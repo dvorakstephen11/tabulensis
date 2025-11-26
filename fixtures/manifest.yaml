@@ -1,0 +1,109 @@
+scenarios:
+  # --- Phase 1.1: Basic File Opening ---
+  - id: "smoke_minimal"
+    generator: "basic_grid"
+    args: { rows: 1, cols: 1 }
+    output: "minimal.xlsx"
+
+  # --- Phase 1.2: Is this a ZIP? ---
+  - id: "container_random_zip"
+    generator: "corrupt_container"
+    args: { mode: "random_zip" }
+    output: "random_zip.zip"
+    
+  - id: "container_no_content_types"
+    generator: "corrupt_container"
+    args: { mode: "no_content_types" }
+    output: "no_content_types.xlsx"
+
+  # --- PG1: Workbook -> Sheet -> Grid IR sanity ---
+  - id: "pg1_basic_two_sheets"
+    generator: "basic_grid"
+    args: { rows: 3, cols: 3, two_sheets: true } # Sheet1 3x3, Sheet2 5x2 (logic in generator)
+    output: "pg1_basic_two_sheets.xlsx"
+
+  - id: "pg1_sparse"
+    generator: "sparse_grid"
+    output: "pg1_sparse_used_range.xlsx"
+
+  - id: "pg1_mixed"
+    generator: "edge_case"
+    output: "pg1_empty_and_mixed_sheets.xlsx"
+
+  # --- PG2: Addressing and index invariants ---
+  - id: "pg2_addressing"
+    generator: "address_sanity"
+    args:
+      targets: ["A1", "B2", "C3", "Z1", "Z10", "AA1", "AA10", "AB7", "AZ5", "BA1", "ZZ10", "AAA1"]
+    output: "pg2_addressing_matrix.xlsx"
+
+  # --- PG3: Cell snapshots and comparison semantics ---
+  - id: "pg3_types"
+    generator: "value_formula"
+    output: "pg3_value_and_formula_cells.xlsx"
+
+  # --- Milestone 2.2: Base64 Correctness ---
+  - id: "corrupt_base64"
+    generator: "mashup_corrupt"
+    args: 
+      base_file: "templates/base_query.xlsx"
+      mode: "byte_flip"
+    output: "corrupt_base64.xlsx"
+
+  # --- Milestone 6: Basic M Diffs ---
+  - id: "m_change_literal"
+    generator: "mashup_inject"
+    args:
+      base_file: "templates/base_query.xlsx"
+      # This query adds a step, changing the definition
+      m_code: |
+        section Section1;
+        shared Query1 = let
+            Source = Csv.Document(File.Contents("C:\data.csv"),[Delimiter=",", Columns=2, Encoding=1252, QuoteStyle=QuoteStyle.None]),
+            #"Changed Type" = Table.TransformColumnTypes(Source,{{"Column1", type text}, {"Column2", type text}}),
+            #"Added Custom" = Table.AddColumn(#"Changed Type", "Custom", each 2)
+        in
+            #"Added Custom";
+    output: "m_change_literal_b.xlsx"
+
+  # --- P1: Large Dense Grid (Performance Baseline) ---
+  - id: "p1_large_dense"
+    generator: "perf_large"
+    args: 
+      rows: 50000 
+      cols: 20
+      mode: "dense" # Deterministic "R1C1" style data
+    output: "grid_large_dense.xlsx"
+
+  # --- P2: Large Noise Grid (Worst-case Alignment) ---
+  - id: "p2_large_noise"
+    generator: "perf_large"
+    args: 
+      rows: 50000 
+      cols: 20
+      mode: "noise" # Random float data
+      seed: 12345
+    output: "grid_large_noise.xlsx"
+
+  # --- D1: Keyed Equality (Database Mode) ---
+  # File A: Ordered IDs 1..1000
+  - id: "db_equal_ordered_a"
+    generator: "db_keyed"
+    args: { count: 1000, shuffle: false, seed: 42 }
+    output: "db_equal_ordered_a.xlsx"
+
+  # File B: Same data, random order (Tests O(N) alignment)
+  - id: "db_equal_ordered_b"
+    generator: "db_keyed"
+    args: { count: 1000, shuffle: true, seed: 42 }
+    output: "db_equal_ordered_b.xlsx"
+
+  # --- D2: Row Added (Database Mode) ---
+  - id: "db_row_added_b"
+    generator: "db_keyed"
+    args: 
+      count: 1000 
+      seed: 42 
+      # Inject a new ID at the end
+      extra_rows: [{id: 1001, name: "New Row", amount: 999}]
+    output: "db_row_added_b.xlsx"

@@ -1,0 +1,16 @@
+# Rust
+target/
+**/target/
+**/*.rs.bk
+
+# Python
+__pycache__/
+**/__pycache__/
+.venv/
+*.pyc
+*.egg-info/
+
+# Shared Generated Data
+fixtures/generated/*.xlsx
+fixtures/generated/*.pbix
+fixtures/generated/*.zip

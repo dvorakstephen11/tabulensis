@@ -1,0 +1,21 @@
+Role: Planner Agent (as defined in docs/rust_docs/excel_diff_meta_programming.md)
+
+Objective:
+Analyze the current state of the project and determine the next development cycle.
+
+Context Provided:
+1. `review_prompt.md`: A complete snapshot of the current codebase directory structure and key file contents.
+2. `docs/rust_docs/*.md`: The technical blueprints, testing plans, and process documentation. (Attached to chat)
+3. `README.md`: Project overview. (Attached to chat)
+
+Instructions:
+1. READ the `docs/rust_docs/excel_diff_meta_programming.md` document carefully. It is the authoritative guide for this process.
+2. ANALYZE the `review_prompt.md` to understand the current implementation status. Compare it against the blueprints in `docs/rust_docs/`.
+3. REVIEW any existing plans in `docs/meta/plans/` (if visible in the file tree) to see what was recently done.
+4. DETERMINE the next cycle's work type (Refactor, Milestone progress, or New incremental milestone) based on the risk ledger and current status.
+5. GENERATE the following artifacts for the next cycle:
+   - A Decision Record (e.g., `docs/meta/plans/YYYY-MM-DD-cycle.yml`) explaining *why* this work was chosen.
+   - A Mini-Spec (e.g., `docs/meta/plans/YYYY-MM-DD-feature-name.md`) describing the scope, behavioral contract, constraints, and testing plan.
+   
+Do not write code yet. Your output is the Plan (Decision Record + Mini-Spec) that an Implementer Agent will use in the next step.
+
