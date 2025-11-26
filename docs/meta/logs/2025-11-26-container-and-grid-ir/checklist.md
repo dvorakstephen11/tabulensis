@@ -1,28 +1,31 @@
-# Cycle Checklist: [Branch Name]
-
-Copy this template into your branch-specific logs directory (e.g., `logs/feature-name/checklist.md`) and update as you progress through the cycle.
+# Cycle Checklist: 2025-11-26-container-and-grid-ir
 
 ---
 
 ## Pre-Implementation
 
-- [ ] Decision record created (`plans/YYYY-MM-DD-cycle.yml`)
-- [ ] Mini-spec written with scope, behavioral contract, and constraints
-- [ ] Test plan defined with specific tests and fixtures
-- [ ] `prompt_original.md` saved to logs directory
-- [ ] `plan_response.md` saved to logs directory
+- [x] Decision record created (`plans/2025-11-26-container-and-grid-ir.yaml`)
+- [x] Mini-spec written with scope, behavioral contract, and constraints
+- [x] Test plan defined with specific tests and fixtures
+- [x] Implementer agent prompt ready (`prompts/implementer.md` + mini-spec)
 
 ## Implementation
 
 - [ ] Activity log started (`activity_log.txt`)
-- [ ] All scope items from mini-spec addressed
-- [ ] All specified tests created
+- [ ] All scope items from mini-spec addressed:
+- [ ] All specified tests created:
 - [ ] Code compiles without errors
-- [ ] `cargo fmt` passes without warnings
-- [ ] `cargo clippy` passes without warnings
+- [ ] `cargo fmt` passes
+- [ ] `cargo clippy` passes (or warnings documented)
 - [ ] Activity log completed with summary of changes
 
 ## Initial Review
+
+- [ ] Automated review completed
+- [ ] No invariant violations identified
+- [ ] No unintended complexity growth
+- [ ] Test coverage adequate for scope
+
 ## Evaluation
 
 - [ ] Unit tests pass
@@ -32,8 +35,12 @@ Copy this template into your branch-specific logs directory (e.g., `logs/feature
 - [ ] Test results recorded (`results/[branch]/test_YYYY-MM-DD.yml`)
 
 ## Post-Implementation Verification
-- [ ] Verification review prompted
+
+- [ ] Verification review completed
 - [ ] Verification report saved (`verification_report.md`)
+- [ ] Recommendation: ____________________
+  - [ ] Proceed to release
+  - [ ] Remediation required
 
 ### If Remediation Required
 

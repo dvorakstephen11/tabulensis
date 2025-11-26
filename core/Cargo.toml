@@ -3,4 +3,11 @@ name = "excel_diff"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["excel-open-xml"]
+excel-open-xml = ["dep:zip", "dep:quick-xml"]
+
 [dependencies]
+quick-xml = { version = "0.32", optional = true }
+thiserror = "1.0"
+zip = { version = "0.6", default-features = false, features = ["deflate"], optional = true }

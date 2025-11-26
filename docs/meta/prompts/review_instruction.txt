@@ -27,12 +27,12 @@ Your goal is to evaluate the current state of the project and define the next de
     *   Refer to Section 3 of `excel_diff_meta_programming.md`.
 
 3.  **Produce Output Artifacts**:
-    *   Create a **Decision Record** (YAML format) explaining *why* you chose this work.
-    *   Create a **Mini-Spec** (Markdown) detailing *what* will be done, including:
+    *   Create a **Decision Record** (YAML format, to be saved as `plans/[branch-name].yml`) explaining *why* you chose this work.
+    *   Create a **Mini-Spec** (Markdown, to be saved as `plans/[branch-name].md`) detailing *what* will be done, including:
         *   Scope of changes.
         *   Behavioral contract.
         *   Constraints.
         *   **Test Plan**: Specific tests and fixtures to add or modify.
 
-Do not implement the code yet. Your output is the plan (Decision Record and Mini-Spec) that an Implementer Agent will use in the next step.
+Do not implement the code yet. Your output is the plan (Decision Record and Mini-Spec) that an Implementer Agent will use in the next step. Both files should be named after the git branch for this cycle.
 

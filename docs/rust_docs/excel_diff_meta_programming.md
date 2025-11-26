@@ -123,9 +123,9 @@ The planner then chooses one of three work types:
 * **Milestone progress**: implement work toward an existing testing or product milestone.
 * **New incremental milestone**: define a smaller milestone that sits between the current state and a larger existing milestone, when the gap is too large to cross in a single cycle.
 
-This choice is recorded in a decision file, for example:
+This choice is recorded in a decision file named after the branch, for example:
 
-`plans/2025-11-25-cycle.yml`
+`plans/feature-grid-alignment.yml`
 
 A typical decision record contains:
 
@@ -139,7 +139,7 @@ Decision records are append-only. They provide a historical trace of why each cy
 
 ### 3.2 Specification and tests-first
 
-Once the work type is chosen, the planner writes a mini-spec for the cycle, typically under `plans/` with a date and short description in the file name.
+Once the work type is chosen, the planner writes a mini-spec for the cycle, stored under `plans/` with the same branch name as the decision record but with a `.md` extension (for example, `plans/feature-grid-alignment.md`).
 
 The mini-spec describes:
 
@@ -192,9 +192,11 @@ This subdirectory must be named exactly matching the current git branch name (e.
 
 Inside this directory, the following files are required:
 
-1.  `prompt_original.md`: The exact prompt sent to the AI model to initiate the work.
-2.  `plan_response.md`: The full response/plan received from the AI.
-3.  `activity_log.txt`: The running log of actions taken during implementation.
+1.  `activity_log.txt`: The running log of actions taken during implementation.
+
+The standard implementer prompt is stored at `prompts/implementer.md` and is used together with the cycle's mini-spec to initiate implementation. If a cycle requires a customized prompt, it may be stored as `prompt_original.md` in this directory.
+
+The planning artifacts (decision record and mini-spec) are stored separately in `plans/` as described in Section 3.
 
 The activity log includes:
 
@@ -447,7 +449,7 @@ This guide defines a development process where AI agents and humans work togethe
 * Architecture and risk are managed at a higher level of abstraction, with their own documents and regular reviews.
 * The process itself evolves through retrospectives and versioned prompts.
 
-A cycle checklist template is provided in `logs/cycle_checklist_template.md` to help track progress through each phase of the development cycle.
+A cycle checklist template is provided in `docs/meta/logs/cycle_checklist_template.md` to help track progress through each phase of the development cycle.
 
 Any new agent or contributor should read this document before making changes, and should treat the described artifacts and flows as the canonical way to move the system forward.
 

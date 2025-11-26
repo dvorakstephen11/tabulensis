@@ -7,8 +7,8 @@ Your role is defined in Section 5.4 of `docs/rust_docs/excel_diff_meta_programmi
 You have been provided with:
 1. **Codebase Snapshot**: `review_prompt.md` contains the current directory structure and the contents of all relevant source code and configuration files, reflecting the state AFTER implementation.
 2. **Documentation**: `docs/rust_docs/` contains the technical blueprints and meta-process guide. `README.md` contains the high-level product overview.
-3. **Original Plan**: The decision record and mini-spec produced by the Planner Agent for this cycle.
-4. **Activity Log**: The implementer's log of changes made during implementation.
+3. **Original Plan**: The decision record (`plans/[branch-name].yml`) and mini-spec (`plans/[branch-name].md`) produced by the Planner Agent for this cycle.
+4. **Activity Log**: The implementer's log of changes made during implementation (`docs/meta/logs/[branch-name]/activity_log.txt`).
 5. **Test Results**: The output from the test runner after implementation.
 
 ## Your Goal
