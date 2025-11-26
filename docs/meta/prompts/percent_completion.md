@@ -88,13 +88,19 @@ Estimate completion along at least these three axes, each as a percentage from 0
        - **Integrations**: Git diff driver, CI/CD hooks
 
 3. **Percent of dev time in days (extrapolated)**
-   - Use dev logs, commit history, and/or explicit time tracking to estimate:
+   - Use the following sources to estimate elapsed dev time:
+     - **Activity logs** in `docs/meta/logs/[branch-name]/activity_log.txt` for each cycle.
+     - **Decision records** in `docs/meta/plans/[branch-name].yaml` which include difficulty estimates.
+     - **Git commit history** (branch names include dates: `YYYY-MM-DD-description`).
+     - **Retrospectives** in `docs/meta/retrospectives/` for cycle duration insights.
+   - Estimate:
      - **Elapsed dev time** so far (in effective calendar days of work).
      - **Remaining dev time**, based on:
-       - Remaining features vs what’s already implemented.
+       - Remaining features vs what's already implemented.
        - The distribution of difficulty (from item 1).
+       - The phased testing plan (Phase 0–6) as a progress marker.
    - Produce an estimate like:
-     - “We’ve likely used ~X–Y dev-days so far, with Z–W dev-days remaining.”
+     - "We've likely used ~X–Y dev-days so far, with Z–W dev-days remaining."
    - Convert that into a **percentage of total dev time**:
      - Percent complete (time) ≈ (elapsed dev time) / (elapsed + remaining dev time) * 100.
    - State your assumptions (e.g., how many hours per dev-day, how many devs, productivity inferred from commit patterns).
@@ -106,31 +112,55 @@ Estimate completion along at least these three axes, each as a percentage from 0
 Beyond those three, propose and compute **other useful measures of “percent complete”**, such as:
 
 1. **Percent of planned features implemented**
-   - From the spec and/or issue tracker:
-     - Identify the set of major features and epics.
-     - Mark each as: not started, in progress, done (and whether done is “MVP” vs “production-ready”).
+   - From `excel_diff_testing_plan.md`, the MVP readiness matrix defines:
+     - **Must work before MVP**: Excel grid diff, Excel DataMashup + M diff
+     - **Can land just before release**: PBIX with DataMashup
+     - **Post-MVP**: PBIX without DataMashup (tabular model), DAX/data model diff
+   - From the phased testing plan (Phase 0–6):
+     - Phase 0: Harness & fixtures
+     - Phase 1: Containers, basic grid IR, WASM build guard
+     - Phase 2: IR semantics, M-code snapshots, streaming budget
+     - Phase 3: MVP diff slice, DataMashup fuzzing
+     - Phase 3.5: PBIX host support
+     - Phase 4: Advanced alignment, DB mode, adversarial grids
+     - Phase 5: Polish, perf, metrics
+     - Phase 6: DAX/model stubs (post-MVP)
+   - Mark each phase/feature as: not started, in progress, done.
    - Compute:
      - A naïve percentage (features done / total features).
-     - A **complexity-weighted percentage** (harder features have higher weight).
+     - A **complexity-weighted percentage** (harder features have higher weight, using decision record difficulty estimates where available).
 
 2. **Percent of modules implemented & integrated**
-   - Build a list of core modules (e.g., parsers, IR, diff engine, CLI, web viewer, integrations, tests).
+   - Build a list of core modules from the architecture:
+     - **core/**: IR types, diff algorithms, M-code parser
+     - **xlsx/**: XLSX container parsing and extraction
+     - **xlsb/**: XLSB binary format support (if applicable)
+     - **pbix/**: PBIX/PBIT Power BI container support
+     - **cli/**: Command-line interface
+     - **wasm/**: WebAssembly bindings for browser deployment
+     - **tests/**: Test harness and fixtures (`fixtures/templates/`, `fixtures/generated/`)
    - Score each on:
      - Implementation completeness.
      - Integration with the rest of the system.
-     - Presence of tests.
+     - Presence of tests (unit, integration, property-based per testing plan).
    - Estimate:
-     - “Standalone implementation complete %”
-     - “Integrated into the full system %”
+     - "Standalone implementation complete %"
+     - "Integrated into the full system %"
 
 3. **Percent of test coverage and quality**
+   - The testing plan uses priority tags:
+     - `[G]` — Release-gating tests (must pass)
+     - `[H]` — Hardening/nice-to-have tests
+     - `[E]` — Exploratory/fuzz tests
+     - `[RC]` — Resource-constrained guardrails (memory/time ceilings)
    - Look at:
      - Automated test coverage (if metrics exist).
      - Breadth of tests (unit, integration, property-based, performance, regression).
+     - Test results in `docs/meta/results/[branch-name].txt` for each completed cycle.
    - Estimate:
-     - What fraction of the planned test surface is actually in place.
-     - How much “hardening” work remains (e.g., edge cases, fuzzing, stress tests).
-   - Express as a percentage of “testing maturity” relative to where it should be at launch.
+     - What fraction of the planned test surface (by phase and priority tag) is actually in place.
+     - How much "hardening" work remains (e.g., `[E]` fuzz tests, `[RC]` memory stress tests).
+   - Express as a percentage of "testing maturity" relative to where it should be at launch.
 
 4. **Percent of polish / production readiness**
    - Evaluate:
@@ -156,10 +186,13 @@ If you identify any other useful quantitative or qualitative metrics for “comp
 --------------------
 
 1. **Understand the intended scope**
-   - Infer the intended “1.0” scope from specs, roadmap, and backlog.
+   - Read `excel_diff_meta_programming.md` for the authoritative development process.
+   - Read `excel_diff_testing_plan.md` for the phased milestones and MVP definition.
+   - Read `excel_diff_product_differentiation_plan.md` for the product roadmap (Phase 1–3).
    - If the code clearly diverges from the specs, mention that and treat the specs as **directional**, not absolute.
 
 2. **Map the architecture**
+   - Use `excel_diff_technical_document.md` as the reference for intended architecture.
    - Sketch (internally) a mental map of the system:
      - Major modules, data flows, external interfaces.
    - For each area, determine:
@@ -171,15 +204,16 @@ If you identify any other useful quantitative or qualitative metrics for “comp
      - Code inspection,
      - File structure and naming,
      - TODO/FIXME comments,
-     - Commit history,
-     - Issue tracker,
-     - Logs of dev time.
+     - Git commit history (branch names: `YYYY-MM-DD-description`),
+     - Activity logs (`docs/meta/logs/[branch-name]/activity_log.txt`),
+     - Decision records (`docs/meta/plans/[branch-name].yaml`),
+     - Test results (`docs/meta/results/[branch-name].txt`).
    - Do not rely solely on any single metric like LOC or commit count.
 
 4. **Be explicit about uncertainty**
    - For every percentage you provide, include:
      - A **confidence level** (low/medium/high).
-     - Key assumptions (e.g., “assuming the current spec is up to date”, “assuming no large untracked work remains”).
+     - Key assumptions (e.g., "assuming the testing plan is up to date", "assuming no large untracked work remains").
 
 --------------------
 5. Deliverable format
@@ -189,15 +223,16 @@ Return a structured report with:
 
 1. **Executive summary**
    - A short narrative answer to:
-     - “Roughly what percentage complete is this project?”
-     - “What’s the main thing left to do?”
+     - "Roughly what percentage complete is this project?"
+     - "What's the main thing left to do?"
+     - "Which testing plan phase are we currently in or completing?"
    - A compact table summarizing all completion metrics:
      - Percent of difficulty overcome
      - Percent of code written
      - Percent of dev time elapsed
-     - Percent of planned features implemented
+     - Percent of planned features implemented (by testing phase)
      - Percent of modules integrated
-     - Percent of testing maturity
+     - Percent of testing maturity (by priority tag: `[G]`/`[H]`/`[E]`/`[RC]`)
      - Risk-adjusted completion
 
 2. **Detailed sections**
@@ -206,7 +241,35 @@ Return a structured report with:
      - Reasoning,
      - Pointers to specific areas of the codebase or artifacts that informed your judgment.
 
-3. **Risk / unknowns**
-   - List the biggest uncertainties that could significantly change the completion estimate (e.g., “we have not yet profiled performance on 100MB workbooks”).
+3. **Phase progress**
+   - Map the current state to the testing plan phases (0–6).
+   - Indicate which phases are complete, in progress, or not started.
+   - Note any deviations from the phased approach.
+
+4. **Risk / unknowns**
+   - List the biggest uncertainties that could significantly change the completion estimate (e.g., "we have not yet profiled performance on 100MB workbooks").
+   - Reference specific risks from `excel_diff_difficulty_analysis.md` if applicable.
 
 Your goal is not to be perfectly precise, but to provide **realistic, grounded ranges** and a clear explanation of how close this codebase is to a shippable, production-ready version of the intended product.
+
+--------------------
+6. Using the collate workflow
+--------------------
+
+To gather all relevant artifacts for this analysis, you can use:
+
+```bash
+python docs/meta/prompts/generate_review_context.py --collate [branch-name]
+```
+
+This packages the following into a single output directory (in Downloads):
+- All `docs/rust_docs/*.md` files (technical blueprints)
+- The mini-spec (`mini_spec_[branch-name].md`)
+- The decision record (`decision_[branch-name].txt`)
+- The codebase context (`codebase_context.md` — generated review snapshot)
+- A combined `cycle_summary.txt` containing:
+  - Activity log from the cycle
+  - Test results from the cycle
+  - Manifest of all included files
+
+This collated package provides a comprehensive view of both the planned and actual work for the most recent development cycle.
