@@ -14,3 +14,4 @@ __pycache__/
 fixtures/generated/*.xlsx
 fixtures/generated/*.pbix
 fixtures/generated/*.zip
+fixtures/generated/*.csv
