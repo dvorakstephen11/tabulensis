@@ -589,3 +589,7 @@ The result is an engine that:
 * Uses alignment and AST techniques that are asymptotically efficient and tuned to real‑world patterns.
 * Lines up exactly with the testing milestones and product roadmap you already outlined.
 
+---
+
+Last updated: 2025-11-24 15:52:36
+

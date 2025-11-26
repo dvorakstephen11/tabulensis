@@ -1901,3 +1901,5 @@ Goal: anchor the later DAX/data-model diff work so the plan stays aligned with t
 * Tag the scenario as post-MVP so it does not block Excel/M release trains but keeps DAX/data-model semantics on the radar.
 
 ---
+
+Last updated: 2025-11-25 14:04:00

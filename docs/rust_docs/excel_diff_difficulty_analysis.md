@@ -247,4 +247,8 @@ Below is what each hurdle actually is and why it scored the way it did.
 * **Middle items (H5–H7, H10–H12)** are substantial, but you can parallelize them once the core IR and diff spine exist.
 * **Bottom items (H8, H13)** are important but relatively contained and can be scoped tightly.
 
-If you’d like, next step we can turn this into a phased implementation roadmap (e.g., which hurdles to tackle in what order to de‑risk the project fastest).
+If you'd like, next step we can turn this into a phased implementation roadmap (e.g., which hurdles to tackle in what order to de‑risk the project fastest).
+
+---
+
+Last updated: 2025-11-24 19:33:13

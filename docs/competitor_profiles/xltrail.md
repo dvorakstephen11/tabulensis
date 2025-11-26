@@ -316,3 +316,7 @@ A next-generation competitor that treats the spreadsheet as a logical graph rath
 36. How DAX UDFs change the way you build semantic models \- element61, accessed November 25, 2025, [https://www.element61.be/en/resource/how-dax-udfs-change-way-you-build-semantic-models](https://www.element61.be/en/resource/how-dax-udfs-change-way-you-build-semantic-models)  
 37. DAX basics in a semantic model \- Tabular Editor, accessed November 25, 2025, [https://tabulareditor.com/blog/dax-basics-in-a-semantic-model](https://tabulareditor.com/blog/dax-basics-in-a-semantic-model)  
 38. Release Notes \- xltrail, accessed November 25, 2025, [https://www.xltrail.com/docs/en/stable/releasenotes](https://www.xltrail.com/docs/en/stable/releasenotes)
+
+---
+
+Last updated: 2025-11-26 10:09:47

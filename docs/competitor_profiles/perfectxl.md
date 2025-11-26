@@ -292,3 +292,7 @@ A new entrant that delivers **PerfectXL’s semantic depth** but wrapped in a **
 20. xlCompare Command Line Parameters \- Compare Excel Files, accessed November 25, 2025, [https://xlcompare.com/excel-compare-command-line-parameters.html](https://xlcompare.com/excel-compare-command-line-parameters.html)  
 21. PerfectXL Explore \- Free download and install on Windows \- Microsoft Store, accessed November 25, 2025, [https://apps.microsoft.com/detail/9pd5gfx4h7w8](https://apps.microsoft.com/detail/9pd5gfx4h7w8)  
 22. PerfectXL Explore \- Understand & explain Excel files in a second, accessed November 25, 2025, [https://www.perfectxl.com/products/perfectxl-explore/](https://www.perfectxl.com/products/perfectxl-explore/)
+
+---
+
+Last updated: 2025-11-26 10:04:29

@@ -63,6 +63,19 @@ The reviewer agent acts as an automated counterpart to code review. It:
 * Interprets static analysis and compiler output.
 * Flags potential invariant violations, complexity issues, and coverage gaps.
 
+### Post-Implementation Verification Reviewer
+
+The post-implementation verification reviewer is a fresh agent instance that operates after implementation and testing. It:
+
+* Receives the same documentation as the original planner plus the implementation plan and activity log.
+* Compares what was planned against what was actually implemented.
+* Verifies that all specified tests were created and are meaningful.
+* Hunts for hidden bugs, gaps, and edge cases that existing tests may not catch.
+* Produces a verification report with findings and severity assessments.
+* Creates a remediation plan if issues are found that must be fixed before release.
+
+This role exists because tests alone cannot guarantee correctness. The verification reviewer provides a second set of eyes that specifically looks for discrepancies between intent and execution.
+
 ### Test Runner
 
 The test runner can be a person or an agent that controls the automated tests. It:
@@ -234,9 +247,11 @@ The test runner executes:
 * Tests associated with the specific testing milestone described in the mini-spec.
 * Performance tests on designated large or complex fixtures.
 
-The outcome is written in a structured artifact, for example:
+The outcome is written in a structured artifact under a branch-specific subdirectory, for example:
 
-`results/2025-11-25-tests.yml`
+`results/feature-excel-parsing-v1/test_2025-11-25.yml`
+
+The subdirectory must be named exactly matching the current git branch name, consistent with the activity logs structure.
 
 This record includes, for each suite:
 
@@ -276,7 +291,53 @@ At the end of evaluation, the project records a consolidated outcome for the cyc
 * Whether performance remains within budget.
 * Any known issues that must be addressed in future cycles.
 
-Only if the evaluation is acceptable does the cycle proceed to release.
+Only if the evaluation is acceptable does the cycle proceed to post-implementation verification.
+
+### 5.4 Post-implementation verification review
+
+After the initial implementation passes tests and evaluation, a second reviewer agent performs an independent verification review. This step exists because:
+
+* Tests may be improperly written or incomplete.
+* Hidden bugs may exist that no existing test reveals.
+* The implementation plan may have specified tests that were never actually created.
+* Subtle gaps between the spec and the implementation may have been overlooked.
+
+The post-implementation reviewer is a fresh agent instance that receives:
+
+* The same documentation that the original planner received.
+* The same codebase snapshot (now reflecting the implemented changes).
+* The original decision record and mini-spec produced by the planner.
+* The implementer's activity log.
+* The test results from evaluation.
+
+The post-implementation reviewer's goal is to find discrepancies, gaps, or bugs by comparing:
+
+* What the plan said would be done versus what was actually done.
+* What tests were supposed to be added versus what tests exist.
+* Whether the implementation adheres to the behavioral contract in the mini-spec.
+* Whether any edge cases or error paths were neglected.
+* Whether the code introduces risks not anticipated in the original plan.
+
+#### Verification review output
+
+The post-implementation reviewer produces a verification report stored under the branch-specific logs directory, for example:
+
+`logs/feature-excel-parsing-v1/verification_report.md`
+
+This report contains:
+
+* A summary of findings (gaps, bugs, missing tests, deviations from spec).
+* A severity assessment for each finding (critical, moderate, minor).
+* A recommendation: either "proceed to release" or "remediation required."
+
+If remediation is required, the post-implementation reviewer also produces:
+
+* A remediation plan (similar in format to a mini-spec) describing what must be fixed.
+* Updated or new test definitions to cover the identified gaps.
+
+The remediation plan is then executed by the implementer agent in a follow-up pass within the same cycle. After remediation, tests are re-run and the verification review may be repeated if significant changes were made.
+
+Only after the post-implementation reviewer recommends proceeding does the cycle move to release.
 
 ---
 
@@ -382,7 +443,14 @@ This guide defines a development process where AI agents and humans work togethe
 * The planner ties each cycle to a clear choice, a mini-spec, and specific tests.
 * The implementer works within that spec and is constrained by static checks and review.
 * Evaluation includes not only correctness but performance and scenario-level product behavior.
+* The post-implementation verification reviewer independently validates that the implementation matches the plan, catches hidden bugs, and confirms all specified tests were created.
 * Architecture and risk are managed at a higher level of abstraction, with their own documents and regular reviews.
 * The process itself evolves through retrospectives and versioned prompts.
 
+A cycle checklist template is provided in `logs/cycle_checklist_template.md` to help track progress through each phase of the development cycle.
+
 Any new agent or contributor should read this document before making changes, and should treat the described artifacts and flows as the canonical way to move the system forward.
+
+---
+
+Last updated: 2025-11-26

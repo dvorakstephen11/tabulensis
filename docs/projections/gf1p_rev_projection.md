@@ -342,3 +342,7 @@ You don’t have to pick exactly one of these; the obvious blend is:
 * **Year 2–5:** Layer in a **Governance Edition** with enterprise features once the engine is hardened and you’ve accumulated a “museum of horrors” corpus from real files.
 
 If you want, next step we can translate one of these strategies into a very concrete funnel model (traffic → free users → Pro/Team conversion → enterprise leads) and tie it to hiring needs and burn so you can see whether the engineering roadmap and revenue ramp actually line up.
+
+---
+
+Last updated: 2025-11-26 09:31:22

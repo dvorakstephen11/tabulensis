@@ -3,9 +3,9 @@
 - Create competitor profile research PROMPTS for
     - ~~Excel Compare (Formulasoft)~~
     - ~~Spreadsheet Advantage~~
-    - 4 Tops Excel Compare
-    - Compare and Merge (Excel diff)
-    - ExcelAnalyzer
+    - ~~4 Tops Excel Compare~~
+    - ~~Compare and Merge (Excel diff)~~
+    - ~~ExcelAnalyzer~~
     - Operis OAK
     - Spreadsheet Detective
     - CIMCON XLAudit
@@ -70,3 +70,5 @@
 - Figure out how pbi-tools might fit into all of this
     - Can .pbix files be parsed and diffed in the same way that .xlsx files can be?
 - Lots of planning on the Tauri desktop app. Haven't even started this. Compare Tauri with Electron or other cross-platform frameworks.
+
+- Set up a system by which I can periodically compare my documentation with my entire codebase and with the latest news about my competitors, their products, and related innovations (AI advances, user behavior, security vulnerabilities, etc.) and have an ultra-powerful LLM help me update my documentation and codebase to reflect the latest information. There should also be a concise "diff" statement that I can log that will tell me what decisions and changes were made. As this log grows, I can reflect upon the decisions I made.

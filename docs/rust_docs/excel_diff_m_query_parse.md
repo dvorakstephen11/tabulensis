@@ -525,3 +525,7 @@ If you build your parser as a clean hierarchy with strong invariants at each lay
 [10]: https://bengribaudo.com/blog/2020/06/04/5298/shedding-light-on-the-mysterious-embedded-value "Shedding Light on the Mysterious Embedded.Value | Ben Gribaudo"
 [11]: https://radacad.com/exposing-m-code-and-query-metadata-of-power-bi-pbix-file/ "Exposing M Code and Query Metadata of Power BI (PBIX) File - RADACAD"
 [12]: https://bengribaudo.com/tools/datamashupexplorer "Data Mashup Explorer | Ben Gribaudo"
+
+---
+
+Last updated: 2025-11-24 14:52:35

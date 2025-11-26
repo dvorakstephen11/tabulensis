@@ -1,5 +1,122 @@
 import os
 import fnmatch
+import re
+from datetime import datetime
+
+
+def get_last_updated_timestamps(root_dir="."):
+    """
+    Scans documentation files for 'Last updated: YYYY-MM-DD HH:MM:SS' timestamps.
+    Returns a list of tuples: (relative_path, timestamp_str, days_elapsed)
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.abspath(os.path.join(script_dir, root_dir))
+    
+    target_dirs = [
+        os.path.join(repo_root, "docs", "rust_docs"),
+        os.path.join(repo_root, "docs", "projections"),
+        os.path.join(repo_root, "docs", "competitor_profiles"),
+    ]
+    
+    timestamp_pattern = re.compile(r'Last updated:\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})')
+    results = []
+    now = datetime.now()
+    
+    for target_dir in target_dirs:
+        if not os.path.exists(target_dir):
+            continue
+        for filename in os.listdir(target_dir):
+            if not filename.endswith('.md'):
+                continue
+            filepath = os.path.join(target_dir, filename)
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                match = timestamp_pattern.search(content)
+                if match:
+                    timestamp_str = match.group(1)
+                    try:
+                        timestamp_dt = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+                        days_elapsed = (now - timestamp_dt).days
+                    except ValueError:
+                        days_elapsed = None
+                else:
+                    timestamp_str = None
+                    days_elapsed = None
+                
+                rel_path = os.path.relpath(filepath, repo_root)
+                results.append((rel_path, timestamp_str, days_elapsed))
+            except Exception:
+                pass
+    
+    results.sort(key=lambda x: (x[2] is None, x[2] if x[2] is not None else 0), reverse=True)
+    return results
+
+
+def generate_timestamp_report(output_file=None):
+    """
+    Generates a visually appealing Markdown table showing document timestamps
+    and how many days have elapsed since last update.
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    results = get_last_updated_timestamps("../../../")
+    
+    lines = []
+    lines.append("# Documentation Freshness Report")
+    lines.append("")
+    lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append("")
+    lines.append("## Document Update Status")
+    lines.append("")
+    lines.append("| Document | Last Updated | Days Ago | Status |")
+    lines.append("|:---------|:-------------|:--------:|:------:|")
+    
+    for rel_path, timestamp_str, days_elapsed in results:
+        doc_name = os.path.basename(rel_path)
+        folder = os.path.basename(os.path.dirname(rel_path))
+        display_name = f"`{folder}/{doc_name}`"
+        
+        if timestamp_str is None:
+            ts_display = "❌ No timestamp"
+            days_display = "-"
+            status = "⚠️"
+        else:
+            ts_display = timestamp_str
+            if days_elapsed is not None:
+                days_display = str(days_elapsed)
+                if days_elapsed == 0:
+                    status = "🟢"
+                elif days_elapsed <= 7:
+                    status = "🟢"
+                elif days_elapsed <= 30:
+                    status = "🟡"
+                else:
+                    status = "🔴"
+            else:
+                days_display = "?"
+                status = "⚠️"
+        
+        lines.append(f"| {display_name} | {ts_display} | {days_display} | {status} |")
+    
+    lines.append("")
+    lines.append("### Legend")
+    lines.append("")
+    lines.append("- 🟢 Fresh (≤7 days)")
+    lines.append("- 🟡 Aging (8-30 days)")
+    lines.append("- 🔴 Stale (>30 days)")
+    lines.append("- ⚠️ Missing timestamp or parse error")
+    lines.append("")
+    
+    report_content = "\n".join(lines)
+    
+    if output_file:
+        output_path = os.path.join(script_dir, output_file)
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(report_content)
+        print(f"Timestamp report generated at: {output_path}")
+    
+    return report_content
+
 
 def generate_review_context(output_file="review_prompt.md", root_dir="../../../"):
     # Adjust root_dir relative to where this script is: docs/meta/prompts/ -> repo root is ../../../
@@ -13,13 +130,15 @@ def generate_review_context(output_file="review_prompt.md", root_dir="../../../"
     
     # Define what to include
     included_extensions = {
-        '.rs', '.py', '.toml', '.yaml', '.yml', '.gitignore', '.txt', '.md'
+        '.rs', '.py', '.toml', '.yaml', '.yml', '.gitignore'
     }
     
     # Explicitly ignore these directories
     ignored_dirs = {
         'target', '.git', '.cursor', 'node_modules', '__pycache__', 
-        '.idea', '.vscode', 'venv', 'env', 'terminals', 'debug', 'incremental'
+        '.idea', '.vscode', '.venv', '.pytest_cache', 'venv', 'env', 
+        'terminals', 'debug', 'incremental', 'docs', 
+        'fixtures/templates', 'fixtures/generated'
     }
     
     # Simple gitignore parser (limited support)
@@ -135,5 +254,12 @@ def generate_review_context(output_file="review_prompt.md", root_dir="../../../"
     print(f"Context generated at: {output_path}")
 
 if __name__ == "__main__":
-    generate_review_context()
+    import sys
+    
+    if len(sys.argv) > 1 and sys.argv[1] == "--timestamps":
+        output_file = sys.argv[2] if len(sys.argv) > 2 else "timestamp_report.md"
+        generate_timestamp_report(output_file)
+    else:
+        generate_review_context()
+        print("\nTip: Run with --timestamps [output_file] to generate a document freshness report")
 
