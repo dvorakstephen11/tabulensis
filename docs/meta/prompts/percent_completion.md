@@ -8,13 +8,35 @@ Your job is to review my codebase and project artifacts, then estimate **what pe
 
 You will have access to some or all of the following:
 
+**Core Codebase**
 - The full **codebase** (current main branch).
-- Any **design docs / specs / roadmap** describing planned features and architecture.
-- The **issue tracker / backlog** (tickets, epics, and their statuses).
-- **Git history** (commits, branches, tags, messages).
-- **Dev time logs** (if available), e.g. time tracking, worklog entries, or commit timestamps.
 - Any **TODOs / FIXMEs / comments** in the code that indicate missing or incomplete work.
-- Test harness and **CI state** (tests passing/failing, coverage, pipelines).
+
+**Technical Documentation** (in `docs/rust_docs/`)
+- `excel_diff_meta_programming.md` — The authoritative development process guide.
+- `excel_diff_technical_document.md` — Architecture and IR design.
+- `excel_diff_testing_plan.md` — Phased testing milestones (Phase 0–6) and MVP readiness matrix.
+- `excel_diff_difficulty_analysis.md` — Analysis of technical challenges.
+- `excel_diff_m_query_parse.md` — M-code parsing design.
+- `excel_diff_product_differentiation_plan.md` — Product roadmap and competitive positioning.
+
+**Cycle Artifacts** (in `docs/meta/`)
+- `plans/[branch-name].md` — Mini-specs defining scope, behavioral contracts, and test plans for each cycle.
+- `plans/[branch-name].yaml` — Decision records explaining why work was chosen.
+- `logs/[branch-name]/activity_log.txt` — Implementer's log of changes and decisions during a cycle.
+- `results/[branch-name].txt` — Test output from the cycle.
+- `retrospectives/` — Post-cycle learnings and process improvements.
+
+**Business Context** (in `docs/`)
+- `projections/` — Revenue projections and market analysis.
+- `competitor_profiles/` — Analysis of competing products (Synkronizer, xlCompare, etc.).
+
+**Version Control**
+- **Git history** (commits, branches, tags, messages).
+- Branch names follow the pattern `YYYY-MM-DD-description` for traceability.
+
+**Review Context**
+- The `generate_review_context.py --collate` workflow packages all relevant artifacts for review sessions, including codebase snapshots, mini-specs, decision records, activity logs, and test results.
 
 Use as many of these signals as are available to build your estimates.
 
@@ -25,11 +47,18 @@ Use as many of these signals as are available to build your estimates.
 Estimate completion along at least these three axes, each as a percentage from 0–100%, with reasoning:
 
 1. **Percent of total difficulty overcome**
-   - Interpret “difficulty” as the combination of:
+   - Interpret "difficulty" as the combination of:
      - Core architectural challenges
      - Algorithmic complexity
      - Integration points and risky dependencies
-   - Identify what you believe are the **hardest technical slices** of the project (e.g., parsing, core diff engine, WASM port, semantic layers, integrations).
+   - The **hardest technical slices** for this project are documented in `excel_diff_difficulty_analysis.md` and include:
+     - Container parsing (XLSX/PBIX OPC packages)
+     - Grid alignment (database mode vs spreadsheet mode algorithms)
+     - DataMashup binary stream extraction and M-code parsing
+     - Hierarchical diff engine (workbook → object → semantic → grid levels)
+     - Memory-efficient streaming for 100MB+ files
+     - WASM compilation and cross-platform deployment
+     - DAX/data model parsing (post-MVP)
    - For each hard slice, judge whether it is:
      - Not started,
      - Partially implemented,
@@ -42,14 +71,21 @@ Estimate completion along at least these three axes, each as a percentage from 0
 2. **Percent of total code written**
    - Do **not** just use raw LOC.
    - Instead:
-     - Identify the planned modules / components from specs and/or the current architecture.
+     - Identify the planned modules / components from `excel_diff_technical_document.md` and the testing plan.
      - For each module, estimate:
        - Planned surface area (APIs, responsibilities).
        - What is implemented vs stubbed vs missing.
      - Include internal plumbing, not just user-visible features.
    - Provide:
-     - A **weighted estimate** of “code written vs code still to be written” based on modules/features.
-     - A brief breakdown per major subsystem (e.g., core engine, parsers, semantic layers, CLI, web UI, integrations).
+     - A **weighted estimate** of "code written vs code still to be written" based on modules/features.
+     - A brief breakdown per major subsystem:
+       - **Container layer**: XLSX/XLSB/PBIX OPC package handling
+       - **Grid IR**: Cell representation, sparse/dense storage, type coercion
+       - **M-code parser**: DataMashup extraction, tokenizer, AST builder
+       - **Diff engine**: Hierarchical comparison, alignment algorithms
+       - **CLI**: Command-line interface for local usage
+       - **Web viewer**: WASM-based browser diff viewer
+       - **Integrations**: Git diff driver, CI/CD hooks
 
 3. **Percent of dev time in days (extrapolated)**
    - Use dev logs, commit history, and/or explicit time tracking to estimate:

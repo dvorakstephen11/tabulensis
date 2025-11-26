@@ -9,9 +9,18 @@
     Cargo.lock
     Cargo.toml
     src/
+      addressing.rs
+      excel_open_xml.rs
+      lib.rs
       main.rs
+      workbook.rs
     tests/
+      addressing_pg2_tests.rs
+      excel_open_xml_tests.rs
       integration_test.rs
+      pg1_ir_tests.rs
+      common/
+        mod.rs
   fixtures/
     manifest.yaml
     pyproject.toml
@@ -46,6 +55,7 @@
         __init__.py
     templates/
       base_query.xlsx
+  logs/
 ```
 
 ## File Contents
@@ -82,7 +92,653 @@ name = "excel_diff"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["excel-open-xml"]
+excel-open-xml = ["dep:zip", "dep:quick-xml"]
+
 [dependencies]
+quick-xml = { version = "0.32", optional = true }
+thiserror = "1.0"
+zip = { version = "0.6", default-features = false, features = ["deflate"], optional = true }
+```
+
+---
+
+### File: `core\src\addressing.rs`
+
+```rust
+/// Convert zero-based (row, col) indices to an Excel A1 address string.
+pub fn index_to_address(row: u32, col: u32) -> String {
+    let mut col_index = col;
+    let mut col_label = String::new();
+
+    loop {
+        let rem = (col_index % 26) as u8;
+        col_label.push((b'A' + rem) as char);
+        if col_index < 26 {
+            break;
+        }
+        col_index = col_index / 26 - 1;
+    }
+
+    col_label.chars().rev().collect::<String>() + &(row + 1).to_string()
+}
+
+/// Parse an A1 address into zero-based (row, col) indices.
+/// Returns `None` for malformed addresses.
+pub fn address_to_index(a1: &str) -> Option<(u32, u32)> {
+    if a1.is_empty() {
+        return None;
+    }
+
+    let mut col: u32 = 0;
+    let mut row: u32 = 0;
+    let mut saw_letter = false;
+    let mut saw_digit = false;
+
+    for ch in a1.chars() {
+        if ch.is_ascii_alphabetic() {
+            saw_letter = true;
+            if saw_digit {
+                // Letters after digits are not allowed.
+                return None;
+            }
+            let upper = ch.to_ascii_uppercase() as u8;
+            if !upper.is_ascii_uppercase() {
+                return None;
+            }
+            col = col
+                .checked_mul(26)?
+                .checked_add((upper - b'A' + 1) as u32)?;
+        } else if ch.is_ascii_digit() {
+            saw_digit = true;
+            row = row.checked_mul(10)?.checked_add((ch as u8 - b'0') as u32)?;
+        } else {
+            return None;
+        }
+    }
+
+    if !saw_letter || !saw_digit || row == 0 || col == 0 {
+        return None;
+    }
+
+    Some((row - 1, col - 1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn index_to_address_examples() {
+        assert_eq!(index_to_address(0, 0), "A1");
+        assert_eq!(index_to_address(0, 25), "Z1");
+        assert_eq!(index_to_address(0, 26), "AA1");
+        assert_eq!(index_to_address(0, 27), "AB1");
+        assert_eq!(index_to_address(0, 51), "AZ1");
+        assert_eq!(index_to_address(0, 52), "BA1");
+    }
+
+    #[test]
+    fn round_trip_addresses() {
+        let addresses = [
+            "A1", "B2", "Z10", "AA1", "AA10", "AB7", "AZ5", "BA1", "ZZ10", "AAA1",
+        ];
+        for addr in addresses {
+            let (r, c) = address_to_index(addr).expect("address should parse");
+            assert_eq!(index_to_address(r, c), addr);
+        }
+    }
+
+    #[test]
+    fn invalid_addresses_rejected() {
+        let invalid = ["", "1A", "A0", "A", "AA0", "A-1", "A1A"];
+        for addr in invalid {
+            assert!(address_to_index(addr).is_none(), "{addr} should be invalid");
+        }
+    }
+}
+```
+
+---
+
+### File: `core\src\excel_open_xml.rs`
+
+```rust
+use crate::addressing::address_to_index;
+use crate::workbook::{Cell, CellAddress, CellValue, Grid, Row, Sheet, SheetKind, Workbook};
+use quick_xml::Reader;
+use quick_xml::events::{BytesStart, Event};
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
+use thiserror::Error;
+use zip::ZipArchive;
+use zip::result::ZipError;
+
+#[derive(Debug, Error)]
+pub enum ExcelOpenError {
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("not a ZIP container")]
+    NotZipContainer,
+    #[error("not an Excel Open XML package")]
+    NotExcelOpenXml,
+    #[error("workbook.xml missing or unreadable")]
+    WorkbookXmlMissing,
+    #[error("worksheet XML missing for sheet {sheet_name}")]
+    WorksheetXmlMissing { sheet_name: String },
+    #[error("XML parse error: {0}")]
+    XmlParseError(String),
+}
+
+struct SheetDescriptor {
+    name: String,
+    rel_id: Option<String>,
+    sheet_id: Option<u32>,
+}
+
+pub fn open_workbook(path: impl AsRef<Path>) -> Result<Workbook, ExcelOpenError> {
+    let mut archive = open_zip(path.as_ref())?;
+
+    if archive.by_name("[Content_Types].xml").is_err() {
+        return Err(ExcelOpenError::NotExcelOpenXml);
+    }
+
+    let shared_strings = match read_zip_file_optional(&mut archive, "xl/sharedStrings.xml") {
+        Ok(Some(bytes)) => parse_shared_strings(&bytes)?,
+        Ok(None) => Vec::new(),
+        Err(e) => return Err(e),
+    };
+
+    let workbook_bytes = match read_zip_file(&mut archive, "xl/workbook.xml") {
+        Ok(bytes) => bytes,
+        Err(ZipError::FileNotFound) => return Err(ExcelOpenError::WorkbookXmlMissing),
+        Err(ZipError::Io(e)) => return Err(ExcelOpenError::Io(e)),
+        Err(e) => return Err(ExcelOpenError::XmlParseError(e.to_string())),
+    };
+
+    let sheets = parse_workbook_xml(&workbook_bytes)?;
+
+    let relationships = match read_zip_file_optional(&mut archive, "xl/_rels/workbook.xml.rels") {
+        Ok(Some(bytes)) => parse_relationships(&bytes)?,
+        Ok(None) => HashMap::new(),
+        Err(e) => return Err(e),
+    };
+
+    let mut sheet_ir = Vec::with_capacity(sheets.len());
+    for (idx, sheet) in sheets.iter().enumerate() {
+        let target = resolve_sheet_target(sheet, &relationships, idx);
+        let sheet_bytes = match read_zip_file(&mut archive, &target) {
+            Ok(bytes) => bytes,
+            Err(ZipError::FileNotFound) => {
+                return Err(ExcelOpenError::WorksheetXmlMissing {
+                    sheet_name: sheet.name.clone(),
+                });
+            }
+            Err(ZipError::Io(e)) => return Err(ExcelOpenError::Io(e)),
+            Err(e) => return Err(ExcelOpenError::XmlParseError(e.to_string())),
+        };
+        let grid = parse_sheet_xml(&sheet_bytes, &shared_strings)?;
+        sheet_ir.push(Sheet {
+            name: sheet.name.clone(),
+            kind: SheetKind::Worksheet,
+            grid,
+        });
+    }
+
+    Ok(Workbook { sheets: sheet_ir })
+}
+
+fn open_zip(path: &Path) -> Result<ZipArchive<File>, ExcelOpenError> {
+    let file = File::open(path)?;
+    ZipArchive::new(file).map_err(|err| match err {
+        ZipError::InvalidArchive(_) | ZipError::UnsupportedArchive(_) => {
+            ExcelOpenError::NotZipContainer
+        }
+        ZipError::Io(e) => ExcelOpenError::Io(e),
+        other => ExcelOpenError::XmlParseError(other.to_string()),
+    })
+}
+
+fn read_zip_file(
+    archive: &mut ZipArchive<File>,
+    name: &str,
+) -> Result<Vec<u8>, zip::result::ZipError> {
+    let mut file = archive.by_name(name)?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf)?;
+    Ok(buf)
+}
+
+fn read_zip_file_optional(
+    archive: &mut ZipArchive<File>,
+    name: &str,
+) -> Result<Option<Vec<u8>>, ExcelOpenError> {
+    match read_zip_file(archive, name) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(ZipError::FileNotFound) => Ok(None),
+        Err(ZipError::Io(e)) => Err(ExcelOpenError::Io(e)),
+        Err(e) => Err(ExcelOpenError::XmlParseError(e.to_string())),
+    }
+}
+
+fn parse_shared_strings(xml: &[u8]) -> Result<Vec<String>, ExcelOpenError> {
+    let mut reader = Reader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buf = Vec::new();
+    let mut strings = Vec::new();
+    let mut current = String::new();
+    let mut in_si = false;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) if e.name().as_ref() == b"si" => {
+                current.clear();
+                in_si = true;
+            }
+            Ok(Event::Start(e)) if e.name().as_ref() == b"t" && in_si => {
+                let text = reader
+                    .read_text(e.name())
+                    .map_err(|e| ExcelOpenError::XmlParseError(e.to_string()))?
+                    .into_owned();
+                current.push_str(&text);
+            }
+            Ok(Event::End(e)) if e.name().as_ref() == b"si" => {
+                strings.push(current.clone());
+                in_si = false;
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(ExcelOpenError::XmlParseError(e.to_string())),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(strings)
+}
+
+fn parse_workbook_xml(xml: &[u8]) -> Result<Vec<SheetDescriptor>, ExcelOpenError> {
+    let mut reader = Reader::from_reader(xml);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    let mut sheets = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == b"sheet" => {
+                let mut name = None;
+                let mut rel_id = None;
+                let mut sheet_id = None;
+                for attr in e.attributes() {
+                    let attr = attr.map_err(|e| ExcelOpenError::XmlParseError(e.to_string()))?;
+                    match attr.key.as_ref() {
+                        b"name" => {
+                            name = Some(attr.unescape_value().map_err(to_xml_err)?.into_owned())
+                        }
+                        b"sheetId" => {
+                            let parsed = attr.unescape_value().map_err(to_xml_err)?;
+                            sheet_id = parsed.into_owned().parse::<u32>().ok();
+                        }
+                        b"r:id" => {
+                            rel_id = Some(attr.unescape_value().map_err(to_xml_err)?.into_owned())
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(name) = name {
+                    sheets.push(SheetDescriptor {
+                        name,
+                        rel_id,
+                        sheet_id,
+                    });
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(ExcelOpenError::XmlParseError(e.to_string())),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(sheets)
+}
+
+fn parse_relationships(xml: &[u8]) -> Result<HashMap<String, String>, ExcelOpenError> {
+    let mut reader = Reader::from_reader(xml);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    let mut map = HashMap::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == b"Relationship" => {
+                let mut id = None;
+                let mut target = None;
+                let mut rel_type = None;
+                for attr in e.attributes() {
+                    let attr = attr.map_err(|e| ExcelOpenError::XmlParseError(e.to_string()))?;
+                    match attr.key.as_ref() {
+                        b"Id" => id = Some(attr.unescape_value().map_err(to_xml_err)?.into_owned()),
+                        b"Target" => {
+                            target = Some(attr.unescape_value().map_err(to_xml_err)?.into_owned())
+                        }
+                        b"Type" => {
+                            rel_type = Some(attr.unescape_value().map_err(to_xml_err)?.into_owned())
+                        }
+                        _ => {}
+                    }
+                }
+
+                if let (Some(id), Some(target), Some(rel_type)) = (id, target, rel_type)
+                    && rel_type.contains("worksheet")
+                {
+                    map.insert(id, target);
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(ExcelOpenError::XmlParseError(e.to_string())),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(map)
+}
+
+fn resolve_sheet_target(
+    sheet: &SheetDescriptor,
+    relationships: &HashMap<String, String>,
+    index: usize,
+) -> String {
+    if let Some(rel_id) = &sheet.rel_id
+        && let Some(target) = relationships.get(rel_id)
+    {
+        return normalize_target(target);
+    }
+
+    let guessed = sheet
+        .sheet_id
+        .map(|id| format!("xl/worksheets/sheet{id}.xml"))
+        .unwrap_or_else(|| format!("xl/worksheets/sheet{}.xml", index + 1));
+    normalize_target(&guessed)
+}
+
+fn normalize_target(target: &str) -> String {
+    let trimmed = target.trim_start_matches('/');
+    if trimmed.starts_with("xl/") {
+        trimmed.to_string()
+    } else {
+        format!("xl/{trimmed}")
+    }
+}
+
+fn parse_sheet_xml(xml: &[u8], shared_strings: &[String]) -> Result<Grid, ExcelOpenError> {
+    let mut reader = Reader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buf = Vec::new();
+
+    let mut dimension_hint: Option<(u32, u32)> = None;
+    let mut parsed_cells: Vec<ParsedCell> = Vec::new();
+    let mut max_row: Option<u32> = None;
+    let mut max_col: Option<u32> = None;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == b"dimension" => {
+                if let Some(r) = get_attr_value(&e, b"ref")? {
+                    dimension_hint = dimension_from_ref(&r);
+                }
+            }
+            Ok(Event::Start(e)) if e.name().as_ref() == b"c" => {
+                let cell = parse_cell(&mut reader, e, shared_strings)?;
+                max_row = Some(max_row.map_or(cell.row, |r| r.max(cell.row)));
+                max_col = Some(max_col.map_or(cell.col, |c| c.max(cell.col)));
+                parsed_cells.push(cell);
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(ExcelOpenError::XmlParseError(e.to_string())),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    if parsed_cells.is_empty() {
+        return Ok(Grid {
+            nrows: 0,
+            ncols: 0,
+            rows: Vec::new(),
+        });
+    }
+
+    let mut nrows = dimension_hint.map(|(r, _)| r).unwrap_or(0);
+    let mut ncols = dimension_hint.map(|(_, c)| c).unwrap_or(0);
+
+    if let Some(max_r) = max_row {
+        nrows = nrows.max(max_r + 1);
+    }
+    if let Some(max_c) = max_col {
+        ncols = ncols.max(max_c + 1);
+    }
+
+    build_grid(nrows, ncols, parsed_cells)
+}
+
+fn parse_cell(
+    reader: &mut Reader<&[u8]>,
+    start: BytesStart,
+    shared_strings: &[String],
+) -> Result<ParsedCell, ExcelOpenError> {
+    let address_raw = get_attr_value(&start, b"r")?
+        .ok_or_else(|| ExcelOpenError::XmlParseError("cell missing address".into()))?;
+    let (row, col) = address_to_index(&address_raw).ok_or_else(|| {
+        ExcelOpenError::XmlParseError(format!("invalid cell address {address_raw}"))
+    })?;
+
+    let cell_type = get_attr_value(&start, b"t")?;
+
+    let mut value_text: Option<String> = None;
+    let mut formula_text: Option<String> = None;
+    let mut inline_text: Option<String> = None;
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) if e.name().as_ref() == b"v" => {
+                let text = reader
+                    .read_text(e.name())
+                    .map_err(|e| ExcelOpenError::XmlParseError(e.to_string()))?
+                    .into_owned();
+                value_text = Some(text);
+            }
+            Ok(Event::Start(e)) if e.name().as_ref() == b"f" => {
+                let text = reader
+                    .read_text(e.name())
+                    .map_err(|e| ExcelOpenError::XmlParseError(e.to_string()))?
+                    .into_owned();
+                formula_text = Some(text);
+            }
+            Ok(Event::Start(e)) if e.name().as_ref() == b"is" => {
+                inline_text = Some(read_inline_string(reader)?);
+            }
+            Ok(Event::End(e)) if e.name().as_ref() == start.name().as_ref() => break,
+            Ok(Event::Eof) => {
+                return Err(ExcelOpenError::XmlParseError(
+                    "unexpected EOF inside cell".into(),
+                ));
+            }
+            Err(e) => return Err(ExcelOpenError::XmlParseError(e.to_string())),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    let value = match inline_text {
+        Some(text) => Some(CellValue::Text(text)),
+        None => convert_value(value_text.as_deref(), cell_type.as_deref(), shared_strings)?,
+    };
+
+    Ok(ParsedCell {
+        row,
+        col,
+        value,
+        formula: formula_text,
+    })
+}
+
+fn read_inline_string(reader: &mut Reader<&[u8]>) -> Result<String, ExcelOpenError> {
+    let mut buf = Vec::new();
+    let mut value = String::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) if e.name().as_ref() == b"t" => {
+                let text = reader
+                    .read_text(e.name())
+                    .map_err(|e| ExcelOpenError::XmlParseError(e.to_string()))?
+                    .into_owned();
+                value.push_str(&text);
+            }
+            Ok(Event::End(e)) if e.name().as_ref() == b"is" => break,
+            Ok(Event::Eof) => {
+                return Err(ExcelOpenError::XmlParseError(
+                    "unexpected EOF inside inline string".into(),
+                ));
+            }
+            Err(e) => return Err(ExcelOpenError::XmlParseError(e.to_string())),
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(value)
+}
+
+fn convert_value(
+    value_text: Option<&str>,
+    cell_type: Option<&str>,
+    shared_strings: &[String],
+) -> Result<Option<CellValue>, ExcelOpenError> {
+    let raw = match value_text {
+        Some(t) => t,
+        None => return Ok(None),
+    };
+
+    let trimmed = raw.trim();
+    if raw.is_empty() || trimmed.is_empty() {
+        return Ok(Some(CellValue::Text(String::new())));
+    }
+
+    match cell_type {
+        Some("s") => {
+            let idx = trimmed
+                .parse::<usize>()
+                .map_err(|e| ExcelOpenError::XmlParseError(e.to_string()))?;
+            Ok(shared_strings.get(idx).cloned().map(CellValue::Text))
+        }
+        Some("b") => Ok(match trimmed {
+            "1" => Some(CellValue::Bool(true)),
+            "0" => Some(CellValue::Bool(false)),
+            _ => None,
+        }),
+        Some("str") | Some("inlineStr") => Ok(Some(CellValue::Text(trimmed.to_string()))),
+        _ => {
+            if let Ok(n) = trimmed.parse::<f64>() {
+                Ok(Some(CellValue::Number(n)))
+            } else {
+                Ok(Some(CellValue::Text(trimmed.to_string())))
+            }
+        }
+    }
+}
+
+fn dimension_from_ref(reference: &str) -> Option<(u32, u32)> {
+    let mut parts = reference.split(':');
+    let start = parts.next()?;
+    let end = parts.next().unwrap_or(start);
+    let (start_row, start_col) = address_to_index(start)?;
+    let (end_row, end_col) = address_to_index(end)?;
+    let height = end_row.checked_sub(start_row)?.checked_add(1)?;
+    let width = end_col.checked_sub(start_col)?.checked_add(1)?;
+    Some((height, width))
+}
+
+fn build_grid(nrows: u32, ncols: u32, cells: Vec<ParsedCell>) -> Result<Grid, ExcelOpenError> {
+    if nrows == 0 || ncols == 0 {
+        return Ok(Grid {
+            nrows: 0,
+            ncols: 0,
+            rows: Vec::new(),
+        });
+    }
+
+    let mut rows = Vec::with_capacity(nrows as usize);
+    for r in 0..nrows {
+        let mut row_cells = Vec::with_capacity(ncols as usize);
+        for c in 0..ncols {
+            row_cells.push(Cell {
+                row: r,
+                col: c,
+                address: CellAddress::from_indices(r, c),
+                value: None,
+                formula: None,
+            });
+        }
+        rows.push(Row {
+            index: r,
+            cells: row_cells,
+        });
+    }
+
+    for parsed in cells {
+        if let Some(row) = rows.get_mut(parsed.row as usize)
+            && let Some(cell) = row.cells.get_mut(parsed.col as usize)
+        {
+            cell.value = parsed.value;
+            cell.formula = parsed.formula;
+        }
+    }
+
+    Ok(Grid { nrows, ncols, rows })
+}
+
+fn get_attr_value(element: &BytesStart<'_>, key: &[u8]) -> Result<Option<String>, ExcelOpenError> {
+    for attr in element.attributes() {
+        let attr = attr.map_err(|e| ExcelOpenError::XmlParseError(e.to_string()))?;
+        if attr.key.as_ref() == key {
+            return Ok(Some(
+                attr.unescape_value().map_err(to_xml_err)?.into_owned(),
+            ));
+        }
+    }
+    Ok(None)
+}
+
+fn to_xml_err(err: quick_xml::Error) -> ExcelOpenError {
+    ExcelOpenError::XmlParseError(err.to_string())
+}
+
+struct ParsedCell {
+    row: u32,
+    col: u32,
+    value: Option<CellValue>,
+    formula: Option<String>,
+}
+```
+
+---
+
+### File: `core\src\lib.rs`
+
+```rust
+pub mod addressing;
+#[cfg(feature = "excel-open-xml")]
+pub mod excel_open_xml;
+pub mod workbook;
+
+pub use addressing::{address_to_index, index_to_address};
+#[cfg(feature = "excel-open-xml")]
+pub use excel_open_xml::{ExcelOpenError, open_workbook};
+pub use workbook::{Cell, CellAddress, CellValue, Grid, Row, Sheet, SheetKind, Workbook};
 ```
 
 ---
@@ -97,6 +753,204 @@ fn main() {
 
 ---
 
+### File: `core\src\workbook.rs`
+
+```rust
+use crate::addressing::index_to_address;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Workbook {
+    pub sheets: Vec<Sheet>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sheet {
+    pub name: String,
+    pub kind: SheetKind,
+    pub grid: Grid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SheetKind {
+    Worksheet,
+    Chart,
+    Macro,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Grid {
+    pub nrows: u32,
+    pub ncols: u32,
+    pub rows: Vec<Row>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Row {
+    pub index: u32,
+    pub cells: Vec<Cell>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Cell {
+    pub row: u32,
+    pub col: u32,
+    pub address: CellAddress,
+    pub value: Option<CellValue>,
+    pub formula: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CellAddress {
+    pub row: u32,
+    pub col: u32,
+}
+
+impl CellAddress {
+    pub fn from_indices(row: u32, col: u32) -> CellAddress {
+        CellAddress { row, col }
+    }
+
+    pub fn to_a1(&self) -> String {
+        index_to_address(self.row, self.col)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CellValue {
+    Number(f64),
+    Text(String),
+    Bool(bool),
+}
+
+impl CellValue {
+    pub fn as_text(&self) -> Option<&str> {
+        if let CellValue::Text(s) = self {
+            Some(s)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_number(&self) -> Option<f64> {
+        if let CellValue::Number(n) = self {
+            Some(*n)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_bool(&self) -> Option<bool> {
+        if let CellValue::Bool(b) = self {
+            Some(*b)
+        } else {
+            None
+        }
+    }
+}
+```
+
+---
+
+### File: `core\tests\addressing_pg2_tests.rs`
+
+```rust
+use excel_diff::{CellValue, address_to_index, index_to_address, open_workbook};
+
+mod common;
+use common::fixture_path;
+
+#[test]
+fn pg2_addressing_matrix_consistency() {
+    let workbook =
+        open_workbook(fixture_path("pg2_addressing_matrix.xlsx")).expect("address fixture opens");
+    let sheet_names: Vec<String> = workbook.sheets.iter().map(|s| s.name.clone()).collect();
+    let sheet = workbook
+        .sheets
+        .iter()
+        .find(|s| s.name == "Addresses")
+        .unwrap_or_else(|| panic!("Addresses sheet present; found {:?}", sheet_names));
+
+    for row in &sheet.grid.rows {
+        for cell in &row.cells {
+            if let Some(CellValue::Text(text)) = &cell.value {
+                assert_eq!(cell.address.to_a1(), text.as_str());
+                let (r, c) =
+                    address_to_index(text).expect("address strings should parse to indices");
+                assert_eq!((r, c), (cell.row, cell.col));
+                assert_eq!(index_to_address(cell.row, cell.col), cell.address.to_a1());
+            }
+        }
+    }
+}
+```
+
+---
+
+### File: `core\tests\excel_open_xml_tests.rs`
+
+```rust
+use std::fs;
+use std::io::ErrorKind;
+
+use excel_diff::{ExcelOpenError, SheetKind, open_workbook};
+
+mod common;
+use common::fixture_path;
+
+#[test]
+fn open_minimal_workbook_succeeds() {
+    let path = fixture_path("minimal.xlsx");
+    let workbook = open_workbook(&path).expect("minimal workbook should open");
+    assert_eq!(workbook.sheets.len(), 1);
+
+    let sheet = &workbook.sheets[0];
+    assert_eq!(sheet.name, "Sheet1");
+    assert!(matches!(sheet.kind, SheetKind::Worksheet));
+    assert_eq!(sheet.grid.nrows, 1);
+    assert_eq!(sheet.grid.ncols, 1);
+
+    let cell = &sheet.grid.rows[0].cells[0];
+    assert_eq!(cell.address.to_a1(), "A1");
+    assert!(cell.value.is_some());
+}
+
+#[test]
+fn open_nonexistent_file_returns_io_error() {
+    let path = fixture_path("definitely_missing.xlsx");
+    let err = open_workbook(&path).expect_err("missing file should error");
+    match err {
+        ExcelOpenError::Io(e) => assert_eq!(e.kind(), ErrorKind::NotFound),
+        other => panic!("expected Io error, got {other:?}"),
+    }
+}
+
+#[test]
+fn random_zip_is_not_excel() {
+    let path = fixture_path("random_zip.zip");
+    let err = open_workbook(&path).expect_err("random zip should not parse");
+    assert!(matches!(err, ExcelOpenError::NotExcelOpenXml));
+}
+
+#[test]
+fn no_content_types_is_not_excel() {
+    let path = fixture_path("no_content_types.xlsx");
+    let err = open_workbook(&path).expect_err("missing content types should fail");
+    assert!(matches!(err, ExcelOpenError::NotExcelOpenXml));
+}
+
+#[test]
+fn not_zip_container_returns_error() {
+    let path = std::env::temp_dir().join("excel_diff_not_zip.txt");
+    fs::write(&path, "this is not a zip container").expect("write temp file");
+    let err = open_workbook(&path).expect_err("non-zip should fail");
+    assert!(matches!(err, ExcelOpenError::NotZipContainer));
+    let _ = fs::remove_file(&path);
+}
+```
+
+---
+
 ### File: `core\tests\integration_test.rs`
 
 ```rust
@@ -105,7 +959,7 @@ use std::path::PathBuf;
 fn get_fixture_path(filename: &str) -> PathBuf {
     let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     // Go up one level from 'core', then into 'fixtures/generated'
-    d.push("../fixtures/generated"); 
+    d.push("../fixtures/generated");
     d.push(filename);
     d
 }
@@ -115,9 +969,163 @@ fn test_locate_fixture() {
     let path = get_fixture_path("minimal.xlsx");
     // This test confirms that the Rust code can locate the Python-generated fixtures
     // using the relative path strategy from the monorepo root.
-    assert!(path.exists(), "Fixture minimal.xlsx should exist at {:?}", path);
+    assert!(
+        path.exists(),
+        "Fixture minimal.xlsx should exist at {:?}",
+        path
+    );
+}
+```
+
+---
+
+### File: `core\tests\pg1_ir_tests.rs`
+
+```rust
+use excel_diff::{CellValue, Sheet, SheetKind, open_workbook};
+
+mod common;
+use common::fixture_path;
+
+#[test]
+fn pg1_basic_two_sheets_structure() {
+    let workbook = open_workbook(fixture_path("pg1_basic_two_sheets.xlsx"))
+        .expect("pg1 basic fixture should open");
+    assert_eq!(workbook.sheets.len(), 2);
+    assert_eq!(workbook.sheets[0].name, "Sheet1");
+    assert_eq!(workbook.sheets[1].name, "Sheet2");
+    assert!(matches!(workbook.sheets[0].kind, SheetKind::Worksheet));
+    assert!(matches!(workbook.sheets[1].kind, SheetKind::Worksheet));
+
+    let sheet1 = &workbook.sheets[0];
+    assert_eq!(sheet1.grid.nrows, 3);
+    assert_eq!(sheet1.grid.ncols, 3);
+    assert_eq!(
+        sheet1.grid.rows[0].cells[0]
+            .value
+            .as_ref()
+            .and_then(CellValue::as_text),
+        Some("R1C1")
+    );
+
+    let sheet2 = &workbook.sheets[1];
+    assert_eq!(sheet2.grid.nrows, 5);
+    assert_eq!(sheet2.grid.ncols, 2);
+    assert_eq!(
+        sheet2.grid.rows[0].cells[0]
+            .value
+            .as_ref()
+            .and_then(CellValue::as_text),
+        Some("S2_R1C1")
+    );
 }
 
+#[test]
+fn pg1_sparse_used_range_extents() {
+    let workbook =
+        open_workbook(fixture_path("pg1_sparse_used_range.xlsx")).expect("sparse fixture opens");
+    let sheet = workbook
+        .sheets
+        .iter()
+        .find(|s| s.name == "Sparse")
+        .expect("Sparse sheet present");
+
+    assert_eq!(sheet.grid.nrows, 10);
+    assert_eq!(sheet.grid.ncols, 7);
+
+    assert_cell_text(sheet, 0, 0, "A1");
+    assert_cell_text(sheet, 1, 1, "B2");
+    assert_cell_text(sheet, 9, 6, "G10");
+
+    for row in &sheet.grid.rows {
+        assert_eq!(row.cells.len() as u32, sheet.grid.ncols);
+    }
+}
+
+#[test]
+fn pg1_empty_and_mixed_sheets() {
+    let workbook = open_workbook(fixture_path("pg1_empty_and_mixed_sheets.xlsx"))
+        .expect("mixed sheets fixture opens");
+
+    let empty = sheet_by_name(&workbook, "Empty");
+    assert_eq!(empty.grid.nrows, 0);
+    assert_eq!(empty.grid.ncols, 0);
+    assert!(empty.grid.rows.is_empty());
+
+    let values_only = sheet_by_name(&workbook, "ValuesOnly");
+    assert_eq!(values_only.grid.nrows, 10);
+    assert_eq!(values_only.grid.ncols, 10);
+    assert!(
+        values_only
+            .grid
+            .rows
+            .iter()
+            .flat_map(|r| &r.cells)
+            .all(|c| c.value.is_some() && c.formula.is_none()),
+        "ValuesOnly cells should have values and no formulas"
+    );
+    assert_eq!(
+        values_only.grid.rows[0].cells[0]
+            .value
+            .as_ref()
+            .and_then(CellValue::as_number),
+        Some(1.0)
+    );
+
+    let formulas = sheet_by_name(&workbook, "FormulasOnly");
+    assert_eq!(formulas.grid.nrows, 10);
+    assert_eq!(formulas.grid.ncols, 10);
+    let first = &formulas.grid.rows[0].cells[0];
+    assert_eq!(first.formula.as_deref(), Some("ValuesOnly!A1"));
+    assert!(
+        first.value.is_some(),
+        "Formulas should surface cached values when present"
+    );
+    assert!(
+        formulas
+            .grid
+            .rows
+            .iter()
+            .flat_map(|r| &r.cells)
+            .all(|c| c.formula.is_some()),
+        "All cells should carry formulas in FormulasOnly"
+    );
+}
+
+fn sheet_by_name<'a>(workbook: &'a excel_diff::Workbook, name: &str) -> &'a Sheet {
+    workbook
+        .sheets
+        .iter()
+        .find(|s| s.name == name)
+        .unwrap_or_else(|| panic!("sheet {name} not found"))
+}
+
+fn assert_cell_text(sheet: &Sheet, row: u32, col: u32, expected: &str) {
+    let cell = &sheet.grid.rows[row as usize].cells[col as usize];
+    assert_eq!(cell.address.to_a1(), expected);
+    assert_eq!(
+        cell.value
+            .as_ref()
+            .and_then(CellValue::as_text)
+            .unwrap_or(""),
+        expected
+    );
+}
+```
+
+---
+
+### File: `core\tests\common\mod.rs`
+
+```rust
+use std::path::PathBuf;
+
+pub fn fixture_path(filename: &str) -> PathBuf {
+    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    path.push("../fixtures/generated");
+    path.push(filename);
+    path
+}
 ```
 
 ---

@@ -44,6 +44,8 @@ Copy this template into your branch-specific logs directory (e.g., `docs/meta/lo
 
 ## Post-Implementation Verification
 
+- [ ] Run `python docs/meta/prompts/generate_review_context.py --collate` to collate review files
+- [ ] Start new chat, paste instruction from clipboard, attach collated files from `~/Downloads/[branch-name]/`
 - [ ] Verification review completed
 - [ ] Verification report saved (`verification_report.md`)
 - [ ] Recommendation: ____________________
