@@ -203,12 +203,13 @@ fn read_datamashup_text(xml: &[u8]) -> Result<Option<String>, ExcelOpenError> {
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
     let mut in_datamashup = false;
+    let mut found_content: Option<String> = None;
     let mut content = String::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) if is_datamashup_element(e.name().as_ref()) => {
-                if in_datamashup {
+                if in_datamashup || found_content.is_some() {
                     return Err(ExcelOpenError::DataMashupFramingInvalid);
                 }
                 in_datamashup = true;
@@ -225,13 +226,17 @@ fn read_datamashup_text(xml: &[u8]) -> Result<Option<String>, ExcelOpenError> {
                 let data = t.into_inner();
                 content.push_str(&String::from_utf8_lossy(&data));
             }
-            Ok(Event::End(e)) if in_datamashup && is_datamashup_element(e.name().as_ref()) => {
-                return Ok(Some(content));
+            Ok(Event::End(e)) if is_datamashup_element(e.name().as_ref()) => {
+                if !in_datamashup {
+                    return Err(ExcelOpenError::DataMashupFramingInvalid);
+                }
+                in_datamashup = false;
+                found_content = Some(content.clone());
             }
             Ok(Event::Eof) if in_datamashup => {
                 return Err(ExcelOpenError::DataMashupFramingInvalid);
             }
-            Ok(Event::Eof) => return Ok(None),
+            Ok(Event::Eof) => return Ok(found_content),
             Err(e) => return Err(ExcelOpenError::XmlParseError(e.to_string())),
             _ => {}
         }
@@ -735,7 +740,7 @@ struct ParsedCell {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExcelOpenError, RawDataMashup, parse_data_mashup};
+    use super::{ExcelOpenError, RawDataMashup, parse_data_mashup, read_datamashup_text};
 
     fn build_dm_bytes(
         version: u32,
@@ -811,6 +816,40 @@ mod tests {
         let mut bytes = build_dm_bytes(0, b"", b"", b"", b"");
         bytes.push(0xFF);
         let err = parse_data_mashup(&bytes).expect_err("trailing bytes should fail");
+        assert!(matches!(err, ExcelOpenError::DataMashupFramingInvalid));
+    }
+
+    #[test]
+    fn too_short_stream_is_framing_invalid() {
+        let bytes = vec![0u8; 8];
+        let err =
+            parse_data_mashup(&bytes).expect_err("buffer shorter than header must be invalid");
+        assert!(matches!(err, ExcelOpenError::DataMashupFramingInvalid));
+    }
+
+    #[test]
+    fn utf16_datamashup_xml_decodes_correctly() {
+        let xml_text = r#"<?xml version="1.0" encoding="utf-16"?><root xmlns:dm="http://schemas.microsoft.com/DataMashup"><dm:DataMashup>QQ==</dm:DataMashup></root>"#;
+        let mut xml_bytes = Vec::with_capacity(2 + xml_text.len() * 2);
+        xml_bytes.extend_from_slice(&[0xFF, 0xFE]);
+        for unit in xml_text.encode_utf16() {
+            xml_bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+
+        let text = read_datamashup_text(&xml_bytes)
+            .expect("UTF-16 XML should parse")
+            .expect("DataMashup element should be found");
+        assert_eq!(text.trim(), "QQ==");
+    }
+
+    #[test]
+    fn duplicate_sibling_datamashup_elements_error() {
+        let xml = br#"<?xml version="1.0"?>
+<root xmlns:dm="http://schemas.microsoft.com/DataMashup">
+  <dm:DataMashup>QQ==</dm:DataMashup>
+  <dm:DataMashup>QQ==</dm:DataMashup>
+</root>"#;
+        let err = read_datamashup_text(xml).expect_err("duplicate DataMashup elements should fail");
         assert!(matches!(err, ExcelOpenError::DataMashupFramingInvalid));
     }
 
