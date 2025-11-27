@@ -80,6 +80,10 @@ fixtures/generated/*.xlsx
 fixtures/generated/*.pbix
 fixtures/generated/*.zip
 fixtures/generated/*.csv
+
+
+# Docs
+docs/meta/completion_estimates/
 ```
 
 ---

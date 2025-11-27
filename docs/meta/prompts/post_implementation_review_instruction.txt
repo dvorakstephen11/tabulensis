@@ -7,7 +7,7 @@ Your role is defined in Section 5.4 of `docs/rust_docs/excel_diff_meta_programmi
 You have been provided with:
 1. **Codebase Snapshot**: `codebase_context.md` contains the current directory structure and the contents of all relevant source code and configuration files, reflecting the state AFTER implementation.
 2. **Documentation**: The `excel_diff_*.md` files contain the technical blueprints and meta-process guide.
-3. **Original Plan**: The decision record (`decision_[branch-name].txt`) and mini-spec (`mini_spec_[branch-name].md`) produced by the Planner Agent for this cycle.
+3. **Original Plan**: The decision record (`decision_[branch-name].yaml`) and mini-spec (`spec_[branch-name].md`) produced by the Planner Agent for this cycle.
 4. **Cycle Summary**: `cycle_summary.txt` contains the activity log (implementer's changes), test results, and a manifest of all provided files.
 
 ## Your Goal
@@ -119,4 +119,14 @@ Your goal is to independently verify that the implementation correctly and compl
 ```
 
 Do not implement the fixes yourself. Your output is the verification report and remediation plan (if needed) that an Implementer Agent will use.
+
+## Where to Save Output
+
+Save your outputs to `docs/meta/reviews/[branch-name]/`:
+- `verification.md` — The final verification report (after all remediations are complete)
+- `remediation.md` — First remediation plan (if issues found)
+- `remediation-1.md` — Second remediation plan (if needed after first round of fixes)
+- `remediation-2.md` — Third remediation plan (and so on)
+
+The verification report is only saved once all critical and moderate issues are resolved. Until then, iterate with remediation plans.
 

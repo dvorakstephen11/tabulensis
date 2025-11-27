@@ -21,10 +21,12 @@ You will have access to some or all of the following:
 - `excel_diff_product_differentiation_plan.md` — Product roadmap and competitive positioning.
 
 **Cycle Artifacts** (in `docs/meta/`)
-- `plans/[branch-name].md` — Mini-specs defining scope, behavioral contracts, and test plans for each cycle.
-- `plans/[branch-name].yaml` — Decision records explaining why work was chosen.
+- `plans/[branch-name]/spec.md` — Mini-specs defining scope, behavioral contracts, and test plans for each cycle.
+- `plans/[branch-name]/decision.yaml` — Decision records explaining why work was chosen.
 - `logs/[branch-name]/activity_log.txt` — Implementer's log of changes and decisions during a cycle.
 - `results/[branch-name].txt` — Test output from the cycle.
+- `reviews/[branch-name]/verification.md` — Final verification report for the cycle.
+- `reviews/[branch-name]/remediation.md` — Remediation plan (if issues found); subsequent iterations use `-1.md`, `-2.md`, etc.
 - `retrospectives/` — Post-cycle learnings and process improvements.
 
 **Business Context** (in `docs/`)
@@ -90,7 +92,7 @@ Estimate completion along at least these three axes, each as a percentage from 0
 3. **Percent of dev time in days (extrapolated)**
    - Use the following sources to estimate elapsed dev time:
      - **Activity logs** in `docs/meta/logs/[branch-name]/activity_log.txt` for each cycle.
-     - **Decision records** in `docs/meta/plans/[branch-name].yaml` which include difficulty estimates.
+     - **Decision records** in `docs/meta/plans/[branch-name]/decision.yaml` which include difficulty estimates.
      - **Git commit history** (branch names include dates: `YYYY-MM-DD-description`).
      - **Retrospectives** in `docs/meta/retrospectives/` for cycle duration insights.
    - Estimate:
@@ -206,7 +208,8 @@ If you identify any other useful quantitative or qualitative metrics for “comp
      - TODO/FIXME comments,
      - Git commit history (branch names: `YYYY-MM-DD-description`),
      - Activity logs (`docs/meta/logs/[branch-name]/activity_log.txt`),
-     - Decision records (`docs/meta/plans/[branch-name].yaml`),
+     - Decision records (`docs/meta/plans/[branch-name]/decision.yaml`),
+     - Verification reports (`docs/meta/reviews/[branch-name]/verification.md`),
      - Test results (`docs/meta/results/[branch-name].txt`).
    - Do not rely solely on any single metric like LOC or commit count.
 
@@ -251,25 +254,3 @@ Return a structured report with:
    - Reference specific risks from `excel_diff_difficulty_analysis.md` if applicable.
 
 Your goal is not to be perfectly precise, but to provide **realistic, grounded ranges** and a clear explanation of how close this codebase is to a shippable, production-ready version of the intended product.
-
---------------------
-6. Using the collate workflow
---------------------
-
-To gather all relevant artifacts for this analysis, you can use:
-
-```bash
-python docs/meta/prompts/generate_review_context.py --collate [branch-name]
-```
-
-This packages the following into a single output directory (in Downloads):
-- All `docs/rust_docs/*.md` files (technical blueprints)
-- The mini-spec (`mini_spec_[branch-name].md`)
-- The decision record (`decision_[branch-name].txt`)
-- The codebase context (`codebase_context.md` — generated review snapshot)
-- A combined `cycle_summary.txt` containing:
-  - Activity log from the cycle
-  - Test results from the cycle
-  - Manifest of all included files
-
-This collated package provides a comprehensive view of both the planned and actual work for the most recent development cycle.

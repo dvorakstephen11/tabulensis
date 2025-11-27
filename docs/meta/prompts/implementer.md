@@ -9,12 +9,12 @@ Your role is defined in Section 4 of `docs/rust_docs/excel_diff_meta_programming
 You have been provided with:
 
 1. **Codebase**: Full access to the current repository via Cursor's file tools.
-2. **Mini-Spec**: The plan for this cycle at `docs/meta/plans/[branch-name].md`, containing:
+2. **Mini-Spec**: The plan for this cycle at `docs/meta/plans/[branch-name]/spec.md`, containing:
    - Scope of changes
    - Behavioral contract
    - Constraints
    - Test plan with specific tests and fixtures
-3. **Decision Record**: The rationale at `docs/meta/plans/[branch-name].yaml`.
+3. **Decision Record**: The rationale at `docs/meta/plans/[branch-name]/decision.yaml`.
 4. **Documentation**: `docs/rust_docs/` contains the technical blueprints and meta-process guide.
 
 ## Your Goal
@@ -98,7 +98,7 @@ When complete, the following must be true:
 
 To begin implementation for the current cycle:
 
-1. Read `docs/meta/plans/[branch-name].md` (the mini-spec).
+1. Read `docs/meta/plans/[branch-name]/spec.md` (the mini-spec).
 2. Create the activity log file at `docs/meta/logs/[branch-name]/activity_log.txt`.
 3. Start implementing the first scope item.
 4. After each logical unit, run `cargo check` to catch errors early.

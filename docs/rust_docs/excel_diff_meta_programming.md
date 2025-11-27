@@ -123,9 +123,9 @@ The planner then chooses one of three work types:
 * **Milestone progress**: implement work toward an existing testing or product milestone.
 * **New incremental milestone**: define a smaller milestone that sits between the current state and a larger existing milestone, when the gap is too large to cross in a single cycle.
 
-This choice is recorded in a decision file named after the branch, for example:
+This choice is recorded in a decision file in a branch-named subdirectory, for example:
 
-`plans/feature-grid-alignment.yml`
+`plans/feature-grid-alignment/decision.yaml`
 
 A typical decision record contains:
 
@@ -139,7 +139,7 @@ Decision records are append-only. They provide a historical trace of why each cy
 
 ### 3.2 Specification and tests-first
 
-Once the work type is chosen, the planner writes a mini-spec for the cycle, stored under `plans/` with the same branch name as the decision record but with a `.md` extension (for example, `plans/feature-grid-alignment.md`).
+Once the work type is chosen, the planner writes a mini-spec for the cycle, stored in the same branch-named subdirectory as the decision record (for example, `plans/feature-grid-alignment/spec.md`).
 
 The mini-spec describes:
 
@@ -196,7 +196,7 @@ Inside this directory, the following files are required:
 
 The standard implementer prompt is stored at `prompts/implementer.md` and is used together with the cycle's mini-spec to initiate implementation. If a cycle requires a customized prompt, it may be stored as `prompt_original.md` in this directory.
 
-The planning artifacts (decision record and mini-spec) are stored separately in `plans/` as described in Section 3.
+The planning artifacts (decision record and mini-spec) are stored in `plans/[branch-name]/` as described in Section 3.
 
 The activity log includes:
 
@@ -322,24 +322,33 @@ The post-implementation reviewer's goal is to find discrepancies, gaps, or bugs 
 
 #### Verification review output
 
-The post-implementation reviewer produces a verification report stored under the branch-specific logs directory, for example:
+The post-implementation reviewer produces artifacts stored under a branch-specific reviews directory, for example:
 
-`logs/feature-excel-parsing-v1/verification_report.md`
+`reviews/feature-excel-parsing-v1/verification.md`
 
-This report contains:
+The verification report contains:
 
 * A summary of findings (gaps, bugs, missing tests, deviations from spec).
 * A severity assessment for each finding (critical, moderate, minor).
 * A recommendation: either "proceed to release" or "remediation required."
 
-If remediation is required, the post-implementation reviewer also produces:
+If remediation is required, the post-implementation reviewer also produces a remediation plan:
 
-* A remediation plan (similar in format to a mini-spec) describing what must be fixed.
-* Updated or new test definitions to cover the identified gaps.
+`reviews/feature-excel-parsing-v1/remediation.md`
 
-The remediation plan is then executed by the implementer agent in a follow-up pass within the same cycle. After remediation, tests are re-run and the verification review may be repeated if significant changes were made.
+This plan contains:
 
-Only after the post-implementation reviewer recommends proceeding does the cycle move to release.
+* A description of what must be fixed and why.
+* Specific code changes or additions needed.
+* Tests to add or modify to cover the identified gaps.
+
+The remediation plan is then executed by the implementer agent in a follow-up pass within the same cycle. If multiple rounds of remediation are needed, subsequent plans are numbered:
+
+* `remediation.md` — first remediation
+* `remediation-1.md` — second remediation
+* `remediation-2.md` — and so on
+
+After each remediation, tests are re-run and the verification review may be repeated. Only after the final verification report recommends proceeding does the cycle move to release. The final `verification.md` file serves as the sign-off for release.
 
 ---
 
