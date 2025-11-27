@@ -65,6 +65,7 @@ Create an activity log at `docs/meta/logs/[branch-name]/activity_log.txt` as you
 - Files created or modified and why.
 - Key structural decisions made.
 - Any deviations from the mini-spec with reasoning.
+- Troubles you encountered and how you resolved them.
 - Open questions or follow-ups for future cycles.
 
 This log is used by the Post-Implementation Verification Reviewer and in retrospectives.

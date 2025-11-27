@@ -5,9 +5,9 @@ Setup script for a new development cycle.
 This script automates the creation of cycle artifacts based on the current git branch:
 1. Creates a logs directory: docs/meta/logs/[branch-name]/
 2. Copies the checklist template to that directory as checklist.md
-3. Creates placeholder files in docs/meta/plans/:
-   - [branch-name].md (for mini-spec)
-   - [branch-name].yaml (for decision record)
+3. Creates a plans directory: docs/meta/plans/[branch-name]/
+   - spec.md (for spec)
+   - decision.yaml (for decision record)
 
 Usage:
     python docs/setup_cycle.py
@@ -70,19 +70,24 @@ def main():
             print(f"Error: Checklist template not found: {checklist_template}")
             sys.exit(1)
     
-    plans_dir.mkdir(parents=True, exist_ok=True)
-    
-    mini_spec_file = plans_dir / f"{branch_name}.md"
-    if mini_spec_file.exists():
-        print(f"Warning: Mini-spec file already exists: {mini_spec_file}")
+    branch_plans_dir = plans_dir / branch_name
+    if branch_plans_dir.exists():
+        print(f"Warning: Plans directory already exists: {branch_plans_dir}")
     else:
-        mini_spec_file.write_text(
-            f"# Mini-Spec: {branch_name}\n\n<!-- Paste mini-spec content here -->\n",
+        branch_plans_dir.mkdir(parents=True)
+        print(f"Created: {branch_plans_dir}")
+    
+    spec_file = branch_plans_dir / "spec.md"
+    if spec_file.exists():
+        print(f"Warning: Spec file already exists: {spec_file}")
+    else:
+        spec_file.write_text(
+            f"# Spec: {branch_name}\n\n<!-- Paste spec content here -->\n",
             encoding="utf-8",
         )
-        print(f"Created: {mini_spec_file}")
+        print(f"Created: {spec_file}")
     
-    decision_file = plans_dir / f"{branch_name}.yaml"
+    decision_file = branch_plans_dir / "decision.yaml"
     if decision_file.exists():
         print(f"Warning: Decision record already exists: {decision_file}")
     else:
@@ -95,7 +100,7 @@ def main():
     print("\nCycle setup complete!")
     print(f"\nNext steps:")
     print(f"  1. Paste your decision YAML into: {decision_file.relative_to(repo_root)}")
-    print(f"  2. Paste your mini-spec into: {mini_spec_file.relative_to(repo_root)}")
+    print(f"  2. Paste your spec into: {spec_file.relative_to(repo_root)}")
     print(f"  3. Track progress using: {checklist_dest.relative_to(repo_root)}")
 
 

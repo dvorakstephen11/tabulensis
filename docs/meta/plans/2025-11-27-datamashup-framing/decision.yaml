@@ -1,0 +1,134 @@
+cycle_id: "2025-11-27-datamashup-framing"
+date: "2025-11-27"
+
+work_type: "milestone_progress"
+
+target_subsystem:
+  - "excel_data_mashup_host"
+  - "data_mashup_framing"
+  - "excel_container_open"
+
+target_testing_milestones:
+  - "Milestone 2 – Host container + DataMashup bytes (Excel first)"
+  - "Milestone 3 – MS-QDEFF top-level framing"
+
+rationale:
+  - >
+    The core crate now cleanly opens Excel Open XML workbooks into the
+    Workbook/Sheet/Grid IR and satisfies PG1/PG2 addressing and container
+    milestones, but it has no support for extracting or interpreting the
+    Power Query DataMashup payloads that the architecture and testing plan
+    assume (Workbook.mashup, M query diff, etc.).
+  - >
+    The testing blueprint explicitly calls out early milestones for host-side
+    DataMashup extraction and MS-QDEFF top-level framing, and the fixtures
+    repo already contains artifacts such as corrupt_base64.xlsx and
+    m_change_literal_b.xlsx to exercise these behaviors, but there are
+    currently no Rust APIs or tests using them. This cycle turns those
+    planned milestones into concrete code and tests.
+  - >
+    The difficulty ledger identifies “Host container + DataMashup extraction &
+    top-level MS-QDEFF framing” (H8) as a moderate-complexity hurdle that
+    underpins later, harder work on the M parser and semantic diff (H3/H4).
+    Implementing H8 now de-risks the M pipeline while the codebase is still
+    small.
+  - >
+    The meta development guide emphasizes small, test-driven cycles tied to
+    explicit milestones. DataMashup host extraction and framing are a
+    naturally self-contained unit: one new domain type, one new public API,
+    and a focused set of invariants and fixtures, with minimal impact on
+    existing grid IR and tests.
+
+risks_of_deferral:
+  - >
+    All M-query–related milestones (M3–M7 and Milestone 6 “Basic M diffs”)
+    remain blocked until we can reliably locate and slice the DataMashup
+    stream. Deferring this work pushes back Excel’s key differentiator
+    (semantic Power Query diff) even though the necessary fixtures and design
+    are already in place.
+  - >
+    Fixtures like corrupt_base64.xlsx and m_change_literal_b.xlsx will remain
+    unused by Rust tests, increasing the chance of bit-rot in the Python
+    generators and leaving important corruption/error-handling paths untested.
+  - >
+    Without an explicitly tested MS-QDEFF framing parser, later work might
+    reach into the DataMashup bytes ad hoc, increasing the risk of panics on
+    malformed streams, subtle security issues, or inconsistent error
+    semantics across platforms. A dedicated, well-tested framing layer gives
+    a single choke point for robustness.
+
+references:
+  architecture_docs:
+    - "excel_diff_technical_document.md"
+    - "excel_diff_m_query_parse.md"
+  testing_docs:
+    - "excel_diff_testing_plan.md"
+  process_docs:
+    - "excel_diff_meta_programming.md"
+  risk_docs:
+    - "excel_diff_difficulty_analysis.md"
+  codebase_snapshot:
+    - "core/src/excel_open_xml.rs"
+    - "core/src/workbook.rs"
+    - "core/tests/*"
+    - "fixtures/manifest.yaml"
+
+difficulty_estimate:
+  hardest_milestone_name: "H1: High-performance 2D grid diff engine (Phase 4 G8–G12, D1–D10)"
+  hardest_milestone_score: 10
+  this_cycle_score: 4
+  reasoning: >
+    DataMashup host extraction and MS-QDEFF framing correspond to hurdle H8
+    in the difficulty analysis: mostly careful binary I/O, length checks, and
+    container plumbing, with modest algorithmic depth and surface area, but
+    they must be robust against malformed inputs and aligned with the spec.
+    That is meaningfully harder than the previous IR/container cycle (score 3)
+    but well below the algorithmically intense grid-alignment and semantic M
+    diff work (scores 8–10).
+
+deferred_items_addressed:
+  - >
+    None: there are currently no post-implementation verification reports or
+    deferred findings on DataMashup handling; this cycle is proactive rather
+    than remedial.
+
+interfaces_allowed_to_change_later:
+  - >
+    Internal helper functions and modules used to open ZIP containers and
+    scan customXml parts (for example, whether DataMashup extraction lives in
+    excel_open_xml.rs or a dedicated data_mashup.rs module).
+  - >
+    The internal framing parser function signature
+    (parse_data_mashup(bytes: &[u8]) -> Result<RawDataMashup, ExcelOpenError>)
+    may evolve (for example, to borrow instead of own Vec<u8>, or to attach
+    offsets/diagnostics) as long as the public API remains stable.
+
+interfaces_expected_stable_after_this_cycle:
+  - >
+    A public RawDataMashup-like struct representing the top-level MS-QDEFF
+    framing with fields for version, package_parts, permissions, metadata, and
+    permission_bindings as separate byte buffers.
+  - >
+    A public function on the core crate for Excel hosts along the lines of
+    open_data_mashup(path: impl AsRef<Path>) -> Result<Option<RawDataMashup>,
+    ExcelOpenError>, where Ok(None) means “no DataMashup present”.
+  - >
+    New ExcelOpenError variants for DataMashup failures (invalid base64,
+    unsupported version, invalid framing) with clear, documented semantics.
+
+notes_for_implementer_agent:
+  - >
+    Prefer a small, self-contained module (for example, data_mashup.rs) that
+    implements the MS-QDEFF framing parser and is exercised heavily by unit
+    tests using synthetic dm_bytes, plus a thin host-layer wrapper that
+    locates and base64-decodes the <DataMashup> element from Excel files using
+    existing ZIP/XML helpers.
+  - >
+    Treat “no DataMashup in this workbook” as Ok(None) rather than an error;
+    reserve hard errors for malformed base64, invalid framing, or multiple
+    DataMashup parts, and make sure all such cases return Result::Err instead
+    of panicking on out-of-bounds or decode failures.
+  - >
+    Keep the new code behind the existing excel-open-xml feature gate so that
+    cargo check --target wasm32-unknown-unknown --no-default-features still
+    succeeds without pulling in std::fs or zip for the wasm build.

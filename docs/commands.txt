@@ -1,0 +1,78 @@
+Excel Diff - Frequently Used Commands
+=====================================
+
+CYCLE SETUP
+-----------
+After creating a new git branch (e.g., git checkout -b 2025-11-27-feature-name):
+
+    python docs/setup_cycle.py
+
+Creates:
+  - docs/meta/logs/[branch-name]/checklist.md
+  - docs/meta/plans/[branch-name]/spec.md
+  - docs/meta/plans/[branch-name]/decision.yaml
+
+
+PLANNING (Generate context for Planner Agent)
+---------------------------------------------
+    python docs/meta/prompts/generate_review_context.py --plan
+
+Collates all context files and copies planner instruction to clipboard.
+Upload the files from docs/meta/prompts/planner_context/ to your LLM.
+
+
+PERCENT COMPLETION ANALYSIS
+---------------------------
+    python docs/meta/prompts/generate_review_context.py --percent
+
+Collates codebase + docs for percent completion analysis.
+Upload files from docs/meta/prompts/percent_context/ to your LLM.
+The prompt is in docs/meta/prompts/percent_completion.md
+
+
+POST-IMPLEMENTATION REVIEW
+--------------------------
+    python docs/meta/prompts/generate_review_context.py --collate [branch-name]
+
+Collates files for post-implementation review of a specific cycle.
+If branch-name is omitted, uses the current git branch.
+
+
+GENERATE CODEBASE CONTEXT ONLY
+------------------------------
+    python docs/meta/prompts/generate_review_context.py
+
+Creates docs/meta/prompts/review_prompt.md with directory structure and code.
+
+
+DOCUMENT FRESHNESS REPORT
+-------------------------
+    python docs/meta/prompts/generate_review_context.py --timestamps [output_file]
+
+Scans docs for "Last updated:" timestamps and reports stale documents.
+
+
+PROMPTS (copy to LLM as system/user instructions)
+-------------------------------------------------
+Planner:     docs/meta/prompts/planner_instruction.txt
+Implementer: docs/meta/prompts/implementer.md
+Reviewer:    docs/meta/prompts/review_instruction.txt
+% Complete:  docs/meta/prompts/percent_completion.md
+
+
+BUILD & TEST (Rust)
+-------------------
+    cargo build           # Compile
+    cargo test            # Run tests (console only)
+    cargo fmt             # Format code
+    cargo clippy --all-targets  # Lint all targets
+    cargo build --target wasm32-unknown-unknown  # WASM build
+
+Save test output to results file (uses current branch name, works from any subdirectory):
+
+  PowerShell:
+    $root = git rev-parse --show-toplevel; $branch = git rev-parse --abbrev-ref HEAD; cargo test 2>&1 | Tee-Object -FilePath "$root/docs/meta/results/$branch.txt"
+
+  Bash/Unix:
+    cargo test 2>&1 | tee "$(git rev-parse --show-toplevel)/docs/meta/results/$(git rev-parse --abbrev-ref HEAD).txt"
+
