@@ -16,6 +16,7 @@
       workbook.rs
     tests/
       addressing_pg2_tests.rs
+      data_mashup_tests.rs
       excel_open_xml_tests.rs
       integration_test.rs
       pg1_ir_tests.rs
@@ -104,6 +105,7 @@ excel-open-xml = ["dep:zip", "dep:quick-xml"]
 quick-xml = { version = "0.32", optional = true }
 thiserror = "1.0"
 zip = { version = "0.6", default-features = false, features = ["deflate"], optional = true }
+base64 = "0.22"
 ```
 
 ---
@@ -211,6 +213,8 @@ mod tests {
 ```rust
 use crate::addressing::address_to_index;
 use crate::workbook::{Cell, CellAddress, CellValue, Grid, Row, Sheet, SheetKind, Workbook};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 use std::collections::HashMap;
@@ -235,12 +239,27 @@ pub enum ExcelOpenError {
     WorksheetXmlMissing { sheet_name: String },
     #[error("XML parse error: {0}")]
     XmlParseError(String),
+    #[error("DataMashup base64 invalid")]
+    DataMashupBase64Invalid,
+    #[error("DataMashup unsupported version {version}")]
+    DataMashupUnsupportedVersion { version: u32 },
+    #[error("DataMashup framing invalid")]
+    DataMashupFramingInvalid,
 }
 
 struct SheetDescriptor {
     name: String,
     rel_id: Option<String>,
     sheet_id: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawDataMashup {
+    pub version: u32,
+    pub package_parts: Vec<u8>,
+    pub permissions: Vec<u8>,
+    pub metadata: Vec<u8>,
+    pub permission_bindings: Vec<u8>,
 }
 
 pub fn open_workbook(path: impl AsRef<Path>) -> Result<Workbook, ExcelOpenError> {
@@ -293,6 +312,205 @@ pub fn open_workbook(path: impl AsRef<Path>) -> Result<Workbook, ExcelOpenError>
     }
 
     Ok(Workbook { sheets: sheet_ir })
+}
+
+pub fn open_data_mashup(path: impl AsRef<Path>) -> Result<Option<RawDataMashup>, ExcelOpenError> {
+    let mut archive = open_zip(path.as_ref())?;
+
+    if archive.by_name("[Content_Types].xml").is_err() {
+        return Err(ExcelOpenError::NotExcelOpenXml);
+    }
+
+    let dm_bytes = match extract_datamashup_bytes_from_excel(&mut archive)? {
+        Some(bytes) => bytes,
+        None => return Ok(None),
+    };
+
+    parse_data_mashup(&dm_bytes).map(Some)
+}
+
+pub(crate) fn parse_data_mashup(bytes: &[u8]) -> Result<RawDataMashup, ExcelOpenError> {
+    const MIN_SIZE: usize = 4 + 4 * 4;
+    if bytes.len() < MIN_SIZE {
+        return Err(ExcelOpenError::DataMashupFramingInvalid);
+    }
+
+    let mut offset: usize = 0;
+    let version = read_u32_at(bytes, offset).ok_or(ExcelOpenError::DataMashupFramingInvalid)?;
+    offset += 4;
+
+    if version != 0 {
+        return Err(ExcelOpenError::DataMashupUnsupportedVersion { version });
+    }
+
+    let package_parts_len = read_length(bytes, offset)?;
+    offset += 4;
+    let package_parts = take_segment(bytes, &mut offset, package_parts_len)?;
+
+    let permissions_len = read_length(bytes, offset)?;
+    offset += 4;
+    let permissions = take_segment(bytes, &mut offset, permissions_len)?;
+
+    let metadata_len = read_length(bytes, offset)?;
+    offset += 4;
+    let metadata = take_segment(bytes, &mut offset, metadata_len)?;
+
+    let permission_bindings_len = read_length(bytes, offset)?;
+    offset += 4;
+    let permission_bindings = take_segment(bytes, &mut offset, permission_bindings_len)?;
+
+    if offset != bytes.len() {
+        return Err(ExcelOpenError::DataMashupFramingInvalid);
+    }
+
+    Ok(RawDataMashup {
+        version,
+        package_parts,
+        permissions,
+        metadata,
+        permission_bindings,
+    })
+}
+
+fn extract_datamashup_bytes_from_excel(
+    archive: &mut ZipArchive<File>,
+) -> Result<Option<Vec<u8>>, ExcelOpenError> {
+    let mut found: Option<Vec<u8>> = None;
+
+    for i in 0..archive.len() {
+        let mut file = match archive.by_index(i) {
+            Ok(f) => f,
+            Err(ZipError::Io(e)) => return Err(ExcelOpenError::Io(e)),
+            Err(e) => return Err(ExcelOpenError::XmlParseError(e.to_string())),
+        };
+        let name = file.name().to_string();
+        if !name.starts_with("customXml/") || !name.ends_with(".xml") {
+            continue;
+        }
+
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf).map_err(ExcelOpenError::Io)?;
+
+        if let Some(text) = read_datamashup_text(&buf)? {
+            let decoded = decode_datamashup_base64(&text)?;
+            if found.is_some() {
+                return Err(ExcelOpenError::DataMashupFramingInvalid);
+            }
+            found = Some(decoded);
+        }
+    }
+
+    Ok(found)
+}
+
+fn read_datamashup_text(xml: &[u8]) -> Result<Option<String>, ExcelOpenError> {
+    let utf8_xml = if xml.starts_with(&[0xFF, 0xFE]) {
+        Some(decode_utf16_xml(xml, true)?)
+    } else if xml.starts_with(&[0xFE, 0xFF]) {
+        Some(decode_utf16_xml(xml, false)?)
+    } else {
+        None
+    };
+
+    let mut reader = Reader::from_reader(utf8_xml.as_deref().unwrap_or(xml));
+    reader.config_mut().trim_text(false);
+    let mut buf = Vec::new();
+    let mut in_datamashup = false;
+    let mut content = String::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) if is_datamashup_element(e.name().as_ref()) => {
+                if in_datamashup {
+                    return Err(ExcelOpenError::DataMashupFramingInvalid);
+                }
+                in_datamashup = true;
+                content.clear();
+            }
+            Ok(Event::Text(t)) if in_datamashup => {
+                let text = t
+                    .unescape()
+                    .map_err(|e| ExcelOpenError::XmlParseError(e.to_string()))?
+                    .into_owned();
+                content.push_str(&text);
+            }
+            Ok(Event::CData(t)) if in_datamashup => {
+                let data = t.into_inner();
+                content.push_str(&String::from_utf8_lossy(&data));
+            }
+            Ok(Event::End(e)) if in_datamashup && is_datamashup_element(e.name().as_ref()) => {
+                return Ok(Some(content));
+            }
+            Ok(Event::Eof) if in_datamashup => {
+                return Err(ExcelOpenError::DataMashupFramingInvalid);
+            }
+            Ok(Event::Eof) => return Ok(None),
+            Err(e) => return Err(ExcelOpenError::XmlParseError(e.to_string())),
+            _ => {}
+        }
+        buf.clear();
+    }
+}
+
+fn decode_datamashup_base64(text: &str) -> Result<Vec<u8>, ExcelOpenError> {
+    let cleaned: String = text.split_whitespace().collect();
+    STANDARD
+        .decode(cleaned.as_bytes())
+        .map_err(|_| ExcelOpenError::DataMashupBase64Invalid)
+}
+
+fn is_datamashup_element(name: &[u8]) -> bool {
+    name.ends_with(b"DataMashup")
+}
+
+fn decode_utf16_xml(xml: &[u8], little_endian: bool) -> Result<Vec<u8>, ExcelOpenError> {
+    let body = xml
+        .get(2..)
+        .ok_or_else(|| ExcelOpenError::XmlParseError("invalid UTF-16 XML".into()))?;
+    if body.len() % 2 != 0 {
+        return Err(ExcelOpenError::XmlParseError(
+            "invalid UTF-16 byte length".into(),
+        ));
+    }
+
+    let mut code_units = Vec::with_capacity(body.len() / 2);
+    for chunk in body.chunks_exact(2) {
+        let unit = if little_endian {
+            u16::from_le_bytes([chunk[0], chunk[1]])
+        } else {
+            u16::from_be_bytes([chunk[0], chunk[1]])
+        };
+        code_units.push(unit);
+    }
+
+    let utf8 = String::from_utf16(&code_units)
+        .map_err(|_| ExcelOpenError::XmlParseError("invalid UTF-16 XML".into()))?;
+    Ok(utf8.into_bytes())
+}
+
+fn read_u32_at(bytes: &[u8], offset: usize) -> Option<u32> {
+    let slice = bytes.get(offset..offset + 4)?;
+    let array: [u8; 4] = slice.try_into().ok()?;
+    Some(u32::from_le_bytes(array))
+}
+
+fn read_length(bytes: &[u8], offset: usize) -> Result<usize, ExcelOpenError> {
+    let len = read_u32_at(bytes, offset).ok_or(ExcelOpenError::DataMashupFramingInvalid)?;
+    usize::try_from(len).map_err(|_| ExcelOpenError::DataMashupFramingInvalid)
+}
+
+fn take_segment(bytes: &[u8], offset: &mut usize, len: usize) -> Result<Vec<u8>, ExcelOpenError> {
+    let start = *offset;
+    let end = start
+        .checked_add(len)
+        .ok_or(ExcelOpenError::DataMashupFramingInvalid)?;
+    if end > bytes.len() {
+        return Err(ExcelOpenError::DataMashupFramingInvalid);
+    }
+
+    let segment = bytes[start..end].to_vec();
+    *offset = end;
+    Ok(segment)
 }
 
 fn open_zip(path: &Path) -> Result<ZipArchive<File>, ExcelOpenError> {
@@ -727,6 +945,104 @@ struct ParsedCell {
     value: Option<CellValue>,
     formula: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ExcelOpenError, RawDataMashup, parse_data_mashup};
+
+    fn build_dm_bytes(
+        version: u32,
+        package_parts: &[u8],
+        permissions: &[u8],
+        metadata: &[u8],
+        permission_bindings: &[u8],
+    ) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&version.to_le_bytes());
+        bytes.extend_from_slice(&(package_parts.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(package_parts);
+        bytes.extend_from_slice(&(permissions.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(permissions);
+        bytes.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(metadata);
+        bytes.extend_from_slice(&(permission_bindings.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(permission_bindings);
+        bytes
+    }
+
+    #[test]
+    fn parse_zero_length_stream_succeeds() {
+        let bytes = build_dm_bytes(0, b"", b"", b"", b"");
+        let parsed = parse_data_mashup(&bytes).expect("zero-length sections should parse");
+        assert_eq!(
+            parsed,
+            RawDataMashup {
+                version: 0,
+                package_parts: Vec::new(),
+                permissions: Vec::new(),
+                metadata: Vec::new(),
+                permission_bindings: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_basic_non_zero_lengths() {
+        let bytes = build_dm_bytes(0, b"AAAA", b"BBBB", b"CCCC", b"DDDD");
+        let parsed = parse_data_mashup(&bytes).expect("non-zero lengths should parse");
+        assert_eq!(parsed.version, 0);
+        assert_eq!(parsed.package_parts, b"AAAA");
+        assert_eq!(parsed.permissions, b"BBBB");
+        assert_eq!(parsed.metadata, b"CCCC");
+        assert_eq!(parsed.permission_bindings, b"DDDD");
+    }
+
+    #[test]
+    fn unsupported_version_is_rejected() {
+        let bytes = build_dm_bytes(1, b"AAAA", b"BBBB", b"CCCC", b"DDDD");
+        let err = parse_data_mashup(&bytes).expect_err("version 1 should be unsupported");
+        assert!(matches!(
+            err,
+            ExcelOpenError::DataMashupUnsupportedVersion { version: 1 }
+        ));
+    }
+
+    #[test]
+    fn truncated_stream_errors() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&100u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        let err = parse_data_mashup(&bytes).expect_err("length overflows buffer");
+        assert!(matches!(err, ExcelOpenError::DataMashupFramingInvalid));
+    }
+
+    #[test]
+    fn trailing_bytes_are_invalid() {
+        let mut bytes = build_dm_bytes(0, b"", b"", b"", b"");
+        bytes.push(0xFF);
+        let err = parse_data_mashup(&bytes).expect_err("trailing bytes should fail");
+        assert!(matches!(err, ExcelOpenError::DataMashupFramingInvalid));
+    }
+
+    #[test]
+    fn fuzz_style_never_panics() {
+        for seed in 0u64..32 {
+            let len = (seed as usize * 7 % 48) + (seed as usize % 5);
+            let mut state = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let mut bytes = Vec::with_capacity(len);
+            for _ in 0..len {
+                state = state
+                    .wrapping_mul(2862933555777941757)
+                    .wrapping_add(3037000493);
+                bytes.push((state >> 32) as u8);
+            }
+            let _ = parse_data_mashup(&bytes);
+        }
+    }
+}
 ```
 
 ---
@@ -741,7 +1057,7 @@ pub mod workbook;
 
 pub use addressing::{address_to_index, index_to_address};
 #[cfg(feature = "excel-open-xml")]
-pub use excel_open_xml::{ExcelOpenError, open_workbook};
+pub use excel_open_xml::{ExcelOpenError, RawDataMashup, open_data_mashup, open_workbook};
 pub use workbook::{Cell, CellAddress, CellValue, Grid, Row, Sheet, SheetKind, Workbook};
 ```
 
@@ -886,6 +1202,84 @@ fn pg2_addressing_matrix_consistency() {
             }
         }
     }
+}
+```
+
+---
+
+### File: `core\tests\data_mashup_tests.rs`
+
+```rust
+use std::io::ErrorKind;
+
+use excel_diff::{ExcelOpenError, RawDataMashup, open_data_mashup};
+
+mod common;
+use common::fixture_path;
+
+#[test]
+fn workbook_without_datamashup_returns_none() {
+    let path = fixture_path("minimal.xlsx");
+    let result = open_data_mashup(&path).expect("minimal workbook should load");
+    assert!(result.is_none());
+}
+
+#[test]
+fn workbook_with_valid_datamashup_parses() {
+    let path = fixture_path("m_change_literal_b.xlsx");
+    let raw = open_data_mashup(&path)
+        .expect("valid mashup should load")
+        .expect("mashup should be present");
+
+    assert_eq!(raw.version, 0);
+    assert!(!raw.package_parts.is_empty());
+    assert!(!raw.metadata.is_empty());
+
+    let assembled = assemble_top_level_bytes(&raw);
+    let expected_len = 4 * 5
+        + raw.package_parts.len()
+        + raw.permissions.len()
+        + raw.metadata.len()
+        + raw.permission_bindings.len();
+    assert_eq!(assembled.len(), expected_len);
+}
+
+#[test]
+fn corrupt_base64_returns_error() {
+    let path = fixture_path("corrupt_base64.xlsx");
+    let err = open_data_mashup(&path).expect_err("corrupt base64 should fail");
+    assert!(matches!(err, ExcelOpenError::DataMashupBase64Invalid));
+}
+
+#[test]
+fn nonexistent_file_returns_io() {
+    let path = fixture_path("missing_mashup.xlsx");
+    let err = open_data_mashup(&path).expect_err("missing file should error");
+    match err {
+        ExcelOpenError::Io(e) => assert_eq!(e.kind(), ErrorKind::NotFound),
+        other => panic!("expected Io error, got {other:?}"),
+    }
+}
+
+#[test]
+fn non_excel_container_returns_not_excel_error() {
+    let path = fixture_path("random_zip.zip");
+    let err = open_data_mashup(&path).expect_err("random zip should not parse");
+    assert!(matches!(err, ExcelOpenError::NotExcelOpenXml));
+}
+
+fn assemble_top_level_bytes(raw: &RawDataMashup) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&raw.version.to_le_bytes());
+    bytes.extend_from_slice(&(raw.package_parts.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&raw.package_parts);
+    bytes.extend_from_slice(&(raw.permissions.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&raw.permissions);
+    bytes.extend_from_slice(&(raw.metadata.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&raw.metadata);
+    bytes.extend_from_slice(&(raw.permission_bindings.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&raw.permission_bindings);
+    bytes
 }
 ```
 

@@ -118,11 +118,11 @@ Your goal is to independently verify that the implementation correctly and compl
 [What should be true after remediation is complete]
 ```
 
-Do not implement the fixes yourself. Your output is the verification report and remediation plan (if needed) that an Implementer Agent will use.
+Do not implement the fixes yourself. You do not have access to modify the repository. Your output is the verification report and remediation plan (if needed) that an Implementer Agent will use.
 
-## Where to Save Output
+## Output Destination
 
-Save your outputs to `docs/meta/reviews/[branch-name]/`:
+The user will save your outputs to `docs/meta/reviews/[branch-name]/`:
 - `verification.md` — The final verification report (after all remediations are complete)
 - `remediation.md` — First remediation plan (if issues found)
 - `remediation-1.md` — Second remediation plan (if needed after first round of fixes)

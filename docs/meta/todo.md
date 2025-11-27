@@ -6,6 +6,8 @@
     - ~~4 Tops Excel Compare~~
     - ~~Compare and Merge (Excel diff)~~
     - ~~ExcelAnalyzer~~
+    - ExcelDiff (ComponentSoftware)
+    - ExcelDiff (Suntrap Systems)
     - Operis OAK
     - Spreadsheet Detective
     - CIMCON XLAudit
@@ -13,11 +15,13 @@
     - Tabular Editor 3
     - Power BI Sentinel
 - Create competitor profiles
-    - Excel Compare (Formulasoft)
-    - Spreadsheet Advantage
-    - 4 Tops Excel Compare
-    - Compare and Merge (Excel diff)
-    - ExcelAnalyzer
+    - ~~Excel Compare (Formulasoft)~~
+    - ~~Spreadsheet Advantage~~
+    - ~~4 Tops Excel Compare~~
+    - ~~Compare and Merge (Excel diff)~~
+    - ~~ExcelAnalyzer~~
+    - ExcelDiff (ComponentSoftware)
+    - ExcelDiff (Suntrap Systems)
     - Operis OAK
     - Spreadsheet Detective
     - CIMCON XLAudit
@@ -30,6 +34,8 @@
     - 4 Tops Excel Compare
     - Compare and Merge (Excel diff)
     - ExcelAnalyzer
+    - ExcelDiff (ComponentSoftware)
+    - ExcelDiff (Suntrap Systems)
     - Operis OAK
     - Spreadsheet Detective
     - CIMCON XLAudit

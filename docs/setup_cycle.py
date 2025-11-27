@@ -8,6 +8,9 @@ This script automates the creation of cycle artifacts based on the current git b
 3. Creates a plans directory: docs/meta/plans/[branch-name]/
    - spec.md (for spec)
    - decision.yaml (for decision record)
+4. Creates a reviews directory: docs/meta/reviews/[branch-name]/
+   - verification.md (for verification notes)
+   - remediation.md (for remediation tracking)
 
 Usage:
     python docs/setup_cycle.py
@@ -97,11 +100,34 @@ def main():
         )
         print(f"Created: {decision_file}")
     
+    reviews_dir = meta_dir / "reviews"
+    branch_reviews_dir = reviews_dir / branch_name
+    if branch_reviews_dir.exists():
+        print(f"Warning: Reviews directory already exists: {branch_reviews_dir}")
+    else:
+        branch_reviews_dir.mkdir(parents=True)
+        print(f"Created: {branch_reviews_dir}")
+    
+    verification_file = branch_reviews_dir / "verification.md"
+    if verification_file.exists():
+        print(f"Warning: Verification file already exists: {verification_file}")
+    else:
+        verification_file.write_text("", encoding="utf-8")
+        print(f"Created: {verification_file}")
+    
+    remediation_file = branch_reviews_dir / "remediation.md"
+    if remediation_file.exists():
+        print(f"Warning: Remediation file already exists: {remediation_file}")
+    else:
+        remediation_file.write_text("", encoding="utf-8")
+        print(f"Created: {remediation_file}")
+    
     print("\nCycle setup complete!")
     print(f"\nNext steps:")
     print(f"  1. Paste your decision YAML into: {decision_file.relative_to(repo_root)}")
     print(f"  2. Paste your spec into: {spec_file.relative_to(repo_root)}")
     print(f"  3. Track progress using: {checklist_dest.relative_to(repo_root)}")
+    print(f"  4. Document review in: {branch_reviews_dir.relative_to(repo_root)}/")
 
 
 if __name__ == "__main__":
