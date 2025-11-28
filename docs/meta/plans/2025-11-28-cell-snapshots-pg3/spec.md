@@ -189,7 +189,7 @@ Round-trip guarantee:
 * Dependencies:
 
   * Add `serde` (with `derive`) as a normal dependency of `core`.
-  * Add `serde_json` as a dev-dependency only; used in PG3.4 tests.
+  * `serde_json` is now a runtime dependency to support the JSON diff helpers exposed from `core` (`output::json::*`); this supersedes the earlier PG3 guidance that limited it to tests. Future cycles can re-isolate JSON in a higher-level crate if needed.
   * New deps must remain wasm-friendly and not introduce OS-only APIs.
 * `CellValue`’s existing variants are left unchanged; error cells remain represented as `CellValue::Text` with the Excel error string (e.g. `"#DIV/0!"`) for now. This behavior is explicitly tested but can be revisited in a future cycle with a dedicated decision record.
 
@@ -228,9 +228,12 @@ In `core/src/lib.rs`:
 pub use crate::workbook::{
     Workbook, Sheet, SheetKind, Grid, Row, Cell, CellValue, CellAddress, CellSnapshot,
 };
+pub use output::json::{CellDiff, serialize_cell_diffs};
+#[cfg(feature = "excel-open-xml")]
+pub use output::json::{diff_workbooks, diff_workbooks_to_json};
 ```
 
-No new public functions are introduced in this cycle.
+The JSON helpers above are part of the public surface to support diff output; this extends the initial PG3 scope where `serde_json` was treated as test-only.
 
 ### 4.2 Internal helpers (test-only)
 

@@ -393,6 +393,38 @@ def collate_post_implementation_review(branch_name=None, downloads_dir=None):
     print(f"  Created: cycle_summary.txt (combined manifest, activity log, test results)")
     copied_count += 1
     
+    reviews_branch_dir = repo_root / "docs" / "meta" / "reviews" / branch_name
+    if reviews_branch_dir.exists():
+        remediation_files = []
+        for f in reviews_branch_dir.iterdir():
+            if f.is_file() and f.name.startswith("remediation") and f.name.endswith(".md"):
+                remediation_files.append(f)
+        
+        if remediation_files:
+            remediation_files.sort(key=lambda x: x.name)
+            combined_remediation_path = output_dir / "combined_remediations.md"
+            
+            with open(combined_remediation_path, 'w', encoding='utf-8') as f:
+                f.write("# Combined Remediation Plans\n\n")
+                f.write(f"Branch: `{branch_name}`\n")
+                f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Total remediation files: {len(remediation_files)}\n\n")
+                f.write("---\n\n")
+                
+                for i, rem_file in enumerate(remediation_files, 1):
+                    f.write(f"## [{i}/{len(remediation_files)}] {rem_file.name}\n\n")
+                    f.write("```markdown\n")
+                    content = rem_file.read_text(encoding='utf-8')
+                    f.write(content)
+                    if not content.endswith('\n'):
+                        f.write('\n')
+                    f.write("```\n\n")
+                    if i < len(remediation_files):
+                        f.write("---\n\n")
+            
+            print(f"  Created: combined_remediations.md ({len(remediation_files)} files)")
+            copied_count += 1
+    
     print(f"\nCollation complete: {copied_count} files in {output_dir}")
     
     instruction_file = script_dir / "post_implementation_review_instruction.txt"
@@ -782,6 +814,78 @@ def collate_planner(downloads_dir=None):
     return output_dir
 
 
+def update_remediation_implementer():
+    script_dir = Path(__file__).parent.resolve()
+    repo_root = script_dir.parent.parent.parent
+    
+    os.chdir(repo_root)
+    branch_name = get_current_branch()
+    if branch_name is None:
+        print("Error: Could not determine current git branch.")
+        return None
+    
+    reviews_branch_dir = repo_root / "docs" / "meta" / "reviews" / branch_name
+    if not reviews_branch_dir.exists():
+        print(f"Error: Reviews directory not found: {reviews_branch_dir}")
+        return None
+    
+    remediation_files = []
+    for f in reviews_branch_dir.iterdir():
+        if f.is_file() and f.name.startswith("remediation") and f.name.endswith(".md"):
+            remediation_files.append(f.name)
+    
+    if not remediation_files:
+        print(f"Error: No remediation files found in {reviews_branch_dir}")
+        return None
+    
+    remediation_files.sort()
+    latest_remediation = remediation_files[-1]
+    latest_path = f"docs/meta/reviews/{branch_name}/{latest_remediation}"
+    
+    print(f"Branch: {branch_name}")
+    print(f"Found remediation files: {remediation_files}")
+    print(f"Latest remediation file: {latest_remediation}")
+    
+    implementer_file = script_dir / "remediation_implementer.md"
+    if not implementer_file.exists():
+        print(f"Error: Implementer file not found: {implementer_file}")
+        return None
+    
+    content = implementer_file.read_text(encoding='utf-8')
+    
+    pattern1 = re.compile(
+        r'`docs/meta/reviews/\[branch-name\]/remediation\.md`'
+        r'\s*\(or\s+`remediation\[A-Z\]\.md`\s+for\s+subsequent\s+rounds\s+of\s+remediation;'
+        r'\s+use\s+the\s+latest\s+file\s+if\s+there\s+are\s+multiple\)'
+    )
+    replacement1 = f'`{latest_path}`'
+    content = pattern1.sub(replacement1, content)
+    
+    pattern2 = re.compile(r'`docs/meta/reviews/\[branch-name\]/remediation\.md`')
+    content = pattern2.sub(f'`{latest_path}`', content)
+    
+    pattern3 = re.compile(r'\[branch-name\]')
+    content = pattern3.sub(branch_name, content)
+    
+    pattern4 = re.compile(r'\n+Replace `[^`]+` with the actual branch name for this cycle\.\s*')
+    content = pattern4.sub('\n', content)
+    
+    content = content.rstrip() + '\n'
+    
+    implementer_file.write_text(content, encoding='utf-8')
+    
+    print(f"\nUpdated: {implementer_file}")
+    print(f"All references now point to: {latest_path}")
+    
+    try:
+        copy_to_clipboard(content)
+        print(f"\nRemediation implementer prompt copied to clipboard!")
+    except Exception as e:
+        print(f"\nWarning: Could not copy to clipboard: {e}")
+    
+    return latest_path
+
+
 if __name__ == "__main__":
     import sys
     
@@ -798,10 +902,13 @@ if __name__ == "__main__":
     elif len(sys.argv) > 1 and sys.argv[1] == "--plan":
         generate_review_context()
         collate_planner()
+    elif len(sys.argv) > 1 and sys.argv[1] == "--remediate":
+        update_remediation_implementer()
     else:
         generate_review_context()
         print("\nTip: Run with --timestamps [output_file] to generate a document freshness report")
         print("Tip: Run with --collate [branch-name] to collate post-implementation review files")
         print("Tip: Run with --percent to collate percent completion analysis files")
         print("Tip: Run with --plan to collate planner context for next cycle planning")
+        print("Tip: Run with --remediate to update remediation_implementer.md with latest remediation file")
 

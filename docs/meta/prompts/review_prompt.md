@@ -14,11 +14,15 @@
       lib.rs
       main.rs
       workbook.rs
+      output/
+        json.rs
+        mod.rs
     tests/
       addressing_pg2_tests.rs
       data_mashup_tests.rs
       excel_open_xml_tests.rs
       integration_test.rs
+      output_tests.rs
       pg1_ir_tests.rs
       pg3_snapshot_tests.rs
       common/
@@ -114,9 +118,9 @@ thiserror = "1.0"
 zip = { version = "0.6", default-features = false, features = ["deflate"], optional = true }
 base64 = "0.22"
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 [dev-dependencies]
-serde_json = "1.0"
 ```
 
 ---
@@ -1242,11 +1246,15 @@ mod tests {
 pub mod addressing;
 #[cfg(feature = "excel-open-xml")]
 pub mod excel_open_xml;
+pub mod output;
 pub mod workbook;
 
 pub use addressing::{address_to_index, index_to_address};
 #[cfg(feature = "excel-open-xml")]
 pub use excel_open_xml::{ExcelOpenError, RawDataMashup, open_data_mashup, open_workbook};
+pub use output::json::{CellDiff, serialize_cell_diffs};
+#[cfg(feature = "excel-open-xml")]
+pub use output::json::{diff_workbooks, diff_workbooks_to_json};
 pub use workbook::{
     Cell, CellAddress, CellSnapshot, CellValue, Grid, Row, Sheet, SheetKind, Workbook,
 };
@@ -1539,6 +1547,137 @@ mod tests {
         assert_eq!(snap1, snap2);
     }
 }
+```
+
+---
+
+### File: `core\src\output\json.rs`
+
+```rust
+#[cfg(feature = "excel-open-xml")]
+use crate::addressing::index_to_address;
+#[cfg(feature = "excel-open-xml")]
+use crate::workbook::{Cell, CellValue, Sheet, Workbook};
+use serde::Serialize;
+#[cfg(feature = "excel-open-xml")]
+use std::collections::HashMap;
+#[cfg(feature = "excel-open-xml")]
+use std::path::Path;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CellDiff {
+    #[serde(rename = "coords")]
+    pub coords: String,
+    #[serde(rename = "value_file1")]
+    pub value_file1: Option<String>,
+    #[serde(rename = "value_file2")]
+    pub value_file2: Option<String>,
+}
+
+pub fn serialize_cell_diffs(diffs: &[CellDiff]) -> serde_json::Result<String> {
+    serde_json::to_string(diffs)
+}
+
+#[cfg(feature = "excel-open-xml")]
+use crate::excel_open_xml::{ExcelOpenError, open_workbook};
+
+#[cfg(feature = "excel-open-xml")]
+pub fn diff_workbooks(
+    path_a: impl AsRef<Path>,
+    path_b: impl AsRef<Path>,
+) -> Result<Vec<CellDiff>, ExcelOpenError> {
+    let wb_a = open_workbook(path_a)?;
+    let wb_b = open_workbook(path_b)?;
+    Ok(compute_cell_diffs(&wb_a, &wb_b))
+}
+
+#[cfg(feature = "excel-open-xml")]
+pub fn diff_workbooks_to_json(
+    path_a: impl AsRef<Path>,
+    path_b: impl AsRef<Path>,
+) -> Result<String, ExcelOpenError> {
+    let diffs = diff_workbooks(path_a, path_b)?;
+    serialize_cell_diffs(&diffs).map_err(|e| ExcelOpenError::XmlParseError(e.to_string()))
+}
+
+#[cfg(feature = "excel-open-xml")]
+fn compute_cell_diffs(a: &Workbook, b: &Workbook) -> Vec<CellDiff> {
+    let map_a = sheet_map(a);
+    let map_b = sheet_map(b);
+
+    let mut names: Vec<&str> = map_a.keys().chain(map_b.keys()).copied().collect();
+    names.sort_unstable();
+    names.dedup();
+
+    let mut diffs = Vec::new();
+    for name in names {
+        let sheet_a = map_a.get(name);
+        let sheet_b = map_b.get(name);
+        let dims = sheet_dims(sheet_a);
+        let other_dims = sheet_dims(sheet_b);
+        let nrows = dims.0.max(other_dims.0);
+        let ncols = dims.1.max(other_dims.1);
+
+        for r in 0..nrows {
+            for c in 0..ncols {
+                let cell_a = sheet_a
+                    .and_then(|s| s.grid.rows.get(r as usize))
+                    .and_then(|row| row.cells.get(c as usize));
+                let cell_b = sheet_b
+                    .and_then(|s| s.grid.rows.get(r as usize))
+                    .and_then(|row| row.cells.get(c as usize));
+
+                let value_a = cell_a.and_then(render_cell_value);
+                let value_b = cell_b.and_then(render_cell_value);
+
+                if value_a != value_b {
+                    let coords = index_to_address(r, c);
+                    diffs.push(CellDiff {
+                        coords,
+                        value_file1: value_a,
+                        value_file2: value_b,
+                    });
+                }
+            }
+        }
+    }
+
+    diffs
+}
+
+#[cfg(feature = "excel-open-xml")]
+fn sheet_map(workbook: &Workbook) -> HashMap<&str, &Sheet> {
+    workbook
+        .sheets
+        .iter()
+        .map(|s| (s.name.as_str(), s))
+        .collect()
+}
+
+#[cfg(feature = "excel-open-xml")]
+fn sheet_dims(sheet: Option<&&Sheet>) -> (u32, u32) {
+    sheet
+        .map(|s| (s.grid.nrows, s.grid.ncols))
+        .unwrap_or((0, 0))
+}
+
+#[cfg(feature = "excel-open-xml")]
+fn render_cell_value(cell: &Cell) -> Option<String> {
+    match &cell.value {
+        Some(CellValue::Number(n)) => Some(n.to_string()),
+        Some(CellValue::Text(s)) => Some(s.clone()),
+        Some(CellValue::Bool(b)) => Some(b.to_string()),
+        None => None,
+    }
+}
+```
+
+---
+
+### File: `core\src\output\mod.rs`
+
+```rust
+pub mod json;
 ```
 
 ---
@@ -1869,6 +2008,55 @@ fn test_locate_fixture() {
         path.exists(),
         "Fixture minimal.xlsx should exist at {:?}",
         path
+    );
+}
+```
+
+---
+
+### File: `core\tests\output_tests.rs`
+
+```rust
+use excel_diff::output::json::{CellDiff, diff_workbooks_to_json, serialize_cell_diffs};
+use serde_json::Value;
+
+mod common;
+use common::fixture_path;
+
+#[test]
+fn test_json_format() {
+    let diffs = vec![CellDiff {
+        coords: "A1".into(),
+        value_file1: Some("100".into()),
+        value_file2: Some("200".into()),
+    }];
+
+    let json = serialize_cell_diffs(&diffs).expect("serialization should succeed");
+    let value: Value = serde_json::from_str(&json).expect("json should parse");
+
+    assert!(value.is_array(), "expected an array of cell diffs");
+    let first = value
+        .as_array()
+        .and_then(|arr| arr.first())
+        .expect("array should contain one element");
+    assert_eq!(first["coords"], Value::String("A1".into()));
+    assert_eq!(first["value_file1"], Value::String("100".into()));
+    assert_eq!(first["value_file2"], Value::String("200".into()));
+}
+
+#[test]
+fn test_json_empty_diff() {
+    let fixture = fixture_path("pg1_basic_two_sheets.xlsx");
+    let json =
+        diff_workbooks_to_json(&fixture, &fixture).expect("diffing identical files should succeed");
+    let value: Value = serde_json::from_str(&json).expect("json should parse");
+
+    let arr = value
+        .as_array()
+        .expect("top-level json should be an array of cell diffs");
+    assert!(
+        arr.is_empty(),
+        "identical files should produce no cell diffs"
     );
 }
 ```

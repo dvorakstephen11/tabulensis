@@ -47,6 +47,20 @@ scenarios:
     generator: "value_formula"
     output: "pg3_value_and_formula_cells.xlsx"
 
+  # --- JSON diff: simple non-empty change ---
+  - id: "json_diff_single_cell"
+    generator: "single_cell_diff"
+    args:
+      rows: 3
+      cols: 3
+      sheet: "Sheet1"
+      target_cell: "C3"
+      value_a: "1"
+      value_b: "2"
+    output:
+      - "json_diff_single_cell_a.xlsx"
+      - "json_diff_single_cell_b.xlsx"
+
   # --- Milestone 2.2: Base64 Correctness ---
   - id: "corrupt_base64"
     generator: "mashup_corrupt"

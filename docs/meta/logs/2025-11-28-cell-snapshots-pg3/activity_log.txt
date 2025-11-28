@@ -22,3 +22,11 @@ Activity Log - 2025-11-28-cell-snapshots-pg3
 - Files modified: core/Cargo.toml; core/src/lib.rs; core/src/output/json.rs; core/src/output/mod.rs; core/tests/output_tests.rs; docs/meta/logs/2025-11-28-cell-snapshots-pg3/activity_log.txt.
 - Complications: none.
 - Validation: cargo fmt --manifest-path core/Cargo.toml; cargo test --manifest-path core/Cargo.toml; cargo clippy --all-targets --manifest-path core/Cargo.toml; cargo check --target wasm32-unknown-unknown --no-default-features --manifest-path core/Cargo.toml.
+
+## Remediation Round 4
+- Addressed Finding 3 (missing positive JSON diff coverage) by adding a `single_cell_diff` generator scenario and fixtures (`json_diff_single_cell_a.xlsx`, `json_diff_single_cell_b.xlsx`) plus `test_json_non_empty_diff`, which asserts the expected coords/value_file1/value_file2 for a single changed cell.
+- Addressed Finding 2 (doc drift on JSON output surface) by updating the decision record, mini-spec, and specification to document the public JSON helpers and the intentional runtime `serde_json` dependency.
+- Addressed Finding 4 (JSON serialization error mapping) by documenting that `ExcelOpenError::XmlParseError` currently covers JSON serialization failures, with a future option to split a dedicated variant.
+- Files modified/created: fixtures/src/generators/grid.py; fixtures/src/generate.py; fixtures/manifest.yaml; fixtures/generated/json_diff_single_cell_a.xlsx; fixtures/generated/json_diff_single_cell_b.xlsx; core/tests/output_tests.rs; docs/meta/plans/2025-11-28-cell-snapshots-pg3/decision.yaml; docs/meta/plans/2025-11-28-cell-snapshots-pg3/spec.md; docs/rust_docs/excel_diff_specification.md; docs/meta/logs/2025-11-28-cell-snapshots-pg3/activity_log.txt.
+- Complications: none; generated only the new fixture pair.
+- Validation: cargo fmt --manifest-path core/Cargo.toml; cargo clippy --all-targets --manifest-path core/Cargo.toml; cargo test --manifest-path core/Cargo.toml.

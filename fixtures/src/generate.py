@@ -10,7 +10,8 @@ from generators.grid import (
     SparseGridGenerator, 
     EdgeCaseGenerator, 
     AddressSanityGenerator,
-    ValueFormulaGenerator
+    ValueFormulaGenerator,
+    SingleCellDiffGenerator,
 )
 from generators.corrupt import ContainerCorruptGenerator
 from generators.mashup import (
@@ -29,6 +30,7 @@ GENERATORS: Dict[str, Any] = {
     "edge_case": EdgeCaseGenerator,
     "address_sanity": AddressSanityGenerator,
     "value_formula": ValueFormulaGenerator,
+    "single_cell_diff": SingleCellDiffGenerator,
     "corrupt_container": ContainerCorruptGenerator,
     "mashup_corrupt": MashupCorruptGenerator,
     "mashup_duplicate": MashupDuplicateGenerator,

@@ -9,12 +9,12 @@ Your role is to address findings from the Post-Implementation Verification Revie
 You have been provided with:
 
 1. **Codebase**: Full access to the current repository via Cursor's file tools.
-2. **Remediation Plan**: The fixes required at `docs/meta/reviews/[branch-name]/remediation.md` (or `remediation[A-Z].md` for subsequent rounds of remediation; use the latest file if there are multiple), containing:
+2. **Remediation Plan**: The fixes required at `docs/meta/reviews/2025-11-28-cell-snapshots-pg3/remediationD.md`, containing:
    - Findings summary with severity ratings
    - Specific fixes required with implementation guidance
    - Constraints on what should and should not change
    - Expected outcome after remediation
-3. **Original Mini-Spec**: Background context at `docs/meta/plans/[branch-name]/spec.md`.
+3. **Original Mini-Spec**: Background context at `docs/meta/plans/2025-11-28-cell-snapshots-pg3/spec.md`.
 4. **Documentation**: `docs/rust_docs/` contains the technical blueprints and meta-process guide.
 
 ## Your Goal
@@ -60,7 +60,7 @@ Execute the fixes specified in the remediation plan. Each "Fix Required" section
 
 ## Activity Logging
 
-Append to the existing activity log at `docs/meta/logs/[branch-name]/activity_log.txt`. Include:
+Append to the existing activity log at `docs/meta/logs/2025-11-28-cell-snapshots-pg3/activity_log.txt`. Include:
 
 - A header indicating this is remediation work (e.g., "## Remediation Round 1").
 - Which findings were addressed (reference by number/title).
@@ -98,12 +98,9 @@ When complete, the following must be true:
 
 To begin remediation for the current cycle:
 
-1. Read the remediation plan at `docs/meta/reviews/[branch-name]/remediation.md`.
-2. Review the original mini-spec at `docs/meta/plans/[branch-name]/spec.md` for context.
+1. Read the remediation plan at `docs/meta/reviews/2025-11-28-cell-snapshots-pg3/remediationD.md`.
+2. Review the original mini-spec at `docs/meta/plans/2025-11-28-cell-snapshots-pg3/spec.md` for context.
 3. Address the first fix in the "Fixes Required" section.
 4. After each fix, run `cargo test` to verify the new test passes and existing tests don't regress.
 5. Continue until all fixes are complete.
 6. Update the activity log with a remediation summary.
-
-Replace `[branch-name]` with the actual branch name for this cycle.
-

@@ -40,3 +40,22 @@ fn test_json_empty_diff() {
         "identical files should produce no cell diffs"
     );
 }
+
+#[test]
+fn test_json_non_empty_diff() {
+    let a = fixture_path("json_diff_single_cell_a.xlsx");
+    let b = fixture_path("json_diff_single_cell_b.xlsx");
+
+    let json = diff_workbooks_to_json(&a, &b).expect("diffing different files should succeed");
+    let value: Value = serde_json::from_str(&json).expect("json should parse");
+
+    let arr = value
+        .as_array()
+        .expect("top-level should be an array of cell diffs");
+    assert_eq!(arr.len(), 1, "expected a single cell difference");
+
+    let first = &arr[0];
+    assert_eq!(first["coords"], Value::String("C3".into()));
+    assert_eq!(first["value_file1"], Value::String("1".into()));
+    assert_eq!(first["value_file2"], Value::String("2".into()));
+}

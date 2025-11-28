@@ -123,3 +123,34 @@ class ValueFormulaGenerator(BaseGenerator):
             
             wb.save(output_dir / name)
 
+class SingleCellDiffGenerator(BaseGenerator):
+    """Generates a tiny pair of workbooks with a single differing cell."""
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        if len(output_names) != 2:
+            raise ValueError("single_cell_diff generator expects exactly two output filenames")
+
+        rows = self.args.get('rows', 3)
+        cols = self.args.get('cols', 3)
+        sheet = self.args.get('sheet', "Sheet1")
+        target_cell = self.args.get('target_cell', "C3")
+        value_a = self.args.get('value_a', "1")
+        value_b = self.args.get('value_b', "2")
+
+        def create_workbook(value: str, name: str):
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = sheet
+
+            for r in range(1, rows + 1):
+                for c in range(1, cols + 1):
+                    ws.cell(row=r, column=c, value=f"R{r}C{c}")
+
+            ws[target_cell] = value
+            wb.save(output_dir / name)
+
+        create_workbook(str(value_a), output_names[0])
+        create_workbook(str(value_b), output_names[1])
+

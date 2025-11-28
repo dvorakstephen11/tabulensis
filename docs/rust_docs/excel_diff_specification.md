@@ -320,6 +320,14 @@ enum DiffOp {
 
 The frontend and CLI consume these ops to render visual diffs or JSON reports, and the testing plan uses the same ops to assert correctness.
 
+### 6.1 JSON cell diff surface
+
+The core crate exposes lightweight JSON helpers for cell-by-cell comparisons:
+
+* `output::json::CellDiff { coords, value_file1, value_file2 }` serializes to a JSON object with those keys, and `serialize_cell_diffs` returns a JSON array of `CellDiff` objects.
+* `diff_workbooks` / `diff_workbooks_to_json` walk paired workbooks and emit `CellDiff` values; this surface is public and intentionally pulls `serde_json` in as a runtime dependency (extending the earlier PG3 test-only guidance for JSON).
+* Serialization failures from `diff_workbooks_to_json` are currently mapped to `ExcelOpenError::XmlParseError` as the shared "structured text" error bucket for XML and JSON; a dedicated `JsonError` can be added if the error model is refined later.
+
 ---
 
 ## 7. Object Graph Diff

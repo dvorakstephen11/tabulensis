@@ -122,3 +122,8 @@ notes_for_implementer_agent:
     current behavior rather than pre-emptively changing it; if you decide to
     introduce a dedicated error-cell variant in `CellValue` in a later cycle,
     that should come with its own decision record and migration plan.
+  - >
+    JSON diff helpers (CellDiff plus serialize/diff_workbooks* helpers) are now
+    part of the public surface, and `serde_json` is treated as a runtime
+    dependency to support that output format; keep specs and docs aligned with
+    this reality rather than implying it is test-only.
