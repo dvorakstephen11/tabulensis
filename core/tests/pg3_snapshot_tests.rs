@@ -89,12 +89,15 @@ fn snapshot_json_roundtrip() {
         snapshot(sheet, "A2"),
         snapshot(sheet, "B1"),
         snapshot(sheet, "B2"),
+        snapshot(sheet, "B3"),
     ];
 
     for snap in snapshots {
+        let addr = snap.addr.to_string();
         let json = serde_json::to_string(&snap).expect("snapshot should serialize");
-        assert!(json.contains("\"addr\""));
-        assert!(json.contains("\"value\""));
+        let as_value: serde_json::Value =
+            serde_json::from_str(&json).expect("snapshot JSON should parse to value");
+        assert_eq!(as_value["addr"], serde_json::Value::String(addr));
         let snap_back: CellSnapshot = serde_json::from_str(&json).expect("snapshot should parse");
         assert_eq!(snap, snap_back);
     }

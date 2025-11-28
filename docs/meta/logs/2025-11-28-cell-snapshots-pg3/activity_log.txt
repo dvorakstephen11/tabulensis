@@ -1,0 +1,8 @@
+Activity Log - 2025-11-28-cell-snapshots-pg3
+
+## Remediation Round 1
+- Addressed Finding 1 (Missing Integration Test Implementation and Execution) by finalizing `core/tests/pg3_snapshot_tests.rs` with fixture-based snapshot assertions for the `Types` sheet and JSON round-trip coverage that validates A1-style addresses, ensuring the integration suite runs.
+- Addressed Finding 2 (Deviation from JSON Format Example for CellAddress) by implementing custom serde for `CellAddress` to serialize/deserialize A1 strings and aligning round-trip expectations.
+- Files modified: docs/meta/logs/2025-11-28-cell-snapshots-pg3/activity_log.txt; core/src/workbook.rs; core/tests/pg3_snapshot_tests.rs.
+- Complications: none; deserialization now surfaces invalid cell addresses via `CellAddress::from_str`.
+- Validation: cargo fmt; cargo clippy --all-targets; cargo test (unit and integration suites, counts now exceed unit-only runs).

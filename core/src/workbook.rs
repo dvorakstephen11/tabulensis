@@ -1,4 +1,7 @@
 use crate::addressing::{address_to_index, index_to_address};
+use serde::de::Error as DeError;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::str::FromStr;
 
 /// A snapshot of a cell's logical content (address, value, formula).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -60,7 +63,7 @@ pub struct Cell {
     pub formula: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CellAddress {
     pub row: u32,
     pub col: u32,
@@ -88,6 +91,26 @@ impl std::str::FromStr for CellAddress {
 impl std::fmt::Display for CellAddress {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_a1())
+    }
+}
+
+impl Serialize for CellAddress {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_a1())
+    }
+}
+
+impl<'de> Deserialize<'de> for CellAddress {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let a1 = String::deserialize(deserializer)?;
+        CellAddress::from_str(&a1)
+            .map_err(|_| DeError::custom(format!("invalid cell address: {a1}")))
     }
 }
 
