@@ -32,10 +32,16 @@
       db_equal_ordered_a.xlsx
       db_equal_ordered_b.xlsx
       db_row_added_b.xlsx
+      duplicate_datamashup_elements.xlsx
+      duplicate_datamashup_parts.xlsx
       grid_large_dense.xlsx
       grid_large_noise.xlsx
+      mashup_base64_whitespace.xlsx
+      mashup_utf16_be.xlsx
+      mashup_utf16_le.xlsx
       minimal.xlsx
       m_change_literal_b.xlsx
+      not_a_zip.txt
       no_content_types.xlsx
       pg1_basic_two_sheets.xlsx
       pg1_empty_and_mixed_sheets.xlsx
@@ -404,24 +410,19 @@ fn extract_datamashup_bytes_from_excel(
 }
 
 fn read_datamashup_text(xml: &[u8]) -> Result<Option<String>, ExcelOpenError> {
-    let utf8_xml = if xml.starts_with(&[0xFF, 0xFE]) {
-        Some(decode_utf16_xml(xml, true)?)
-    } else if xml.starts_with(&[0xFE, 0xFF]) {
-        Some(decode_utf16_xml(xml, false)?)
-    } else {
-        None
-    };
+    let utf8_xml = decode_datamashup_xml(xml)?;
 
     let mut reader = Reader::from_reader(utf8_xml.as_deref().unwrap_or(xml));
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
     let mut in_datamashup = false;
+    let mut found_content: Option<String> = None;
     let mut content = String::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) if is_datamashup_element(e.name().as_ref()) => {
-                if in_datamashup {
+                if in_datamashup || found_content.is_some() {
                     return Err(ExcelOpenError::DataMashupFramingInvalid);
                 }
                 in_datamashup = true;
@@ -438,13 +439,17 @@ fn read_datamashup_text(xml: &[u8]) -> Result<Option<String>, ExcelOpenError> {
                 let data = t.into_inner();
                 content.push_str(&String::from_utf8_lossy(&data));
             }
-            Ok(Event::End(e)) if in_datamashup && is_datamashup_element(e.name().as_ref()) => {
-                return Ok(Some(content));
+            Ok(Event::End(e)) if is_datamashup_element(e.name().as_ref()) => {
+                if !in_datamashup {
+                    return Err(ExcelOpenError::DataMashupFramingInvalid);
+                }
+                in_datamashup = false;
+                found_content = Some(content.clone());
             }
             Ok(Event::Eof) if in_datamashup => {
                 return Err(ExcelOpenError::DataMashupFramingInvalid);
             }
-            Ok(Event::Eof) => return Ok(None),
+            Ok(Event::Eof) => return Ok(found_content),
             Err(e) => return Err(ExcelOpenError::XmlParseError(e.to_string())),
             _ => {}
         }
@@ -460,12 +465,63 @@ fn decode_datamashup_base64(text: &str) -> Result<Vec<u8>, ExcelOpenError> {
 }
 
 fn is_datamashup_element(name: &[u8]) -> bool {
-    name.ends_with(b"DataMashup")
+    match name.iter().rposition(|&b| b == b':') {
+        Some(idx) => name.get(idx + 1..) == Some(b"DataMashup".as_slice()),
+        None => name == b"DataMashup",
+    }
 }
 
-fn decode_utf16_xml(xml: &[u8], little_endian: bool) -> Result<Vec<u8>, ExcelOpenError> {
+fn decode_datamashup_xml(xml: &[u8]) -> Result<Option<Vec<u8>>, ExcelOpenError> {
+    if xml.starts_with(&[0xFF, 0xFE]) {
+        return Ok(Some(decode_utf16_xml(xml, true, true)?));
+    }
+    if xml.starts_with(&[0xFE, 0xFF]) {
+        return Ok(Some(decode_utf16_xml(xml, false, true)?));
+    }
+
+    decode_declared_utf16_without_bom(xml)
+}
+
+fn decode_declared_utf16_without_bom(xml: &[u8]) -> Result<Option<Vec<u8>>, ExcelOpenError> {
+    let attempt_decode = |little_endian| -> Result<Option<Vec<u8>>, ExcelOpenError> {
+        if !looks_like_utf16(xml, little_endian) {
+            return Ok(None);
+        }
+        let decoded = decode_utf16_xml(xml, little_endian, false)?;
+        let lower = String::from_utf8_lossy(&decoded).to_ascii_lowercase();
+        if lower.contains("encoding=\"utf-16\"") || lower.contains("encoding='utf-16'") {
+            Ok(Some(decoded))
+        } else {
+            Ok(None)
+        }
+    };
+
+    if let Some(decoded) = attempt_decode(true)? {
+        return Ok(Some(decoded));
+    }
+    attempt_decode(false)
+}
+
+fn looks_like_utf16(xml: &[u8], little_endian: bool) -> bool {
+    if xml.len() < 4 {
+        return false;
+    }
+
+    if little_endian {
+        xml[0] == b'<' && xml[1] == 0 && xml[2] == b'?' && xml[3] == 0
+    } else {
+        xml[0] == 0 && xml[1] == b'<' && xml[2] == 0 && xml[3] == b'?'
+    }
+}
+
+fn decode_utf16_xml(
+    xml: &[u8],
+    little_endian: bool,
+    has_bom: bool,
+) -> Result<Vec<u8>, ExcelOpenError> {
+    let start = if has_bom { 2 } else { 0 };
     let body = xml
-        .get(2..)
+        .get(start..)
         .ok_or_else(|| ExcelOpenError::XmlParseError("invalid UTF-16 XML".into()))?;
     if body.len() % 2 != 0 {
         return Err(ExcelOpenError::XmlParseError(
@@ -948,7 +1004,7 @@ struct ParsedCell {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExcelOpenError, RawDataMashup, parse_data_mashup};
+    use super::{ExcelOpenError, RawDataMashup, parse_data_mashup, read_datamashup_text};
 
     fn build_dm_bytes(
         version: u32,
@@ -1024,6 +1080,68 @@ mod tests {
         let mut bytes = build_dm_bytes(0, b"", b"", b"", b"");
         bytes.push(0xFF);
         let err = parse_data_mashup(&bytes).expect_err("trailing bytes should fail");
+        assert!(matches!(err, ExcelOpenError::DataMashupFramingInvalid));
+    }
+
+    #[test]
+    fn too_short_stream_is_framing_invalid() {
+        let bytes = vec![0u8; 8];
+        let err =
+            parse_data_mashup(&bytes).expect_err("buffer shorter than header must be invalid");
+        assert!(matches!(err, ExcelOpenError::DataMashupFramingInvalid));
+    }
+
+    #[test]
+    fn utf16_datamashup_xml_decodes_correctly() {
+        let xml_text = r#"<?xml version="1.0" encoding="utf-16"?><root xmlns:dm="http://schemas.microsoft.com/DataMashup"><dm:DataMashup>QQ==</dm:DataMashup></root>"#;
+        let mut xml_bytes = Vec::with_capacity(2 + xml_text.len() * 2);
+        xml_bytes.extend_from_slice(&[0xFF, 0xFE]);
+        for unit in xml_text.encode_utf16() {
+            xml_bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+
+        let text = read_datamashup_text(&xml_bytes)
+            .expect("UTF-16 XML should parse")
+            .expect("DataMashup element should be found");
+        assert_eq!(text.trim(), "QQ==");
+    }
+
+    #[test]
+    fn utf16_without_bom_with_declared_encoding_parses() {
+        let xml_text = r#"<?xml version="1.0" encoding="utf-16"?><root xmlns:dm="http://schemas.microsoft.com/DataMashup"><dm:DataMashup>QQ==</dm:DataMashup></root>"#;
+        for &little_endian in &[true, false] {
+            let mut xml_bytes = Vec::with_capacity(xml_text.len() * 2);
+            for unit in xml_text.encode_utf16() {
+                let bytes = if little_endian {
+                    unit.to_le_bytes()
+                } else {
+                    unit.to_be_bytes()
+                };
+                xml_bytes.extend_from_slice(&bytes);
+            }
+
+            let text = read_datamashup_text(&xml_bytes)
+                .expect("UTF-16 XML without BOM should parse when declared")
+                .expect("DataMashup element should be found");
+            assert_eq!(text.trim(), "QQ==");
+        }
+    }
+
+    #[test]
+    fn elements_with_datamashup_suffix_are_ignored() {
+        let xml = br#"<?xml version="1.0"?><root><FooDataMashup>QQ==</FooDataMashup></root>"#;
+        let result = read_datamashup_text(xml).expect("parsing should succeed");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn duplicate_sibling_datamashup_elements_error() {
+        let xml = br#"<?xml version="1.0"?>
+<root xmlns:dm="http://schemas.microsoft.com/DataMashup">
+  <dm:DataMashup>QQ==</dm:DataMashup>
+  <dm:DataMashup>QQ==</dm:DataMashup>
+</root>"#;
+        let err = read_datamashup_text(xml).expect_err("duplicate DataMashup elements should fail");
         assert!(matches!(err, ExcelOpenError::DataMashupFramingInvalid));
     }
 
@@ -1210,9 +1328,14 @@ fn pg2_addressing_matrix_consistency() {
 ### File: `core\tests\data_mashup_tests.rs`
 
 ```rust
-use std::io::ErrorKind;
+use std::fs::File;
+use std::io::{ErrorKind, Read};
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use excel_diff::{ExcelOpenError, RawDataMashup, open_data_mashup};
+use quick_xml::{Reader, events::Event};
+use zip::ZipArchive;
 
 mod common;
 use common::fixture_path;
@@ -1236,12 +1359,38 @@ fn workbook_with_valid_datamashup_parses() {
     assert!(!raw.metadata.is_empty());
 
     let assembled = assemble_top_level_bytes(&raw);
-    let expected_len = 4 * 5
-        + raw.package_parts.len()
-        + raw.permissions.len()
-        + raw.metadata.len()
-        + raw.permission_bindings.len();
-    assert_eq!(assembled.len(), expected_len);
+    let expected = datamashup_bytes_from_fixture(&path);
+    assert_eq!(assembled, expected);
+}
+
+#[test]
+fn datamashup_with_base64_whitespace_parses() {
+    let path = fixture_path("mashup_base64_whitespace.xlsx");
+    let raw = open_data_mashup(&path)
+        .expect("whitespace in base64 payload should be tolerated")
+        .expect("mashup should be present");
+    assert_eq!(raw.version, 0);
+    assert!(!raw.package_parts.is_empty());
+}
+
+#[test]
+fn utf16_le_datamashup_parses() {
+    let path = fixture_path("mashup_utf16_le.xlsx");
+    let raw = open_data_mashup(&path)
+        .expect("UTF-16LE mashup should load")
+        .expect("mashup should be present");
+    assert_eq!(raw.version, 0);
+    assert!(!raw.package_parts.is_empty());
+}
+
+#[test]
+fn utf16_be_datamashup_parses() {
+    let path = fixture_path("mashup_utf16_be.xlsx");
+    let raw = open_data_mashup(&path)
+        .expect("UTF-16BE mashup should load")
+        .expect("mashup should be present");
+    assert_eq!(raw.version, 0);
+    assert!(!raw.package_parts.is_empty());
 }
 
 #[test]
@@ -1249,6 +1398,21 @@ fn corrupt_base64_returns_error() {
     let path = fixture_path("corrupt_base64.xlsx");
     let err = open_data_mashup(&path).expect_err("corrupt base64 should fail");
     assert!(matches!(err, ExcelOpenError::DataMashupBase64Invalid));
+}
+
+#[test]
+fn duplicate_datamashup_parts_are_rejected() {
+    let path = fixture_path("duplicate_datamashup_parts.xlsx");
+    let err = open_data_mashup(&path).expect_err("duplicate DataMashup parts should be rejected");
+    assert!(matches!(err, ExcelOpenError::DataMashupFramingInvalid));
+}
+
+#[test]
+fn duplicate_datamashup_elements_are_rejected() {
+    let path = fixture_path("duplicate_datamashup_elements.xlsx");
+    let err =
+        open_data_mashup(&path).expect_err("duplicate DataMashup elements should be rejected");
+    assert!(matches!(err, ExcelOpenError::DataMashupFramingInvalid));
 }
 
 #[test]
@@ -1266,6 +1430,87 @@ fn non_excel_container_returns_not_excel_error() {
     let path = fixture_path("random_zip.zip");
     let err = open_data_mashup(&path).expect_err("random zip should not parse");
     assert!(matches!(err, ExcelOpenError::NotExcelOpenXml));
+}
+
+#[test]
+fn missing_content_types_is_not_excel_error() {
+    let path = fixture_path("no_content_types.xlsx");
+    let err = open_data_mashup(&path).expect_err("missing [Content_Types].xml should fail");
+    assert!(matches!(err, ExcelOpenError::NotExcelOpenXml));
+}
+
+#[test]
+fn non_zip_file_returns_not_zip_error() {
+    let path = fixture_path("not_a_zip.txt");
+    let err = open_data_mashup(&path).expect_err("non-zip input should not parse as Excel");
+    assert!(matches!(err, ExcelOpenError::NotZipContainer));
+}
+
+fn datamashup_bytes_from_fixture(path: &std::path::Path) -> Vec<u8> {
+    let file = File::open(path).expect("fixture should be readable");
+    let mut archive = ZipArchive::new(file).expect("fixture should be a zip container");
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).expect("zip entry should be readable");
+        let name = file.name().to_string();
+        if !name.starts_with("customXml/") || !name.ends_with(".xml") {
+            continue;
+        }
+
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf).expect("XML part should read");
+        if let Some(text) = extract_datamashup_base64(&buf) {
+            let cleaned: String = text.split_whitespace().collect();
+            return STANDARD
+                .decode(cleaned.as_bytes())
+                .expect("DataMashup base64 should decode");
+        }
+    }
+
+    panic!("DataMashup element not found in {}", path.display());
+}
+
+fn extract_datamashup_base64(xml: &[u8]) -> Option<String> {
+    let mut reader = Reader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buf = Vec::new();
+    let mut in_datamashup = false;
+    let mut content = String::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) if is_datamashup_element(e.name().as_ref()) => {
+                if in_datamashup {
+                    return None;
+                }
+                in_datamashup = true;
+                content.clear();
+            }
+            Ok(Event::Text(t)) if in_datamashup => {
+                let text = t.unescape().ok()?.into_owned();
+                content.push_str(&text);
+            }
+            Ok(Event::CData(t)) if in_datamashup => {
+                content.push_str(&String::from_utf8_lossy(&t.into_inner()));
+            }
+            Ok(Event::End(e)) if is_datamashup_element(e.name().as_ref()) => {
+                if !in_datamashup {
+                    return None;
+                }
+                return Some(content.clone());
+            }
+            Ok(Event::Eof) => return None,
+            Err(_) => return None,
+            _ => {}
+        }
+        buf.clear();
+    }
+}
+
+fn is_datamashup_element(name: &[u8]) -> bool {
+    match name.iter().rposition(|&b| b == b':') {
+        Some(idx) => name.get(idx + 1..) == Some(b"DataMashup".as_slice()),
+        None => name == b"DataMashup",
+    }
 }
 
 fn assemble_top_level_bytes(raw: &RawDataMashup) -> Vec<u8> {
@@ -1549,6 +1794,11 @@ scenarios:
     args: { mode: "no_content_types" }
     output: "no_content_types.xlsx"
 
+  - id: "container_not_zip_text"
+    generator: "corrupt_container"
+    args: { mode: "not_zip_text" }
+    output: "not_a_zip.txt"
+
   # --- PG1: Workbook -> Sheet -> Grid IR sanity ---
   - id: "pg1_basic_two_sheets"
     generator: "basic_grid"
@@ -1582,6 +1832,40 @@ scenarios:
       base_file: "templates/base_query.xlsx"
       mode: "byte_flip"
     output: "corrupt_base64.xlsx"
+
+  - id: "duplicate_datamashup_parts"
+    generator: "mashup_duplicate"
+    args:
+      base_file: "templates/base_query.xlsx"
+    output: "duplicate_datamashup_parts.xlsx"
+
+  - id: "duplicate_datamashup_elements"
+    generator: "mashup_duplicate"
+    args:
+      base_file: "templates/base_query.xlsx"
+      mode: "element"
+    output: "duplicate_datamashup_elements.xlsx"
+
+  - id: "mashup_utf16_le"
+    generator: "mashup_encode"
+    args:
+      base_file: "templates/base_query.xlsx"
+      encoding: "utf-16-le"
+    output: "mashup_utf16_le.xlsx"
+
+  - id: "mashup_utf16_be"
+    generator: "mashup_encode"
+    args:
+      base_file: "templates/base_query.xlsx"
+      encoding: "utf-16-be"
+    output: "mashup_utf16_be.xlsx"
+
+  - id: "mashup_base64_whitespace"
+    generator: "mashup_encode"
+    args:
+      base_file: "templates/base_query.xlsx"
+      whitespace: true
+    output: "mashup_base64_whitespace.xlsx"
 
   # --- Milestone 6: Basic M Diffs ---
   - id: "m_change_literal"
@@ -1692,7 +1976,12 @@ from generators.grid import (
     ValueFormulaGenerator
 )
 from generators.corrupt import ContainerCorruptGenerator
-from generators.mashup import MashupCorruptGenerator, MashupInjectGenerator
+from generators.mashup import (
+    MashupCorruptGenerator,
+    MashupDuplicateGenerator,
+    MashupInjectGenerator,
+    MashupEncodeGenerator,
+)
 from generators.perf import LargeGridGenerator
 from generators.database import KeyedTableGenerator
 
@@ -1705,7 +1994,9 @@ GENERATORS: Dict[str, Any] = {
     "value_formula": ValueFormulaGenerator,
     "corrupt_container": ContainerCorruptGenerator,
     "mashup_corrupt": MashupCorruptGenerator,
+    "mashup_duplicate": MashupDuplicateGenerator,
     "mashup_inject": MashupInjectGenerator,
+    "mashup_encode": MashupEncodeGenerator,
     "perf_large": LargeGridGenerator,
     "db_keyed": KeyedTableGenerator,
 }
@@ -1865,6 +2156,10 @@ class ContainerCorruptGenerator(BaseGenerator):
                         for item in zin.infolist():
                             if item.filename != "[Content_Types].xml":
                                 zout.writestr(item, zin.read(item.filename))
+            elif mode == 'not_zip_text':
+                out_path.write_text("This is not a zip container", encoding="utf-8")
+            else:
+                raise ValueError(f"Unsupported corrupt_container mode: {mode}")
 
 ```
 
@@ -2077,12 +2372,15 @@ class ValueFormulaGenerator(BaseGenerator):
 
 ```python
 import base64
-import struct
-import zipfile
+import copy
 import io
 import random
+import re
+import struct
+import zipfile
 from pathlib import Path
-from typing import Union, List
+from typing import Callable, List, Optional, Union
+from xml.etree import ElementTree as ET
 from lxml import etree
 from .base import BaseGenerator
 
@@ -2093,9 +2391,17 @@ class MashupBaseGenerator(BaseGenerator):
     """Base class for handling the outer Excel container and finding DataMashup."""
     
     def _get_mashup_element(self, tree):
-        return tree.find('//dm:DataMashup', namespaces=NS)
+        if tree.tag.endswith("DataMashup"):
+            return tree
+        return tree.find('.//dm:DataMashup', namespaces=NS)
 
-    def _process_excel_container(self, base_path, output_path, callback):
+    def _process_excel_container(
+        self,
+        base_path,
+        output_path,
+        callback,
+        text_mutator: Optional[Callable[[str], str]] = None,
+    ):
         """
         Generic wrapper to open xlsx, find customXml, apply a callback to the 
         DataMashup bytes, and save the result.
@@ -2108,7 +2414,8 @@ class MashupBaseGenerator(BaseGenerator):
                     
                     # We only care about the item containing DataMashup
                     # Usually customXml/item1.xml, but we check content to be safe
-                    if item.filename.startswith("customXml/item") and b"DataMashup" in buffer:
+                    has_marker = b"DataMashup" in buffer or b"D\x00a\x00t\x00a\x00M\x00a\x00s\x00h\x00u\x00p" in buffer
+                    if item.filename.startswith("customXml/item") and has_marker:
                         # Parse XML
                         root = etree.fromstring(buffer)
                         dm_node = self._get_mashup_element(root)
@@ -2124,7 +2431,10 @@ class MashupBaseGenerator(BaseGenerator):
                                 new_bytes = callback(raw_bytes)
                                 
                                 # 3. Encode back
-                                dm_node.text = base64.b64encode(new_bytes).decode('utf-8')
+                                new_text = base64.b64encode(new_bytes).decode('utf-8')
+                                if text_mutator is not None:
+                                    new_text = text_mutator(new_text)
+                                dm_node.text = new_text
                                 buffer = etree.tostring(root, encoding='utf-8', xml_declaration=True)
                     
                     zout.writestr(item, buffer)
@@ -2170,7 +2480,20 @@ class MashupCorruptGenerator(MashupBaseGenerator):
             # Actually output_dir is a Path. name is str.
             # .resolve() resolves symlinks and relative paths to absolute
             target_path = (output_dir / name).resolve()
-            self._process_excel_container(base.resolve(), target_path, corruptor)
+            text_mutator = self._garble_base64_text if mode == 'byte_flip' else None
+            self._process_excel_container(
+                base.resolve(),
+                target_path,
+                corruptor,
+                text_mutator=text_mutator,
+            )
+
+    def _garble_base64_text(self, encoded: str) -> str:
+        if not encoded:
+            return "!!"
+        chars = list(encoded)
+        chars[0] = "!"
+        return "".join(chars)
 
 
 class MashupInjectGenerator(MashupBaseGenerator):
@@ -2262,6 +2585,234 @@ class MashupInjectGenerator(MashupBaseGenerator):
             return zip_bytes
             
         return out_buffer.getvalue()
+
+
+class MashupDuplicateGenerator(MashupBaseGenerator):
+    """
+    Duplicates the customXml part that contains DataMashup to produce two
+    DataMashup occurrences in a single workbook.
+    """
+
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        base_file_arg = self.args.get('base_file')
+        mode = self.args.get('mode', 'part')
+        if not base_file_arg:
+            raise ValueError("MashupDuplicateGenerator requires 'base_file' argument")
+
+        base = Path(base_file_arg)
+        if not base.exists():
+            candidate = Path("fixtures") / base_file_arg
+            if candidate.exists():
+                base = candidate
+            else:
+                raise FileNotFoundError(f"Template {base} not found.")
+
+        for name in output_names:
+            target_path = (output_dir / name).resolve()
+            if mode == 'part':
+                self._duplicate_datamashup_part(base.resolve(), target_path)
+            elif mode == 'element':
+                self._duplicate_datamashup_element(base.resolve(), target_path)
+            else:
+                raise ValueError(f"Unsupported duplicate mode: {mode}")
+
+    def _duplicate_datamashup_part(self, base_path: Path, output_path: Path):
+        with zipfile.ZipFile(base_path, 'r') as zin:
+            try:
+                item1_xml = zin.read("customXml/item1.xml")
+                item_props1 = zin.read("customXml/itemProps1.xml")
+                item1_rels = zin.read("customXml/_rels/item1.xml.rels")
+                content_types = zin.read("[Content_Types].xml")
+                workbook_rels = zin.read("xl/_rels/workbook.xml.rels")
+            except KeyError as e:
+                raise FileNotFoundError(f"Required DataMashup part missing: {e}") from e
+
+            updated_content_types = self._add_itemprops_override(content_types)
+            updated_workbook_rels = self._add_workbook_relationship(workbook_rels)
+            item2_rels = item1_rels.replace(b"itemProps1.xml", b"itemProps2.xml")
+            item_props2 = item_props1.replace(
+                b"{37E9CB8A-1D60-4852-BCC8-3140E13993BE}",
+                b"{37E9CB8A-1D60-4852-BCC8-3140E13993BF}",
+            )
+
+            with zipfile.ZipFile(output_path, 'w') as zout:
+                for info in zin.infolist():
+                    data = zin.read(info.filename)
+                    if info.filename == "[Content_Types].xml":
+                        data = updated_content_types
+                    elif info.filename == "xl/_rels/workbook.xml.rels":
+                        data = updated_workbook_rels
+                    zout.writestr(info, data)
+
+                zout.writestr("customXml/item2.xml", item1_xml)
+                zout.writestr("customXml/itemProps2.xml", item_props2)
+                zout.writestr("customXml/_rels/item2.xml.rels", item2_rels)
+
+    def _add_itemprops_override(self, content_types_bytes: bytes) -> bytes:
+        ns = "http://schemas.openxmlformats.org/package/2006/content-types"
+        root = ET.fromstring(content_types_bytes)
+        override_tag = f"{{{ns}}}Override"
+        if not any(
+            elem.get("PartName") == "/customXml/itemProps2.xml"
+            for elem in root.findall(override_tag)
+        ):
+            new_override = ET.SubElement(root, override_tag)
+            new_override.set("PartName", "/customXml/itemProps2.xml")
+            new_override.set(
+                "ContentType",
+                "application/vnd.openxmlformats-officedocument.customXmlProperties+xml",
+            )
+        return ET.tostring(root, xml_declaration=True, encoding="utf-8")
+
+    def _add_workbook_relationship(self, rels_bytes: bytes) -> bytes:
+        ns = "http://schemas.openxmlformats.org/package/2006/relationships"
+        root = ET.fromstring(rels_bytes)
+        rel_tag = f"{{{ns}}}Relationship"
+        existing_ids = {elem.get("Id") for elem in root.findall(rel_tag)}
+        next_id = 1
+        while f"rId{next_id}" in existing_ids:
+            next_id += 1
+        new_rel = ET.SubElement(root, rel_tag)
+        new_rel.set("Id", f"rId{next_id}")
+        new_rel.set(
+            "Type",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml",
+        )
+        new_rel.set("Target", "../customXml/item2.xml")
+        return ET.tostring(root, xml_declaration=True, encoding="utf-8")
+
+    def _duplicate_datamashup_element(self, base_path: Path, output_path: Path):
+        with zipfile.ZipFile(base_path, 'r') as zin:
+            with zipfile.ZipFile(output_path, 'w') as zout:
+                for info in zin.infolist():
+                    data = zin.read(info.filename)
+                    if info.filename.startswith("customXml/item") and (
+                        b"DataMashup" in data
+                        or b"D\x00a\x00t\x00a\x00M\x00a\x00s\x00h\x00u\x00p" in data
+                    ):
+                        try:
+                            root = etree.fromstring(data)
+                            dm_node = self._get_mashup_element(root)
+                            if dm_node is not None:
+                                duplicate = copy.deepcopy(dm_node)
+                                parent = dm_node.getparent()
+                                if parent is not None:
+                                    parent.append(duplicate)
+                                    target_root = root
+                                else:
+                                    container = etree.Element("root", nsmap=root.nsmap)
+                                    container.append(dm_node)
+                                    container.append(duplicate)
+                                    target_root = container
+                                data = etree.tostring(
+                                    target_root, encoding="utf-8", xml_declaration=True
+                                )
+                        except etree.XMLSyntaxError:
+                            pass
+                    zout.writestr(info, data)
+
+
+class MashupEncodeGenerator(MashupBaseGenerator):
+    """
+    Re-encodes the DataMashup customXml stream to a target encoding and optionally
+    inserts whitespace into the base64 payload.
+    """
+
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        base_file_arg = self.args.get('base_file')
+        encoding = self.args.get('encoding', 'utf-8')
+        whitespace = bool(self.args.get('whitespace', False))
+        if not base_file_arg:
+            raise ValueError("MashupEncodeGenerator requires 'base_file' argument")
+
+        base = Path(base_file_arg)
+        if not base.exists():
+            candidate = Path("fixtures") / base_file_arg
+            if candidate.exists():
+                base = candidate
+            else:
+                raise FileNotFoundError(f"Template {base} not found.")
+
+        for name in output_names:
+            target_path = (output_dir / name).resolve()
+            self._rewrite_datamashup_xml(base.resolve(), target_path, encoding, whitespace)
+
+    def _rewrite_datamashup_xml(
+        self,
+        base_path: Path,
+        output_path: Path,
+        encoding: str,
+        whitespace: bool,
+    ):
+        with zipfile.ZipFile(base_path, 'r') as zin:
+            with zipfile.ZipFile(output_path, 'w') as zout:
+                for info in zin.infolist():
+                    data = zin.read(info.filename)
+                    if info.filename.startswith("customXml/item") and (
+                        b"DataMashup" in data
+                        or b"D\x00a\x00t\x00a\x00M\x00a\x00s\x00h\x00u\x00p" in data
+                    ):
+                        try:
+                            data = self._process_datamashup_stream(data, encoding, whitespace)
+                        except etree.XMLSyntaxError:
+                            pass
+                    zout.writestr(info, data)
+
+    def _process_datamashup_stream(
+        self,
+        xml_bytes: bytes,
+        encoding: str,
+        whitespace: bool,
+    ) -> bytes:
+        root = etree.fromstring(xml_bytes)
+        dm_node = self._get_mashup_element(root)
+        if dm_node is None:
+            return xml_bytes
+
+        if dm_node.text and whitespace:
+            dm_node.text = self._with_whitespace(dm_node.text)
+
+        xml_bytes = etree.tostring(root, encoding="utf-8", xml_declaration=True)
+        return self._encode_bytes(xml_bytes, encoding)
+
+    def _with_whitespace(self, text: str) -> str:
+        cleaned = text.strip()
+        if not cleaned:
+            return text
+        midpoint = max(1, len(cleaned) // 2)
+        return f"\n  {cleaned[:midpoint]}\n  {cleaned[midpoint:]}\n"
+
+    def _encode_bytes(self, xml_bytes: bytes, encoding: str) -> bytes:
+        enc = encoding.lower()
+        if enc == "utf-8":
+            return xml_bytes
+        if enc == "utf-16-le":
+            return self._to_utf16(xml_bytes, little_endian=True)
+        if enc == "utf-16-be":
+            return self._to_utf16(xml_bytes, little_endian=False)
+        raise ValueError(f"Unsupported encoding: {encoding}")
+
+    def _to_utf16(self, xml_bytes: bytes, little_endian: bool) -> bytes:
+        text = xml_bytes.decode("utf-8")
+        text = self._rewrite_declaration(text)
+        encoded = text.encode("utf-16-le" if little_endian else "utf-16-be")
+        bom = b"\xff\xfe" if little_endian else b"\xfe\xff"
+        return bom + encoded
+
+    def _rewrite_declaration(self, text: str) -> str:
+        pattern = r'encoding=["\'][^"\']+["\']'
+        if re.search(pattern, text):
+            return re.sub(pattern, 'encoding="UTF-16"', text, count=1)
+        prefix = "<?xml version='1.0'?>"
+        if text.startswith(prefix):
+            return text.replace(prefix, "<?xml version='1.0' encoding='UTF-16'?>", 1)
+        return text
 
 ```
 

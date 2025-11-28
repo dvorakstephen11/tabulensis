@@ -1,10 +1,13 @@
 import base64
-import struct
-import zipfile
+import copy
 import io
 import random
+import re
+import struct
+import zipfile
 from pathlib import Path
-from typing import Union, List
+from typing import Callable, List, Optional, Union
+from xml.etree import ElementTree as ET
 from lxml import etree
 from .base import BaseGenerator
 
@@ -15,9 +18,17 @@ class MashupBaseGenerator(BaseGenerator):
     """Base class for handling the outer Excel container and finding DataMashup."""
     
     def _get_mashup_element(self, tree):
-        return tree.find('//dm:DataMashup', namespaces=NS)
+        if tree.tag.endswith("DataMashup"):
+            return tree
+        return tree.find('.//dm:DataMashup', namespaces=NS)
 
-    def _process_excel_container(self, base_path, output_path, callback):
+    def _process_excel_container(
+        self,
+        base_path,
+        output_path,
+        callback,
+        text_mutator: Optional[Callable[[str], str]] = None,
+    ):
         """
         Generic wrapper to open xlsx, find customXml, apply a callback to the 
         DataMashup bytes, and save the result.
@@ -30,7 +41,8 @@ class MashupBaseGenerator(BaseGenerator):
                     
                     # We only care about the item containing DataMashup
                     # Usually customXml/item1.xml, but we check content to be safe
-                    if item.filename.startswith("customXml/item") and b"DataMashup" in buffer:
+                    has_marker = b"DataMashup" in buffer or b"D\x00a\x00t\x00a\x00M\x00a\x00s\x00h\x00u\x00p" in buffer
+                    if item.filename.startswith("customXml/item") and has_marker:
                         # Parse XML
                         root = etree.fromstring(buffer)
                         dm_node = self._get_mashup_element(root)
@@ -46,7 +58,10 @@ class MashupBaseGenerator(BaseGenerator):
                                 new_bytes = callback(raw_bytes)
                                 
                                 # 3. Encode back
-                                dm_node.text = base64.b64encode(new_bytes).decode('utf-8')
+                                new_text = base64.b64encode(new_bytes).decode('utf-8')
+                                if text_mutator is not None:
+                                    new_text = text_mutator(new_text)
+                                dm_node.text = new_text
                                 buffer = etree.tostring(root, encoding='utf-8', xml_declaration=True)
                     
                     zout.writestr(item, buffer)
@@ -92,7 +107,20 @@ class MashupCorruptGenerator(MashupBaseGenerator):
             # Actually output_dir is a Path. name is str.
             # .resolve() resolves symlinks and relative paths to absolute
             target_path = (output_dir / name).resolve()
-            self._process_excel_container(base.resolve(), target_path, corruptor)
+            text_mutator = self._garble_base64_text if mode == 'byte_flip' else None
+            self._process_excel_container(
+                base.resolve(),
+                target_path,
+                corruptor,
+                text_mutator=text_mutator,
+            )
+
+    def _garble_base64_text(self, encoded: str) -> str:
+        if not encoded:
+            return "!!"
+        chars = list(encoded)
+        chars[0] = "!"
+        return "".join(chars)
 
 
 class MashupInjectGenerator(MashupBaseGenerator):
@@ -184,4 +212,232 @@ class MashupInjectGenerator(MashupBaseGenerator):
             return zip_bytes
             
         return out_buffer.getvalue()
+
+
+class MashupDuplicateGenerator(MashupBaseGenerator):
+    """
+    Duplicates the customXml part that contains DataMashup to produce two
+    DataMashup occurrences in a single workbook.
+    """
+
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        base_file_arg = self.args.get('base_file')
+        mode = self.args.get('mode', 'part')
+        if not base_file_arg:
+            raise ValueError("MashupDuplicateGenerator requires 'base_file' argument")
+
+        base = Path(base_file_arg)
+        if not base.exists():
+            candidate = Path("fixtures") / base_file_arg
+            if candidate.exists():
+                base = candidate
+            else:
+                raise FileNotFoundError(f"Template {base} not found.")
+
+        for name in output_names:
+            target_path = (output_dir / name).resolve()
+            if mode == 'part':
+                self._duplicate_datamashup_part(base.resolve(), target_path)
+            elif mode == 'element':
+                self._duplicate_datamashup_element(base.resolve(), target_path)
+            else:
+                raise ValueError(f"Unsupported duplicate mode: {mode}")
+
+    def _duplicate_datamashup_part(self, base_path: Path, output_path: Path):
+        with zipfile.ZipFile(base_path, 'r') as zin:
+            try:
+                item1_xml = zin.read("customXml/item1.xml")
+                item_props1 = zin.read("customXml/itemProps1.xml")
+                item1_rels = zin.read("customXml/_rels/item1.xml.rels")
+                content_types = zin.read("[Content_Types].xml")
+                workbook_rels = zin.read("xl/_rels/workbook.xml.rels")
+            except KeyError as e:
+                raise FileNotFoundError(f"Required DataMashup part missing: {e}") from e
+
+            updated_content_types = self._add_itemprops_override(content_types)
+            updated_workbook_rels = self._add_workbook_relationship(workbook_rels)
+            item2_rels = item1_rels.replace(b"itemProps1.xml", b"itemProps2.xml")
+            item_props2 = item_props1.replace(
+                b"{37E9CB8A-1D60-4852-BCC8-3140E13993BE}",
+                b"{37E9CB8A-1D60-4852-BCC8-3140E13993BF}",
+            )
+
+            with zipfile.ZipFile(output_path, 'w') as zout:
+                for info in zin.infolist():
+                    data = zin.read(info.filename)
+                    if info.filename == "[Content_Types].xml":
+                        data = updated_content_types
+                    elif info.filename == "xl/_rels/workbook.xml.rels":
+                        data = updated_workbook_rels
+                    zout.writestr(info, data)
+
+                zout.writestr("customXml/item2.xml", item1_xml)
+                zout.writestr("customXml/itemProps2.xml", item_props2)
+                zout.writestr("customXml/_rels/item2.xml.rels", item2_rels)
+
+    def _add_itemprops_override(self, content_types_bytes: bytes) -> bytes:
+        ns = "http://schemas.openxmlformats.org/package/2006/content-types"
+        root = ET.fromstring(content_types_bytes)
+        override_tag = f"{{{ns}}}Override"
+        if not any(
+            elem.get("PartName") == "/customXml/itemProps2.xml"
+            for elem in root.findall(override_tag)
+        ):
+            new_override = ET.SubElement(root, override_tag)
+            new_override.set("PartName", "/customXml/itemProps2.xml")
+            new_override.set(
+                "ContentType",
+                "application/vnd.openxmlformats-officedocument.customXmlProperties+xml",
+            )
+        return ET.tostring(root, xml_declaration=True, encoding="utf-8")
+
+    def _add_workbook_relationship(self, rels_bytes: bytes) -> bytes:
+        ns = "http://schemas.openxmlformats.org/package/2006/relationships"
+        root = ET.fromstring(rels_bytes)
+        rel_tag = f"{{{ns}}}Relationship"
+        existing_ids = {elem.get("Id") for elem in root.findall(rel_tag)}
+        next_id = 1
+        while f"rId{next_id}" in existing_ids:
+            next_id += 1
+        new_rel = ET.SubElement(root, rel_tag)
+        new_rel.set("Id", f"rId{next_id}")
+        new_rel.set(
+            "Type",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml",
+        )
+        new_rel.set("Target", "../customXml/item2.xml")
+        return ET.tostring(root, xml_declaration=True, encoding="utf-8")
+
+    def _duplicate_datamashup_element(self, base_path: Path, output_path: Path):
+        with zipfile.ZipFile(base_path, 'r') as zin:
+            with zipfile.ZipFile(output_path, 'w') as zout:
+                for info in zin.infolist():
+                    data = zin.read(info.filename)
+                    if info.filename.startswith("customXml/item") and (
+                        b"DataMashup" in data
+                        or b"D\x00a\x00t\x00a\x00M\x00a\x00s\x00h\x00u\x00p" in data
+                    ):
+                        try:
+                            root = etree.fromstring(data)
+                            dm_node = self._get_mashup_element(root)
+                            if dm_node is not None:
+                                duplicate = copy.deepcopy(dm_node)
+                                parent = dm_node.getparent()
+                                if parent is not None:
+                                    parent.append(duplicate)
+                                    target_root = root
+                                else:
+                                    container = etree.Element("root", nsmap=root.nsmap)
+                                    container.append(dm_node)
+                                    container.append(duplicate)
+                                    target_root = container
+                                data = etree.tostring(
+                                    target_root, encoding="utf-8", xml_declaration=True
+                                )
+                        except etree.XMLSyntaxError:
+                            pass
+                    zout.writestr(info, data)
+
+
+class MashupEncodeGenerator(MashupBaseGenerator):
+    """
+    Re-encodes the DataMashup customXml stream to a target encoding and optionally
+    inserts whitespace into the base64 payload.
+    """
+
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        base_file_arg = self.args.get('base_file')
+        encoding = self.args.get('encoding', 'utf-8')
+        whitespace = bool(self.args.get('whitespace', False))
+        if not base_file_arg:
+            raise ValueError("MashupEncodeGenerator requires 'base_file' argument")
+
+        base = Path(base_file_arg)
+        if not base.exists():
+            candidate = Path("fixtures") / base_file_arg
+            if candidate.exists():
+                base = candidate
+            else:
+                raise FileNotFoundError(f"Template {base} not found.")
+
+        for name in output_names:
+            target_path = (output_dir / name).resolve()
+            self._rewrite_datamashup_xml(base.resolve(), target_path, encoding, whitespace)
+
+    def _rewrite_datamashup_xml(
+        self,
+        base_path: Path,
+        output_path: Path,
+        encoding: str,
+        whitespace: bool,
+    ):
+        with zipfile.ZipFile(base_path, 'r') as zin:
+            with zipfile.ZipFile(output_path, 'w') as zout:
+                for info in zin.infolist():
+                    data = zin.read(info.filename)
+                    if info.filename.startswith("customXml/item") and (
+                        b"DataMashup" in data
+                        or b"D\x00a\x00t\x00a\x00M\x00a\x00s\x00h\x00u\x00p" in data
+                    ):
+                        try:
+                            data = self._process_datamashup_stream(data, encoding, whitespace)
+                        except etree.XMLSyntaxError:
+                            pass
+                    zout.writestr(info, data)
+
+    def _process_datamashup_stream(
+        self,
+        xml_bytes: bytes,
+        encoding: str,
+        whitespace: bool,
+    ) -> bytes:
+        root = etree.fromstring(xml_bytes)
+        dm_node = self._get_mashup_element(root)
+        if dm_node is None:
+            return xml_bytes
+
+        if dm_node.text and whitespace:
+            dm_node.text = self._with_whitespace(dm_node.text)
+
+        xml_bytes = etree.tostring(root, encoding="utf-8", xml_declaration=True)
+        return self._encode_bytes(xml_bytes, encoding)
+
+    def _with_whitespace(self, text: str) -> str:
+        cleaned = text.strip()
+        if not cleaned:
+            return text
+        midpoint = max(1, len(cleaned) // 2)
+        return f"\n  {cleaned[:midpoint]}\n  {cleaned[midpoint:]}\n"
+
+    def _encode_bytes(self, xml_bytes: bytes, encoding: str) -> bytes:
+        enc = encoding.lower()
+        if enc == "utf-8":
+            return xml_bytes
+        if enc == "utf-16-le":
+            return self._to_utf16(xml_bytes, little_endian=True)
+        if enc == "utf-16-be":
+            return self._to_utf16(xml_bytes, little_endian=False)
+        raise ValueError(f"Unsupported encoding: {encoding}")
+
+    def _to_utf16(self, xml_bytes: bytes, little_endian: bool) -> bytes:
+        text = xml_bytes.decode("utf-8")
+        text = self._rewrite_declaration(text)
+        encoded = text.encode("utf-16-le" if little_endian else "utf-16-be")
+        bom = b"\xff\xfe" if little_endian else b"\xfe\xff"
+        return bom + encoded
+
+    def _rewrite_declaration(self, text: str) -> str:
+        pattern = r'encoding=["\'][^"\']+["\']'
+        if re.search(pattern, text):
+            return re.sub(pattern, 'encoding="UTF-16"', text, count=1)
+        prefix = "<?xml version='1.0'?>"
+        if text.startswith(prefix):
+            return text.replace(prefix, "<?xml version='1.0' encoding='UTF-16'?>", 1)
+        return text
 

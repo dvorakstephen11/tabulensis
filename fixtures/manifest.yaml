@@ -16,6 +16,11 @@ scenarios:
     args: { mode: "no_content_types" }
     output: "no_content_types.xlsx"
 
+  - id: "container_not_zip_text"
+    generator: "corrupt_container"
+    args: { mode: "not_zip_text" }
+    output: "not_a_zip.txt"
+
   # --- PG1: Workbook -> Sheet -> Grid IR sanity ---
   - id: "pg1_basic_two_sheets"
     generator: "basic_grid"
@@ -49,6 +54,40 @@ scenarios:
       base_file: "templates/base_query.xlsx"
       mode: "byte_flip"
     output: "corrupt_base64.xlsx"
+
+  - id: "duplicate_datamashup_parts"
+    generator: "mashup_duplicate"
+    args:
+      base_file: "templates/base_query.xlsx"
+    output: "duplicate_datamashup_parts.xlsx"
+
+  - id: "duplicate_datamashup_elements"
+    generator: "mashup_duplicate"
+    args:
+      base_file: "templates/base_query.xlsx"
+      mode: "element"
+    output: "duplicate_datamashup_elements.xlsx"
+
+  - id: "mashup_utf16_le"
+    generator: "mashup_encode"
+    args:
+      base_file: "templates/base_query.xlsx"
+      encoding: "utf-16-le"
+    output: "mashup_utf16_le.xlsx"
+
+  - id: "mashup_utf16_be"
+    generator: "mashup_encode"
+    args:
+      base_file: "templates/base_query.xlsx"
+      encoding: "utf-16-be"
+    output: "mashup_utf16_be.xlsx"
+
+  - id: "mashup_base64_whitespace"
+    generator: "mashup_encode"
+    args:
+      base_file: "templates/base_query.xlsx"
+      whitespace: true
+    output: "mashup_base64_whitespace.xlsx"
 
   # --- Milestone 6: Basic M Diffs ---
   - id: "m_change_literal"

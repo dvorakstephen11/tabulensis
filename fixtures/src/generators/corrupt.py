@@ -36,4 +36,8 @@ class ContainerCorruptGenerator(BaseGenerator):
                         for item in zin.infolist():
                             if item.filename != "[Content_Types].xml":
                                 zout.writestr(item, zin.read(item.filename))
+            elif mode == 'not_zip_text':
+                out_path.write_text("This is not a zip container", encoding="utf-8")
+            else:
+                raise ValueError(f"Unsupported corrupt_container mode: {mode}")
 

@@ -223,7 +223,8 @@ Given:
 
      * Handle duplicates:
 
-       * If both sides have multiple rows, treat as a *duplicate key cluster* and run a small Hungarian match using row similarity (e.g., Jaccard similarity on changed columns).
+       * If both sides have multiple rows, treat as a *duplicate key cluster*. Formulate this as a Linear Assignment Problem (LAP) that finds the optimal matching between rows in Cluster A and Cluster B based on row similarity (e.g., Jaccard similarity on cell contents).
+       * Use the **Jonker-Volgenant (LAPJV) algorithm**, an optimized O(K³) solver faster than the classical Hungarian approach. Cluster sizes K are typically tiny, so the cost is negligible.
      * For each matched pair, run **row diff** (see below).
 
 3. **Row diff**:
@@ -243,60 +244,41 @@ Complexity:
 
 ## 6. Grid Diff (Spreadsheet Mode)
 
-This is the “financial model” case where *physical layout* and 2D alignment matter and there may be no clear key. Here we deploy the **multi‑pass hierarchical alignment** strategy sketched in the product plan. 
+This handles the "financial model" case where *physical layout* matters and there may be no clear key. We deploy a **Hybrid Alignment Pipeline** designed for robustness and near-linear performance, avoiding the pathologies of traditional LCS algorithms on repetitive spreadsheet data.
 
-Key idea: reduce the 2D problem to a sequence of mostly 1D problems (rows, then columns), with smart anchors and move detection.
+### 6.1 Phase 1: Row Hashing and Anchoring (Patience Diff)
 
-### 6.1 Row‑level alignment via Hunt–Szymanski
+We first segment the grid using high-confidence anchors.
 
-We treat each sheet as a sequence of row signatures:
+1. For each row, compute a strong signature (e.g., XXHash64) of normalized cell contents.
+2. Apply the **Patience Diff** algorithm (O(N log N)). This identifies the Longest Common Subsequence of *unique* identical rows.
+3. These unique matches serve as anchors, dividing the grid into "gaps" (unmatched regions between anchors). This stage effectively neutralizes the impact of repetitive data (e.g., blank rows).
 
-1. For each row, compute a signature:
+### 6.2 Phase 2: Gap Filling (Adaptive LCS)
 
-   * Hash of `(non‑blank cell positions, cell values up to normalization)`.
-   * Optionally fold in formula structure but ignore constants for robustness.
+We align the rows within each gap using the most appropriate LCS algorithm.
 
-2. Apply **Hunt–Szymanski** (HS) longest common subsequence algorithm on these signatures:
+1. **Small Gaps (e.g., < 1000 rows):** Use **Myers O(ND) algorithm** (with linear space refinement). It provides precise alignment efficiently when the gap size (N) or the difference (D) is small.
+2. **Large Gaps:** Use **Histogram Diff** (the modern Git standard). It is robust against density variations and generally provides high-quality alignments quickly in practice.
 
-   * HS improves over naive O(n²) LCS by focusing on *rare* symbols, giving O((n + r) log n) where `r` is number of equal‑signature pairs.
-   * Result: an ordered set of “anchor” row matches: `(iA, jB)` pairs believed to be the same logical row.
+This phase produces an alignment where most rows are matched, leaving some as candidate insertions and deletions.
 
-3. Between anchors, classify stretches:
+### 6.3 Phase 3: Refinement and Move Detection (Sparse LAPJV)
 
-   * A block of rows present in A only → deleted block.
-   * In B only → inserted block.
-   * Mixed → ambiguous; we recurse with a more permissive similarity metric or fall back to cell‑wise diff.
+We analyze the unmatched rows (candidate deletions in A and insertions in B) to detect rows/blocks that were moved and potentially edited ("fuzzy moves").
 
-This alignment already gives robust detection of row insertions/deletions and reorders without treating the entire sheet as “changed”.
+1. **Candidate Generation:** Identify contiguous blocks of unmatched rows.
+2. **Sparse Cost Matrix Construction:** Generate a cost matrix between deleted blocks in A and inserted blocks in B. The cost is `1 - Similarity(BlockA, BlockB)` (e.g., using Jaccard similarity of row hashes). We use a threshold to keep the matrix sparse, only including pairs with high similarity.
+3. **Optimal Assignment (LAPJV):** Run the **Jonker-Volgenant (LAPJV) algorithm** on the sparse matrix to find the globally optimal matching. This aligns with recent block-aware differencing work (e.g., BDiff), which frames move detection as a Linear Assignment Problem instead of relying only on sequence heuristics.
+4. **Classification:** High-similarity matches are reclassified as **Moves** (potentially with internal edits) rather than Delete+Insert operations.
 
-### 6.2 Column alignment
+### 6.4 Column Alignment
 
-Within each aligned row block (range of rows that are matched 1‑to‑1 across sheets), we align columns:
+Within each aligned row block, apply a similar Hybrid Alignment strategy (Patience + Myers/Histogram) to the column signatures to detect inserted/deleted/moved columns.
 
-1. Compute column signatures from header row + sample body rows.
-2. Run another HS pass on column sequences to detect inserted/deleted/renamed columns.
-3. Use these aligned columns when computing cell-level edits, which avoids marking entire blocks as changed when only some columns moved.
+### 6.5 Cell-level edit detection
 
-For worksheets with “headerless” regions, we can run the same algorithm on a restricted region (e.g., modeling block) identified by heuristics or user hints.
-
-### 6.3 Block move detection
-
-We want to distinguish **moved blocks** from delete+insert pairs.
-
-1. For each maximal deleted row block in A, compute a composite block hash:
-
-   * Combine per-row signatures and relative column signatures.
-2. Search in B for inserted blocks with matching or similar hashes.
-3. When a match is found:
-
-   * Run a detailed cell diff inside the candidate blocks.
-   * If a high fraction of cells are equal, emit `BlockMoved` instead of separate add/remove ops.
-
-This is essentially a rolling‑hash search (rsync‑style), constrained to plausible windows to stay near O(N).
-
-### 6.4 Cell‑level edit detection
-
-Once row/column alignment is known, the cell diff is straightforward:
+(Adapted from the prior 6.4.) Once row/column alignment is known, the cell diff is straightforward.
 
 For each aligned `(rowA, rowB)` and aligned `(colA, colB)`:
 
@@ -312,11 +294,11 @@ Classification:
 * If formula AST changed:
 
   * `FormulaChanged` with an embedded AST diff (see Section 8).
-* If one side empty and other non‑empty:
+* If one side empty and other non-empty:
 
   * `CellAdded` or `CellRemoved`.
 
-For unaligned rows/cols, we emit bulk operations (`RowAdded`, `RowRemoved`, `ColumnAdded`, `ColumnRemoved`) rather than per‑cell ops.
+For unaligned rows/cols, emit bulk operations (`RowAdded`, `RowRemoved`, `ColumnAdded`, `ColumnRemoved`) rather than per-cell ops.
 
 ---
 
@@ -417,15 +399,24 @@ Algorithm:
 
 This gives exactly the semantics the testing plan expects for filters, column removals, join changes, etc. 
 
-#### 7.3.3 Fallback tree edit distance
+#### 7.3.3 Advanced AST Differencing (GumTree + APTED)
 
-For steps we can’t classify, or for expressions inside steps, we can fall back to **tree edit distance** (Zhang–Shasha):
+For steps we cannot classify, or for expressions inside steps, we fall back to **Tree Edit Distance** (TED) on the ASTs using a hybrid approach for scalability and semantic richness.
 
-* Nodes are AST constructs.
-* Edit operations: insert, delete, substitute.
-* Costs chosen so that structurally small changes lead to small distances.
+We use a tiered strategy:
 
-This yields compact diffs (“function call changed from `Table.AddColumn` to `Table.TransformColumns`”) without requiring handcrafted handling for every possible M construct.
+1. **Scalability and Move Detection (GumTree):**
+
+   * Apply the **GumTree** algorithm. It uses fast, near-linear heuristics (top-down anchoring, bottom-up propagation).
+   * GumTree explicitly detects **Move** operations and **Renames** based on subtree similarity, which is critical for large ASTs and refactor-style changes.
+
+2. **Precision Edits (APTED):**
+
+   * For remaining unmatched sub-forests, or if the AST is small (< 2000 nodes), deploy **APTED (All-Path Tree Edit Distance)**.
+   * APTED is state-of-the-art for exact TED, guaranteeing O(N³) time regardless of tree shape and improving on Zhang-Shasha’s worst-case behavior.
+   * This yields the minimal edit script (Insert, Delete, Rename) for precise logic changes.
+
+This hybrid strategy lets us handle massive generated queries while still producing exact edit scripts for user-written logic.
 
 ---
 
@@ -450,15 +441,15 @@ If canonical ASTs are equal → no logical change (formatting only).
 
 For differing ASTs:
 
-1. Run tree edit distance to identify changed subtrees.
-2. Summarize at a human‑useful granularity:
+1. Run the Hybrid Tree Edit Distance strategy (**GumTree + APTED**, detailed in Section 7.3.3) to identify changed subtrees and moves.
+2. Summarize at a human-usable granularity:
 
-   * “Measure `TotalSales` changed aggregation from SUM to AVERAGE.”
-   * “Filter condition on `Calendar[Year]` changed from `>= 2020` to `>= 2021`.”
+   * "Measure `TotalSales` changed aggregation from SUM to AVERAGE."
+   * "Filter condition on `Calendar[Year]` changed from `>= 2020` to `>= 2021`."
 
 Implementation detail:
 
-* Because DAX formulas are relatively small, typical tree edit distance costs are tiny; performance is dominated by parsing, not diff.
+* APTED guarantees stable O(N³) exact edits for small/medium ASTs; GumTree provides near-linear performance and explicit move detection for larger formulas, so parsing remains the dominant cost.
 
 ---
 
@@ -495,18 +486,11 @@ Changes are grouped under logical domains (e.g., query `Foo`’s load destinatio
 
 ### 10.1 Grid diff
 
-Let:
+Let `R` = rows. The Hybrid Alignment Pipeline keeps performance near-linear in practice.
 
-* `R` = rows, `C` = columns.
-
-Row HS alignment: O((R + r) log R) where `r` is number of equal signature pairs; typical real‑world sheets have relatively distinctive rows (low `r`).
-
-Within blocks:
-
-* Column HS: O((C + c) log C).
-* Cell diffs: only for aligned rows/cols, typically O(R·C) in the common case but with early exits for equal rows/cells.
-
-Block move detection uses rolling hashes and windows, keeping the total cost linear in practice.
+* **Anchoring:** O(R log R) via Patience Diff on row signatures.
+* **Gap Filling:** Adaptive. Typically near-linear using Myers (small `D`) or Histogram Diff (large gaps). Avoids the Hunt-Szymanski O(R^2 log R) pathology on repetitive data.
+* **Move Detection:** LAPJV is O(K^3), where `K` is the number of candidate blocks. Sparse matrix construction keeps `K` small.
 
 ### 10.2 Tabular diff
 
@@ -515,10 +499,12 @@ Keyed diff is O(N) in number of rows plus O(M) per changed row; we never perform
 ### 10.3 M / DAX diff
 
 * Query alignment: O(Q log Q) for maps and small matching, `Q` = number of queries.
-* Step alignment uses dynamic programming; step sequences rarely exceed a few dozen entries, so complexity is negligible.
-* AST diff costs are small because expressions are compact.
+* Step alignment: same DP approach; sequences are short, so cost is negligible.
+* AST diff: tiered strategy.
+  * **APTED:** Guaranteed O(N^3) time, O(N^2) space. Used for N < 2000 or for unmatched sub-forests where exactness matters.
+  * **GumTree:** Near-linear time in practice, O(N^2) worst case. Used to scale to very large ASTs while detecting moves/renames.
 
-The design is consistent with the product‑plan goal: “compare 100MB files in under ~2 seconds” given streaming parsers and native Rust performance. 
+The design remains consistent with the product-plan goal: "compare 100MB files in under ~2 seconds" given streaming parsers and native Rust performance.
 
 ---
 
@@ -591,5 +577,4 @@ The result is an engine that:
 
 ---
 
-Last updated: 2025-11-24 15:52:36
-
+Last updated: 2025-11-28 05:15:27

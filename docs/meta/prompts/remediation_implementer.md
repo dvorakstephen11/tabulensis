@@ -9,7 +9,7 @@ Your role is to address findings from the Post-Implementation Verification Revie
 You have been provided with:
 
 1. **Codebase**: Full access to the current repository via Cursor's file tools.
-2. **Remediation Plan**: The fixes required at `docs/meta/reviews/[branch-name]/remediation.md` (or `remediation-N.md` for subsequent rounds), containing:
+2. **Remediation Plan**: The fixes required at `docs/meta/reviews/[branch-name]/remediation.md` (or `remediation[A-Z].md` for subsequent rounds of remediation; use the latest file if there are multiple), containing:
    - Findings summary with severity ratings
    - Specific fixes required with implementation guidance
    - Constraints on what should and should not change

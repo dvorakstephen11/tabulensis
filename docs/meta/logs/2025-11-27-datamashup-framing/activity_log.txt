@@ -7,3 +7,28 @@ Activity Log - 2025-11-27-datamashup-framing
 - Wrote unit tests for parse_data_mashup invariants and fuzz coverage plus integration tests for open_data_mashup fixtures.
 - Corrupted fixtures/generated/corrupt_base64.xlsx DataMashup payload (one base64 character flipped) to align fixture with spec expectation.
 - Ran cargo fmt, cargo clippy --all-targets, and cargo test via core/Cargo.toml (all passing).
+
+## Remediation Round 1
+- Addressed Finding 1 by adding a generated duplicate DataMashup fixture (`duplicate_datamashup_parts.xlsx`) and an integration test asserting `ExcelOpenError::DataMashupFramingInvalid`.
+- Addressed Finding 2 by adding an `open_data_mashup` NotZip test using a text fixture and a framing MIN_SIZE unit test for `parse_data_mashup`.
+- Addressed optional Finding 3 with a UTF-16 `read_datamashup_text` unit test.
+- Fixtures updated: added `not_a_zip.txt`, regenerated all outputs via manifest, and extended generator mapping (`mashup_duplicate`, new corrupt mode garbling).
+- Modified files: fixtures/src/generators/mashup.py, fixtures/src/generators/corrupt.py, fixtures/manifest.yaml, fixtures/src/generate.py, core/tests/data_mashup_tests.rs, core/src/excel_open_xml.rs.
+- Complication: fixture generator initially skipped UTF-16 DataMashup parts, so corrupt_base64 stayed valid; fixed detection (handles UTF-16 markers/root) and base64 garbling so corruption produces a decode error.
+- Validation: cargo fmt, cargo test, and cargo clippy --all-targets --all-features all pass.
+
+## Remediation Round 2
+- Addressed Finding 4 (duplicate sibling DataMashup elements bug) by tightening `read_datamashup_text` state tracking and adding a unit test to assert `DataMashupFramingInvalid` on siblings.
+- Added generator capabilities for encoded/whitespace fixtures (`MashupEncodeGenerator`) and duplicate element mode in `MashupDuplicateGenerator`; manifest now includes UTF-16 LE/BE, whitespace, and duplicate-element scenarios with generated fixtures.
+- Expanded integration tests (`core/tests/data_mashup_tests.rs`) to cover UTF-16 LE/BE mashups, base64 whitespace tolerance, and rejection of duplicate DataMashup elements; kept duplicate-part test.
+- New fixture outputs: `mashup_utf16_le.xlsx`, `mashup_utf16_be.xlsx`, `mashup_base64_whitespace.xlsx`, `duplicate_datamashup_elements.xlsx`.
+- Complication: initial duplicate-element fixture still parsed as single root DataMashup; fixed by wrapping and emitting two sibling elements in the customXml stream.
+- Validation: cargo fmt; cargo test; cargo clippy --all-targets --all-features.
+
+## Remediation Round 3
+- Addressed Finding 1 (over-broad DataMashup detection) by matching only the `DataMashup` local name with optional prefix and added a unit test that ignores `<FooDataMashup>` elements.
+- Addressed Finding 2 (UTF-16 BOM-only handling) by decoding BOM-less UTF-16 when the XML declaration specifies `encoding="utf-16"` for both endian orders; added corresponding unit coverage.
+- Strengthened the valid DataMashup integration test by comparing reconstructed framing bytes to the fixture’s actual decoded payload, avoiding the tautological length check.
+- Added `open_data_mashup` coverage for missing `[Content_Types].xml` using the existing `no_content_types.xlsx` fixture.
+- Files modified: core/src/excel_open_xml.rs; core/tests/data_mashup_tests.rs; docs/meta/logs/2025-11-27-datamashup-framing/activity_log.txt.
+- Validation: cargo fmt --manifest-path core/Cargo.toml; cargo test --manifest-path core/Cargo.toml; cargo clippy --manifest-path core/Cargo.toml --all-targets -- -D warnings.

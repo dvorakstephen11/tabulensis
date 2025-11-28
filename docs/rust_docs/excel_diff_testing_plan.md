@@ -18,7 +18,7 @@ Use `[G]` for release-gating tests, `[H]` for hardening/nice-to-have, `[E]` for 
 | 2 | IR semantics (snapshots, M) + streaming budget | PG2–PG3, PG5–PG6, M3–M5 | H2, H3, H7, H8, H9 |
 | 3 | MVP diff slice + early DataMashup fuzzing | PG4, M6, G1–G7 | H1, H3, H4, H9 |
 | 3.5 | PBIX host support | PBIX-1 | H8, H9 |
-| 4 | Advanced alignment & DB mode (incl. adversarial grids) | M7, G8–G12, D1–D10 | H1, H4 |
+| 4 | Advanced alignment & DB mode (incl. adversarial grids) | M7, G8-G13, D1-D10 | H1, H4 |
 | 5 | Polish, perf, metrics | M8–M12, P1–P2 | H2, H9, H10, H11, H12 |
 | 6 | DAX/model stubs (post-MVP) | DX1 | Data model / DAX |
 
@@ -1188,9 +1188,9 @@ Goal: reuse the Excel DataMashup parser for `.pbix/.pbit` containers once framin
 
 Goal: tackle the hardest algorithms. Add semantic M AST diffing (M7), advanced spreadsheet alignment/moves (G8?G12), and the database-mode keyed diffs (D1?D10) that exercise H1/H4 risks.
 
-### Milestone 7 – Semantic (AST) M diffing
+### Milestone 7 - Semantic (AST) M diffing
 
-This is where your differentiator shows up: abstract‑syntax‑tree diffing rather than raw text diff. 
+This is where your differentiator shows up: semantic AST diffing rather than raw text diff, using a hybrid **GumTree + APTED** strategy.
 
 **Rust capability**
 
@@ -1199,8 +1199,9 @@ This is where your differentiator shows up: abstract‑syntax‑tree diffing rat
 
   * Whitespace
   * Comments
-  * Possibly step order when it’s semantically irrelevant (careful here).
-* Compare ASTs for semantic equality / produce a semantic diff.
+  * Possibly step order when it is semantically irrelevant (careful here).
+* Implement hybrid AST differencing: **GumTree** for scalable move/rename detection, **APTED** for exact edits on small/medium ASTs and unmatched sub-forests.
+* Compare ASTs for semantic equality / produce a semantic diff with move awareness.
 
 **Tests**
 
@@ -1257,25 +1258,38 @@ You don’t have to implement the reporting format yet, but the test can at mini
 
 ---
 
+### 7.4 Hybrid AST Strategy Validation
+
+**Fixtures**
+* `m_ast_deep_skewed_{a,b}.xlsx`: (APTED test) Deeply nested IFs (~500 nodes) designed to trigger Zhang-Shasha worst cases. B has a minor edit.
+* `m_ast_large_refactor_{a,b}.xlsx`: (GumTree test) Large query (> 3000 nodes). A large expression block is moved from one `let` binding to another in B.
+* `m_ast_wrap_unwrap_{a,b}.xlsx`: (Precision test) A function is wrapped (e.g., `Value(X)` -> `Table.Buffer(Value(X))`).
+
+**Tests**
+* `apted_robustness`: Diff `m_ast_deep_skewed`. Assert APTED completes quickly (O(N^3)) and finds the minimal edit.
+* `gumtree_moves_and_scale`: Diff `m_ast_large_refactor`. Assert the engine completes quickly (validating scale) and explicitly reports the change as a `Move` operation (validating semantics).
+* `precision_wrap`: Diff `m_ast_wrap_unwrap`. Assert the diff reports an `Insert(Table.Buffer)` node with `Value(X)` as a child, demonstrating structural understanding rather than a text replacement.
+
 ### Spreadsheet-Mode advanced alignment (G8?G12)
 
-#### G8a – Adversarial repetitive patterns [RC]
+#### G8a - Adversarial repetitive patterns [RC] [CRITICAL UPDATE]
 
 **Core capability**
 
-Catch worst-case Hunt-Szymanski behaviour on highly repetitive signatures before it lands in prod.
+Validate that the Hybrid Alignment Pipeline (Patience/Myers/Histogram) avoids the O(N^2 log N) pathology of Hunt-Szymanski on repetitive data.
 
 **Fixture sketch**
 
-* `adversarial_grid_{a,b}.xlsx`:
+* `adversarial_grid_repetitive_{a,b}.xlsx`:
 
-  * Rows of near-duplicate signatures (e.g., row of `A,B,C,D...` vs `A,A,B,B,C,C...`) across thousands of rows/cols with slight offsets.
-  * Generates many plausible alignments to stress the edit graph.
+  * 50,000 rows. 99% of rows are identical (e.g., blank rows). A few unique rows exist as headers/footers.
+  * B is similar to A but with a block of 1000 blank rows inserted in the middle.
 
 **Checks**
 
-* Wrap diff in a strict timeout (e.g., <500ms or a small multiple of linear baseline).
-* Expect a deterministic, bounded set of DiffOps (row/col moves or edits) with no timeout or explosive op counts.
+* The Patience pass must correctly anchor the unique rows.
+* Wrap diff in a strict timeout (e.g., < 1 second). Assert the engine does not exhibit super-linear performance degradation.
+* Assert the diff correctly identifies the 1000 `RowAdded` ops.
 
 #### G8 – Single row insert/delete in the middle (row alignment)
 
@@ -1393,6 +1407,26 @@ Same as G11, but for columns and 2D rectangular blocks.
 
 * `BlockMovedColumns` or equivalent for column move.
 * For rectangle: a single rectangular move op (or combination of row/column moves) and no `CellEdited` in the block.
+
+---
+
+#### G13 - Fuzzy Move Detection (LAPJV)
+
+**Core capability**
+
+Validate that the LAPJV solver correctly identifies blocks that were moved and subsequently edited.
+
+**Fixture sketch**
+
+* `grid_move_and_edit_{a,b}.xlsx`:
+
+  * A distinctive 10-row block is moved from the top to the bottom.
+  * In B, 2 cells inside the moved block are edited.
+
+**Checks**
+
+* The engine must report a `BlockMoved` operation (not Delete+Insert).
+* The engine must also report the 2 `CellEdited` operations within the moved block.
 
 ---
 

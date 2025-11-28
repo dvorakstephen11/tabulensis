@@ -6,13 +6,13 @@
     - ~~4 Tops Excel Compare~~
     - ~~Compare and Merge (Excel diff)~~
     - ~~ExcelAnalyzer~~
-    - ExcelDiff (ComponentSoftware)
-    - ExcelDiff (Suntrap Systems)
-    - Operis OAK
-    - Spreadsheet Detective
-    - CIMCON XLAudit
-    - TeamMate Analytics (audit/risk with overlap)
-    - Tabular Editor 3
+    - ~~ExcelDiff (ComponentSoftware)~~
+    - ~~ExcelDiff (Suntrap Systems)~~
+    - ~~Operis OAK~~
+    - ~~Spreadsheet Detective~~
+    - ~~CIMCON XLAudit~~
+    - ~~TeamMate Analytics (audit/risk with overlap)~~
+    - ~~Tabular Editor 3~~
     - Power BI Sentinel
 - Create competitor profiles
     - ~~Excel Compare (Formulasoft)~~
@@ -103,3 +103,6 @@
 - Make sure my documentation doesn't imply that I'll be attempting to offer in-Excel features.
 - List all the features that have been discussed among all competitors and my own product and identify potential use cases that are not
 - Research international distribution options/hurdles
+
+
+

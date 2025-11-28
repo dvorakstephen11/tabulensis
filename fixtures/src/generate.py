@@ -13,7 +13,12 @@ from generators.grid import (
     ValueFormulaGenerator
 )
 from generators.corrupt import ContainerCorruptGenerator
-from generators.mashup import MashupCorruptGenerator, MashupInjectGenerator
+from generators.mashup import (
+    MashupCorruptGenerator,
+    MashupDuplicateGenerator,
+    MashupInjectGenerator,
+    MashupEncodeGenerator,
+)
 from generators.perf import LargeGridGenerator
 from generators.database import KeyedTableGenerator
 
@@ -26,7 +31,9 @@ GENERATORS: Dict[str, Any] = {
     "value_formula": ValueFormulaGenerator,
     "corrupt_container": ContainerCorruptGenerator,
     "mashup_corrupt": MashupCorruptGenerator,
+    "mashup_duplicate": MashupDuplicateGenerator,
     "mashup_inject": MashupInjectGenerator,
+    "mashup_encode": MashupEncodeGenerator,
     "perf_large": LargeGridGenerator,
     "db_keyed": KeyedTableGenerator,
 }

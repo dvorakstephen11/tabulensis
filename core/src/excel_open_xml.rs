@@ -191,13 +191,7 @@ fn extract_datamashup_bytes_from_excel(
 }
 
 fn read_datamashup_text(xml: &[u8]) -> Result<Option<String>, ExcelOpenError> {
-    let utf8_xml = if xml.starts_with(&[0xFF, 0xFE]) {
-        Some(decode_utf16_xml(xml, true)?)
-    } else if xml.starts_with(&[0xFE, 0xFF]) {
-        Some(decode_utf16_xml(xml, false)?)
-    } else {
-        None
-    };
+    let utf8_xml = decode_datamashup_xml(xml)?;
 
     let mut reader = Reader::from_reader(utf8_xml.as_deref().unwrap_or(xml));
     reader.config_mut().trim_text(false);
@@ -252,12 +246,63 @@ fn decode_datamashup_base64(text: &str) -> Result<Vec<u8>, ExcelOpenError> {
 }
 
 fn is_datamashup_element(name: &[u8]) -> bool {
-    name.ends_with(b"DataMashup")
+    match name.iter().rposition(|&b| b == b':') {
+        Some(idx) => name.get(idx + 1..) == Some(b"DataMashup".as_slice()),
+        None => name == b"DataMashup",
+    }
 }
 
-fn decode_utf16_xml(xml: &[u8], little_endian: bool) -> Result<Vec<u8>, ExcelOpenError> {
+fn decode_datamashup_xml(xml: &[u8]) -> Result<Option<Vec<u8>>, ExcelOpenError> {
+    if xml.starts_with(&[0xFF, 0xFE]) {
+        return Ok(Some(decode_utf16_xml(xml, true, true)?));
+    }
+    if xml.starts_with(&[0xFE, 0xFF]) {
+        return Ok(Some(decode_utf16_xml(xml, false, true)?));
+    }
+
+    decode_declared_utf16_without_bom(xml)
+}
+
+fn decode_declared_utf16_without_bom(xml: &[u8]) -> Result<Option<Vec<u8>>, ExcelOpenError> {
+    let attempt_decode = |little_endian| -> Result<Option<Vec<u8>>, ExcelOpenError> {
+        if !looks_like_utf16(xml, little_endian) {
+            return Ok(None);
+        }
+        let decoded = decode_utf16_xml(xml, little_endian, false)?;
+        let lower = String::from_utf8_lossy(&decoded).to_ascii_lowercase();
+        if lower.contains("encoding=\"utf-16\"") || lower.contains("encoding='utf-16'") {
+            Ok(Some(decoded))
+        } else {
+            Ok(None)
+        }
+    };
+
+    if let Some(decoded) = attempt_decode(true)? {
+        return Ok(Some(decoded));
+    }
+    attempt_decode(false)
+}
+
+fn looks_like_utf16(xml: &[u8], little_endian: bool) -> bool {
+    if xml.len() < 4 {
+        return false;
+    }
+
+    if little_endian {
+        xml[0] == b'<' && xml[1] == 0 && xml[2] == b'?' && xml[3] == 0
+    } else {
+        xml[0] == 0 && xml[1] == b'<' && xml[2] == 0 && xml[3] == b'?'
+    }
+}
+
+fn decode_utf16_xml(
+    xml: &[u8],
+    little_endian: bool,
+    has_bom: bool,
+) -> Result<Vec<u8>, ExcelOpenError> {
+    let start = if has_bom { 2 } else { 0 };
     let body = xml
-        .get(2..)
+        .get(start..)
         .ok_or_else(|| ExcelOpenError::XmlParseError("invalid UTF-16 XML".into()))?;
     if body.len() % 2 != 0 {
         return Err(ExcelOpenError::XmlParseError(
@@ -840,6 +885,34 @@ mod tests {
             .expect("UTF-16 XML should parse")
             .expect("DataMashup element should be found");
         assert_eq!(text.trim(), "QQ==");
+    }
+
+    #[test]
+    fn utf16_without_bom_with_declared_encoding_parses() {
+        let xml_text = r#"<?xml version="1.0" encoding="utf-16"?><root xmlns:dm="http://schemas.microsoft.com/DataMashup"><dm:DataMashup>QQ==</dm:DataMashup></root>"#;
+        for &little_endian in &[true, false] {
+            let mut xml_bytes = Vec::with_capacity(xml_text.len() * 2);
+            for unit in xml_text.encode_utf16() {
+                let bytes = if little_endian {
+                    unit.to_le_bytes()
+                } else {
+                    unit.to_be_bytes()
+                };
+                xml_bytes.extend_from_slice(&bytes);
+            }
+
+            let text = read_datamashup_text(&xml_bytes)
+                .expect("UTF-16 XML without BOM should parse when declared")
+                .expect("DataMashup element should be found");
+            assert_eq!(text.trim(), "QQ==");
+        }
+    }
+
+    #[test]
+    fn elements_with_datamashup_suffix_are_ignored() {
+        let xml = br#"<?xml version="1.0"?><root><FooDataMashup>QQ==</FooDataMashup></root>"#;
+        let result = read_datamashup_text(xml).expect("parsing should succeed");
+        assert!(result.is_none());
     }
 
     #[test]

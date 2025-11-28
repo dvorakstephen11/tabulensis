@@ -17,7 +17,7 @@ def copy_to_clipboard(text):
             temp_path = f.name
         try:
             subprocess.run(
-                ['powershell', '-command', f'Get-Content -Raw -Path "{temp_path}" | Set-Clipboard'],
+                ['powershell', '-command', f'Get-Content -Raw -Encoding UTF8 -Path "{temp_path}" | Set-Clipboard'],
                 check=True,
                 capture_output=True
             )
