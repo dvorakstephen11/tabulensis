@@ -916,7 +916,10 @@ fn convert_value(
             let idx = trimmed
                 .parse::<usize>()
                 .map_err(|e| ExcelOpenError::XmlParseError(e.to_string()))?;
-            Ok(shared_strings.get(idx).cloned().map(CellValue::Text))
+            let text = shared_strings.get(idx).ok_or_else(|| {
+                ExcelOpenError::XmlParseError(format!("shared string index {idx} out of bounds"))
+            })?;
+            Ok(Some(CellValue::Text(text.clone())))
         }
         Some("b") => Ok(match trimmed {
             "1" => Some(CellValue::Bool(true)),
@@ -1143,6 +1146,16 @@ mod tests {
     }
 
     #[test]
+    fn convert_value_shared_string_index_out_of_bounds_errors() {
+        let err = convert_value(Some("5"), Some("s"), &["only".into()])
+            .expect_err("invalid shared string index should error");
+        assert!(matches!(
+            err,
+            ExcelOpenError::XmlParseError(msg) if msg.contains("shared string index 5")
+        ));
+    }
+
+    #[test]
     fn convert_value_error_cell_as_text() {
         let value =
             convert_value(Some("#DIV/0!"), Some("e"), &[]).expect("error cell should convert");
@@ -1255,6 +1268,9 @@ fn main() {
 
 ```rust
 use crate::addressing::{address_to_index, index_to_address};
+use serde::de::Error as DeError;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::str::FromStr;
 
 /// A snapshot of a cell's logical content (address, value, formula).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -1274,19 +1290,19 @@ impl CellSnapshot {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Workbook {
     pub sheets: Vec<Sheet>,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Sheet {
     pub name: String,
     pub kind: SheetKind,
     pub grid: Grid,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SheetKind {
     Worksheet,
     Chart,
@@ -1294,20 +1310,20 @@ pub enum SheetKind {
     Other,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Grid {
     pub nrows: u32,
     pub ncols: u32,
     pub rows: Vec<Row>,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Row {
     pub index: u32,
     pub cells: Vec<Cell>,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Cell {
     pub row: u32,
     pub col: u32,
@@ -1316,7 +1332,7 @@ pub struct Cell {
     pub formula: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CellAddress {
     pub row: u32,
     pub col: u32,
@@ -1344,6 +1360,26 @@ impl std::str::FromStr for CellAddress {
 impl std::fmt::Display for CellAddress {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_a1())
+    }
+}
+
+impl Serialize for CellAddress {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_a1())
+    }
+}
+
+impl<'de> Deserialize<'de> for CellAddress {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let a1 = String::deserialize(deserializer)?;
+        CellAddress::from_str(&a1)
+            .map_err(|_| DeError::custom(format!("invalid cell address: {a1}")))
     }
 }
 
@@ -2069,15 +2105,40 @@ fn snapshot_json_roundtrip() {
         snapshot(sheet, "A2"),
         snapshot(sheet, "B1"),
         snapshot(sheet, "B2"),
+        snapshot(sheet, "B3"),
     ];
 
     for snap in snapshots {
+        let addr = snap.addr.to_string();
         let json = serde_json::to_string(&snap).expect("snapshot should serialize");
-        assert!(json.contains("\"addr\""));
-        assert!(json.contains("\"value\""));
+        let as_value: serde_json::Value =
+            serde_json::from_str(&json).expect("snapshot JSON should parse to value");
+        assert_eq!(as_value["addr"], serde_json::Value::String(addr));
         let snap_back: CellSnapshot = serde_json::from_str(&json).expect("snapshot should parse");
+        assert_eq!(snap.addr, snap_back.addr);
         assert_eq!(snap, snap_back);
     }
+}
+
+#[test]
+fn snapshot_json_roundtrip_detects_tampered_addr() {
+    let snap = CellSnapshot {
+        addr: "Z9".parse().expect("address should parse"),
+        value: Some(CellValue::Number(1.0)),
+        formula: Some("A1+1".into()),
+    };
+
+    let mut value: serde_json::Value =
+        serde_json::from_str(&serde_json::to_string(&snap).expect("serialize should work"))
+            .expect("serialized JSON should parse");
+    value["addr"] = serde_json::Value::String("A1".into());
+
+    let tampered_json = serde_json::to_string(&value).expect("tampered JSON should serialize");
+    let tampered: CellSnapshot =
+        serde_json::from_str(&tampered_json).expect("tampered JSON should parse");
+
+    assert_ne!(snap.addr, tampered.addr);
+    assert_eq!(snap, tampered, "value/formula equality ignores addr");
 }
 ```
 

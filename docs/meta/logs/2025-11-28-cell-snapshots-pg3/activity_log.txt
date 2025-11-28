@@ -6,3 +6,19 @@ Activity Log - 2025-11-28-cell-snapshots-pg3
 - Files modified: docs/meta/logs/2025-11-28-cell-snapshots-pg3/activity_log.txt; core/src/workbook.rs; core/tests/pg3_snapshot_tests.rs.
 - Complications: none; deserialization now surfaces invalid cell addresses via `CellAddress::from_str`.
 - Validation: cargo fmt; cargo clippy --all-targets; cargo test (unit and integration suites, counts now exceed unit-only runs).
+
+## Remediation Round 2
+- Addressed Finding 1 gap by hardening `snapshot_json_roundtrip` to assert address equality and adding a tampering test that highlights addr differences despite value/formula equality.
+- Addressed Finding 2 (serde surface) by narrowing serde derives to snapshot-related types only (removing derives from Workbook/Sheet/Grid/Row/Cell while retaining snapshot serialization support).
+- Addressed Finding 3 by treating out-of-bounds shared string indices as XML parse errors and adding a focused unit test.
+- Files modified: core/tests/pg3_snapshot_tests.rs; core/src/workbook.rs; core/src/excel_open_xml.rs; docs/meta/logs/2025-11-28-cell-snapshots-pg3/activity_log.txt.
+- Complications: initial wasm check needed a longer timeout; reran successfully.
+- Validation: cargo fmt --manifest-path core/Cargo.toml; cargo test --manifest-path core/Cargo.toml; cargo test --tests --manifest-path core/Cargo.toml; cargo clippy --all-targets --manifest-path core/Cargo.toml; cargo check --target wasm32-unknown-unknown --no-default-features --manifest-path core/Cargo.toml.
+
+## Remediation Round 3
+- Addressed Finding 1 (JSON structure) by defining `CellDiff` as a keyed object (`coords`, `value_file1`, `value_file2`) and updating JSON serialization plus output tests to assert the object shape.
+- Addressed Finding 2 (dependencies) by adding explicit `serde_json` to core dependencies to align with the JSON output surface.
+- Addressed Finding 3 (empty diff coverage) with a new integration test that diffs identical fixtures and asserts an empty diff array.
+- Files modified: core/Cargo.toml; core/src/lib.rs; core/src/output/json.rs; core/src/output/mod.rs; core/tests/output_tests.rs; docs/meta/logs/2025-11-28-cell-snapshots-pg3/activity_log.txt.
+- Complications: none.
+- Validation: cargo fmt --manifest-path core/Cargo.toml; cargo test --manifest-path core/Cargo.toml; cargo clippy --all-targets --manifest-path core/Cargo.toml; cargo check --target wasm32-unknown-unknown --no-default-features --manifest-path core/Cargo.toml.
