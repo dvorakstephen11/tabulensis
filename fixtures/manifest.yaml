@@ -74,6 +74,19 @@ scenarios:
       - "json_diff_bool_a.xlsx"
       - "json_diff_bool_b.xlsx"
 
+  - id: "json_diff_value_to_empty"
+    generator: "single_cell_diff"
+    args:
+      rows: 3
+      cols: 3
+      sheet: "Sheet1"
+      target_cell: "C3"
+      value_a: "1"
+      value_b: null
+    output:
+      - "json_diff_value_to_empty_a.xlsx"
+      - "json_diff_value_to_empty_b.xlsx"
+
   # --- Milestone 2.2: Base64 Correctness ---
   - id: "corrupt_base64"
     generator: "mashup_corrupt"

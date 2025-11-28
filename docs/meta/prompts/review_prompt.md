@@ -45,6 +45,8 @@
       json_diff_bool_b.xlsx
       json_diff_single_cell_a.xlsx
       json_diff_single_cell_b.xlsx
+      json_diff_value_to_empty_a.xlsx
+      json_diff_value_to_empty_b.xlsx
       mashup_base64_whitespace.xlsx
       mashup_utf16_be.xlsx
       mashup_utf16_le.xlsx
@@ -2024,7 +2026,10 @@ fn test_locate_fixture() {
 ### File: `core\tests\output_tests.rs`
 
 ```rust
-use excel_diff::output::json::{CellDiff, diff_workbooks_to_json, serialize_cell_diffs};
+use excel_diff::{
+    ExcelOpenError,
+    output::json::{CellDiff, diff_workbooks_to_json, serialize_cell_diffs},
+};
 use serde_json::Value;
 
 mod common;
@@ -2127,6 +2132,37 @@ fn test_json_non_empty_diff_bool() {
     assert_eq!(first["coords"], Value::String("C3".into()));
     assert_eq!(first["value_file1"], Value::String("true".into()));
     assert_eq!(first["value_file2"], Value::String("false".into()));
+}
+
+#[test]
+fn test_json_diff_value_to_empty() {
+    let a = fixture_path("json_diff_value_to_empty_a.xlsx");
+    let b = fixture_path("json_diff_value_to_empty_b.xlsx");
+
+    let json = diff_workbooks_to_json(&a, &b).expect("diffing different files should succeed");
+    let value: Value = serde_json::from_str(&json).expect("json should parse");
+
+    let arr = value
+        .as_array()
+        .expect("top-level should be an array of cell diffs");
+    assert_eq!(arr.len(), 1, "expected a single cell difference");
+
+    let first = &arr[0];
+    assert_eq!(first["coords"], Value::String("C3".into()));
+    assert_eq!(first["value_file1"], Value::String("1".into()));
+    assert_eq!(first["value_file2"], Value::Null);
+}
+
+#[test]
+fn test_diff_workbooks_to_json_reports_invalid_zip() {
+    let path = fixture_path("not_a_zip.txt");
+    let err = diff_workbooks_to_json(&path, &path)
+        .expect_err("diffing invalid containers should return an error");
+
+    assert!(
+        matches!(err, ExcelOpenError::NotZipContainer),
+        "expected NotZipContainer, got {err}"
+    );
 }
 ```
 
@@ -2403,6 +2439,42 @@ fn snapshot_json_roundtrip_detects_tampered_addr() {
     assert_ne!(snap.addr, tampered.addr);
     assert_eq!(snap, tampered, "value/formula equality ignores addr");
 }
+
+#[test]
+fn snapshot_json_rejects_invalid_addr_1a() {
+    let json = r#"{"addr":"1A","value":null,"formula":null}"#;
+    let result: Result<CellSnapshot, _> = serde_json::from_str(json);
+    let err = result
+        .expect_err("invalid addr should fail to deserialize")
+        .to_string();
+
+    assert!(
+        err.contains("invalid cell address"),
+        "error should mention invalid cell address: {err}"
+    );
+    assert!(
+        err.contains("1A"),
+        "error should include the offending address: {err}"
+    );
+}
+
+#[test]
+fn snapshot_json_rejects_invalid_addr_a0() {
+    let json = r#"{"addr":"A0","value":null,"formula":null}"#;
+    let result: Result<CellSnapshot, _> = serde_json::from_str(json);
+    let err = result
+        .expect_err("invalid addr should fail to deserialize")
+        .to_string();
+
+    assert!(
+        err.contains("invalid cell address"),
+        "error should mention invalid cell address: {err}"
+    );
+    assert!(
+        err.contains("A0"),
+        "error should include the offending address: {err}"
+    );
+}
 ```
 
 ---
@@ -2500,6 +2572,19 @@ scenarios:
     output:
       - "json_diff_bool_a.xlsx"
       - "json_diff_bool_b.xlsx"
+
+  - id: "json_diff_value_to_empty"
+    generator: "single_cell_diff"
+    args:
+      rows: 3
+      cols: 3
+      sheet: "Sheet1"
+      target_cell: "C3"
+      value_a: "1"
+      value_b: null
+    output:
+      - "json_diff_value_to_empty_a.xlsx"
+      - "json_diff_value_to_empty_b.xlsx"
 
   # --- Milestone 2.2: Base64 Correctness ---
   - id: "corrupt_base64"

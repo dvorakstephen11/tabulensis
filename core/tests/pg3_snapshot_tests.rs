@@ -130,3 +130,39 @@ fn snapshot_json_roundtrip_detects_tampered_addr() {
     assert_ne!(snap.addr, tampered.addr);
     assert_eq!(snap, tampered, "value/formula equality ignores addr");
 }
+
+#[test]
+fn snapshot_json_rejects_invalid_addr_1a() {
+    let json = r#"{"addr":"1A","value":null,"formula":null}"#;
+    let result: Result<CellSnapshot, _> = serde_json::from_str(json);
+    let err = result
+        .expect_err("invalid addr should fail to deserialize")
+        .to_string();
+
+    assert!(
+        err.contains("invalid cell address"),
+        "error should mention invalid cell address: {err}"
+    );
+    assert!(
+        err.contains("1A"),
+        "error should include the offending address: {err}"
+    );
+}
+
+#[test]
+fn snapshot_json_rejects_invalid_addr_a0() {
+    let json = r#"{"addr":"A0","value":null,"formula":null}"#;
+    let result: Result<CellSnapshot, _> = serde_json::from_str(json);
+    let err = result
+        .expect_err("invalid addr should fail to deserialize")
+        .to_string();
+
+    assert!(
+        err.contains("invalid cell address"),
+        "error should mention invalid cell address: {err}"
+    );
+    assert!(
+        err.contains("A0"),
+        "error should include the offending address: {err}"
+    );
+}
