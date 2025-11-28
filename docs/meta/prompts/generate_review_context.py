@@ -886,6 +886,99 @@ def update_remediation_implementer():
     return latest_path
 
 
+def collate_projections(downloads_dir=None):
+    script_dir = Path(__file__).parent.resolve()
+    repo_root = script_dir.parent.parent.parent
+    
+    if downloads_dir is None:
+        downloads_dir = Path.home() / "Downloads"
+    else:
+        downloads_dir = Path(downloads_dir)
+    
+    output_dir = downloads_dir / "projections_context"
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    print("Collating projections context...")
+    print(f"Output directory: {output_dir}")
+    
+    files_to_copy = []
+    
+    rust_docs_dir = repo_root / "docs" / "rust_docs"
+    if rust_docs_dir.exists():
+        for f in rust_docs_dir.iterdir():
+            if f.is_file() and f.suffix == '.md':
+                files_to_copy.append((f, output_dir / f.name))
+    
+    copied_count = 0
+    for src, dst in files_to_copy:
+        try:
+            shutil.copy2(src, dst)
+            print(f"  Copied: {src.name} -> {dst.name}")
+            copied_count += 1
+        except Exception as e:
+            print(f"  Error copying {src.name}: {e}")
+    
+    competitor_profiles_dir = repo_root / "docs" / "competitor_profiles"
+    combined_profiles_path = output_dir / "combined_competitor_profiles.md"
+    
+    profile_files = []
+    if competitor_profiles_dir.exists():
+        for f in sorted(competitor_profiles_dir.iterdir()):
+            if f.is_file() and f.suffix == '.md':
+                profile_files.append(f)
+    
+    with open(combined_profiles_path, 'w', encoding='utf-8') as f:
+        f.write("# Combined Competitor Profiles\n\n")
+        f.write("This document consolidates all competitive intelligence research for the Excel/Power BI diff engine market. ")
+        f.write("It includes detailed profiles of incumbent tools, their technical architectures, pricing models, ")
+        f.write("market positioning, and estimated revenue footprints.\n\n")
+        f.write(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"**Total profiles:** {len(profile_files)}\n\n")
+        f.write("---\n\n")
+        f.write("## Table of Contents\n\n")
+        for i, pf in enumerate(profile_files, 1):
+            display_name = pf.stem.replace('_', ' ').title()
+            f.write(f"{i}. [{display_name}](#{pf.stem})\n")
+        f.write("\n---\n\n")
+        
+        for i, pf in enumerate(profile_files, 1):
+            display_name = pf.stem.replace('_', ' ').title()
+            f.write(f"<a id=\"{pf.stem}\"></a>\n\n")
+            f.write(f"# [{i}/{len(profile_files)}] {display_name}\n\n")
+            f.write(f"*Source: `{pf.name}`*\n\n")
+            try:
+                content = pf.read_text(encoding='utf-8')
+                f.write(content)
+                if not content.endswith('\n'):
+                    f.write('\n')
+            except Exception as e:
+                f.write(f"(Error reading file: {e})\n")
+            f.write("\n\n---\n\n")
+    
+    print(f"  Created: combined_competitor_profiles.md ({len(profile_files)} profiles)")
+    copied_count += 1
+    
+    print(f"\nCollation complete: {copied_count} files in {output_dir}")
+    print("\nFiles included:")
+    print(f"  1-{len(files_to_copy)}. Technical blueprints from docs/rust_docs/")
+    print(f"  {len(files_to_copy) + 1}.   combined_competitor_profiles.md (all competitor research)")
+    
+    prompt_file = script_dir / "revenue_projections.md"
+    if prompt_file.exists():
+        try:
+            prompt_text = prompt_file.read_text(encoding='utf-8')
+            copy_to_clipboard(prompt_text)
+            print(f"\nRevenue projections prompt copied to clipboard!")
+        except Exception as e:
+            print(f"\nWarning: Could not copy prompt to clipboard: {e}")
+    else:
+        print(f"\nWarning: Prompt file not found at {prompt_file}")
+    
+    return output_dir
+
+
 if __name__ == "__main__":
     import sys
     
@@ -904,6 +997,8 @@ if __name__ == "__main__":
         collate_planner()
     elif len(sys.argv) > 1 and sys.argv[1] == "--remediate":
         update_remediation_implementer()
+    elif len(sys.argv) > 1 and sys.argv[1] == "--projections":
+        collate_projections()
     else:
         generate_review_context()
         print("\nTip: Run with --timestamps [output_file] to generate a document freshness report")
@@ -911,4 +1006,5 @@ if __name__ == "__main__":
         print("Tip: Run with --percent to collate percent completion analysis files")
         print("Tip: Run with --plan to collate planner context for next cycle planning")
         print("Tip: Run with --remediate to update remediation_implementer.md with latest remediation file")
+        print("Tip: Run with --projections to collate revenue projection analysis context")
 

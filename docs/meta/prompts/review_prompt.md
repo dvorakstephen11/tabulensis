@@ -41,6 +41,8 @@
       duplicate_datamashup_parts.xlsx
       grid_large_dense.xlsx
       grid_large_noise.xlsx
+      json_diff_single_cell_a.xlsx
+      json_diff_single_cell_b.xlsx
       mashup_base64_whitespace.xlsx
       mashup_utf16_be.xlsx
       mashup_utf16_le.xlsx
@@ -2059,6 +2061,25 @@ fn test_json_empty_diff() {
         "identical files should produce no cell diffs"
     );
 }
+
+#[test]
+fn test_json_non_empty_diff() {
+    let a = fixture_path("json_diff_single_cell_a.xlsx");
+    let b = fixture_path("json_diff_single_cell_b.xlsx");
+
+    let json = diff_workbooks_to_json(&a, &b).expect("diffing different files should succeed");
+    let value: Value = serde_json::from_str(&json).expect("json should parse");
+
+    let arr = value
+        .as_array()
+        .expect("top-level should be an array of cell diffs");
+    assert_eq!(arr.len(), 1, "expected a single cell difference");
+
+    let first = &arr[0];
+    assert_eq!(first["coords"], Value::String("C3".into()));
+    assert_eq!(first["value_file1"], Value::String("1".into()));
+    assert_eq!(first["value_file2"], Value::String("2".into()));
+}
 ```
 
 ---
@@ -2399,6 +2420,20 @@ scenarios:
     generator: "value_formula"
     output: "pg3_value_and_formula_cells.xlsx"
 
+  # --- JSON diff: simple non-empty change ---
+  - id: "json_diff_single_cell"
+    generator: "single_cell_diff"
+    args:
+      rows: 3
+      cols: 3
+      sheet: "Sheet1"
+      target_cell: "C3"
+      value_a: "1"
+      value_b: "2"
+    output:
+      - "json_diff_single_cell_a.xlsx"
+      - "json_diff_single_cell_b.xlsx"
+
   # --- Milestone 2.2: Base64 Correctness ---
   - id: "corrupt_base64"
     generator: "mashup_corrupt"
@@ -2547,7 +2582,8 @@ from generators.grid import (
     SparseGridGenerator, 
     EdgeCaseGenerator, 
     AddressSanityGenerator,
-    ValueFormulaGenerator
+    ValueFormulaGenerator,
+    SingleCellDiffGenerator,
 )
 from generators.corrupt import ContainerCorruptGenerator
 from generators.mashup import (
@@ -2566,6 +2602,7 @@ GENERATORS: Dict[str, Any] = {
     "edge_case": EdgeCaseGenerator,
     "address_sanity": AddressSanityGenerator,
     "value_formula": ValueFormulaGenerator,
+    "single_cell_diff": SingleCellDiffGenerator,
     "corrupt_container": ContainerCorruptGenerator,
     "mashup_corrupt": MashupCorruptGenerator,
     "mashup_duplicate": MashupDuplicateGenerator,
@@ -2937,6 +2974,37 @@ class ValueFormulaGenerator(BaseGenerator):
             ws['B3'] = "=A1>0"
             
             wb.save(output_dir / name)
+
+class SingleCellDiffGenerator(BaseGenerator):
+    """Generates a tiny pair of workbooks with a single differing cell."""
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        if len(output_names) != 2:
+            raise ValueError("single_cell_diff generator expects exactly two output filenames")
+
+        rows = self.args.get('rows', 3)
+        cols = self.args.get('cols', 3)
+        sheet = self.args.get('sheet', "Sheet1")
+        target_cell = self.args.get('target_cell', "C3")
+        value_a = self.args.get('value_a', "1")
+        value_b = self.args.get('value_b', "2")
+
+        def create_workbook(value: str, name: str):
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = sheet
+
+            for r in range(1, rows + 1):
+                for c in range(1, cols + 1):
+                    ws.cell(row=r, column=c, value=f"R{r}C{c}")
+
+            ws[target_cell] = value
+            wb.save(output_dir / name)
+
+        create_workbook(str(value_a), output_names[0])
+        create_workbook(str(value_b), output_names[1])
 
 ```
 
