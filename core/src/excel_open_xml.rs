@@ -692,7 +692,10 @@ fn convert_value(
             let idx = trimmed
                 .parse::<usize>()
                 .map_err(|e| ExcelOpenError::XmlParseError(e.to_string()))?;
-            Ok(shared_strings.get(idx).cloned().map(CellValue::Text))
+            let text = shared_strings.get(idx).ok_or_else(|| {
+                ExcelOpenError::XmlParseError(format!("shared string index {idx} out of bounds"))
+            })?;
+            Ok(Some(CellValue::Text(text.clone())))
         }
         Some("b") => Ok(match trimmed {
             "1" => Some(CellValue::Bool(true)),
@@ -916,6 +919,16 @@ mod tests {
         let none_val = convert_value(Some("2"), Some("b"), &[])
             .expect("unexpected bool tokens should still parse");
         assert!(none_val.is_none());
+    }
+
+    #[test]
+    fn convert_value_shared_string_index_out_of_bounds_errors() {
+        let err = convert_value(Some("5"), Some("s"), &["only".into()])
+            .expect_err("invalid shared string index should error");
+        assert!(matches!(
+            err,
+            ExcelOpenError::XmlParseError(msg) if msg.contains("shared string index 5")
+        ));
     }
 
     #[test]

@@ -99,6 +99,28 @@ fn snapshot_json_roundtrip() {
             serde_json::from_str(&json).expect("snapshot JSON should parse to value");
         assert_eq!(as_value["addr"], serde_json::Value::String(addr));
         let snap_back: CellSnapshot = serde_json::from_str(&json).expect("snapshot should parse");
+        assert_eq!(snap.addr, snap_back.addr);
         assert_eq!(snap, snap_back);
     }
+}
+
+#[test]
+fn snapshot_json_roundtrip_detects_tampered_addr() {
+    let snap = CellSnapshot {
+        addr: "Z9".parse().expect("address should parse"),
+        value: Some(CellValue::Number(1.0)),
+        formula: Some("A1+1".into()),
+    };
+
+    let mut value: serde_json::Value =
+        serde_json::from_str(&serde_json::to_string(&snap).expect("serialize should work"))
+            .expect("serialized JSON should parse");
+    value["addr"] = serde_json::Value::String("A1".into());
+
+    let tampered_json = serde_json::to_string(&value).expect("tampered JSON should serialize");
+    let tampered: CellSnapshot =
+        serde_json::from_str(&tampered_json).expect("tampered JSON should parse");
+
+    assert_ne!(snap.addr, tampered.addr);
+    assert_eq!(snap, tampered, "value/formula equality ignores addr");
 }

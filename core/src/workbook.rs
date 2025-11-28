@@ -21,19 +21,19 @@ impl CellSnapshot {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Workbook {
     pub sheets: Vec<Sheet>,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Sheet {
     pub name: String,
     pub kind: SheetKind,
     pub grid: Grid,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SheetKind {
     Worksheet,
     Chart,
@@ -41,20 +41,20 @@ pub enum SheetKind {
     Other,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Grid {
     pub nrows: u32,
     pub ncols: u32,
     pub rows: Vec<Row>,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Row {
     pub index: u32,
     pub cells: Vec<Cell>,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Cell {
     pub row: u32,
     pub col: u32,
