@@ -699,7 +699,7 @@ fn convert_value(
             "0" => Some(CellValue::Bool(false)),
             _ => None,
         }),
-        Some("str") | Some("inlineStr") => Ok(Some(CellValue::Text(trimmed.to_string()))),
+        Some("str") | Some("inlineStr") => Ok(Some(CellValue::Text(raw.to_string()))),
         _ => {
             if let Ok(n) = trimmed.parse::<f64>() {
                 Ok(Some(CellValue::Number(n)))
@@ -785,7 +785,12 @@ struct ParsedCell {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExcelOpenError, RawDataMashup, parse_data_mashup, read_datamashup_text};
+    use super::{
+        ExcelOpenError, RawDataMashup, convert_value, parse_data_mashup, parse_shared_strings,
+        read_datamashup_text, read_inline_string,
+    };
+    use crate::workbook::CellValue;
+    use quick_xml::Reader;
 
     fn build_dm_bytes(
         version: u32,
@@ -870,6 +875,54 @@ mod tests {
         let err =
             parse_data_mashup(&bytes).expect_err("buffer shorter than header must be invalid");
         assert!(matches!(err, ExcelOpenError::DataMashupFramingInvalid));
+    }
+
+    #[test]
+    fn parse_shared_strings_rich_text_flattens_runs() {
+        let xml = br#"<?xml version="1.0"?>
+<sst>
+  <si>
+    <r><t>Hello</t></r>
+    <r><t xml:space="preserve"> World</t></r>
+  </si>
+</sst>"#;
+        let strings = parse_shared_strings(xml).expect("shared strings should parse");
+        assert_eq!(strings.first(), Some(&"Hello World".to_string()));
+    }
+
+    #[test]
+    fn read_inline_string_preserves_xml_space_preserve() {
+        let xml = br#"<is><t xml:space="preserve"> hello</t></is>"#;
+        let mut reader = Reader::from_reader(xml.as_ref());
+        reader.config_mut().trim_text(false);
+        let value = read_inline_string(&mut reader).expect("inline string should parse");
+        assert_eq!(value, " hello");
+
+        let converted = convert_value(Some(value.as_str()), Some("inlineStr"), &[])
+            .expect("inlineStr conversion should succeed");
+        assert_eq!(converted, Some(CellValue::Text(" hello".into())));
+    }
+
+    #[test]
+    fn convert_value_bool_0_1_and_other() {
+        let false_val =
+            convert_value(Some("0"), Some("b"), &[]).expect("bool cell conversion should succeed");
+        assert_eq!(false_val, Some(CellValue::Bool(false)));
+
+        let true_val =
+            convert_value(Some("1"), Some("b"), &[]).expect("bool cell conversion should succeed");
+        assert_eq!(true_val, Some(CellValue::Bool(true)));
+
+        let none_val = convert_value(Some("2"), Some("b"), &[])
+            .expect("unexpected bool tokens should still parse");
+        assert!(none_val.is_none());
+    }
+
+    #[test]
+    fn convert_value_error_cell_as_text() {
+        let value =
+            convert_value(Some("#DIV/0!"), Some("e"), &[]).expect("error cell should convert");
+        assert_eq!(value, Some(CellValue::Text("#DIV/0!".into())));
     }
 
     #[test]

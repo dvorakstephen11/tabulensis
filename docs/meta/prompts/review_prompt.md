@@ -20,6 +20,7 @@
       excel_open_xml_tests.rs
       integration_test.rs
       pg1_ir_tests.rs
+      pg3_snapshot_tests.rs
       common/
         mod.rs
   fixtures/
@@ -112,6 +113,10 @@ quick-xml = { version = "0.32", optional = true }
 thiserror = "1.0"
 zip = { version = "0.6", default-features = false, features = ["deflate"], optional = true }
 base64 = "0.22"
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1.0"
 ```
 
 ---
@@ -918,7 +923,7 @@ fn convert_value(
             "0" => Some(CellValue::Bool(false)),
             _ => None,
         }),
-        Some("str") | Some("inlineStr") => Ok(Some(CellValue::Text(trimmed.to_string()))),
+        Some("str") | Some("inlineStr") => Ok(Some(CellValue::Text(raw.to_string()))),
         _ => {
             if let Ok(n) = trimmed.parse::<f64>() {
                 Ok(Some(CellValue::Number(n)))
@@ -1004,7 +1009,12 @@ struct ParsedCell {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExcelOpenError, RawDataMashup, parse_data_mashup, read_datamashup_text};
+    use super::{
+        ExcelOpenError, RawDataMashup, convert_value, parse_data_mashup, parse_shared_strings,
+        read_datamashup_text, read_inline_string,
+    };
+    use crate::workbook::CellValue;
+    use quick_xml::Reader;
 
     fn build_dm_bytes(
         version: u32,
@@ -1092,6 +1102,54 @@ mod tests {
     }
 
     #[test]
+    fn parse_shared_strings_rich_text_flattens_runs() {
+        let xml = br#"<?xml version="1.0"?>
+<sst>
+  <si>
+    <r><t>Hello</t></r>
+    <r><t xml:space="preserve"> World</t></r>
+  </si>
+</sst>"#;
+        let strings = parse_shared_strings(xml).expect("shared strings should parse");
+        assert_eq!(strings.first(), Some(&"Hello World".to_string()));
+    }
+
+    #[test]
+    fn read_inline_string_preserves_xml_space_preserve() {
+        let xml = br#"<is><t xml:space="preserve"> hello</t></is>"#;
+        let mut reader = Reader::from_reader(xml.as_ref());
+        reader.config_mut().trim_text(false);
+        let value = read_inline_string(&mut reader).expect("inline string should parse");
+        assert_eq!(value, " hello");
+
+        let converted = convert_value(Some(value.as_str()), Some("inlineStr"), &[])
+            .expect("inlineStr conversion should succeed");
+        assert_eq!(converted, Some(CellValue::Text(" hello".into())));
+    }
+
+    #[test]
+    fn convert_value_bool_0_1_and_other() {
+        let false_val =
+            convert_value(Some("0"), Some("b"), &[]).expect("bool cell conversion should succeed");
+        assert_eq!(false_val, Some(CellValue::Bool(false)));
+
+        let true_val =
+            convert_value(Some("1"), Some("b"), &[]).expect("bool cell conversion should succeed");
+        assert_eq!(true_val, Some(CellValue::Bool(true)));
+
+        let none_val = convert_value(Some("2"), Some("b"), &[])
+            .expect("unexpected bool tokens should still parse");
+        assert!(none_val.is_none());
+    }
+
+    #[test]
+    fn convert_value_error_cell_as_text() {
+        let value =
+            convert_value(Some("#DIV/0!"), Some("e"), &[]).expect("error cell should convert");
+        assert_eq!(value, Some(CellValue::Text("#DIV/0!".into())));
+    }
+
+    #[test]
     fn utf16_datamashup_xml_decodes_correctly() {
         let xml_text = r#"<?xml version="1.0" encoding="utf-16"?><root xmlns:dm="http://schemas.microsoft.com/DataMashup"><dm:DataMashup>QQ==</dm:DataMashup></root>"#;
         let mut xml_bytes = Vec::with_capacity(2 + xml_text.len() * 2);
@@ -1176,7 +1234,9 @@ pub mod workbook;
 pub use addressing::{address_to_index, index_to_address};
 #[cfg(feature = "excel-open-xml")]
 pub use excel_open_xml::{ExcelOpenError, RawDataMashup, open_data_mashup, open_workbook};
-pub use workbook::{Cell, CellAddress, CellValue, Grid, Row, Sheet, SheetKind, Workbook};
+pub use workbook::{
+    Cell, CellAddress, CellSnapshot, CellValue, Grid, Row, Sheet, SheetKind, Workbook,
+};
 ```
 
 ---
@@ -1194,21 +1254,39 @@ fn main() {
 ### File: `core\src\workbook.rs`
 
 ```rust
-use crate::addressing::index_to_address;
+use crate::addressing::{address_to_index, index_to_address};
 
-#[derive(Debug, Clone, PartialEq)]
+/// A snapshot of a cell's logical content (address, value, formula).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CellSnapshot {
+    pub addr: CellAddress,
+    pub value: Option<CellValue>,
+    pub formula: Option<String>,
+}
+
+impl CellSnapshot {
+    pub fn from_cell(cell: &Cell) -> CellSnapshot {
+        CellSnapshot {
+            addr: cell.address,
+            value: cell.value.clone(),
+            formula: cell.formula.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Workbook {
     pub sheets: Vec<Sheet>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Sheet {
     pub name: String,
     pub kind: SheetKind,
     pub grid: Grid,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SheetKind {
     Worksheet,
     Chart,
@@ -1216,20 +1294,20 @@ pub enum SheetKind {
     Other,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Grid {
     pub nrows: u32,
     pub ncols: u32,
     pub rows: Vec<Row>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Row {
     pub index: u32,
     pub cells: Vec<Cell>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Cell {
     pub row: u32,
     pub col: u32,
@@ -1238,7 +1316,7 @@ pub struct Cell {
     pub formula: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CellAddress {
     pub row: u32,
     pub col: u32,
@@ -1254,12 +1332,35 @@ impl CellAddress {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+impl std::str::FromStr for CellAddress {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (row, col) = address_to_index(s).ok_or(())?;
+        Ok(CellAddress { row, col })
+    }
+}
+
+impl std::fmt::Display for CellAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_a1())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum CellValue {
     Number(f64),
     Text(String),
     Bool(bool),
 }
+
+impl PartialEq for CellSnapshot {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value && self.formula == other.formula
+    }
+}
+
+impl Eq for CellSnapshot {}
 
 impl CellValue {
     pub fn as_text(&self) -> Option<&str> {
@@ -1284,6 +1385,122 @@ impl CellValue {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn addr(a1: &str) -> CellAddress {
+        a1.parse().expect("address should parse")
+    }
+
+    fn make_cell(address: &str, value: Option<CellValue>, formula: Option<&str>) -> Cell {
+        let (row, col) = address_to_index(address).expect("address should parse");
+        Cell {
+            row,
+            col,
+            address: CellAddress::from_indices(row, col),
+            value,
+            formula: formula.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn snapshot_from_number_cell() {
+        let cell = make_cell("A1", Some(CellValue::Number(42.0)), None);
+        let snap = CellSnapshot::from_cell(&cell);
+        assert_eq!(snap.addr.to_string(), "A1");
+        assert_eq!(snap.value, Some(CellValue::Number(42.0)));
+        assert!(snap.formula.is_none());
+    }
+
+    #[test]
+    fn snapshot_from_text_cell() {
+        let cell = make_cell("B2", Some(CellValue::Text("hello".into())), None);
+        let snap = CellSnapshot::from_cell(&cell);
+        assert_eq!(snap.addr.to_string(), "B2");
+        assert_eq!(snap.value, Some(CellValue::Text("hello".into())));
+        assert!(snap.formula.is_none());
+    }
+
+    #[test]
+    fn snapshot_from_bool_cell() {
+        let cell = make_cell("C3", Some(CellValue::Bool(true)), None);
+        let snap = CellSnapshot::from_cell(&cell);
+        assert_eq!(snap.addr.to_string(), "C3");
+        assert_eq!(snap.value, Some(CellValue::Bool(true)));
+        assert!(snap.formula.is_none());
+    }
+
+    #[test]
+    fn snapshot_from_empty_cell() {
+        let cell = make_cell("D4", None, None);
+        let snap = CellSnapshot::from_cell(&cell);
+        assert_eq!(snap.addr.to_string(), "D4");
+        assert!(snap.value.is_none());
+        assert!(snap.formula.is_none());
+    }
+
+    #[test]
+    fn snapshot_equality_same_value_and_formula() {
+        let snap1 = CellSnapshot {
+            addr: addr("A1"),
+            value: Some(CellValue::Number(1.0)),
+            formula: Some("A1+1".into()),
+        };
+        let snap2 = CellSnapshot {
+            addr: addr("B2"),
+            value: Some(CellValue::Number(1.0)),
+            formula: Some("A1+1".into()),
+        };
+        assert_eq!(snap1, snap2);
+    }
+
+    #[test]
+    fn snapshot_inequality_different_value_same_formula() {
+        let snap1 = CellSnapshot {
+            addr: addr("A1"),
+            value: Some(CellValue::Number(43.0)),
+            formula: Some("A1+1".into()),
+        };
+        let snap2 = CellSnapshot {
+            addr: addr("A1"),
+            value: Some(CellValue::Number(44.0)),
+            formula: Some("A1+1".into()),
+        };
+        assert_ne!(snap1, snap2);
+    }
+
+    #[test]
+    fn snapshot_inequality_value_vs_formula() {
+        let snap1 = CellSnapshot {
+            addr: addr("A1"),
+            value: Some(CellValue::Number(42.0)),
+            formula: None,
+        };
+        let snap2 = CellSnapshot {
+            addr: addr("A1"),
+            value: Some(CellValue::Number(42.0)),
+            formula: Some("A1+1".into()),
+        };
+        assert_ne!(snap1, snap2);
+    }
+
+    #[test]
+    fn snapshot_equality_ignores_address() {
+        let snap1 = CellSnapshot {
+            addr: addr("A1"),
+            value: Some(CellValue::Text("hello".into())),
+            formula: None,
+        };
+        let snap2 = CellSnapshot {
+            addr: addr("Z9"),
+            value: Some(CellValue::Text("hello".into())),
+            formula: None,
+        };
+        assert_eq!(snap1, snap2);
     }
 }
 ```
@@ -1753,6 +1970,114 @@ fn assert_cell_text(sheet: &Sheet, row: u32, col: u32, expected: &str) {
             .unwrap_or(""),
         expected
     );
+}
+```
+
+---
+
+### File: `core\tests\pg3_snapshot_tests.rs`
+
+```rust
+use excel_diff::{
+    Cell, CellAddress, CellSnapshot, CellValue, Sheet, Workbook, address_to_index, open_workbook,
+};
+
+mod common;
+use common::fixture_path;
+
+fn sheet_by_name<'a>(workbook: &'a Workbook, name: &str) -> &'a Sheet {
+    workbook
+        .sheets
+        .iter()
+        .find(|s| s.name == name)
+        .expect("sheet should exist")
+}
+
+fn find_cell<'a>(sheet: &'a Sheet, addr: &str) -> Option<&'a Cell> {
+    let (row, col) = address_to_index(addr).expect("address should parse");
+    sheet
+        .grid
+        .rows
+        .get(row as usize)
+        .and_then(|r| r.cells.get(col as usize))
+}
+
+fn snapshot(sheet: &Sheet, addr: &str) -> CellSnapshot {
+    if let Some(cell) = find_cell(sheet, addr) {
+        CellSnapshot::from_cell(cell)
+    } else {
+        let (row, col) = address_to_index(addr).expect("address should parse");
+        CellSnapshot {
+            addr: CellAddress::from_indices(row, col),
+            value: None,
+            formula: None,
+        }
+    }
+}
+
+#[test]
+fn pg3_value_and_formula_cells_snapshot_from_excel() {
+    let path = fixture_path("pg3_value_and_formula_cells.xlsx");
+    let workbook = open_workbook(&path).expect("fixture should load");
+    let sheet = sheet_by_name(&workbook, "Types");
+
+    let a1 = snapshot(sheet, "A1");
+    assert_eq!(a1.addr.to_string(), "A1");
+    assert_eq!(a1.value, Some(CellValue::Number(42.0)));
+    assert!(a1.formula.is_none());
+
+    let a2 = snapshot(sheet, "A2");
+    assert_eq!(a2.value, Some(CellValue::Text("hello".into())));
+    assert!(a2.formula.is_none());
+
+    let a3 = snapshot(sheet, "A3");
+    assert_eq!(a3.value, Some(CellValue::Bool(true)));
+    assert!(a3.formula.is_none());
+
+    let a4 = snapshot(sheet, "A4");
+    assert!(a4.value.is_none());
+    assert!(a4.formula.is_none());
+
+    let b1 = snapshot(sheet, "B1");
+    assert!(matches!(
+        b1.value,
+        Some(CellValue::Number(n)) if (n - 43.0).abs() < 1e-6
+    ));
+    let b1_formula = b1.formula.as_deref().expect("B1 should have a formula");
+    assert!(b1_formula.contains("A1+1"));
+
+    let b2 = snapshot(sheet, "B2");
+    assert_eq!(b2.value, Some(CellValue::Text("hello world".into())));
+    let b2_formula = b2.formula.as_deref().expect("B2 should have a formula");
+    assert!(b2_formula.contains("hello"));
+    assert!(b2_formula.contains("world"));
+
+    let b3 = snapshot(sheet, "B3");
+    assert_eq!(b3.value, Some(CellValue::Bool(true)));
+    let b3_formula = b3.formula.as_deref().expect("B3 should have a formula");
+    assert!(b3_formula.contains(">0"));
+}
+
+#[test]
+fn snapshot_json_roundtrip() {
+    let path = fixture_path("pg3_value_and_formula_cells.xlsx");
+    let workbook = open_workbook(&path).expect("fixture should load");
+    let sheet = sheet_by_name(&workbook, "Types");
+
+    let snapshots = vec![
+        snapshot(sheet, "A1"),
+        snapshot(sheet, "A2"),
+        snapshot(sheet, "B1"),
+        snapshot(sheet, "B2"),
+    ];
+
+    for snap in snapshots {
+        let json = serde_json::to_string(&snap).expect("snapshot should serialize");
+        assert!(json.contains("\"addr\""));
+        assert!(json.contains("\"value\""));
+        let snap_back: CellSnapshot = serde_json::from_str(&json).expect("snapshot should parse");
+        assert_eq!(snap, snap_back);
+    }
 }
 ```
 
