@@ -63,19 +63,25 @@ fn pg3_value_and_formula_cells_snapshot_from_excel() {
         b1.value,
         Some(CellValue::Number(n)) if (n - 43.0).abs() < 1e-6
     ));
+    assert_eq!(b1.addr.to_string(), "B1");
     let b1_formula = b1.formula.as_deref().expect("B1 should have a formula");
     assert!(b1_formula.contains("A1+1"));
 
     let b2 = snapshot(sheet, "B2");
     assert_eq!(b2.value, Some(CellValue::Text("hello world".into())));
+    assert_eq!(b2.addr.to_string(), "B2");
     let b2_formula = b2.formula.as_deref().expect("B2 should have a formula");
     assert!(b2_formula.contains("hello"));
     assert!(b2_formula.contains("world"));
 
     let b3 = snapshot(sheet, "B3");
     assert_eq!(b3.value, Some(CellValue::Bool(true)));
+    assert_eq!(b3.addr.to_string(), "B3");
     let b3_formula = b3.formula.as_deref().expect("B3 should have a formula");
-    assert!(b3_formula.contains(">0"));
+    assert!(
+        b3_formula.contains(">0"),
+        "B3 formula should include comparison: {b3_formula:?}"
+    );
 }
 
 #[test]

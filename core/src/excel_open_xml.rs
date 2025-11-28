@@ -616,7 +616,10 @@ fn parse_cell(
                     .read_text(e.name())
                     .map_err(|e| ExcelOpenError::XmlParseError(e.to_string()))?
                     .into_owned();
-                formula_text = Some(text);
+                let unescaped = quick_xml::escape::unescape(&text)
+                    .map_err(|e| ExcelOpenError::XmlParseError(e.to_string()))?
+                    .into_owned();
+                formula_text = Some(unescaped);
             }
             Ok(Event::Start(e)) if e.name().as_ref() == b"is" => {
                 inline_text = Some(read_inline_string(reader)?);

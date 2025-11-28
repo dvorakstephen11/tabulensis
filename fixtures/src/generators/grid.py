@@ -1,4 +1,6 @@
 import openpyxl
+import zipfile
+import xml.etree.ElementTree as ET
 from openpyxl.utils import get_column_letter
 from pathlib import Path
 from typing import Union, List
@@ -121,7 +123,43 @@ class ValueFormulaGenerator(BaseGenerator):
             ws['B2'] = '="hello" & " world"'
             ws['B3'] = "=A1>0"
             
-            wb.save(output_dir / name)
+            output_path = output_dir / name
+            wb.save(output_path)
+            self._inject_formula_caches(output_path)
+
+    def _inject_formula_caches(self, path: Path):
+        ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+        with zipfile.ZipFile(path, "r") as zf:
+            sheet_xml = zf.read("xl/worksheets/sheet1.xml")
+            other_files = {
+                info.filename: zf.read(info.filename)
+                for info in zf.infolist()
+                if info.filename != "xl/worksheets/sheet1.xml"
+            }
+
+        root = ET.fromstring(sheet_xml)
+
+        def update_cell(ref: str, value: str, cell_type: str | None = None):
+            cell = root.find(f".//{{{ns}}}c[@r='{ref}']")
+            if cell is None:
+                return
+            if cell_type:
+                cell.set("t", cell_type)
+            v = cell.find(f"{{{ns}}}v")
+            if v is None:
+                v = ET.SubElement(cell, f"{{{ns}}}v")
+            v.text = value
+
+        update_cell("B1", "43")
+        update_cell("B2", "hello world", "str")
+        update_cell("B3", "1", "b")
+
+        ET.register_namespace("", ns)
+        updated_sheet = ET.tostring(root, encoding="utf-8", xml_declaration=False)
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("xl/worksheets/sheet1.xml", updated_sheet)
+            for name, data in other_files.items():
+                zf.writestr(name, data)
 
 class SingleCellDiffGenerator(BaseGenerator):
     """Generates a tiny pair of workbooks with a single differing cell."""
@@ -139,7 +177,7 @@ class SingleCellDiffGenerator(BaseGenerator):
         value_a = self.args.get('value_a', "1")
         value_b = self.args.get('value_b', "2")
 
-        def create_workbook(value: str, name: str):
+        def create_workbook(value, name: str):
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = sheet
@@ -151,6 +189,6 @@ class SingleCellDiffGenerator(BaseGenerator):
             ws[target_cell] = value
             wb.save(output_dir / name)
 
-        create_workbook(str(value_a), output_names[0])
-        create_workbook(str(value_b), output_names[1])
+        create_workbook(value_a, output_names[0])
+        create_workbook(value_b, output_names[1])
 

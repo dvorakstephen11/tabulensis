@@ -41,6 +41,8 @@
       duplicate_datamashup_parts.xlsx
       grid_large_dense.xlsx
       grid_large_noise.xlsx
+      json_diff_bool_a.xlsx
+      json_diff_bool_b.xlsx
       json_diff_single_cell_a.xlsx
       json_diff_single_cell_b.xlsx
       mashup_base64_whitespace.xlsx
@@ -2027,23 +2029,47 @@ use common::fixture_path;
 
 #[test]
 fn test_json_format() {
-    let diffs = vec![CellDiff {
-        coords: "A1".into(),
-        value_file1: Some("100".into()),
-        value_file2: Some("200".into()),
-    }];
+    let diffs = vec![
+        CellDiff {
+            coords: "A1".into(),
+            value_file1: Some("100".into()),
+            value_file2: Some("200".into()),
+        },
+        CellDiff {
+            coords: "B2".into(),
+            value_file1: Some("true".into()),
+            value_file2: Some("false".into()),
+        },
+        CellDiff {
+            coords: "C3".into(),
+            value_file1: Some("#DIV/0!".into()),
+            value_file2: None,
+        },
+    ];
 
     let json = serialize_cell_diffs(&diffs).expect("serialization should succeed");
     let value: Value = serde_json::from_str(&json).expect("json should parse");
 
     assert!(value.is_array(), "expected an array of cell diffs");
-    let first = value
+    let arr = value
         .as_array()
-        .and_then(|arr| arr.first())
-        .expect("array should contain one element");
+        .expect("top-level json should be an array of cell diffs");
+    assert_eq!(arr.len(), 3);
+
+    let first = &arr[0];
     assert_eq!(first["coords"], Value::String("A1".into()));
     assert_eq!(first["value_file1"], Value::String("100".into()));
     assert_eq!(first["value_file2"], Value::String("200".into()));
+
+    let second = &arr[1];
+    assert_eq!(second["coords"], Value::String("B2".into()));
+    assert_eq!(second["value_file1"], Value::String("true".into()));
+    assert_eq!(second["value_file2"], Value::String("false".into()));
+
+    let third = &arr[2];
+    assert_eq!(third["coords"], Value::String("C3".into()));
+    assert_eq!(third["value_file1"], Value::String("#DIV/0!".into()));
+    assert_eq!(third["value_file2"], Value::Null);
 }
 
 #[test]
@@ -2079,6 +2105,25 @@ fn test_json_non_empty_diff() {
     assert_eq!(first["coords"], Value::String("C3".into()));
     assert_eq!(first["value_file1"], Value::String("1".into()));
     assert_eq!(first["value_file2"], Value::String("2".into()));
+}
+
+#[test]
+fn test_json_non_empty_diff_bool() {
+    let a = fixture_path("json_diff_bool_a.xlsx");
+    let b = fixture_path("json_diff_bool_b.xlsx");
+
+    let json = diff_workbooks_to_json(&a, &b).expect("diffing different files should succeed");
+    let value: Value = serde_json::from_str(&json).expect("json should parse");
+
+    let arr = value
+        .as_array()
+        .expect("top-level should be an array of cell diffs");
+    assert_eq!(arr.len(), 1, "expected a single cell difference");
+
+    let first = &arr[0];
+    assert_eq!(first["coords"], Value::String("C3".into()));
+    assert_eq!(first["value_file1"], Value::String("true".into()));
+    assert_eq!(first["value_file2"], Value::String("false".into()));
 }
 ```
 
@@ -2288,19 +2333,25 @@ fn pg3_value_and_formula_cells_snapshot_from_excel() {
         b1.value,
         Some(CellValue::Number(n)) if (n - 43.0).abs() < 1e-6
     ));
+    assert_eq!(b1.addr.to_string(), "B1");
     let b1_formula = b1.formula.as_deref().expect("B1 should have a formula");
     assert!(b1_formula.contains("A1+1"));
 
     let b2 = snapshot(sheet, "B2");
     assert_eq!(b2.value, Some(CellValue::Text("hello world".into())));
+    assert_eq!(b2.addr.to_string(), "B2");
     let b2_formula = b2.formula.as_deref().expect("B2 should have a formula");
     assert!(b2_formula.contains("hello"));
     assert!(b2_formula.contains("world"));
 
     let b3 = snapshot(sheet, "B3");
     assert_eq!(b3.value, Some(CellValue::Bool(true)));
+    assert_eq!(b3.addr.to_string(), "B3");
     let b3_formula = b3.formula.as_deref().expect("B3 should have a formula");
-    assert!(b3_formula.contains(">0"));
+    assert!(
+        b3_formula.contains(">0"),
+        "B3 formula should include comparison: {b3_formula:?}"
+    );
 }
 
 #[test]
@@ -2433,6 +2484,19 @@ scenarios:
     output:
       - "json_diff_single_cell_a.xlsx"
       - "json_diff_single_cell_b.xlsx"
+
+  - id: "json_diff_single_bool"
+    generator: "single_cell_diff"
+    args:
+      rows: 3
+      cols: 3
+      sheet: "Sheet1"
+      target_cell: "C3"
+      value_a: true
+      value_b: false
+    output:
+      - "json_diff_bool_a.xlsx"
+      - "json_diff_bool_b.xlsx"
 
   # --- Milestone 2.2: Base64 Correctness ---
   - id: "corrupt_base64"
@@ -2851,6 +2915,8 @@ class KeyedTableGenerator(BaseGenerator):
 
 ```python
 import openpyxl
+import zipfile
+import xml.etree.ElementTree as ET
 from openpyxl.utils import get_column_letter
 from pathlib import Path
 from typing import Union, List
@@ -2973,7 +3039,43 @@ class ValueFormulaGenerator(BaseGenerator):
             ws['B2'] = '="hello" & " world"'
             ws['B3'] = "=A1>0"
             
-            wb.save(output_dir / name)
+            output_path = output_dir / name
+            wb.save(output_path)
+            self._inject_formula_caches(output_path)
+
+    def _inject_formula_caches(self, path: Path):
+        ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+        with zipfile.ZipFile(path, "r") as zf:
+            sheet_xml = zf.read("xl/worksheets/sheet1.xml")
+            other_files = {
+                info.filename: zf.read(info.filename)
+                for info in zf.infolist()
+                if info.filename != "xl/worksheets/sheet1.xml"
+            }
+
+        root = ET.fromstring(sheet_xml)
+
+        def update_cell(ref: str, value: str, cell_type: str | None = None):
+            cell = root.find(f".//{{{ns}}}c[@r='{ref}']")
+            if cell is None:
+                return
+            if cell_type:
+                cell.set("t", cell_type)
+            v = cell.find(f"{{{ns}}}v")
+            if v is None:
+                v = ET.SubElement(cell, f"{{{ns}}}v")
+            v.text = value
+
+        update_cell("B1", "43")
+        update_cell("B2", "hello world", "str")
+        update_cell("B3", "1", "b")
+
+        ET.register_namespace("", ns)
+        updated_sheet = ET.tostring(root, encoding="utf-8", xml_declaration=False)
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("xl/worksheets/sheet1.xml", updated_sheet)
+            for name, data in other_files.items():
+                zf.writestr(name, data)
 
 class SingleCellDiffGenerator(BaseGenerator):
     """Generates a tiny pair of workbooks with a single differing cell."""
@@ -2991,7 +3093,7 @@ class SingleCellDiffGenerator(BaseGenerator):
         value_a = self.args.get('value_a', "1")
         value_b = self.args.get('value_b', "2")
 
-        def create_workbook(value: str, name: str):
+        def create_workbook(value, name: str):
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = sheet
@@ -3003,8 +3105,8 @@ class SingleCellDiffGenerator(BaseGenerator):
             ws[target_cell] = value
             wb.save(output_dir / name)
 
-        create_workbook(str(value_a), output_names[0])
-        create_workbook(str(value_b), output_names[1])
+        create_workbook(value_a, output_names[0])
+        create_workbook(value_b, output_names[1])
 
 ```
 

@@ -122,6 +122,19 @@ def main():
         remediation_file.write_text("", encoding="utf-8")
         print(f"Created: {remediation_file}")
     
+    completion_estimates_dir = meta_dir / "completion_estimates"
+    if not completion_estimates_dir.exists():
+        completion_estimates_dir.mkdir(parents=True)
+        print(f"Created: {completion_estimates_dir}")
+    
+    for suffix in ("gemini", "openai"):
+        estimate_file = completion_estimates_dir / f"{branch_name}-{suffix}.md"
+        if estimate_file.exists():
+            print(f"Warning: Completion estimate already exists: {estimate_file}")
+        else:
+            estimate_file.write_text("", encoding="utf-8")
+            print(f"Created: {estimate_file}")
+    
     print("\nCycle setup complete!")
     print(f"\nNext steps:")
     print(f"  1. Paste your decision YAML into: {decision_file.relative_to(repo_root)}")

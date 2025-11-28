@@ -30,3 +30,11 @@ Activity Log - 2025-11-28-cell-snapshots-pg3
 - Files modified/created: fixtures/src/generators/grid.py; fixtures/src/generate.py; fixtures/manifest.yaml; fixtures/generated/json_diff_single_cell_a.xlsx; fixtures/generated/json_diff_single_cell_b.xlsx; core/tests/output_tests.rs; docs/meta/plans/2025-11-28-cell-snapshots-pg3/decision.yaml; docs/meta/plans/2025-11-28-cell-snapshots-pg3/spec.md; docs/rust_docs/excel_diff_specification.md; docs/meta/logs/2025-11-28-cell-snapshots-pg3/activity_log.txt.
 - Complications: none; generated only the new fixture pair.
 - Validation: cargo fmt --manifest-path core/Cargo.toml; cargo clippy --all-targets --manifest-path core/Cargo.toml; cargo test --manifest-path core/Cargo.toml.
+
+## Remediation Round 5
+- Addressed Fix 1 (PG3 formula snapshot addresses) by asserting B1/B2/B3 addresses in `pg3_value_and_formula_cells_snapshot_from_excel` and hardening formula parsing to unescape comparison text.
+- Addressed Fix 2 (JSON diff boolean/error coverage) by expanding `test_json_format` with boolean/error-like entries and adding a boolean diff integration test using new fixtures.
+- Stabilized PG3 fixture formulas by injecting cached values and boolean types in the generator so snapshot value assertions remain valid.
+- Files modified/created: core/tests/pg3_snapshot_tests.rs; core/src/excel_open_xml.rs; core/tests/output_tests.rs; fixtures/manifest.yaml; fixtures/src/generators/grid.py; fixtures/generated/json_diff_bool_a.xlsx; fixtures/generated/json_diff_bool_b.xlsx; fixtures/generated/pg3_value_and_formula_cells.xlsx; docs/meta/logs/2025-11-28-cell-snapshots-pg3/activity_log.txt.
+- Complications: Regenerating fixtures initially stripped cached formula values; resolved by adding XML cache injection and unescaping formula text.
+- Validation: cargo fmt --manifest-path core/Cargo.toml; cargo test --manifest-path core/Cargo.toml --test output_tests; cargo test --manifest-path core/Cargo.toml; cargo clippy --manifest-path core/Cargo.toml; cargo check --target wasm32-unknown-unknown --no-default-features --manifest-path core/Cargo.toml.
