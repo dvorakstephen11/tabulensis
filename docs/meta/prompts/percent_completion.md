@@ -13,12 +13,11 @@ You will have access to some or all of the following:
 - Any **TODOs / FIXMEs / comments** in the code that indicate missing or incomplete work.
 
 **Technical Documentation** (in `docs/rust_docs/`)
-- `excel_diff_meta_programming.md` — The authoritative development process guide.
-- `excel_diff_technical_document.md` — Architecture and IR design.
-- `excel_diff_testing_plan.md` — Phased testing milestones (Phase 0–6) and MVP readiness matrix.
-- `excel_diff_difficulty_analysis.md` — Analysis of technical challenges.
-- `excel_diff_m_query_parse.md` — M-code parsing design.
-- `excel_diff_product_differentiation_plan.md` — Product roadmap and competitive positioning.
+- `excel_diff_meta_programming.md` - The authoritative development process guide.
+- `excel_diff_specification.md` - Architecture, parsing, and diff design.
+- `excel_diff_testing_plan.md` - Phased testing milestones (Phase 0-6) and MVP readiness matrix.
+- `excel_diff_difficulty_analysis.md` - Analysis of technical challenges.
+- `excel_diff_product_differentiation_plan.md` - Product roadmap and competitive positioning.
 
 **Cycle Artifacts** (in `docs/meta/`)
 - `plans/[branch-name]/spec.md` — Mini-specs defining scope, behavioral contracts, and test plans for each cycle.
@@ -73,7 +72,7 @@ Estimate completion along at least these three axes, each as a percentage from 0
 2. **Percent of total code written**
    - Do **not** just use raw LOC.
    - Instead:
-     - Identify the planned modules / components from `excel_diff_technical_document.md` and the testing plan.
+    - Identify the planned modules / components from `excel_diff_specification.md` and the testing plan.
      - For each module, estimate:
        - Planned surface area (APIs, responsibilities).
        - What is implemented vs stubbed vs missing.
@@ -194,7 +193,7 @@ If you identify any other useful quantitative or qualitative metrics for “comp
    - If the code clearly diverges from the specs, mention that and treat the specs as **directional**, not absolute.
 
 2. **Map the architecture**
-   - Use `excel_diff_technical_document.md` as the reference for intended architecture.
+  - Use `excel_diff_specification.md` as the reference for intended architecture.
    - Sketch (internally) a mental map of the system:
      - Major modules, data flows, external interfaces.
    - For each area, determine:

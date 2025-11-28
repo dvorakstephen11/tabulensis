@@ -1,7 +1,7 @@
 Activity Log - 2025-11-27-datamashup-framing
 
 - Read mini-spec docs/meta/plans/2025-11-27-datamashup-framing/spec.md and decision.yaml; noted scope for RawDataMashup framing and host API.
-- Reviewed meta programming guide section 4 and architecture docs (excel_diff_technical_document.md, excel_diff_m_query_parse.md) to align implementation approach.
+- Reviewed meta programming guide section 4 and architecture docs (`excel_diff_specification.md`) to align implementation approach.
 - Implemented RawDataMashup framing parser with strict length checks and new ExcelOpenError variants for DataMashup paths.
 - Added open_data_mashup extraction (UTF-16 DataMashup parsing, base64 decode, duplicate detection) and re-exported API.
 - Wrote unit tests for parse_data_mashup invariants and fuzz coverage plus integration tests for open_data_mashup fixtures.

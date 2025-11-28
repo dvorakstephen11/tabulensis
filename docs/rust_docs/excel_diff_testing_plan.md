@@ -1,4 +1,9 @@
-Here's a concrete, end-to-end testing blueprint reorganized into interleaved vertical-slice phases (per test_reorganization.md). The phases advance container handling, grid parsing, and M parsing together so we surface the grid alignment/memory risks early while still aiming at semantic M-query diffing.
+Here's a concrete, end-to-end testing plan reorganized into interleaved vertical-slice phases (per test_reorganization.md). The phases advance container handling, grid parsing, and M parsing together so we surface the grid alignment/memory risks early while still aiming at semantic M-query diffing.
+
+> **Related Documentation:**
+> - `excel_diff_specification.md` - Technical specification for parsing and diff algorithms
+
+All diff algorithms operate on a normalized IR defined in `excel_diff_specification.md` Section 5; parsing is handled by the DataMashup parser and Open XML layer.
 
 For each phase:
 * What the Rust side does
@@ -630,7 +635,7 @@ Now you parse `dm_bytes` into the `Version + 4 length‑prefixed sections` struc
 
 ### 3.2 Invariant tests (negatives)
 
-From your blueprint: version must be 0 for now, lengths must fit within the buffer. 
+From `excel_diff_specification.md` Sections 4.1-4.5: version must be 0 for now, lengths must fit within the buffer. 
 
 * **Unit tests**
 
@@ -648,9 +653,9 @@ Python is not needed for these tests beyond providing the original workbook.
 
 ---
 
-### Milestone 4 – Semantic sections: PackageParts / Permissions / Metadata / Bindings
+### Milestone 4 - Semantic sections: PackageParts / Permissions / Metadata / Bindings
 
-Now you implement the **semantic layer** per the blueprint: treat `PackageParts` as ZIP, parse Permissions XML, Metadata XML, and treat Permission Bindings as opaque. 
+Now you implement the **semantic layer** per `excel_diff_specification.md` Sections 4-5: treat `PackageParts` as ZIP, parse Permissions XML, Metadata XML, and treat Permission Bindings as opaque. 
 
 **Rust capability**
 
@@ -718,7 +723,7 @@ Python can create these by:
 
 ### 4.3 Metadata XML tests
 
-Per blueprint, Metadata XML has `LocalPackageMetadataFile` with `Formulas` entries keyed by `SectionName/FormulaName`, plus load destinations etc. 
+Per `excel_diff_specification.md` Section 4.4, Metadata XML has `LocalPackageMetadataFile` with `Formulas` entries keyed by `SectionName/FormulaName`, plus load destinations, privacy, result types, and related properties. 
 
 **Fixtures**
 
@@ -735,7 +740,7 @@ Per blueprint, Metadata XML has `LocalPackageMetadataFile` with `Formulas` entri
 
   * Parse Metadata XML.
   * Parse `Section1.m` into members.
-  * Assert number of `ItemType=Formula` entries equals number of shared members in `Section1.m` (minus known oddities like step entries) – your blueprint already calls this out as an invariant. 
+  * Assert number of `ItemType=Formula` entries equals number of shared members in `Section1.m` (minus known oddities like step entries) - the specification calls this out as an invariant. 
 * `metadata_load_destinations`:
 
   * For each query, assert load settings from Metadata (sheet vs model vs both) match what you manually configured when creating the fixtures.
@@ -1729,13 +1734,13 @@ These tests double as validation that your earlier, more granular tests actually
 
 ---
 
-### Milestone 9 – Fuzzing, golden tests, and regression harness
+### Milestone 9 - Fuzzing, golden tests, and regression harness
 
 Once the basics work, you want to be very hard to break.
 
 ### 9.1 Golden oracles (Data Mashup Explorer / Cmdlets)
 
-Your parser blueprint already suggests using Ben Gribaudo’s tools as oracles. 
+The specification (Section 15) already suggests using Ben Gribaudo’s tools as oracles. 
 
 * **Offline golden files**
 
@@ -1750,9 +1755,9 @@ Your parser blueprint already suggests using Ben Gribaudo’s tools as oracles.
 
 This catches subtle schema interpretation bugs.
 
-### 9.2 Property‑based tests on the binary framing
+### 9.2 Property-based tests on the binary framing
 
-From your blueprint’s own suggestions: test invariants like length sums. 
+From the specification’s own suggestions: test invariants like length sums. 
 
 * **Property tests**
 

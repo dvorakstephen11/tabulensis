@@ -59,8 +59,7 @@ risks_of_deferral:
 
 references:
   architecture_docs:
-    - "excel_diff_technical_document.md"
-    - "excel_diff_m_query_parse.md"
+    - "excel_diff_specification.md"
   testing_docs:
     - "excel_diff_testing_plan.md"
   process_docs:

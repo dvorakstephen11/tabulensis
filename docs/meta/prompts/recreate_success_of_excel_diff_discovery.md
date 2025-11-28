@@ -6,7 +6,7 @@ initial_quick_software_product_brainstorm_conversation.md represents a conversat
 
 excel_diff_product_differentiation_plan.md represents a deep dive into the competitive landscape of the Excel diff product market and a plan for how to differentiate my product.
 
-excel_diff_technical_document.md represents a technical specification for the Excel diff product.
+excel_diff_specification.md represents a technical specification for the Excel diff product.
 
 excel_diff_marketing_plan.md represents a marketing plan for the Excel diff product.
 

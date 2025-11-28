@@ -17,8 +17,7 @@ target_testing_milestones:
 
 context:
   architecture_docs:
-    - "excel_diff_technical_document.md"
-    - "excel_diff_m_query_parse.md"
+    - "excel_diff_specification.md"
     - "excel_diff_product_differentiation_plan.md"
   process_docs:
     - "excel_diff_meta_programming.md"

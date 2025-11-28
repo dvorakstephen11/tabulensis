@@ -21,12 +21,12 @@ The implementation closely follows the mini-spec and decision record for the `20
 
   * `extract_datamashup_bytes_from_excel` iterates every ZIP entry whose name starts with `customXml/` and ends with `.xml`. For each, it calls `read_datamashup_text`. :contentReference[oaicite:0]{index=0}  
   * `read_datamashup_text` uses `is_datamashup_element(e.name().as_ref())` on every `Start` / `End` event, and collects the text of the first such element. :contentReference[oaicite:1]{index=1}  
-  * `is_datamashup_element` matches by suffix after the last colon (`dm:DataMashup` → `"DataMashup"`), but does **not** check the namespace URI or that the element is the **document root**. :contentReference[oaicite:2]{index=2}  
+  * `is_datamashup_element` matches by suffix after the last colon (`dm:DataMashup` -> `"DataMashup"`), but does **not** check the namespace URI or that the element is the **document root**. :contentReference[oaicite:2]{index=2}  
 
-  The architecture blueprint `excel_diff_m_query_parse.md` describes a stricter invariant: enumerate `/customXml/item*.xml` and “look for a document whose root element is `DataMashup` in namespace `http://schemas.microsoft.com/DataMashup`.” :contentReference[oaicite:3]{index=3}  
+  The specification `excel_diff_specification.md` (Section 3) describes a stricter invariant: enumerate `/customXml/item*.xml` and "look for a document whose root element is `DataMashup` in namespace `http://schemas.microsoft.com/DataMashup`." :contentReference[oaicite:3]{index=3}  
 - **Evidence**:  
   * `extract_datamashup_bytes_from_excel`, `read_datamashup_text`, and `is_datamashup_element` in `core/src/excel_open_xml.rs`.   
-  * Architecture blueprint section “1. Outer container → DataMashup bytes”. :contentReference[oaicite:5]{index=5}  
+  * `Host Container Layer` guidance in `excel_diff_specification.md` Section 3. :contentReference[oaicite:5]{index=5}  
 - **Impact**:  
   * On typical Excel workbooks (where only the real Power Query part uses `DataMashup`), behavior is correct and well-tested.
   * In a hypothetical workbook where some **other** `customXml` part contains an element named `DataMashup` in a different namespace or deeper in the tree, `open_data_mashup` might:

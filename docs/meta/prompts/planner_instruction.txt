@@ -7,12 +7,11 @@ Your role is defined in Section 2 (Planner Agent) and Section 3.1 (Planning and 
 You have been provided with:
 
 1. **Technical Blueprints** (`excel_diff_*.md` files):
-   - `excel_diff_meta_programming.md` — The development process guide
-   - `excel_diff_technical_document.md` — Architecture and IR design
-   - `excel_diff_testing_plan.md` — Phased milestones and MVP definition
-   - `excel_diff_difficulty_analysis.md` — Technical challenge analysis
-   - `excel_diff_m_query_parse.md` — M-code parsing design
-   - `excel_diff_product_differentiation_plan.md` — Product roadmap
+   - `excel_diff_meta_programming.md` - The development process guide
+   - `excel_diff_specification.md` - Architecture, parsing, and diff design
+   - `excel_diff_testing_plan.md` - Phased milestones and MVP definition
+   - `excel_diff_difficulty_analysis.md` - Technical challenge analysis
+   - `excel_diff_product_differentiation_plan.md` - Product roadmap
 
 2. **Current Codebase**: `codebase_context.md` contains the directory structure and source code.
 

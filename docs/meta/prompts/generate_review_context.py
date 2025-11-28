@@ -431,10 +431,9 @@ def collate_percent_completion(downloads_dir=None):
     rust_docs_dir = repo_root / "docs" / "rust_docs"
     priority_docs = [
         "excel_diff_meta_programming.md",
-        "excel_diff_technical_document.md",
+        "excel_diff_specification.md",
         "excel_diff_testing_plan.md",
         "excel_diff_difficulty_analysis.md",
-        "excel_diff_m_query_parse.md",
         "excel_diff_product_differentiation_plan.md",
     ]
     
@@ -581,10 +580,9 @@ def collate_planner(downloads_dir=None):
     rust_docs_dir = repo_root / "docs" / "rust_docs"
     priority_docs = [
         "excel_diff_meta_programming.md",
-        "excel_diff_technical_document.md",
+        "excel_diff_specification.md",
         "excel_diff_testing_plan.md",
         "excel_diff_difficulty_analysis.md",
-        "excel_diff_m_query_parse.md",
         "excel_diff_product_differentiation_plan.md",
     ]
     
