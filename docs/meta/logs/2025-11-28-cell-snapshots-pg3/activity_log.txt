@@ -46,3 +46,11 @@ Activity Log - 2025-11-28-cell-snapshots-pg3
 - Files modified/created: core/tests/pg3_snapshot_tests.rs; core/tests/output_tests.rs; fixtures/manifest.yaml; fixtures/generated/json_diff_value_to_empty_a.xlsx; fixtures/generated/json_diff_value_to_empty_b.xlsx; docs/meta/logs/2025-11-28-cell-snapshots-pg3/activity_log.txt.
 - Complications: None.
 - Validation: cargo fmt --manifest-path core/Cargo.toml; cargo clippy --all-targets --manifest-path core/Cargo.toml; cargo test --manifest-path core/Cargo.toml; cargo check --target wasm32-unknown-unknown --no-default-features --manifest-path core/Cargo.toml.
+
+## Remediation Round 7
+- Addressed Finding 2 (doc drift on JSON output surface) by updating the decision record to state that JSON diff helpers are a public API and `serde_json` is an intentional runtime dependency.
+- Addressed Finding 4 (JSON serialization error mapping clarity) by documenting that JSON serialization errors currently flow through `ExcelOpenError::XmlParseError`, with a future option to split a dedicated variant.
+- Revalidated Finding 3 coverage: existing non-empty JSON diff integration tests already exercise `diff_workbooks_to_json`; no code changes were required.
+- Files modified: docs/meta/plans/2025-11-28-cell-snapshots-pg3/decision.yaml; docs/meta/logs/2025-11-28-cell-snapshots-pg3/activity_log.txt.
+- Complications: none.
+- Validation: cargo fmt --manifest-path core/Cargo.toml; cargo clippy --all-targets --manifest-path core/Cargo.toml; cargo test --manifest-path core/Cargo.toml; cargo check --target wasm32-unknown-unknown --no-default-features --manifest-path core/Cargo.toml.

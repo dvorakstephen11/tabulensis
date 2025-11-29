@@ -114,16 +114,18 @@ notes_for_implementer_agent:
     semantics can be layered on later without changing the basic struct
     shape.
   - >
-    Prefer adding `serde` derives to `CellSnapshot` and using `serde_json`
-    only in tests for PG3.4, so the core library remains format-agnostic but
-    trivially serializable for CLI/UX. 
+    JSON diff helpers (`CellDiff`, `serialize_cell_diffs`, `diff_workbooks`,
+    `diff_workbooks_to_json`) are intentionally part of the core public
+    surface, and `serde_json` is treated as a runtime dependency to support
+    that output. Keep decision/spec documents aligned with this scope rather
+    than implying test-only usage.
   - >
     When writing value semantics tests in `excel_open_xml.rs`, mirror the
     current behavior rather than pre-emptively changing it; if you decide to
     introduce a dedicated error-cell variant in `CellValue` in a later cycle,
     that should come with its own decision record and migration plan.
   - >
-    JSON diff helpers (CellDiff plus serialize/diff_workbooks* helpers) are now
-    part of the public surface, and `serde_json` is treated as a runtime
-    dependency to support that output format; keep specs and docs aligned with
-    this reality rather than implying it is test-only.
+    JSON serialization failures currently map to `ExcelOpenError::XmlParseError`
+    as the shared structured-text bucket for XML and JSON; if you split out a
+    dedicated `JsonError` in the future, record that refinement in a follow-up
+    decision entry.

@@ -814,6 +814,46 @@ def collate_planner(downloads_dir=None):
     return output_dir
 
 
+def run_cargo_tests_and_save(repo_root=None, branch_name=None):
+    if repo_root is None:
+        script_dir = Path(__file__).parent.resolve()
+        repo_root = script_dir.parent.parent.parent
+    else:
+        repo_root = Path(repo_root)
+    
+    if branch_name is None:
+        os.chdir(repo_root)
+        branch_name = get_current_branch()
+        if branch_name is None:
+            print("Error: Could not determine current git branch.")
+            return False
+    
+    results_dir = repo_root / "docs" / "meta" / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    results_file = results_dir / f"{branch_name}.txt"
+    
+    print(f"Running cargo test for branch: {branch_name}")
+    print(f"Output will be saved to: {results_file}")
+    
+    try:
+        result = subprocess.run(
+            ['cargo', 'test'],
+            cwd=repo_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True
+        )
+        
+        with open(results_file, 'w', encoding='utf-8') as f:
+            f.write(result.stdout)
+        
+        print(f"Test output saved to: {results_file}")
+        return True
+    except Exception as e:
+        print(f"Error running cargo test: {e}")
+        return False
+
+
 def update_remediation_implementer():
     script_dir = Path(__file__).parent.resolve()
     repo_root = script_dir.parent.parent.parent
@@ -987,6 +1027,7 @@ if __name__ == "__main__":
         generate_timestamp_report(output_file)
     elif len(sys.argv) > 1 and sys.argv[1] == "--collate":
         branch_name = sys.argv[2] if len(sys.argv) > 2 else None
+        run_cargo_tests_and_save(branch_name=branch_name)
         generate_review_context()
         collate_post_implementation_review(branch_name)
     elif len(sys.argv) > 1 and sys.argv[1] == "--percent":
