@@ -1,5 +1,5 @@
 
-# 2025-11-28-diffop-pg4 Mini-Spec  
+# 2025-11-28b-diffop-pg4 Mini-Spec  
 DiffOp domain types and JSON wire contract (PG4)
 
 ## 1. Scope

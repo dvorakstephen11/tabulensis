@@ -13,3 +13,4 @@
 - Introduced a workspace `Cargo.toml` so `cargo test` works from the repo root while retaining `core/` as the crate manifest.
 - Realigned decision/spec branch identifiers to `2025-11-28b-diffop-pg4` and noted the logs relocation requirement.
 - Validation: cargo fmt; cargo clippy --all-targets --manifest-path core/Cargo.toml; cargo test (workspace root); cargo check --target wasm32-unknown-unknown --no-default-features --manifest-path core/Cargo.toml.
+

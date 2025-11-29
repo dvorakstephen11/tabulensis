@@ -1,8 +1,8 @@
-# File: docs/meta/plans/2025-11-28-diffop-pg4/decision.yaml
+# File: docs/meta/plans/2025-11-28b-diffop-pg4/decision.yaml
 
 work_type: milestone_progress
 target_subsystem: diff_layer.diffop_types_and_json_contract
-branch_name: 2025-11-28-diffop-pg4
+branch_name: 2025-11-28b-diffop-pg4
 
 rationale:
   - PG1–PG3 grid IR, addressing, and CellSnapshot semantics are implemented and fully tested, but the DiffOp layer described in excel_diff_specification.md Section 6 is still missing from the codebase.
