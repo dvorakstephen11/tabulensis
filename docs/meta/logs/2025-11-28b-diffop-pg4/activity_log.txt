@@ -1,0 +1,9 @@
+2025-11-28 Activity Log - PG4 DiffOp types
+- Reviewed docs/meta/plans/2025-11-28b-diffop-pg4/spec.md and decision.yaml for scope/tests.
+- Read process prompt at docs/rust_docs/excel_diff_meta_programming.md and implementer.md to align with roles.
+- Noted branch name 2025-11-28b-diffop-pg4 (decision header references 2025-11-28-diffop-pg4).
+- Starting implementation: need new diff module, public re-exports, and PG4 tests per spec.
+- Added core/src/diff.rs with DiffOp, DiffReport, SheetId alias, RowSignature/ColSignature and serde tags per PG4 spec; re-exported via core/src/lib.rs.
+- Implemented PG4 test suite in core/tests/pg4_diffop_tests.rs covering construction, JSON shape/omission rules, round-trips, and DiffReport ordering.
+- Ran cargo fmt, cargo clippy --all-targets --all-features (-D warnings); no warnings.
+- Ran cargo test from core/; all suites passed including new PG4 diffop tests.

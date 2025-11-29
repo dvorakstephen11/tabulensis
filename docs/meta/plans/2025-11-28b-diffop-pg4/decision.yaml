@@ -1,0 +1,50 @@
+# File: docs/meta/plans/2025-11-28-diffop-pg4/decision.yaml
+
+work_type: milestone_progress
+target_subsystem: diff_layer.diffop_types_and_json_contract
+branch_name: 2025-11-28-diffop-pg4
+
+rationale:
+  - PG1–PG3 grid IR, addressing, and CellSnapshot semantics are implemented and fully tested, but the DiffOp layer described in excel_diff_specification.md Section 6 is still missing from the codebase.
+  - The current JSON output surface exposes only CellDiff (per-cell JSON) and bypasses the staged DiffOp pipeline, which the testing plan and product docs treat as the canonical diff representation.
+  - The testing plan’s Phase 3 PG4 milestone is explicitly about type-level DiffOp coverage and JSON wire-format stability, with no grid-alignment algorithms required; this matches the current maturity of the grid layer.
+  - Having a stable DiffOp + DiffReport contract is a prerequisite for later milestones (PG5/PG6 grid diff, G1–G7 sheet-level tests, D1–D7 database mode, and M6 query diff), and for any frontend/CLI integration that consumes structured diffs instead of ad-hoc JSON.
+  - CellSnapshot JSON and equality semantics were just hardened (PG3), giving us a solid payload type to embed in CellEdited DiffOps without reworking snapshots later.
+  - Recent test results show a healthy, green baseline across container, DataMashup framing, PG1–PG3, and JSON cell diff tests, making this a good moment to extend the public diff surface rather than tackling heavier algorithmic work.
+
+risks_of_deferral:
+  - Grid diff (PG5/G1–G7) and database-mode diff (D1–D7) would be forced to invent ad-hoc types or reuse the CellDiff JSON surface, increasing the risk of architectural drift away from the spec’s DiffOp-centric design.
+  - Frontend / CLI experiments would have to target unstable or interim formats, causing churn and possible breaking changes once the DiffOp contract finally lands.
+  - Later, when grid and M diff algorithms are more complex, changing or introducing DiffOp types will be riskier and harder to retrofit into existing tests and scenarios.
+  - The meta process and testing plan both expect PG4 to lock the type- and JSON-level DiffOp contract relatively early; continued omission makes subsequent planning and verification fuzzier.
+
+references:
+  - docs/rust_docs/excel_diff_specification.md
+  - docs/rust_docs/excel_diff_testing_plan.md
+  - docs/rust_docs/excel_diff_difficulty_analysis.md
+  - core/src/workbook.rs
+  - core/src/output/json.rs
+  - core/tests/pg3_snapshot_tests.rs
+  - core/tests/output_tests.rs
+  - docs/meta/plans/2025-11-28-cell-snapshots-pg3/spec.md
+  - docs/meta/plans/2025-11-28-cell-snapshots-pg3/decision.yaml
+
+difficulty_estimate:
+  value: 3
+  scale_notes: >
+    10 corresponds to the hardest planned work items, such as the high-performance
+    2D grid diff and adversarial alignment pipeline (H1 in the difficulty analysis:
+    large-sheet Hybrid Alignment + move detection powering G8–G13 and later D-series tests).
+  reasoning: >
+    This cycle is limited to adding domain types and JSON serialization/round-trip
+    tests for DiffOp and a small DiffReport container. It does not implement grid
+    alignment, query diff algorithms, or performance-critical logic.
+
+deferred_items_addressed:
+  - description: >
+      None explicitly: previous cycles’ findings for container/grid IR, DataMashup
+      framing, snapshots, and JSON cell diff were remediated in their own rounds.
+      No outstanding “Minor – defer to future cycle” items are visible in the
+      combined activity logs for those areas.
+    source: combined_activity_logs.txt
+    status: no_known_outstanding_items
