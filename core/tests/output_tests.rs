@@ -1,6 +1,9 @@
 use excel_diff::{
-    ContainerError, DiffOp, DiffReport, ExcelOpenError,
-    output::json::{CellDiff, diff_workbooks_to_json, serialize_cell_diffs},
+    CellAddress, CellSnapshot, CellValue, ContainerError, DiffOp, DiffReport, ExcelOpenError,
+    output::json::{
+        CellDiff, diff_report_to_cell_diffs, diff_workbooks_to_json, serialize_cell_diffs,
+        serialize_diff_report,
+    },
 };
 use serde_json::Value;
 
@@ -14,6 +17,95 @@ fn render_value(value: &Option<excel_diff::CellValue>) -> Option<String> {
         Some(excel_diff::CellValue::Bool(b)) => Some(b.to_string()),
         None => None,
     }
+}
+
+fn make_cell_snapshot(addr: CellAddress, value: Option<CellValue>) -> CellSnapshot {
+    CellSnapshot {
+        addr,
+        value,
+        formula: None,
+    }
+}
+
+#[test]
+fn diff_report_to_cell_diffs_filters_non_cell_ops() {
+    let addr1 = CellAddress::from_indices(0, 0);
+    let addr2 = CellAddress::from_indices(1, 1);
+
+    let report = DiffReport::new(vec![
+        DiffOp::SheetAdded {
+            sheet: "SheetAdded".into(),
+        },
+        DiffOp::cell_edited(
+            "Sheet1".into(),
+            addr1,
+            make_cell_snapshot(addr1, Some(CellValue::Number(1.0))),
+            make_cell_snapshot(addr1, Some(CellValue::Number(2.0))),
+        ),
+        DiffOp::RowAdded {
+            sheet: "Sheet1".into(),
+            row_idx: 5,
+            row_signature: None,
+        },
+        DiffOp::cell_edited(
+            "Sheet2".into(),
+            addr2,
+            make_cell_snapshot(addr2, Some(CellValue::Text("old".into()))),
+            make_cell_snapshot(addr2, Some(CellValue::Text("new".into()))),
+        ),
+        DiffOp::SheetRemoved {
+            sheet: "OldSheet".into(),
+        },
+    ]);
+
+    let cell_diffs = diff_report_to_cell_diffs(&report);
+    assert_eq!(
+        cell_diffs.len(),
+        2,
+        "only CellEdited ops should be projected"
+    );
+
+    assert_eq!(cell_diffs[0].coords, addr1.to_a1());
+    assert_eq!(cell_diffs[0].value_file1, Some("1".into()));
+    assert_eq!(cell_diffs[0].value_file2, Some("2".into()));
+
+    assert_eq!(cell_diffs[1].coords, addr2.to_a1());
+    assert_eq!(cell_diffs[1].value_file1, Some("old".into()));
+    assert_eq!(cell_diffs[1].value_file2, Some("new".into()));
+}
+
+#[test]
+fn diff_report_to_cell_diffs_maps_values_correctly() {
+    let addr_num = CellAddress::from_indices(2, 2); // C3
+    let addr_bool = CellAddress::from_indices(3, 3); // D4
+
+    let report = DiffReport::new(vec![
+        DiffOp::cell_edited(
+            "SheetX".into(),
+            addr_num,
+            make_cell_snapshot(addr_num, Some(CellValue::Number(42.5))),
+            make_cell_snapshot(addr_num, Some(CellValue::Number(43.5))),
+        ),
+        DiffOp::cell_edited(
+            "SheetX".into(),
+            addr_bool,
+            make_cell_snapshot(addr_bool, Some(CellValue::Bool(true))),
+            make_cell_snapshot(addr_bool, Some(CellValue::Bool(false))),
+        ),
+    ]);
+
+    let cell_diffs = diff_report_to_cell_diffs(&report);
+    assert_eq!(cell_diffs.len(), 2);
+
+    let number_diff = &cell_diffs[0];
+    assert_eq!(number_diff.coords, addr_num.to_a1());
+    assert_eq!(number_diff.value_file1, Some("42.5".into()));
+    assert_eq!(number_diff.value_file2, Some("43.5".into()));
+
+    let bool_diff = &cell_diffs[1];
+    assert_eq!(bool_diff.coords, addr_bool.to_a1());
+    assert_eq!(bool_diff.value_file1, Some("true".into()));
+    assert_eq!(bool_diff.value_file2, Some("false".into()));
 }
 
 #[test]
@@ -140,4 +232,89 @@ fn test_diff_workbooks_to_json_reports_invalid_zip() {
         ),
         "expected container error, got {err}"
     );
+}
+
+#[test]
+fn serialize_diff_report_nan_maps_to_serialization_error() {
+    let addr = CellAddress::from_indices(0, 0);
+    let report = DiffReport::new(vec![DiffOp::cell_edited(
+        "Sheet1".into(),
+        addr,
+        make_cell_snapshot(addr, Some(CellValue::Number(f64::NAN))),
+        make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
+    )]);
+
+    let err = serialize_diff_report(&report).expect_err("NaN should fail to serialize");
+    let wrapped = ExcelOpenError::SerializationError(err.to_string());
+
+    match wrapped {
+        ExcelOpenError::SerializationError(msg) => {
+            assert!(
+                msg.to_lowercase().contains("nan"),
+                "error message should mention NaN for clarity"
+            );
+        }
+        other => panic!("expected SerializationError, got {other:?}"),
+    }
+}
+
+#[test]
+fn serialize_diff_report_infinity_maps_to_serialization_error() {
+    let addr = CellAddress::from_indices(0, 0);
+    let report = DiffReport::new(vec![DiffOp::cell_edited(
+        "Sheet1".into(),
+        addr,
+        make_cell_snapshot(addr, Some(CellValue::Number(f64::INFINITY))),
+        make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
+    )]);
+
+    let err = serialize_diff_report(&report).expect_err("Infinity should fail to serialize");
+    let wrapped = ExcelOpenError::SerializationError(err.to_string());
+    match wrapped {
+        ExcelOpenError::SerializationError(msg) => {
+            assert!(
+                msg.to_lowercase().contains("infinity"),
+                "error message should mention infinity for clarity"
+            );
+        }
+        other => panic!("expected SerializationError, got {other:?}"),
+    }
+}
+
+#[test]
+fn serialize_diff_report_neg_infinity_maps_to_serialization_error() {
+    let addr = CellAddress::from_indices(0, 0);
+    let report = DiffReport::new(vec![DiffOp::cell_edited(
+        "Sheet1".into(),
+        addr,
+        make_cell_snapshot(addr, Some(CellValue::Number(f64::NEG_INFINITY))),
+        make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
+    )]);
+
+    let err = serialize_diff_report(&report).expect_err("NEG_INFINITY should fail to serialize");
+    let wrapped = ExcelOpenError::SerializationError(err.to_string());
+    match wrapped {
+        ExcelOpenError::SerializationError(msg) => {
+            assert!(
+                msg.to_lowercase().contains("infinity"),
+                "error message should mention infinity for clarity"
+            );
+        }
+        other => panic!("expected SerializationError, got {other:?}"),
+    }
+}
+
+#[test]
+fn serialize_diff_report_with_finite_numbers_succeeds() {
+    let addr = CellAddress::from_indices(1, 1);
+    let report = DiffReport::new(vec![DiffOp::cell_edited(
+        "Sheet1".into(),
+        addr,
+        make_cell_snapshot(addr, Some(CellValue::Number(2.5))),
+        make_cell_snapshot(addr, Some(CellValue::Number(3.5))),
+    )]);
+
+    let json = serialize_diff_report(&report).expect("finite values should serialize");
+    let parsed: DiffReport = serde_json::from_str(&json).expect("json should parse");
+    assert_eq!(parsed.ops.len(), 1);
 }

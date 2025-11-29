@@ -1200,7 +1200,7 @@ For iteration, sparse grids are faster when sparsity > 50% because we only visit
 
 ### 8.3 Signature computation
 
-Computing all signatures is O(R × C) in the worst case but O(populated_cells) in practice for sparse grids. Signatures are computed lazily (only when needed) or eagerly via `compute_all_signatures()`.
+Computing all signatures currently walks the full `nrows x ncols` used range, so complexity is effectively O(R * C) even on sparse sheets. The O(populated_cells) claim is aspirational and will require a future H1 perf pass that aggregates only populated cells. Signatures are computed lazily (only when needed) or eagerly via `compute_all_signatures()`.
 
 ---
 

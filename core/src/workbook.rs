@@ -389,4 +389,23 @@ mod tests {
         };
         assert_eq!(snap1, snap2);
     }
+
+    #[test]
+    fn cellvalue_as_text_number_bool_match_variants() {
+        let text = CellValue::Text("abc".into());
+        let number = CellValue::Number(5.0);
+        let boolean = CellValue::Bool(true);
+
+        assert_eq!(text.as_text(), Some("abc"));
+        assert_eq!(text.as_number(), None);
+        assert_eq!(text.as_bool(), None);
+
+        assert_eq!(number.as_text(), None);
+        assert_eq!(number.as_number(), Some(5.0));
+        assert_eq!(number.as_bool(), None);
+
+        assert_eq!(boolean.as_text(), None);
+        assert_eq!(boolean.as_number(), None);
+        assert_eq!(boolean.as_bool(), Some(true));
+    }
 }

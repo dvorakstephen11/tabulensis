@@ -48,3 +48,35 @@ fn sparse_grid_memory_efficiency() {
     let grid = Grid::new(10_000, 1_000);
     assert!(std::mem::size_of_val(&grid) < 1024);
 }
+
+#[test]
+fn rows_iter_covers_all_rows() {
+    let grid = Grid::new(3, 5);
+    let rows: Vec<u32> = grid.rows_iter().collect();
+    assert_eq!(rows, vec![0, 1, 2]);
+}
+
+#[test]
+fn cols_iter_covers_all_cols() {
+    let grid = Grid::new(4, 2);
+    let cols: Vec<u32> = grid.cols_iter().collect();
+    assert_eq!(cols, vec![0, 1]);
+}
+
+#[test]
+fn rows_iter_and_get_are_consistent() {
+    let mut grid = Grid::new(2, 2);
+    grid.insert(Cell {
+        row: 1,
+        col: 1,
+        address: CellAddress::from_indices(1, 1),
+        value: Some(CellValue::Number(1.0)),
+        formula: None,
+    });
+
+    for r in grid.rows_iter() {
+        for c in grid.cols_iter() {
+            let _ = grid.get(r, c);
+        }
+    }
+}

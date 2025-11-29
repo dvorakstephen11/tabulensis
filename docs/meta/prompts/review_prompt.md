@@ -12,8 +12,12 @@
     Cargo.toml
     src/
       addressing.rs
+      container.rs
+      datamashup_framing.rs
       diff.rs
+      engine.rs
       excel_open_xml.rs
+      grid_parser.rs
       lib.rs
       main.rs
       workbook.rs
@@ -23,12 +27,15 @@
     tests/
       addressing_pg2_tests.rs
       data_mashup_tests.rs
+      engine_tests.rs
       excel_open_xml_tests.rs
       integration_test.rs
       output_tests.rs
       pg1_ir_tests.rs
       pg3_snapshot_tests.rs
       pg4_diffop_tests.rs
+      signature_tests.rs
+      sparse_grid_tests.rs
       common/
         mod.rs
   fixtures/
@@ -132,12 +139,12 @@ edition = "2024"
 
 [features]
 default = ["excel-open-xml"]
-excel-open-xml = ["dep:zip", "dep:quick-xml"]
+excel-open-xml = []
 
 [dependencies]
-quick-xml = { version = "0.32", optional = true }
+quick-xml = "0.32"
 thiserror = "1.0"
-zip = { version = "0.6", default-features = false, features = ["deflate"], optional = true }
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 base64 = "0.22"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -245,25 +252,501 @@ mod tests {
 
 ---
 
+### File: `core\src\container.rs`
+
+```rust
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
+use thiserror::Error;
+use zip::ZipArchive;
+use zip::result::ZipError;
+
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum ContainerError {
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("not a ZIP container")]
+    NotZipContainer,
+    #[error("not an OPC package (missing [Content_Types].xml)")]
+    NotOpcPackage,
+}
+
+pub struct OpcContainer {
+    pub(crate) archive: ZipArchive<File>,
+}
+
+impl OpcContainer {
+    pub fn open(path: impl AsRef<Path>) -> Result<OpcContainer, ContainerError> {
+        let file = File::open(path)?;
+        let archive = ZipArchive::new(file).map_err(|err| match err {
+            ZipError::InvalidArchive(_) | ZipError::UnsupportedArchive(_) => {
+                ContainerError::NotZipContainer
+            }
+            ZipError::Io(e) => ContainerError::Io(e),
+            other => ContainerError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                other.to_string(),
+            )),
+        })?;
+
+        let mut container = OpcContainer { archive };
+        if container.read_file("[Content_Types].xml").is_err() {
+            return Err(ContainerError::NotOpcPackage);
+        }
+
+        Ok(container)
+    }
+
+    pub fn read_file(&mut self, name: &str) -> Result<Vec<u8>, ZipError> {
+        let mut file = self.archive.by_name(name)?;
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+        Ok(buf)
+    }
+
+    pub fn read_file_optional(&mut self, name: &str) -> Result<Option<Vec<u8>>, std::io::Error> {
+        match self.read_file(name) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(ZipError::FileNotFound) => Ok(None),
+            Err(ZipError::Io(e)) => Err(e),
+            Err(e) => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e.to_string(),
+            )),
+        }
+    }
+
+    pub fn file_names(&self) -> impl Iterator<Item = &str> {
+        self.archive.file_names()
+    }
+
+    pub fn len(&self) -> usize {
+        self.archive.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+```
+
+---
+
+### File: `core\src\datamashup_framing.rs`
+
+```rust
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
+use quick_xml::Reader;
+use quick_xml::events::Event;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum DataMashupError {
+    #[error("base64 decoding failed")]
+    Base64Invalid,
+    #[error("unsupported version: {0}")]
+    UnsupportedVersion(u32),
+    #[error("invalid framing structure")]
+    FramingInvalid,
+    #[error("XML parse error: {0}")]
+    XmlError(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawDataMashup {
+    pub version: u32,
+    pub package_parts: Vec<u8>,
+    pub permissions: Vec<u8>,
+    pub metadata: Vec<u8>,
+    pub permission_bindings: Vec<u8>,
+}
+
+pub fn parse_data_mashup(bytes: &[u8]) -> Result<RawDataMashup, DataMashupError> {
+    const MIN_SIZE: usize = 4 + 4 * 4;
+    if bytes.len() < MIN_SIZE {
+        return Err(DataMashupError::FramingInvalid);
+    }
+
+    let mut offset: usize = 0;
+    let version = read_u32_at(bytes, offset).ok_or(DataMashupError::FramingInvalid)?;
+    offset += 4;
+
+    if version != 0 {
+        return Err(DataMashupError::UnsupportedVersion(version));
+    }
+
+    let package_parts_len = read_length(bytes, offset)?;
+    offset += 4;
+    let package_parts = take_segment(bytes, &mut offset, package_parts_len)?;
+
+    let permissions_len = read_length(bytes, offset)?;
+    offset += 4;
+    let permissions = take_segment(bytes, &mut offset, permissions_len)?;
+
+    let metadata_len = read_length(bytes, offset)?;
+    offset += 4;
+    let metadata = take_segment(bytes, &mut offset, metadata_len)?;
+
+    let permission_bindings_len = read_length(bytes, offset)?;
+    offset += 4;
+    let permission_bindings = take_segment(bytes, &mut offset, permission_bindings_len)?;
+
+    if offset != bytes.len() {
+        return Err(DataMashupError::FramingInvalid);
+    }
+
+    Ok(RawDataMashup {
+        version,
+        package_parts,
+        permissions,
+        metadata,
+        permission_bindings,
+    })
+}
+
+pub fn read_datamashup_text(xml: &[u8]) -> Result<Option<String>, DataMashupError> {
+    let utf8_xml = decode_datamashup_xml(xml)?;
+
+    let mut reader = Reader::from_reader(utf8_xml.as_deref().unwrap_or(xml));
+    reader.config_mut().trim_text(false);
+    let mut buf = Vec::new();
+    let mut in_datamashup = false;
+    let mut found_content: Option<String> = None;
+    let mut content = String::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) if is_datamashup_element(e.name().as_ref()) => {
+                if in_datamashup || found_content.is_some() {
+                    return Err(DataMashupError::FramingInvalid);
+                }
+                in_datamashup = true;
+                content.clear();
+            }
+            Ok(Event::Text(t)) if in_datamashup => {
+                let text = t
+                    .unescape()
+                    .map_err(|e| DataMashupError::XmlError(e.to_string()))?
+                    .into_owned();
+                content.push_str(&text);
+            }
+            Ok(Event::CData(t)) if in_datamashup => {
+                let data = t.into_inner();
+                content.push_str(&String::from_utf8_lossy(&data));
+            }
+            Ok(Event::End(e)) if is_datamashup_element(e.name().as_ref()) => {
+                if !in_datamashup {
+                    return Err(DataMashupError::FramingInvalid);
+                }
+                in_datamashup = false;
+                found_content = Some(content.clone());
+            }
+            Ok(Event::Eof) if in_datamashup => {
+                return Err(DataMashupError::FramingInvalid);
+            }
+            Ok(Event::Eof) => return Ok(found_content),
+            Err(e) => return Err(DataMashupError::XmlError(e.to_string())),
+            _ => {}
+        }
+        buf.clear();
+    }
+}
+
+pub fn decode_datamashup_base64(text: &str) -> Result<Vec<u8>, DataMashupError> {
+    let cleaned: String = text.split_whitespace().collect();
+    STANDARD
+        .decode(cleaned.as_bytes())
+        .map_err(|_| DataMashupError::Base64Invalid)
+}
+
+pub(crate) fn decode_datamashup_xml(xml: &[u8]) -> Result<Option<Vec<u8>>, DataMashupError> {
+    if xml.starts_with(&[0xFF, 0xFE]) {
+        return Ok(Some(decode_utf16_xml(xml, true, true)?));
+    }
+    if xml.starts_with(&[0xFE, 0xFF]) {
+        return Ok(Some(decode_utf16_xml(xml, false, true)?));
+    }
+
+    decode_declared_utf16_without_bom(xml)
+}
+
+fn decode_declared_utf16_without_bom(xml: &[u8]) -> Result<Option<Vec<u8>>, DataMashupError> {
+    let attempt_decode = |little_endian| -> Result<Option<Vec<u8>>, DataMashupError> {
+        if !looks_like_utf16(xml, little_endian) {
+            return Ok(None);
+        }
+        let decoded = decode_utf16_xml(xml, little_endian, false)?;
+        let lower = String::from_utf8_lossy(&decoded).to_ascii_lowercase();
+        if lower.contains("encoding=\"utf-16\"") || lower.contains("encoding='utf-16'") {
+            Ok(Some(decoded))
+        } else {
+            Ok(None)
+        }
+    };
+
+    if let Some(decoded) = attempt_decode(true)? {
+        return Ok(Some(decoded));
+    }
+    attempt_decode(false)
+}
+
+fn looks_like_utf16(xml: &[u8], little_endian: bool) -> bool {
+    if xml.len() < 4 {
+        return false;
+    }
+
+    if little_endian {
+        xml[0] == b'<' && xml[1] == 0 && xml[2] == b'?' && xml[3] == 0
+    } else {
+        xml[0] == 0 && xml[1] == b'<' && xml[2] == 0 && xml[3] == b'?'
+    }
+}
+
+fn decode_utf16_xml(
+    xml: &[u8],
+    little_endian: bool,
+    has_bom: bool,
+) -> Result<Vec<u8>, DataMashupError> {
+    let start = if has_bom { 2 } else { 0 };
+    let body = xml
+        .get(start..)
+        .ok_or_else(|| DataMashupError::XmlError("invalid UTF-16 XML".into()))?;
+    if body.len() % 2 != 0 {
+        return Err(DataMashupError::XmlError(
+            "invalid UTF-16 byte length".into(),
+        ));
+    }
+
+    let mut code_units = Vec::with_capacity(body.len() / 2);
+    for chunk in body.chunks_exact(2) {
+        let unit = if little_endian {
+            u16::from_le_bytes([chunk[0], chunk[1]])
+        } else {
+            u16::from_be_bytes([chunk[0], chunk[1]])
+        };
+        code_units.push(unit);
+    }
+
+    let utf8 = String::from_utf16(&code_units)
+        .map_err(|_| DataMashupError::XmlError("invalid UTF-16 XML".into()))?;
+    Ok(utf8.into_bytes())
+}
+
+fn is_datamashup_element(name: &[u8]) -> bool {
+    match name.iter().rposition(|&b| b == b':') {
+        Some(idx) => name.get(idx + 1..) == Some(b"DataMashup".as_slice()),
+        None => name == b"DataMashup",
+    }
+}
+
+fn read_u32_at(bytes: &[u8], offset: usize) -> Option<u32> {
+    let slice = bytes.get(offset..offset + 4)?;
+    let array: [u8; 4] = slice.try_into().ok()?;
+    Some(u32::from_le_bytes(array))
+}
+
+fn read_length(bytes: &[u8], offset: usize) -> Result<usize, DataMashupError> {
+    let len = read_u32_at(bytes, offset).ok_or(DataMashupError::FramingInvalid)?;
+    usize::try_from(len).map_err(|_| DataMashupError::FramingInvalid)
+}
+
+fn take_segment(bytes: &[u8], offset: &mut usize, len: usize) -> Result<Vec<u8>, DataMashupError> {
+    let start = *offset;
+    let end = start
+        .checked_add(len)
+        .ok_or(DataMashupError::FramingInvalid)?;
+    if end > bytes.len() {
+        return Err(DataMashupError::FramingInvalid);
+    }
+
+    let segment = bytes[start..end].to_vec();
+    *offset = end;
+    Ok(segment)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        DataMashupError, RawDataMashup, decode_datamashup_base64, parse_data_mashup,
+        read_datamashup_text,
+    };
+
+    fn build_dm_bytes(
+        version: u32,
+        package_parts: &[u8],
+        permissions: &[u8],
+        metadata: &[u8],
+        permission_bindings: &[u8],
+    ) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&version.to_le_bytes());
+        bytes.extend_from_slice(&(package_parts.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(package_parts);
+        bytes.extend_from_slice(&(permissions.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(permissions);
+        bytes.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(metadata);
+        bytes.extend_from_slice(&(permission_bindings.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(permission_bindings);
+        bytes
+    }
+
+    #[test]
+    fn parse_zero_length_stream_succeeds() {
+        let bytes = build_dm_bytes(0, b"", b"", b"", b"");
+        let parsed = parse_data_mashup(&bytes).expect("zero-length sections should parse");
+        assert_eq!(
+            parsed,
+            RawDataMashup {
+                version: 0,
+                package_parts: Vec::new(),
+                permissions: Vec::new(),
+                metadata: Vec::new(),
+                permission_bindings: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_basic_non_zero_lengths() {
+        let bytes = build_dm_bytes(0, b"AAAA", b"BBBB", b"CCCC", b"DDDD");
+        let parsed = parse_data_mashup(&bytes).expect("non-zero lengths should parse");
+        assert_eq!(parsed.version, 0);
+        assert_eq!(parsed.package_parts, b"AAAA");
+        assert_eq!(parsed.permissions, b"BBBB");
+        assert_eq!(parsed.metadata, b"CCCC");
+        assert_eq!(parsed.permission_bindings, b"DDDD");
+    }
+
+    #[test]
+    fn unsupported_version_is_rejected() {
+        let bytes = build_dm_bytes(1, b"AAAA", b"BBBB", b"CCCC", b"DDDD");
+        let err = parse_data_mashup(&bytes).expect_err("version 1 should be unsupported");
+        assert!(matches!(err, DataMashupError::UnsupportedVersion(1)));
+    }
+
+    #[test]
+    fn truncated_stream_errors() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&100u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        let err = parse_data_mashup(&bytes).expect_err("length overflows buffer");
+        assert!(matches!(err, DataMashupError::FramingInvalid));
+    }
+
+    #[test]
+    fn trailing_bytes_are_invalid() {
+        let mut bytes = build_dm_bytes(0, b"", b"", b"", b"");
+        bytes.push(0xFF);
+        let err = parse_data_mashup(&bytes).expect_err("trailing bytes should fail");
+        assert!(matches!(err, DataMashupError::FramingInvalid));
+    }
+
+    #[test]
+    fn too_short_stream_is_framing_invalid() {
+        let bytes = vec![0u8; 8];
+        let err =
+            parse_data_mashup(&bytes).expect_err("buffer shorter than header must be invalid");
+        assert!(matches!(err, DataMashupError::FramingInvalid));
+    }
+
+    #[test]
+    fn utf16_datamashup_xml_decodes_correctly() {
+        let xml_text = r#"<?xml version="1.0" encoding="utf-16"?><root xmlns:dm="http://schemas.microsoft.com/DataMashup"><dm:DataMashup>QQ==</dm:DataMashup></root>"#;
+        let mut xml_bytes = Vec::with_capacity(2 + xml_text.len() * 2);
+        xml_bytes.extend_from_slice(&[0xFF, 0xFE]);
+        for unit in xml_text.encode_utf16() {
+            xml_bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+
+        let text = read_datamashup_text(&xml_bytes)
+            .expect("UTF-16 XML should parse")
+            .expect("DataMashup element should be found");
+        assert_eq!(text.trim(), "QQ==");
+    }
+
+    #[test]
+    fn utf16_without_bom_with_declared_encoding_parses() {
+        let xml_text = r#"<?xml version="1.0" encoding="utf-16"?><root xmlns:dm="http://schemas.microsoft.com/DataMashup"><dm:DataMashup>QQ==</dm:DataMashup></root>"#;
+        for &little_endian in &[true, false] {
+            let mut xml_bytes = Vec::with_capacity(xml_text.len() * 2);
+            for unit in xml_text.encode_utf16() {
+                let bytes = if little_endian {
+                    unit.to_le_bytes()
+                } else {
+                    unit.to_be_bytes()
+                };
+                xml_bytes.extend_from_slice(&bytes);
+            }
+
+            let text = read_datamashup_text(&xml_bytes)
+                .expect("UTF-16 XML without BOM should parse when declared")
+                .expect("DataMashup element should be found");
+            assert_eq!(text.trim(), "QQ==");
+        }
+    }
+
+    #[test]
+    fn elements_with_datamashup_suffix_are_ignored() {
+        let xml = br#"<?xml version="1.0"?><root><FooDataMashup>QQ==</FooDataMashup></root>"#;
+        let result = read_datamashup_text(xml).expect("parsing should succeed");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn duplicate_sibling_datamashup_elements_error() {
+        let xml = br#"<?xml version="1.0"?>
+<root xmlns:dm="http://schemas.microsoft.com/DataMashup">
+  <dm:DataMashup>QQ==</dm:DataMashup>
+  <dm:DataMashup>QQ==</dm:DataMashup>
+</root>"#;
+        let err = read_datamashup_text(xml).expect_err("duplicate DataMashup elements should fail");
+        assert!(matches!(err, DataMashupError::FramingInvalid));
+    }
+
+    #[test]
+    fn decode_datamashup_base64_rejects_invalid() {
+        let err = decode_datamashup_base64("!!!").expect_err("invalid base64 should fail");
+        assert!(matches!(err, DataMashupError::Base64Invalid));
+    }
+
+    #[test]
+    fn fuzz_style_never_panics() {
+        for seed in 0u64..32 {
+            let len = (seed as usize * 7 % 48) + (seed as usize % 5);
+            let mut state = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let mut bytes = Vec::with_capacity(len);
+            for _ in 0..len {
+                state = state
+                    .wrapping_mul(2862933555777941757)
+                    .wrapping_add(3037000493);
+                bytes.push((state >> 32) as u8);
+            }
+            let _ = parse_data_mashup(&bytes);
+        }
+    }
+}
+```
+
+---
+
 ### File: `core\src\diff.rs`
 
 ```rust
-use crate::workbook::{CellAddress, CellSnapshot};
+use crate::workbook::{CellAddress, CellSnapshot, ColSignature, RowSignature};
 
 pub type SheetId = String;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct RowSignature {
-    pub hash: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct ColSignature {
-    pub hash: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind")]
+#[non_exhaustive]
 pub enum DiffOp {
     SheetAdded {
         sheet: SheetId,
@@ -344,6 +827,169 @@ impl DiffReport {
         }
     }
 }
+
+impl DiffOp {
+    pub fn cell_edited(
+        sheet: SheetId,
+        addr: CellAddress,
+        from: CellSnapshot,
+        to: CellSnapshot,
+    ) -> DiffOp {
+        debug_assert_eq!(from.addr, addr, "from.addr must match canonical addr");
+        debug_assert_eq!(to.addr, addr, "to.addr must match canonical addr");
+        DiffOp::CellEdited {
+            sheet,
+            addr,
+            from,
+            to,
+        }
+    }
+
+    pub fn row_added(sheet: SheetId, row_idx: u32, row_signature: Option<RowSignature>) -> DiffOp {
+        DiffOp::RowAdded {
+            sheet,
+            row_idx,
+            row_signature,
+        }
+    }
+
+    pub fn row_removed(
+        sheet: SheetId,
+        row_idx: u32,
+        row_signature: Option<RowSignature>,
+    ) -> DiffOp {
+        DiffOp::RowRemoved {
+            sheet,
+            row_idx,
+            row_signature,
+        }
+    }
+
+    pub fn column_added(
+        sheet: SheetId,
+        col_idx: u32,
+        col_signature: Option<ColSignature>,
+    ) -> DiffOp {
+        DiffOp::ColumnAdded {
+            sheet,
+            col_idx,
+            col_signature,
+        }
+    }
+
+    pub fn column_removed(
+        sheet: SheetId,
+        col_idx: u32,
+        col_signature: Option<ColSignature>,
+    ) -> DiffOp {
+        DiffOp::ColumnRemoved {
+            sheet,
+            col_idx,
+            col_signature,
+        }
+    }
+
+    pub fn block_moved_rows(
+        sheet: SheetId,
+        src_start_row: u32,
+        row_count: u32,
+        dst_start_row: u32,
+        block_hash: Option<u64>,
+    ) -> DiffOp {
+        DiffOp::BlockMovedRows {
+            sheet,
+            src_start_row,
+            row_count,
+            dst_start_row,
+            block_hash,
+        }
+    }
+
+    pub fn block_moved_columns(
+        sheet: SheetId,
+        src_start_col: u32,
+        col_count: u32,
+        dst_start_col: u32,
+        block_hash: Option<u64>,
+    ) -> DiffOp {
+        DiffOp::BlockMovedColumns {
+            sheet,
+            src_start_col,
+            col_count,
+            dst_start_col,
+            block_hash,
+        }
+    }
+}
+```
+
+---
+
+### File: `core\src\engine.rs`
+
+```rust
+use crate::diff::{DiffOp, DiffReport, SheetId};
+use crate::workbook::{CellAddress, CellSnapshot, Grid, Sheet, Workbook};
+use std::collections::HashMap;
+
+pub fn diff_workbooks(old: &Workbook, new: &Workbook) -> DiffReport {
+    let mut ops = Vec::new();
+
+    let old_sheets: HashMap<&str, &Sheet> =
+        old.sheets.iter().map(|s| (s.name.as_str(), s)).collect();
+    let new_sheets: HashMap<&str, &Sheet> =
+        new.sheets.iter().map(|s| (s.name.as_str(), s)).collect();
+
+    let mut all_names: Vec<&str> = old_sheets
+        .keys()
+        .chain(new_sheets.keys())
+        .copied()
+        .collect();
+    all_names.sort_unstable();
+    all_names.dedup();
+
+    for name in all_names {
+        let sheet_id: SheetId = name.to_string();
+
+        match (old_sheets.get(name), new_sheets.get(name)) {
+            (None, Some(_)) => {
+                ops.push(DiffOp::SheetAdded { sheet: sheet_id });
+            }
+            (Some(_), None) => {
+                ops.push(DiffOp::SheetRemoved { sheet: sheet_id });
+            }
+            (Some(old_sheet), Some(new_sheet)) => {
+                diff_grids(&sheet_id, &old_sheet.grid, &new_sheet.grid, &mut ops);
+            }
+            (None, None) => unreachable!(),
+        }
+    }
+
+    DiffReport::new(ops)
+}
+
+fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>) {
+    let max_rows = old.nrows.max(new.nrows);
+    let max_cols = old.ncols.max(new.ncols);
+
+    for row in 0..max_rows {
+        for col in 0..max_cols {
+            let old_cell = old.get(row, col);
+            let new_cell = new.get(row, col);
+
+            let old_snapshot = old_cell.map(CellSnapshot::from_cell);
+            let new_snapshot = new_cell.map(CellSnapshot::from_cell);
+
+            if old_snapshot != new_snapshot {
+                let addr = CellAddress::from_indices(row, col);
+                let from = old_snapshot.unwrap_or_else(|| CellSnapshot::empty(addr));
+                let to = new_snapshot.unwrap_or_else(|| CellSnapshot::empty(addr));
+
+                ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
+            }
+        }
+    }
+}
 ```
 
 ---
@@ -351,98 +997,71 @@ impl DiffReport {
 ### File: `core\src\excel_open_xml.rs`
 
 ```rust
-use crate::addressing::address_to_index;
-use crate::workbook::{Cell, CellAddress, CellValue, Grid, Row, Sheet, SheetKind, Workbook};
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
-use quick_xml::Reader;
-use quick_xml::events::{BytesStart, Event};
+use crate::container::{ContainerError, OpcContainer};
+use crate::datamashup_framing::{
+    DataMashupError, RawDataMashup, decode_datamashup_base64, parse_data_mashup,
+    read_datamashup_text,
+};
+use crate::grid_parser::{
+    GridParseError, parse_relationships, parse_shared_strings, parse_sheet_xml, parse_workbook_xml,
+    resolve_sheet_target,
+};
+use crate::workbook::{Sheet, SheetKind, Workbook};
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::Read;
 use std::path::Path;
 use thiserror::Error;
-use zip::ZipArchive;
-use zip::result::ZipError;
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ExcelOpenError {
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("not a ZIP container")]
-    NotZipContainer,
-    #[error("not an Excel Open XML package")]
-    NotExcelOpenXml,
+    #[error("container error: {0}")]
+    Container(#[from] ContainerError),
+    #[error("grid parse error: {0}")]
+    GridParse(#[from] GridParseError),
+    #[error("DataMashup error: {0}")]
+    DataMashup(#[from] DataMashupError),
     #[error("workbook.xml missing or unreadable")]
     WorkbookXmlMissing,
     #[error("worksheet XML missing for sheet {sheet_name}")]
     WorksheetXmlMissing { sheet_name: String },
-    #[error("XML parse error: {0}")]
-    XmlParseError(String),
-    #[error("DataMashup base64 invalid")]
-    DataMashupBase64Invalid,
-    #[error("DataMashup unsupported version {version}")]
-    DataMashupUnsupportedVersion { version: u32 },
-    #[error("DataMashup framing invalid")]
-    DataMashupFramingInvalid,
-}
-
-struct SheetDescriptor {
-    name: String,
-    rel_id: Option<String>,
-    sheet_id: Option<u32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RawDataMashup {
-    pub version: u32,
-    pub package_parts: Vec<u8>,
-    pub permissions: Vec<u8>,
-    pub metadata: Vec<u8>,
-    pub permission_bindings: Vec<u8>,
+    #[error("serialization error: {0}")]
+    SerializationError(String),
 }
 
 pub fn open_workbook(path: impl AsRef<Path>) -> Result<Workbook, ExcelOpenError> {
-    let mut archive = open_zip(path.as_ref())?;
+    let mut container = OpcContainer::open(path.as_ref())?;
 
-    if archive.by_name("[Content_Types].xml").is_err() {
-        return Err(ExcelOpenError::NotExcelOpenXml);
-    }
-
-    let shared_strings = match read_zip_file_optional(&mut archive, "xl/sharedStrings.xml") {
-        Ok(Some(bytes)) => parse_shared_strings(&bytes)?,
-        Ok(None) => Vec::new(),
-        Err(e) => return Err(e),
+    let shared_strings = match container
+        .read_file_optional("xl/sharedStrings.xml")
+        .map_err(ContainerError::from)?
+    {
+        Some(bytes) => parse_shared_strings(&bytes)?,
+        None => Vec::new(),
     };
 
-    let workbook_bytes = match read_zip_file(&mut archive, "xl/workbook.xml") {
-        Ok(bytes) => bytes,
-        Err(ZipError::FileNotFound) => return Err(ExcelOpenError::WorkbookXmlMissing),
-        Err(ZipError::Io(e)) => return Err(ExcelOpenError::Io(e)),
-        Err(e) => return Err(ExcelOpenError::XmlParseError(e.to_string())),
-    };
+    let workbook_bytes = container
+        .read_file("xl/workbook.xml")
+        .map_err(|_| ExcelOpenError::WorkbookXmlMissing)?;
 
     let sheets = parse_workbook_xml(&workbook_bytes)?;
 
-    let relationships = match read_zip_file_optional(&mut archive, "xl/_rels/workbook.xml.rels") {
-        Ok(Some(bytes)) => parse_relationships(&bytes)?,
-        Ok(None) => HashMap::new(),
-        Err(e) => return Err(e),
+    let relationships = match container
+        .read_file_optional("xl/_rels/workbook.xml.rels")
+        .map_err(ContainerError::from)?
+    {
+        Some(bytes) => parse_relationships(&bytes)?,
+        None => HashMap::new(),
     };
 
     let mut sheet_ir = Vec::with_capacity(sheets.len());
     for (idx, sheet) in sheets.iter().enumerate() {
         let target = resolve_sheet_target(sheet, &relationships, idx);
-        let sheet_bytes = match read_zip_file(&mut archive, &target) {
-            Ok(bytes) => bytes,
-            Err(ZipError::FileNotFound) => {
-                return Err(ExcelOpenError::WorksheetXmlMissing {
+        let sheet_bytes =
+            container
+                .read_file(&target)
+                .map_err(|_| ExcelOpenError::WorksheetXmlMissing {
                     sheet_name: sheet.name.clone(),
-                });
-            }
-            Err(ZipError::Io(e)) => return Err(ExcelOpenError::Io(e)),
-            Err(e) => return Err(ExcelOpenError::XmlParseError(e.to_string())),
-        };
+                })?;
         let grid = parse_sheet_xml(&sheet_bytes, &shared_strings)?;
         sheet_ir.push(Sheet {
             name: sheet.name.clone(),
@@ -455,288 +1074,69 @@ pub fn open_workbook(path: impl AsRef<Path>) -> Result<Workbook, ExcelOpenError>
 }
 
 pub fn open_data_mashup(path: impl AsRef<Path>) -> Result<Option<RawDataMashup>, ExcelOpenError> {
-    let mut archive = open_zip(path.as_ref())?;
+    let mut container = OpcContainer::open(path.as_ref())?;
+    let mut found: Option<RawDataMashup> = None;
 
-    if archive.by_name("[Content_Types].xml").is_err() {
-        return Err(ExcelOpenError::NotExcelOpenXml);
-    }
-
-    let dm_bytes = match extract_datamashup_bytes_from_excel(&mut archive)? {
-        Some(bytes) => bytes,
-        None => return Ok(None),
-    };
-
-    parse_data_mashup(&dm_bytes).map(Some)
-}
-
-pub(crate) fn parse_data_mashup(bytes: &[u8]) -> Result<RawDataMashup, ExcelOpenError> {
-    const MIN_SIZE: usize = 4 + 4 * 4;
-    if bytes.len() < MIN_SIZE {
-        return Err(ExcelOpenError::DataMashupFramingInvalid);
-    }
-
-    let mut offset: usize = 0;
-    let version = read_u32_at(bytes, offset).ok_or(ExcelOpenError::DataMashupFramingInvalid)?;
-    offset += 4;
-
-    if version != 0 {
-        return Err(ExcelOpenError::DataMashupUnsupportedVersion { version });
-    }
-
-    let package_parts_len = read_length(bytes, offset)?;
-    offset += 4;
-    let package_parts = take_segment(bytes, &mut offset, package_parts_len)?;
-
-    let permissions_len = read_length(bytes, offset)?;
-    offset += 4;
-    let permissions = take_segment(bytes, &mut offset, permissions_len)?;
-
-    let metadata_len = read_length(bytes, offset)?;
-    offset += 4;
-    let metadata = take_segment(bytes, &mut offset, metadata_len)?;
-
-    let permission_bindings_len = read_length(bytes, offset)?;
-    offset += 4;
-    let permission_bindings = take_segment(bytes, &mut offset, permission_bindings_len)?;
-
-    if offset != bytes.len() {
-        return Err(ExcelOpenError::DataMashupFramingInvalid);
-    }
-
-    Ok(RawDataMashup {
-        version,
-        package_parts,
-        permissions,
-        metadata,
-        permission_bindings,
-    })
-}
-
-fn extract_datamashup_bytes_from_excel(
-    archive: &mut ZipArchive<File>,
-) -> Result<Option<Vec<u8>>, ExcelOpenError> {
-    let mut found: Option<Vec<u8>> = None;
-
-    for i in 0..archive.len() {
-        let mut file = match archive.by_index(i) {
-            Ok(f) => f,
-            Err(ZipError::Io(e)) => return Err(ExcelOpenError::Io(e)),
-            Err(e) => return Err(ExcelOpenError::XmlParseError(e.to_string())),
+    for i in 0..container.len() {
+        let name = {
+            let file = container.archive.by_index(i).ok();
+            file.map(|f| f.name().to_string())
         };
-        let name = file.name().to_string();
-        if !name.starts_with("customXml/") || !name.ends_with(".xml") {
-            continue;
-        }
 
-        let mut buf = Vec::new();
-        file.read_to_end(&mut buf).map_err(ExcelOpenError::Io)?;
-
-        if let Some(text) = read_datamashup_text(&buf)? {
-            let decoded = decode_datamashup_base64(&text)?;
-            if found.is_some() {
-                return Err(ExcelOpenError::DataMashupFramingInvalid);
+        if let Some(name) = name {
+            if !name.starts_with("customXml/") || !name.ends_with(".xml") {
+                continue;
             }
-            found = Some(decoded);
+
+            let bytes = container
+                .read_file(&name)
+                .map_err(|e| ContainerError::Io(std::io::Error::other(e.to_string())))?;
+
+            if let Some(text) = read_datamashup_text(&bytes)? {
+                let decoded = decode_datamashup_base64(&text)?;
+                let parsed = parse_data_mashup(&decoded)?;
+                if found.is_some() {
+                    return Err(DataMashupError::FramingInvalid.into());
+                }
+                found = Some(parsed);
+            }
         }
     }
 
     Ok(found)
 }
+```
 
-fn read_datamashup_text(xml: &[u8]) -> Result<Option<String>, ExcelOpenError> {
-    let utf8_xml = decode_datamashup_xml(xml)?;
+---
 
-    let mut reader = Reader::from_reader(utf8_xml.as_deref().unwrap_or(xml));
-    reader.config_mut().trim_text(false);
-    let mut buf = Vec::new();
-    let mut in_datamashup = false;
-    let mut found_content: Option<String> = None;
-    let mut content = String::new();
+### File: `core\src\grid_parser.rs`
 
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) if is_datamashup_element(e.name().as_ref()) => {
-                if in_datamashup || found_content.is_some() {
-                    return Err(ExcelOpenError::DataMashupFramingInvalid);
-                }
-                in_datamashup = true;
-                content.clear();
-            }
-            Ok(Event::Text(t)) if in_datamashup => {
-                let text = t
-                    .unescape()
-                    .map_err(|e| ExcelOpenError::XmlParseError(e.to_string()))?
-                    .into_owned();
-                content.push_str(&text);
-            }
-            Ok(Event::CData(t)) if in_datamashup => {
-                let data = t.into_inner();
-                content.push_str(&String::from_utf8_lossy(&data));
-            }
-            Ok(Event::End(e)) if is_datamashup_element(e.name().as_ref()) => {
-                if !in_datamashup {
-                    return Err(ExcelOpenError::DataMashupFramingInvalid);
-                }
-                in_datamashup = false;
-                found_content = Some(content.clone());
-            }
-            Ok(Event::Eof) if in_datamashup => {
-                return Err(ExcelOpenError::DataMashupFramingInvalid);
-            }
-            Ok(Event::Eof) => return Ok(found_content),
-            Err(e) => return Err(ExcelOpenError::XmlParseError(e.to_string())),
-            _ => {}
-        }
-        buf.clear();
-    }
+```rust
+use crate::addressing::address_to_index;
+use crate::workbook::{Cell, CellAddress, CellValue, Grid};
+use quick_xml::Reader;
+use quick_xml::events::{BytesStart, Event};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum GridParseError {
+    #[error("XML parse error: {0}")]
+    XmlError(String),
+    #[error("invalid cell address: {0}")]
+    InvalidAddress(String),
+    #[error("shared string index {0} out of bounds")]
+    SharedStringOutOfBounds(usize),
 }
 
-fn decode_datamashup_base64(text: &str) -> Result<Vec<u8>, ExcelOpenError> {
-    let cleaned: String = text.split_whitespace().collect();
-    STANDARD
-        .decode(cleaned.as_bytes())
-        .map_err(|_| ExcelOpenError::DataMashupBase64Invalid)
+pub struct SheetDescriptor {
+    pub name: String,
+    pub rel_id: Option<String>,
+    pub sheet_id: Option<u32>,
 }
 
-fn is_datamashup_element(name: &[u8]) -> bool {
-    match name.iter().rposition(|&b| b == b':') {
-        Some(idx) => name.get(idx + 1..) == Some(b"DataMashup".as_slice()),
-        None => name == b"DataMashup",
-    }
-}
-
-fn decode_datamashup_xml(xml: &[u8]) -> Result<Option<Vec<u8>>, ExcelOpenError> {
-    if xml.starts_with(&[0xFF, 0xFE]) {
-        return Ok(Some(decode_utf16_xml(xml, true, true)?));
-    }
-    if xml.starts_with(&[0xFE, 0xFF]) {
-        return Ok(Some(decode_utf16_xml(xml, false, true)?));
-    }
-
-    decode_declared_utf16_without_bom(xml)
-}
-
-fn decode_declared_utf16_without_bom(xml: &[u8]) -> Result<Option<Vec<u8>>, ExcelOpenError> {
-    let attempt_decode = |little_endian| -> Result<Option<Vec<u8>>, ExcelOpenError> {
-        if !looks_like_utf16(xml, little_endian) {
-            return Ok(None);
-        }
-        let decoded = decode_utf16_xml(xml, little_endian, false)?;
-        let lower = String::from_utf8_lossy(&decoded).to_ascii_lowercase();
-        if lower.contains("encoding=\"utf-16\"") || lower.contains("encoding='utf-16'") {
-            Ok(Some(decoded))
-        } else {
-            Ok(None)
-        }
-    };
-
-    if let Some(decoded) = attempt_decode(true)? {
-        return Ok(Some(decoded));
-    }
-    attempt_decode(false)
-}
-
-fn looks_like_utf16(xml: &[u8], little_endian: bool) -> bool {
-    if xml.len() < 4 {
-        return false;
-    }
-
-    if little_endian {
-        xml[0] == b'<' && xml[1] == 0 && xml[2] == b'?' && xml[3] == 0
-    } else {
-        xml[0] == 0 && xml[1] == b'<' && xml[2] == 0 && xml[3] == b'?'
-    }
-}
-
-fn decode_utf16_xml(
-    xml: &[u8],
-    little_endian: bool,
-    has_bom: bool,
-) -> Result<Vec<u8>, ExcelOpenError> {
-    let start = if has_bom { 2 } else { 0 };
-    let body = xml
-        .get(start..)
-        .ok_or_else(|| ExcelOpenError::XmlParseError("invalid UTF-16 XML".into()))?;
-    if body.len() % 2 != 0 {
-        return Err(ExcelOpenError::XmlParseError(
-            "invalid UTF-16 byte length".into(),
-        ));
-    }
-
-    let mut code_units = Vec::with_capacity(body.len() / 2);
-    for chunk in body.chunks_exact(2) {
-        let unit = if little_endian {
-            u16::from_le_bytes([chunk[0], chunk[1]])
-        } else {
-            u16::from_be_bytes([chunk[0], chunk[1]])
-        };
-        code_units.push(unit);
-    }
-
-    let utf8 = String::from_utf16(&code_units)
-        .map_err(|_| ExcelOpenError::XmlParseError("invalid UTF-16 XML".into()))?;
-    Ok(utf8.into_bytes())
-}
-
-fn read_u32_at(bytes: &[u8], offset: usize) -> Option<u32> {
-    let slice = bytes.get(offset..offset + 4)?;
-    let array: [u8; 4] = slice.try_into().ok()?;
-    Some(u32::from_le_bytes(array))
-}
-
-fn read_length(bytes: &[u8], offset: usize) -> Result<usize, ExcelOpenError> {
-    let len = read_u32_at(bytes, offset).ok_or(ExcelOpenError::DataMashupFramingInvalid)?;
-    usize::try_from(len).map_err(|_| ExcelOpenError::DataMashupFramingInvalid)
-}
-
-fn take_segment(bytes: &[u8], offset: &mut usize, len: usize) -> Result<Vec<u8>, ExcelOpenError> {
-    let start = *offset;
-    let end = start
-        .checked_add(len)
-        .ok_or(ExcelOpenError::DataMashupFramingInvalid)?;
-    if end > bytes.len() {
-        return Err(ExcelOpenError::DataMashupFramingInvalid);
-    }
-
-    let segment = bytes[start..end].to_vec();
-    *offset = end;
-    Ok(segment)
-}
-
-fn open_zip(path: &Path) -> Result<ZipArchive<File>, ExcelOpenError> {
-    let file = File::open(path)?;
-    ZipArchive::new(file).map_err(|err| match err {
-        ZipError::InvalidArchive(_) | ZipError::UnsupportedArchive(_) => {
-            ExcelOpenError::NotZipContainer
-        }
-        ZipError::Io(e) => ExcelOpenError::Io(e),
-        other => ExcelOpenError::XmlParseError(other.to_string()),
-    })
-}
-
-fn read_zip_file(
-    archive: &mut ZipArchive<File>,
-    name: &str,
-) -> Result<Vec<u8>, zip::result::ZipError> {
-    let mut file = archive.by_name(name)?;
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf)?;
-    Ok(buf)
-}
-
-fn read_zip_file_optional(
-    archive: &mut ZipArchive<File>,
-    name: &str,
-) -> Result<Option<Vec<u8>>, ExcelOpenError> {
-    match read_zip_file(archive, name) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(ZipError::FileNotFound) => Ok(None),
-        Err(ZipError::Io(e)) => Err(ExcelOpenError::Io(e)),
-        Err(e) => Err(ExcelOpenError::XmlParseError(e.to_string())),
-    }
-}
-
-fn parse_shared_strings(xml: &[u8]) -> Result<Vec<String>, ExcelOpenError> {
+pub fn parse_shared_strings(xml: &[u8]) -> Result<Vec<String>, GridParseError> {
     let mut reader = Reader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
@@ -753,7 +1153,7 @@ fn parse_shared_strings(xml: &[u8]) -> Result<Vec<String>, ExcelOpenError> {
             Ok(Event::Start(e)) if e.name().as_ref() == b"t" && in_si => {
                 let text = reader
                     .read_text(e.name())
-                    .map_err(|e| ExcelOpenError::XmlParseError(e.to_string()))?
+                    .map_err(|e| GridParseError::XmlError(e.to_string()))?
                     .into_owned();
                 current.push_str(&text);
             }
@@ -762,7 +1162,7 @@ fn parse_shared_strings(xml: &[u8]) -> Result<Vec<String>, ExcelOpenError> {
                 in_si = false;
             }
             Ok(Event::Eof) => break,
-            Err(e) => return Err(ExcelOpenError::XmlParseError(e.to_string())),
+            Err(e) => return Err(GridParseError::XmlError(e.to_string())),
             _ => {}
         }
         buf.clear();
@@ -771,7 +1171,7 @@ fn parse_shared_strings(xml: &[u8]) -> Result<Vec<String>, ExcelOpenError> {
     Ok(strings)
 }
 
-fn parse_workbook_xml(xml: &[u8]) -> Result<Vec<SheetDescriptor>, ExcelOpenError> {
+pub fn parse_workbook_xml(xml: &[u8]) -> Result<Vec<SheetDescriptor>, GridParseError> {
     let mut reader = Reader::from_reader(xml);
     reader.config_mut().trim_text(true);
     let mut buf = Vec::new();
@@ -784,7 +1184,7 @@ fn parse_workbook_xml(xml: &[u8]) -> Result<Vec<SheetDescriptor>, ExcelOpenError
                 let mut rel_id = None;
                 let mut sheet_id = None;
                 for attr in e.attributes() {
-                    let attr = attr.map_err(|e| ExcelOpenError::XmlParseError(e.to_string()))?;
+                    let attr = attr.map_err(|e| GridParseError::XmlError(e.to_string()))?;
                     match attr.key.as_ref() {
                         b"name" => {
                             name = Some(attr.unescape_value().map_err(to_xml_err)?.into_owned())
@@ -808,7 +1208,7 @@ fn parse_workbook_xml(xml: &[u8]) -> Result<Vec<SheetDescriptor>, ExcelOpenError
                 }
             }
             Ok(Event::Eof) => break,
-            Err(e) => return Err(ExcelOpenError::XmlParseError(e.to_string())),
+            Err(e) => return Err(GridParseError::XmlError(e.to_string())),
             _ => {}
         }
         buf.clear();
@@ -817,7 +1217,7 @@ fn parse_workbook_xml(xml: &[u8]) -> Result<Vec<SheetDescriptor>, ExcelOpenError
     Ok(sheets)
 }
 
-fn parse_relationships(xml: &[u8]) -> Result<HashMap<String, String>, ExcelOpenError> {
+pub fn parse_relationships(xml: &[u8]) -> Result<HashMap<String, String>, GridParseError> {
     let mut reader = Reader::from_reader(xml);
     reader.config_mut().trim_text(true);
     let mut buf = Vec::new();
@@ -830,7 +1230,7 @@ fn parse_relationships(xml: &[u8]) -> Result<HashMap<String, String>, ExcelOpenE
                 let mut target = None;
                 let mut rel_type = None;
                 for attr in e.attributes() {
-                    let attr = attr.map_err(|e| ExcelOpenError::XmlParseError(e.to_string()))?;
+                    let attr = attr.map_err(|e| GridParseError::XmlError(e.to_string()))?;
                     match attr.key.as_ref() {
                         b"Id" => id = Some(attr.unescape_value().map_err(to_xml_err)?.into_owned()),
                         b"Target" => {
@@ -850,7 +1250,7 @@ fn parse_relationships(xml: &[u8]) -> Result<HashMap<String, String>, ExcelOpenE
                 }
             }
             Ok(Event::Eof) => break,
-            Err(e) => return Err(ExcelOpenError::XmlParseError(e.to_string())),
+            Err(e) => return Err(GridParseError::XmlError(e.to_string())),
             _ => {}
         }
         buf.clear();
@@ -859,7 +1259,7 @@ fn parse_relationships(xml: &[u8]) -> Result<HashMap<String, String>, ExcelOpenE
     Ok(map)
 }
 
-fn resolve_sheet_target(
+pub fn resolve_sheet_target(
     sheet: &SheetDescriptor,
     relationships: &HashMap<String, String>,
     index: usize,
@@ -886,7 +1286,7 @@ fn normalize_target(target: &str) -> String {
     }
 }
 
-fn parse_sheet_xml(xml: &[u8], shared_strings: &[String]) -> Result<Grid, ExcelOpenError> {
+pub fn parse_sheet_xml(xml: &[u8], shared_strings: &[String]) -> Result<Grid, GridParseError> {
     let mut reader = Reader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
@@ -910,18 +1310,14 @@ fn parse_sheet_xml(xml: &[u8], shared_strings: &[String]) -> Result<Grid, ExcelO
                 parsed_cells.push(cell);
             }
             Ok(Event::Eof) => break,
-            Err(e) => return Err(ExcelOpenError::XmlParseError(e.to_string())),
+            Err(e) => return Err(GridParseError::XmlError(e.to_string())),
             _ => {}
         }
         buf.clear();
     }
 
     if parsed_cells.is_empty() {
-        return Ok(Grid {
-            nrows: 0,
-            ncols: 0,
-            rows: Vec::new(),
-        });
+        return Ok(Grid::new(0, 0));
     }
 
     let mut nrows = dimension_hint.map(|(r, _)| r).unwrap_or(0);
@@ -941,12 +1337,11 @@ fn parse_cell(
     reader: &mut Reader<&[u8]>,
     start: BytesStart,
     shared_strings: &[String],
-) -> Result<ParsedCell, ExcelOpenError> {
+) -> Result<ParsedCell, GridParseError> {
     let address_raw = get_attr_value(&start, b"r")?
-        .ok_or_else(|| ExcelOpenError::XmlParseError("cell missing address".into()))?;
-    let (row, col) = address_to_index(&address_raw).ok_or_else(|| {
-        ExcelOpenError::XmlParseError(format!("invalid cell address {address_raw}"))
-    })?;
+        .ok_or_else(|| GridParseError::XmlError("cell missing address".into()))?;
+    let (row, col) = address_to_index(&address_raw)
+        .ok_or_else(|| GridParseError::InvalidAddress(address_raw.clone()))?;
 
     let cell_type = get_attr_value(&start, b"t")?;
 
@@ -960,17 +1355,17 @@ fn parse_cell(
             Ok(Event::Start(e)) if e.name().as_ref() == b"v" => {
                 let text = reader
                     .read_text(e.name())
-                    .map_err(|e| ExcelOpenError::XmlParseError(e.to_string()))?
+                    .map_err(|e| GridParseError::XmlError(e.to_string()))?
                     .into_owned();
                 value_text = Some(text);
             }
             Ok(Event::Start(e)) if e.name().as_ref() == b"f" => {
                 let text = reader
                     .read_text(e.name())
-                    .map_err(|e| ExcelOpenError::XmlParseError(e.to_string()))?
+                    .map_err(|e| GridParseError::XmlError(e.to_string()))?
                     .into_owned();
                 let unescaped = quick_xml::escape::unescape(&text)
-                    .map_err(|e| ExcelOpenError::XmlParseError(e.to_string()))?
+                    .map_err(|e| GridParseError::XmlError(e.to_string()))?
                     .into_owned();
                 formula_text = Some(unescaped);
             }
@@ -979,11 +1374,11 @@ fn parse_cell(
             }
             Ok(Event::End(e)) if e.name().as_ref() == start.name().as_ref() => break,
             Ok(Event::Eof) => {
-                return Err(ExcelOpenError::XmlParseError(
+                return Err(GridParseError::XmlError(
                     "unexpected EOF inside cell".into(),
                 ));
             }
-            Err(e) => return Err(ExcelOpenError::XmlParseError(e.to_string())),
+            Err(e) => return Err(GridParseError::XmlError(e.to_string())),
             _ => {}
         }
         buf.clear();
@@ -1002,7 +1397,7 @@ fn parse_cell(
     })
 }
 
-fn read_inline_string(reader: &mut Reader<&[u8]>) -> Result<String, ExcelOpenError> {
+fn read_inline_string(reader: &mut Reader<&[u8]>) -> Result<String, GridParseError> {
     let mut buf = Vec::new();
     let mut value = String::new();
     loop {
@@ -1010,17 +1405,17 @@ fn read_inline_string(reader: &mut Reader<&[u8]>) -> Result<String, ExcelOpenErr
             Ok(Event::Start(e)) if e.name().as_ref() == b"t" => {
                 let text = reader
                     .read_text(e.name())
-                    .map_err(|e| ExcelOpenError::XmlParseError(e.to_string()))?
+                    .map_err(|e| GridParseError::XmlError(e.to_string()))?
                     .into_owned();
                 value.push_str(&text);
             }
             Ok(Event::End(e)) if e.name().as_ref() == b"is" => break,
             Ok(Event::Eof) => {
-                return Err(ExcelOpenError::XmlParseError(
+                return Err(GridParseError::XmlError(
                     "unexpected EOF inside inline string".into(),
                 ));
             }
-            Err(e) => return Err(ExcelOpenError::XmlParseError(e.to_string())),
+            Err(e) => return Err(GridParseError::XmlError(e.to_string())),
             _ => {}
         }
         buf.clear();
@@ -1032,7 +1427,7 @@ fn convert_value(
     value_text: Option<&str>,
     cell_type: Option<&str>,
     shared_strings: &[String],
-) -> Result<Option<CellValue>, ExcelOpenError> {
+) -> Result<Option<CellValue>, GridParseError> {
     let raw = match value_text {
         Some(t) => t,
         None => return Ok(None),
@@ -1047,10 +1442,10 @@ fn convert_value(
         Some("s") => {
             let idx = trimmed
                 .parse::<usize>()
-                .map_err(|e| ExcelOpenError::XmlParseError(e.to_string()))?;
-            let text = shared_strings.get(idx).ok_or_else(|| {
-                ExcelOpenError::XmlParseError(format!("shared string index {idx} out of bounds"))
-            })?;
+                .map_err(|e| GridParseError::XmlError(e.to_string()))?;
+            let text = shared_strings
+                .get(idx)
+                .ok_or(GridParseError::SharedStringOutOfBounds(idx))?;
             Ok(Some(CellValue::Text(text.clone())))
         }
         Some("b") => Ok(match trimmed {
@@ -1080,48 +1475,26 @@ fn dimension_from_ref(reference: &str) -> Option<(u32, u32)> {
     Some((height, width))
 }
 
-fn build_grid(nrows: u32, ncols: u32, cells: Vec<ParsedCell>) -> Result<Grid, ExcelOpenError> {
-    if nrows == 0 || ncols == 0 {
-        return Ok(Grid {
-            nrows: 0,
-            ncols: 0,
-            rows: Vec::new(),
-        });
-    }
-
-    let mut rows = Vec::with_capacity(nrows as usize);
-    for r in 0..nrows {
-        let mut row_cells = Vec::with_capacity(ncols as usize);
-        for c in 0..ncols {
-            row_cells.push(Cell {
-                row: r,
-                col: c,
-                address: CellAddress::from_indices(r, c),
-                value: None,
-                formula: None,
-            });
-        }
-        rows.push(Row {
-            index: r,
-            cells: row_cells,
-        });
-    }
+fn build_grid(nrows: u32, ncols: u32, cells: Vec<ParsedCell>) -> Result<Grid, GridParseError> {
+    let mut grid = Grid::new(nrows, ncols);
 
     for parsed in cells {
-        if let Some(row) = rows.get_mut(parsed.row as usize)
-            && let Some(cell) = row.cells.get_mut(parsed.col as usize)
-        {
-            cell.value = parsed.value;
-            cell.formula = parsed.formula;
-        }
+        let cell = Cell {
+            row: parsed.row,
+            col: parsed.col,
+            address: CellAddress::from_indices(parsed.row, parsed.col),
+            value: parsed.value,
+            formula: parsed.formula,
+        };
+        grid.insert(cell);
     }
 
-    Ok(Grid { nrows, ncols, rows })
+    Ok(grid)
 }
 
-fn get_attr_value(element: &BytesStart<'_>, key: &[u8]) -> Result<Option<String>, ExcelOpenError> {
+fn get_attr_value(element: &BytesStart<'_>, key: &[u8]) -> Result<Option<String>, GridParseError> {
     for attr in element.attributes() {
-        let attr = attr.map_err(|e| ExcelOpenError::XmlParseError(e.to_string()))?;
+        let attr = attr.map_err(|e| GridParseError::XmlError(e.to_string()))?;
         if attr.key.as_ref() == key {
             return Ok(Some(
                 attr.unescape_value().map_err(to_xml_err)?.into_owned(),
@@ -1131,8 +1504,8 @@ fn get_attr_value(element: &BytesStart<'_>, key: &[u8]) -> Result<Option<String>
     Ok(None)
 }
 
-fn to_xml_err(err: quick_xml::Error) -> ExcelOpenError {
-    ExcelOpenError::XmlParseError(err.to_string())
+fn to_xml_err(err: quick_xml::Error) -> GridParseError {
+    GridParseError::XmlError(err.to_string())
 }
 
 struct ParsedCell {
@@ -1144,97 +1517,9 @@ struct ParsedCell {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ExcelOpenError, RawDataMashup, convert_value, parse_data_mashup, parse_shared_strings,
-        read_datamashup_text, read_inline_string,
-    };
+    use super::{GridParseError, convert_value, parse_shared_strings, read_inline_string};
     use crate::workbook::CellValue;
     use quick_xml::Reader;
-
-    fn build_dm_bytes(
-        version: u32,
-        package_parts: &[u8],
-        permissions: &[u8],
-        metadata: &[u8],
-        permission_bindings: &[u8],
-    ) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&version.to_le_bytes());
-        bytes.extend_from_slice(&(package_parts.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(package_parts);
-        bytes.extend_from_slice(&(permissions.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(permissions);
-        bytes.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(metadata);
-        bytes.extend_from_slice(&(permission_bindings.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(permission_bindings);
-        bytes
-    }
-
-    #[test]
-    fn parse_zero_length_stream_succeeds() {
-        let bytes = build_dm_bytes(0, b"", b"", b"", b"");
-        let parsed = parse_data_mashup(&bytes).expect("zero-length sections should parse");
-        assert_eq!(
-            parsed,
-            RawDataMashup {
-                version: 0,
-                package_parts: Vec::new(),
-                permissions: Vec::new(),
-                metadata: Vec::new(),
-                permission_bindings: Vec::new(),
-            }
-        );
-    }
-
-    #[test]
-    fn parse_basic_non_zero_lengths() {
-        let bytes = build_dm_bytes(0, b"AAAA", b"BBBB", b"CCCC", b"DDDD");
-        let parsed = parse_data_mashup(&bytes).expect("non-zero lengths should parse");
-        assert_eq!(parsed.version, 0);
-        assert_eq!(parsed.package_parts, b"AAAA");
-        assert_eq!(parsed.permissions, b"BBBB");
-        assert_eq!(parsed.metadata, b"CCCC");
-        assert_eq!(parsed.permission_bindings, b"DDDD");
-    }
-
-    #[test]
-    fn unsupported_version_is_rejected() {
-        let bytes = build_dm_bytes(1, b"AAAA", b"BBBB", b"CCCC", b"DDDD");
-        let err = parse_data_mashup(&bytes).expect_err("version 1 should be unsupported");
-        assert!(matches!(
-            err,
-            ExcelOpenError::DataMashupUnsupportedVersion { version: 1 }
-        ));
-    }
-
-    #[test]
-    fn truncated_stream_errors() {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&0u32.to_le_bytes());
-        bytes.extend_from_slice(&100u32.to_le_bytes());
-        bytes.extend_from_slice(&0u32.to_le_bytes());
-        bytes.extend_from_slice(&0u32.to_le_bytes());
-        bytes.extend_from_slice(&0u32.to_le_bytes());
-        let err = parse_data_mashup(&bytes).expect_err("length overflows buffer");
-        assert!(matches!(err, ExcelOpenError::DataMashupFramingInvalid));
-    }
-
-    #[test]
-    fn trailing_bytes_are_invalid() {
-        let mut bytes = build_dm_bytes(0, b"", b"", b"", b"");
-        bytes.push(0xFF);
-        let err = parse_data_mashup(&bytes).expect_err("trailing bytes should fail");
-        assert!(matches!(err, ExcelOpenError::DataMashupFramingInvalid));
-    }
-
-    #[test]
-    fn too_short_stream_is_framing_invalid() {
-        let bytes = vec![0u8; 8];
-        let err =
-            parse_data_mashup(&bytes).expect_err("buffer shorter than header must be invalid");
-        assert!(matches!(err, ExcelOpenError::DataMashupFramingInvalid));
-    }
 
     #[test]
     fn parse_shared_strings_rich_text_flattens_runs() {
@@ -1281,10 +1566,7 @@ mod tests {
     fn convert_value_shared_string_index_out_of_bounds_errors() {
         let err = convert_value(Some("5"), Some("s"), &["only".into()])
             .expect_err("invalid shared string index should error");
-        assert!(matches!(
-            err,
-            ExcelOpenError::XmlParseError(msg) if msg.contains("shared string index 5")
-        ));
+        assert!(matches!(err, GridParseError::SharedStringOutOfBounds(5)));
     }
 
     #[test]
@@ -1292,76 +1574,6 @@ mod tests {
         let value =
             convert_value(Some("#DIV/0!"), Some("e"), &[]).expect("error cell should convert");
         assert_eq!(value, Some(CellValue::Text("#DIV/0!".into())));
-    }
-
-    #[test]
-    fn utf16_datamashup_xml_decodes_correctly() {
-        let xml_text = r#"<?xml version="1.0" encoding="utf-16"?><root xmlns:dm="http://schemas.microsoft.com/DataMashup"><dm:DataMashup>QQ==</dm:DataMashup></root>"#;
-        let mut xml_bytes = Vec::with_capacity(2 + xml_text.len() * 2);
-        xml_bytes.extend_from_slice(&[0xFF, 0xFE]);
-        for unit in xml_text.encode_utf16() {
-            xml_bytes.extend_from_slice(&unit.to_le_bytes());
-        }
-
-        let text = read_datamashup_text(&xml_bytes)
-            .expect("UTF-16 XML should parse")
-            .expect("DataMashup element should be found");
-        assert_eq!(text.trim(), "QQ==");
-    }
-
-    #[test]
-    fn utf16_without_bom_with_declared_encoding_parses() {
-        let xml_text = r#"<?xml version="1.0" encoding="utf-16"?><root xmlns:dm="http://schemas.microsoft.com/DataMashup"><dm:DataMashup>QQ==</dm:DataMashup></root>"#;
-        for &little_endian in &[true, false] {
-            let mut xml_bytes = Vec::with_capacity(xml_text.len() * 2);
-            for unit in xml_text.encode_utf16() {
-                let bytes = if little_endian {
-                    unit.to_le_bytes()
-                } else {
-                    unit.to_be_bytes()
-                };
-                xml_bytes.extend_from_slice(&bytes);
-            }
-
-            let text = read_datamashup_text(&xml_bytes)
-                .expect("UTF-16 XML without BOM should parse when declared")
-                .expect("DataMashup element should be found");
-            assert_eq!(text.trim(), "QQ==");
-        }
-    }
-
-    #[test]
-    fn elements_with_datamashup_suffix_are_ignored() {
-        let xml = br#"<?xml version="1.0"?><root><FooDataMashup>QQ==</FooDataMashup></root>"#;
-        let result = read_datamashup_text(xml).expect("parsing should succeed");
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn duplicate_sibling_datamashup_elements_error() {
-        let xml = br#"<?xml version="1.0"?>
-<root xmlns:dm="http://schemas.microsoft.com/DataMashup">
-  <dm:DataMashup>QQ==</dm:DataMashup>
-  <dm:DataMashup>QQ==</dm:DataMashup>
-</root>"#;
-        let err = read_datamashup_text(xml).expect_err("duplicate DataMashup elements should fail");
-        assert!(matches!(err, ExcelOpenError::DataMashupFramingInvalid));
-    }
-
-    #[test]
-    fn fuzz_style_never_panics() {
-        for seed in 0u64..32 {
-            let len = (seed as usize * 7 % 48) + (seed as usize % 5);
-            let mut state = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-            let mut bytes = Vec::with_capacity(len);
-            for _ in 0..len {
-                state = state
-                    .wrapping_mul(2862933555777941757)
-                    .wrapping_add(3037000493);
-                bytes.push((state >> 32) as u8);
-            }
-            let _ = parse_data_mashup(&bytes);
-        }
     }
 }
 ```
@@ -1372,21 +1584,30 @@ mod tests {
 
 ```rust
 pub mod addressing;
+pub mod container;
+pub mod datamashup_framing;
 pub mod diff;
+pub mod engine;
 #[cfg(feature = "excel-open-xml")]
 pub mod excel_open_xml;
+pub mod grid_parser;
 pub mod output;
 pub mod workbook;
 
 pub use addressing::{address_to_index, index_to_address};
-pub use diff::{ColSignature, DiffOp, DiffReport, RowSignature, SheetId};
+pub use container::{ContainerError, OpcContainer};
+pub use datamashup_framing::{DataMashupError, RawDataMashup};
+pub use diff::{DiffOp, DiffReport, SheetId};
+pub use engine::diff_workbooks;
 #[cfg(feature = "excel-open-xml")]
-pub use excel_open_xml::{ExcelOpenError, RawDataMashup, open_data_mashup, open_workbook};
-pub use output::json::{CellDiff, serialize_cell_diffs};
+pub use excel_open_xml::{ExcelOpenError, open_data_mashup, open_workbook};
+pub use grid_parser::{GridParseError, SheetDescriptor};
 #[cfg(feature = "excel-open-xml")]
-pub use output::json::{diff_workbooks, diff_workbooks_to_json};
+pub use output::json::diff_workbooks_to_json;
+pub use output::json::{CellDiff, serialize_cell_diffs, serialize_diff_report};
 pub use workbook::{
-    Cell, CellAddress, CellSnapshot, CellValue, Grid, Row, Sheet, SheetKind, Workbook,
+    Cell, CellAddress, CellSnapshot, CellValue, ColSignature, Grid, RowSignature, Sheet, SheetKind,
+    Workbook,
 };
 ```
 
@@ -1408,6 +1629,9 @@ fn main() {
 use crate::addressing::{address_to_index, index_to_address};
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
 /// A snapshot of a cell's logical content (address, value, formula).
@@ -1424,6 +1648,14 @@ impl CellSnapshot {
             addr: cell.address,
             value: cell.value.clone(),
             formula: cell.formula.clone(),
+        }
+    }
+
+    pub fn empty(addr: CellAddress) -> CellSnapshot {
+        CellSnapshot {
+            addr,
+            value: None,
+            formula: None,
         }
     }
 }
@@ -1452,13 +1684,9 @@ pub enum SheetKind {
 pub struct Grid {
     pub nrows: u32,
     pub ncols: u32,
-    pub rows: Vec<Row>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Row {
-    pub index: u32,
-    pub cells: Vec<Cell>,
+    pub cells: HashMap<(u32, u32), Cell>,
+    pub row_signatures: Option<Vec<RowSignature>>,
+    pub col_signatures: Option<Vec<ColSignature>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1526,6 +1754,119 @@ pub enum CellValue {
     Number(f64),
     Text(String),
     Bool(bool),
+}
+
+impl Hash for CellValue {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            CellValue::Number(n) => {
+                0u8.hash(state);
+                n.to_bits().hash(state);
+            }
+            CellValue::Text(s) => {
+                1u8.hash(state);
+                s.hash(state);
+            }
+            CellValue::Bool(b) => {
+                2u8.hash(state);
+                b.hash(state);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RowSignature {
+    pub hash: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ColSignature {
+    pub hash: u64,
+}
+
+impl Grid {
+    pub fn new(nrows: u32, ncols: u32) -> Grid {
+        Grid {
+            nrows,
+            ncols,
+            cells: HashMap::new(),
+            row_signatures: None,
+            col_signatures: None,
+        }
+    }
+
+    pub fn get(&self, row: u32, col: u32) -> Option<&Cell> {
+        self.cells.get(&(row, col))
+    }
+
+    pub fn get_mut(&mut self, row: u32, col: u32) -> Option<&mut Cell> {
+        self.cells.get_mut(&(row, col))
+    }
+
+    pub fn insert(&mut self, cell: Cell) {
+        self.cells.insert((cell.row, cell.col), cell);
+    }
+
+    pub fn cell_count(&self) -> usize {
+        self.cells.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.cells.is_empty()
+    }
+
+    pub fn iter_cells(&self) -> impl Iterator<Item = &Cell> {
+        self.cells.values()
+    }
+
+    pub fn rows_iter(&self) -> impl Iterator<Item = u32> + '_ {
+        0..self.nrows
+    }
+
+    pub fn cols_iter(&self) -> impl Iterator<Item = u32> + '_ {
+        0..self.ncols
+    }
+
+    pub fn compute_row_signature(&self, row: u32) -> RowSignature {
+        let mut hasher = DefaultHasher::new();
+        for col in 0..self.ncols {
+            if let Some(cell) = self.get(row, col) {
+                cell.value.hash(&mut hasher);
+                cell.formula.hash(&mut hasher);
+            }
+        }
+        RowSignature {
+            hash: hasher.finish(),
+        }
+    }
+
+    pub fn compute_col_signature(&self, col: u32) -> ColSignature {
+        let mut hasher = DefaultHasher::new();
+        for row in 0..self.nrows {
+            if let Some(cell) = self.get(row, col) {
+                cell.value.hash(&mut hasher);
+                cell.formula.hash(&mut hasher);
+            }
+        }
+        ColSignature {
+            hash: hasher.finish(),
+        }
+    }
+
+    pub fn compute_all_signatures(&mut self) {
+        let mut row_sigs = Vec::with_capacity(self.nrows as usize);
+        for row in 0..self.nrows {
+            row_sigs.push(self.compute_row_signature(row));
+        }
+        self.row_signatures = Some(row_sigs);
+
+        let mut col_sigs = Vec::with_capacity(self.ncols as usize);
+        for col in 0..self.ncols {
+            col_sigs.push(self.compute_col_signature(col));
+        }
+        self.col_signatures = Some(col_sigs);
+    }
 }
 
 impl PartialEq for CellSnapshot {
@@ -1676,6 +2017,25 @@ mod tests {
         };
         assert_eq!(snap1, snap2);
     }
+
+    #[test]
+    fn cellvalue_as_text_number_bool_match_variants() {
+        let text = CellValue::Text("abc".into());
+        let number = CellValue::Number(5.0);
+        let boolean = CellValue::Bool(true);
+
+        assert_eq!(text.as_text(), Some("abc"));
+        assert_eq!(text.as_number(), None);
+        assert_eq!(text.as_bool(), None);
+
+        assert_eq!(number.as_text(), None);
+        assert_eq!(number.as_number(), Some(5.0));
+        assert_eq!(number.as_bool(), None);
+
+        assert_eq!(boolean.as_text(), None);
+        assert_eq!(boolean.as_number(), None);
+        assert_eq!(boolean.as_bool(), Some(true));
+    }
 }
 ```
 
@@ -1684,13 +2044,13 @@ mod tests {
 ### File: `core\src\output\json.rs`
 
 ```rust
+use crate::diff::DiffReport;
 #[cfg(feature = "excel-open-xml")]
-use crate::addressing::index_to_address;
+use crate::engine::diff_workbooks as compute_diff;
 #[cfg(feature = "excel-open-xml")]
-use crate::workbook::{Cell, CellValue, Sheet, Workbook};
+use crate::excel_open_xml::{ExcelOpenError, open_workbook};
 use serde::Serialize;
-#[cfg(feature = "excel-open-xml")]
-use std::collections::HashMap;
+use serde::ser::Error as SerdeError;
 #[cfg(feature = "excel-open-xml")]
 use std::path::Path;
 
@@ -1708,17 +2068,23 @@ pub fn serialize_cell_diffs(diffs: &[CellDiff]) -> serde_json::Result<String> {
     serde_json::to_string(diffs)
 }
 
-#[cfg(feature = "excel-open-xml")]
-use crate::excel_open_xml::{ExcelOpenError, open_workbook};
+pub fn serialize_diff_report(report: &DiffReport) -> serde_json::Result<String> {
+    if contains_non_finite_numbers(report) {
+        return Err(SerdeError::custom(
+            "non-finite numbers (NaN or infinity) are not supported in DiffReport JSON output",
+        ));
+    }
+    serde_json::to_string(report)
+}
 
 #[cfg(feature = "excel-open-xml")]
 pub fn diff_workbooks(
     path_a: impl AsRef<Path>,
     path_b: impl AsRef<Path>,
-) -> Result<Vec<CellDiff>, ExcelOpenError> {
+) -> Result<DiffReport, ExcelOpenError> {
     let wb_a = open_workbook(path_a)?;
     let wb_b = open_workbook(path_b)?;
-    Ok(compute_cell_diffs(&wb_a, &wb_b))
+    Ok(compute_diff(&wb_a, &wb_b))
 }
 
 #[cfg(feature = "excel-open-xml")]
@@ -1726,79 +2092,51 @@ pub fn diff_workbooks_to_json(
     path_a: impl AsRef<Path>,
     path_b: impl AsRef<Path>,
 ) -> Result<String, ExcelOpenError> {
-    let diffs = diff_workbooks(path_a, path_b)?;
-    serialize_cell_diffs(&diffs).map_err(|e| ExcelOpenError::XmlParseError(e.to_string()))
+    let report = diff_workbooks(path_a, path_b)?;
+    serialize_diff_report(&report).map_err(|e| ExcelOpenError::SerializationError(e.to_string()))
 }
 
-#[cfg(feature = "excel-open-xml")]
-fn compute_cell_diffs(a: &Workbook, b: &Workbook) -> Vec<CellDiff> {
-    let map_a = sheet_map(a);
-    let map_b = sheet_map(b);
+pub fn diff_report_to_cell_diffs(report: &DiffReport) -> Vec<CellDiff> {
+    use crate::diff::DiffOp;
+    use crate::workbook::CellValue;
 
-    let mut names: Vec<&str> = map_a.keys().chain(map_b.keys()).copied().collect();
-    names.sort_unstable();
-    names.dedup();
-
-    let mut diffs = Vec::new();
-    for name in names {
-        let sheet_a = map_a.get(name);
-        let sheet_b = map_b.get(name);
-        let dims = sheet_dims(sheet_a);
-        let other_dims = sheet_dims(sheet_b);
-        let nrows = dims.0.max(other_dims.0);
-        let ncols = dims.1.max(other_dims.1);
-
-        for r in 0..nrows {
-            for c in 0..ncols {
-                let cell_a = sheet_a
-                    .and_then(|s| s.grid.rows.get(r as usize))
-                    .and_then(|row| row.cells.get(c as usize));
-                let cell_b = sheet_b
-                    .and_then(|s| s.grid.rows.get(r as usize))
-                    .and_then(|row| row.cells.get(c as usize));
-
-                let value_a = cell_a.and_then(render_cell_value);
-                let value_b = cell_b.and_then(render_cell_value);
-
-                if value_a != value_b {
-                    let coords = index_to_address(r, c);
-                    diffs.push(CellDiff {
-                        coords,
-                        value_file1: value_a,
-                        value_file2: value_b,
-                    });
-                }
-            }
+    fn render_value(value: &Option<CellValue>) -> Option<String> {
+        match value {
+            Some(CellValue::Number(n)) => Some(n.to_string()),
+            Some(CellValue::Text(s)) => Some(s.clone()),
+            Some(CellValue::Bool(b)) => Some(b.to_string()),
+            None => None,
         }
     }
 
-    diffs
-}
-
-#[cfg(feature = "excel-open-xml")]
-fn sheet_map(workbook: &Workbook) -> HashMap<&str, &Sheet> {
-    workbook
-        .sheets
+    report
+        .ops
         .iter()
-        .map(|s| (s.name.as_str(), s))
+        .filter_map(|op| {
+            if let DiffOp::CellEdited { addr, from, to, .. } = op {
+                Some(CellDiff {
+                    coords: addr.to_a1(),
+                    value_file1: render_value(&from.value),
+                    value_file2: render_value(&to.value),
+                })
+            } else {
+                None
+            }
+        })
         .collect()
 }
 
-#[cfg(feature = "excel-open-xml")]
-fn sheet_dims(sheet: Option<&&Sheet>) -> (u32, u32) {
-    sheet
-        .map(|s| (s.grid.nrows, s.grid.ncols))
-        .unwrap_or((0, 0))
-}
+fn contains_non_finite_numbers(report: &DiffReport) -> bool {
+    use crate::diff::DiffOp;
+    use crate::workbook::CellValue;
 
-#[cfg(feature = "excel-open-xml")]
-fn render_cell_value(cell: &Cell) -> Option<String> {
-    match &cell.value {
-        Some(CellValue::Number(n)) => Some(n.to_string()),
-        Some(CellValue::Text(s)) => Some(s.clone()),
-        Some(CellValue::Bool(b)) => Some(b.to_string()),
-        None => None,
-    }
+    report.ops.iter().any(|op| match op {
+        DiffOp::CellEdited { from, to, .. } => {
+            matches!(from.value, Some(CellValue::Number(n)) if !n.is_finite())
+                || matches!(to.value, Some(CellValue::Number(n)) if !n.is_finite())
+        }
+        _ => false,
+    })
 }
 ```
 
@@ -1831,15 +2169,12 @@ fn pg2_addressing_matrix_consistency() {
         .find(|s| s.name == "Addresses")
         .unwrap_or_else(|| panic!("Addresses sheet present; found {:?}", sheet_names));
 
-    for row in &sheet.grid.rows {
-        for cell in &row.cells {
-            if let Some(CellValue::Text(text)) = &cell.value {
-                assert_eq!(cell.address.to_a1(), text.as_str());
-                let (r, c) =
-                    address_to_index(text).expect("address strings should parse to indices");
-                assert_eq!((r, c), (cell.row, cell.col));
-                assert_eq!(index_to_address(cell.row, cell.col), cell.address.to_a1());
-            }
+    for cell in sheet.grid.iter_cells() {
+        if let Some(CellValue::Text(text)) = &cell.value {
+            assert_eq!(cell.address.to_a1(), text.as_str());
+            let (r, c) = address_to_index(text).expect("address strings should parse to indices");
+            assert_eq!((r, c), (cell.row, cell.col));
+            assert_eq!(index_to_address(cell.row, cell.col), cell.address.to_a1());
         }
     }
 }
@@ -1855,7 +2190,9 @@ use std::io::{ErrorKind, Read};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use excel_diff::{ExcelOpenError, RawDataMashup, open_data_mashup};
+use excel_diff::{
+    ContainerError, DataMashupError, ExcelOpenError, RawDataMashup, open_data_mashup,
+};
 use quick_xml::{Reader, events::Event};
 use zip::ZipArchive;
 
@@ -1919,14 +2256,20 @@ fn utf16_be_datamashup_parses() {
 fn corrupt_base64_returns_error() {
     let path = fixture_path("corrupt_base64.xlsx");
     let err = open_data_mashup(&path).expect_err("corrupt base64 should fail");
-    assert!(matches!(err, ExcelOpenError::DataMashupBase64Invalid));
+    assert!(matches!(
+        err,
+        ExcelOpenError::DataMashup(DataMashupError::Base64Invalid)
+    ));
 }
 
 #[test]
 fn duplicate_datamashup_parts_are_rejected() {
     let path = fixture_path("duplicate_datamashup_parts.xlsx");
     let err = open_data_mashup(&path).expect_err("duplicate DataMashup parts should be rejected");
-    assert!(matches!(err, ExcelOpenError::DataMashupFramingInvalid));
+    assert!(matches!(
+        err,
+        ExcelOpenError::DataMashup(DataMashupError::FramingInvalid)
+    ));
 }
 
 #[test]
@@ -1934,7 +2277,10 @@ fn duplicate_datamashup_elements_are_rejected() {
     let path = fixture_path("duplicate_datamashup_elements.xlsx");
     let err =
         open_data_mashup(&path).expect_err("duplicate DataMashup elements should be rejected");
-    assert!(matches!(err, ExcelOpenError::DataMashupFramingInvalid));
+    assert!(matches!(
+        err,
+        ExcelOpenError::DataMashup(DataMashupError::FramingInvalid)
+    ));
 }
 
 #[test]
@@ -1942,7 +2288,9 @@ fn nonexistent_file_returns_io() {
     let path = fixture_path("missing_mashup.xlsx");
     let err = open_data_mashup(&path).expect_err("missing file should error");
     match err {
-        ExcelOpenError::Io(e) => assert_eq!(e.kind(), ErrorKind::NotFound),
+        ExcelOpenError::Container(ContainerError::Io(e)) => {
+            assert_eq!(e.kind(), ErrorKind::NotFound)
+        }
         other => panic!("expected Io error, got {other:?}"),
     }
 }
@@ -1951,21 +2299,30 @@ fn nonexistent_file_returns_io() {
 fn non_excel_container_returns_not_excel_error() {
     let path = fixture_path("random_zip.zip");
     let err = open_data_mashup(&path).expect_err("random zip should not parse");
-    assert!(matches!(err, ExcelOpenError::NotExcelOpenXml));
+    assert!(matches!(
+        err,
+        ExcelOpenError::Container(ContainerError::NotOpcPackage)
+    ));
 }
 
 #[test]
 fn missing_content_types_is_not_excel_error() {
     let path = fixture_path("no_content_types.xlsx");
     let err = open_data_mashup(&path).expect_err("missing [Content_Types].xml should fail");
-    assert!(matches!(err, ExcelOpenError::NotExcelOpenXml));
+    assert!(matches!(
+        err,
+        ExcelOpenError::Container(ContainerError::NotOpcPackage)
+    ));
 }
 
 #[test]
 fn non_zip_file_returns_not_zip_error() {
     let path = fixture_path("not_a_zip.txt");
     let err = open_data_mashup(&path).expect_err("non-zip input should not parse as Excel");
-    assert!(matches!(err, ExcelOpenError::NotZipContainer));
+    assert!(matches!(
+        err,
+        ExcelOpenError::Container(ContainerError::NotZipContainer)
+    ));
 }
 
 fn datamashup_bytes_from_fixture(path: &std::path::Path) -> Vec<u8> {
@@ -2052,16 +2409,155 @@ fn assemble_top_level_bytes(raw: &RawDataMashup) -> Vec<u8> {
 
 ---
 
+### File: `core\tests\engine_tests.rs`
+
+```rust
+use excel_diff::{
+    Cell, CellAddress, CellValue, DiffOp, DiffReport, Grid, Sheet, SheetKind, Workbook,
+    diff_workbooks,
+};
+
+type SheetSpec<'a> = (&'a str, Vec<(u32, u32, f64)>);
+
+fn make_workbook(sheets: Vec<SheetSpec<'_>>) -> Workbook {
+    let sheet_ir: Vec<Sheet> = sheets
+        .into_iter()
+        .map(|(name, cells)| {
+            let max_row = cells.iter().map(|(r, _, _)| *r).max().unwrap_or(0);
+            let max_col = cells.iter().map(|(_, c, _)| *c).max().unwrap_or(0);
+            let mut grid = Grid::new(max_row + 1, max_col + 1);
+            for (r, c, val) in cells {
+                grid.insert(Cell {
+                    row: r,
+                    col: c,
+                    address: CellAddress::from_indices(r, c),
+                    value: Some(CellValue::Number(val)),
+                    formula: None,
+                });
+            }
+            Sheet {
+                name: name.to_string(),
+                kind: SheetKind::Worksheet,
+                grid,
+            }
+        })
+        .collect();
+    Workbook { sheets: sheet_ir }
+}
+
+#[test]
+fn identical_workbooks_produce_empty_report() {
+    let wb = make_workbook(vec![("Sheet1", vec![(0, 0, 1.0)])]);
+    let report = diff_workbooks(&wb, &wb);
+    assert!(report.ops.is_empty());
+}
+
+#[test]
+fn sheet_added_detected() {
+    let old = make_workbook(vec![("Sheet1", vec![(0, 0, 1.0)])]);
+    let new = make_workbook(vec![
+        ("Sheet1", vec![(0, 0, 1.0)]),
+        ("Sheet2", vec![(0, 0, 2.0)]),
+    ]);
+    let report = diff_workbooks(&old, &new);
+    assert!(
+        report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::SheetAdded { sheet } if sheet == "Sheet2"))
+    );
+}
+
+#[test]
+fn sheet_removed_detected() {
+    let old = make_workbook(vec![
+        ("Sheet1", vec![(0, 0, 1.0)]),
+        ("Sheet2", vec![(0, 0, 2.0)]),
+    ]);
+    let new = make_workbook(vec![("Sheet1", vec![(0, 0, 1.0)])]);
+    let report = diff_workbooks(&old, &new);
+    assert!(
+        report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::SheetRemoved { sheet } if sheet == "Sheet2"))
+    );
+}
+
+#[test]
+fn cell_edited_detected() {
+    let old = make_workbook(vec![("Sheet1", vec![(0, 0, 1.0)])]);
+    let new = make_workbook(vec![("Sheet1", vec![(0, 0, 2.0)])]);
+    let report = diff_workbooks(&old, &new);
+    assert_eq!(report.ops.len(), 1);
+    match &report.ops[0] {
+        DiffOp::CellEdited {
+            sheet,
+            addr,
+            from,
+            to,
+        } => {
+            assert_eq!(sheet, "Sheet1");
+            assert_eq!(addr.to_a1(), "A1");
+            assert_eq!(from.value, Some(CellValue::Number(1.0)));
+            assert_eq!(to.value, Some(CellValue::Number(2.0)));
+        }
+        _ => panic!("expected CellEdited"),
+    }
+}
+
+#[test]
+fn diff_report_json_round_trips() {
+    let old = make_workbook(vec![("Sheet1", vec![(0, 0, 1.0)])]);
+    let new = make_workbook(vec![("Sheet1", vec![(0, 0, 2.0)])]);
+    let report = diff_workbooks(&old, &new);
+    let json = serde_json::to_string(&report).expect("serialize");
+    let parsed: DiffReport = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(report, parsed);
+}
+```
+
+---
+
 ### File: `core\tests\excel_open_xml_tests.rs`
 
 ```rust
 use std::fs;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
+use std::path::Path;
+use std::time::SystemTime;
 
-use excel_diff::{ExcelOpenError, SheetKind, open_workbook};
+use excel_diff::{ContainerError, ExcelOpenError, SheetKind, open_workbook};
+use zip::write::FileOptions;
+use zip::{CompressionMethod, ZipWriter};
 
 mod common;
 use common::fixture_path;
+
+fn temp_xlsx_path(prefix: &str) -> std::path::PathBuf {
+    let mut path = std::env::temp_dir();
+    let nanos = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time should be after unix epoch")
+        .as_nanos();
+    path.push(format!("excel_diff_{prefix}_{nanos}.xlsx"));
+    path
+}
+
+fn write_zip(entries: &[(&str, &str)], path: &Path) {
+    let file = fs::File::create(path).expect("create temp zip");
+    let mut writer = ZipWriter::new(file);
+    let options = FileOptions::default().compression_method(CompressionMethod::Stored);
+
+    for (name, contents) in entries {
+        writer.start_file(*name, options).expect("start zip entry");
+        writer
+            .write_all(contents.as_bytes())
+            .expect("write zip entry");
+    }
+
+    writer.finish().expect("finish zip");
+}
 
 #[test]
 fn open_minimal_workbook_succeeds() {
@@ -2075,7 +2571,7 @@ fn open_minimal_workbook_succeeds() {
     assert_eq!(sheet.grid.nrows, 1);
     assert_eq!(sheet.grid.ncols, 1);
 
-    let cell = &sheet.grid.rows[0].cells[0];
+    let cell = sheet.grid.get(0, 0).expect("A1 should be present");
     assert_eq!(cell.address.to_a1(), "A1");
     assert!(cell.value.is_some());
 }
@@ -2085,7 +2581,9 @@ fn open_nonexistent_file_returns_io_error() {
     let path = fixture_path("definitely_missing.xlsx");
     let err = open_workbook(&path).expect_err("missing file should error");
     match err {
-        ExcelOpenError::Io(e) => assert_eq!(e.kind(), ErrorKind::NotFound),
+        ExcelOpenError::Container(ContainerError::Io(e)) => {
+            assert_eq!(e.kind(), ErrorKind::NotFound)
+        }
         other => panic!("expected Io error, got {other:?}"),
     }
 }
@@ -2094,14 +2592,20 @@ fn open_nonexistent_file_returns_io_error() {
 fn random_zip_is_not_excel() {
     let path = fixture_path("random_zip.zip");
     let err = open_workbook(&path).expect_err("random zip should not parse");
-    assert!(matches!(err, ExcelOpenError::NotExcelOpenXml));
+    assert!(matches!(
+        err,
+        ExcelOpenError::Container(ContainerError::NotOpcPackage)
+    ));
 }
 
 #[test]
 fn no_content_types_is_not_excel() {
     let path = fixture_path("no_content_types.xlsx");
     let err = open_workbook(&path).expect_err("missing content types should fail");
-    assert!(matches!(err, ExcelOpenError::NotExcelOpenXml));
+    assert!(matches!(
+        err,
+        ExcelOpenError::Container(ContainerError::NotOpcPackage)
+    ));
 }
 
 #[test]
@@ -2109,7 +2613,71 @@ fn not_zip_container_returns_error() {
     let path = std::env::temp_dir().join("excel_diff_not_zip.txt");
     fs::write(&path, "this is not a zip container").expect("write temp file");
     let err = open_workbook(&path).expect_err("non-zip should fail");
-    assert!(matches!(err, ExcelOpenError::NotZipContainer));
+    assert!(matches!(
+        err,
+        ExcelOpenError::Container(ContainerError::NotZipContainer)
+    ));
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn missing_workbook_xml_returns_workbookxmlmissing() {
+    let path = temp_xlsx_path("missing_workbook_xml");
+    let content_types = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+</Types>"#;
+
+    write_zip(&[("[Content_Types].xml", content_types)], &path);
+
+    let err = open_workbook(&path).expect_err("missing workbook xml should error");
+    assert!(matches!(err, ExcelOpenError::WorkbookXmlMissing));
+
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn missing_worksheet_xml_returns_worksheetxmlmissing() {
+    let path = temp_xlsx_path("missing_worksheet_xml");
+    let content_types = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+</Types>"#;
+
+    let workbook_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"#;
+
+    let relationships = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1"
+                Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"
+                Target="worksheets/sheet1.xml"/>
+</Relationships>"#;
+
+    write_zip(
+        &[
+            ("[Content_Types].xml", content_types),
+            ("xl/workbook.xml", workbook_xml),
+            ("xl/_rels/workbook.xml.rels", relationships),
+        ],
+        &path,
+    );
+
+    let err = open_workbook(&path).expect_err("missing worksheet xml should error");
+    match err {
+        ExcelOpenError::WorksheetXmlMissing { sheet_name } => {
+            assert_eq!(sheet_name, "Sheet1");
+        }
+        other => panic!("expected WorksheetXmlMissing, got {other:?}"),
+    }
+
     let _ = fs::remove_file(&path);
 }
 ```
@@ -2148,13 +2716,114 @@ fn test_locate_fixture() {
 
 ```rust
 use excel_diff::{
-    ExcelOpenError,
-    output::json::{CellDiff, diff_workbooks_to_json, serialize_cell_diffs},
+    CellAddress, CellSnapshot, CellValue, ContainerError, DiffOp, DiffReport, ExcelOpenError,
+    output::json::{
+        CellDiff, diff_report_to_cell_diffs, diff_workbooks_to_json, serialize_cell_diffs,
+        serialize_diff_report,
+    },
 };
 use serde_json::Value;
 
 mod common;
 use common::fixture_path;
+
+fn render_value(value: &Option<excel_diff::CellValue>) -> Option<String> {
+    match value {
+        Some(excel_diff::CellValue::Number(n)) => Some(n.to_string()),
+        Some(excel_diff::CellValue::Text(s)) => Some(s.clone()),
+        Some(excel_diff::CellValue::Bool(b)) => Some(b.to_string()),
+        None => None,
+    }
+}
+
+fn make_cell_snapshot(addr: CellAddress, value: Option<CellValue>) -> CellSnapshot {
+    CellSnapshot {
+        addr,
+        value,
+        formula: None,
+    }
+}
+
+#[test]
+fn diff_report_to_cell_diffs_filters_non_cell_ops() {
+    let addr1 = CellAddress::from_indices(0, 0);
+    let addr2 = CellAddress::from_indices(1, 1);
+
+    let report = DiffReport::new(vec![
+        DiffOp::SheetAdded {
+            sheet: "SheetAdded".into(),
+        },
+        DiffOp::cell_edited(
+            "Sheet1".into(),
+            addr1,
+            make_cell_snapshot(addr1, Some(CellValue::Number(1.0))),
+            make_cell_snapshot(addr1, Some(CellValue::Number(2.0))),
+        ),
+        DiffOp::RowAdded {
+            sheet: "Sheet1".into(),
+            row_idx: 5,
+            row_signature: None,
+        },
+        DiffOp::cell_edited(
+            "Sheet2".into(),
+            addr2,
+            make_cell_snapshot(addr2, Some(CellValue::Text("old".into()))),
+            make_cell_snapshot(addr2, Some(CellValue::Text("new".into()))),
+        ),
+        DiffOp::SheetRemoved {
+            sheet: "OldSheet".into(),
+        },
+    ]);
+
+    let cell_diffs = diff_report_to_cell_diffs(&report);
+    assert_eq!(
+        cell_diffs.len(),
+        2,
+        "only CellEdited ops should be projected"
+    );
+
+    assert_eq!(cell_diffs[0].coords, addr1.to_a1());
+    assert_eq!(cell_diffs[0].value_file1, Some("1".into()));
+    assert_eq!(cell_diffs[0].value_file2, Some("2".into()));
+
+    assert_eq!(cell_diffs[1].coords, addr2.to_a1());
+    assert_eq!(cell_diffs[1].value_file1, Some("old".into()));
+    assert_eq!(cell_diffs[1].value_file2, Some("new".into()));
+}
+
+#[test]
+fn diff_report_to_cell_diffs_maps_values_correctly() {
+    let addr_num = CellAddress::from_indices(2, 2); // C3
+    let addr_bool = CellAddress::from_indices(3, 3); // D4
+
+    let report = DiffReport::new(vec![
+        DiffOp::cell_edited(
+            "SheetX".into(),
+            addr_num,
+            make_cell_snapshot(addr_num, Some(CellValue::Number(42.5))),
+            make_cell_snapshot(addr_num, Some(CellValue::Number(43.5))),
+        ),
+        DiffOp::cell_edited(
+            "SheetX".into(),
+            addr_bool,
+            make_cell_snapshot(addr_bool, Some(CellValue::Bool(true))),
+            make_cell_snapshot(addr_bool, Some(CellValue::Bool(false))),
+        ),
+    ]);
+
+    let cell_diffs = diff_report_to_cell_diffs(&report);
+    assert_eq!(cell_diffs.len(), 2);
+
+    let number_diff = &cell_diffs[0];
+    assert_eq!(number_diff.coords, addr_num.to_a1());
+    assert_eq!(number_diff.value_file1, Some("42.5".into()));
+    assert_eq!(number_diff.value_file2, Some("43.5".into()));
+
+    let bool_diff = &cell_diffs[1];
+    assert_eq!(bool_diff.coords, addr_bool.to_a1());
+    assert_eq!(bool_diff.value_file1, Some("true".into()));
+    assert_eq!(bool_diff.value_file2, Some("false".into()));
+}
 
 #[test]
 fn test_json_format() {
@@ -2206,14 +2875,10 @@ fn test_json_empty_diff() {
     let fixture = fixture_path("pg1_basic_two_sheets.xlsx");
     let json =
         diff_workbooks_to_json(&fixture, &fixture).expect("diffing identical files should succeed");
-    let value: Value = serde_json::from_str(&json).expect("json should parse");
-
-    let arr = value
-        .as_array()
-        .expect("top-level json should be an array of cell diffs");
+    let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
     assert!(
-        arr.is_empty(),
-        "identical files should produce no cell diffs"
+        report.ops.is_empty(),
+        "identical files should produce no diff ops"
     );
 }
 
@@ -2223,17 +2888,16 @@ fn test_json_non_empty_diff() {
     let b = fixture_path("json_diff_single_cell_b.xlsx");
 
     let json = diff_workbooks_to_json(&a, &b).expect("diffing different files should succeed");
-    let value: Value = serde_json::from_str(&json).expect("json should parse");
-
-    let arr = value
-        .as_array()
-        .expect("top-level should be an array of cell diffs");
-    assert_eq!(arr.len(), 1, "expected a single cell difference");
-
-    let first = &arr[0];
-    assert_eq!(first["coords"], Value::String("C3".into()));
-    assert_eq!(first["value_file1"], Value::String("1".into()));
-    assert_eq!(first["value_file2"], Value::String("2".into()));
+    let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
+    assert_eq!(report.ops.len(), 1, "expected a single diff op");
+    match &report.ops[0] {
+        DiffOp::CellEdited { addr, from, to, .. } => {
+            assert_eq!(addr.to_a1(), "C3");
+            assert_eq!(render_value(&from.value), Some("1".into()));
+            assert_eq!(render_value(&to.value), Some("2".into()));
+        }
+        other => panic!("expected CellEdited, got {other:?}"),
+    }
 }
 
 #[test]
@@ -2242,17 +2906,16 @@ fn test_json_non_empty_diff_bool() {
     let b = fixture_path("json_diff_bool_b.xlsx");
 
     let json = diff_workbooks_to_json(&a, &b).expect("diffing different files should succeed");
-    let value: Value = serde_json::from_str(&json).expect("json should parse");
-
-    let arr = value
-        .as_array()
-        .expect("top-level should be an array of cell diffs");
-    assert_eq!(arr.len(), 1, "expected a single cell difference");
-
-    let first = &arr[0];
-    assert_eq!(first["coords"], Value::String("C3".into()));
-    assert_eq!(first["value_file1"], Value::String("true".into()));
-    assert_eq!(first["value_file2"], Value::String("false".into()));
+    let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
+    assert_eq!(report.ops.len(), 1, "expected a single diff op");
+    match &report.ops[0] {
+        DiffOp::CellEdited { addr, from, to, .. } => {
+            assert_eq!(addr.to_a1(), "C3");
+            assert_eq!(render_value(&from.value), Some("true".into()));
+            assert_eq!(render_value(&to.value), Some("false".into()));
+        }
+        other => panic!("expected CellEdited, got {other:?}"),
+    }
 }
 
 #[test]
@@ -2261,17 +2924,16 @@ fn test_json_diff_value_to_empty() {
     let b = fixture_path("json_diff_value_to_empty_b.xlsx");
 
     let json = diff_workbooks_to_json(&a, &b).expect("diffing different files should succeed");
-    let value: Value = serde_json::from_str(&json).expect("json should parse");
-
-    let arr = value
-        .as_array()
-        .expect("top-level should be an array of cell diffs");
-    assert_eq!(arr.len(), 1, "expected a single cell difference");
-
-    let first = &arr[0];
-    assert_eq!(first["coords"], Value::String("C3".into()));
-    assert_eq!(first["value_file1"], Value::String("1".into()));
-    assert_eq!(first["value_file2"], Value::Null);
+    let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
+    assert_eq!(report.ops.len(), 1, "expected a single diff op");
+    match &report.ops[0] {
+        DiffOp::CellEdited { addr, from, to, .. } => {
+            assert_eq!(addr.to_a1(), "C3");
+            assert_eq!(render_value(&from.value), Some("1".into()));
+            assert_eq!(render_value(&to.value), None);
+        }
+        other => panic!("expected CellEdited, got {other:?}"),
+    }
 }
 
 #[test]
@@ -2281,9 +2943,97 @@ fn test_diff_workbooks_to_json_reports_invalid_zip() {
         .expect_err("diffing invalid containers should return an error");
 
     assert!(
-        matches!(err, ExcelOpenError::NotZipContainer),
-        "expected NotZipContainer, got {err}"
+        matches!(
+            err,
+            ExcelOpenError::Container(ContainerError::NotZipContainer)
+        ),
+        "expected container error, got {err}"
     );
+}
+
+#[test]
+fn serialize_diff_report_nan_maps_to_serialization_error() {
+    let addr = CellAddress::from_indices(0, 0);
+    let report = DiffReport::new(vec![DiffOp::cell_edited(
+        "Sheet1".into(),
+        addr,
+        make_cell_snapshot(addr, Some(CellValue::Number(f64::NAN))),
+        make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
+    )]);
+
+    let err = serialize_diff_report(&report).expect_err("NaN should fail to serialize");
+    let wrapped = ExcelOpenError::SerializationError(err.to_string());
+
+    match wrapped {
+        ExcelOpenError::SerializationError(msg) => {
+            assert!(
+                msg.to_lowercase().contains("nan"),
+                "error message should mention NaN for clarity"
+            );
+        }
+        other => panic!("expected SerializationError, got {other:?}"),
+    }
+}
+
+#[test]
+fn serialize_diff_report_infinity_maps_to_serialization_error() {
+    let addr = CellAddress::from_indices(0, 0);
+    let report = DiffReport::new(vec![DiffOp::cell_edited(
+        "Sheet1".into(),
+        addr,
+        make_cell_snapshot(addr, Some(CellValue::Number(f64::INFINITY))),
+        make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
+    )]);
+
+    let err = serialize_diff_report(&report).expect_err("Infinity should fail to serialize");
+    let wrapped = ExcelOpenError::SerializationError(err.to_string());
+    match wrapped {
+        ExcelOpenError::SerializationError(msg) => {
+            assert!(
+                msg.to_lowercase().contains("infinity"),
+                "error message should mention infinity for clarity"
+            );
+        }
+        other => panic!("expected SerializationError, got {other:?}"),
+    }
+}
+
+#[test]
+fn serialize_diff_report_neg_infinity_maps_to_serialization_error() {
+    let addr = CellAddress::from_indices(0, 0);
+    let report = DiffReport::new(vec![DiffOp::cell_edited(
+        "Sheet1".into(),
+        addr,
+        make_cell_snapshot(addr, Some(CellValue::Number(f64::NEG_INFINITY))),
+        make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
+    )]);
+
+    let err = serialize_diff_report(&report).expect_err("NEG_INFINITY should fail to serialize");
+    let wrapped = ExcelOpenError::SerializationError(err.to_string());
+    match wrapped {
+        ExcelOpenError::SerializationError(msg) => {
+            assert!(
+                msg.to_lowercase().contains("infinity"),
+                "error message should mention infinity for clarity"
+            );
+        }
+        other => panic!("expected SerializationError, got {other:?}"),
+    }
+}
+
+#[test]
+fn serialize_diff_report_with_finite_numbers_succeeds() {
+    let addr = CellAddress::from_indices(1, 1);
+    let report = DiffReport::new(vec![DiffOp::cell_edited(
+        "Sheet1".into(),
+        addr,
+        make_cell_snapshot(addr, Some(CellValue::Number(2.5))),
+        make_cell_snapshot(addr, Some(CellValue::Number(3.5))),
+    )]);
+
+    let json = serialize_diff_report(&report).expect("finite values should serialize");
+    let parsed: DiffReport = serde_json::from_str(&json).expect("json should parse");
+    assert_eq!(parsed.ops.len(), 1);
 }
 ```
 
@@ -2311,10 +3061,10 @@ fn pg1_basic_two_sheets_structure() {
     assert_eq!(sheet1.grid.nrows, 3);
     assert_eq!(sheet1.grid.ncols, 3);
     assert_eq!(
-        sheet1.grid.rows[0].cells[0]
-            .value
-            .as_ref()
-            .and_then(CellValue::as_text),
+        sheet1
+            .grid
+            .get(0, 0)
+            .and_then(|cell| cell.value.as_ref().and_then(CellValue::as_text)),
         Some("R1C1")
     );
 
@@ -2322,10 +3072,10 @@ fn pg1_basic_two_sheets_structure() {
     assert_eq!(sheet2.grid.nrows, 5);
     assert_eq!(sheet2.grid.ncols, 2);
     assert_eq!(
-        sheet2.grid.rows[0].cells[0]
-            .value
-            .as_ref()
-            .and_then(CellValue::as_text),
+        sheet2
+            .grid
+            .get(0, 0)
+            .and_then(|cell| cell.value.as_ref().and_then(CellValue::as_text)),
         Some("S2_R1C1")
     );
 }
@@ -2346,10 +3096,7 @@ fn pg1_sparse_used_range_extents() {
     assert_cell_text(sheet, 0, 0, "A1");
     assert_cell_text(sheet, 1, 1, "B2");
     assert_cell_text(sheet, 9, 6, "G10");
-
-    for row in &sheet.grid.rows {
-        assert_eq!(row.cells.len() as u32, sheet.grid.ncols);
-    }
+    assert_eq!(sheet.grid.cell_count(), 3);
 }
 
 #[test]
@@ -2360,44 +3107,37 @@ fn pg1_empty_and_mixed_sheets() {
     let empty = sheet_by_name(&workbook, "Empty");
     assert_eq!(empty.grid.nrows, 0);
     assert_eq!(empty.grid.ncols, 0);
-    assert!(empty.grid.rows.is_empty());
+    assert_eq!(empty.grid.cell_count(), 0);
 
     let values_only = sheet_by_name(&workbook, "ValuesOnly");
     assert_eq!(values_only.grid.nrows, 10);
     assert_eq!(values_only.grid.ncols, 10);
+    let values: Vec<_> = values_only.grid.iter_cells().collect();
     assert!(
-        values_only
-            .grid
-            .rows
+        values
             .iter()
-            .flat_map(|r| &r.cells)
             .all(|c| c.value.is_some() && c.formula.is_none()),
         "ValuesOnly cells should have values and no formulas"
     );
     assert_eq!(
-        values_only.grid.rows[0].cells[0]
-            .value
-            .as_ref()
-            .and_then(CellValue::as_number),
+        values_only
+            .grid
+            .get(0, 0)
+            .and_then(|cell| cell.value.as_ref().and_then(CellValue::as_number)),
         Some(1.0)
     );
 
     let formulas = sheet_by_name(&workbook, "FormulasOnly");
     assert_eq!(formulas.grid.nrows, 10);
     assert_eq!(formulas.grid.ncols, 10);
-    let first = &formulas.grid.rows[0].cells[0];
+    let first = formulas.grid.get(0, 0).expect("A1 should exist");
     assert_eq!(first.formula.as_deref(), Some("ValuesOnly!A1"));
     assert!(
         first.value.is_some(),
         "Formulas should surface cached values when present"
     );
     assert!(
-        formulas
-            .grid
-            .rows
-            .iter()
-            .flat_map(|r| &r.cells)
-            .all(|c| c.formula.is_some()),
+        formulas.grid.iter_cells().all(|c| c.formula.is_some()),
         "All cells should carry formulas in FormulasOnly"
     );
 }
@@ -2411,7 +3151,10 @@ fn sheet_by_name<'a>(workbook: &'a excel_diff::Workbook, name: &str) -> &'a Shee
 }
 
 fn assert_cell_text(sheet: &Sheet, row: u32, col: u32, expected: &str) {
-    let cell = &sheet.grid.rows[row as usize].cells[col as usize];
+    let cell = sheet
+        .grid
+        .get(row, col)
+        .unwrap_or_else(|| panic!("cell {expected} should exist"));
     assert_eq!(cell.address.to_a1(), expected);
     assert_eq!(
         cell.value
@@ -2445,11 +3188,7 @@ fn sheet_by_name<'a>(workbook: &'a Workbook, name: &str) -> &'a Sheet {
 
 fn find_cell<'a>(sheet: &'a Sheet, addr: &str) -> Option<&'a Cell> {
     let (row, col) = address_to_index(addr).expect("address should parse");
-    sheet
-        .grid
-        .rows
-        .get(row as usize)
-        .and_then(|r| r.cells.get(col as usize))
+    sheet.grid.get(row, col)
 }
 
 fn snapshot(sheet: &Sheet, addr: &str) -> CellSnapshot {
@@ -2661,6 +3400,7 @@ fn op_kind(op: &DiffOp) -> &'static str {
         DiffOp::BlockMovedRows { .. } => "BlockMovedRows",
         DiffOp::BlockMovedColumns { .. } => "BlockMovedColumns",
         DiffOp::CellEdited { .. } => "CellEdited",
+        _ => "Unknown",
     }
 }
 
@@ -3520,6 +4260,167 @@ fn pg4_cell_edited_invariant_helper_rejects_mismatched_snapshot_addr() {
     };
 
     assert_cell_edited_invariants(&op, "Sheet1", "C3");
+}
+```
+
+---
+
+### File: `core\tests\signature_tests.rs`
+
+```rust
+use excel_diff::{Cell, CellAddress, CellValue, Grid};
+
+#[test]
+fn identical_rows_have_same_signature() {
+    let mut grid1 = Grid::new(1, 3);
+    let mut grid2 = Grid::new(1, 3);
+    for c in 0..3 {
+        let cell = Cell {
+            row: 0,
+            col: c,
+            address: CellAddress::from_indices(0, c),
+            value: Some(CellValue::Number(c as f64)),
+            formula: None,
+        };
+        grid1.insert(cell.clone());
+        grid2.insert(cell);
+    }
+    let sig1 = grid1.compute_row_signature(0);
+    let sig2 = grid2.compute_row_signature(0);
+    assert_eq!(sig1, sig2);
+}
+
+#[test]
+fn different_rows_have_different_signatures() {
+    let mut grid1 = Grid::new(1, 3);
+    let mut grid2 = Grid::new(1, 3);
+    for c in 0..3 {
+        grid1.insert(Cell {
+            row: 0,
+            col: c,
+            address: CellAddress::from_indices(0, c),
+            value: Some(CellValue::Number(c as f64)),
+            formula: None,
+        });
+        grid2.insert(Cell {
+            row: 0,
+            col: c,
+            address: CellAddress::from_indices(0, c),
+            value: Some(CellValue::Number((c + 1) as f64)),
+            formula: None,
+        });
+    }
+    let sig1 = grid1.compute_row_signature(0);
+    let sig2 = grid2.compute_row_signature(0);
+    assert_ne!(sig1, sig2);
+}
+
+#[test]
+fn compute_all_signatures_populates_fields() {
+    let mut grid = Grid::new(5, 5);
+    grid.insert(Cell {
+        row: 2,
+        col: 2,
+        address: CellAddress::from_indices(2, 2),
+        value: Some(CellValue::Text("center".into())),
+        formula: None,
+    });
+    assert!(grid.row_signatures.is_none());
+    assert!(grid.col_signatures.is_none());
+    grid.compute_all_signatures();
+    assert!(grid.row_signatures.is_some());
+    assert!(grid.col_signatures.is_some());
+    assert_eq!(grid.row_signatures.as_ref().unwrap().len(), 5);
+    assert_eq!(grid.col_signatures.as_ref().unwrap().len(), 5);
+}
+```
+
+---
+
+### File: `core\tests\sparse_grid_tests.rs`
+
+```rust
+use excel_diff::{Cell, CellAddress, CellValue, Grid};
+
+#[test]
+fn sparse_grid_empty_has_zero_cells() {
+    let grid = Grid::new(1000, 1000);
+    assert_eq!(grid.cell_count(), 0);
+    assert!(grid.is_empty());
+    assert_eq!(grid.nrows, 1000);
+    assert_eq!(grid.ncols, 1000);
+}
+
+#[test]
+fn sparse_grid_insert_and_retrieve() {
+    let mut grid = Grid::new(100, 100);
+    let cell = Cell {
+        row: 50,
+        col: 50,
+        address: CellAddress::from_indices(50, 50),
+        value: Some(CellValue::Number(42.0)),
+        formula: None,
+    };
+    grid.insert(cell);
+    assert_eq!(grid.cell_count(), 1);
+    let retrieved = grid.get(50, 50).expect("cell should exist");
+    assert_eq!(retrieved.value, Some(CellValue::Number(42.0)));
+    assert!(grid.get(0, 0).is_none());
+}
+
+#[test]
+fn sparse_grid_iter_cells_only_populated() {
+    let mut grid = Grid::new(1000, 1000);
+    for i in 0..10 {
+        let cell = Cell {
+            row: i * 100,
+            col: i * 100,
+            address: CellAddress::from_indices(i * 100, i * 100),
+            value: Some(CellValue::Number(i as f64)),
+            formula: None,
+        };
+        grid.insert(cell);
+    }
+    let cells: Vec<_> = grid.iter_cells().collect();
+    assert_eq!(cells.len(), 10);
+}
+
+#[test]
+fn sparse_grid_memory_efficiency() {
+    let grid = Grid::new(10_000, 1_000);
+    assert!(std::mem::size_of_val(&grid) < 1024);
+}
+
+#[test]
+fn rows_iter_covers_all_rows() {
+    let grid = Grid::new(3, 5);
+    let rows: Vec<u32> = grid.rows_iter().collect();
+    assert_eq!(rows, vec![0, 1, 2]);
+}
+
+#[test]
+fn cols_iter_covers_all_cols() {
+    let grid = Grid::new(4, 2);
+    let cols: Vec<u32> = grid.cols_iter().collect();
+    assert_eq!(cols, vec![0, 1]);
+}
+
+#[test]
+fn rows_iter_and_get_are_consistent() {
+    let mut grid = Grid::new(2, 2);
+    grid.insert(Cell {
+        row: 1,
+        col: 1,
+        address: CellAddress::from_indices(1, 1),
+        value: Some(CellValue::Number(1.0)),
+        formula: None,
+    });
+
+    for r in grid.rows_iter() {
+        for c in grid.cols_iter() {
+            let _ = grid.get(r, c);
+        }
+    }
 }
 ```
 

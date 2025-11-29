@@ -2,6 +2,7 @@
 
 > This document specifies the parsing, data model, and diff algorithms for the Excel Diff Engine.
 > For testing strategy and milestones, see `excel_diff_testing_plan.md`.
+> Legacy PG3/PG4/PG5 callouts describe the pre-refactor shape; see `docs/meta/plans/2025-11-29-refactor/spec.md` for the current architecture baseline.
 
 ---
 
@@ -79,6 +80,17 @@ Caveat: newer PBIX with **enhanced dataset metadata** may no longer store a Data
 Your parser should therefore:
 
 * Detect absence of `DataMashup` and clearly report "new-style PBIX without DataMashup; use tabular model path instead."
+
+### 3.3 Error layering
+
+`ExcelOpenError` is the facade surface for workbook parsing and JSON serialization. It is intentionally thin and delegates to layered error types:
+
+* `ExcelOpenError` variants: `Container(#[from] ContainerError)`, `GridParse(#[from] GridParseError)`, `DataMashup(#[from] DataMashupError)`, `WorkbookXmlMissing`, `WorksheetXmlMissing { sheet_name }`, `SerializationError(String)` (used by JSON helpers).
+* `ContainerError` covers host issues: `Io`, `NotZipContainer`, `NotOpcPackage` (missing `[Content_Types].xml`).
+* `GridParseError` covers sheet XML problems: `XmlError`, `InvalidAddress`, `SharedStringOutOfBounds`.
+* `DataMashupError` covers the optional mashup stream: `Base64Invalid`, `UnsupportedVersion { version }`, `FramingInvalid`, `XmlError`.
+
+Host- and DataMashup-specific details live in their respective error types so `ExcelOpenError` stays stable while inner layers can evolve independently.
 
 ---
 
@@ -322,11 +334,12 @@ The frontend and CLI consume these ops to render visual diffs or JSON reports, a
 
 ### 6.1 JSON cell diff surface
 
-The core crate exposes lightweight JSON helpers for cell-by-cell comparisons:
+The core crate exposes lightweight JSON helpers for cell-by-cell comparisons as projections from the canonical diff IR:
 
-* `output::json::CellDiff { coords, value_file1, value_file2 }` serializes to a JSON object with those keys, and `serialize_cell_diffs` returns a JSON array of `CellDiff` objects.
-* `diff_workbooks` / `diff_workbooks_to_json` walk paired workbooks and emit `CellDiff` values; this surface is public and intentionally pulls `serde_json` in as a runtime dependency (extending the earlier PG3 test-only guidance for JSON).
-* Serialization failures from `diff_workbooks_to_json` are currently mapped to `ExcelOpenError::XmlParseError` as the shared "structured text" error bucket for XML and JSON; a dedicated `JsonError` can be added if the error model is refined later.
+* `engine::diff_workbooks` is the canonical IR producer, yielding a `DiffReport` of `DiffOp` values.
+* `output::json::diff_report_to_cell_diffs` filters `DiffReport` down to `CellDiff { coords, value_file1, value_file2 }` entries for the CLI/fixtures; non-cell ops are intentionally ignored in this projection.
+* `serialize_diff_report` and `serialize_cell_diffs` convert either representation to JSON strings.
+* `diff_workbooks_to_json` is a convenience shim for fixtures/CLI that opens workbooks, calls `engine::diff_workbooks`, and serializes the `DiffReport`. Serialization failures from this helper are mapped to `ExcelOpenError::SerializationError(String)` for clarity.
 
 ---
 
