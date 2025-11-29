@@ -54,3 +54,11 @@ Activity Log - 2025-11-28-cell-snapshots-pg3
 - Files modified: docs/meta/plans/2025-11-28-cell-snapshots-pg3/decision.yaml; docs/meta/logs/2025-11-28-cell-snapshots-pg3/activity_log.txt.
 - Complications: none.
 - Validation: cargo fmt --manifest-path core/Cargo.toml; cargo clippy --all-targets --manifest-path core/Cargo.toml; cargo test --manifest-path core/Cargo.toml; cargo check --target wasm32-unknown-unknown --no-default-features --manifest-path core/Cargo.toml.
+
+## Remediation Round 8
+- Addressed Fix 1 (positive JSON diff coverage) by confirming the existing non-empty diff integration tests in `core/tests/output_tests.rs` exercise `diff_workbooks_to_json` with changed-cell fixtures.
+- Addressed Fix 2 (doc alignment on JSON surface and serde_json dependency) by re-reviewing `decision.yaml`, the PG3 mini-spec, and `excel_diff_specification.md`; no new edits were required because they already describe the public JSON helpers and runtime dependency.
+- Addressed Fix 3 (JSON serialization error mapping) by confirming the documented `XmlParseError` mapping remains accurate and consistent with the current API.
+- Files modified: docs/meta/logs/2025-11-28-cell-snapshots-pg3/activity_log.txt.
+- Complications: none; no production or fixture changes were necessary.
+- Validation: cargo fmt; cargo clippy --all-targets; cargo test; cargo check --manifest-path core/Cargo.toml --target wasm32-unknown-unknown --no-default-features.

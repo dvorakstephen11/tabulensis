@@ -61,6 +61,15 @@ pub enum DiffOp {
         #[serde(skip_serializing_if = "Option::is_none")]
         block_hash: Option<u64>,
     },
+    /// Logical change to a single cell.
+    ///
+    /// Invariants (maintained by producers and tests, not by the type system):
+    /// - `addr` is the canonical location for the edit.
+    /// - `from.addr` and `to.addr` must both equal `addr`.
+    /// - `CellSnapshot` equality intentionally ignores `addr` and compares only
+    ///   `(value, formula)`, so `DiffOp::CellEdited` equality does not by itself
+    ///   enforce the address invariants; callers must respect them when
+    ///   constructing ops.
     CellEdited {
         sheet: SheetId,
         addr: CellAddress,

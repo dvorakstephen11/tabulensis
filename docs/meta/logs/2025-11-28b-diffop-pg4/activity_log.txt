@@ -13,3 +13,10 @@
 - Introduced a workspace `Cargo.toml` so `cargo test` works from the repo root while retaining `core/` as the crate manifest.
 - Realigned decision/spec branch identifiers to `2025-11-28b-diffop-pg4` and noted the logs relocation requirement.
 - Validation: cargo fmt; cargo clippy --all-targets --manifest-path core/Cargo.toml; cargo test (workspace root); cargo check --target wasm32-unknown-unknown --no-default-features --manifest-path core/Cargo.toml.
+
+## Remediation Round 2
+- Finding 4: Added PG4 JSON key-set tests for sheet-level, row/column (with and without signatures), and block move DiffOps to lock wire shapes across variants.
+- Finding 6: Added DiffOp/DiffReport deserialization tests that reject invalid CellEdited addresses at the top level and inside snapshots, ensuring nested errors surface `"invalid cell address"` details.
+- Finding 5: Documented CellEdited address invariants and equality semantics in core/src/diff.rs and linked the PG4 invariant helper comment to the Rustdoc guidance.
+- Files touched: core/tests/pg4_diffop_tests.rs; core/src/diff.rs.
+- Validation: cargo fmt; cargo clippy --all-targets --all-features; cargo test (workspace root). Complications: none.

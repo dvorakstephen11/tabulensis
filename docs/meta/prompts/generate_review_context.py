@@ -891,35 +891,16 @@ def update_remediation_implementer():
         print(f"Error: Implementer file not found: {implementer_file}")
         return None
     
-    content = implementer_file.read_text(encoding='utf-8')
+    template_content = implementer_file.read_text(encoding='utf-8')
     
-    pattern1 = re.compile(
-        r'`docs/meta/reviews/\[branch-name\]/remediation\.md`'
-        r'\s*\(or\s+`remediation\[A-Z\]\.md`\s+for\s+subsequent\s+rounds\s+of\s+remediation;'
-        r'\s+use\s+the\s+latest\s+file\s+if\s+there\s+are\s+multiple\)'
-    )
-    replacement1 = f'`{latest_path}`'
-    content = pattern1.sub(replacement1, content)
+    output_content = template_content.replace('{{BRANCH_NAME}}', branch_name)
+    output_content = output_content.replace('{{REMEDIATION_PATH}}', latest_path)
     
-    pattern2 = re.compile(r'`docs/meta/reviews/\[branch-name\]/remediation\.md`')
-    content = pattern2.sub(f'`{latest_path}`', content)
-    
-    pattern3 = re.compile(r'\[branch-name\]')
-    content = pattern3.sub(branch_name, content)
-    
-    pattern4 = re.compile(r'\n+Replace `[^`]+` with the actual branch name for this cycle\.\s*')
-    content = pattern4.sub('\n', content)
-    
-    content = content.rstrip() + '\n'
-    
-    implementer_file.write_text(content, encoding='utf-8')
-    
-    print(f"\nUpdated: {implementer_file}")
-    print(f"All references now point to: {latest_path}")
+    print(f"\nGenerated prompt for: {latest_path}")
     
     try:
-        copy_to_clipboard(content)
-        print(f"\nRemediation implementer prompt copied to clipboard!")
+        copy_to_clipboard(output_content)
+        print(f"Remediation implementer prompt copied to clipboard!")
     except Exception as e:
         print(f"\nWarning: Could not copy to clipboard: {e}")
     
