@@ -1,11 +1,20 @@
 use excel_diff::{
-    ExcelOpenError,
+    ContainerError, DiffOp, DiffReport, ExcelOpenError,
     output::json::{CellDiff, diff_workbooks_to_json, serialize_cell_diffs},
 };
 use serde_json::Value;
 
 mod common;
 use common::fixture_path;
+
+fn render_value(value: &Option<excel_diff::CellValue>) -> Option<String> {
+    match value {
+        Some(excel_diff::CellValue::Number(n)) => Some(n.to_string()),
+        Some(excel_diff::CellValue::Text(s)) => Some(s.clone()),
+        Some(excel_diff::CellValue::Bool(b)) => Some(b.to_string()),
+        None => None,
+    }
+}
 
 #[test]
 fn test_json_format() {
@@ -57,14 +66,10 @@ fn test_json_empty_diff() {
     let fixture = fixture_path("pg1_basic_two_sheets.xlsx");
     let json =
         diff_workbooks_to_json(&fixture, &fixture).expect("diffing identical files should succeed");
-    let value: Value = serde_json::from_str(&json).expect("json should parse");
-
-    let arr = value
-        .as_array()
-        .expect("top-level json should be an array of cell diffs");
+    let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
     assert!(
-        arr.is_empty(),
-        "identical files should produce no cell diffs"
+        report.ops.is_empty(),
+        "identical files should produce no diff ops"
     );
 }
 
@@ -74,17 +79,16 @@ fn test_json_non_empty_diff() {
     let b = fixture_path("json_diff_single_cell_b.xlsx");
 
     let json = diff_workbooks_to_json(&a, &b).expect("diffing different files should succeed");
-    let value: Value = serde_json::from_str(&json).expect("json should parse");
-
-    let arr = value
-        .as_array()
-        .expect("top-level should be an array of cell diffs");
-    assert_eq!(arr.len(), 1, "expected a single cell difference");
-
-    let first = &arr[0];
-    assert_eq!(first["coords"], Value::String("C3".into()));
-    assert_eq!(first["value_file1"], Value::String("1".into()));
-    assert_eq!(first["value_file2"], Value::String("2".into()));
+    let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
+    assert_eq!(report.ops.len(), 1, "expected a single diff op");
+    match &report.ops[0] {
+        DiffOp::CellEdited { addr, from, to, .. } => {
+            assert_eq!(addr.to_a1(), "C3");
+            assert_eq!(render_value(&from.value), Some("1".into()));
+            assert_eq!(render_value(&to.value), Some("2".into()));
+        }
+        other => panic!("expected CellEdited, got {other:?}"),
+    }
 }
 
 #[test]
@@ -93,17 +97,16 @@ fn test_json_non_empty_diff_bool() {
     let b = fixture_path("json_diff_bool_b.xlsx");
 
     let json = diff_workbooks_to_json(&a, &b).expect("diffing different files should succeed");
-    let value: Value = serde_json::from_str(&json).expect("json should parse");
-
-    let arr = value
-        .as_array()
-        .expect("top-level should be an array of cell diffs");
-    assert_eq!(arr.len(), 1, "expected a single cell difference");
-
-    let first = &arr[0];
-    assert_eq!(first["coords"], Value::String("C3".into()));
-    assert_eq!(first["value_file1"], Value::String("true".into()));
-    assert_eq!(first["value_file2"], Value::String("false".into()));
+    let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
+    assert_eq!(report.ops.len(), 1, "expected a single diff op");
+    match &report.ops[0] {
+        DiffOp::CellEdited { addr, from, to, .. } => {
+            assert_eq!(addr.to_a1(), "C3");
+            assert_eq!(render_value(&from.value), Some("true".into()));
+            assert_eq!(render_value(&to.value), Some("false".into()));
+        }
+        other => panic!("expected CellEdited, got {other:?}"),
+    }
 }
 
 #[test]
@@ -112,17 +115,16 @@ fn test_json_diff_value_to_empty() {
     let b = fixture_path("json_diff_value_to_empty_b.xlsx");
 
     let json = diff_workbooks_to_json(&a, &b).expect("diffing different files should succeed");
-    let value: Value = serde_json::from_str(&json).expect("json should parse");
-
-    let arr = value
-        .as_array()
-        .expect("top-level should be an array of cell diffs");
-    assert_eq!(arr.len(), 1, "expected a single cell difference");
-
-    let first = &arr[0];
-    assert_eq!(first["coords"], Value::String("C3".into()));
-    assert_eq!(first["value_file1"], Value::String("1".into()));
-    assert_eq!(first["value_file2"], Value::Null);
+    let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
+    assert_eq!(report.ops.len(), 1, "expected a single diff op");
+    match &report.ops[0] {
+        DiffOp::CellEdited { addr, from, to, .. } => {
+            assert_eq!(addr.to_a1(), "C3");
+            assert_eq!(render_value(&from.value), Some("1".into()));
+            assert_eq!(render_value(&to.value), None);
+        }
+        other => panic!("expected CellEdited, got {other:?}"),
+    }
 }
 
 #[test]
@@ -132,7 +134,10 @@ fn test_diff_workbooks_to_json_reports_invalid_zip() {
         .expect_err("diffing invalid containers should return an error");
 
     assert!(
-        matches!(err, ExcelOpenError::NotZipContainer),
-        "expected NotZipContainer, got {err}"
+        matches!(
+            err,
+            ExcelOpenError::Container(ContainerError::NotZipContainer)
+        ),
+        "expected container error, got {err}"
     );
 }

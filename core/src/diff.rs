@@ -1,19 +1,10 @@
-use crate::workbook::{CellAddress, CellSnapshot};
+use crate::workbook::{CellAddress, CellSnapshot, ColSignature, RowSignature};
 
 pub type SheetId = String;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct RowSignature {
-    pub hash: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct ColSignature {
-    pub hash: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind")]
+#[non_exhaustive]
 pub enum DiffOp {
     SheetAdded {
         sheet: SheetId,
@@ -91,6 +82,100 @@ impl DiffReport {
         DiffReport {
             version: Self::SCHEMA_VERSION.to_string(),
             ops,
+        }
+    }
+}
+
+impl DiffOp {
+    pub fn cell_edited(
+        sheet: SheetId,
+        addr: CellAddress,
+        from: CellSnapshot,
+        to: CellSnapshot,
+    ) -> DiffOp {
+        debug_assert_eq!(from.addr, addr, "from.addr must match canonical addr");
+        debug_assert_eq!(to.addr, addr, "to.addr must match canonical addr");
+        DiffOp::CellEdited {
+            sheet,
+            addr,
+            from,
+            to,
+        }
+    }
+
+    pub fn row_added(sheet: SheetId, row_idx: u32, row_signature: Option<RowSignature>) -> DiffOp {
+        DiffOp::RowAdded {
+            sheet,
+            row_idx,
+            row_signature,
+        }
+    }
+
+    pub fn row_removed(
+        sheet: SheetId,
+        row_idx: u32,
+        row_signature: Option<RowSignature>,
+    ) -> DiffOp {
+        DiffOp::RowRemoved {
+            sheet,
+            row_idx,
+            row_signature,
+        }
+    }
+
+    pub fn column_added(
+        sheet: SheetId,
+        col_idx: u32,
+        col_signature: Option<ColSignature>,
+    ) -> DiffOp {
+        DiffOp::ColumnAdded {
+            sheet,
+            col_idx,
+            col_signature,
+        }
+    }
+
+    pub fn column_removed(
+        sheet: SheetId,
+        col_idx: u32,
+        col_signature: Option<ColSignature>,
+    ) -> DiffOp {
+        DiffOp::ColumnRemoved {
+            sheet,
+            col_idx,
+            col_signature,
+        }
+    }
+
+    pub fn block_moved_rows(
+        sheet: SheetId,
+        src_start_row: u32,
+        row_count: u32,
+        dst_start_row: u32,
+        block_hash: Option<u64>,
+    ) -> DiffOp {
+        DiffOp::BlockMovedRows {
+            sheet,
+            src_start_row,
+            row_count,
+            dst_start_row,
+            block_hash,
+        }
+    }
+
+    pub fn block_moved_columns(
+        sheet: SheetId,
+        src_start_col: u32,
+        col_count: u32,
+        dst_start_col: u32,
+        block_hash: Option<u64>,
+    ) -> DiffOp {
+        DiffOp::BlockMovedColumns {
+            sheet,
+            src_start_col,
+            col_count,
+            dst_start_col,
+            block_hash,
         }
     }
 }

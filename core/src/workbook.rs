@@ -1,6 +1,9 @@
 use crate::addressing::{address_to_index, index_to_address};
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
 /// A snapshot of a cell's logical content (address, value, formula).
@@ -17,6 +20,14 @@ impl CellSnapshot {
             addr: cell.address,
             value: cell.value.clone(),
             formula: cell.formula.clone(),
+        }
+    }
+
+    pub fn empty(addr: CellAddress) -> CellSnapshot {
+        CellSnapshot {
+            addr,
+            value: None,
+            formula: None,
         }
     }
 }
@@ -45,13 +56,9 @@ pub enum SheetKind {
 pub struct Grid {
     pub nrows: u32,
     pub ncols: u32,
-    pub rows: Vec<Row>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Row {
-    pub index: u32,
-    pub cells: Vec<Cell>,
+    pub cells: HashMap<(u32, u32), Cell>,
+    pub row_signatures: Option<Vec<RowSignature>>,
+    pub col_signatures: Option<Vec<ColSignature>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -119,6 +126,119 @@ pub enum CellValue {
     Number(f64),
     Text(String),
     Bool(bool),
+}
+
+impl Hash for CellValue {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            CellValue::Number(n) => {
+                0u8.hash(state);
+                n.to_bits().hash(state);
+            }
+            CellValue::Text(s) => {
+                1u8.hash(state);
+                s.hash(state);
+            }
+            CellValue::Bool(b) => {
+                2u8.hash(state);
+                b.hash(state);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RowSignature {
+    pub hash: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ColSignature {
+    pub hash: u64,
+}
+
+impl Grid {
+    pub fn new(nrows: u32, ncols: u32) -> Grid {
+        Grid {
+            nrows,
+            ncols,
+            cells: HashMap::new(),
+            row_signatures: None,
+            col_signatures: None,
+        }
+    }
+
+    pub fn get(&self, row: u32, col: u32) -> Option<&Cell> {
+        self.cells.get(&(row, col))
+    }
+
+    pub fn get_mut(&mut self, row: u32, col: u32) -> Option<&mut Cell> {
+        self.cells.get_mut(&(row, col))
+    }
+
+    pub fn insert(&mut self, cell: Cell) {
+        self.cells.insert((cell.row, cell.col), cell);
+    }
+
+    pub fn cell_count(&self) -> usize {
+        self.cells.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.cells.is_empty()
+    }
+
+    pub fn iter_cells(&self) -> impl Iterator<Item = &Cell> {
+        self.cells.values()
+    }
+
+    pub fn rows_iter(&self) -> impl Iterator<Item = u32> + '_ {
+        0..self.nrows
+    }
+
+    pub fn cols_iter(&self) -> impl Iterator<Item = u32> + '_ {
+        0..self.ncols
+    }
+
+    pub fn compute_row_signature(&self, row: u32) -> RowSignature {
+        let mut hasher = DefaultHasher::new();
+        for col in 0..self.ncols {
+            if let Some(cell) = self.get(row, col) {
+                cell.value.hash(&mut hasher);
+                cell.formula.hash(&mut hasher);
+            }
+        }
+        RowSignature {
+            hash: hasher.finish(),
+        }
+    }
+
+    pub fn compute_col_signature(&self, col: u32) -> ColSignature {
+        let mut hasher = DefaultHasher::new();
+        for row in 0..self.nrows {
+            if let Some(cell) = self.get(row, col) {
+                cell.value.hash(&mut hasher);
+                cell.formula.hash(&mut hasher);
+            }
+        }
+        ColSignature {
+            hash: hasher.finish(),
+        }
+    }
+
+    pub fn compute_all_signatures(&mut self) {
+        let mut row_sigs = Vec::with_capacity(self.nrows as usize);
+        for row in 0..self.nrows {
+            row_sigs.push(self.compute_row_signature(row));
+        }
+        self.row_signatures = Some(row_sigs);
+
+        let mut col_sigs = Vec::with_capacity(self.ncols as usize);
+        for col in 0..self.ncols {
+            col_sigs.push(self.compute_col_signature(col));
+        }
+        self.col_signatures = Some(col_sigs);
+    }
 }
 
 impl PartialEq for CellSnapshot {

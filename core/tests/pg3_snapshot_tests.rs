@@ -15,11 +15,7 @@ fn sheet_by_name<'a>(workbook: &'a Workbook, name: &str) -> &'a Sheet {
 
 fn find_cell<'a>(sheet: &'a Sheet, addr: &str) -> Option<&'a Cell> {
     let (row, col) = address_to_index(addr).expect("address should parse");
-    sheet
-        .grid
-        .rows
-        .get(row as usize)
-        .and_then(|r| r.cells.get(col as usize))
+    sheet.grid.get(row, col)
 }
 
 fn snapshot(sheet: &Sheet, addr: &str) -> CellSnapshot {

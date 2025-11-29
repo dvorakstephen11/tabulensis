@@ -56,6 +56,7 @@ fn op_kind(op: &DiffOp) -> &'static str {
         DiffOp::BlockMovedRows { .. } => "BlockMovedRows",
         DiffOp::BlockMovedColumns { .. } => "BlockMovedColumns",
         DiffOp::CellEdited { .. } => "CellEdited",
+        _ => "Unknown",
     }
 }
 

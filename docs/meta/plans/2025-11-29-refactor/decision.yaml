@@ -1,0 +1,246 @@
+cycle_id: "2025-11-29-refactor"
+date: "2025-11-29"
+branch_name: "2025-11-29-refactor"
+
+work_type: "architectural_refactoring"
+
+target_subsystem:
+  - "workbook_grid_ir"
+  - "diff_engine"
+  - "excel_open_xml_parser_structure"
+  - "error_types"
+
+target_testing_milestones:
+  - "Performance – Sparse grid memory efficiency"
+  - "Phase 3 – PG5: Canonical diff engine producing DiffReport"
+  - "Architecture – Module decomposition and layer separation"
+
+rationale:
+  - >
+    The unified design evaluation (2025-11-29-unified-evaluation.md) identifies
+    critical performance bottlenecks: the dense Grid representation allocates
+    memory for every cell in the used range, causing gigabytes of allocation
+    for large sparse files. This directly threatens the "instant diff on 100MB
+    files" goal and must be addressed before any performance-sensitive work.
+  - >
+    The current diff implementation in output/json.rs produces Vec<CellDiff>
+    directly, bypassing the DiffOp/DiffReport IR that was designed in PG4.
+    This creates parallel representations and prevents future diff algorithms
+    from sharing infrastructure. Unifying around DiffOp now avoids accumulating
+    architectural debt.
+  - >
+    excel_open_xml.rs is 1000+ lines conflating Host Container (ZIP I/O),
+    Binary Framing (MS-QDEFF), and Semantic Parsing (Grid XML) responsibilities.
+    The evaluation recommends splitting into focused modules to improve
+    maintainability and prepare for PBIX host support.
+  - >
+    DiffOp and ExcelOpenError are not marked #[non_exhaustive], making future
+    variant additions a breaking change. The evaluation recommends hardening
+    these enums now while the API surface is small and there are no external
+    consumers.
+  - >
+    The codebase incorrectly maps JSON serialization errors to XmlParseError.
+    A dedicated SerializationError variant aligns error semantics with actual
+    failure modes.
+  - >
+    Row and column signatures are specified in the DiffOp types but not yet
+    computable from the Grid. Adding signature computation methods prepares
+    the foundation for future alignment algorithms (H1).
+
+risks_of_deferral:
+  - >
+    Memory consumption will remain a blocking issue for large file support.
+    Any work on performance benchmarks (P1/P2) or advanced algorithms (H1)
+    will be meaningless until the dense Grid bottleneck is resolved.
+  - >
+    The parallel diff representations (CellDiff vs DiffOp) will diverge
+    further as features are added, making eventual unification more expensive
+    and error-prone.
+  - >
+    The monolithic parser will grow as PBIX support and additional features
+    are added, making the eventual refactoring more difficult and risky.
+  - >
+    Adding new DiffOp or error variants without #[non_exhaustive] will break
+    downstream code once external consumers exist, requiring a major version
+    bump or migration support.
+  - >
+    Future M Query domain layer work (H4) depends on having a sparse Grid and
+    proper module separation; deferring this refactoring blocks that work.
+
+references:
+  evaluation_source:
+    - "docs/meta/plans/2025-11-29-refactor/2025-11-29-unified-evaluation.md"
+  architecture:
+    - "docs/rust_docs/excel_diff_specification.md"
+  testing_plan:
+    - "docs/rust_docs/excel_diff_testing_plan.md"
+  difficulty_analysis:
+    - "docs/rust_docs/excel_diff_difficulty_analysis.md"
+  implementation_state:
+    - "core/src/workbook.rs"
+    - "core/src/diff.rs"
+    - "core/src/excel_open_xml.rs"
+    - "core/src/output/json.rs"
+  prior_cycles:
+    - "docs/meta/plans/2025-11-28b-diffop-pg4/spec.md"
+    - "docs/meta/plans/2025-11-28-cell-snapshots-pg3/spec.md"
+
+difficulty_estimate:
+  hardest_milestone_name: "H1 – High-performance 2D grid diff engine (row/col alignment, moves)"
+  hardest_milestone_score: 10
+  this_cycle_score: 5
+  reasoning: >
+    This cycle involves significant structural changes across multiple modules
+    (Grid IR, diff engine, parser decomposition, error types) but does not
+    implement complex algorithms. The sparse Grid transition requires updating
+    all existing tests and call sites, and the module split requires careful
+    dependency management. This is meaningfully harder than previous IR-shaping
+    cycles (score 3-4) due to the breadth of changes, but well below the
+    algorithmic complexity of grid alignment or M AST diff (scores 8-10).
+
+deferred_items_addressed:
+  - id: "EVAL-PERF-001"
+    description: >
+      Grid Allocation Bottleneck: Dense Vec<Vec<Cell>> representation causes
+      massive memory allocation for sparse files.
+    source: "2025-11-29-unified-evaluation.md – Section 6: Performance Awareness"
+    plan: >
+      Replace Grid.rows: Vec<Row> with Grid.cells: HashMap<(u32, u32), Cell>.
+      Remove Row struct entirely. Add Grid::get(), Grid::insert(), Grid::iter_cells() API.
+
+  - id: "EVAL-ARCH-001"
+    description: >
+      Parallel diff representations: CellDiff in output/json.rs bypasses DiffOp IR.
+    source: "2025-11-29-unified-evaluation.md – Section 1: Architectural Integrity"
+    plan: >
+      Create engine.rs with diff_workbooks() -> DiffReport. Refactor output/json.rs
+      to consume DiffReport instead of computing diffs directly.
+
+  - id: "EVAL-ARCH-002"
+    description: >
+      Monolithic parser: excel_open_xml.rs conflates container, framing, and
+      semantic parsing responsibilities.
+    source: "2025-11-29-unified-evaluation.md – Section 1 & 4: Maintainability"
+    plan: >
+      Split into container.rs (OpcContainer), grid_parser.rs (sheet XML parsing),
+      datamashup_framing.rs (MS-QDEFF logic). Reduce excel_open_xml.rs to facade.
+
+  - id: "EVAL-RUST-001"
+    description: >
+      DiffOp and ExcelOpenError lack #[non_exhaustive], preventing safe enum extension.
+    source: "2025-11-29-unified-evaluation.md – Section 3 & 5: Rust Idiomaticity"
+    plan: >
+      Add #[non_exhaustive] attribute to DiffOp and ExcelOpenError enums.
+
+  - id: "EVAL-RUST-002"
+    description: >
+      DiffOp::CellEdited invariants (addr matching from.addr and to.addr) are
+      documented but not enforced by constructors.
+    source: "2025-11-29-unified-evaluation.md – Section 3: Rust Idiomaticity"
+    plan: >
+      Add DiffOp::cell_edited() constructor with debug_assert! for invariants.
+
+  - id: "EVAL-ERR-001"
+    description: >
+      JSON serialization errors incorrectly map to XmlParseError.
+    source: "2025-11-29-unified-evaluation.md – Section 5: Pattern Appropriateness"
+    plan: >
+      Add ExcelOpenError::SerializationError variant for serde_json failures.
+
+  - id: "EVAL-PERF-002"
+    description: >
+      Row and column signatures exist in DiffOp types but are not computable
+      from Grid.
+    source: "2025-11-29-unified-evaluation.md – Section 6: Performance Awareness"
+    plan: >
+      Add Hash impl for CellValue. Add Grid::compute_row_signature(),
+      Grid::compute_col_signature(), Grid::compute_all_signatures() methods.
+
+open_deferred_items_not_in_scope_this_cycle:
+  - id: "EVAL-ALG-001"
+    description: >
+      Advanced diff algorithms (Patience Diff, LCS, Myers/Histogram, LAPJV)
+      for row/column alignment.
+    note: >
+      Deferred to H1 cycle. This refactoring provides the foundation (sparse
+      Grid, signatures, canonical DiffReport) that algorithms will build on.
+
+  - id: "EVAL-M-001"
+    description: >
+      M Query domain layer (Query, MStep, M AST structures).
+    note: >
+      Deferred to H4 cycle. Requires sparse Grid and module separation first.
+
+  - id: "EVAL-HOST-001"
+    description: >
+      PBIX host container support and host abstraction trait.
+    note: >
+      Deferred to Phase 3.5. The container.rs module provides the foundation.
+
+  - id: "EVAL-BENCH-001"
+    description: >
+      Performance benchmark harnesses (P1/P2 scenarios, metrics-export feature).
+    note: >
+      Deferred to follow-up cycle. Sparse Grid must land first for meaningful
+      benchmarks.
+
+  - id: "EVAL-STREAM-001"
+    description: >
+      Streaming I/O: Parse directly from ZIP stream without loading entire
+      parts into memory.
+    note: >
+      Lower priority optimization. Current approach is acceptable for most files.
+
+interfaces_allowed_to_change_later:
+  - >
+    Internal helper functions in container.rs, grid_parser.rs, and
+    datamashup_framing.rs may evolve as long as public APIs remain stable.
+  - >
+    Grid::compute_*_signature() hash algorithm may change (currently uses
+    DefaultHasher) as long as signature comparison semantics remain consistent
+    within a single diff operation.
+  - >
+    The DiffOp constructor functions may add additional validation or
+    normalization as requirements clarify.
+
+interfaces_expected_stable_after_this_cycle:
+  - >
+    Grid sparse API: Grid::new(), Grid::get(), Grid::insert(), Grid::iter_cells(),
+    Grid::cell_count(), Grid::is_empty() with HashMap<(u32, u32), Cell> storage.
+  - >
+    engine::diff_workbooks(&Workbook, &Workbook) -> DiffReport as the canonical
+    entry point for workbook comparison.
+  - >
+    DiffOp and ExcelOpenError as #[non_exhaustive] enums, enabling future
+    variant additions without breaking changes.
+  - >
+    ExcelOpenError::SerializationError variant for JSON/serialization failures.
+  - >
+    OpcContainer as the abstraction for ZIP-based OPC packages.
+
+notes_for_implementer_agent:
+  - >
+    The Grid sparse transition is breaking: all code accessing grid.rows[r].cells[c]
+    must change to grid.get(r, c). Use grep to find all such call sites in
+    tests and production code before starting implementation.
+  - >
+    When implementing Hash for CellValue, use f64::to_bits() for Number variant
+    to ensure deterministic hashing. Do not add ordered_float dependency unless
+    explicitly approved.
+  - >
+    The module split should preserve all existing functionality. After splitting,
+    run the full test suite to verify no regressions. The excel_open_xml.rs
+    facade should re-export types for backward compatibility.
+  - >
+    Constructor functions like DiffOp::cell_edited() should use debug_assert!
+    (not assert!) for invariant checks to avoid runtime overhead in release builds.
+  - >
+    Keep the Row struct removal clean: do not add compatibility shims unless
+    absolutely necessary. The sparse Grid is the target design.
+  - >
+    When updating tests, prefer grid.get(r, c).expect("cell should exist") over
+    unwrap() for clearer error messages. Use grid.get(r, c).is_none() to test
+    for empty cells.
+  - >
+    The ContainerError and GridParseError types in the new modules should be
+    convertible to ExcelOpenError via From impls for ergonomic error propagation.

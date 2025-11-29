@@ -17,10 +17,10 @@ fn pg1_basic_two_sheets_structure() {
     assert_eq!(sheet1.grid.nrows, 3);
     assert_eq!(sheet1.grid.ncols, 3);
     assert_eq!(
-        sheet1.grid.rows[0].cells[0]
-            .value
-            .as_ref()
-            .and_then(CellValue::as_text),
+        sheet1
+            .grid
+            .get(0, 0)
+            .and_then(|cell| cell.value.as_ref().and_then(CellValue::as_text)),
         Some("R1C1")
     );
 
@@ -28,10 +28,10 @@ fn pg1_basic_two_sheets_structure() {
     assert_eq!(sheet2.grid.nrows, 5);
     assert_eq!(sheet2.grid.ncols, 2);
     assert_eq!(
-        sheet2.grid.rows[0].cells[0]
-            .value
-            .as_ref()
-            .and_then(CellValue::as_text),
+        sheet2
+            .grid
+            .get(0, 0)
+            .and_then(|cell| cell.value.as_ref().and_then(CellValue::as_text)),
         Some("S2_R1C1")
     );
 }
@@ -52,10 +52,7 @@ fn pg1_sparse_used_range_extents() {
     assert_cell_text(sheet, 0, 0, "A1");
     assert_cell_text(sheet, 1, 1, "B2");
     assert_cell_text(sheet, 9, 6, "G10");
-
-    for row in &sheet.grid.rows {
-        assert_eq!(row.cells.len() as u32, sheet.grid.ncols);
-    }
+    assert_eq!(sheet.grid.cell_count(), 3);
 }
 
 #[test]
@@ -66,44 +63,37 @@ fn pg1_empty_and_mixed_sheets() {
     let empty = sheet_by_name(&workbook, "Empty");
     assert_eq!(empty.grid.nrows, 0);
     assert_eq!(empty.grid.ncols, 0);
-    assert!(empty.grid.rows.is_empty());
+    assert_eq!(empty.grid.cell_count(), 0);
 
     let values_only = sheet_by_name(&workbook, "ValuesOnly");
     assert_eq!(values_only.grid.nrows, 10);
     assert_eq!(values_only.grid.ncols, 10);
+    let values: Vec<_> = values_only.grid.iter_cells().collect();
     assert!(
-        values_only
-            .grid
-            .rows
+        values
             .iter()
-            .flat_map(|r| &r.cells)
             .all(|c| c.value.is_some() && c.formula.is_none()),
         "ValuesOnly cells should have values and no formulas"
     );
     assert_eq!(
-        values_only.grid.rows[0].cells[0]
-            .value
-            .as_ref()
-            .and_then(CellValue::as_number),
+        values_only
+            .grid
+            .get(0, 0)
+            .and_then(|cell| cell.value.as_ref().and_then(CellValue::as_number)),
         Some(1.0)
     );
 
     let formulas = sheet_by_name(&workbook, "FormulasOnly");
     assert_eq!(formulas.grid.nrows, 10);
     assert_eq!(formulas.grid.ncols, 10);
-    let first = &formulas.grid.rows[0].cells[0];
+    let first = formulas.grid.get(0, 0).expect("A1 should exist");
     assert_eq!(first.formula.as_deref(), Some("ValuesOnly!A1"));
     assert!(
         first.value.is_some(),
         "Formulas should surface cached values when present"
     );
     assert!(
-        formulas
-            .grid
-            .rows
-            .iter()
-            .flat_map(|r| &r.cells)
-            .all(|c| c.formula.is_some()),
+        formulas.grid.iter_cells().all(|c| c.formula.is_some()),
         "All cells should carry formulas in FormulasOnly"
     );
 }
@@ -117,7 +107,10 @@ fn sheet_by_name<'a>(workbook: &'a excel_diff::Workbook, name: &str) -> &'a Shee
 }
 
 fn assert_cell_text(sheet: &Sheet, row: u32, col: u32, expected: &str) {
-    let cell = &sheet.grid.rows[row as usize].cells[col as usize];
+    let cell = sheet
+        .grid
+        .get(row, col)
+        .unwrap_or_else(|| panic!("cell {expected} should exist"));
     assert_eq!(cell.address.to_a1(), expected);
     assert_eq!(
         cell.value

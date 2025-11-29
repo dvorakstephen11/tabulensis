@@ -1,0 +1,7 @@
+[2025-11-29 06:17:48] Started implementation. Reviewed spec and decision docs.
+[2025-11-29 06:18:51] Updated workbook Grid to sparse HashMap, added signature types and CellValue Hash; moved DiffOp signature deps and constructors.
+[2025-11-29 06:30:29] Implemented sparse Grid HashMap storage, moved signatures to workbook, added hashing and signature computation APIs.
+[2025-11-29 06:30:29] Added engine module with canonical diff_workbooks and refactored JSON output to consume DiffReport.
+[2025-11-29 06:30:29] Split excel_open_xml into container/grid_parser/datamashup_framing modules with non_exhaustive errors and new SerializationError variant.
+[2025-11-29 06:30:29] Updated existing tests for sparse Grid API; added sparse_grid_tests.rs, engine_tests.rs, signature_tests.rs.
+[2025-11-29 06:34:56] Ran cargo fmt, cargo clippy --all-targets --all-features (clean), cargo test --all-features (all passing).
