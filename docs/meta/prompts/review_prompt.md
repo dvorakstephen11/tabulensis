@@ -311,6 +311,15 @@ pub enum DiffOp {
         #[serde(skip_serializing_if = "Option::is_none")]
         block_hash: Option<u64>,
     },
+    /// Logical change to a single cell.
+    ///
+    /// Invariants (maintained by producers and tests, not by the type system):
+    /// - `addr` is the canonical location for the edit.
+    /// - `from.addr` and `to.addr` must both equal `addr`.
+    /// - `CellSnapshot` equality intentionally ignores `addr` and compares only
+    ///   `(value, formula)`, so `DiffOp::CellEdited` equality does not by itself
+    ///   enforce the address invariants; callers must respect them when
+    ///   constructing ops.
     CellEdited {
         sheet: SheetId,
         addr: CellAddress,
@@ -2621,6 +2630,7 @@ fn sample_cell_edited() -> DiffOp {
     }
 }
 
+// Enforces the invariant documented on DiffOp::CellEdited.
 fn assert_cell_edited_invariants(op: &DiffOp, expected_sheet: &str, expected_addr: &str) {
     let expected_addr_parsed: CellAddress =
         expected_addr.parse().expect("expected_addr should parse");
@@ -2652,6 +2662,14 @@ fn op_kind(op: &DiffOp) -> &'static str {
         DiffOp::BlockMovedColumns { .. } => "BlockMovedColumns",
         DiffOp::CellEdited { .. } => "CellEdited",
     }
+}
+
+fn json_keys(json: &Value) -> BTreeSet<String> {
+    json.as_object()
+        .expect("object json")
+        .keys()
+        .cloned()
+        .collect()
 }
 
 #[test]
@@ -3058,6 +3076,245 @@ fn pg4_block_moved_columns_json_optional_hash() {
 }
 
 #[test]
+fn pg4_sheet_added_and_removed_json_shape() {
+    let added = DiffOp::SheetAdded {
+        sheet: "Sheet1".to_string(),
+    };
+    let added_json = serde_json::to_value(&added).expect("serialize sheet added");
+    assert_eq!(added_json["kind"], "SheetAdded");
+    assert_eq!(added_json["sheet"], "Sheet1");
+    let added_keys = json_keys(&added_json);
+    let expected_keys: BTreeSet<String> = ["kind", "sheet"].into_iter().map(String::from).collect();
+    assert_eq!(added_keys, expected_keys);
+
+    let removed = DiffOp::SheetRemoved {
+        sheet: "SheetX".to_string(),
+    };
+    let removed_json = serde_json::to_value(&removed).expect("serialize sheet removed");
+    assert_eq!(removed_json["kind"], "SheetRemoved");
+    assert_eq!(removed_json["sheet"], "SheetX");
+    let removed_keys = json_keys(&removed_json);
+    assert_eq!(removed_keys, expected_keys);
+}
+
+#[test]
+fn pg4_row_and_column_json_shape_keysets() {
+    let expected_row_with_sig: BTreeSet<String> = ["kind", "row_idx", "row_signature", "sheet"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    let expected_row_without_sig: BTreeSet<String> = ["kind", "row_idx", "sheet"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    let expected_col_with_sig: BTreeSet<String> = ["col_idx", "col_signature", "kind", "sheet"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    let expected_col_without_sig: BTreeSet<String> = ["col_idx", "kind", "sheet"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+
+    let row_added_with_sig = DiffOp::RowAdded {
+        sheet: "Sheet1".to_string(),
+        row_idx: 10,
+        row_signature: Some(RowSignature { hash: 0xDEADBEEF }),
+    };
+    let row_added_without_sig = DiffOp::RowAdded {
+        sheet: "Sheet1".to_string(),
+        row_idx: 11,
+        row_signature: None,
+    };
+    let row_removed_with_sig = DiffOp::RowRemoved {
+        sheet: "Sheet1".to_string(),
+        row_idx: 9,
+        row_signature: Some(RowSignature { hash: 0x1234 }),
+    };
+    let row_removed_without_sig = DiffOp::RowRemoved {
+        sheet: "Sheet1".to_string(),
+        row_idx: 8,
+        row_signature: None,
+    };
+
+    let col_added_with_sig = DiffOp::ColumnAdded {
+        sheet: "Sheet2".to_string(),
+        col_idx: 2,
+        col_signature: Some(ColSignature { hash: 0xABCDEF }),
+    };
+    let col_added_without_sig = DiffOp::ColumnAdded {
+        sheet: "Sheet2".to_string(),
+        col_idx: 3,
+        col_signature: None,
+    };
+    let col_removed_with_sig = DiffOp::ColumnRemoved {
+        sheet: "Sheet2".to_string(),
+        col_idx: 1,
+        col_signature: Some(ColSignature { hash: 0x123456 }),
+    };
+    let col_removed_without_sig = DiffOp::ColumnRemoved {
+        sheet: "Sheet2".to_string(),
+        col_idx: 0,
+        col_signature: None,
+    };
+
+    let cases = vec![
+        (
+            row_added_with_sig,
+            "RowAdded",
+            expected_row_with_sig.clone(),
+        ),
+        (
+            row_added_without_sig,
+            "RowAdded",
+            expected_row_without_sig.clone(),
+        ),
+        (
+            row_removed_with_sig,
+            "RowRemoved",
+            expected_row_with_sig.clone(),
+        ),
+        (
+            row_removed_without_sig,
+            "RowRemoved",
+            expected_row_without_sig.clone(),
+        ),
+        (
+            col_added_with_sig,
+            "ColumnAdded",
+            expected_col_with_sig.clone(),
+        ),
+        (
+            col_added_without_sig,
+            "ColumnAdded",
+            expected_col_without_sig.clone(),
+        ),
+        (
+            col_removed_with_sig,
+            "ColumnRemoved",
+            expected_col_with_sig.clone(),
+        ),
+        (
+            col_removed_without_sig,
+            "ColumnRemoved",
+            expected_col_without_sig.clone(),
+        ),
+    ];
+
+    for (op, expected_kind, expected_keys) in cases {
+        let json = serde_json::to_value(&op).expect("serialize diffop");
+        assert_eq!(json["kind"], expected_kind);
+        let keys = json_keys(&json);
+        assert_eq!(keys, expected_keys);
+    }
+}
+
+#[test]
+fn pg4_block_move_json_shape_keysets() {
+    let expected_rows_with_hash: BTreeSet<String> = [
+        "block_hash",
+        "dst_start_row",
+        "kind",
+        "row_count",
+        "sheet",
+        "src_start_row",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    let expected_rows_without_hash: BTreeSet<String> = [
+        "dst_start_row",
+        "kind",
+        "row_count",
+        "sheet",
+        "src_start_row",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    let expected_cols_with_hash: BTreeSet<String> = [
+        "block_hash",
+        "col_count",
+        "dst_start_col",
+        "kind",
+        "sheet",
+        "src_start_col",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    let expected_cols_without_hash: BTreeSet<String> = [
+        "col_count",
+        "dst_start_col",
+        "kind",
+        "sheet",
+        "src_start_col",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+
+    let block_rows_with_hash = DiffOp::BlockMovedRows {
+        sheet: "Sheet1".to_string(),
+        src_start_row: 10,
+        row_count: 3,
+        dst_start_row: 5,
+        block_hash: Some(0x12345678),
+    };
+    let block_rows_without_hash = DiffOp::BlockMovedRows {
+        sheet: "Sheet1".to_string(),
+        src_start_row: 20,
+        row_count: 2,
+        dst_start_row: 0,
+        block_hash: None,
+    };
+    let block_cols_with_hash = DiffOp::BlockMovedColumns {
+        sheet: "Sheet2".to_string(),
+        src_start_col: 7,
+        col_count: 2,
+        dst_start_col: 3,
+        block_hash: Some(0xCAFEBABE),
+    };
+    let block_cols_without_hash = DiffOp::BlockMovedColumns {
+        sheet: "Sheet2".to_string(),
+        src_start_col: 4,
+        col_count: 1,
+        dst_start_col: 9,
+        block_hash: None,
+    };
+
+    let cases = vec![
+        (
+            block_rows_with_hash,
+            "BlockMovedRows",
+            expected_rows_with_hash.clone(),
+        ),
+        (
+            block_rows_without_hash,
+            "BlockMovedRows",
+            expected_rows_without_hash.clone(),
+        ),
+        (
+            block_cols_with_hash,
+            "BlockMovedColumns",
+            expected_cols_with_hash.clone(),
+        ),
+        (
+            block_cols_without_hash,
+            "BlockMovedColumns",
+            expected_cols_without_hash.clone(),
+        ),
+    ];
+
+    for (op, expected_kind, expected_keys) in cases {
+        let json = serde_json::to_value(&op).expect("serialize diffop");
+        assert_eq!(json["kind"], expected_kind);
+        let keys = json_keys(&json);
+        assert_eq!(keys, expected_keys);
+    }
+}
+
+#[test]
 fn pg4_diffop_roundtrip_each_variant() {
     let ops = vec![
         DiffOp::SheetAdded {
@@ -3190,6 +3447,66 @@ fn pg4_diff_report_json_shape() {
     assert_eq!(ops_json.len(), 2);
     assert_eq!(ops_json[0]["kind"], "SheetRemoved");
     assert_eq!(ops_json[1]["kind"], "RowRemoved");
+}
+
+#[test]
+fn pg4_diffop_cell_edited_rejects_invalid_top_level_addr() {
+    let json = r#"{
+        "kind": "CellEdited",
+        "sheet": "Sheet1",
+        "addr": "1A",
+        "from": { "addr": "C3", "value": null, "formula": null },
+        "to":   { "addr": "C3", "value": null, "formula": null }
+    }"#;
+
+    let err = serde_json::from_str::<DiffOp>(json)
+        .expect_err("invalid top-level addr should fail to deserialize");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("invalid cell address") && msg.contains("1A"),
+        "error should mention invalid address: {msg}",
+    );
+}
+
+#[test]
+fn pg4_diffop_cell_edited_rejects_invalid_snapshot_addrs() {
+    let json = r#"{
+        "kind": "CellEdited",
+        "sheet": "Sheet1",
+        "addr": "C3",
+        "from": { "addr": "A0", "value": null, "formula": null },
+        "to":   { "addr": "C3", "value": null, "formula": null }
+    }"#;
+
+    let err = serde_json::from_str::<DiffOp>(json)
+        .expect_err("invalid snapshot addr should fail to deserialize");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("invalid cell address") && msg.contains("A0"),
+        "error should mention invalid address: {msg}",
+    );
+}
+
+#[test]
+fn pg4_diff_report_rejects_invalid_nested_addr() {
+    let json = r#"{
+        "version": "1",
+        "ops": [{
+            "kind": "CellEdited",
+            "sheet": "Sheet1",
+            "addr": "1A",
+            "from": { "addr": "C3", "value": null, "formula": null },
+            "to":   { "addr": "C3", "value": null, "formula": null }
+        }]
+    }"#;
+
+    let err = serde_json::from_str::<DiffReport>(json)
+        .expect_err("invalid nested addr should fail to deserialize");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("invalid cell address") && msg.contains("1A"),
+        "error should surface nested invalid address: {msg}",
+    );
 }
 
 #[test]

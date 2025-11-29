@@ -3,7 +3,7 @@
 
 ## Summary
 
-The PG4 cycle cleanly implements the planned `DiffOp` and `DiffReport` types, wires them into the public API, and adds the specified type-level and JSON-level tests. The JSON schema and invariants match the mini-spec and the main Excel diff specification. All prior remediation items for this branch (column JSON tests, `CellEdited` invariant helper, and workspace manifest) are present and validated. I did not find any critical or moderate issues; the only observations are minor hardening opportunities around schema tests and documentation of invariants. Overall, the branch is ready to ship as the PG4 “DiffOp wire format” milestone.
+The PG4 DiffOp / DiffReport implementation on branch `2025-11-28b-diffop-pg4` cleanly matches the mini-spec, the broader excel_diff specification, and the decision record. The new `diff` module defines exactly the planned domain types and JSON schema; `core/src/lib.rs` re-exports them as required; and the PG4 test suite not only implements the full mini-spec test plan but also incorporates all prior remediation requests (JSON key-set locking, invalid-address deserialization tests, and `CellEdited` invariants documented and enforced). All tests pass from both the `core/` crate and the workspace root, and there is no sign of architectural drift or unhandled error paths in the newly added code. I recommend proceeding to release with no further remediation for this cycle.
 
 ## Recommendation
 
@@ -12,141 +12,112 @@ The PG4 cycle cleanly implements the planned `DiffOp` and `DiffReport` types, wi
 
 ## Findings
 
-### Finding 1: PG4 scope fully implemented and aligned with spec
+### Finding 1: Prior remediation items fully addressed
 
-- **Severity**: Minor (positive confirmation; no action required)
-- **Category**: Spec Alignment
+- **Severity**: Minor (informational)
+- **Category**: Spec Deviation → Resolved / Process Follow‑through
 - **Description**:  
-  The new `diff` module defines `SheetId`, `RowSignature`, `ColSignature`, `DiffOp`, and `DiffReport` exactly as described in the PG4 mini-spec and Excel diff specification:
-
-  * `DiffOp` is a `#[serde(tag = "kind")]` enum with variants:
-    * `SheetAdded/SheetRemoved { sheet: SheetId }`
-    * `RowAdded/RowRemoved { sheet, row_idx, row_signature: Option<RowSignature> }`
-    * `ColumnAdded/ColumnRemoved { sheet, col_idx, col_signature: Option<ColSignature> }`
-    * `BlockMovedRows/BlockMovedColumns { sheet, src_start_*, *_count, dst_start_*, block_hash: Option<u64> }`
-    * `CellEdited { sheet, addr: CellAddress, from: CellSnapshot, to: CellSnapshot }`   
-  * Optional signatures and `block_hash` fields use `#[serde(skip_serializing_if = "Option::is_none")]` as required by the JSON-schema description.   
-  * `DiffReport` has `version: String`, `ops: Vec<DiffOp>`, a `SCHEMA_VERSION` constant of `"1"`, and `DiffReport::new` sets `version` accordingly.   
-  * `core/src/lib.rs` exposes these via `pub mod diff;` and `pub use diff::{ColSignature, DiffOp, DiffReport, RowSignature, SheetId};` as specified. :contentReference[oaicite:3]{index=3}  
-
-- **Evidence**: `core/src/diff.rs`, `core/src/lib.rs`, PG4 spec section 2–3. 
-- **Impact**: Confirms that downstream consumers can rely on the planned PG4 wire types and JSON schema. No change requested; this is the intended outcome of the cycle.
-
----
-
-### Finding 2: All planned PG4 tests (plus remediation tests) are present and meaningful
-
-- **Severity**: Minor (positive confirmation; no action required)
-- **Category**: Test Coverage
-- **Description**:  
-  The mini-spec’s entire PG4 test plan is implemented in `core/tests/pg4_diffop_tests.rs`, and the prior remediation plan’s additional tests are also present:
-
-  * **Construction tests (PG4.1)**:
-    * `pg4_construct_cell_edited_diffop` builds a `CellEdited` op for `Sheet1!C3`, then uses the invariant helper to assert `sheet == "Sheet1"` and `addr`, `from.addr`, `to.addr` all equal `C3`, and that `from.value != to.value`.   
-    * `pg4_construct_row_and_column_diffops` covers `RowAdded/RowRemoved/ColumnAdded/ColumnRemoved` with both `Some` and `None` signatures, asserting required fields and that optional signatures behave as expected (plus inequality between the with/without forms).   
-    * `pg4_construct_block_move_diffops` constructs `BlockMovedRows`/`BlockMovedColumns` with and without hashes and asserts numeric fields and optional hash behavior.   
-  * **JSON shape tests (PG4.2 + remediation)**:
-    * `pg4_cell_edited_json_shape` asserts `kind`, `sheet`, `addr`, nested snapshot addresses, and that the top-level key set is exactly `{ "addr","from","kind","sheet","to" }`.   
-    * `pg4_row_added_json_optional_signature` verifies omission of `row_signature` when `None` and presence of `row_signature.hash` when `Some`.   
-    * `pg4_block_moved_rows_json_optional_hash` asserts omission/presence of `block_hash` for `BlockMovedRows`.   
-    * **Remediation adds**: `pg4_column_added_json_optional_signature` and `pg4_block_moved_columns_json_optional_hash` mirror the row-side tests for column signatures and column block hashes.   
-  * **Round-trip tests (PG4.3)**:
-    * `pg4_diffop_roundtrip_each_variant` serializes/deserializes a representative instance of every `DiffOp` variant (including both `Some`/`None` flavors where applicable) and asserts equality plus `CellEdited` invariants via the helper.   
-    * `pg4_cell_edited_roundtrip_preserves_snapshot_addrs` ensures that after JSON round-trip, `CellEdited` snapshots still carry address `C3` and satisfy the invariants helper, guarding against the “address ignored in equality” subtlety.   
-  * **DiffReport tests (PG4.4)**:
-    * `pg4_diff_report_roundtrip_preserves_order` checks `DiffReport::new` sets version to `SCHEMA_VERSION`, that JSON round-trip preserves `version == "1"` and the exact op sequence, and that the ordered `kind` sequence is as expected.   
-    * `pg4_diff_report_json_shape` asserts that a serialized report’s top-level keys are exactly `{"version","ops"}`, `version == "1"`, and `ops[*]["kind"]` matches the constructed variants.   
-  * **Invariants helper + negative test (remediation)**:
-    * `assert_cell_edited_invariants` centralizes the `CellEdited` address invariants and is used across all relevant tests.   
-    * `pg4_cell_edited_invariant_helper_rejects_mismatched_snapshot_addr` is a `#[should_panic]` test that deliberately constructs a `CellEdited` with a mismatched `from.addr` and confirms the helper fails, proving it is sensitive to the invariant.   
-
-  All PG4 tests run and pass under `cargo test`, as shown in `cycle_summary.txt`. :contentReference[oaicite:18]{index=18}
-
-- **Evidence**: `core/tests/pg4_diffop_tests.rs`, PG4 spec section 6, cycle summary test output. 
-- **Impact**: This confirms the behavioral contract for PG4 is enforced at the level of type construction, JSON shape, and JSON round-trip; no additional coverage is strictly required for this milestone.
-
----
-
-### Finding 3: Prior remediation items are fully addressed
-
-- **Severity**: Minor (positive confirmation; no action required)
-- **Category**: Spec / Process Alignment
-- **Description**:  
-  The earlier remediation plan for this branch called out three improvements:
-
-  1. **Column-side JSON shape tests for optional fields**  
-     * Implemented as `pg4_column_added_json_optional_signature` and `pg4_block_moved_columns_json_optional_hash`, mirroring row-based tests and validating omission/presence of `col_signature` and `block_hash` keys.   
-
-  2. **`CellEdited` invariant helper and negative test**  
-     * The `assert_cell_edited_invariants` helper is present and used in all `CellEdited` tests, and `pg4_cell_edited_invariant_helper_rejects_mismatched_snapshot_addr` confirms that mismatched snapshot addresses are rejected.   
-
-  3. **Workspace manifest so `cargo test` works from repo root**  
-     * A root `Cargo.toml` declares a workspace with `core` as the sole member, allowing `cargo test` to run from the repository root without changing the `core` crate definition.   
-
-- **Evidence**: `combined_remediations.md`, `core/tests/pg4_diffop_tests.rs`, root `Cargo.toml`, cycle summary. 
-- **Impact**: Process-wise, this closes the loop on the earlier review feedback. No further remediation is needed for those items.
-
----
-
-### Finding 4: DiffOp JSON key-set is only strictly locked-in for `CellEdited`
-
-- **Severity**: Minor
-- **Category**: Missing Test
-- **Description**:  
-  For `DiffOp::CellEdited`, there is a precise key-set assertion verifying that the top-level JSON object contains exactly `"kind","sheet","addr","from","to"`. Other variants (e.g., `RowAdded`, `RowRemoved`, `ColumnAdded`, `ColumnRemoved`, `BlockMovedRows`, `BlockMovedColumns`, `SheetAdded`, `SheetRemoved`) are tested for presence/absence of specific fields (`row_idx`, `col_idx`, optional signatures, `block_hash`) but do not assert a complete key-set; they would not catch accidental introduction of extraneous keys on those variants.
-
-  * `pg4_cell_edited_json_shape` explicitly checks the full key-set for `CellEdited`.   
-  * `pg4_row_added_json_optional_signature`, `pg4_column_added_json_optional_signature`, and the block-move JSON tests verify specific fields and omission rules but not that no extra fields exist.   
-
-  The PG4 spec states that DiffOp JSON schema (field names, tag name `"kind"`, and container structure) is treated as stable once PG4 is complete. 
-
-- **Evidence**: `core/tests/pg4_diffop_tests.rs`, PG4 spec JSON-schema discussion. 
+  Earlier reviews identified three classes of gaps:
+  1. Missing JSON shape tests for column‑side optional fields and `BlockMovedColumns`.  
+  2. Weak visibility/enforcement of `CellEdited` address invariants (relying on tests but not type-level docs).  
+  3. No workspace `Cargo.toml` at repo root, making `cargo test` from the root inconsistent with the meta-process.   
+  The current snapshot shows all three have been implemented:
+  - New tests: `pg4_column_added_json_optional_signature`, `pg4_block_moved_columns_json_optional_hash`, and additional key-set tests such as `pg4_sheet_added_and_removed_json_shape`, `pg4_row_and_column_json_shape_keysets`, and `pg4_block_move_json_shape_keysets` lock JSON field presence and omission across all variants.   
+  - `DiffOp::CellEdited` now has an explicit Rustdoc block describing its address invariants and the subtlety that `CellSnapshot` equality ignores `addr`, with tests funneled through `assert_cell_edited_invariants` and a `#[should_panic]` negative test to catch misuse.   
+  - A minimal workspace `Cargo.toml` at the repo root (`[workspace] members = ["core"]`) exists, and the activity log confirms that `cargo test` runs successfully from the workspace root. 
+- **Evidence**:  
+  - `core/src/diff.rs` for doc comments and type definitions. :contentReference[oaicite:4]{index=4}  
+  - `core/tests/pg4_diffop_tests.rs` for JSON shape tests and invariant helper.   
+  - `Cargo.toml` at workspace root; `cycle_summary.txt` remediation rounds and test runs. 
 - **Impact**:  
-  This is not a current bug—the implementation matches the spec and all tests pass—but future changes that accidentally add unexpected fields to, say, `RowAdded` could slip through existing tests. Given that extra fields are often backwards-compatible at the JSON level, this is low risk but slightly weakens our guardrails around schema stability.
+  These changes close previously noted gaps: JSON schema is now strongly defended by tests, `CellEdited` invariants are explicit and discoverable, and the workspace layout matches the meta-process. No further action needed; this is included here to record that earlier findings have been fully resolved.
 
----
+### Finding 2: DiffOp / DiffReport implementation cleanly matches the PG4 mini-spec
 
-### Finding 5: `CellEdited` invariants are not surfaced in type-level documentation
-
-- **Severity**: Minor
-- **Category**: Gap
+- **Severity**: Minor (informational)
+- **Category**: Gap → None (conformance check)
 - **Description**:  
-  The invariant that `CellEdited.addr` must match `from.addr` and `to.addr` is enforced in tests via `assert_cell_edited_invariants` and called out in the PG4 spec.   
-  However, the `DiffOp::CellEdited` variant in `core/src/diff.rs` has no doc comments explaining this semantic invariant or clarifying that equality for `CellEdited` uses snapshot equality, which ignores snapshot `addr`.   
-
-  The earlier remediation plan suggested (optionally) documenting this near the `CellEdited` variant so that future authors and external consumers do not assume equality implies address alignment. :contentReference[oaicite:30]{index=30}  
-
-- **Evidence**: `core/src/diff.rs`, PG4 spec section 4.3, PG3 snapshot tests. 
+  The new `diff` module defines exactly the types and fields specified in the PG4 mini-spec:
+  - `pub type SheetId = String;`
+  - `RowSignature { hash: u64 }` and `ColSignature { hash: u64 }` with `Debug + Clone + PartialEq + Eq + Serialize + Deserialize`.  
+  - `DiffOp` with the full variant set: `SheetAdded`, `SheetRemoved`, `RowAdded`, `RowRemoved`, `ColumnAdded`, `ColumnRemoved`, `BlockMovedRows`, `BlockMovedColumns`, and `CellEdited`. All variants match the spec’s field names and types (including zero-based indices for row/column fields).   
+  - `DiffOp` uses `#[serde(tag = "kind")]` as required, and optional fields (`row_signature`, `col_signature`, `block_hash`) have `#[serde(skip_serializing_if = "Option::is_none")]` to enforce omission‑when‑None, per the JSON shape contract.   
+  - `DiffReport { version: String, ops: Vec<DiffOp> }` plus `SCHEMA_VERSION: "1"` and `new(ops)` initializing `version` from that constant, as in the spec.   
+  `core/src/lib.rs` re‑exports `DiffOp`, `DiffReport`, `SheetId`, `RowSignature`, and `ColSignature` exactly as described.   
+- **Evidence**:  
+  - `core/src/diff.rs` and `core/src/lib.rs`.   
+  - `spec_2025-11-28b-diffop-pg4.md` sections 1–3 (scope, behavioral contract, interfaces).   
 - **Impact**:  
-  This is a usability/documentation gap rather than a correctness defect. Today, all internal constructions of `CellEdited` obey the invariant and the tests will catch regressions. But without type-level documentation, future contributors (or external code constructing DiffOps manually) may rely on `PartialEq` alone and accidentally produce inconsistent `CellEdited` values that won’t be obviously flagged without tests.
+  There is no divergence between spec and implementation. This finding simply records that conformance has been verified.
 
----
+### Finding 3: PG4 test plan fully implemented and extended beyond minimum
 
-### Finding 6: No direct DiffOp-level tests for invalid/tampered JSON inputs
-
-- **Severity**: Minor
-- **Category**: Missing Test
+- **Severity**: Minor (informational)
+- **Category**: Missing Test → Resolved / Coverage Assessment
 - **Description**:  
-  PG3 snapshot tests comprehensively cover serialization/deserialization behavior of `CellSnapshot`, including:
-
-  * Round-tripping snapshots through JSON.
-  * Detecting tampered `addr` fields.
-  * Rejecting invalid A1-style addresses like `"1A"` and `"A0"`. :contentReference[oaicite:32]{index=32}  
-
-  PG4 tests exercise only valid JSON for `DiffOp` and `DiffReport`; they do not attempt to deserialize malformed or tampered DiffOp JSON (e.g., invalid `addr` string inside a `CellEdited` or structurally invalid objects). In practice, these inputs would be handled by the same `CellAddress` and `CellSnapshot` deserializers, so behavior should be correct today.   
-
-- **Evidence**: `core/tests/pg3_snapshot_tests.rs`, `core/tests/pg4_diffop_tests.rs`. 
+  Every test named in the PG4 mini-spec is present and behaves as described, and the suite has been extended with additional coverage:
+  - **PG4.1 – construction & required fields**  
+    - `pg4_construct_cell_edited_diffop` constructs `CellEdited` with `Sheet1!C3`, checks snapshot addresses and value inequality.   
+    - `pg4_construct_row_and_column_diffops` builds row/column add/remove variants with and without signatures and asserts required fields and optional presence/absence.   
+    - `pg4_construct_block_move_diffops` builds both row and column block moves with `Some` and `None` `block_hash` and validates numeric fields and equality differences.   
+  - **PG4.2 – JSON shape tests**  
+    - `pg4_cell_edited_json_shape`, `pg4_row_added_json_optional_signature`, and `pg4_block_moved_rows_json_optional_hash` match the spec’s JSON assertions, including top-level key sets and omission of optional fields when `None`.   
+    - Additional tests extend coverage to columns and sheets and lock key-sets for all variants: `pg4_column_added_json_optional_signature`, `pg4_sheet_added_and_removed_json_shape`, `pg4_row_and_column_json_shape_keysets`, `pg4_block_move_json_shape_keysets`.   
+  - **PG4.3 – DiffOp JSON round-trip stability**  
+    - `pg4_diffop_roundtrip_each_variant` serializes/deserializes representative instances of every variant, asserts equality, and re-checks `CellEdited` invariants post-roundtrip.   
+    - `pg4_cell_edited_roundtrip_preserves_snapshot_addrs` specifically defends snapshot `addr` fields through JSON.   
+  - **PG4.4 – DiffReport container**  
+    - `pg4_diff_report_roundtrip_preserves_order` confirms `DiffReport::new` sets version to `SCHEMA_VERSION`, round-tripping yields `"1"`, and the sequence of `kind` strings is preserved.   
+    - `pg4_diff_report_json_shape` asserts top-level keys are exactly `{"version","ops"}` and inspects inner op kinds.   
+  - **Additional PG4 tests from remediation**  
+    - JSON key-set tests across all variants.   
+    - Negative deserialization tests for invalid A1 addresses at both DiffOp and DiffReport levels, ensuring PG4 composes correctly with PG3 address validation (`"1A"`, `"A0"` errors bubble up with informative messages).   
+- **Evidence**:  
+  - `core/tests/pg4_diffop_tests.rs`.   
+  - Mini-spec test plan section §6.1–6.4.   
 - **Impact**:  
-  Very low risk for current code, since DiffOp deserialization composes the already-tested snapshot/CellAddress deserializers. However, if future changes introduce custom `Deserialize` implementations for `DiffOp` or `DiffReport`, or if external JSON is fed directly into these types, having at least one negative test at the DiffOp level would more explicitly lock in the “invalid addresses are rejected” contract in the PG4 context.
+  Test coverage is stronger than originally required. Future changes to the DiffOp/Report wire contract are very likely to surface as test failures, which is exactly what PG4 is supposed to guarantee.
 
----
+### Finding 4: No new bugs or architectural drift detected in PG4 scope
+
+- **Severity**: Minor (informational)
+- **Category**: Bug / Gap → None observed
+- **Description**:  
+  Within the PG4 scope, I did not identify any functional bugs, missing error handling, or architectural drift:
+  - The new `diff` module is self-contained and does not introduce new I/O, allocation patterns, or feature-gated dependencies; it is pure data + serde.   
+  - Existing modules (`workbook`, `output/json`, `excel_open_xml`) are unchanged in ways that would affect PG4; there is no premature wiring of `DiffReport` into the JSON cell-diff pipeline, consistent with the “out of scope” section of the mini-spec.   
+  - Error behavior for invalid addresses remains centralized in `CellAddress` / `CellSnapshot` deserialization, and PG4 now adds container-level tests rather than duplicating logic in `DiffOp`.   
+  - The activity log confirms all standard quality gates ran cleanly (`cargo fmt`, `cargo clippy -D warnings`, `cargo test`, and the wasm `cargo check` smoke test), with 27 tests passing, including the new PG4 tests. 
+- **Evidence**:  
+  - `codebase_context.md` snapshots of all touched modules.   
+  - `cycle_summary.txt` test and validation logs.   
+- **Impact**:  
+  No corrective action required. This finding simply documents the absence of hidden issues in the reviewed scope.
 
 ## Checklist Verification
 
 - [x] All scope items from mini-spec addressed  
+  - `core/src/diff.rs` introduced with `DiffOp`, `DiffReport`, `SheetId`, `RowSignature`, and `ColSignature`.   
+  - `core/src/lib.rs` re-exports all new types.   
+  - `core/tests/pg4_diffop_tests.rs` contains the full PG4 suite.   
+
 - [x] All specified tests created  
+  - `pg4_construct_cell_edited_diffop`, `pg4_construct_row_and_column_diffops`, `pg4_construct_block_move_diffops`.   
+  - `pg4_cell_edited_json_shape`, `pg4_row_added_json_optional_signature`, `pg4_block_moved_rows_json_optional_hash`.   
+  - `pg4_diffop_roundtrip_each_variant`, `pg4_cell_edited_roundtrip_preserves_snapshot_addrs`.   
+  - `pg4_diff_report_roundtrip_preserves_order`, `pg4_diff_report_json_shape`.   
+
 - [x] Behavioral contract satisfied  
+  - Variants, field types, serde behavior, and invariants match §2–3 of the mini-spec and the corresponding sections of the main excel_diff specification.   
+
 - [x] No undocumented deviations from spec  
-- [x] Error handling adequate (no panics or unchecked invariants in library code for this cycle)  
-- [x] No obvious performance regressions (only lightweight enum/struct definitions and unit tests added)
+  - Decision record, mini-spec, and implementation are aligned on branch name, scope, and intended behavior, with no extra variants or wire-format changes introduced.   
+
+- [x] Error handling adequate  
+  - Invalid A1 addresses still fail at the `CellAddress`/`CellSnapshot` layer, and PG4 now adds container-level tests ensuring those failures surface through `DiffOp` and `DiffReport` deserialization.   
+
+- [x] No obvious performance regressions  
+  - New code is purely structural (enums/structs + serde), with no loops or heavy allocations beyond what tests already exercise. The test count increased modestly, and overall test runtime remains low per `cycle_summary.txt`. 
 ```
+
+*No remediation plan is included because there are no outstanding issues that justify another remediation round for this PG4 cycle.*
