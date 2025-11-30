@@ -623,6 +623,15 @@ def collate_planner(downloads_dir=None):
         if doc_path.exists():
             files_to_copy.append((doc_path, output_dir / doc_name))
     
+    extra_rust_docs = [
+        "unified_grid_diff_algorithm_specification.md",
+        "2025-11-30-docs-vs-implementation.md",
+    ]
+    for doc_name in extra_rust_docs:
+        doc_path = rust_docs_dir / doc_name
+        if doc_path.exists():
+            files_to_copy.append((doc_path, output_dir / doc_name))
+    
     review_prompt = script_dir / "review_prompt.md"
     if review_prompt.exists():
         files_to_copy.append((review_prompt, output_dir / "codebase_context.md"))
@@ -792,13 +801,14 @@ def collate_planner(downloads_dir=None):
     
     print(f"\nCollation complete: {copied_count} files in {output_dir}")
     print("\nFiles included:")
-    print("  1-6. Technical blueprints from docs/rust_docs/")
-    print("  7.   codebase_context.md (current code snapshot)")
-    print("  8.   todo.md (current task list)")
-    print("  9.   combined_activity_logs.txt (all branch activity)")
-    print("  10.  combined_decision_records.txt (all cycle decisions)")
-    print("  11.  recent_verification_reports.txt (last 3 reviews)")
-    print("  12.  latest_test_results.txt (most recent test output)")
+    print("  1-5. Technical blueprints from docs/rust_docs/")
+    print("  6-7. Design docs (grid diff spec, docs-vs-implementation analysis)")
+    print("  8.   codebase_context.md (current code snapshot)")
+    print("  9.   todo.md (current task list)")
+    print("  10.  combined_activity_logs.txt (all branch activity)")
+    print("  11.  combined_decision_records.txt (all cycle decisions)")
+    print("  12.  recent_verification_reports.txt (last 3 reviews)")
+    print("  13.  latest_test_results.txt (most recent test output)")
     
     prompt_file = script_dir / "planner_instruction.txt"
     if prompt_file.exists():

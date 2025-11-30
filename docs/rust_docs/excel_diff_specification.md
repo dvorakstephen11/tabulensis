@@ -428,6 +428,8 @@ Complexity:
 
 ## 9. Grid Diff (Spreadsheet Mode)
 
+> **Detailed Specification:** For comprehensive algorithm design including pseudocode, worked examples, complexity analysis, configuration reference, and validation strategy, see [`docs/design/docs_versus_implementation/unified_grid_diff_algorithm_specification.md`](unified_grid_diff_algorithm_specification.md). This section provides a high-level overview.
+
 This handles the "financial model" case where *physical layout* matters and there may be no clear key. We deploy a **Hybrid Alignment Pipeline** designed for robustness and near-linear performance, avoiding the pathologies of traditional LCS algorithms on repetitive spreadsheet data.
 
 ### 9.1 Phase 1: Row Hashing and Anchoring (Patience Diff)
@@ -830,7 +832,7 @@ Binwalk helps you *find* and *sanity-check* embedded containers; Kaitai helps yo
 
 ---
 
-Last updated: 2025-11-28
+Last updated: 2025-11-30
 
 [1]: https://bengribaudo.com/blog/2020/04/22/5198/data-mashup-binary-stream "The Data Mashup Binary Stream: How Power Queries Are Stored | Ben Gribaudo"
 [2]: https://community.powerbi.com/t5/Desktop/DataMashup-file-no-longer-exists/td-p/1145141?utm_source=chatgpt.com "DataMashup file no longer exists"
