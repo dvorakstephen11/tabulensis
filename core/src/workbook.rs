@@ -44,7 +44,7 @@ pub struct Sheet {
     pub grid: Grid,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SheetKind {
     Worksheet,
     Chart,

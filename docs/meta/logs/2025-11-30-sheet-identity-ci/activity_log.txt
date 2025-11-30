@@ -1,0 +1,9 @@
+2025-11-30-sheet-identity-ci implementation activity log
+
+- Initialized log; reviewed docs/meta/plans/2025-11-30-sheet-identity-ci/spec.md and decision.yaml.
+- Reviewed engine and workbook code to understand current sheet identity handling (HashMap by name).
+- Reviewed implementer instructions in docs/rust_docs/excel_diff_meta_programming.md section on activity logging.
+- Updated core/src/workbook.rs to derive Hash for SheetKind so it can participate in sheet identity keys.
+- Refactored core/src/engine.rs diff_workbooks to key sheets by (lowercased name, SheetKind) via private SheetKey + helpers and deterministic ordering (name_lower then kind rank), emitting ops with old/new casing per spec.
+- Added new engine tests for case-insensitive sheet matching and kind-aware identity in core/tests/engine_tests.rs.
+- Tools run: cargo fmt; cargo clippy; cargo test (all suites passing).

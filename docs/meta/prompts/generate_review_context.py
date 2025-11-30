@@ -650,8 +650,6 @@ def collate_planner(downloads_dir=None):
             print(f"  Error copying {src.name}: {e}")
     
     logs_dir = repo_root / "docs" / "meta" / "logs"
-    combined_logs_path = output_dir / "combined_activity_logs.txt"
-    
     branch_logs = []
     if logs_dir.exists():
         for branch_dir in sorted(logs_dir.iterdir()):
@@ -664,106 +662,6 @@ def collate_planner(downloads_dir=None):
                         branch_logs.append((branch_name, content))
                     except Exception:
                         pass
-    
-    with open(combined_logs_path, 'w', encoding='utf-8') as f:
-        f.write("=" * 60 + "\n")
-        f.write("COMBINED ACTIVITY LOGS\n")
-        f.write("=" * 60 + "\n\n")
-        f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"Total branches with activity logs: {len(branch_logs)}\n\n")
-        
-        if branch_logs:
-            for branch_name, content in branch_logs:
-                f.write("-" * 60 + "\n")
-                f.write(f"BRANCH: {branch_name}\n")
-                f.write("-" * 60 + "\n\n")
-                f.write(content)
-                if not content.endswith('\n'):
-                    f.write("\n")
-                f.write("\n")
-        else:
-            f.write("(No activity logs found)\n")
-    
-    print(f"  Created: combined_activity_logs.txt ({len(branch_logs)} branches)")
-    copied_count += 1
-    
-    plans_dir = repo_root / "docs" / "meta" / "plans"
-    combined_decisions_path = output_dir / "combined_decision_records.txt"
-    
-    decision_records = []
-    if plans_dir.exists():
-        for branch_dir in sorted(plans_dir.iterdir()):
-            if branch_dir.is_dir():
-                decision_file = branch_dir / "decision.yaml"
-                if decision_file.exists():
-                    branch_name = branch_dir.name
-                    try:
-                        content = decision_file.read_text(encoding='utf-8')
-                        decision_records.append((branch_name, content))
-                    except Exception:
-                        pass
-    
-    with open(combined_decisions_path, 'w', encoding='utf-8') as f:
-        f.write("=" * 60 + "\n")
-        f.write("COMBINED DECISION RECORDS\n")
-        f.write("=" * 60 + "\n\n")
-        f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"Total decision records: {len(decision_records)}\n\n")
-        
-        if decision_records:
-            for branch_name, content in decision_records:
-                f.write("-" * 60 + "\n")
-                f.write(f"BRANCH: {branch_name}\n")
-                f.write("-" * 60 + "\n\n")
-                f.write(content)
-                if not content.endswith('\n'):
-                    f.write("\n")
-                f.write("\n")
-        else:
-            f.write("(No decision records found)\n")
-    
-    print(f"  Created: combined_decision_records.txt ({len(decision_records)} records)")
-    copied_count += 1
-    
-    reviews_dir = repo_root / "docs" / "meta" / "reviews"
-    combined_verifications_path = output_dir / "recent_verification_reports.txt"
-    
-    verification_reports = []
-    if reviews_dir.exists():
-        for branch_dir in sorted(reviews_dir.iterdir(), reverse=True):
-            if branch_dir.is_dir():
-                verification_file = branch_dir / "verification.md"
-                if verification_file.exists():
-                    branch_name = branch_dir.name
-                    try:
-                        content = verification_file.read_text(encoding='utf-8')
-                        verification_reports.append((branch_name, content))
-                    except Exception:
-                        pass
-    
-    recent_verifications = verification_reports[:3]
-    
-    with open(combined_verifications_path, 'w', encoding='utf-8') as f:
-        f.write("=" * 60 + "\n")
-        f.write("RECENT VERIFICATION REPORTS\n")
-        f.write("=" * 60 + "\n\n")
-        f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"Showing {len(recent_verifications)} most recent (of {len(verification_reports)} total)\n\n")
-        
-        if recent_verifications:
-            for branch_name, content in recent_verifications:
-                f.write("-" * 60 + "\n")
-                f.write(f"BRANCH: {branch_name}\n")
-                f.write("-" * 60 + "\n\n")
-                f.write(content)
-                if not content.endswith('\n'):
-                    f.write("\n")
-                f.write("\n")
-        else:
-            f.write("(No verification reports found)\n")
-    
-    print(f"  Created: recent_verification_reports.txt ({len(recent_verifications)} reports)")
-    copied_count += 1
     
     results_dir = repo_root / "docs" / "meta" / "results"
     latest_results = None
@@ -781,12 +679,33 @@ def collate_planner(downloads_dir=None):
                 latest_results = (result_file.stem, content)
                 break
     
-    latest_results_path = output_dir / "latest_test_results.txt"
-    with open(latest_results_path, 'w', encoding='utf-8') as f:
+    dev_history_path = output_dir / "development_history.txt"
+    with open(dev_history_path, 'w', encoding='utf-8') as f:
         f.write("=" * 60 + "\n")
-        f.write("LATEST TEST RESULTS\n")
+        f.write("DEVELOPMENT HISTORY\n")
         f.write("=" * 60 + "\n\n")
         f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        
+        f.write("=" * 60 + "\n")
+        f.write("PART 1: ACTIVITY LOGS\n")
+        f.write("=" * 60 + "\n\n")
+        f.write(f"Total branches with activity logs: {len(branch_logs)}\n\n")
+        
+        if branch_logs:
+            for branch_name, content in branch_logs:
+                f.write("-" * 60 + "\n")
+                f.write(f"BRANCH: {branch_name}\n")
+                f.write("-" * 60 + "\n\n")
+                f.write(content)
+                if not content.endswith('\n'):
+                    f.write("\n")
+                f.write("\n")
+        else:
+            f.write("(No activity logs found)\n\n")
+        
+        f.write("=" * 60 + "\n")
+        f.write("PART 2: LATEST TEST RESULTS\n")
+        f.write("=" * 60 + "\n\n")
         
         if latest_results:
             branch_name, content = latest_results
@@ -796,7 +715,7 @@ def collate_planner(downloads_dir=None):
         else:
             f.write("(No test results found)\n")
     
-    print(f"  Created: latest_test_results.txt")
+    print(f"  Created: development_history.txt ({len(branch_logs)} branches + latest test results)")
     copied_count += 1
     
     print(f"\nCollation complete: {copied_count} files in {output_dir}")
@@ -805,10 +724,7 @@ def collate_planner(downloads_dir=None):
     print("  6-7. Design docs (grid diff spec, docs-vs-implementation analysis)")
     print("  8.   codebase_context.md (current code snapshot)")
     print("  9.   todo.md (current task list)")
-    print("  10.  combined_activity_logs.txt (all branch activity)")
-    print("  11.  combined_decision_records.txt (all cycle decisions)")
-    print("  12.  recent_verification_reports.txt (last 3 reviews)")
-    print("  13.  latest_test_results.txt (most recent test output)")
+    print("  10.  development_history.txt (activity logs + latest test results)")
     
     prompt_file = script_dir / "planner_instruction.txt"
     if prompt_file.exists():

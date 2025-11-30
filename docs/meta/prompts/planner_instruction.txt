@@ -13,15 +13,15 @@ You have been provided with:
    - `excel_diff_difficulty_analysis.md` - Technical challenge analysis
    - `excel_diff_product_differentiation_plan.md` - Product roadmap
 
-2. **Current Codebase**: `codebase_context.md` contains the directory structure and source code.
+2. **Design Documents**:
+   - `unified_grid_diff_algorithm_specification.md` - Grid diffing algorithm design
+   - `2025-11-30-docs-vs-implementation.md` - Analysis of documentation vs implementation gaps
 
-3. **Development History**:
-   - `combined_activity_logs.txt` — Activity logs from all previous cycles
-   - `combined_decision_records.txt` — Decision records explaining past choices
-   - `recent_verification_reports.txt` — Post-implementation reviews (may contain deferred items)
-   - `latest_test_results.txt` — Most recent test output
+3. **Current Codebase**: `codebase_context.md` contains the directory structure and source code.
 
-4. **Current Backlog**: `todo.md` contains the current task list.
+4. **Development History**: `development_history.txt` — Activity logs from all previous cycles, plus the most recent test output
+
+5. **Current Backlog**: `todo.md` contains the current task list.
 
 ## Your Goal
 
@@ -35,11 +35,7 @@ Decide what work should be done in the next development cycle and produce:
 
 1. **Read the testing plan** to understand the phased milestones (Phase 0–6).
 2. **Review the codebase** to understand what's already implemented.
-3. **Check recent verification reports** for:
-   - Deferred findings (marked "Minor" with "defer to future cycle")
-   - Suggested improvements that weren't in scope
-   - Edge cases lacking test coverage
-4. **Review previous decision records** to understand the progression of work.
+3. **Review activity logs** to understand the progression of work and any notes from previous cycles.
 
 ### Phase 2: Choose Work Type
 
@@ -65,7 +61,6 @@ Include:
 - `risks_of_deferral`: What happens if we don't do this now
 - `references`: Pointers to relevant design and test documents
 - `difficulty_estimate`: 1–10 scale (10 = hardest milestone, name it)
-- `deferred_items_addressed`: Any items from previous verification reports being tackled
 
 #### Mini-Spec (`docs/meta/plans/[branch-name]/spec.md`)
 
@@ -91,7 +86,6 @@ Example: `2025-11-27-m-code-tokenizer`
 2. **Keep cycles small and focused.** Better to complete a small scope than abandon a large one.
 3. **Build on the phased testing plan.** Reference which phase/milestone this advances.
 4. **Consider risk.** Address high-risk subsystems early; defer polish until foundations are solid.
-5. **Learn from verification reports.** Deferred items and observations should influence planning.
 
 ## Output Format
 
