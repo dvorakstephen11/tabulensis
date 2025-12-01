@@ -12,6 +12,7 @@ from generators.grid import (
     AddressSanityGenerator,
     ValueFormulaGenerator,
     SingleCellDiffGenerator,
+    SheetCaseRenameGenerator,
 )
 from generators.corrupt import ContainerCorruptGenerator
 from generators.mashup import (
@@ -31,6 +32,7 @@ GENERATORS: Dict[str, Any] = {
     "address_sanity": AddressSanityGenerator,
     "value_formula": ValueFormulaGenerator,
     "single_cell_diff": SingleCellDiffGenerator,
+    "sheet_case_rename": SheetCaseRenameGenerator,
     "corrupt_container": ContainerCorruptGenerator,
     "mashup_corrupt": MashupCorruptGenerator,
     "mashup_duplicate": MashupDuplicateGenerator,

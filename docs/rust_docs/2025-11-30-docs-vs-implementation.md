@@ -451,11 +451,13 @@ The error handling infrastructure is excellent. Performance and robustness featu
 
 | ID | Issue | Status | Recommendation |
 |----|-------|--------|----------------|
-| D1 | Sheet identity case-sensitive | Open | Fix before advanced diff work |
+| D1 | Sheet identity case-sensitive | Resolved (2025-11-30-sheet-identity-ci) | Covered by engine + fixture tests; keep focused on grid diff/signature work |
 | D2 | UTF-16 handling undocumented | Open | Document in spec |
 | D3 | Missing IR fields (mashup, tables) | Open | Add placeholders |
 | D4 | Sparse vs row-oriented Grid | Resolved | Sparse is correct choice |
 | D5 | Missing M/DAX DiffOp variants | Open | Add placeholders |
+
+Sheet identity now matches the spec: the engine keys sheets by `(lowercase name, SheetKind)`, orders workbook-level ops deterministically, and is guarded by both in-memory engine tests and fixture-based case-only rename checks.
 
 ---
 
@@ -471,13 +473,12 @@ The main risk is **not** architectural deviation but **incomplete implementation
 
 ### Recommended Priority Order
 
-1. **Immediate**: Fix sheet identity case-sensitivity (D1)
-2. **Immediate**: Enhance row signatures (column positions, type tags)
-3. **Soon**: Implement frequency analysis and anchor discovery
-4. **Soon**: Implement Patience Diff for row anchoring
-5. **Medium-term**: Implement gap filling (Myers diff)
-6. **Medium-term**: Implement move detection
-7. **Later**: Database mode, formula AST, performance optimization
+1. **Immediate**: Enhance row signatures (column positions, type tags)
+2. **Soon**: Implement frequency analysis and anchor discovery
+3. **Soon**: Implement Patience Diff for row anchoring
+4. **Medium-term**: Implement gap filling (Myers diff)
+5. **Medium-term**: Implement move detection
+6. **Later**: Database mode, formula AST, performance optimization
 
 ### Risk Matrix
 

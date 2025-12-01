@@ -354,6 +354,7 @@ We treat:
 * Sheets keyed by (case-insensitive) name plus type.
 * Tables keyed by sheet + table name.
 * Named ranges keyed by name.
+* Within a single workbook, `(lowercase(sheet name), SheetKind)` keys must be **unique**. The IR producer (`open_workbook`) is expected to enforce this; `diff_workbooks` defensively `debug_assert!`s if duplicates slip through while keeping release builds deterministic (last writer wins) to avoid surprising consumers.
 
 Algorithm (for any keyed object set):
 

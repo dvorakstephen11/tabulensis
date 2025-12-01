@@ -1,6 +1,6 @@
 use excel_diff::{
-    Cell, CellAddress, CellValue, DiffOp, DiffReport, Grid, Sheet, SheetKind, Workbook,
-    diff_workbooks,
+    Cell, CellAddress, CellSnapshot, CellValue, DiffOp, DiffReport, Grid, Sheet, SheetKind,
+    Workbook, diff_workbooks,
 };
 
 type SheetSpec<'a> = (&'a str, Vec<(u32, u32, f64)>);
@@ -29,6 +29,33 @@ fn make_workbook(sheets: Vec<SheetSpec<'_>>) -> Workbook {
         })
         .collect();
     Workbook { sheets: sheet_ir }
+}
+
+fn make_sheet_with_kind(name: &str, kind: SheetKind, cells: Vec<(u32, u32, f64)>) -> Sheet {
+    let (nrows, ncols) = if cells.is_empty() {
+        (0, 0)
+    } else {
+        let max_row = cells.iter().map(|(r, _, _)| *r).max().unwrap_or(0);
+        let max_col = cells.iter().map(|(_, c, _)| *c).max().unwrap_or(0);
+        (max_row + 1, max_col + 1)
+    };
+
+    let mut grid = Grid::new(nrows, ncols);
+    for (r, c, val) in cells {
+        grid.insert(Cell {
+            row: r,
+            col: c,
+            address: CellAddress::from_indices(r, c),
+            value: Some(CellValue::Number(val)),
+            formula: None,
+        });
+    }
+
+    Sheet {
+        name: name.to_string(),
+        kind,
+        grid,
+    }
 }
 
 #[test]
@@ -183,4 +210,73 @@ fn sheet_identity_includes_kind() {
         "expected one SheetRemoved for Worksheet 'Sheet1'"
     );
     assert_eq!(report.ops.len(), 2, "no other ops expected");
+}
+
+#[test]
+fn deterministic_sheet_op_ordering() {
+    let budget_old = make_sheet_with_kind("Budget", SheetKind::Worksheet, vec![(0, 0, 1.0)]);
+    let budget_new = make_sheet_with_kind("Budget", SheetKind::Worksheet, vec![(0, 0, 2.0)]);
+    let sheet1_old = make_sheet_with_kind("Sheet1", SheetKind::Worksheet, vec![(0, 1, 5.0)]);
+    let sheet1_chart = make_sheet_with_kind("sheet1", SheetKind::Chart, Vec::new());
+    let summary_new = make_sheet_with_kind("Summary", SheetKind::Worksheet, vec![(0, 0, 3.0)]);
+
+    let old = Workbook {
+        sheets: vec![budget_old.clone(), sheet1_old],
+    };
+    let new = Workbook {
+        sheets: vec![budget_new.clone(), sheet1_chart, summary_new],
+    };
+
+    let budget_addr = CellAddress::from_indices(0, 0);
+    let expected = vec![
+        DiffOp::cell_edited(
+            "Budget".into(),
+            budget_addr,
+            CellSnapshot {
+                addr: budget_addr,
+                value: Some(CellValue::Number(1.0)),
+                formula: None,
+            },
+            CellSnapshot {
+                addr: budget_addr,
+                value: Some(CellValue::Number(2.0)),
+                formula: None,
+            },
+        ),
+        DiffOp::SheetRemoved {
+            sheet: "Sheet1".into(),
+        },
+        DiffOp::SheetAdded {
+            sheet: "sheet1".into(),
+        },
+        DiffOp::SheetAdded {
+            sheet: "Summary".into(),
+        },
+    ];
+
+    let report = diff_workbooks(&old, &new);
+    assert_eq!(
+        report.ops, expected,
+        "ops should be ordered by lowercase name then sheet kind"
+    );
+}
+
+#[test]
+fn duplicate_sheet_identity_panics_in_debug() {
+    let duplicate_a = make_sheet_with_kind("Sheet1", SheetKind::Worksheet, vec![(0, 0, 1.0)]);
+    let duplicate_b = make_sheet_with_kind("sheet1", SheetKind::Worksheet, vec![(0, 1, 2.0)]);
+    let old = Workbook {
+        sheets: vec![duplicate_a, duplicate_b],
+    };
+    let new = Workbook { sheets: Vec::new() };
+
+    let result = std::panic::catch_unwind(|| diff_workbooks(&old, &new));
+    if cfg!(debug_assertions) {
+        assert!(
+            result.is_err(),
+            "duplicate sheet identities should trigger a debug assertion"
+        );
+    } else {
+        assert!(result.is_ok(), "debug assertions disabled should not panic");
+    }
 }

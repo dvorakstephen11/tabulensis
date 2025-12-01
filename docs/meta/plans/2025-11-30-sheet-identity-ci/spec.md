@@ -114,6 +114,11 @@ Let “identity key” mean `(lowercase(sheet_name), SheetKind)`.
      - Union of keys is sorted by `name_lower` (lexicographically), then by a stable SheetKind order (Worksheet < Chart < Macro < Other).
    - For identical inputs across runs/platforms, the sequence of `DiffOp`s at the workbook level does not change due to this refactor (except for the corrected identity semantics themselves). 
 
+### 2.4 Duplicate identity keys (defensive stance)
+
+- A single workbook should not contain two `Sheet` entries whose identity key `(lowercase(name), SheetKind)` collides; this is treated as invalid IR rather than a supported edge case.
+- `diff_workbooks` keeps release behavior deterministic (later insert wins) but includes a `debug_assert!` to surface duplicates during development, so producers such as `open_workbook` can be fixed if they ever emit a duplicate.
+
 ---
 
 ## 3. Constraints

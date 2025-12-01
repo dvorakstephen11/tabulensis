@@ -320,19 +320,11 @@ def collate_post_implementation_review(branch_name=None, downloads_dir=None):
     files_to_copy = []
     
     rust_docs_dir = repo_root / "docs" / "rust_docs"
+    excluded_docs = {"excel_diff_meta_programming.md"}
     if rust_docs_dir.exists():
         for f in rust_docs_dir.iterdir():
-            if f.is_file() and f.suffix == '.md':
+            if f.is_file() and f.suffix == '.md' and f.name not in excluded_docs:
                 files_to_copy.append((f, output_dir / f.name))
-    
-    plans_branch_dir = repo_root / "docs" / "meta" / "plans" / branch_name
-    if plans_branch_dir.exists():
-        spec_file = plans_branch_dir / "spec.md"
-        if spec_file.exists():
-            files_to_copy.append((spec_file, output_dir / f"spec_{branch_name}.md"))
-        decision_file = plans_branch_dir / "decision.yaml"
-        if decision_file.exists() and decision_file.stat().st_size > 0:
-            files_to_copy.append((decision_file, output_dir / f"decision_{branch_name}.yaml"))
     
     review_prompt = script_dir / "review_prompt.md"
     if review_prompt.exists():
@@ -346,6 +338,36 @@ def collate_post_implementation_review(branch_name=None, downloads_dir=None):
             copied_count += 1
         except Exception as e:
             print(f"  Error copying {src.name}: {e}")
+    
+    plans_branch_dir = repo_root / "docs" / "meta" / "plans" / branch_name
+    cycle_plan_path = output_dir / "cycle_plan.md"
+    spec_file = plans_branch_dir / "spec.md" if plans_branch_dir.exists() else None
+    decision_file = plans_branch_dir / "decision.yaml" if plans_branch_dir.exists() else None
+    
+    with open(cycle_plan_path, 'w', encoding='utf-8') as f:
+        f.write(f"# Cycle Plan: {branch_name}\n\n")
+        f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        
+        f.write("## Decision Record\n\n")
+        if decision_file and decision_file.exists() and decision_file.stat().st_size > 0:
+            f.write("```yaml\n")
+            f.write(decision_file.read_text(encoding='utf-8'))
+            f.write("```\n\n")
+        else:
+            f.write("(No decision record found)\n\n")
+        
+        f.write("---\n\n")
+        f.write("## Mini-Spec\n\n")
+        if spec_file and spec_file.exists():
+            spec_content = spec_file.read_text(encoding='utf-8')
+            f.write(spec_content)
+            if not spec_content.endswith('\n'):
+                f.write('\n')
+        else:
+            f.write("(No spec found)\n")
+    
+    print(f"  Created: cycle_plan.md (combined decision + spec)")
+    copied_count += 1
     
     activity_log = repo_root / "docs" / "meta" / "logs" / branch_name / "activity_log.txt"
     test_results = repo_root / "docs" / "meta" / "results" / f"{branch_name}.txt"
@@ -362,6 +384,8 @@ def collate_post_implementation_review(branch_name=None, downloads_dir=None):
         for src, dst in files_to_copy:
             if dst.exists():
                 f.write(f"  - {dst.name} (from {src.relative_to(repo_root)})\n")
+        if cycle_plan_path.exists():
+            f.write(f"  - cycle_plan.md (combined decision + spec)\n")
         f.write("\n")
         
         f.write("=" * 60 + "\n")

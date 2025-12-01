@@ -929,36 +929,64 @@ impl DiffOp {
 
 ```rust
 use crate::diff::{DiffOp, DiffReport, SheetId};
-use crate::workbook::{CellAddress, CellSnapshot, Grid, Sheet, Workbook};
+use crate::workbook::{CellAddress, CellSnapshot, Grid, Sheet, SheetKind, Workbook};
 use std::collections::HashMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SheetKey {
+    name_lower: String,
+    kind: SheetKind,
+}
+
+fn make_sheet_key(sheet: &Sheet) -> SheetKey {
+    SheetKey {
+        name_lower: sheet.name.to_lowercase(),
+        kind: sheet.kind.clone(),
+    }
+}
+
+fn sheet_kind_order(kind: &SheetKind) -> u8 {
+    match kind {
+        SheetKind::Worksheet => 0,
+        SheetKind::Chart => 1,
+        SheetKind::Macro => 2,
+        SheetKind::Other => 3,
+    }
+}
 
 pub fn diff_workbooks(old: &Workbook, new: &Workbook) -> DiffReport {
     let mut ops = Vec::new();
 
-    let old_sheets: HashMap<&str, &Sheet> =
-        old.sheets.iter().map(|s| (s.name.as_str(), s)).collect();
-    let new_sheets: HashMap<&str, &Sheet> =
-        new.sheets.iter().map(|s| (s.name.as_str(), s)).collect();
+    let old_sheets: HashMap<SheetKey, &Sheet> =
+        old.sheets.iter().map(|s| (make_sheet_key(s), s)).collect();
+    let new_sheets: HashMap<SheetKey, &Sheet> =
+        new.sheets.iter().map(|s| (make_sheet_key(s), s)).collect();
 
-    let mut all_names: Vec<&str> = old_sheets
+    let mut all_keys: Vec<SheetKey> = old_sheets
         .keys()
         .chain(new_sheets.keys())
-        .copied()
+        .cloned()
         .collect();
-    all_names.sort_unstable();
-    all_names.dedup();
+    all_keys.sort_by(|a, b| match a.name_lower.cmp(&b.name_lower) {
+        std::cmp::Ordering::Equal => sheet_kind_order(&a.kind).cmp(&sheet_kind_order(&b.kind)),
+        other => other,
+    });
+    all_keys.dedup();
 
-    for name in all_names {
-        let sheet_id: SheetId = name.to_string();
-
-        match (old_sheets.get(name), new_sheets.get(name)) {
-            (None, Some(_)) => {
-                ops.push(DiffOp::SheetAdded { sheet: sheet_id });
+    for key in all_keys {
+        match (old_sheets.get(&key), new_sheets.get(&key)) {
+            (None, Some(new_sheet)) => {
+                ops.push(DiffOp::SheetAdded {
+                    sheet: new_sheet.name.clone(),
+                });
             }
-            (Some(_), None) => {
-                ops.push(DiffOp::SheetRemoved { sheet: sheet_id });
+            (Some(old_sheet), None) => {
+                ops.push(DiffOp::SheetRemoved {
+                    sheet: old_sheet.name.clone(),
+                });
             }
             (Some(old_sheet), Some(new_sheet)) => {
+                let sheet_id: SheetId = old_sheet.name.clone();
                 diff_grids(&sheet_id, &old_sheet.grid, &new_sheet.grid, &mut ops);
             }
             (None, None) => unreachable!(),
@@ -1672,7 +1700,7 @@ pub struct Sheet {
     pub grid: Grid,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SheetKind {
     Worksheet,
     Chart,
@@ -2514,6 +2542,89 @@ fn diff_report_json_round_trips() {
     let json = serde_json::to_string(&report).expect("serialize");
     let parsed: DiffReport = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(report, parsed);
+}
+
+#[test]
+fn sheet_name_case_insensitive_no_changes() {
+    let old = make_workbook(vec![("Sheet1", vec![(0, 0, 1.0)])]);
+    let new = make_workbook(vec![("sheet1", vec![(0, 0, 1.0)])]);
+
+    let report = diff_workbooks(&old, &new);
+    assert!(report.ops.is_empty());
+}
+
+#[test]
+fn sheet_name_case_insensitive_cell_edit() {
+    let old = make_workbook(vec![("Sheet1", vec![(0, 0, 1.0)])]);
+    let new = make_workbook(vec![("sheet1", vec![(0, 0, 2.0)])]);
+
+    let report = diff_workbooks(&old, &new);
+    assert_eq!(report.ops.len(), 1);
+
+    match &report.ops[0] {
+        DiffOp::CellEdited {
+            sheet,
+            addr,
+            from,
+            to,
+        } => {
+            assert_eq!(sheet, "Sheet1");
+            assert_eq!(addr.to_a1(), "A1");
+            assert_eq!(from.value, Some(CellValue::Number(1.0)));
+            assert_eq!(to.value, Some(CellValue::Number(2.0)));
+        }
+        other => panic!("expected CellEdited, got {other:?}"),
+    }
+}
+
+#[test]
+fn sheet_identity_includes_kind() {
+    let mut grid = Grid::new(1, 1);
+    grid.insert(Cell {
+        row: 0,
+        col: 0,
+        address: CellAddress::from_indices(0, 0),
+        value: Some(CellValue::Number(1.0)),
+        formula: None,
+    });
+
+    let worksheet = Sheet {
+        name: "Sheet1".to_string(),
+        kind: SheetKind::Worksheet,
+        grid: grid.clone(),
+    };
+
+    let chart = Sheet {
+        name: "Sheet1".to_string(),
+        kind: SheetKind::Chart,
+        grid,
+    };
+
+    let old = Workbook {
+        sheets: vec![worksheet],
+    };
+    let new = Workbook {
+        sheets: vec![chart],
+    };
+
+    let report = diff_workbooks(&old, &new);
+
+    let mut added = 0;
+    let mut removed = 0;
+    for op in &report.ops {
+        match op {
+            DiffOp::SheetAdded { sheet } if sheet == "Sheet1" => added += 1,
+            DiffOp::SheetRemoved { sheet } if sheet == "Sheet1" => removed += 1,
+            _ => {}
+        }
+    }
+
+    assert_eq!(added, 1, "expected one SheetAdded for Chart 'Sheet1'");
+    assert_eq!(
+        removed, 1,
+        "expected one SheetRemoved for Worksheet 'Sheet1'"
+    );
+    assert_eq!(report.ops.len(), 2, "no other ops expected");
 }
 ```
 

@@ -1,5 +1,6 @@
 use excel_diff::{
     CellAddress, CellSnapshot, CellValue, ContainerError, DiffOp, DiffReport, ExcelOpenError,
+    diff_workbooks, open_workbook,
     output::json::{
         CellDiff, diff_report_to_cell_diffs, diff_workbooks_to_json, serialize_cell_diffs,
         serialize_diff_report,
@@ -214,6 +215,48 @@ fn test_json_diff_value_to_empty() {
             assert_eq!(addr.to_a1(), "C3");
             assert_eq!(render_value(&from.value), Some("1".into()));
             assert_eq!(render_value(&to.value), None);
+        }
+        other => panic!("expected CellEdited, got {other:?}"),
+    }
+}
+
+#[test]
+fn json_diff_case_only_sheet_name_no_changes() {
+    let a = fixture_path("sheet_case_only_rename_a.xlsx");
+    let b = fixture_path("sheet_case_only_rename_b.xlsx");
+
+    let old = open_workbook(&a).expect("fixture A should open");
+    let new = open_workbook(&b).expect("fixture B should open");
+
+    let report = diff_workbooks(&old, &new);
+    assert!(
+        report.ops.is_empty(),
+        "case-only sheet rename with identical content should produce no diff ops"
+    );
+}
+
+#[test]
+fn json_diff_case_only_sheet_name_cell_edit() {
+    let a = fixture_path("sheet_case_only_rename_edit_a.xlsx");
+    let b = fixture_path("sheet_case_only_rename_edit_b.xlsx");
+
+    let old = open_workbook(&a).expect("fixture A should open");
+    let new = open_workbook(&b).expect("fixture B should open");
+
+    let report = diff_workbooks(&old, &new);
+    assert_eq!(report.ops.len(), 1, "expected a single cell edit");
+    match &report.ops[0] {
+        DiffOp::CellEdited {
+            sheet,
+            addr,
+            from,
+            to,
+            ..
+        } => {
+            assert_eq!(sheet, "Sheet1");
+            assert_eq!(addr.to_a1(), "A1");
+            assert_eq!(render_value(&from.value), Some("1".into()));
+            assert_eq!(render_value(&to.value), Some("2".into()));
         }
         other => panic!("expected CellEdited, got {other:?}"),
     }

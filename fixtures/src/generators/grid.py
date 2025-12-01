@@ -192,3 +192,28 @@ class SingleCellDiffGenerator(BaseGenerator):
         create_workbook(value_a, output_names[0])
         create_workbook(value_b, output_names[1])
 
+class SheetCaseRenameGenerator(BaseGenerator):
+    """Generates a pair of workbooks that differ only by sheet name casing, with optional cell edit."""
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        if len(output_names) != 2:
+            raise ValueError("sheet_case_rename generator expects exactly two output filenames")
+
+        sheet_a = self.args.get("sheet_a", "Sheet1")
+        sheet_b = self.args.get("sheet_b", "sheet1")
+        cell = self.args.get("cell", "A1")
+        value_a = self.args.get("value_a", 1.0)
+        value_b = self.args.get("value_b", value_a)
+
+        def create_workbook(sheet_name: str, value, output_name: str):
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = sheet_name
+            ws[cell] = value
+            wb.save(output_dir / output_name)
+
+        create_workbook(sheet_a, value_a, output_names[0])
+        create_workbook(sheet_b, value_b, output_names[1])
+

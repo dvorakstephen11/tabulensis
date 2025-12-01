@@ -87,6 +87,31 @@ scenarios:
       - "json_diff_value_to_empty_a.xlsx"
       - "json_diff_value_to_empty_b.xlsx"
 
+  # --- Sheet identity: case-only renames ---
+  - id: "sheet_case_only_rename"
+    generator: "sheet_case_rename"
+    args:
+      sheet_a: "Sheet1"
+      sheet_b: "sheet1"
+      cell: "A1"
+      value_a: 1.0
+      value_b: 1.0
+    output:
+      - "sheet_case_only_rename_a.xlsx"
+      - "sheet_case_only_rename_b.xlsx"
+
+  - id: "sheet_case_only_rename_cell_edit"
+    generator: "sheet_case_rename"
+    args:
+      sheet_a: "Sheet1"
+      sheet_b: "sheet1"
+      cell: "A1"
+      value_a: 1.0
+      value_b: 2.0
+    output:
+      - "sheet_case_only_rename_edit_a.xlsx"
+      - "sheet_case_only_rename_edit_b.xlsx"
+
   # --- Milestone 2.2: Base64 Correctness ---
   - id: "corrupt_base64"
     generator: "mashup_corrupt"

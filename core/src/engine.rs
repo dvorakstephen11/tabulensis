@@ -27,10 +27,27 @@ fn sheet_kind_order(kind: &SheetKind) -> u8 {
 pub fn diff_workbooks(old: &Workbook, new: &Workbook) -> DiffReport {
     let mut ops = Vec::new();
 
-    let old_sheets: HashMap<SheetKey, &Sheet> =
-        old.sheets.iter().map(|s| (make_sheet_key(s), s)).collect();
-    let new_sheets: HashMap<SheetKey, &Sheet> =
-        new.sheets.iter().map(|s| (make_sheet_key(s), s)).collect();
+    let mut old_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
+    for sheet in &old.sheets {
+        let key = make_sheet_key(sheet);
+        let was_unique = old_sheets.insert(key.clone(), sheet).is_none();
+        debug_assert!(
+            was_unique,
+            "duplicate sheet identity in old workbook: ({}, {:?})",
+            key.name_lower, key.kind
+        );
+    }
+
+    let mut new_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
+    for sheet in &new.sheets {
+        let key = make_sheet_key(sheet);
+        let was_unique = new_sheets.insert(key.clone(), sheet).is_none();
+        debug_assert!(
+            was_unique,
+            "duplicate sheet identity in new workbook: ({}, {:?})",
+            key.name_lower, key.kind
+        );
+    }
 
     let mut all_keys: Vec<SheetKey> = old_sheets
         .keys()
