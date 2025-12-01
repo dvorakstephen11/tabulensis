@@ -1,0 +1,8 @@
+2025-12-01-pg5-grid-diff-baseline implementation activity log
+
+- Reviewed implementer prompt and mini-spec/decision for this branch (docs/meta/plans/2025-12-01-pg5-grid-diff-baseline/*) plus Section 4 of docs/rust_docs/excel_diff_meta_programming.md.
+- Inspected current grid diff behavior in core/src/engine.rs along with workbook/diff types to confirm existing CellEdited-only semantics.
+- Updated diff_grids to limit cell comparisons to the overlapping rectangle and emit RowAdded/RowRemoved and ColumnAdded/ColumnRemoved for tail shape differences using the DiffOp helpers.
+- Added PG5 in-memory grid diff coverage with helpers (grid_from_numbers, single_sheet_workbook) and scenarios in core/tests/pg5_grid_diff_tests.rs.
+- Adjusted the grid_from_numbers helper to take slices-of-slices for compile-time sizing and updated callers.
+- Tools run: cargo fmt; cargo clippy --all-targets --all-features; cargo test (all suites passing).

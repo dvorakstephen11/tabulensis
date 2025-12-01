@@ -84,11 +84,11 @@ pub fn diff_workbooks(old: &Workbook, new: &Workbook) -> DiffReport {
 }
 
 fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>) {
-    let max_rows = old.nrows.max(new.nrows);
-    let max_cols = old.ncols.max(new.ncols);
+    let overlap_rows = old.nrows.min(new.nrows);
+    let overlap_cols = old.ncols.min(new.ncols);
 
-    for row in 0..max_rows {
-        for col in 0..max_cols {
+    for row in 0..overlap_rows {
+        for col in 0..overlap_cols {
             let old_cell = old.get(row, col);
             let new_cell = new.get(row, col);
 
@@ -102,6 +102,26 @@ fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>)
 
                 ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
             }
+        }
+    }
+
+    if new.nrows > old.nrows {
+        for row_idx in old.nrows..new.nrows {
+            ops.push(DiffOp::row_added(sheet_id.clone(), row_idx, None));
+        }
+    } else if old.nrows > new.nrows {
+        for row_idx in new.nrows..old.nrows {
+            ops.push(DiffOp::row_removed(sheet_id.clone(), row_idx, None));
+        }
+    }
+
+    if new.ncols > old.ncols {
+        for col_idx in old.ncols..new.ncols {
+            ops.push(DiffOp::column_added(sheet_id.clone(), col_idx, None));
+        }
+    } else if old.ncols > new.ncols {
+        for col_idx in new.ncols..old.ncols {
+            ops.push(DiffOp::column_removed(sheet_id.clone(), col_idx, None));
         }
     }
 }

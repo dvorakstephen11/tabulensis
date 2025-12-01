@@ -1,0 +1,53 @@
+branch: 2025-12-01-pg5-grid-diff-baseline
+work_type: milestone_progress
+target_subsystem: grid_diff_engine_pg5
+
+linked_testing_milestones:
+  - Phase2
+  - PG5
+
+rationale:
+  - The current grid diff implementation (`diff_grids` in `core/src/engine.rs`) only emits `CellEdited`
+    operations via a naive nested loop over the max row/column extents. It never uses the Row/Column
+    structural variants (`RowAdded`, `RowRemoved`, `ColumnAdded`, `ColumnRemoved`) that are already
+    defined and tested in `DiffOp`. This diverges from the architecture docs and leaves structural
+    grid ops effectively dead code.
+  - The Phase 2 testing plan defines PG5 as the “in‑memory grid diff smoke tests” milestone, with
+    explicit expectations for row/column append and degenerate cases that must yield `RowAdded`/
+    `ColumnAdded` rather than per‑cell edits. PG1–PG4 and the basic engine tests are in place, but PG5
+    has no tests or implementation, so grid diff remains unvalidated at the structural level.
+  - The unified grid diff algorithm spec treats structural row/column ops as core semantics and
+    positions the grid diff engine as the hardest and most central component of the product. PG5 is
+    the smallest, Excel‑free foothold into that engine: tiny in‑memory grids, spreadsheet mode, and
+    no reordering. Getting this pinned down reduces risk before adding alignment, keys, and Excel I/O.
+  - DiffOp JSON shape and round‑trip tests (PG4) are already wired up for row/column operations, so
+    the public schema is stable. Hooking `diff_grids` up to emit these variants in simple cases is a
+    low‑risk way to move toward the spec while preserving existing PG4 and JSON output tests.
+  - Sheet‑level diff (`diff_workbooks`) and workbook parsing are now in good shape (including
+    sheet-identity and case-only rename handling), so the next natural bottleneck is correctness of
+    grid‑level ops for simple scenarios before we attempt more advanced alignment or database mode.
+
+risks_of_deferral:
+  - Structural grid operations stay untested and unused, increasing the chance that later work on
+    alignment or performance breaks or bypasses them without CI catching it.
+  - PG6 (object graph vs grid responsibilities) and the later “G*” Excel‑backed grid tests both rely
+    on having a coherent notion of row/column structure changes. Deferring PG5 keeps these later
+    milestones blocked or forces them to be built on top of an incorrect or underspecified grid diff.
+  - The hardest hurdle (H1: high‑performance 2D grid diff) will eventually require major changes to
+    `diff_grids`. Doing that without a stable suite of in‑memory structural tests increases the risk
+    of regressions, spurious cell edits, and non‑deterministic behavior.
+  - Any downstream consumers that start depending on the current “only CellEdited” behavior from
+    `diff_workbooks` will be harder to migrate once structural ops finally appear, whereas changing
+    this behavior now (before broad external adoption) is much safer.
+
+references:
+  - docs/rust_docs/excel_diff_testing_plan.md (Phase 2, PG5/PG6 description)
+  - docs/rust_docs/unified_grid_diff_algorithm_specification.md (grid diff pipeline and role)
+  - docs/rust_docs/excel_diff_specification.md (IR and diff pipeline overview)
+  - docs/rust_docs/2025-11-30-docs-vs-implementation.md (grid diff vs implementation gap)
+  - docs/rust_docs/excel_diff_difficulty_analysis.md (H1: high-performance 2D grid diff engine)
+  - core/src/engine.rs (current diff_workbooks/diff_grids implementation)
+  - core/src/diff.rs and core/tests/pg4_diffop_tests.rs (DiffOp structure and JSON tests)
+  - development_history.txt (completed PG1–PG4, sheet-identity, docs-vs-implementation work)
+
+difficulty_estimate: 3  # On a 1–10 scale where 10 ≈ H1 “High-performance 2D grid diff engine”

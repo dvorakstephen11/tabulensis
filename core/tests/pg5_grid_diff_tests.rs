@@ -1,0 +1,197 @@
+use excel_diff::{
+    Cell, CellAddress, CellValue, DiffOp, Grid, Sheet, SheetKind, Workbook, diff_workbooks,
+};
+use std::collections::BTreeSet;
+
+fn grid_from_numbers(values: &[&[i32]]) -> Grid {
+    let nrows = values.len() as u32;
+    let ncols = if nrows == 0 {
+        0
+    } else {
+        values[0].len() as u32
+    };
+
+    let mut grid = Grid::new(nrows, ncols);
+    for (r, row_vals) in values.iter().enumerate() {
+        for (c, v) in row_vals.iter().enumerate() {
+            grid.insert(Cell {
+                row: r as u32,
+                col: c as u32,
+                address: CellAddress::from_indices(r as u32, c as u32),
+                value: Some(CellValue::Number(*v as f64)),
+                formula: None,
+            });
+        }
+    }
+
+    grid
+}
+
+fn single_sheet_workbook(name: &str, grid: Grid) -> Workbook {
+    Workbook {
+        sheets: vec![Sheet {
+            name: name.to_string(),
+            kind: SheetKind::Worksheet,
+            grid,
+        }],
+    }
+}
+
+#[test]
+fn pg5_1_grid_diff_1x1_identical_empty_diff() {
+    let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1]]));
+    let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1]]));
+
+    let report = diff_workbooks(&old, &new);
+    assert!(report.ops.is_empty());
+}
+
+#[test]
+fn pg5_2_grid_diff_1x1_value_change_single_cell_edited() {
+    let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1]]));
+    let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[2]]));
+
+    let report = diff_workbooks(&old, &new);
+    assert_eq!(report.ops.len(), 1);
+
+    match &report.ops[0] {
+        DiffOp::CellEdited {
+            sheet,
+            addr,
+            from,
+            to,
+        } => {
+            assert_eq!(sheet, "Sheet1");
+            assert_eq!(addr.to_a1(), "A1");
+            assert_eq!(from.value, Some(CellValue::Number(1.0)));
+            assert_eq!(to.value, Some(CellValue::Number(2.0)));
+        }
+        other => panic!("expected CellEdited, got {other:?}"),
+    }
+}
+
+#[test]
+fn pg5_3_grid_diff_row_appended_row_added_only() {
+    let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1]]));
+    let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1], &[2]]));
+
+    let report = diff_workbooks(&old, &new);
+    assert_eq!(report.ops.len(), 1);
+
+    match &report.ops[0] {
+        DiffOp::RowAdded {
+            sheet,
+            row_idx,
+            row_signature,
+        } => {
+            assert_eq!(sheet, "Sheet1");
+            assert_eq!(*row_idx, 1);
+            assert!(row_signature.is_none());
+        }
+        other => panic!("expected RowAdded, got {other:?}"),
+    }
+}
+
+#[test]
+fn pg5_4_grid_diff_column_appended_column_added_only() {
+    let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1], &[2]]));
+    let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1, 10], &[2, 20]]));
+
+    let report = diff_workbooks(&old, &new);
+    assert_eq!(report.ops.len(), 1);
+
+    match &report.ops[0] {
+        DiffOp::ColumnAdded {
+            sheet,
+            col_idx,
+            col_signature,
+        } => {
+            assert_eq!(sheet, "Sheet1");
+            assert_eq!(*col_idx, 1);
+            assert!(col_signature.is_none());
+        }
+        other => panic!("expected ColumnAdded, got {other:?}"),
+    }
+}
+
+#[test]
+fn pg5_5_grid_diff_same_shape_scattered_cell_edits() {
+    let old = single_sheet_workbook(
+        "Sheet1",
+        grid_from_numbers(&[&[1, 2, 3], &[4, 5, 6], &[7, 8, 9]]),
+    );
+    let new = single_sheet_workbook(
+        "Sheet1",
+        grid_from_numbers(&[&[10, 2, 3], &[4, 50, 6], &[7, 8, 90]]),
+    );
+
+    let report = diff_workbooks(&old, &new);
+    assert_eq!(report.ops.len(), 3);
+    assert!(
+        report
+            .ops
+            .iter()
+            .all(|op| matches!(op, DiffOp::CellEdited { .. }))
+    );
+
+    let edited_addrs: BTreeSet<String> = report
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            DiffOp::CellEdited { addr, .. } => Some(addr.to_a1()),
+            _ => None,
+        })
+        .collect();
+    let expected: BTreeSet<String> = ["A1", "B2", "C3"].into_iter().map(String::from).collect();
+    assert_eq!(edited_addrs, expected);
+}
+
+#[test]
+fn pg5_6_grid_diff_degenerate_grids() {
+    let empty_old = single_sheet_workbook("Sheet1", Grid::new(0, 0));
+    let empty_new = single_sheet_workbook("Sheet1", Grid::new(0, 0));
+
+    let empty_report = diff_workbooks(&empty_old, &empty_new);
+    assert!(empty_report.ops.is_empty());
+
+    let old = single_sheet_workbook("Sheet1", Grid::new(0, 0));
+    let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1]]));
+
+    let report = diff_workbooks(&old, &new);
+    assert_eq!(report.ops.len(), 2);
+
+    let mut row_added = 0;
+    let mut col_added = 0;
+    let mut cell_edits = 0;
+
+    for op in &report.ops {
+        match op {
+            DiffOp::RowAdded {
+                sheet,
+                row_idx,
+                row_signature,
+            } => {
+                assert_eq!(sheet, "Sheet1");
+                assert_eq!(*row_idx, 0);
+                assert!(row_signature.is_none());
+                row_added += 1;
+            }
+            DiffOp::ColumnAdded {
+                sheet,
+                col_idx,
+                col_signature,
+            } => {
+                assert_eq!(sheet, "Sheet1");
+                assert_eq!(*col_idx, 0);
+                assert!(col_signature.is_none());
+                col_added += 1;
+            }
+            DiffOp::CellEdited { .. } => cell_edits += 1,
+            other => panic!("unexpected op: {other:?}"),
+        }
+    }
+
+    assert_eq!(row_added, 1);
+    assert_eq!(col_added, 1);
+    assert_eq!(cell_edits, 0);
+}
