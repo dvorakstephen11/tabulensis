@@ -195,3 +195,126 @@ fn pg5_6_grid_diff_degenerate_grids() {
     assert_eq!(col_added, 1);
     assert_eq!(cell_edits, 0);
 }
+
+#[test]
+fn pg5_7_grid_diff_row_truncated_row_removed_only() {
+    let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1], &[2]]));
+    let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1]]));
+
+    let report = diff_workbooks(&old, &new);
+    assert_eq!(report.ops.len(), 1);
+
+    match &report.ops[0] {
+        DiffOp::RowRemoved {
+            sheet,
+            row_idx,
+            row_signature,
+        } => {
+            assert_eq!(sheet, "Sheet1");
+            assert_eq!(*row_idx, 1);
+            assert!(row_signature.is_none());
+        }
+        other => panic!("expected RowRemoved, got {other:?}"),
+    }
+}
+
+#[test]
+fn pg5_8_grid_diff_column_truncated_column_removed_only() {
+    let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1, 10], &[2, 20]]));
+    let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1], &[2]]));
+
+    let report = diff_workbooks(&old, &new);
+    assert_eq!(report.ops.len(), 1);
+
+    match &report.ops[0] {
+        DiffOp::ColumnRemoved {
+            sheet,
+            col_idx,
+            col_signature,
+        } => {
+            assert_eq!(sheet, "Sheet1");
+            assert_eq!(*col_idx, 1);
+            assert!(col_signature.is_none());
+        }
+        other => panic!("expected ColumnRemoved, got {other:?}"),
+    }
+}
+
+#[test]
+fn pg5_9_grid_diff_row_and_column_truncated_structure_only() {
+    let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1, 2], &[3, 4]]));
+    let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1]]));
+
+    let report = diff_workbooks(&old, &new);
+    assert_eq!(report.ops.len(), 2);
+
+    let mut rows_removed = 0;
+    let mut cols_removed = 0;
+    let mut cell_edits = 0;
+
+    for op in &report.ops {
+        match op {
+            DiffOp::RowRemoved {
+                sheet,
+                row_idx,
+                row_signature,
+            } => {
+                assert_eq!(sheet, "Sheet1");
+                assert_eq!(*row_idx, 1);
+                assert!(row_signature.is_none());
+                rows_removed += 1;
+            }
+            DiffOp::ColumnRemoved {
+                sheet,
+                col_idx,
+                col_signature,
+            } => {
+                assert_eq!(sheet, "Sheet1");
+                assert_eq!(*col_idx, 1);
+                assert!(col_signature.is_none());
+                cols_removed += 1;
+            }
+            DiffOp::CellEdited { .. } => cell_edits += 1,
+            other => panic!("unexpected op: {other:?}"),
+        }
+    }
+
+    assert_eq!(rows_removed, 1);
+    assert_eq!(cols_removed, 1);
+    assert_eq!(cell_edits, 0);
+}
+
+#[test]
+fn pg5_10_grid_diff_row_appended_with_overlap_cell_edits() {
+    let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1, 2], &[3, 4]]));
+    let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1, 20], &[30, 4], &[5, 6]]));
+
+    let report = diff_workbooks(&old, &new);
+    assert_eq!(report.ops.len(), 3);
+
+    let mut row_added = 0;
+    let mut cell_edits = BTreeSet::new();
+
+    for op in &report.ops {
+        match op {
+            DiffOp::RowAdded {
+                sheet,
+                row_idx,
+                row_signature,
+            } => {
+                assert_eq!(sheet, "Sheet1");
+                assert_eq!(*row_idx, 2);
+                assert!(row_signature.is_none());
+                row_added += 1;
+            }
+            DiffOp::CellEdited { addr, .. } => {
+                cell_edits.insert(addr.to_a1());
+            }
+            other => panic!("unexpected op: {other:?}"),
+        }
+    }
+
+    assert_eq!(row_added, 1);
+    let expected: BTreeSet<String> = ["B1", "A2"].into_iter().map(String::from).collect();
+    assert_eq!(cell_edits, expected);
+}

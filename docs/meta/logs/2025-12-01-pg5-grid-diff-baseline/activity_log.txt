@@ -6,3 +6,13 @@
 - Added PG5 in-memory grid diff coverage with helpers (grid_from_numbers, single_sheet_workbook) and scenarios in core/tests/pg5_grid_diff_tests.rs.
 - Adjusted the grid_from_numbers helper to take slices-of-slices for compile-time sizing and updated callers.
 - Tools run: cargo fmt; cargo clippy --all-targets --all-features; cargo test (all suites passing).
+
+## Remediation Round 1 (2025-12-01)
+- Addressed Fix 1 (truncation coverage): added pg5_7/pg5_8/pg5_9 truncation tests in core/tests/pg5_grid_diff_tests.rs.
+- Addressed Fix 2 (mixed shape + content): added pg5_10 mixed overlap edits plus tail row add in core/tests/pg5_grid_diff_tests.rs.
+- Addressed Fix 3 (docs refresh): updated docs/rust_docs/2025-11-30-docs-vs-implementation.md for UC-04/UC-05 tail ops and current diff_grids behavior.
+- Addressed Fix 4 (remediation persistence): populated docs/meta/reviews/2025-12-01-pg5-grid-diff-baseline/remediation.md; added docs/meta/remediations/2025-12-01-pg5-grid-diff-baseline.md and combined_remediations.md.
+- Files touched: core/tests/pg5_grid_diff_tests.rs; docs/rust_docs/2025-11-30-docs-vs-implementation.md; docs/meta/remediations/*; docs/meta/reviews/2025-12-01-pg5-grid-diff-baseline/remediation.md.
+- Complications: remediation.md for this branch was empty; reused remediationB.md content to restore the plan text.
+- Tools run: cargo fmt; cargo test; cargo clippy --all-targets --all-features.
+

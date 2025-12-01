@@ -1,3 +1,12 @@
+# Combined Remediation Plans
+
+Generated: 2025-12-01 16:42:50
+
+Total remediation files: 1
+
+## 2025-12-01-pg5-grid-diff-baseline
+
+```markdown
 # Remediation Plan: 2025-12-01-pg5-grid-diff-baseline
 
 ## Overview
@@ -135,3 +144,5 @@ After remediation:
 - `2025-11-30-docs-vs-implementation.md` will accurately reflect that simple row/column appends at the tail are now backed by `RowAdded`/`ColumnAdded` ops rather than cell edits, while still clearly calling out the remaining algorithmic gaps.   
 - Future changes to `diff_grids` that break truncate semantics or leak cell edits into tail-only regions will be caught early by CI, before more advanced alignment or database-mode work builds on top of PG5.  
 - The remediation history for this branch will be preserved, giving future reviewers clear traceability from findings to fixes.
+
+```

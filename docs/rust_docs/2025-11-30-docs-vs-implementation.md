@@ -26,7 +26,7 @@ The current implementation represents approximately **25-35% of the end-state sy
 | Part I: Foundations | 60% | Use cases defined; basic infrastructure present |
 | Part II: Architecture | 40% | Data structures implemented; pipeline scaffolding missing |
 | Part III: Preprocessing | 30% | Row/column signatures exist; full fingerprinting not implemented |
-| Part IV: Spreadsheet Mode Alignment | 5% | Only naive cell-by-cell comparison exists |
+| Part IV: Spreadsheet Mode Alignment | 5% | Overlap-only cell comparison with tail row/column adds/removes; no alignment |
 | Part V: Database Mode | 0% | Not started |
 | Part VI: Cell-Level Comparison | 70% | Basic cell diff works; formula semantics missing |
 | Part VII: Result Assembly | 60% | DiffOp/DiffReport types complete; coalescing not implemented |
@@ -54,8 +54,8 @@ The spec defines 20 use cases (UC-01 through UC-20) across five categories:
 | UC-01: Identical grids | ✅ Partial | Returns empty diff, but no early termination optimization |
 | UC-02: Single cell change | ✅ Yes | Correctly detects single cell edits |
 | UC-03: Scattered edits | ✅ Yes | Multiple CellEdited ops emitted |
-| UC-04: Row append | ❌ No | Reports as CellEdited, not RowAdded |
-| UC-05: Column append | ❌ No | Reports as CellEdited, not ColumnAdded |
+| UC-04: Row append | Partial | Tail-only spreadsheet-mode appends emit RowAdded; mid-sheet alignment still missing |
+| UC-05: Column append | Partial | Tail-only spreadsheet-mode appends emit ColumnAdded; mid-sheet alignment still missing |
 | UC-06–10: Alignment | ❌ No | No row/column alignment implemented |
 | UC-11–13: Move detection | ❌ No | DiffOp variants exist but not detected |
 | UC-14–16: Adversarial | ❌ No | No special handling |
@@ -63,7 +63,7 @@ The spec defines 20 use cases (UC-01 through UC-20) across five categories:
 
 #### Assessment
 
-The implementation handles the simplest use cases (identical grids, cell edits) but lacks the structural operations that define the product's value proposition. The **DiffOp enum is forward-looking**, containing all the variants needed for future work:
+The implementation handles the simplest use cases (identical grids, cell edits) and now emits structural row/column operations for tail-only spreadsheet-mode changes, but it still lacks the broader alignment that would detect mid-sheet inserts or moves. The **DiffOp enum is forward-looking**, containing all the variants needed for future work:
 
 ```rust
 // From diff.rs - variants are ready but not emitted by current engine
@@ -144,26 +144,30 @@ The spec's Layer 2 (Alignment results) is **partially ready**:
 
 The foundational data structures are solid but incomplete. The implementation correctly chose a sparse representation for memory efficiency, which the spec later ratified. However, the algorithmic scaffolding (GridView, alignment structures) is missing.
 
-**Critical Gap**: The current engine is an O(R×C) nested loop:
+**Critical Gap**: The current engine remains a simple overlap-first comparator with tail handling:
 
 ```rust
-// From engine.rs - does not implement the spec's alignment pipeline
+// From engine.rs - spreadsheet-mode tails only, no alignment
 fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>) {
-    let max_rows = old.nrows.max(new.nrows);
-    let max_cols = old.ncols.max(new.ncols);
+    let overlap_rows = old.nrows.min(new.nrows);
+    let overlap_cols = old.ncols.min(new.ncols);
 
-    for row in 0..max_rows {
-        for col in 0..max_cols {
-            // Cell-by-cell comparison without alignment
-            let old_cell = old.get(row, col);
-            let new_cell = new.get(row, col);
-            // ...
+    for row in 0..overlap_rows {
+        for col in 0..overlap_cols {
+            let old_snapshot = old.get(row, col).map(CellSnapshot::from_cell);
+            let new_snapshot = new.get(row, col).map(CellSnapshot::from_cell);
+            if old_snapshot != new_snapshot {
+                // emit CellEdited for overlapping cells only
+            }
         }
     }
+
+    // Tail-only structure changes (append/truncate at end)
+    // emit RowAdded/RowRemoved then ColumnAdded/ColumnRemoved
 }
 ```
 
-This fundamentally contradicts the spec's Anchor-Move-Refine algorithm and cannot handle insertions, deletions, or moves.
+This still omits the spec's Anchor-Move-Refine alignment and cannot detect mid-sheet insertions, deletions, or moves beyond simple tail append/truncate cases.
 
 **Verdict**: Data structures are on track; algorithm is placeholder only.
 
