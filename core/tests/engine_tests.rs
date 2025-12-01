@@ -262,6 +262,76 @@ fn deterministic_sheet_op_ordering() {
 }
 
 #[test]
+fn sheet_identity_includes_kind_for_macro_and_other() {
+    let mut grid = Grid::new(1, 1);
+    grid.insert(Cell {
+        row: 0,
+        col: 0,
+        address: CellAddress::from_indices(0, 0),
+        value: Some(CellValue::Number(1.0)),
+        formula: None,
+    });
+
+    let macro_sheet = Sheet {
+        name: "Code".to_string(),
+        kind: SheetKind::Macro,
+        grid: grid.clone(),
+    };
+
+    let other_sheet = Sheet {
+        name: "Code".to_string(),
+        kind: SheetKind::Other,
+        grid,
+    };
+
+    let old = Workbook {
+        sheets: vec![macro_sheet],
+    };
+    let new = Workbook {
+        sheets: vec![other_sheet],
+    };
+
+    let report = diff_workbooks(&old, &new);
+
+    let mut added = 0;
+    let mut removed = 0;
+    for op in &report.ops {
+        match op {
+            DiffOp::SheetAdded { sheet } if sheet == "Code" => added += 1,
+            DiffOp::SheetRemoved { sheet } if sheet == "Code" => removed += 1,
+            _ => {}
+        }
+    }
+
+    assert_eq!(added, 1, "expected one SheetAdded for Other 'Code'");
+    assert_eq!(removed, 1, "expected one SheetRemoved for Macro 'Code'");
+    assert_eq!(report.ops.len(), 2, "no other ops expected");
+}
+
+#[cfg(not(debug_assertions))]
+#[test]
+fn duplicate_sheet_identity_last_writer_wins_release() {
+    let duplicate_a = make_sheet_with_kind("Sheet1", SheetKind::Worksheet, vec![(0, 0, 1.0)]);
+    let duplicate_b = make_sheet_with_kind("sheet1", SheetKind::Worksheet, vec![(0, 1, 2.0)]);
+
+    let old = Workbook {
+        sheets: vec![duplicate_a, duplicate_b],
+    };
+    let new = Workbook { sheets: Vec::new() };
+
+    let report = diff_workbooks(&old, &new);
+    assert_eq!(report.ops.len(), 1, "expected last writer to win");
+
+    match &report.ops[0] {
+        DiffOp::SheetRemoved { sheet } => assert_eq!(
+            sheet, "sheet1",
+            "duplicate identity should prefer the last sheet in release builds"
+        ),
+        other => panic!("expected SheetRemoved, got {other:?}"),
+    }
+}
+
+#[test]
 fn duplicate_sheet_identity_panics_in_debug() {
     let duplicate_a = make_sheet_with_kind("Sheet1", SheetKind::Worksheet, vec![(0, 0, 1.0)]);
     let duplicate_b = make_sheet_with_kind("sheet1", SheetKind::Worksheet, vec![(0, 1, 2.0)]);

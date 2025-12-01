@@ -71,6 +71,10 @@
       pg2_addressing_matrix.xlsx
       pg3_value_and_formula_cells.xlsx
       random_zip.zip
+      sheet_case_only_rename_a.xlsx
+      sheet_case_only_rename_b.xlsx
+      sheet_case_only_rename_edit_a.xlsx
+      sheet_case_only_rename_edit_b.xlsx
     src/
       generate.py
       __init__.py
@@ -957,10 +961,27 @@ fn sheet_kind_order(kind: &SheetKind) -> u8 {
 pub fn diff_workbooks(old: &Workbook, new: &Workbook) -> DiffReport {
     let mut ops = Vec::new();
 
-    let old_sheets: HashMap<SheetKey, &Sheet> =
-        old.sheets.iter().map(|s| (make_sheet_key(s), s)).collect();
-    let new_sheets: HashMap<SheetKey, &Sheet> =
-        new.sheets.iter().map(|s| (make_sheet_key(s), s)).collect();
+    let mut old_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
+    for sheet in &old.sheets {
+        let key = make_sheet_key(sheet);
+        let was_unique = old_sheets.insert(key.clone(), sheet).is_none();
+        debug_assert!(
+            was_unique,
+            "duplicate sheet identity in old workbook: ({}, {:?})",
+            key.name_lower, key.kind
+        );
+    }
+
+    let mut new_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
+    for sheet in &new.sheets {
+        let key = make_sheet_key(sheet);
+        let was_unique = new_sheets.insert(key.clone(), sheet).is_none();
+        debug_assert!(
+            was_unique,
+            "duplicate sheet identity in new workbook: ({}, {:?})",
+            key.name_lower, key.kind
+        );
+    }
 
     let mut all_keys: Vec<SheetKey> = old_sheets
         .keys()
@@ -2441,8 +2462,8 @@ fn assemble_top_level_bytes(raw: &RawDataMashup) -> Vec<u8> {
 
 ```rust
 use excel_diff::{
-    Cell, CellAddress, CellValue, DiffOp, DiffReport, Grid, Sheet, SheetKind, Workbook,
-    diff_workbooks,
+    Cell, CellAddress, CellSnapshot, CellValue, DiffOp, DiffReport, Grid, Sheet, SheetKind,
+    Workbook, diff_workbooks,
 };
 
 type SheetSpec<'a> = (&'a str, Vec<(u32, u32, f64)>);
@@ -2471,6 +2492,33 @@ fn make_workbook(sheets: Vec<SheetSpec<'_>>) -> Workbook {
         })
         .collect();
     Workbook { sheets: sheet_ir }
+}
+
+fn make_sheet_with_kind(name: &str, kind: SheetKind, cells: Vec<(u32, u32, f64)>) -> Sheet {
+    let (nrows, ncols) = if cells.is_empty() {
+        (0, 0)
+    } else {
+        let max_row = cells.iter().map(|(r, _, _)| *r).max().unwrap_or(0);
+        let max_col = cells.iter().map(|(_, c, _)| *c).max().unwrap_or(0);
+        (max_row + 1, max_col + 1)
+    };
+
+    let mut grid = Grid::new(nrows, ncols);
+    for (r, c, val) in cells {
+        grid.insert(Cell {
+            row: r,
+            col: c,
+            address: CellAddress::from_indices(r, c),
+            value: Some(CellValue::Number(val)),
+            formula: None,
+        });
+    }
+
+    Sheet {
+        name: name.to_string(),
+        kind,
+        grid,
+    }
 }
 
 #[test]
@@ -2625,6 +2673,75 @@ fn sheet_identity_includes_kind() {
         "expected one SheetRemoved for Worksheet 'Sheet1'"
     );
     assert_eq!(report.ops.len(), 2, "no other ops expected");
+}
+
+#[test]
+fn deterministic_sheet_op_ordering() {
+    let budget_old = make_sheet_with_kind("Budget", SheetKind::Worksheet, vec![(0, 0, 1.0)]);
+    let budget_new = make_sheet_with_kind("Budget", SheetKind::Worksheet, vec![(0, 0, 2.0)]);
+    let sheet1_old = make_sheet_with_kind("Sheet1", SheetKind::Worksheet, vec![(0, 1, 5.0)]);
+    let sheet1_chart = make_sheet_with_kind("sheet1", SheetKind::Chart, Vec::new());
+    let summary_new = make_sheet_with_kind("Summary", SheetKind::Worksheet, vec![(0, 0, 3.0)]);
+
+    let old = Workbook {
+        sheets: vec![budget_old.clone(), sheet1_old],
+    };
+    let new = Workbook {
+        sheets: vec![budget_new.clone(), sheet1_chart, summary_new],
+    };
+
+    let budget_addr = CellAddress::from_indices(0, 0);
+    let expected = vec![
+        DiffOp::cell_edited(
+            "Budget".into(),
+            budget_addr,
+            CellSnapshot {
+                addr: budget_addr,
+                value: Some(CellValue::Number(1.0)),
+                formula: None,
+            },
+            CellSnapshot {
+                addr: budget_addr,
+                value: Some(CellValue::Number(2.0)),
+                formula: None,
+            },
+        ),
+        DiffOp::SheetRemoved {
+            sheet: "Sheet1".into(),
+        },
+        DiffOp::SheetAdded {
+            sheet: "sheet1".into(),
+        },
+        DiffOp::SheetAdded {
+            sheet: "Summary".into(),
+        },
+    ];
+
+    let report = diff_workbooks(&old, &new);
+    assert_eq!(
+        report.ops, expected,
+        "ops should be ordered by lowercase name then sheet kind"
+    );
+}
+
+#[test]
+fn duplicate_sheet_identity_panics_in_debug() {
+    let duplicate_a = make_sheet_with_kind("Sheet1", SheetKind::Worksheet, vec![(0, 0, 1.0)]);
+    let duplicate_b = make_sheet_with_kind("sheet1", SheetKind::Worksheet, vec![(0, 1, 2.0)]);
+    let old = Workbook {
+        sheets: vec![duplicate_a, duplicate_b],
+    };
+    let new = Workbook { sheets: Vec::new() };
+
+    let result = std::panic::catch_unwind(|| diff_workbooks(&old, &new));
+    if cfg!(debug_assertions) {
+        assert!(
+            result.is_err(),
+            "duplicate sheet identities should trigger a debug assertion"
+        );
+    } else {
+        assert!(result.is_ok(), "debug assertions disabled should not panic");
+    }
 }
 ```
 
@@ -2828,6 +2945,7 @@ fn test_locate_fixture() {
 ```rust
 use excel_diff::{
     CellAddress, CellSnapshot, CellValue, ContainerError, DiffOp, DiffReport, ExcelOpenError,
+    diff_workbooks, open_workbook,
     output::json::{
         CellDiff, diff_report_to_cell_diffs, diff_workbooks_to_json, serialize_cell_diffs,
         serialize_diff_report,
@@ -3042,6 +3160,48 @@ fn test_json_diff_value_to_empty() {
             assert_eq!(addr.to_a1(), "C3");
             assert_eq!(render_value(&from.value), Some("1".into()));
             assert_eq!(render_value(&to.value), None);
+        }
+        other => panic!("expected CellEdited, got {other:?}"),
+    }
+}
+
+#[test]
+fn json_diff_case_only_sheet_name_no_changes() {
+    let a = fixture_path("sheet_case_only_rename_a.xlsx");
+    let b = fixture_path("sheet_case_only_rename_b.xlsx");
+
+    let old = open_workbook(&a).expect("fixture A should open");
+    let new = open_workbook(&b).expect("fixture B should open");
+
+    let report = diff_workbooks(&old, &new);
+    assert!(
+        report.ops.is_empty(),
+        "case-only sheet rename with identical content should produce no diff ops"
+    );
+}
+
+#[test]
+fn json_diff_case_only_sheet_name_cell_edit() {
+    let a = fixture_path("sheet_case_only_rename_edit_a.xlsx");
+    let b = fixture_path("sheet_case_only_rename_edit_b.xlsx");
+
+    let old = open_workbook(&a).expect("fixture A should open");
+    let new = open_workbook(&b).expect("fixture B should open");
+
+    let report = diff_workbooks(&old, &new);
+    assert_eq!(report.ops.len(), 1, "expected a single cell edit");
+    match &report.ops[0] {
+        DiffOp::CellEdited {
+            sheet,
+            addr,
+            from,
+            to,
+            ..
+        } => {
+            assert_eq!(sheet, "Sheet1");
+            assert_eq!(addr.to_a1(), "A1");
+            assert_eq!(render_value(&from.value), Some("1".into()));
+            assert_eq!(render_value(&to.value), Some("2".into()));
         }
         other => panic!("expected CellEdited, got {other:?}"),
     }
@@ -4644,6 +4804,31 @@ scenarios:
       - "json_diff_value_to_empty_a.xlsx"
       - "json_diff_value_to_empty_b.xlsx"
 
+  # --- Sheet identity: case-only renames ---
+  - id: "sheet_case_only_rename"
+    generator: "sheet_case_rename"
+    args:
+      sheet_a: "Sheet1"
+      sheet_b: "sheet1"
+      cell: "A1"
+      value_a: 1.0
+      value_b: 1.0
+    output:
+      - "sheet_case_only_rename_a.xlsx"
+      - "sheet_case_only_rename_b.xlsx"
+
+  - id: "sheet_case_only_rename_cell_edit"
+    generator: "sheet_case_rename"
+    args:
+      sheet_a: "Sheet1"
+      sheet_b: "sheet1"
+      cell: "A1"
+      value_a: 1.0
+      value_b: 2.0
+    output:
+      - "sheet_case_only_rename_edit_a.xlsx"
+      - "sheet_case_only_rename_edit_b.xlsx"
+
   # --- Milestone 2.2: Base64 Correctness ---
   - id: "corrupt_base64"
     generator: "mashup_corrupt"
@@ -4794,6 +4979,7 @@ from generators.grid import (
     AddressSanityGenerator,
     ValueFormulaGenerator,
     SingleCellDiffGenerator,
+    SheetCaseRenameGenerator,
 )
 from generators.corrupt import ContainerCorruptGenerator
 from generators.mashup import (
@@ -4813,6 +4999,7 @@ GENERATORS: Dict[str, Any] = {
     "address_sanity": AddressSanityGenerator,
     "value_formula": ValueFormulaGenerator,
     "single_cell_diff": SingleCellDiffGenerator,
+    "sheet_case_rename": SheetCaseRenameGenerator,
     "corrupt_container": ContainerCorruptGenerator,
     "mashup_corrupt": MashupCorruptGenerator,
     "mashup_duplicate": MashupDuplicateGenerator,
@@ -5253,6 +5440,31 @@ class SingleCellDiffGenerator(BaseGenerator):
 
         create_workbook(value_a, output_names[0])
         create_workbook(value_b, output_names[1])
+
+class SheetCaseRenameGenerator(BaseGenerator):
+    """Generates a pair of workbooks that differ only by sheet name casing, with optional cell edit."""
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        if len(output_names) != 2:
+            raise ValueError("sheet_case_rename generator expects exactly two output filenames")
+
+        sheet_a = self.args.get("sheet_a", "Sheet1")
+        sheet_b = self.args.get("sheet_b", "sheet1")
+        cell = self.args.get("cell", "A1")
+        value_a = self.args.get("value_a", 1.0)
+        value_b = self.args.get("value_b", value_a)
+
+        def create_workbook(sheet_name: str, value, output_name: str):
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = sheet_name
+            ws[cell] = value
+            wb.save(output_dir / output_name)
+
+        create_workbook(sheet_a, value_a, output_names[0])
+        create_workbook(sheet_b, value_b, output_names[1])
 
 ```
 

@@ -13,3 +13,9 @@
 - Files modified/created: core/src/engine.rs; core/tests/engine_tests.rs; core/tests/output_tests.rs; fixtures/src/generators/grid.py; fixtures/src/generate.py; fixtures/manifest.yaml; fixtures/generated/sheet_case_only_rename_a.xlsx; fixtures/generated/sheet_case_only_rename_b.xlsx; fixtures/generated/sheet_case_only_rename_edit_a.xlsx; fixtures/generated/sheet_case_only_rename_edit_b.xlsx; docs/rust_docs/excel_diff_specification.md; docs/meta/plans/2025-11-30-sheet-identity-ci/spec.md; docs/rust_docs/2025-11-30-docs-vs-implementation.md; docs/meta/logs/2025-11-30-sheet-identity-ci/activity_log.txt.
 - Complications: None; added a debug_assert in diff_workbooks to flag duplicate sheet identity keys while keeping release behavior deterministic (last writer wins) for invalid IR.
 - Tests/tools run: cargo fmt; cargo clippy; cargo test.
+
+## Remediation Round 2
+- Findings addressed: release-mode duplicate sheet identity behavior (last writer wins) covered; SheetKind::Macro/Other ordering and identity coverage added; JSON helper verified against case-only sheet rename fixtures.
+- Files modified/created: core/src/engine.rs; core/tests/engine_tests.rs; core/tests/output_tests.rs.
+- Complications: Initial cargo test --release run hit a transient BrokenPipe when listing tests; reran and the full suite passed.
+- Tests/tools run: cargo fmt; cargo clippy; cargo test; cargo test --release.

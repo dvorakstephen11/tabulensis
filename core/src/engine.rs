@@ -105,3 +105,24 @@ fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>)
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sheet_kind_order_ranking_includes_macro_and_other() {
+        assert!(
+            sheet_kind_order(&SheetKind::Worksheet) < sheet_kind_order(&SheetKind::Chart),
+            "Worksheet should rank before Chart"
+        );
+        assert!(
+            sheet_kind_order(&SheetKind::Chart) < sheet_kind_order(&SheetKind::Macro),
+            "Chart should rank before Macro"
+        );
+        assert!(
+            sheet_kind_order(&SheetKind::Macro) < sheet_kind_order(&SheetKind::Other),
+            "Macro should rank before Other"
+        );
+    }
+}

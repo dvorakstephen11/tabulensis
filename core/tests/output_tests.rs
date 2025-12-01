@@ -263,6 +263,47 @@ fn json_diff_case_only_sheet_name_cell_edit() {
 }
 
 #[test]
+fn test_json_case_only_sheet_name_no_changes() {
+    let a = fixture_path("sheet_case_only_rename_a.xlsx");
+    let b = fixture_path("sheet_case_only_rename_b.xlsx");
+
+    let json =
+        diff_workbooks_to_json(&a, &b).expect("diffing case-only sheet rename should succeed");
+    let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
+    assert!(
+        report.ops.is_empty(),
+        "case-only sheet rename with identical content should serialize to no ops"
+    );
+}
+
+#[test]
+fn test_json_case_only_sheet_name_cell_edit_via_helper() {
+    let a = fixture_path("sheet_case_only_rename_edit_a.xlsx");
+    let b = fixture_path("sheet_case_only_rename_edit_b.xlsx");
+
+    let json = diff_workbooks_to_json(&a, &b)
+        .expect("diffing case-only sheet rename with cell edit should succeed");
+    let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
+    assert_eq!(report.ops.len(), 1, "expected a single cell edit");
+
+    match &report.ops[0] {
+        DiffOp::CellEdited {
+            sheet,
+            addr,
+            from,
+            to,
+            ..
+        } => {
+            assert_eq!(sheet, "Sheet1");
+            assert_eq!(addr.to_a1(), "A1");
+            assert_eq!(render_value(&from.value), Some("1".into()));
+            assert_eq!(render_value(&to.value), Some("2".into()));
+        }
+        other => panic!("expected CellEdited, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_diff_workbooks_to_json_reports_invalid_zip() {
     let path = fixture_path("not_a_zip.txt");
     let err = diff_workbooks_to_json(&path, &path)
