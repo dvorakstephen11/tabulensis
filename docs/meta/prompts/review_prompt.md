@@ -5126,6 +5126,39 @@ fn compute_all_signatures_populates_fields() {
 }
 
 #[test]
+fn compute_all_signatures_on_empty_grid_produces_empty_vectors() {
+    let mut grid = Grid::new(0, 0);
+
+    grid.compute_all_signatures();
+
+    assert!(grid.row_signatures.is_some());
+    assert!(grid.col_signatures.is_some());
+    assert!(grid.row_signatures.as_ref().unwrap().is_empty());
+    assert!(grid.col_signatures.as_ref().unwrap().is_empty());
+}
+
+#[test]
+fn compute_all_signatures_with_all_empty_rows_and_cols_is_stable() {
+    let mut grid = Grid::new(3, 4);
+
+    grid.compute_all_signatures();
+    let first_rows = grid.row_signatures.as_ref().unwrap().clone();
+    let first_cols = grid.col_signatures.as_ref().unwrap().clone();
+
+    assert_eq!(first_rows.len(), 3);
+    assert_eq!(first_cols.len(), 4);
+    assert!(first_rows.iter().all(|sig| sig.hash == 0));
+    assert!(first_cols.iter().all(|sig| sig.hash == 0));
+
+    grid.compute_all_signatures();
+    let second_rows = grid.row_signatures.as_ref().unwrap();
+    let second_cols = grid.col_signatures.as_ref().unwrap();
+
+    assert_eq!(first_rows, *second_rows);
+    assert_eq!(first_cols, *second_cols);
+}
+
+#[test]
 fn row_and_col_signatures_match_bulk_computation() {
     let mut grid = Grid::new(3, 2);
     grid.insert(make_cell(
@@ -5513,6 +5546,27 @@ fn rows_iter_and_get_are_consistent() {
             let _ = grid.get(r, c);
         }
     }
+}
+
+#[test]
+fn sparse_grid_all_empty_rows_have_zero_signatures() {
+    let mut grid = Grid::new(2, 3);
+
+    grid.compute_all_signatures();
+
+    let row_sigs = grid
+        .row_signatures
+        .as_ref()
+        .expect("row signatures should exist");
+    let col_sigs = grid
+        .col_signatures
+        .as_ref()
+        .expect("col signatures should exist");
+
+    assert_eq!(row_sigs.len(), 2);
+    assert_eq!(col_sigs.len(), 3);
+    assert!(row_sigs.iter().all(|sig| sig.hash == 0));
+    assert!(col_sigs.iter().all(|sig| sig.hash == 0));
 }
 
 #[test]
