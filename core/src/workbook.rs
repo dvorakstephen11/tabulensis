@@ -233,15 +233,15 @@ impl Grid {
     pub fn compute_all_signatures(&mut self) {
         let mut row_hashers: Vec<Xxh64> = (0..self.nrows).map(|_| Xxh64::new(XXH64_SEED)).collect();
         let mut col_hashers: Vec<Xxh64> = (0..self.ncols).map(|_| Xxh64::new(XXH64_SEED)).collect();
-        let mut cells: Vec<Cell> = self.cells.values().cloned().collect();
+        let mut cells: Vec<&Cell> = self.cells.values().collect();
 
         cells.sort_by(|a, b| a.row.cmp(&b.row).then_with(|| a.col.cmp(&b.col)));
-        for cell in &cells {
+        for &cell in &cells {
             hash_cell_with_position(cell.col, cell, &mut row_hashers[cell.row as usize]);
         }
 
         cells.sort_by(|a, b| a.col.cmp(&b.col).then_with(|| a.row.cmp(&b.row)));
-        for cell in &cells {
+        for &cell in &cells {
             hash_cell_with_position(cell.row, cell, &mut col_hashers[cell.col as usize]);
         }
 

@@ -6,3 +6,9 @@
 - Expanded signature tests for position sensitivity, type discrimination, sparse empties, and a golden constant (8394164658571930929); added sparse grid sanity check for non-zero hashes.
 - Updated docs/rust_docs/2025-11-30-docs-vs-implementation.md preprocessing section and priority order to reflect XXHash64, position/type coverage.
 - Tooling: ran cargo fmt, cargo clippy, and cargo test (all passing); fixed clippy warnings about unused mut and Xxh64 constructor typo.
+
+## Remediation Round 1 (2025-12-02)
+- Addressed: Constraint Violation - Unnecessary Allocations in compute_all_signatures.
+- Changes: core/src/workbook.rs now hashes row/col signatures over references (`Vec<&Cell>`) to avoid per-cell cloning while preserving the sorted iteration order for determinism.
+- Tests: cargo fmt; cargo fmt --check; cargo clippy --all-targets --all-features; cargo test; cargo build.
+- Complications: None; existing signature and sparse grid tests confirm behavior unchanged aside from allocation reduction.
