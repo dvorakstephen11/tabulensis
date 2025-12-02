@@ -1670,11 +1670,13 @@ Both implement the same trait interface, allowing generic algorithms:
 
 ```
 Trait RowHasher
-├── type Hash: Eq + Hash + Copy + Ord + Default
-├── fn hash_row(&self, cells: &[(u32, &Cell)]) -> Self::Hash
-├── fn hash_column(&self, cells: &[(u32, &Cell)]) -> Self::Hash
-└── fn combine(&self, a: Self::Hash, b: Self::Hash) -> Self::Hash
+- type Hash: Eq + Hash + Copy + Ord + Default
+- fn hash_row(&self, cells: &[(u32, &Cell)]) -> Self::Hash
+- fn hash_column(&self, cells: &[(u32, &Cell)]) -> Self::Hash
+- fn combine(&self, a: Self::Hash, b: Self::Hash) -> Self::Hash
 ```
+
+`combine` is a commutative, order-independent reduction over per-cell contributions, ensuring deterministic hashes even when iterating sparsely stored cells without sorting.
 
 #### Hash64 Implementation (XXHash64)
 
@@ -1684,18 +1686,11 @@ Trait RowHasher
 - Collision probability at 50K rows: ~0.00006% (birthday paradox)
 
 **Hash computation**:
-1. Initialize hasher state
-2. For each (col, cell) in row (sorted order):
-   - Feed column index (4 bytes)
-   - Feed cell type discriminant (1 byte)
-   - Feed cell value (variable):
-     - Number: 8 bytes (f64 bits)
-     - String: length + bytes
-     - Boolean: 1 byte
-     - Empty: nothing
-     - Error: error type byte
-   - If formula present: feed formula string
-3. Finalize to 64-bit output
+1. For each non-empty cell, compute a per-cell contribution with XXHash64 over `(position, type_tag, value_bytes, optional_formula_bytes)`, where `position` is the column index for row hashes and the row index for column hashes.
+2. Combine contributions using the commutative reducer `combine` (mix + wrapping add). Because position is encoded inside each contribution, the final hash remains position-sensitive even though reduction is order-independent.
+3. Return the accumulator as the row/column fingerprint. No sorting of sparse cells is required; streaming over a `HashMap` produces identical results across platforms.
+
+**Implementation Note (RS1 milestone)**: The sparse `Grid` layer uses the commutative reducer so hashing can stream over `HashMap`-backed cells without cloning or sorting. Higher-level `GridView` structures may still materialize sorted row/column views for other algorithms, but the fingerprint semantics are defined in terms of the commutative reduction, not iteration order.
 
 #### Hash128 Implementation (BLAKE3 truncated)
 
@@ -7946,7 +7941,8 @@ A gap with no content on one or both sides, requiring no actual alignment work.
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
-| 1.0 | 2025-11-30 | — | Initial specification |
+| 1.1 | 2025-12-02 | RS1 doc update | Clarified commutative XXHash64 reduction for row/col signatures (order-independent over sparse iteration with position-tagged contributions). |
+| 1.0 | 2025-11-30 | - | Initial specification |
 
 ---
 

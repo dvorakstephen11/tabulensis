@@ -23,3 +23,9 @@
 - Changes: Updated spec.md and docs-vs-implementation to describe the commutative reduction/determinism model; added debug_assert bounds checks and documented Grid invariants in core/src/workbook.rs; added insertion-order independence and recomputation tests in core/tests/signature_tests.rs.
 - Tests: cargo fmt; cargo clippy --all-targets --all-features; cargo test.
 - Complications: None; golden signature constants unchanged.
+
+## Remediation Round 4 (2025-12-02)
+- Addressed: Finding 1 (unified spec wording for commutative hashing model), Finding 2 (missing degenerate/empty signature coverage).
+- Changes: Updated docs/rust_docs/unified_grid_diff_algorithm_specification.md to describe per-cell XXHash64 contributions combined via commutative reduction (RS1 note + revision history entry); added explicit empty-grid stability tests in core/tests/signature_tests.rs and a sparse empty-grid zero-signature test in core/tests/sparse_grid_tests.rs.
+- Tests: cargo fmt; cargo clippy --all-targets --all-features -- -D warnings; cargo test.
+- Complications: None; behavior unchanged and signatures remain stable.

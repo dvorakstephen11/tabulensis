@@ -82,6 +82,27 @@ fn rows_iter_and_get_are_consistent() {
 }
 
 #[test]
+fn sparse_grid_all_empty_rows_have_zero_signatures() {
+    let mut grid = Grid::new(2, 3);
+
+    grid.compute_all_signatures();
+
+    let row_sigs = grid
+        .row_signatures
+        .as_ref()
+        .expect("row signatures should exist");
+    let col_sigs = grid
+        .col_signatures
+        .as_ref()
+        .expect("col signatures should exist");
+
+    assert_eq!(row_sigs.len(), 2);
+    assert_eq!(col_sigs.len(), 3);
+    assert!(row_sigs.iter().all(|sig| sig.hash == 0));
+    assert!(col_sigs.iter().all(|sig| sig.hash == 0));
+}
+
+#[test]
 fn compute_signatures_on_sparse_grid_produces_hashes() {
     let mut grid = Grid::new(4, 4);
     grid.insert(Cell {
