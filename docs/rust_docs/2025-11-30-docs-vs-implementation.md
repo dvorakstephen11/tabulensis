@@ -190,21 +190,45 @@ The spec defines comprehensive fingerprinting:
 **Implemented:**
 - Deterministic row signature computation via `XXHash64` (seed 0) that includes column position, value type tag, value, and formula.
 - Deterministic column signature computation via `XXHash64` that includes row position, value type tag, value, and formula.
-- `compute_all_signatures()` method on Grid
+- `compute_all_signatures()` streams over sparse cells once using the same per-cell hash helper for rows and columns; cached signatures stay consistent with direct calls.
 
 ```rust
 // From workbook.rs
 pub fn compute_row_signature(&self, row: u32) -> RowSignature {
-    let mut row_cells: Vec<&Cell> = self.cells.values().filter(|cell| cell.row == row).collect();
-    row_cells.sort_by_key(|cell| cell.col);
+    let hash = self
+        .cells
+        .values()
+        .filter(|cell| cell.row == row)
+        .fold(0u64, |acc, cell| {
+            combine_hashes(acc, hash_cell_contribution(cell.col, cell))
+        });
+    RowSignature { hash }
+}
 
-    let mut hasher = Xxh64::new(0);
-    for cell in row_cells {
-        cell.col.hash(&mut hasher);
-        cell.value.hash(&mut hasher);
-        cell.formula.hash(&mut hasher);
+pub fn compute_all_signatures(&mut self) {
+    let mut row_hashes = vec![0u64; self.nrows as usize];
+    let mut col_hashes = vec![0u64; self.ncols as usize];
+
+    for cell in self.cells.values() {
+        row_hashes[cell.row as usize] =
+            combine_hashes(row_hashes[cell.row as usize], hash_cell_contribution(cell.col, cell));
+        col_hashes[cell.col as usize] =
+            combine_hashes(col_hashes[cell.col as usize], hash_cell_contribution(cell.row, cell));
     }
-    RowSignature { hash: hasher.finish() }
+
+    self.row_signatures = Some(
+        row_hashes
+            .into_iter()
+            .map(|hash| RowSignature { hash })
+            .collect(),
+    );
+
+    self.col_signatures = Some(
+        col_hashes
+            .into_iter()
+            .map(|hash| ColSignature { hash })
+            .collect(),
+    );
 }
 ```
 
@@ -227,7 +251,11 @@ The signature computation exists but lacks the sophistication required by the sp
 | XXHash64/BLAKE3 | ✅ | XXHash64 with fixed seed (deterministic across platforms) |
 | Frequency tables | ❌ | Not implemented |
 
-**Verdict**: Row/column signatures are deterministic, position- and type-sensitive, but full normalization and frequency analysis are still missing.
+Additional notes:
+- Bulk `compute_all_signatures` now streams in **O(M)** using a commutative reduction (no sorting/cloning); per-row/per-col calls still scan **O(M)** until row/column indexing is added (documented as deferred in the spec).
+- New tests lock formula inclusion and column-side invariants, including golden constants for rows with and without formulas.
+
+**Verdict**: Row/column signatures are deterministic, position- and type-sensitive, but full normalization, frequency analysis, and O(k) per-row/per-col iteration are still missing.
 
 ---
 

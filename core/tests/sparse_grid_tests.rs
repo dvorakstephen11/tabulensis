@@ -108,3 +108,45 @@ fn compute_signatures_on_sparse_grid_produces_hashes() {
     assert_ne!(row_hash, 0);
     assert_ne!(col_hash, 0);
 }
+
+#[test]
+fn compute_all_signatures_matches_direct_computation() {
+    let mut grid = Grid::new(3, 3);
+    grid.insert(Cell {
+        row: 0,
+        col: 1,
+        address: CellAddress::from_indices(0, 1),
+        value: Some(CellValue::Number(10.0)),
+        formula: Some("=5+5".into()),
+    });
+    grid.insert(Cell {
+        row: 1,
+        col: 0,
+        address: CellAddress::from_indices(1, 0),
+        value: Some(CellValue::Text("x".into())),
+        formula: None,
+    });
+    grid.insert(Cell {
+        row: 2,
+        col: 2,
+        address: CellAddress::from_indices(2, 2),
+        value: Some(CellValue::Bool(false)),
+        formula: Some("=A1".into()),
+    });
+
+    grid.compute_all_signatures();
+
+    let row_sigs = grid
+        .row_signatures
+        .as_ref()
+        .expect("row signatures should exist");
+    let col_sigs = grid
+        .col_signatures
+        .as_ref()
+        .expect("col signatures should exist");
+
+    assert_eq!(grid.compute_row_signature(0).hash, row_sigs[0].hash);
+    assert_eq!(grid.compute_row_signature(2).hash, row_sigs[2].hash);
+    assert_eq!(grid.compute_col_signature(0).hash, col_sigs[0].hash);
+    assert_eq!(grid.compute_col_signature(2).hash, col_sigs[2].hash);
+}

@@ -178,6 +178,7 @@ Let `grid1` and `grid2` have `nrows = 2, ncols = 1`.
   - Feed into the hasher, for each non-empty cell:
     - Row hash: `(column_index, type_tag, normalized value, optional formula bytes)`
     - Column hash: `(row_index, type_tag, normalized value, optional formula bytes)`
+- Implementation note: per-cell XXHash64 contributions are combined with a commutative reduction (mix + wrapping add) so that `compute_all_signatures` can stream over the sparse `HashMap` once without sorting while remaining deterministic and position/type/formula aware.
 - For this milestone:
   - We **require** position indices and a type tag; we **allow** value normalization to remain “as-is” (using current `CellValue::hash`), acknowledging that full normalization (numeric rounding, string Unicode normalization) is deferred to a later milestone.
   - The tests will include at least one **golden constant**: a small row whose `hash` is asserted against a fixed `u64` value, locking in the particular XXHash64 configuration.
@@ -197,9 +198,9 @@ Explicitly out of scope:
 
 ### 4.1 Performance
 
-- `Grid::compute_row_signature` and `Grid::compute_col_signature` must run in **O(k)** where `k` is the number of non-empty cells in the row/column.
+- `Grid::compute_row_signature` and `Grid::compute_col_signature` are currently **O(M)** scans over the sparse map; the intended **O(k)** behavior (row/col-local iteration) remains a follow-up optimization once row/column indexing (GridView) is introduced.
 - `Grid::compute_all_signatures` must remain **O(M)** where `M` is total non-empty cells:
-  - Implementation: single pass over each row and column; no nested N×M scanning.
+  - Implementation: single pass over each row and column using commutative accumulation; no per-cell cloning or sorting needed for determinism.
 - Hash computation overhead should be modest:
   - For small unit tests and typical PG-level scenarios, overhead is negligible.
   - For large grids (up to tens of thousands of rows), hashing should not dominate; the chosen hash (XXHash64) is explicitly spec’d as “fast enough” for this. 
