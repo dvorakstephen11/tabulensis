@@ -218,7 +218,7 @@ Explicitly out of scope:
 
 - Hash results must be:
   - Independent of Rust’s `Hash` trait implementation for `HashMap` (no `DefaultHasher`).
-  - Independent of iteration order of `Grid.cells` (we already iterate by explicit row/col indices; we must keep that invariant).
+  - Independent of iteration order of `Grid.cells` thanks to the order-independent commutative reduction over per-cell XXHash64 contributions (HashMap iteration order does not affect the result).
   - Identical across architectures and build modes (debug vs release).
 
 ### 4.4 Invariants
@@ -261,7 +261,7 @@ impl Grid {
 
     pub fn compute_col_signature(&self, col: u32) -> ColSignature { /* stronger impl */ }
 
-    pub fn compute_all_signatures(&mut self) { /* uses the two above */ }
+    pub fn compute_all_signatures(&mut self) { /* shares the same per-cell hashing scheme as row/col helpers and populates row_signatures/col_signatures in one pass */ }
 }
 ```
 

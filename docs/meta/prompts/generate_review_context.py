@@ -320,7 +320,7 @@ def collate_post_implementation_review(branch_name=None, downloads_dir=None):
     files_to_copy = []
     
     rust_docs_dir = repo_root / "docs" / "rust_docs"
-    excluded_docs = {"excel_diff_meta_programming.md"}
+    excluded_docs = {"excel_diff_meta_programming.md", "2025-11-30-docs-vs-implementation.md"}
     if rust_docs_dir.exists():
         for f in rust_docs_dir.iterdir():
             if f.is_file() and f.suffix == '.md' and f.name not in excluded_docs:
@@ -649,7 +649,6 @@ def collate_planner(downloads_dir=None):
     
     extra_rust_docs = [
         "unified_grid_diff_algorithm_specification.md",
-        "2025-11-30-docs-vs-implementation.md",
     ]
     for doc_name in extra_rust_docs:
         doc_path = rust_docs_dir / doc_name
@@ -745,10 +744,10 @@ def collate_planner(downloads_dir=None):
     print(f"\nCollation complete: {copied_count} files in {output_dir}")
     print("\nFiles included:")
     print("  1-5. Technical blueprints from docs/rust_docs/")
-    print("  6-7. Design docs (grid diff spec, docs-vs-implementation analysis)")
-    print("  8.   codebase_context.md (current code snapshot)")
-    print("  9.   todo.md (current task list)")
-    print("  10.  development_history.txt (activity logs + latest test results)")
+    print("  6.   Design doc (unified grid diff algorithm specification)")
+    print("  7.   codebase_context.md (current code snapshot)")
+    print("  8.   todo.md (current task list)")
+    print("  9.   development_history.txt (activity logs + latest test results)")
     
     prompt_file = script_dir / "planner_instruction.txt"
     if prompt_file.exists():
@@ -877,9 +876,10 @@ def collate_projections(downloads_dir=None):
     files_to_copy = []
     
     rust_docs_dir = repo_root / "docs" / "rust_docs"
+    excluded_docs = {"2025-11-30-docs-vs-implementation.md"}
     if rust_docs_dir.exists():
         for f in rust_docs_dir.iterdir():
-            if f.is_file() and f.suffix == '.md':
+            if f.is_file() and f.suffix == '.md' and f.name not in excluded_docs:
                 files_to_copy.append((f, output_dir / f.name))
     
     copied_count = 0

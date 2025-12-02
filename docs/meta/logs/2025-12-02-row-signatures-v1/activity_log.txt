@@ -17,3 +17,9 @@
 - Changes: compute_all_signatures now streams over sparse cells with a commutative mix (no sorting or cloning) shared with compute_row/compute_col; added formula inclusion, column invariants, and bulk-consistency tests plus a formula-inclusive golden; updated spec and docs-vs-implementation to record the commutative reduction and O(k) deferral.
 - Tests: cargo fmt; cargo clippy --all-targets --all-features; cargo test; cargo build.
 - Complications: None; golden hashes refreshed after the hashing reduction change.
+
+## Remediation Round 3 (2025-12-02)
+- Addressed: Finding 2 (docs/spec wording on commutative reduction), Finding 3 (iteration-order independence tests), Finding 4 (explicit Grid bounds invariants), Finding 5 (compute_all_signatures recomputation behavior).
+- Changes: Updated spec.md and docs-vs-implementation to describe the commutative reduction/determinism model; added debug_assert bounds checks and documented Grid invariants in core/src/workbook.rs; added insertion-order independence and recomputation tests in core/tests/signature_tests.rs.
+- Tests: cargo fmt; cargo clippy --all-targets --all-features; cargo test.
+- Complications: None; golden signature constants unchanged.

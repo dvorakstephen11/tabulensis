@@ -100,6 +100,27 @@ fn row_and_col_signatures_match_bulk_computation() {
 }
 
 #[test]
+fn compute_all_signatures_recomputes_after_mutation() {
+    let mut grid = Grid::new(3, 3);
+    grid.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    grid.insert(make_cell(1, 1, Some(CellValue::Text("x".into())), None));
+
+    grid.compute_all_signatures();
+    let first_rows = grid.row_signatures.as_ref().unwrap().clone();
+    let first_cols = grid.col_signatures.as_ref().unwrap().clone();
+
+    grid.insert(make_cell(1, 1, Some(CellValue::Text("y".into())), None));
+    grid.insert(make_cell(2, 2, Some(CellValue::Bool(true)), None));
+
+    grid.compute_all_signatures();
+    let second_rows = grid.row_signatures.as_ref().unwrap();
+    let second_cols = grid.col_signatures.as_ref().unwrap();
+
+    assert_ne!(first_rows[1].hash, second_rows[1].hash);
+    assert_ne!(first_cols[1].hash, second_cols[1].hash);
+}
+
+#[test]
 fn row_signatures_distinguish_column_positions() {
     let mut grid1 = Grid::new(1, 2);
     grid1.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
@@ -127,6 +148,74 @@ fn col_signatures_distinguish_row_positions() {
     let sig1 = grid1.compute_col_signature(0);
     let sig2 = grid2.compute_col_signature(0);
     assert_ne!(sig1.hash, sig2.hash);
+}
+
+#[test]
+fn row_signature_independent_of_insertion_order() {
+    let mut grid1 = Grid::new(1, 3);
+    grid1.insert(make_cell(
+        0,
+        0,
+        Some(CellValue::Number(10.0)),
+        Some("=A1*2"),
+    ));
+    grid1.insert(make_cell(0, 1, Some(CellValue::Text("mix".into())), None));
+    grid1.insert(make_cell(0, 2, Some(CellValue::Bool(true)), None));
+
+    let mut grid2 = Grid::new(1, 3);
+    grid2.insert(make_cell(0, 2, Some(CellValue::Bool(true)), None));
+    grid2.insert(make_cell(
+        0,
+        0,
+        Some(CellValue::Number(10.0)),
+        Some("=A1*2"),
+    ));
+    grid2.insert(make_cell(0, 1, Some(CellValue::Text("mix".into())), None));
+
+    let sig1 = grid1.compute_row_signature(0).hash;
+    let sig2 = grid2.compute_row_signature(0).hash;
+    assert_eq!(sig1, sig2);
+
+    grid1.compute_all_signatures();
+    grid2.compute_all_signatures();
+
+    let bulk_sig1 = grid1.row_signatures.as_ref().unwrap()[0].hash;
+    let bulk_sig2 = grid2.row_signatures.as_ref().unwrap()[0].hash;
+    assert_eq!(bulk_sig1, bulk_sig2);
+}
+
+#[test]
+fn col_signature_independent_of_insertion_order() {
+    let mut grid1 = Grid::new(3, 1);
+    grid1.insert(make_cell(
+        0,
+        0,
+        Some(CellValue::Number(std::f64::consts::E)),
+        Some("=EXP(1)"),
+    ));
+    grid1.insert(make_cell(1, 0, Some(CellValue::Text("col".into())), None));
+    grid1.insert(make_cell(2, 0, Some(CellValue::Bool(false)), None));
+
+    let mut grid2 = Grid::new(3, 1);
+    grid2.insert(make_cell(2, 0, Some(CellValue::Bool(false)), None));
+    grid2.insert(make_cell(
+        0,
+        0,
+        Some(CellValue::Number(std::f64::consts::E)),
+        Some("=EXP(1)"),
+    ));
+    grid2.insert(make_cell(1, 0, Some(CellValue::Text("col".into())), None));
+
+    let sig1 = grid1.compute_col_signature(0).hash;
+    let sig2 = grid2.compute_col_signature(0).hash;
+    assert_eq!(sig1, sig2);
+
+    grid1.compute_all_signatures();
+    grid2.compute_all_signatures();
+
+    let bulk_sig1 = grid1.col_signatures.as_ref().unwrap()[0].hash;
+    let bulk_sig2 = grid2.col_signatures.as_ref().unwrap()[0].hash;
+    assert_eq!(bulk_sig1, bulk_sig2);
 }
 
 #[test]

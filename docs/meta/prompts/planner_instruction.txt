@@ -15,7 +15,6 @@ You have been provided with:
 
 2. **Design Documents**:
    - `unified_grid_diff_algorithm_specification.md` - Grid diffing algorithm design
-   - `2025-11-30-docs-vs-implementation.md` - Analysis of documentation vs implementation gaps
 
 3. **Current Codebase**: `codebase_context.md` contains the directory structure and source code.
 

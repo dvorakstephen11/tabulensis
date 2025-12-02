@@ -253,6 +253,7 @@ The signature computation exists but lacks the sophistication required by the sp
 
 Additional notes:
 - Bulk `compute_all_signatures` now streams in **O(M)** using a commutative reduction (no sorting/cloning); per-row/per-col calls still scan **O(M)** until row/column indexing is added (documented as deferred in the spec).
+- The commutative mix + wrapping-add reduction makes the hashes independent of `HashMap` iteration order; no explicit sorting of cells is required to stay deterministic across platforms.
 - New tests lock formula inclusion and column-side invariants, including golden constants for rows with and without formulas.
 
 **Verdict**: Row/column signatures are deterministic, position- and type-sensitive, but full normalization, frequency analysis, and O(k) per-row/per-col iteration are still missing.

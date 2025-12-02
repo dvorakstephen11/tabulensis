@@ -53,6 +53,7 @@ pub enum SheetKind {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// Invariant: all cells stored in `cells` must satisfy `row < nrows` and `col < ncols`.
 pub struct Grid {
     pub nrows: u32,
     pub ncols: u32,
@@ -180,6 +181,10 @@ impl Grid {
     }
 
     pub fn insert(&mut self, cell: Cell) {
+        debug_assert!(
+            cell.row < self.nrows && cell.col < self.ncols,
+            "cell coordinates must lie within the grid bounds"
+        );
         self.cells.insert((cell.row, cell.col), cell);
     }
 
@@ -232,6 +237,11 @@ impl Grid {
         for cell in self.cells.values() {
             let row_idx = cell.row as usize;
             let col_idx = cell.col as usize;
+
+            debug_assert!(
+                row_idx < row_hashes.len() && col_idx < col_hashes.len(),
+                "cell coordinates must lie within the grid bounds"
+            );
 
             let row_contribution = hash_cell_contribution(cell.col, cell);
             row_hashes[row_idx] = combine_hashes(row_hashes[row_idx], row_contribution);
