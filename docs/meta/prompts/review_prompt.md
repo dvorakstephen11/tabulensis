@@ -35,6 +35,7 @@
       pg3_snapshot_tests.rs
       pg4_diffop_tests.rs
       pg5_grid_diff_tests.rs
+      pg6_object_vs_grid_tests.rs
       signature_tests.rs
       sparse_grid_tests.rs
       common/
@@ -71,6 +72,14 @@
       pg1_sparse_used_range.xlsx
       pg2_addressing_matrix.xlsx
       pg3_value_and_formula_cells.xlsx
+      pg6_sheet_added_a.xlsx
+      pg6_sheet_added_b.xlsx
+      pg6_sheet_and_grid_change_a.xlsx
+      pg6_sheet_and_grid_change_b.xlsx
+      pg6_sheet_removed_a.xlsx
+      pg6_sheet_removed_b.xlsx
+      pg6_sheet_renamed_a.xlsx
+      pg6_sheet_renamed_b.xlsx
       random_zip.zip
       sheet_case_only_rename_a.xlsx
       sheet_case_only_rename_b.xlsx
@@ -5058,6 +5067,170 @@ fn pg5_10_grid_diff_row_appended_with_overlap_cell_edits() {
 
 ---
 
+### File: `core\tests\pg6_object_vs_grid_tests.rs`
+
+```rust
+use excel_diff::{DiffOp, diff_workbooks, open_workbook};
+
+mod common;
+use common::fixture_path;
+
+#[test]
+fn pg6_1_sheet_added_no_grid_ops_on_main() {
+    let old = open_workbook(fixture_path("pg6_sheet_added_a.xlsx")).expect("open pg6 added A");
+    let new = open_workbook(fixture_path("pg6_sheet_added_b.xlsx")).expect("open pg6 added B");
+
+    let report = diff_workbooks(&old, &new);
+
+    let mut sheet_added = 0;
+    for op in &report.ops {
+        match op {
+            DiffOp::SheetAdded { sheet } if sheet == "NewSheet" => sheet_added += 1,
+            DiffOp::RowAdded { sheet, .. }
+            | DiffOp::RowRemoved { sheet, .. }
+            | DiffOp::ColumnAdded { sheet, .. }
+            | DiffOp::ColumnRemoved { sheet, .. }
+            | DiffOp::CellEdited { sheet, .. }
+                if sheet == "Main" =>
+            {
+                panic!("unexpected grid op on Main: {op:?}");
+            }
+            DiffOp::SheetAdded { sheet } => {
+                panic!("unexpected sheet added: {sheet}");
+            }
+            DiffOp::SheetRemoved { sheet } => {
+                panic!("unexpected sheet removed: {sheet}");
+            }
+            DiffOp::BlockMovedRows { .. } | DiffOp::BlockMovedColumns { .. } => {
+                panic!("block move ops are not expected in PG6.1: {op:?}");
+            }
+            _ => panic!("unexpected op variant: {op:?}"),
+        }
+    }
+
+    assert_eq!(sheet_added, 1, "exactly one NewSheet addition expected");
+    assert_eq!(report.ops.len(), 1, "no other operations expected");
+}
+
+#[test]
+fn pg6_2_sheet_removed_no_grid_ops_on_main() {
+    let old = open_workbook(fixture_path("pg6_sheet_removed_a.xlsx")).expect("open pg6 removed A");
+    let new = open_workbook(fixture_path("pg6_sheet_removed_b.xlsx")).expect("open pg6 removed B");
+
+    let report = diff_workbooks(&old, &new);
+
+    let mut sheet_removed = 0;
+    for op in &report.ops {
+        match op {
+            DiffOp::SheetRemoved { sheet } if sheet == "OldSheet" => sheet_removed += 1,
+            DiffOp::RowAdded { sheet, .. }
+            | DiffOp::RowRemoved { sheet, .. }
+            | DiffOp::ColumnAdded { sheet, .. }
+            | DiffOp::ColumnRemoved { sheet, .. }
+            | DiffOp::CellEdited { sheet, .. }
+                if sheet == "Main" =>
+            {
+                panic!("unexpected grid op on Main: {op:?}");
+            }
+            DiffOp::SheetAdded { sheet } => {
+                panic!("unexpected sheet added: {sheet}");
+            }
+            DiffOp::SheetRemoved { sheet } => {
+                panic!("unexpected sheet removed: {sheet}");
+            }
+            DiffOp::BlockMovedRows { .. } | DiffOp::BlockMovedColumns { .. } => {
+                panic!("block move ops are not expected in PG6.2: {op:?}");
+            }
+            _ => panic!("unexpected op variant: {op:?}"),
+        }
+    }
+
+    assert_eq!(sheet_removed, 1, "exactly one OldSheet removal expected");
+    assert_eq!(report.ops.len(), 1, "no other operations expected");
+}
+
+#[test]
+fn pg6_3_rename_as_remove_plus_add_no_grid_ops() {
+    let old = open_workbook(fixture_path("pg6_sheet_renamed_a.xlsx")).expect("open pg6 rename A");
+    let new = open_workbook(fixture_path("pg6_sheet_renamed_b.xlsx")).expect("open pg6 rename B");
+
+    let report = diff_workbooks(&old, &new);
+
+    let mut added = 0;
+    let mut removed = 0;
+
+    for op in &report.ops {
+        match op {
+            DiffOp::SheetAdded { sheet } if sheet == "NewName" => added += 1,
+            DiffOp::SheetRemoved { sheet } if sheet == "OldName" => removed += 1,
+            DiffOp::SheetAdded { sheet } => panic!("unexpected sheet added: {sheet}"),
+            DiffOp::SheetRemoved { sheet } => panic!("unexpected sheet removed: {sheet}"),
+            DiffOp::RowAdded { .. }
+            | DiffOp::RowRemoved { .. }
+            | DiffOp::ColumnAdded { .. }
+            | DiffOp::ColumnRemoved { .. }
+            | DiffOp::CellEdited { .. }
+            | DiffOp::BlockMovedRows { .. }
+            | DiffOp::BlockMovedColumns { .. } => {
+                panic!("no grid-level ops expected for rename scenario: {op:?}");
+            }
+            _ => panic!("unexpected op variant: {op:?}"),
+        }
+    }
+
+    assert_eq!(
+        report.ops.len(),
+        2,
+        "rename should produce one add and one remove"
+    );
+    assert_eq!(added, 1, "expected one NewName addition");
+    assert_eq!(removed, 1, "expected one OldName removal");
+}
+
+#[test]
+fn pg6_4_sheet_and_grid_change_composed_cleanly() {
+    let old =
+        open_workbook(fixture_path("pg6_sheet_and_grid_change_a.xlsx")).expect("open pg6 4 A");
+    let new =
+        open_workbook(fixture_path("pg6_sheet_and_grid_change_b.xlsx")).expect("open pg6 4 B");
+
+    let report = diff_workbooks(&old, &new);
+
+    let mut scratch_added = 0;
+    let mut main_cell_edits = 0;
+
+    for op in &report.ops {
+        match op {
+            DiffOp::SheetAdded { sheet } if sheet == "Scratch" => scratch_added += 1,
+            DiffOp::CellEdited { sheet, .. } => {
+                assert_eq!(sheet, "Main", "only Main should have cell edits");
+                main_cell_edits += 1;
+            }
+            DiffOp::SheetRemoved { .. } => {
+                panic!("no sheets should be removed in PG6.4: {op:?}");
+            }
+            DiffOp::RowAdded { .. }
+            | DiffOp::RowRemoved { .. }
+            | DiffOp::ColumnAdded { .. }
+            | DiffOp::ColumnRemoved { .. }
+            | DiffOp::BlockMovedRows { .. }
+            | DiffOp::BlockMovedColumns { .. } => {
+                panic!("no structural row/column ops expected in PG6.4: {op:?}");
+            }
+            _ => panic!("unexpected op variant: {op:?}"),
+        }
+    }
+
+    assert_eq!(scratch_added, 1, "exactly one Scratch addition expected");
+    assert!(
+        main_cell_edits > 0,
+        "Main should report at least one cell edit"
+    );
+}
+```
+
+---
+
 ### File: `core\tests\signature_tests.rs`
 
 ```rust
@@ -5774,6 +5947,39 @@ scenarios:
       - "sheet_case_only_rename_edit_a.xlsx"
       - "sheet_case_only_rename_edit_b.xlsx"
 
+  # --- PG6: Object graph vs grid responsibilities ---
+  - id: "pg6_sheet_added"
+    generator: "pg6_sheet_scenario"
+    args:
+      mode: "sheet_added"
+    output:
+      - "pg6_sheet_added_a.xlsx"
+      - "pg6_sheet_added_b.xlsx"
+
+  - id: "pg6_sheet_removed"
+    generator: "pg6_sheet_scenario"
+    args:
+      mode: "sheet_removed"
+    output:
+      - "pg6_sheet_removed_a.xlsx"
+      - "pg6_sheet_removed_b.xlsx"
+
+  - id: "pg6_sheet_renamed"
+    generator: "pg6_sheet_scenario"
+    args:
+      mode: "sheet_renamed"
+    output:
+      - "pg6_sheet_renamed_a.xlsx"
+      - "pg6_sheet_renamed_b.xlsx"
+
+  - id: "pg6_sheet_and_grid_change"
+    generator: "pg6_sheet_scenario"
+    args:
+      mode: "sheet_and_grid_change"
+    output:
+      - "pg6_sheet_and_grid_change_a.xlsx"
+      - "pg6_sheet_and_grid_change_b.xlsx"
+
   # --- Milestone 2.2: Base64 Correctness ---
   - id: "corrupt_base64"
     generator: "mashup_corrupt"
@@ -5925,6 +6131,7 @@ from generators.grid import (
     ValueFormulaGenerator,
     SingleCellDiffGenerator,
     SheetCaseRenameGenerator,
+    Pg6SheetScenarioGenerator,
 )
 from generators.corrupt import ContainerCorruptGenerator
 from generators.mashup import (
@@ -5945,6 +6152,7 @@ GENERATORS: Dict[str, Any] = {
     "value_formula": ValueFormulaGenerator,
     "single_cell_diff": SingleCellDiffGenerator,
     "sheet_case_rename": SheetCaseRenameGenerator,
+    "pg6_sheet_scenario": Pg6SheetScenarioGenerator,
     "corrupt_container": ContainerCorruptGenerator,
     "mashup_corrupt": MashupCorruptGenerator,
     "mashup_duplicate": MashupDuplicateGenerator,
@@ -6411,6 +6619,104 @@ class SheetCaseRenameGenerator(BaseGenerator):
         create_workbook(sheet_a, value_a, output_names[0])
         create_workbook(sheet_b, value_b, output_names[1])
 
+class Pg6SheetScenarioGenerator(BaseGenerator):
+    """Generates workbook pairs for PG6 sheet add/remove/rename vs grid responsibilities."""
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        if len(output_names) != 2:
+            raise ValueError("pg6_sheet_scenario generator expects exactly two output filenames")
+
+        mode = self.args.get("mode")
+        a_path = output_dir / output_names[0]
+        b_path = output_dir / output_names[1]
+
+        if mode == "sheet_added":
+            self._gen_sheet_added(a_path, b_path)
+        elif mode == "sheet_removed":
+            self._gen_sheet_removed(a_path, b_path)
+        elif mode == "sheet_renamed":
+            self._gen_sheet_renamed(a_path, b_path)
+        elif mode == "sheet_and_grid_change":
+            self._gen_sheet_and_grid_change(a_path, b_path)
+        else:
+            raise ValueError(f"Unsupported PG6 mode: {mode}")
+
+    def _fill_grid(self, worksheet, rows: int, cols: int, prefix: str = "R"):
+        for r in range(1, rows + 1):
+            for c in range(1, cols + 1):
+                worksheet.cell(row=r, column=c, value=f"{prefix}{r}C{c}")
+
+    def _gen_sheet_added(self, a_path: Path, b_path: Path):
+        wb_a = openpyxl.Workbook()
+        ws_main_a = wb_a.active
+        ws_main_a.title = "Main"
+        self._fill_grid(ws_main_a, 5, 5)
+        wb_a.save(a_path)
+
+        wb_b = openpyxl.Workbook()
+        ws_main_b = wb_b.active
+        ws_main_b.title = "Main"
+        self._fill_grid(ws_main_b, 5, 5)
+        ws_new = wb_b.create_sheet("NewSheet")
+        self._fill_grid(ws_new, 3, 3, prefix="N")
+        wb_b.save(b_path)
+
+    def _gen_sheet_removed(self, a_path: Path, b_path: Path):
+        wb_a = openpyxl.Workbook()
+        ws_main_a = wb_a.active
+        ws_main_a.title = "Main"
+        self._fill_grid(ws_main_a, 5, 5)
+        ws_old = wb_a.create_sheet("OldSheet")
+        self._fill_grid(ws_old, 3, 3, prefix="O")
+        wb_a.save(a_path)
+
+        wb_b = openpyxl.Workbook()
+        ws_main_b = wb_b.active
+        ws_main_b.title = "Main"
+        self._fill_grid(ws_main_b, 5, 5)
+        wb_b.save(b_path)
+
+    def _gen_sheet_renamed(self, a_path: Path, b_path: Path):
+        wb_a = openpyxl.Workbook()
+        ws_old = wb_a.active
+        ws_old.title = "OldName"
+        self._fill_grid(ws_old, 3, 3)
+        wb_a.save(a_path)
+
+        wb_b = openpyxl.Workbook()
+        ws_new = wb_b.active
+        ws_new.title = "NewName"
+        self._fill_grid(ws_new, 3, 3)
+        wb_b.save(b_path)
+
+    def _gen_sheet_and_grid_change(self, a_path: Path, b_path: Path):
+        base_rows = 5
+        base_cols = 5
+
+        wb_a = openpyxl.Workbook()
+        ws_main_a = wb_a.active
+        ws_main_a.title = "Main"
+        self._fill_grid(ws_main_a, base_rows, base_cols)
+        ws_aux_a = wb_a.create_sheet("Aux")
+        self._fill_grid(ws_aux_a, 3, 3, prefix="A")
+        wb_a.save(a_path)
+
+        wb_b = openpyxl.Workbook()
+        ws_main_b = wb_b.active
+        ws_main_b.title = "Main"
+        self._fill_grid(ws_main_b, base_rows, base_cols)
+        ws_main_b["A1"] = "Main changed 1"
+        ws_main_b["B2"] = "Main changed 2"
+        ws_main_b["C3"] = "Main changed 3"
+
+        ws_aux_b = wb_b.create_sheet("Aux")
+        self._fill_grid(ws_aux_b, 3, 3, prefix="A")
+
+        ws_scratch = wb_b.create_sheet("Scratch")
+        self._fill_grid(ws_scratch, 2, 2, prefix="S")
+        wb_b.save(b_path)
 ```
 
 ---
