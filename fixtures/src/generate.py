@@ -13,6 +13,7 @@ from generators.grid import (
     ValueFormulaGenerator,
     SingleCellDiffGenerator,
     SheetCaseRenameGenerator,
+    Pg6SheetScenarioGenerator,
 )
 from generators.corrupt import ContainerCorruptGenerator
 from generators.mashup import (
@@ -33,6 +34,7 @@ GENERATORS: Dict[str, Any] = {
     "value_formula": ValueFormulaGenerator,
     "single_cell_diff": SingleCellDiffGenerator,
     "sheet_case_rename": SheetCaseRenameGenerator,
+    "pg6_sheet_scenario": Pg6SheetScenarioGenerator,
     "corrupt_container": ContainerCorruptGenerator,
     "mashup_corrupt": MashupCorruptGenerator,
     "mashup_duplicate": MashupDuplicateGenerator,

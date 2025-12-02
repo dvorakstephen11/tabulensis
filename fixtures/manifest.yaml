@@ -112,6 +112,39 @@ scenarios:
       - "sheet_case_only_rename_edit_a.xlsx"
       - "sheet_case_only_rename_edit_b.xlsx"
 
+  # --- PG6: Object graph vs grid responsibilities ---
+  - id: "pg6_sheet_added"
+    generator: "pg6_sheet_scenario"
+    args:
+      mode: "sheet_added"
+    output:
+      - "pg6_sheet_added_a.xlsx"
+      - "pg6_sheet_added_b.xlsx"
+
+  - id: "pg6_sheet_removed"
+    generator: "pg6_sheet_scenario"
+    args:
+      mode: "sheet_removed"
+    output:
+      - "pg6_sheet_removed_a.xlsx"
+      - "pg6_sheet_removed_b.xlsx"
+
+  - id: "pg6_sheet_renamed"
+    generator: "pg6_sheet_scenario"
+    args:
+      mode: "sheet_renamed"
+    output:
+      - "pg6_sheet_renamed_a.xlsx"
+      - "pg6_sheet_renamed_b.xlsx"
+
+  - id: "pg6_sheet_and_grid_change"
+    generator: "pg6_sheet_scenario"
+    args:
+      mode: "sheet_and_grid_change"
+    output:
+      - "pg6_sheet_and_grid_change_a.xlsx"
+      - "pg6_sheet_and_grid_change_b.xlsx"
+
   # --- Milestone 2.2: Base64 Correctness ---
   - id: "corrupt_base64"
     generator: "mashup_corrupt"

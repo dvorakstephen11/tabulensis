@@ -1,0 +1,7 @@
+Activity Log - 2025-12-02b-pg6-object-vs-grid
+
+- Added Pg6SheetScenarioGenerator to fixtures/src/generators/grid.py and registered it in fixtures/src/generate.py for PG6 sheet add/remove/rename/grid-change scenarios.
+- Extended fixtures/manifest.yaml with pg6_sheet_added/removed/renamed/sheet_and_grid_change entries; generated the corresponding workbooks into fixtures/generated/pg6_*.xlsx via Pg6SheetScenarioGenerator with PYTHONPATH=fixtures/src.
+- Implemented PG6 integration tests in core/tests/pg6_object_vs_grid_tests.rs covering PG6.1–PG6.4 expectations (sheet add/remove, rename as add+remove, and mixed sheet+grid changes).
+- Ran cargo fmt, cargo clippy, and cargo test (all passing).
+- No deviations from the mini-spec; grid diff code unchanged.

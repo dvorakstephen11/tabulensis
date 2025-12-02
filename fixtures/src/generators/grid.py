@@ -217,3 +217,101 @@ class SheetCaseRenameGenerator(BaseGenerator):
         create_workbook(sheet_a, value_a, output_names[0])
         create_workbook(sheet_b, value_b, output_names[1])
 
+class Pg6SheetScenarioGenerator(BaseGenerator):
+    """Generates workbook pairs for PG6 sheet add/remove/rename vs grid responsibilities."""
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        if len(output_names) != 2:
+            raise ValueError("pg6_sheet_scenario generator expects exactly two output filenames")
+
+        mode = self.args.get("mode")
+        a_path = output_dir / output_names[0]
+        b_path = output_dir / output_names[1]
+
+        if mode == "sheet_added":
+            self._gen_sheet_added(a_path, b_path)
+        elif mode == "sheet_removed":
+            self._gen_sheet_removed(a_path, b_path)
+        elif mode == "sheet_renamed":
+            self._gen_sheet_renamed(a_path, b_path)
+        elif mode == "sheet_and_grid_change":
+            self._gen_sheet_and_grid_change(a_path, b_path)
+        else:
+            raise ValueError(f"Unsupported PG6 mode: {mode}")
+
+    def _fill_grid(self, worksheet, rows: int, cols: int, prefix: str = "R"):
+        for r in range(1, rows + 1):
+            for c in range(1, cols + 1):
+                worksheet.cell(row=r, column=c, value=f"{prefix}{r}C{c}")
+
+    def _gen_sheet_added(self, a_path: Path, b_path: Path):
+        wb_a = openpyxl.Workbook()
+        ws_main_a = wb_a.active
+        ws_main_a.title = "Main"
+        self._fill_grid(ws_main_a, 5, 5)
+        wb_a.save(a_path)
+
+        wb_b = openpyxl.Workbook()
+        ws_main_b = wb_b.active
+        ws_main_b.title = "Main"
+        self._fill_grid(ws_main_b, 5, 5)
+        ws_new = wb_b.create_sheet("NewSheet")
+        self._fill_grid(ws_new, 3, 3, prefix="N")
+        wb_b.save(b_path)
+
+    def _gen_sheet_removed(self, a_path: Path, b_path: Path):
+        wb_a = openpyxl.Workbook()
+        ws_main_a = wb_a.active
+        ws_main_a.title = "Main"
+        self._fill_grid(ws_main_a, 5, 5)
+        ws_old = wb_a.create_sheet("OldSheet")
+        self._fill_grid(ws_old, 3, 3, prefix="O")
+        wb_a.save(a_path)
+
+        wb_b = openpyxl.Workbook()
+        ws_main_b = wb_b.active
+        ws_main_b.title = "Main"
+        self._fill_grid(ws_main_b, 5, 5)
+        wb_b.save(b_path)
+
+    def _gen_sheet_renamed(self, a_path: Path, b_path: Path):
+        wb_a = openpyxl.Workbook()
+        ws_old = wb_a.active
+        ws_old.title = "OldName"
+        self._fill_grid(ws_old, 3, 3)
+        wb_a.save(a_path)
+
+        wb_b = openpyxl.Workbook()
+        ws_new = wb_b.active
+        ws_new.title = "NewName"
+        self._fill_grid(ws_new, 3, 3)
+        wb_b.save(b_path)
+
+    def _gen_sheet_and_grid_change(self, a_path: Path, b_path: Path):
+        base_rows = 5
+        base_cols = 5
+
+        wb_a = openpyxl.Workbook()
+        ws_main_a = wb_a.active
+        ws_main_a.title = "Main"
+        self._fill_grid(ws_main_a, base_rows, base_cols)
+        ws_aux_a = wb_a.create_sheet("Aux")
+        self._fill_grid(ws_aux_a, 3, 3, prefix="A")
+        wb_a.save(a_path)
+
+        wb_b = openpyxl.Workbook()
+        ws_main_b = wb_b.active
+        ws_main_b.title = "Main"
+        self._fill_grid(ws_main_b, base_rows, base_cols)
+        ws_main_b["A1"] = "Main changed 1"
+        ws_main_b["B2"] = "Main changed 2"
+        ws_main_b["C3"] = "Main changed 3"
+
+        ws_aux_b = wb_b.create_sheet("Aux")
+        self._fill_grid(ws_aux_b, 3, 3, prefix="A")
+
+        ws_scratch = wb_b.create_sheet("Scratch")
+        self._fill_grid(ws_scratch, 2, 2, prefix="S")
+        wb_b.save(b_path)
