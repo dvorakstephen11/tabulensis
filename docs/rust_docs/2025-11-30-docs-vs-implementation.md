@@ -25,7 +25,7 @@ The current implementation represents approximately **25-35% of the end-state sy
 |-----------|----------|--------|
 | Part I: Foundations | 60% | Use cases defined; basic infrastructure present |
 | Part II: Architecture | 40% | Data structures implemented; pipeline scaffolding missing |
-| Part III: Preprocessing | 30% | Row/column signatures exist; full fingerprinting not implemented |
+| Part III: Preprocessing | 35% | Row/column signatures now deterministic (XXHash64 with position/type tags); normalization and frequency analysis not implemented |
 | Part IV: Spreadsheet Mode Alignment | 5% | Overlap-only cell comparison with tail row/column adds/removes; no alignment |
 | Part V: Database Mode | 0% | Not started |
 | Part VI: Cell-Level Comparison | 70% | Basic cell diff works; formula semantics missing |
@@ -188,19 +188,21 @@ The spec defines comprehensive fingerprinting:
 #### Current Implementation
 
 **Implemented:**
-- Basic row signature computation via `DefaultHasher`
-- Basic column signature computation
+- Deterministic row signature computation via `XXHash64` (seed 0) that includes column position, value type tag, value, and formula.
+- Deterministic column signature computation via `XXHash64` that includes row position, value type tag, value, and formula.
 - `compute_all_signatures()` method on Grid
 
 ```rust
 // From workbook.rs
 pub fn compute_row_signature(&self, row: u32) -> RowSignature {
-    let mut hasher = DefaultHasher::new();
-    for col in 0..self.ncols {
-        if let Some(cell) = self.get(row, col) {
-            cell.value.hash(&mut hasher);
-            cell.formula.hash(&mut hasher);
-        }
+    let mut row_cells: Vec<&Cell> = self.cells.values().filter(|cell| cell.row == row).collect();
+    row_cells.sort_by_key(|cell| cell.col);
+
+    let mut hasher = Xxh64::new(0);
+    for cell in row_cells {
+        cell.col.hash(&mut hasher);
+        cell.value.hash(&mut hasher);
+        cell.formula.hash(&mut hasher);
     }
     RowSignature { hash: hasher.finish() }
 }
@@ -208,8 +210,6 @@ pub fn compute_row_signature(&self, row: u32) -> RowSignature {
 
 **Not Implemented:**
 - Cell value normalization (numeric rounding, string trimming, NaN handling)
-- Column position inclusion in row hashes (the spec requires this to distinguish permutations)
-- Type discriminant tags in hashes
 - Frequency analysis and row classification (unique/rare/common)
 - Token interning
 - Parallel hash computation
@@ -220,14 +220,14 @@ The signature computation exists but lacks the sophistication required by the sp
 
 | Spec Requirement | Implementation | Gap |
 |-----------------|----------------|-----|
-| Column position in hash | ❌ | Rows with swapped values hash identically |
-| Type discriminant | ❌ | String "1" and Number 1 may collide |
+| Column position in hash | ✅ | Column/row indices are included in the XXHash64 stream |
+| Type discriminant | ✅ | `CellValue::hash` encodes tags; tests cover numeric/text/bool |
 | Numeric normalization | ❌ | Floating-point representation differences cause false positives |
-| Empty cell handling | ⚠️ Partial | Empty cells contribute nothing, which is correct |
-| XXHash64/BLAKE3 | ❌ | Uses DefaultHasher (SipHash) |
+| Empty cell handling | ✅ | Empty cells are skipped; sparse rows/cols hash identically |
+| XXHash64/BLAKE3 | ✅ | XXHash64 with fixed seed (deterministic across platforms) |
 | Frequency tables | ❌ | Not implemented |
 
-**Verdict**: Signatures exist but need enhancement before alignment algorithms can use them effectively.
+**Verdict**: Row/column signatures are deterministic, position- and type-sensitive, but full normalization and frequency analysis are still missing.
 
 ---
 
@@ -447,7 +447,7 @@ The error handling infrastructure is excellent. Performance and robustness featu
 ### What Needs Work
 
 1. **Grid Diff Algorithm**: The entire AMR pipeline is unimplemented
-2. **Row/Column Signatures**: Need enhancement (column position, type tags, frequency analysis)
+2. **Row/Column Signatures**: Need normalization and frequency analysis; position/type-sensitive XXHash64 signatures are in place
 3. **Alignment Data Structures**: GridView, RowMeta, ColMeta, alignment results
 4. **Coalescing and Optimization**: Post-processing of diff results
 
@@ -477,9 +477,9 @@ The main risk is **not** architectural deviation but **incomplete implementation
 
 ### Recommended Priority Order
 
-1. **Immediate**: Enhance row signatures (column positions, type tags)
-2. **Soon**: Implement frequency analysis and anchor discovery
-3. **Soon**: Implement Patience Diff for row anchoring
+1. **Immediate**: Implement frequency analysis and row classification to support anchor discovery
+2. **Soon**: Implement Patience Diff for row anchoring
+3. **Soon**: Add numeric/string normalization to signature computation
 4. **Medium-term**: Implement gap filling (Myers diff)
 5. **Medium-term**: Implement move detection
 6. **Later**: Database mode, formula AST, performance optimization

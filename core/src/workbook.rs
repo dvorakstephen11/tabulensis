@@ -2,9 +2,9 @@ use crate::addressing::{address_to_index, index_to_address};
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
-use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
+use xxhash_rust::xxh64::Xxh64;
 
 /// A snapshot of a cell's logical content (address, value, formula).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -157,6 +157,8 @@ pub struct ColSignature {
     pub hash: u64,
 }
 
+const XXH64_SEED: u64 = 0;
+
 impl Grid {
     pub fn new(nrows: u32, ncols: u32) -> Grid {
         Grid {
@@ -201,12 +203,13 @@ impl Grid {
     }
 
     pub fn compute_row_signature(&self, row: u32) -> RowSignature {
-        let mut hasher = DefaultHasher::new();
-        for col in 0..self.ncols {
-            if let Some(cell) = self.get(row, col) {
-                cell.value.hash(&mut hasher);
-                cell.formula.hash(&mut hasher);
-            }
+        let mut row_cells: Vec<&Cell> =
+            self.cells.values().filter(|cell| cell.row == row).collect();
+        row_cells.sort_by_key(|cell| cell.col);
+
+        let mut hasher = Xxh64::new(XXH64_SEED);
+        for cell in row_cells {
+            hash_cell_with_position(cell.col, cell, &mut hasher);
         }
         RowSignature {
             hash: hasher.finish(),
@@ -214,12 +217,13 @@ impl Grid {
     }
 
     pub fn compute_col_signature(&self, col: u32) -> ColSignature {
-        let mut hasher = DefaultHasher::new();
-        for row in 0..self.nrows {
-            if let Some(cell) = self.get(row, col) {
-                cell.value.hash(&mut hasher);
-                cell.formula.hash(&mut hasher);
-            }
+        let mut col_cells: Vec<&Cell> =
+            self.cells.values().filter(|cell| cell.col == col).collect();
+        col_cells.sort_by_key(|cell| cell.row);
+
+        let mut hasher = Xxh64::new(XXH64_SEED);
+        for cell in col_cells {
+            hash_cell_with_position(cell.row, cell, &mut hasher);
         }
         ColSignature {
             hash: hasher.finish(),
@@ -227,18 +231,44 @@ impl Grid {
     }
 
     pub fn compute_all_signatures(&mut self) {
-        let mut row_sigs = Vec::with_capacity(self.nrows as usize);
-        for row in 0..self.nrows {
-            row_sigs.push(self.compute_row_signature(row));
-        }
-        self.row_signatures = Some(row_sigs);
+        let mut row_hashers: Vec<Xxh64> = (0..self.nrows).map(|_| Xxh64::new(XXH64_SEED)).collect();
+        let mut col_hashers: Vec<Xxh64> = (0..self.ncols).map(|_| Xxh64::new(XXH64_SEED)).collect();
+        let mut cells: Vec<Cell> = self.cells.values().cloned().collect();
 
-        let mut col_sigs = Vec::with_capacity(self.ncols as usize);
-        for col in 0..self.ncols {
-            col_sigs.push(self.compute_col_signature(col));
+        cells.sort_by(|a, b| a.row.cmp(&b.row).then_with(|| a.col.cmp(&b.col)));
+        for cell in &cells {
+            hash_cell_with_position(cell.col, cell, &mut row_hashers[cell.row as usize]);
         }
-        self.col_signatures = Some(col_sigs);
+
+        cells.sort_by(|a, b| a.col.cmp(&b.col).then_with(|| a.row.cmp(&b.row)));
+        for cell in &cells {
+            hash_cell_with_position(cell.row, cell, &mut col_hashers[cell.col as usize]);
+        }
+
+        self.row_signatures = Some(
+            row_hashers
+                .into_iter()
+                .map(|hasher| RowSignature {
+                    hash: hasher.finish(),
+                })
+                .collect(),
+        );
+
+        self.col_signatures = Some(
+            col_hashers
+                .into_iter()
+                .map(|hasher| ColSignature {
+                    hash: hasher.finish(),
+                })
+                .collect(),
+        );
     }
+}
+
+fn hash_cell_with_position<H: Hasher>(position: u32, cell: &Cell, hasher: &mut H) {
+    position.hash(hasher);
+    cell.value.hash(hasher);
+    cell.formula.hash(hasher);
 }
 
 impl PartialEq for CellSnapshot {

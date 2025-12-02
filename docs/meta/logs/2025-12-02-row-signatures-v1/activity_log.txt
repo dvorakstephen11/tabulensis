@@ -1,0 +1,8 @@
+2025-12-02
+- Reviewed mini-spec, decision record, and implementer guide section 4 for hashing requirements.
+- Switched row/column signatures to XXHash64 with fixed seed and explicit position + type tagging via hash_cell_with_position helper.
+- Reworked signature computation to sort non-empty cells for deterministic hashing; compute_all_signatures now hashes rows/cols in sorted passes over cloned cells (O(M log M) due to ordering requirement).
+- Added xxhash-rust dependency and helper constant XXH64_SEED.
+- Expanded signature tests for position sensitivity, type discrimination, sparse empties, and a golden constant (8394164658571930929); added sparse grid sanity check for non-zero hashes.
+- Updated docs/rust_docs/2025-11-30-docs-vs-implementation.md preprocessing section and priority order to reflect XXHash64, position/type coverage.
+- Tooling: ran cargo fmt, cargo clippy, and cargo test (all passing); fixed clippy warnings about unused mut and Xxh64 constructor typo.

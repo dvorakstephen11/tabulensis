@@ -80,3 +80,31 @@ fn rows_iter_and_get_are_consistent() {
         }
     }
 }
+
+#[test]
+fn compute_signatures_on_sparse_grid_produces_hashes() {
+    let mut grid = Grid::new(4, 4);
+    grid.insert(Cell {
+        row: 1,
+        col: 3,
+        address: CellAddress::from_indices(1, 3),
+        value: Some(CellValue::Text("value".into())),
+        formula: Some("=A1".into()),
+    });
+
+    grid.compute_all_signatures();
+
+    let row_hash = grid
+        .row_signatures
+        .as_ref()
+        .expect("row signatures should exist")[1]
+        .hash;
+    let col_hash = grid
+        .col_signatures
+        .as_ref()
+        .expect("col signatures should exist")[3]
+        .hash;
+
+    assert_ne!(row_hash, 0);
+    assert_ne!(col_hash, 0);
+}
