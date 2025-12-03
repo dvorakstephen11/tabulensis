@@ -3639,6 +3639,23 @@ fn embedded_content_name_is_canonicalized() {
 }
 
 #[test]
+fn empty_content_directory_is_ignored() {
+    let bytes = build_zip(vec![
+        ("Config/Package.xml", MIN_PACKAGE_XML.as_bytes().to_vec()),
+        ("Formulas/Section1.m", MIN_SECTION.as_bytes().to_vec()),
+        ("Content/", Vec::new()),
+    ]);
+
+    let parts = parse_package_parts(&bytes).expect("package with empty Content/ directory parses");
+    assert!(!parts.package_xml.raw_xml.is_empty());
+    assert!(!parts.main_section.source.is_empty());
+    assert!(
+        parts.embedded_contents.is_empty(),
+        "bare Content/ directory should not produce embedded contents"
+    );
+}
+
+#[test]
 fn parse_package_parts_never_panics_on_random_bytes() {
     for seed in 0u64..64 {
         let len = (seed as usize * 13 % 256) + (seed as usize % 7);
@@ -3666,6 +3683,48 @@ fn package_parts_section1_with_bom_parses_via_parse_section_members() {
     assert_eq!(members[0].section_name, "Section1");
 }
 
+#[test]
+fn embedded_content_section1_with_bom_parses_via_parse_section_members() {
+    let embedded = build_embedded_section_zip(BOM_SECTION.as_bytes().to_vec());
+    let bytes = build_zip(vec![
+        ("Config/Package.xml", MIN_PACKAGE_XML.as_bytes().to_vec()),
+        ("Formulas/Section1.m", MIN_SECTION.as_bytes().to_vec()),
+        ("Content/bom_embedded.package", embedded),
+    ]);
+
+    let parts = parse_package_parts(&bytes).expect("outer package should parse");
+    assert!(
+        parts.embedded_contents.len() >= 1,
+        "embedded package should be detected"
+    );
+
+    let embedded = parts
+        .embedded_contents
+        .iter()
+        .find(|entry| entry.name == "Content/bom_embedded.package")
+        .expect("expected embedded package to round-trip name");
+
+    assert!(
+        !embedded.section.source.starts_with('\u{FEFF}'),
+        "embedded Section1.m should strip leading BOM"
+    );
+
+    let members = parse_section_members(&embedded.section.source)
+        .expect("parse_section_members should accept embedded BOM Section1");
+    assert!(
+        !members.is_empty(),
+        "embedded Section1.m should contain members"
+    );
+    assert!(
+        members.iter().any(|member| {
+            member.section_name == "Section1"
+                && member.member_name == "Foo"
+                && member.expression_m == "1"
+        }),
+        "embedded Section1.m should parse shared Foo = 1"
+    );
+}
+
 fn build_minimal_package_parts_with(entries: Vec<(&str, Vec<u8>)>) -> Vec<u8> {
     let mut all_entries = Vec::with_capacity(entries.len() + 2);
     all_entries.push(("Config/Package.xml", MIN_PACKAGE_XML.as_bytes().to_vec()));
@@ -3684,8 +3743,14 @@ fn build_zip(entries: Vec<(&str, Vec<u8>)>) -> Vec<u8> {
     let options = FileOptions::default().compression_method(CompressionMethod::Stored);
 
     for (name, bytes) in entries {
-        writer.start_file(name, options).expect("start zip entry");
-        writer.write_all(&bytes).expect("write zip entry");
+        if name.ends_with('/') {
+            writer
+                .add_directory(name, options)
+                .expect("start zip directory");
+        } else {
+            writer.start_file(name, options).expect("start zip entry");
+            writer.write_all(&bytes).expect("write zip entry");
+        }
     }
 
     writer.finish().expect("finish zip").into_inner()
