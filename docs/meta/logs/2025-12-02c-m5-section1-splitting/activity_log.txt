@@ -1,0 +1,10 @@
+[Start] Created activity log for 2025-12-02-m5-section1-splitting.
+- Read docs/meta/plans/2025-12-02c-m5-section1-splitting/spec.md and decision.yaml; confirmed scope: parse_section_members API and tests only.
+- Reviewed docs/rust_docs/excel_diff_meta_programming.md Section 4 expectations for implementer (activity log, tests-first, no scope creep).
+- Noted outputs: new core/src/m_section.rs, exports in lib.rs, tests in core/tests/m_section_splitting_tests.rs. No new fixtures.
+[Work] Implemented Section1 splitting API and tests.
+- Added core/src/m_section.rs with SectionMember struct, SectionParseError, and parse_section_members per spec: header detection with InvalidHeader vs MissingSectionHeader, only shared members returned, private members ignored, simple line-accumulation to ';' for expression_m with trimming, identifier validation kept ASCII alnum/underscore, malformed shared lines skipped (no InvalidMemberSyntax emitted this cycle).
+- Exported module from core/src/lib.rs.
+- Added core/tests/m_section_splitting_tests.rs covering parse_single_member_section, parse_multiple_members, tolerate_whitespace_comments, and error_on_missing_section_header (inline fixtures).
+- Tooling: cargo fmt, cargo clippy --all-targets (resolved unused mut warning), cargo test (all suites passed including new tests).
+- No deviations from spec; no new fixtures introduced. Future consideration: richer M parsing left for later milestones.
