@@ -15,3 +15,9 @@
 - Files modified: core/tests/m4_package_parts_tests.rs; core/src/datamashup_package.rs; docs/rust_docs/excel_diff_specification.md.
 - Tests: cargo fmt; cargo clippy; cargo test (all passing).
 - Complications: None encountered; no production behavior changes beyond tying EmbeddedContent.name to normalize_path for future-proofing.
+
+## Remediation Round 3
+- Addressed Fixes 1-2 from remediationC: added regression for BOM stripping on embedded Content/*.package Section1.m and ensured empty Content/ directory entries are tolerated by extending the in-memory ZIP helper to emit directory entries.
+- Files modified: core/tests/m4_package_parts_tests.rs.
+- Tests: cargo fmt; cargo test; cargo clippy.
+- Complications: None; behavior unchanged outside of added tests.

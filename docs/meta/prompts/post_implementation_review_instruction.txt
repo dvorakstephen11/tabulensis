@@ -122,4 +122,4 @@ Your goal is to independently verify that the implementation correctly and compl
 [What should be true after remediation is complete]
 ```
 
-Do not implement the fixes yourself. You do not have access to modify the repository. Your output is the verification report and remediation plan (if needed) that an Implementer Agent will use.
+Do not implement the fixes yourself. You do not have access to modify the repository. Your output is the verification report or remediation plan (if needed) that an Implementer Agent will use.
