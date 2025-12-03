@@ -4,7 +4,8 @@ use std::io::{ErrorKind, Read};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use excel_diff::{
-    ContainerError, DataMashupError, ExcelOpenError, RawDataMashup, open_data_mashup,
+    ContainerError, DataMashupError, ExcelOpenError, RawDataMashup, build_data_mashup,
+    open_data_mashup,
 };
 use quick_xml::{Reader, events::Event};
 use zip::ZipArchive;
@@ -136,6 +137,23 @@ fn non_zip_file_returns_not_zip_error() {
         err,
         ExcelOpenError::Container(ContainerError::NotZipContainer)
     ));
+}
+
+#[test]
+fn build_data_mashup_smoke_from_fixture() {
+    let raw = open_data_mashup(fixture_path("one_query.xlsx"))
+        .expect("fixture should load")
+        .expect("DataMashup should be present");
+    let dm = build_data_mashup(&raw).expect("build_data_mashup should succeed");
+
+    assert_eq!(dm.version, 0);
+    assert!(
+        dm.package_parts
+            .main_section
+            .source
+            .contains("section Section1;")
+    );
+    assert!(!dm.metadata.formulas.is_empty());
 }
 
 fn datamashup_bytes_from_fixture(path: &std::path::Path) -> Vec<u8> {

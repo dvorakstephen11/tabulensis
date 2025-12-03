@@ -200,6 +200,42 @@ scenarios:
       base_file: "templates/base_query.xlsx"
     output: "multi_query_with_embedded.xlsx"
 
+  # --- Milestone 4.2-4.4: Permissions / Metadata ---
+  - id: "permissions_defaults"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "permissions_defaults"
+      base_file: "templates/base_query.xlsx"
+    output: "permissions_defaults.xlsx"
+
+  - id: "permissions_firewall_off"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "permissions_firewall_off"
+      base_file: "templates/base_query.xlsx"
+    output: "permissions_firewall_off.xlsx"
+
+  - id: "metadata_simple"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "metadata_simple"
+      base_file: "templates/base_query.xlsx"
+    output: "metadata_simple.xlsx"
+
+  - id: "metadata_query_groups"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "metadata_query_groups"
+      base_file: "templates/base_query.xlsx"
+    output: "metadata_query_groups.xlsx"
+
+  - id: "metadata_hidden_queries"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "metadata_hidden_queries"
+      base_file: "templates/base_query.xlsx"
+    output: "metadata_hidden_queries.xlsx"
+
   # --- Milestone 6: Basic M Diffs ---
   - id: "m_change_literal"
     generator: "mashup_inject"

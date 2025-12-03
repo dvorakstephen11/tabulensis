@@ -252,7 +252,7 @@ fn embedded_content_section1_with_bom_parses_via_parse_section_members() {
 
     let parts = parse_package_parts(&bytes).expect("outer package should parse");
     assert!(
-        parts.embedded_contents.len() >= 1,
+        !parts.embedded_contents.is_empty(),
         "embedded package should be detected"
     );
 

@@ -23,6 +23,7 @@ from generators.mashup import (
     MashupEncodeGenerator,
     MashupMultiEmbeddedGenerator,
     MashupOneQueryGenerator,
+    MashupPermissionsMetadataGenerator,
 )
 from generators.perf import LargeGridGenerator
 from generators.database import KeyedTableGenerator
@@ -44,6 +45,7 @@ GENERATORS: Dict[str, Any] = {
     "mashup_encode": MashupEncodeGenerator,
     "mashup:one_query": MashupOneQueryGenerator,
     "mashup:multi_query_with_embedded": MashupMultiEmbeddedGenerator,
+    "mashup:permissions_metadata": MashupPermissionsMetadataGenerator,
     "perf_large": LargeGridGenerator,
     "db_keyed": KeyedTableGenerator,
 }

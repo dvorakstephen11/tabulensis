@@ -640,3 +640,281 @@ class MashupEncodeGenerator(MashupBaseGenerator):
             return text.replace(prefix, "<?xml version='1.0' encoding='UTF-16'?>", 1)
         return text
 
+
+class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
+    """
+    Builds fixtures that exercise Permissions and Metadata parsing by rewriting
+    the PackageParts Section1.m, Permissions XML, and Metadata XML inside
+    the DataMashup stream.
+    """
+
+    def __init__(self, args):
+        super().__init__(args)
+        self.mode = args.get("mode")
+
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if not self.mode:
+            raise ValueError("MashupPermissionsMetadataGenerator requires 'mode' argument")
+
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        base_file_arg = self.args.get("base_file", "templates/base_query.xlsx")
+        base = Path(base_file_arg)
+        if not base.exists():
+            candidate = Path("fixtures") / base_file_arg
+            if candidate.exists():
+                base = candidate
+            else:
+                raise FileNotFoundError(f"Template {base} not found.")
+
+        for name in output_names:
+            target_path = (output_dir / name).resolve()
+            self._process_excel_container(base.resolve(), target_path, self._rewrite_datamashup)
+
+    def _rewrite_datamashup(self, raw_bytes: bytes) -> bytes:
+        version, package_parts, _, _, bindings = self._split_sections(raw_bytes)
+        scenario = self._scenario_definition()
+
+        updated_package_parts = self._replace_section(
+            package_parts,
+            scenario["section_text"],
+        )
+        permissions_bytes = self._permissions_bytes(**scenario["permissions"])
+        metadata_bytes = self._metadata_bytes(scenario["metadata_entries"])
+
+        return self._assemble_sections(
+            version,
+            updated_package_parts,
+            permissions_bytes,
+            metadata_bytes,
+            bindings,
+        )
+
+    def _scenario_definition(self):
+        shared_section_simple = "\n".join(
+            [
+                "section Section1;",
+                "",
+                "shared LoadToSheet = 1;",
+                "shared LoadToModel = 2;",
+            ]
+        )
+
+        if self.mode in ("permissions_defaults", "permissions_firewall_off", "metadata_simple"):
+            return {
+                "section_text": shared_section_simple,
+                "permissions": {
+                    "can_eval": False,
+                    "firewall_enabled": self.mode != "permissions_firewall_off",
+                    "group_type": "Organizational",
+                },
+                "metadata_entries": [
+                    {
+                        "path": "Section1/LoadToSheet",
+                        "entries": [
+                            ("FillEnabled", True),
+                            ("FillToDataModelEnabled", False),
+                        ],
+                    },
+                    {
+                        "path": "Section1/LoadToModel",
+                        "entries": [
+                            ("FillEnabled", False),
+                            ("FillToDataModelEnabled", True),
+                        ],
+                    },
+                ],
+            }
+
+        if self.mode == "metadata_query_groups":
+            section_text = "\n".join(
+                [
+                    "section Section1;",
+                    "",
+                    "shared RootQuery = 1;",
+                    "shared GroupedFoo = 2;",
+                    "shared NestedBar = 3;",
+                ]
+            )
+            return {
+                "section_text": section_text,
+                "permissions": {
+                    "can_eval": False,
+                    "firewall_enabled": True,
+                    "group_type": "Organizational",
+                },
+                "metadata_entries": [
+                    {
+                        "path": "Section1/RootQuery",
+                        "entries": [("FillEnabled", True)],
+                    },
+                    {
+                        "path": "Section1/GroupedFoo",
+                        "entries": [
+                            ("FillEnabled", True),
+                            ("QueryGroupPath", "Inputs/DimTables"),
+                        ],
+                    },
+                    {
+                        "path": "Section1/NestedBar",
+                        "entries": [
+                            ("FillToDataModelEnabled", True),
+                            ("QueryGroupPath", "Inputs/DimTables"),
+                        ],
+                    },
+                ],
+            }
+
+        if self.mode == "metadata_hidden_queries":
+            section_text = "\n".join(
+                [
+                    "section Section1;",
+                    "",
+                    "shared ConnectionOnly = 1;",
+                    "shared VisibleLoad = 2;",
+                ]
+            )
+            return {
+                "section_text": section_text,
+                "permissions": {
+                    "can_eval": False,
+                    "firewall_enabled": True,
+                    "group_type": "Organizational",
+                },
+                "metadata_entries": [
+                    {
+                        "path": "Section1/ConnectionOnly",
+                        "entries": [
+                            ("FillEnabled", False),
+                            ("FillToDataModelEnabled", False),
+                        ],
+                    },
+                    {
+                        "path": "Section1/VisibleLoad",
+                        "entries": [
+                            ("FillEnabled", True),
+                            ("FillToDataModelEnabled", False),
+                        ],
+                    },
+                ],
+            }
+
+        raise ValueError(f"Unsupported mode: {self.mode}")
+
+    def _split_sections(self, raw_bytes: bytes):
+        min_size = 4 + 4 * 4
+        if len(raw_bytes) < min_size:
+            raise ValueError("DataMashup stream too short")
+
+        offset = 0
+        version = struct.unpack_from("<I", raw_bytes, offset)[0]
+        offset += 4
+
+        package_parts_len = struct.unpack_from("<I", raw_bytes, offset)[0]
+        offset += 4
+        package_parts = raw_bytes[offset : offset + package_parts_len]
+        offset += package_parts_len
+
+        permissions_len = struct.unpack_from("<I", raw_bytes, offset)[0]
+        offset += 4
+        permissions = raw_bytes[offset : offset + permissions_len]
+        offset += permissions_len
+
+        metadata_len = struct.unpack_from("<I", raw_bytes, offset)[0]
+        offset += 4
+        metadata = raw_bytes[offset : offset + metadata_len]
+        offset += metadata_len
+
+        bindings_len = struct.unpack_from("<I", raw_bytes, offset)[0]
+        offset += 4
+        bindings = raw_bytes[offset : offset + bindings_len]
+
+        return version, package_parts, permissions, metadata, bindings
+
+    def _assemble_sections(
+        self,
+        version: int,
+        package_parts: bytes,
+        permissions: bytes,
+        metadata: bytes,
+        bindings: bytes,
+    ) -> bytes:
+        return b"".join(
+            [
+                struct.pack("<I", version),
+                struct.pack("<I", len(package_parts)),
+                package_parts,
+                struct.pack("<I", len(permissions)),
+                permissions,
+                struct.pack("<I", len(metadata)),
+                metadata,
+                struct.pack("<I", len(bindings)),
+                bindings,
+            ]
+        )
+
+    def _replace_section(self, package_parts: bytes, section_text: str) -> bytes:
+        return self._replace_in_zip(package_parts, "Formulas/Section1.m", section_text)
+
+    def _replace_in_zip(self, zip_bytes: bytes, filename: str, new_content: str) -> bytes:
+        in_buffer = io.BytesIO(zip_bytes)
+        out_buffer = io.BytesIO()
+
+        with zipfile.ZipFile(in_buffer, "r") as zin:
+            with zipfile.ZipFile(out_buffer, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+                for item in zin.infolist():
+                    if item.filename == filename:
+                        zout.writestr(filename, new_content.encode("utf-8"))
+                    else:
+                        zout.writestr(item, zin.read(item.filename))
+        return out_buffer.getvalue()
+
+    def _permissions_bytes(self, can_eval: bool, firewall_enabled: bool, group_type: str) -> bytes:
+        xml = (
+            '<?xml version="1.0" encoding="utf-8"?>'
+            "<PermissionList xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\" "
+            "xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">"
+            f"<CanEvaluateFuturePackages>{str(can_eval).lower()}</CanEvaluateFuturePackages>"
+            f"<FirewallEnabled>{str(firewall_enabled).lower()}</FirewallEnabled>"
+            f"<WorkbookGroupType>{group_type}</WorkbookGroupType>"
+            "</PermissionList>"
+        )
+        return ("\ufeff" + xml).encode("utf-8")
+
+    def _metadata_bytes(self, items: List[dict]) -> bytes:
+        xml = self._metadata_xml(items)
+        xml_bytes = ("\ufeff" + xml).encode("utf-8")
+        header = struct.pack("<I", 0) + struct.pack("<I", len(xml_bytes))
+        return header + xml_bytes
+
+    def _metadata_xml(self, items: List[dict]) -> str:
+        parts = [
+            '<?xml version="1.0" encoding="utf-8"?>',
+            '<LocalPackageMetadataFile xmlns:xsd="http://www.w3.org/2001/XMLSchema" '
+            'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">',
+            "<Items>",
+            "<Item><ItemLocation><ItemType>AllFormulas</ItemType><ItemPath /></ItemLocation><StableEntries /></Item>",
+        ]
+
+        for item in items:
+            parts.append("<Item>")
+            parts.append("<ItemLocation>")
+            parts.append("<ItemType>Formula</ItemType>")
+            parts.append(f"<ItemPath>{item['path']}</ItemPath>")
+            parts.append("</ItemLocation>")
+            parts.append("<StableEntries>")
+            for entry_name, entry_value in item.get("entries", []):
+                value = self._format_entry_value(entry_value)
+                parts.append(f'<Entry Type="{entry_name}" Value="{value}" />')
+            parts.append("</StableEntries>")
+            parts.append("</Item>")
+
+        parts.append("</Items></LocalPackageMetadataFile>")
+        return "".join(parts)
+
+    def _format_entry_value(self, value):
+        if isinstance(value, bool):
+            return f"l{'1' if value else '0'}"
+        return f"s{value}"
+

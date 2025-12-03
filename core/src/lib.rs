@@ -1,5 +1,6 @@
 pub mod addressing;
 pub mod container;
+pub mod datamashup;
 pub mod datamashup_framing;
 pub mod datamashup_package;
 pub mod diff;
@@ -13,6 +14,7 @@ pub mod workbook;
 
 pub use addressing::{address_to_index, index_to_address};
 pub use container::{ContainerError, OpcContainer};
+pub use datamashup::{DataMashup, Metadata, Permissions, QueryMetadata, build_data_mashup};
 pub use datamashup_framing::{DataMashupError, RawDataMashup};
 pub use datamashup_package::{
     EmbeddedContent, PackageParts, PackageXml, SectionDocument, parse_package_parts,

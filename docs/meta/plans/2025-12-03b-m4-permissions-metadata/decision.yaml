@@ -1,0 +1,30 @@
+
+branch: 2025-12-03b-m4-permissions-metadata
+work_type: milestone_progress
+milestone: "Milestone 4 – Semantic sections: PackageParts / Permissions / Metadata / Bindings"
+phase: 2
+target_subsystem: datamashup-semantic-sections
+
+rationale:
+  - Milestone 4 is only partially implemented: we have RawDataMashup framing (M3) and PackageParts parsing (M4.1) but no IR for Permissions, Metadata, or Permission Bindings, and no `DataMashup` domain struct wired together from the four slices. 
+  - The testing plan calls out explicit M4 tests for Permissions XML (`permissions_parsed_flags`), Metadata XML (`metadata_formulas_match_section_members`, `metadata_load_destinations`, `metadata_groups`), and permission bindings presence, none of which exist yet in the Rust test suite. 
+  - Later milestones depend on a typed DataMashup model: the M5 Query/Metadata API and M6 textual M diff both assume we can map `Section1` members and metadata entries via `SectionName/FormulaName` and reason about load destinations and groups. Implementing Permissions + Metadata IR now reduces risk for those harder milestones. 
+  - The current code already exposes strong framing and PackageParts parsing APIs (`RawDataMashup`, `parse_data_mashup`, `parse_package_parts`, `parse_section_members`), so adding a thin semantic layer on top is a natural, well-scoped next step that reuses existing error types and XML tooling. 
+  - From the difficulty analysis, DataMashup host/framing and semantic sections are medium complexity compared to the H1 grid-diff alignment and H4 M AST diff work; finishing M4 now moves a medium‑risk area toward “hardened” while keeping the hardest grid and M‑AST milestones for later. :contentReference[oaicite:4]{index=4}
+
+risks_of_deferral:
+  - M6 textual M diff cannot be implemented meaningfully without Metadata and Permissions IR: we can’t distinguish definition changes from metadata-only changes or honor load destinations and privacy flags. This would stall Phase 3 MVP progress even though grid diff is already underway. 
+  - Without a canonical `DataMashup` struct anchored in the spec, future implementers might build ad hoc query/metadata parsing around RawDataMashup bytes, increasing architecture drift and making later refactors more expensive. 
+  - The Permissions and Metadata XML formats are subtle; deferring tests for them increases the risk that quiet parser bugs accumulate and break scenarios when PBIX support or query diffing is added. Early, focused tests make regressions far more visible. 
+  - Permission Bindings handling (opaque bytes + presence flag) is currently unspecified in code; leaving this undefined can lead to accidental overreach (attempting to decrypt/validate) or inconsistent behavior across platforms when bindings are missing or malformed. 
+
+references:
+  - docs/rust_docs/excel_diff_specification.md – Sections 4.2–4.5 (PackageParts, Permissions, Metadata, Permission Bindings) and 5.3 (DataMashup IR). 
+  - docs/rust_docs/excel_diff_testing_plan.md – Phase 2, Milestone 4 and Milestone 5 (Metadata tests and Query/Metadata join) plus M6 textual diff dependency. 
+  - docs/rust_docs/excel_diff_difficulty_analysis.md – Risk ratings for DataMashup host/semantic sections vs grid alignment and M AST diff. :contentReference[oaicite:11]{index=11}
+  - core/src/datamashup_framing.rs, core/src/datamashup_package.rs, core/src/m_section.rs – existing framing, PackageParts, and Section1 splitting implementations. 
+  - core/tests/data_mashup_tests.rs, core/tests/m4_package_parts_tests.rs, core/tests/m_section_splitting_tests.rs – current tests for framing, PackageParts, and section splitting (M3, M4.1, M5.1). 
+  - docs/meta/logs/2025-12-03-m4-packageparts/activity_log.txt – last cycle’s plan and implementation details for PackageParts. :contentReference[oaicite:14]{index=14}
+  - docs/rust_docs/unified_grid_diff_algorithm_specification.md – for overall IR and streaming constraints context. 
+
+difficulty_estimate: 5  # 10 ≈ G8–G13 unified grid alignment / database-mode diff (H1 difficulty item).
