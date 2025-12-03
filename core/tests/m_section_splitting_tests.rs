@@ -29,6 +29,8 @@ shared Foo = 1;
 
 "#;
 
+const SECTION_WITH_BOM: &str = "\u{FEFF}section Section1;\nshared Foo = 1;";
+
 #[test]
 fn parse_single_member_section() {
     let members = parse_section_members(SECTION_SINGLE).expect("single member section parses");
@@ -81,4 +83,17 @@ fn error_on_missing_section_header() {
 
     let result = parse_section_members(NO_SECTION);
     assert_eq!(result, Err(SectionParseError::MissingSectionHeader));
+}
+
+#[test]
+fn section_parsing_tolerates_utf8_bom() {
+    let members =
+        parse_section_members(SECTION_WITH_BOM).expect("BOM-prefixed section should parse");
+    assert_eq!(members.len(), 1);
+
+    let member = &members[0];
+    assert_eq!(member.member_name, "Foo");
+    assert_eq!(member.section_name, "Section1");
+    assert_eq!(member.expression_m, "1");
+    assert!(member.is_shared);
 }

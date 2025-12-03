@@ -14,6 +14,7 @@
       addressing.rs
       container.rs
       datamashup_framing.rs
+      datamashup_package.rs
       diff.rs
       engine.rs
       excel_open_xml.rs
@@ -31,6 +32,7 @@
       engine_tests.rs
       excel_open_xml_tests.rs
       integration_test.rs
+      m4_package_parts_tests.rs
       m_section_splitting_tests.rs
       output_tests.rs
       pg1_ir_tests.rs
@@ -66,9 +68,11 @@
       mashup_utf16_be.xlsx
       mashup_utf16_le.xlsx
       minimal.xlsx
+      multi_query_with_embedded.xlsx
       m_change_literal_b.xlsx
       not_a_zip.txt
       no_content_types.xlsx
+      one_query.xlsx
       pg1_basic_two_sheets.xlsx
       pg1_empty_and_mixed_sheets.xlsx
       pg1_sparse_used_range.xlsx
@@ -749,6 +753,129 @@ mod tests {
             let _ = parse_data_mashup(&bytes);
         }
     }
+}
+```
+
+---
+
+### File: `core\src\datamashup_package.rs`
+
+```rust
+use crate::datamashup_framing::DataMashupError;
+use std::io::{Cursor, Read, Seek};
+use zip::ZipArchive;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageXml {
+    pub raw_xml: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SectionDocument {
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddedContent {
+    pub name: String,
+    pub section: SectionDocument,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageParts {
+    pub package_xml: PackageXml,
+    pub main_section: SectionDocument,
+    pub embedded_contents: Vec<EmbeddedContent>,
+}
+
+pub fn parse_package_parts(bytes: &[u8]) -> Result<PackageParts, DataMashupError> {
+    let cursor = Cursor::new(bytes);
+    let mut archive = ZipArchive::new(cursor).map_err(|_| DataMashupError::FramingInvalid)?;
+
+    let mut package_xml: Option<PackageXml> = None;
+    let mut main_section: Option<SectionDocument> = None;
+    let mut embedded_contents: Vec<EmbeddedContent> = Vec::new();
+
+    for i in 0..archive.len() {
+        let mut file = archive
+            .by_index(i)
+            .map_err(|_| DataMashupError::FramingInvalid)?;
+        if file.is_dir() {
+            continue;
+        }
+
+        let raw_name = file.name().to_string();
+        let name = normalize_path(&raw_name);
+        if package_xml.is_none() && name == "Config/Package.xml" {
+            let text = read_file_to_string(&mut file)?;
+            package_xml = Some(PackageXml { raw_xml: text });
+            continue;
+        }
+        if main_section.is_none() && name == "Formulas/Section1.m" {
+            let text = read_file_to_string(&mut file)?;
+            main_section = Some(SectionDocument { source: text });
+            continue;
+        }
+        if name.starts_with("Content/") {
+            let mut content_bytes = Vec::new();
+            if file.read_to_end(&mut content_bytes).is_err() {
+                continue;
+            }
+
+            if let Some(section) = extract_embedded_section(&content_bytes) {
+                embedded_contents.push(EmbeddedContent {
+                    name: raw_name.trim_start_matches('/').to_string(),
+                    section: SectionDocument { source: section },
+                });
+            }
+        }
+    }
+
+    let package_xml = package_xml.ok_or(DataMashupError::FramingInvalid)?;
+    let main_section = main_section.ok_or(DataMashupError::FramingInvalid)?;
+
+    Ok(PackageParts {
+        package_xml,
+        main_section,
+        embedded_contents,
+    })
+}
+
+fn normalize_path(name: &str) -> &str {
+    name.trim_start_matches('/')
+}
+
+fn read_file_to_string(file: &mut zip::read::ZipFile<'_>) -> Result<String, DataMashupError> {
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf)
+        .map_err(|_| DataMashupError::FramingInvalid)?;
+    String::from_utf8(buf).map_err(|_| DataMashupError::FramingInvalid)
+}
+
+fn extract_embedded_section(bytes: &[u8]) -> Option<String> {
+    let cursor = Cursor::new(bytes);
+    let mut archive = ZipArchive::new(cursor).ok()?;
+    find_section_document(&mut archive)
+}
+
+fn find_section_document<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Option<String> {
+    for idx in 0..archive.len() {
+        let mut file = match archive.by_index(idx) {
+            Ok(file) => file,
+            Err(_) => continue,
+        };
+        if file.is_dir() {
+            continue;
+        }
+
+        if normalize_path(file.name()) == "Formulas/Section1.m" {
+            let mut buf = Vec::new();
+            if file.read_to_end(&mut buf).is_ok() {
+                return String::from_utf8(buf).ok();
+            }
+        }
+    }
+    None
 }
 ```
 
@@ -1689,6 +1816,7 @@ mod tests {
 pub mod addressing;
 pub mod container;
 pub mod datamashup_framing;
+pub mod datamashup_package;
 pub mod diff;
 pub mod engine;
 #[cfg(feature = "excel-open-xml")]
@@ -1701,6 +1829,9 @@ pub mod workbook;
 pub use addressing::{address_to_index, index_to_address};
 pub use container::{ContainerError, OpcContainer};
 pub use datamashup_framing::{DataMashupError, RawDataMashup};
+pub use datamashup_package::{
+    EmbeddedContent, PackageParts, PackageXml, SectionDocument, parse_package_parts,
+};
 pub use diff::{DiffOp, DiffReport, SheetId};
 pub use engine::diff_workbooks;
 #[cfg(feature = "excel-open-xml")]
@@ -3288,6 +3419,76 @@ fn test_locate_fixture() {
         "Fixture minimal.xlsx should exist at {:?}",
         path
     );
+}
+```
+
+---
+
+### File: `core\tests\m4_package_parts_tests.rs`
+
+```rust
+use excel_diff::{DataMashupError, open_data_mashup, parse_package_parts};
+
+mod common;
+use common::fixture_path;
+
+#[test]
+fn package_parts_contains_expected_entries() {
+    let path = fixture_path("one_query.xlsx");
+    let raw = open_data_mashup(&path)
+        .expect("fixture should open")
+        .expect("mashup should be present");
+
+    let parts = parse_package_parts(&raw.package_parts).expect("PackageParts should parse");
+
+    assert!(!parts.package_xml.raw_xml.is_empty());
+    assert!(
+        parts.main_section.source.contains("section Section1;"),
+        "main Section1.m should be present"
+    );
+    assert!(
+        parts.main_section.source.contains("shared"),
+        "at least one shared query should be present"
+    );
+    assert!(
+        parts.embedded_contents.is_empty(),
+        "one_query.xlsx should not contain embedded contents"
+    );
+}
+
+#[test]
+fn embedded_content_detection() {
+    let path = fixture_path("multi_query_with_embedded.xlsx");
+    let raw = open_data_mashup(&path)
+        .expect("fixture should open")
+        .expect("mashup should be present");
+
+    let parts = parse_package_parts(&raw.package_parts).expect("PackageParts should parse");
+
+    assert!(
+        !parts.embedded_contents.is_empty(),
+        "multi_query_with_embedded.xlsx should expose at least one embedded content"
+    );
+
+    for embedded in &parts.embedded_contents {
+        assert!(
+            embedded.section.source.contains("section Section1"),
+            "embedded Section1.m should be present for {}",
+            embedded.name
+        );
+        assert!(
+            embedded.section.source.contains("shared"),
+            "embedded Section1.m should contain at least one shared member for {}",
+            embedded.name
+        );
+    }
+}
+
+#[test]
+fn parse_package_parts_rejects_non_zip() {
+    let bogus = b"this is not a zip file";
+    let err = parse_package_parts(bogus).expect_err("non-zip bytes should fail");
+    assert!(matches!(err, DataMashupError::FramingInvalid));
 }
 ```
 
@@ -6303,6 +6504,19 @@ scenarios:
       whitespace: true
     output: "mashup_base64_whitespace.xlsx"
 
+  # --- Milestone 4.1: PackageParts ---
+  - id: "m4_packageparts_one_query"
+    generator: "mashup:one_query"
+    args:
+      base_file: "templates/base_query.xlsx"
+    output: "one_query.xlsx"
+
+  - id: "m4_packageparts_multi_embedded"
+    generator: "mashup:multi_query_with_embedded"
+    args:
+      base_file: "templates/base_query.xlsx"
+    output: "multi_query_with_embedded.xlsx"
+
   # --- Milestone 6: Basic M Diffs ---
   - id: "m_change_literal"
     generator: "mashup_inject"
@@ -6420,6 +6634,8 @@ from generators.mashup import (
     MashupDuplicateGenerator,
     MashupInjectGenerator,
     MashupEncodeGenerator,
+    MashupMultiEmbeddedGenerator,
+    MashupOneQueryGenerator,
 )
 from generators.perf import LargeGridGenerator
 from generators.database import KeyedTableGenerator
@@ -6439,6 +6655,8 @@ GENERATORS: Dict[str, Any] = {
     "mashup_duplicate": MashupDuplicateGenerator,
     "mashup_inject": MashupInjectGenerator,
     "mashup_encode": MashupEncodeGenerator,
+    "mashup:one_query": MashupOneQueryGenerator,
+    "mashup:multi_query_with_embedded": MashupMultiEmbeddedGenerator,
     "perf_large": LargeGridGenerator,
     "db_keyed": KeyedTableGenerator,
 }
@@ -7219,6 +7437,205 @@ class MashupInjectGenerator(MashupBaseGenerator):
             return zip_bytes
             
         return out_buffer.getvalue()
+
+
+class MashupPackagePartsGenerator(MashupBaseGenerator):
+    """
+    Generates PackageParts-focused fixtures starting from a base workbook.
+    """
+
+    variant: str = "one_query"
+
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        base_file_arg = self.args.get("base_file", "templates/base_query.xlsx")
+        base = Path(base_file_arg)
+        if not base.exists():
+            candidate = Path("fixtures") / base_file_arg
+            if candidate.exists():
+                base = candidate
+            else:
+                raise FileNotFoundError(f"Template {base} not found.")
+
+        for name in output_names:
+            target_path = (output_dir / name).resolve()
+            self._process_excel_container(base.resolve(), target_path, self._rewrite_datamashup)
+
+    def _rewrite_datamashup(self, raw_bytes: bytes) -> bytes:
+        if self.variant == "one_query":
+            return raw_bytes
+
+        version, package_parts, permissions, metadata, bindings = self._split_sections(raw_bytes)
+        package_xml, main_section_text, content_types = self._extract_package_parts(package_parts)
+
+        embedded_guid = self.args.get(
+            "embedded_guid", "{11111111-2222-3333-4444-555555555555}"
+        )
+        embedded_section_text = self.args.get(
+            "embedded_section",
+            self._default_embedded_section(),
+        )
+        updated_main_section = self._extend_main_section(main_section_text, embedded_guid)
+        embedded_bytes = self._build_embedded_package(embedded_section_text, content_types)
+        updated_package_parts = self._build_package_parts(
+            package_xml,
+            updated_main_section,
+            content_types,
+            embedded_guid,
+            embedded_bytes,
+        )
+
+        return self._assemble_sections(
+            version,
+            updated_package_parts,
+            permissions,
+            metadata,
+            bindings,
+        )
+
+    def _split_sections(self, raw_bytes: bytes):
+        min_size = 4 + 4 * 4
+        if len(raw_bytes) < min_size:
+            raise ValueError("DataMashup stream too short")
+
+        offset = 0
+        version = struct.unpack_from("<I", raw_bytes, offset)[0]
+        offset += 4
+
+        package_parts_len = struct.unpack_from("<I", raw_bytes, offset)[0]
+        offset += 4
+        package_parts_end = offset + package_parts_len
+        if package_parts_end > len(raw_bytes):
+            raise ValueError("invalid PackageParts length")
+        package_parts = raw_bytes[offset:package_parts_end]
+        offset = package_parts_end
+
+        permissions_len = struct.unpack_from("<I", raw_bytes, offset)[0]
+        offset += 4
+        permissions_end = offset + permissions_len
+        if permissions_end > len(raw_bytes):
+            raise ValueError("invalid permissions length")
+        permissions = raw_bytes[offset:permissions_end]
+        offset = permissions_end
+
+        metadata_len = struct.unpack_from("<I", raw_bytes, offset)[0]
+        offset += 4
+        metadata_end = offset + metadata_len
+        if metadata_end > len(raw_bytes):
+            raise ValueError("invalid metadata length")
+        metadata = raw_bytes[offset:metadata_end]
+        offset = metadata_end
+
+        bindings_len = struct.unpack_from("<I", raw_bytes, offset)[0]
+        offset += 4
+        bindings_end = offset + bindings_len
+        if bindings_end > len(raw_bytes):
+            raise ValueError("invalid bindings length")
+        bindings = raw_bytes[offset:bindings_end]
+        offset = bindings_end
+
+        if offset != len(raw_bytes):
+            raise ValueError("DataMashup trailing bytes mismatch")
+
+        return version, package_parts, permissions, metadata, bindings
+
+    def _assemble_sections(
+        self,
+        version: int,
+        package_parts: bytes,
+        permissions: bytes,
+        metadata: bytes,
+        bindings: bytes,
+    ) -> bytes:
+        return b"".join(
+            [
+                struct.pack("<I", version),
+                struct.pack("<I", len(package_parts)),
+                package_parts,
+                struct.pack("<I", len(permissions)),
+                permissions,
+                struct.pack("<I", len(metadata)),
+                metadata,
+                struct.pack("<I", len(bindings)),
+                bindings,
+            ]
+        )
+
+    def _extract_package_parts(self, package_parts: bytes):
+        with zipfile.ZipFile(io.BytesIO(package_parts), "r") as z:
+            package_xml = z.read("Config/Package.xml")
+            content_types = z.read("[Content_Types].xml")
+            main_section = z.read("Formulas/Section1.m")
+        return package_xml, main_section.decode("utf-8", errors="ignore"), content_types
+
+    def _extend_main_section(self, base_section: str, embedded_guid: str) -> str:
+        stripped = base_section.rstrip()
+        lines = [
+            stripped,
+            "",
+            "shared EmbeddedQuery = let",
+            f'    Source = Embedded.Value("Content/{embedded_guid}.package")',
+            "in",
+            "    Source;",
+        ]
+        return "\n".join(lines)
+
+    def _build_embedded_package(self, section_text: str, content_types_template: bytes) -> bytes:
+        content_types = self._augment_content_types(content_types_template)
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as z:
+            z.writestr("[Content_Types].xml", content_types)
+            z.writestr("Formulas/Section1.m", section_text)
+        return buffer.getvalue()
+
+    def _build_package_parts(
+        self,
+        package_xml: bytes,
+        main_section: str,
+        content_types_template: bytes,
+        embedded_guid: str,
+        embedded_package: bytes,
+    ) -> bytes:
+        content_types = self._augment_content_types(content_types_template)
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as z:
+            z.writestr("[Content_Types].xml", content_types)
+            z.writestr("Config/Package.xml", package_xml)
+            z.writestr("Formulas/Section1.m", main_section)
+            z.writestr(f"Content/{embedded_guid}.package", embedded_package)
+        return buffer.getvalue()
+
+    def _augment_content_types(self, content_types_bytes: bytes) -> str:
+        text = content_types_bytes.decode("utf-8", errors="ignore")
+        if "Extension=\"package\"" not in text and "Extension='package'" not in text:
+            text = text.replace(
+                "</Types>",
+                '<Default Extension="package" ContentType="application/octet-stream" /></Types>',
+                1,
+            )
+        return text
+
+    def _default_embedded_section(self) -> str:
+        return "\n".join(
+            [
+                "section Section1;",
+                "",
+                "shared Inner = let",
+                "    Source = 1",
+                "in",
+                "    Source;",
+            ]
+        )
+
+
+class MashupOneQueryGenerator(MashupPackagePartsGenerator):
+    variant = "one_query"
+
+
+class MashupMultiEmbeddedGenerator(MashupPackagePartsGenerator):
+    variant = "multi_query_with_embedded"
 
 
 class MashupDuplicateGenerator(MashupBaseGenerator):

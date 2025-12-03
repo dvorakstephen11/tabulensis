@@ -1,6 +1,7 @@
 pub mod addressing;
 pub mod container;
 pub mod datamashup_framing;
+pub mod datamashup_package;
 pub mod diff;
 pub mod engine;
 #[cfg(feature = "excel-open-xml")]
@@ -13,6 +14,9 @@ pub mod workbook;
 pub use addressing::{address_to_index, index_to_address};
 pub use container::{ContainerError, OpcContainer};
 pub use datamashup_framing::{DataMashupError, RawDataMashup};
+pub use datamashup_package::{
+    EmbeddedContent, PackageParts, PackageXml, SectionDocument, parse_package_parts,
+};
 pub use diff::{DiffOp, DiffReport, SheetId};
 pub use engine::diff_workbooks;
 #[cfg(feature = "excel-open-xml")]

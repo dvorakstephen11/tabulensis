@@ -187,6 +187,19 @@ scenarios:
       whitespace: true
     output: "mashup_base64_whitespace.xlsx"
 
+  # --- Milestone 4.1: PackageParts ---
+  - id: "m4_packageparts_one_query"
+    generator: "mashup:one_query"
+    args:
+      base_file: "templates/base_query.xlsx"
+    output: "one_query.xlsx"
+
+  - id: "m4_packageparts_multi_embedded"
+    generator: "mashup:multi_query_with_embedded"
+    args:
+      base_file: "templates/base_query.xlsx"
+    output: "multi_query_with_embedded.xlsx"
+
   # --- Milestone 6: Basic M Diffs ---
   - id: "m_change_literal"
     generator: "mashup_inject"

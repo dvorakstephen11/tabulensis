@@ -18,9 +18,7 @@ You have been provided with:
 
 3. **Current Codebase**: `codebase_context.md` contains the directory structure and source code.
 
-4. **Development History**: `development_history.txt` — Activity logs from all previous cycles, plus the most recent test output
-
-5. **Current Backlog**: `todo.md` contains the current task list.
+4. **Current Backlog**: `todo.md` contains the current task list.
 
 ## Your Goal
 

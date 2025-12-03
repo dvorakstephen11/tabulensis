@@ -19,6 +19,7 @@ pub struct SectionMember {
 }
 
 pub fn parse_section_members(source: &str) -> Result<Vec<SectionMember>, SectionParseError> {
+    let source = strip_leading_bom(source);
     let mut lines = source.lines();
     let section_name = find_section_name(&mut lines)?;
 
@@ -176,4 +177,8 @@ fn split_identifier(text: &str) -> Option<(&str, &str)> {
 
 fn is_valid_identifier(name: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn strip_leading_bom(text: &str) -> &str {
+    text.strip_prefix('\u{FEFF}').unwrap_or(text)
 }

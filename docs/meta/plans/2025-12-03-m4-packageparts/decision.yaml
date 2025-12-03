@@ -1,0 +1,34 @@
+branch: 2025-12-03-m4-packageparts
+work_type: milestone_progress
+target_subsystem: datamashup_packageparts
+
+rationale:
+  - Milestone 4 ("Semantic sections: PackageParts / Permissions / Metadata / Bindings") is currently unimplemented beyond the binary framing; the Rust code stops at `RawDataMashup` and never interprets `package_parts` as an embedded OPC/ZIP with `/Config/Package.xml`, `/Formulas/Section1.m`, or `/Content/*` entries, even though the spec treats this as the first semantic layer above MS-QDEFF. 
+  - The testing plan explicitly calls out Milestone 4.1 tests `package_parts_contains_expected_entries` and `embedded_content_detection`, which expect us to open the PackageParts ZIP, locate `/Config/Package.xml` and `/Formulas/Section1.m`, and detect embedded mini‑mashups under `/Content/{GUID}`. Progress on this milestone is a prerequisite for metadata and query-domain tests that depend on Section1.m being reachable from real Excel files.
+  - We now have robust DataMashup framing (`RawDataMashup`, `open_data_mashup`) and fixtures for MS‑QDEFF, plus a Section1 splitting utility (`parse_section_members`) that can interpret `/Formulas/Section1.m` once we can extract it. The missing piece is precisely the PackageParts ZIP reader that turns raw `package_parts` bytes into `PackageParts { package_xml, main_section, embedded_contents }`.
+  - The difficulty analysis highlights "PackageParts + embedded OPC / Embedded.Value contents" as a distinct risk cluster because of nested ZIP handling and the need to be resilient to odd or partial content. Tackling a narrow subset (happy‑path PackageParts parsing and embedded content discovery) now reduces uncertainty for later work on `Embedded.Value` semantics and metadata‑driven query diff.
+  - Grid IR, DiffOps, and grid diff (PG1–PG6) already have strong coverage; the M side has only framing and Section1 splitting. Advancing PackageParts semantics keeps subsystem risk balanced and unblocks subsequent Milestone 4 and 5 tests (Permissions XML, Metadata XML, query–metadata join) and ultimately Milestone 6 (textual M diff) for MVP.
+
+risks_of_deferral:
+  - M‑side milestones remain blocked: without a way to open PackageParts and extract `/Formulas/Section1.m`, we cannot write the Metadata XML tests that compare `Formulas` entries against Section1 members, nor can we build a `Query` domain object wired to real workbooks.
+  - Embedded `Content/{GUID}` packages used by `Embedded.Value` will remain opaque; any later attempt to support them will have to re‑shape APIs after callers have started depending on a "raw bytes only" model, increasing refactor cost.
+  - The longer PackageParts semantics are deferred, the more tempting it becomes to sprinkle ad‑hoc ZIP handling near call sites (e.g., tests or metadata parsing) instead of centralizing it behind a dedicated `PackageParts` API, leading to duplication and inconsistent error handling.
+  - MVP readiness for "Excel DataMashup + M diff" depends on making DataMashup a first‑class citizen of the `Workbook` IR; deferring PackageParts parsing keeps DataMashup stuck at a raw framing level, pushing more M‑related work into the back end of the schedule.
+
+references:
+  - docs/rust_docs/excel_diff_testing_plan.md – Milestone 4 ("Semantic sections") and tests `package_parts_contains_expected_entries`, `embedded_content_detection`.
+  - docs/rust_docs/excel_diff_specification.md – DataMashup PackageParts, Power Query model, and the end‑to‑end processing summary for host container → MS‑QDEFF → PackageParts → queries.
+  - docs/rust_docs/excel_diff_difficulty_analysis.md – risk cluster around PackageParts and embedded OPC/Embedded.Value parsing.
+  - docs/rust_docs/unified_grid_diff_algorithm_specification.md – system‑level difficulty scaling and context for balancing grid vs. M‑side work.
+  - docs/meta/development_history.txt – prior cycles focusing on container+grid IR, DataMashup framing, and Section1 splitting; no PackageParts semantics yet.
+  - docs/rust_docs/excel_diff_meta_programming.md – planner/implementer roles, test‑first cycle structure, and decision record format.
+
+difficulty_estimate:
+  score: 6
+  scale: 10
+  reference_hardest_milestone: "H1 – Advanced grid alignment + database mode (G8–G13, D1–D10) in unified_grid_diff_algorithm_specification"
+  reasoning: >
+    Implementing PackageParts semantics requires nested ZIP handling, careful error propagation through DataMashupError, and designing a stable
+    PackageParts/EmbeddedContent API that will feed later Metadata and Query layers. Compared to H1 (advanced grid alignment + database mode) this work is
+    simpler in algorithmic terms and has looser performance constraints, but it touches a new embedded-container stack, must be robust against malformed inputs,
+    and sets the shape for M-domain IR. This makes it moderately hard, above simple plumbing but well below the hardest alignment and semantic diff milestones.

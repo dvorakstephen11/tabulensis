@@ -145,9 +145,11 @@ Practical parsing strategy:
 2. Use a normal ZIP/OPC library to list entries and extract required parts.
 3. Read `/Config/Package.xml` as UTF-8 XML; parse fields such as client version, minimum compatible version, culture, etc. (helps with diagnostics).
 4. Read `/Formulas/Section1.m` as UTF-8 text:
-   * This is a Power Query "section document"; Excel/Power BI currently enforce a single section called `Section1` with all members shared if they are loadable.([bengribaudo.com][1])
+    * This is a Power Query "section document"; Excel/Power BI currently enforce a single section called `Section1` with all members shared if they are loadable.([bengribaudo.com][1])
 5. For each `/Content/{GUID}`:
-   * Treat as another OPC/ZIP; inside you'll find its own `/Formulas/Section1.m` and `/Config/Formulas.xml`. These are the "embedded contents" used by `Embedded.Value`.([bengribaudo.com][1])
+    * Treat as another OPC/ZIP; inside you'll find its own `/Formulas/Section1.m` and `/Config/Formulas.xml`. These are the "embedded contents" used by `Embedded.Value`.([bengribaudo.com][1])
+6. Accept PackageParts entries with or without a leading `/`, but store canonical, slash-free paths for consumers (including `EmbeddedContent.name`).
+7. Strip a single leading UTF-8 BOM from any Section1.m text (outer or nested) before handing it to M parsing so the section header is discoverable.
 
 This matches what Imke's M code is doing: decode + unzip + select `"Formulas/Section1.m"`.([The Biccountant][4])
 
