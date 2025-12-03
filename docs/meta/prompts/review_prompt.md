@@ -20,6 +20,7 @@
       grid_parser.rs
       lib.rs
       main.rs
+      m_section.rs
       workbook.rs
       output/
         json.rs
@@ -30,6 +31,7 @@
       engine_tests.rs
       excel_open_xml_tests.rs
       integration_test.rs
+      m_section_splitting_tests.rs
       output_tests.rs
       pg1_ir_tests.rs
       pg3_snapshot_tests.rs
@@ -1692,6 +1694,7 @@ pub mod engine;
 #[cfg(feature = "excel-open-xml")]
 pub mod excel_open_xml;
 pub mod grid_parser;
+pub mod m_section;
 pub mod output;
 pub mod workbook;
 
@@ -1703,6 +1706,7 @@ pub use engine::diff_workbooks;
 #[cfg(feature = "excel-open-xml")]
 pub use excel_open_xml::{ExcelOpenError, open_data_mashup, open_workbook};
 pub use grid_parser::{GridParseError, SheetDescriptor};
+pub use m_section::{SectionMember, SectionParseError, parse_section_members};
 #[cfg(feature = "excel-open-xml")]
 pub use output::json::diff_workbooks_to_json;
 pub use output::json::{CellDiff, serialize_cell_diffs, serialize_diff_report};
@@ -1719,6 +1723,192 @@ pub use workbook::{
 ```rust
 fn main() {
     println!("Hello, world!");
+}
+```
+
+---
+
+### File: `core\src\m_section.rs`
+
+```rust
+use std::str::Lines;
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum SectionParseError {
+    #[error("missing section header")]
+    MissingSectionHeader,
+    #[error("invalid section header")]
+    InvalidHeader,
+    #[error("invalid member syntax")]
+    InvalidMemberSyntax,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SectionMember {
+    pub section_name: String,
+    pub member_name: String,
+    pub expression_m: String,
+    pub is_shared: bool,
+}
+
+pub fn parse_section_members(source: &str) -> Result<Vec<SectionMember>, SectionParseError> {
+    let mut lines = source.lines();
+    let section_name = find_section_name(&mut lines)?;
+
+    let mut members = Vec::new();
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            continue;
+        }
+
+        if !trimmed.starts_with("shared") {
+            continue;
+        }
+
+        if let Some(member) = parse_shared_member(trimmed, &mut lines, &section_name) {
+            members.push(member);
+        }
+    }
+
+    Ok(members)
+}
+
+fn find_section_name(lines: &mut Lines<'_>) -> Result<String, SectionParseError> {
+    for line in lines.by_ref() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            continue;
+        }
+
+        match try_parse_section_header(trimmed) {
+            Ok(Some(name)) => return Ok(name),
+            Ok(None) => continue,
+            Err(err) => return Err(err),
+        }
+    }
+
+    Err(SectionParseError::MissingSectionHeader)
+}
+
+fn try_parse_section_header(line: &str) -> Result<Option<String>, SectionParseError> {
+    let Some(rest) = line.strip_prefix("section") else {
+        return Ok(None);
+    };
+
+    if !rest.starts_with(char::is_whitespace) && !rest.is_empty() {
+        return Err(SectionParseError::InvalidHeader);
+    }
+
+    let header_body = rest.trim_start();
+    if !header_body.ends_with(';') {
+        return Err(SectionParseError::InvalidHeader);
+    }
+
+    let without_semicolon = &header_body[..header_body.len() - 1];
+    let name_candidate = without_semicolon.trim();
+    if name_candidate.is_empty() {
+        return Err(SectionParseError::InvalidHeader);
+    }
+
+    let mut parts = name_candidate.split_whitespace();
+    let name = parts.next().ok_or(SectionParseError::InvalidHeader)?;
+    if parts.next().is_some() {
+        return Err(SectionParseError::InvalidHeader);
+    }
+
+    if !is_valid_identifier(name) {
+        return Err(SectionParseError::InvalidHeader);
+    }
+
+    Ok(Some(name.to_string()))
+}
+
+fn parse_shared_member(
+    line: &str,
+    remaining_lines: &mut Lines<'_>,
+    section_name: &str,
+) -> Option<SectionMember> {
+    let rest = line.strip_prefix("shared")?;
+    if !rest.starts_with(char::is_whitespace) && !rest.is_empty() {
+        return None;
+    }
+
+    let body = rest.trim_start();
+    if body.is_empty() {
+        return None;
+    }
+
+    let (member_name, after_name) = split_identifier(body)?;
+    if !is_valid_identifier(member_name) {
+        return None;
+    }
+
+    let mut expression_source = after_name;
+    let eq_index = expression_source.find('=')?;
+    if !expression_source[..eq_index].trim().is_empty() {
+        return None;
+    }
+    expression_source = &expression_source[eq_index + 1..];
+
+    let mut expression = expression_source.to_string();
+    if let Some(idx) = expression_source.find(';') {
+        expression.truncate(idx);
+    } else {
+        let mut terminator_index = None;
+        while terminator_index.is_none() {
+            let Some(next_line) = remaining_lines.next() else {
+                break;
+            };
+
+            expression.push('\n');
+            let offset = expression.len();
+            expression.push_str(next_line);
+            if let Some(idx) = next_line.find(';') {
+                terminator_index = Some(offset + idx);
+            }
+        }
+
+        if let Some(idx) = terminator_index {
+            expression.truncate(idx);
+        } else {
+            return None;
+        }
+    }
+
+    let expression_m = expression.trim().to_string();
+
+    Some(SectionMember {
+        section_name: section_name.to_string(),
+        member_name: member_name.to_string(),
+        expression_m,
+        is_shared: true,
+    })
+}
+
+fn split_identifier(text: &str) -> Option<(&str, &str)> {
+    let trimmed = text.trim_start();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut end = 0;
+    for ch in trimmed.chars() {
+        if ch.is_whitespace() || ch == '=' {
+            break;
+        }
+        end += ch.len_utf8();
+    }
+
+    if end == 0 {
+        return None;
+    }
+
+    Some(trimmed.split_at(end))
+}
+
+fn is_valid_identifier(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 ```
 
@@ -3098,6 +3288,97 @@ fn test_locate_fixture() {
         "Fixture minimal.xlsx should exist at {:?}",
         path
     );
+}
+```
+
+---
+
+### File: `core\tests\m_section_splitting_tests.rs`
+
+```rust
+use excel_diff::{SectionParseError, parse_section_members};
+
+const SECTION_SINGLE: &str = r#"
+    section Section1;
+
+    shared Foo = 1;
+"#;
+
+const SECTION_MULTI: &str = r#"
+    section Section1;
+
+    shared Foo = 1;
+    shared Bar = 2;
+    Baz = 3;
+"#;
+
+const SECTION_NOISY: &str = r#"
+
+// Leading comment
+
+section Section1;
+
+// Comment before Foo
+shared Foo = 1;
+
+// Another comment
+
+    shared   Bar   =    2    ;
+
+"#;
+
+#[test]
+fn parse_single_member_section() {
+    let members = parse_section_members(SECTION_SINGLE).expect("single member section parses");
+    assert_eq!(members.len(), 1);
+
+    let foo = &members[0];
+    assert_eq!(foo.section_name, "Section1");
+    assert_eq!(foo.member_name, "Foo");
+    assert_eq!(foo.expression_m, "1");
+    assert!(foo.is_shared);
+}
+
+#[test]
+fn parse_multiple_members() {
+    let members = parse_section_members(SECTION_MULTI).expect("multi-member section parses");
+    assert_eq!(members.len(), 2);
+
+    assert_eq!(members[0].member_name, "Foo");
+    assert_eq!(members[0].section_name, "Section1");
+    assert_eq!(members[0].expression_m, "1");
+    assert!(members[0].is_shared);
+
+    assert_eq!(members[1].member_name, "Bar");
+    assert_eq!(members[1].section_name, "Section1");
+    assert_eq!(members[1].expression_m, "2");
+    assert!(members[1].is_shared);
+}
+
+#[test]
+fn tolerate_whitespace_comments() {
+    let members = parse_section_members(SECTION_NOISY).expect("noisy section still parses");
+    assert_eq!(members.len(), 2);
+
+    assert_eq!(members[0].member_name, "Foo");
+    assert_eq!(members[0].expression_m, "1");
+    assert!(members[0].is_shared);
+    assert_eq!(members[0].section_name, "Section1");
+
+    assert_eq!(members[1].member_name, "Bar");
+    assert_eq!(members[1].expression_m, "2");
+    assert!(members[1].is_shared);
+    assert_eq!(members[1].section_name, "Section1");
+}
+
+#[test]
+fn error_on_missing_section_header() {
+    const NO_SECTION: &str = r#"
+        shared Foo = 1;
+    "#;
+
+    let result = parse_section_members(NO_SECTION);
+    assert_eq!(result, Err(SectionParseError::MissingSectionHeader));
 }
 ```
 
