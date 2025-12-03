@@ -103,6 +103,17 @@ fn invalid_utf8_in_package_xml_errors() {
 }
 
 #[test]
+fn invalid_utf8_in_section1_errors() {
+    let bytes = build_zip(vec![
+        ("Config/Package.xml", MIN_PACKAGE_XML.as_bytes().to_vec()),
+        ("Formulas/Section1.m", vec![0xFF, 0xFF]),
+    ]);
+
+    let err = parse_package_parts(&bytes).expect_err("invalid UTF-8 in Section1.m should error");
+    assert!(matches!(err, DataMashupError::FramingInvalid));
+}
+
+#[test]
 fn embedded_content_invalid_zip_is_skipped() {
     let bytes =
         build_minimal_package_parts_with(vec![("Content/bogus.package", b"not a zip".to_vec())]);
@@ -124,6 +135,22 @@ fn embedded_content_invalid_utf8_is_skipped() {
     let bytes = build_minimal_package_parts_with(vec![("Content/bad_utf8.package", nested)]);
     let parts = parse_package_parts(&bytes).expect("outer package should parse");
     assert!(parts.embedded_contents.is_empty());
+}
+
+#[test]
+fn embedded_content_partial_failure_retains_valid_entries() {
+    let good_nested = build_embedded_section_zip(MIN_SECTION.as_bytes().to_vec());
+    let bytes = build_minimal_package_parts_with(vec![
+        ("Content/good.package", good_nested),
+        ("Content/bad.package", b"not a zip".to_vec()),
+    ]);
+
+    let parts = parse_package_parts(&bytes).expect("outer package should parse");
+    assert_eq!(parts.embedded_contents.len(), 1);
+    let embedded = &parts.embedded_contents[0];
+    assert_eq!(embedded.name, "Content/good.package");
+    assert!(embedded.section.source.contains("section Section1;"));
+    assert!(embedded.section.source.contains("shared"));
 }
 
 #[test]
@@ -186,6 +213,10 @@ fn package_parts_section1_with_bom_parses_via_parse_section_members() {
     ]);
 
     let parts = parse_package_parts(&bytes).expect("BOM-prefixed Section1.m should parse");
+    assert!(
+        !parts.main_section.source.starts_with('\u{FEFF}'),
+        "PackageParts should strip a single leading BOM from Section1.m"
+    );
     let members = parse_section_members(&parts.main_section.source)
         .expect("parse_section_members should accept BOM-prefixed Section1");
     assert_eq!(members.len(), 1);

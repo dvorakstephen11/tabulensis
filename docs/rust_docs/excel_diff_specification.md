@@ -143,7 +143,7 @@ Practical parsing strategy:
 
 1. Treat `PackageParts` bytes as a ZIP/OPC stream.
 2. Use a normal ZIP/OPC library to list entries and extract required parts.
-3. Read `/Config/Package.xml` as UTF-8 XML; parse fields such as client version, minimum compatible version, culture, etc. (helps with diagnostics).
+3. Read `/Config/Package.xml` as UTF-8 XML. For the current milestone, surface it as an opaque `PackageXml { raw_xml }` string without parsing individual fields; later milestones may extract structured fields (client version, minimum reader, culture, etc.).
 4. Read `/Formulas/Section1.m` as UTF-8 text:
     * This is a Power Query "section document"; Excel/Power BI currently enforce a single section called `Section1` with all members shared if they are loadable.([bengribaudo.com][1])
 5. For each `/Content/{GUID}`:

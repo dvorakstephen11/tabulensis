@@ -9,3 +9,9 @@
 - Files modified: core/src/datamashup_package.rs; core/src/m_section.rs; core/tests/m4_package_parts_tests.rs; core/tests/m_section_splitting_tests.rs; docs/meta/plans/2025-12-03-m4-packageparts/spec.md; docs/rust_docs/excel_diff_specification.md.
 - Tests added: missing_config_package_xml_errors, missing_section1_errors, invalid_utf8_in_package_xml_errors, embedded_content_invalid_zip_is_skipped, embedded_content_missing_section1_is_skipped, embedded_content_invalid_utf8_is_skipped, leading_slash_paths_are_accepted, embedded_content_name_is_canonicalized, parse_package_parts_never_panics_on_random_bytes, section_parsing_tolerates_utf8_bom, package_parts_section1_with_bom_parses_via_parse_section_members.
 - Complications: None; BOM handling adjusted to strip a single leading codepoint before M parsing while keeping other whitespace intact.
+
+## Remediation Round 2
+- Addressed Fixes 1-5 from remediationB: added invalid UTF-8 negative test for Section1.m, strengthened BOM stripping assertion at PackageParts boundary, added mixed valid/invalid embedded content coverage, aligned EmbeddedContent.name construction with normalize_path, and clarified Package.xml behavior in the spec to surface raw_xml only for this milestone.
+- Files modified: core/tests/m4_package_parts_tests.rs; core/src/datamashup_package.rs; docs/rust_docs/excel_diff_specification.md.
+- Tests: cargo fmt; cargo clippy; cargo test (all passing).
+- Complications: None encountered; no production behavior changes beyond tying EmbeddedContent.name to normalize_path for future-proofing.

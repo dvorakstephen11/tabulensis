@@ -62,7 +62,7 @@ pub fn parse_package_parts(bytes: &[u8]) -> Result<PackageParts, DataMashupError
 
             if let Some(section) = extract_embedded_section(&content_bytes) {
                 embedded_contents.push(EmbeddedContent {
-                    name: raw_name.trim_start_matches('/').to_string(),
+                    name: normalize_path(&raw_name).to_string(),
                     section: SectionDocument { source: section },
                 });
             }
