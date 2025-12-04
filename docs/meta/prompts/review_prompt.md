@@ -32,6 +32,7 @@
       data_mashup_tests.rs
       engine_tests.rs
       excel_open_xml_tests.rs
+      g1_g2_grid_workbook_tests.rs
       integration_test.rs
       m4_package_parts_tests.rs
       m4_permissions_metadata_tests.rs
@@ -59,6 +60,8 @@
       db_row_added_b.xlsx
       duplicate_datamashup_elements.xlsx
       duplicate_datamashup_parts.xlsx
+      equal_sheet_a.xlsx
+      equal_sheet_b.xlsx
       grid_large_dense.xlsx
       grid_large_noise.xlsx
       json_diff_bool_a.xlsx
@@ -102,6 +105,8 @@
       sheet_case_only_rename_b.xlsx
       sheet_case_only_rename_edit_a.xlsx
       sheet_case_only_rename_edit_b.xlsx
+      single_cell_value_a.xlsx
+      single_cell_value_b.xlsx
     src/
       generate.py
       __init__.py
@@ -4029,6 +4034,75 @@ fn missing_worksheet_xml_returns_worksheetxmlmissing() {
 
 ---
 
+### File: `core\tests\g1_g2_grid_workbook_tests.rs`
+
+```rust
+use excel_diff::{CellValue, DiffOp, diff_workbooks, open_workbook};
+
+mod common;
+use common::fixture_path;
+
+#[test]
+fn g1_equal_sheet_produces_empty_diff() {
+    let wb_a =
+        open_workbook(fixture_path("equal_sheet_a.xlsx")).expect("equal_sheet_a.xlsx should open");
+    let wb_b =
+        open_workbook(fixture_path("equal_sheet_b.xlsx")).expect("equal_sheet_b.xlsx should open");
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    assert!(
+        report.ops.is_empty(),
+        "identical 5x5 sheet should produce an empty diff"
+    );
+}
+
+#[test]
+fn g2_single_cell_literal_change_produces_one_celledited() {
+    let wb_a = open_workbook(fixture_path("single_cell_value_a.xlsx"))
+        .expect("single_cell_value_a.xlsx should open");
+    let wb_b = open_workbook(fixture_path("single_cell_value_b.xlsx"))
+        .expect("single_cell_value_b.xlsx should open");
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    assert_eq!(
+        report.ops.len(),
+        1,
+        "expected exactly one diff op for a single edited cell"
+    );
+
+    match &report.ops[0] {
+        DiffOp::CellEdited {
+            sheet,
+            addr,
+            from,
+            to,
+        } => {
+            assert_eq!(sheet, "Sheet1");
+            assert_eq!(addr.to_a1(), "C3");
+            assert_eq!(from.value, Some(CellValue::Number(1.0)));
+            assert_eq!(to.value, Some(CellValue::Number(2.0)));
+            assert_eq!(from.formula, to.formula, "no formula changes expected");
+        }
+        other => panic!("expected CellEdited, got {other:?}"),
+    }
+
+    assert!(
+        !report.ops.iter().any(|op| matches!(
+            op,
+            DiffOp::RowAdded { .. }
+                | DiffOp::RowRemoved { .. }
+                | DiffOp::ColumnAdded { .. }
+                | DiffOp::ColumnRemoved { .. }
+        )),
+        "single cell change should not produce row/column structure ops"
+    );
+}
+```
+
+---
+
 ### File: `core\tests\integration_test.rs`
 
 ```rust
@@ -7718,6 +7792,30 @@ scenarios:
   - id: "pg3_types"
     generator: "value_formula"
     output: "pg3_value_and_formula_cells.xlsx"
+
+  # --- Phase 3: Spreadsheet-mode G1/G2 ---
+  - id: "g1_equal_sheet"
+    generator: "basic_grid"
+    args:
+      rows: 5
+      cols: 5
+      sheet: "Sheet1"
+    output:
+      - "equal_sheet_a.xlsx"
+      - "equal_sheet_b.xlsx"
+
+  - id: "g2_single_cell_value"
+    generator: "single_cell_diff"
+    args:
+      rows: 5
+      cols: 5
+      sheet: "Sheet1"
+      target_cell: "C3"
+      value_a: 1.0
+      value_b: 2.0
+    output:
+      - "single_cell_value_a.xlsx"
+      - "single_cell_value_b.xlsx"
 
   # --- JSON diff: simple non-empty change ---
   - id: "json_diff_single_cell"
