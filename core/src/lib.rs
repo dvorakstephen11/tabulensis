@@ -8,6 +8,7 @@ pub mod engine;
 #[cfg(feature = "excel-open-xml")]
 pub mod excel_open_xml;
 pub mod grid_parser;
+pub mod m_diff;
 pub mod m_section;
 pub mod output;
 pub mod workbook;
@@ -26,6 +27,7 @@ pub use engine::diff_workbooks;
 #[cfg(feature = "excel-open-xml")]
 pub use excel_open_xml::{ExcelOpenError, open_data_mashup, open_workbook};
 pub use grid_parser::{GridParseError, SheetDescriptor};
+pub use m_diff::{MQueryDiff, QueryChangeKind, diff_m_queries};
 pub use m_section::{SectionMember, SectionParseError, parse_section_members};
 #[cfg(feature = "excel-open-xml")]
 pub use output::json::diff_workbooks_to_json;

@@ -1,0 +1,8 @@
+2025-12-04: Started implementation for branch 2025-12-04c-m6-textual-m-diff (M6 textual M diff).
+- Read mini-spec and decision record; confirmed behavioral contract (QueryChangeKind/MQueryDiff, deterministic diffing).
+- Reviewed excel_diff_meta_programming Section 4 requirements and existing mashup generators/manifest.
+- Planned tasks: add m_diff module + exports, extend fixtures/generator for M diff scenarios, add integration tests, run fmt/clippy/tests.
+- Added `core/src/m_diff.rs` implementing `QueryChangeKind`, `MQueryDiff`, and `diff_m_queries` with deterministic name-sorted results; exported via `lib.rs`.
+- Extended mashup generator with helper functions and new modes for M6 scenarios; updated `fixtures/manifest.yaml` and generated fixtures (`m_add_query_*`, `m_remove_query_*`, `m_change_literal_*`, `m_metadata_only_change_*`, `m_rename_query_*`) replacing the old m_change_literal fixture content.
+- Created `core/tests/m6_textual_m_diff_tests.rs` covering add/remove/definition change/metadata-only/rename/identical cases using real fixtures.
+- Ran `cargo fmt`, `cargo clippy`, and `cargo test` (initial attempt hit a transient pipe/build lock issue; rerun succeeded with all tests passing).

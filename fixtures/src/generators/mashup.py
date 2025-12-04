@@ -701,6 +701,42 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
             ]
         )
 
+        def default_permissions():
+            return {
+                "can_eval": False,
+                "firewall_enabled": True,
+                "group_type": "Organizational",
+            }
+
+        def build_section_text(query_specs):
+            lines = ["section Section1;", ""]
+            for spec in query_specs:
+                lines.append(f"shared {spec['name']} = {spec['body']};")
+            return "\n".join(lines)
+
+        def build_metadata_entries(query_specs):
+            entries = []
+            for spec in query_specs:
+                stable_entries = []
+                if spec.get("load_to_sheet"):
+                    stable_entries.append(("FillEnabled", True))
+                if spec.get("load_to_model"):
+                    stable_entries.append(("FillToDataModelEnabled", True))
+                entries.append(
+                    {
+                        "path": f"Section1/{spec['name']}",
+                        "entries": stable_entries,
+                    }
+                )
+            return entries
+
+        def m_diff_scenario(query_specs):
+            return {
+                "section_text": build_section_text(query_specs),
+                "permissions": default_permissions(),
+                "metadata_entries": build_metadata_entries(query_specs),
+            }
+
         if self.mode in ("permissions_defaults", "permissions_firewall_off", "metadata_simple"):
             return {
                 "section_text": shared_section_simple,
@@ -726,6 +762,78 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
                     },
                 ],
             }
+
+        if self.mode == "m_add_query_a":
+            return m_diff_scenario(
+                [
+                    {"name": "Foo", "body": "1", "load_to_sheet": True, "load_to_model": False},
+                ]
+            )
+
+        if self.mode == "m_add_query_b":
+            return m_diff_scenario(
+                [
+                    {"name": "Foo", "body": "1", "load_to_sheet": True, "load_to_model": False},
+                    {"name": "Bar", "body": "2", "load_to_sheet": True, "load_to_model": False},
+                ]
+            )
+
+        if self.mode == "m_remove_query_a":
+            return m_diff_scenario(
+                [
+                    {"name": "Foo", "body": "1", "load_to_sheet": True, "load_to_model": False},
+                    {"name": "Bar", "body": "2", "load_to_sheet": True, "load_to_model": False},
+                ]
+            )
+
+        if self.mode == "m_remove_query_b":
+            return m_diff_scenario(
+                [
+                    {"name": "Foo", "body": "1", "load_to_sheet": True, "load_to_model": False},
+                ]
+            )
+
+        if self.mode == "m_change_literal_a":
+            return m_diff_scenario(
+                [
+                    {"name": "Foo", "body": "1", "load_to_sheet": True, "load_to_model": False},
+                ]
+            )
+
+        if self.mode == "m_change_literal_b":
+            return m_diff_scenario(
+                [
+                    {"name": "Foo", "body": "2", "load_to_sheet": True, "load_to_model": False},
+                ]
+            )
+
+        if self.mode == "m_metadata_only_change_a":
+            return m_diff_scenario(
+                [
+                    {"name": "Foo", "body": "1", "load_to_sheet": True, "load_to_model": False},
+                ]
+            )
+
+        if self.mode == "m_metadata_only_change_b":
+            return m_diff_scenario(
+                [
+                    {"name": "Foo", "body": "1", "load_to_sheet": False, "load_to_model": True},
+                ]
+            )
+
+        if self.mode == "m_rename_query_a":
+            return m_diff_scenario(
+                [
+                    {"name": "Foo", "body": "1", "load_to_sheet": True, "load_to_model": False},
+                ]
+            )
+
+        if self.mode == "m_rename_query_b":
+            return m_diff_scenario(
+                [
+                    {"name": "Bar", "body": "1", "load_to_sheet": True, "load_to_model": False},
+                ]
+            )
 
         if self.mode == "metadata_query_groups":
             section_text = "\n".join(

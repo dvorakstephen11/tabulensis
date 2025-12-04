@@ -1,0 +1,53 @@
+branch: 2025-12-04-m6-textual-m-diff
+
+work_type: milestone_progress
+
+target_subsystem: textual_m_diff_engine
+
+phase: 3
+milestone:
+  id: M6
+  name: "Textual M diff engine"
+  scope:
+    # This cycle explicitly targets 6.1 and the "no-rename-detection" variant of 6.2.
+    - "6.1 Basic M diffs: add/remove/change/metadata-only at the Query level"
+    - "6.2 Renames: codify current behavior as Removed+Added, no rename detection yet"
+  out_of_scope_for_this_cycle:
+    - "6.3 Embedded contents (diffing queries inside embedded mashups)"
+    - "Semantic/AST-level M diff (H4) and query move/rename detection"
+    - "Surfacing M diffs via DiffOp / JSON / CLI"
+
+rationale:
+  - "Phase 2 M infrastructure (M1–M5) is now implemented and tested: DataMashup framing, PackageParts, permissions, metadata, and Query domain (build_queries) are all in place, so the next natural step is M6 textual diff on top of these layers."
+  - "The testing plan calls out Milestone 6 as the first end-to-end diff for M queries, completing the vertical slice: Excel → DataMashup → Query domain → diff; this is currently missing entirely."
+  - "Development history shows the most recent branches completed M5 (Query domain layer) and G1/G2 workbook-level grid diffs; no M diff module or tests exist yet, and only a single M6-related fixture (m_change_literal_b.xlsx) is present."
+  - "Difficulty analysis flags semantic M diff (H4) as high risk; implementing a simple, deterministic textual diff now de-risks later semantic and AST-based work while the M parser and metadata logic are still fresh."
+  - "From a product perspective, being able to say 'we diff Power Query / DataMashup code' is a key differentiator beyond grid-only diff, and Milestone 6 is the first concrete step toward that roadmap."
+
+risks_of_deferral:
+  - "Query-level diff semantics remain unspecified, which will make future AST-level and semantic diff design more fragile; we’d be guessing about rename/add/remove behavior instead of codifying it with tests."
+  - "Downstream milestones that depend on M changes (e.g., mixed grid+M diff stories and UI surfacing of query changes) cannot progress until we have a stable, tested representation of basic M diffs."
+  - "We lose a clean opportunity to validate that the Query domain (M5) is sufficient for diffing; if there are missing fields or invariants, they will be harder to retrofit after more code is layered on top."
+  - "Product value remains skewed toward grid diffs only; lacking even basic M diffs weakens the differentiation plan relative to other spreadsheet diff tools."
+
+references:
+  - "excel_diff_testing_plan.md – Phase 3, Milestone 6: Textual M diff engine (6.1–6.3)."
+  - "excel_diff_specification.md – DataMashup framing, metadata, Query domain API, and overall diff architecture."
+  - "excel_diff_difficulty_analysis.md – H1 High-performance 2D grid diff, H4 Semantic M diff (risk context)."
+  - "excel_diff_product_differentiation_plan.md – Positioning around M / DataMashup awareness."
+  - "unified_grid_diff_algorithm_specification.md – For overall diff pipeline context (grid vs M vs metadata)."
+  - "codebase_context.md – Current datamashup.rs, lib.rs exports, diff.rs, and lack of any M diff module or tests."
+  - "development_history.txt – Recent completion of M5 Query domain layer and G1/G2 workbook grid tests."
+
+difficulty_estimate:
+  score: 5
+  scale: 10
+  hardest_milestone: "Phase 4 – Unified grid diff alignment & database-mode coverage (G8–G13, D1–D10), corresponding to H1 in difficulty analysis"
+  notes:
+    - "This work is more complex than prior parsing-only milestones because it introduces a new diff domain and end-to-end behavior, but it avoids AST/semantic diff and embedded content handling."
+    - "Complexity is moderate: we are aligning and classifying queries using existing DataMashup and Query structures, not yet doing structural M analysis or integrating with DiffOp/JSON."
+
+success_criteria:
+  - "A new public API exists to diff queries between two DataMashup instances, returning a stable list of MQueryDiff items."
+  - "For the basic scenarios (add/remove/definition-change/metadata-only, plus a rename pair), tests using real Excel fixtures assert the exact shape of the diff results."
+  - "No changes are required to existing PG/M1–M5 or G1/G2 tests; all existing suites continue to pass."

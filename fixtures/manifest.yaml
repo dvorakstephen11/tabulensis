@@ -282,20 +282,75 @@ scenarios:
     output: "metadata_orphan_entries.xlsx"
 
   # --- Milestone 6: Basic M Diffs ---
-  - id: "m_change_literal"
-    generator: "mashup_inject"
+  - id: "m_add_query_a"
+    generator: "mashup:permissions_metadata"
     args:
+      mode: "m_add_query_a"
       base_file: "templates/base_query.xlsx"
-      # This query adds a step, changing the definition
-      m_code: |
-        section Section1;
-        shared Query1 = let
-            Source = Csv.Document(File.Contents("C:\data.csv"),[Delimiter=",", Columns=2, Encoding=1252, QuoteStyle=QuoteStyle.None]),
-            #"Changed Type" = Table.TransformColumnTypes(Source,{{"Column1", type text}, {"Column2", type text}}),
-            #"Added Custom" = Table.AddColumn(#"Changed Type", "Custom", each 2)
-        in
-            #"Added Custom";
+    output: "m_add_query_a.xlsx"
+
+  - id: "m_add_query_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_add_query_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_add_query_b.xlsx"
+
+  - id: "m_remove_query_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_remove_query_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_remove_query_a.xlsx"
+
+  - id: "m_remove_query_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_remove_query_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_remove_query_b.xlsx"
+
+  - id: "m_change_literal_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_change_literal_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_change_literal_a.xlsx"
+
+  - id: "m_change_literal_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_change_literal_b"
+      base_file: "templates/base_query.xlsx"
     output: "m_change_literal_b.xlsx"
+
+  - id: "m_metadata_only_change_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_metadata_only_change_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_metadata_only_change_a.xlsx"
+
+  - id: "m_metadata_only_change_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_metadata_only_change_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_metadata_only_change_b.xlsx"
+
+  - id: "m_rename_query_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_rename_query_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_rename_query_a.xlsx"
+
+  - id: "m_rename_query_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_rename_query_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_rename_query_b.xlsx"
 
   # --- P1: Large Dense Grid (Performance Baseline) ---
   - id: "p1_large_dense"
