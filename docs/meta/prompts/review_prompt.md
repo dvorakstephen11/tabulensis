@@ -35,6 +35,7 @@
       integration_test.rs
       m4_package_parts_tests.rs
       m4_permissions_metadata_tests.rs
+      m5_query_domain_tests.rs
       m_section_splitting_tests.rs
       output_tests.rs
       pg1_ir_tests.rs
@@ -70,8 +71,11 @@
       mashup_utf16_be.xlsx
       mashup_utf16_le.xlsx
       metadata_hidden_queries.xlsx
+      metadata_missing_entry.xlsx
+      metadata_orphan_entries.xlsx
       metadata_query_groups.xlsx
       metadata_simple.xlsx
+      metadata_url_encoding.xlsx
       minimal.xlsx
       multi_query_with_embedded.xlsx
       m_change_literal_b.xlsx
@@ -365,8 +369,11 @@ impl OpcContainer {
 ### File: `core\src\datamashup.rs`
 
 ```rust
+use std::collections::HashMap;
+
 use crate::datamashup_framing::{DataMashupError, RawDataMashup};
 use crate::datamashup_package::{PackageParts, parse_package_parts};
+use crate::m_section::{SectionParseError, parse_section_members};
 use quick_xml::Reader;
 use quick_xml::events::Event;
 
@@ -412,6 +419,14 @@ pub struct QueryMetadata {
     pub group_path: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Query {
+    pub name: String,
+    pub section_member: String,
+    pub expression_m: String,
+    pub metadata: QueryMetadata,
+}
+
 pub fn build_data_mashup(raw: &RawDataMashup) -> Result<DataMashup, DataMashupError> {
     let package_parts = parse_package_parts(&raw.package_parts)?;
     let permissions = parse_permissions(&raw.permissions);
@@ -424,6 +439,57 @@ pub fn build_data_mashup(raw: &RawDataMashup) -> Result<DataMashup, DataMashupEr
         metadata,
         permission_bindings_raw: raw.permission_bindings.clone(),
     })
+}
+
+pub fn build_queries(dm: &DataMashup) -> Result<Vec<Query>, SectionParseError> {
+    let members = parse_section_members(&dm.package_parts.main_section.source)?;
+
+    let mut metadata_index: HashMap<(String, String), QueryMetadata> = HashMap::new();
+    for meta in &dm.metadata.formulas {
+        metadata_index.insert(
+            (meta.section_name.clone(), meta.formula_name.clone()),
+            meta.clone(),
+        );
+    }
+
+    let mut positions: HashMap<String, usize> = HashMap::new();
+    let mut queries = Vec::new();
+
+    for member in members {
+        let section_name = member.section_name.clone();
+        let member_name = member.member_name.clone();
+        let key = (section_name.clone(), member_name.clone());
+        let metadata = metadata_index
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| QueryMetadata {
+                item_path: format!("{}/{}", section_name, member_name),
+                section_name: section_name.clone(),
+                formula_name: member_name.clone(),
+                load_to_sheet: false,
+                load_to_model: false,
+                is_connection_only: true,
+                group_path: None,
+            });
+
+        let name = format!("{}/{}", section_name, member_name);
+        let query = Query {
+            name: name.clone(),
+            section_member: member.member_name,
+            expression_m: member.expression_m,
+            metadata,
+        };
+
+        if let Some(idx) = positions.get(&name) {
+            debug_assert!(false, "duplicate query name {}", name);
+            queries[*idx] = query;
+        } else {
+            positions.insert(name, queries.len());
+            queries.push(query);
+        }
+    }
+
+    Ok(queries)
 }
 
 pub fn parse_permissions(xml_bytes: &[u8]) -> Permissions {
@@ -2307,7 +2373,9 @@ pub mod workbook;
 
 pub use addressing::{address_to_index, index_to_address};
 pub use container::{ContainerError, OpcContainer};
-pub use datamashup::{DataMashup, Metadata, Permissions, QueryMetadata, build_data_mashup};
+pub use datamashup::{
+    DataMashup, Metadata, Permissions, Query, QueryMetadata, build_data_mashup, build_queries,
+};
 pub use datamashup_framing::{DataMashupError, RawDataMashup};
 pub use datamashup_package::{
     EmbeddedContent, PackageParts, PackageXml, SectionDocument, parse_package_parts,
@@ -2451,10 +2519,7 @@ fn parse_shared_member(
         return None;
     }
 
-    let (member_name, after_name) = split_identifier(body)?;
-    if !is_valid_identifier(member_name) {
-        return None;
-    }
+    let (member_name, after_name) = parse_identifier(body)?;
 
     let mut expression_source = after_name;
     let eq_index = expression_source.find('=')?;
@@ -2498,14 +2563,26 @@ fn parse_shared_member(
     })
 }
 
-fn split_identifier(text: &str) -> Option<(&str, &str)> {
+fn parse_identifier(text: &str) -> Option<(String, &str)> {
     let trimmed = text.trim_start();
     if trimmed.is_empty() {
         return None;
     }
 
+    if trimmed.starts_with("#\"") {
+        return parse_quoted_identifier(trimmed);
+    }
+
+    parse_unquoted_identifier(trimmed)
+}
+
+fn parse_unquoted_identifier(text: &str) -> Option<(String, &str)> {
+    if text.is_empty() {
+        return None;
+    }
+
     let mut end = 0;
-    for ch in trimmed.chars() {
+    for ch in text.chars() {
         if ch.is_whitespace() || ch == '=' {
             break;
         }
@@ -2516,7 +2593,43 @@ fn split_identifier(text: &str) -> Option<(&str, &str)> {
         return None;
     }
 
-    Some(trimmed.split_at(end))
+    let (name, rest) = text.split_at(end);
+    if !is_valid_identifier(name) {
+        return None;
+    }
+
+    Some((name.to_string(), rest))
+}
+
+fn parse_quoted_identifier(text: &str) -> Option<(String, &str)> {
+    let mut chars = text.char_indices();
+    let (_, hash) = chars.next()?;
+    if hash != '#' {
+        return None;
+    }
+    if !matches!(chars.next(), Some((_, '"'))) {
+        return None;
+    }
+
+    let mut name = String::new();
+    while let Some((idx, ch)) = chars.next() {
+        if ch == '"' {
+            if let Some((_, next_ch)) = chars.clone().next()
+                && next_ch == '"'
+            {
+                name.push('"');
+                chars.next();
+                continue;
+            }
+            let rest_start = idx + 1;
+            let rest = &text[rest_start..];
+            return Some((name, rest));
+        }
+
+        name.push(ch);
+    }
+
+    None
 }
 
 fn is_valid_identifier(name: &str) -> bool {
@@ -4282,8 +4395,8 @@ fn random_bytes(seed: u64, len: usize) -> Vec<u8> {
 
 ```rust
 use excel_diff::{
-    DataMashupError, Permissions, RawDataMashup, build_data_mashup, datamashup::parse_metadata,
-    open_data_mashup, parse_package_parts, parse_section_members,
+    DataMashupError, Permissions, RawDataMashup, build_data_mashup, build_queries,
+    datamashup::parse_metadata, open_data_mashup, parse_package_parts, parse_section_members,
 };
 
 mod common;
@@ -4559,6 +4672,114 @@ fn permission_bindings_missing_ok() {
     let dm = build_data_mashup(&synthetic).expect("empty bindings should build");
     assert!(dm.permission_bindings_raw.is_empty());
     assert_eq!(dm.permissions, Permissions::default());
+}
+
+#[test]
+fn build_queries_is_compatible_with_metadata_simple() {
+    let dm = load_datamashup("metadata_simple.xlsx");
+    let queries = build_queries(&dm).expect("queries should build");
+    assert!(!queries.is_empty());
+}
+```
+
+---
+
+### File: `core\tests\m5_query_domain_tests.rs`
+
+```rust
+use std::collections::HashSet;
+
+use excel_diff::{build_data_mashup, build_queries, open_data_mashup};
+
+mod common;
+use common::fixture_path;
+
+fn load_datamashup(path: &str) -> excel_diff::DataMashup {
+    let raw = open_data_mashup(fixture_path(path))
+        .expect("fixture should load")
+        .expect("DataMashup should be present");
+    build_data_mashup(&raw).expect("DataMashup should build")
+}
+
+#[test]
+fn metadata_join_simple() {
+    let dm = load_datamashup("metadata_simple.xlsx");
+    let queries = build_queries(&dm).expect("queries should build");
+
+    assert_eq!(queries.len(), 2);
+    let names: HashSet<_> = queries.iter().map(|q| q.name.as_str()).collect();
+    assert_eq!(
+        names,
+        HashSet::from(["Section1/LoadToSheet", "Section1/LoadToModel"])
+    );
+
+    let sheet = queries
+        .iter()
+        .find(|q| q.section_member == "LoadToSheet")
+        .expect("LoadToSheet query missing");
+    assert!(sheet.metadata.load_to_sheet);
+    assert!(!sheet.metadata.load_to_model);
+
+    let model = queries
+        .iter()
+        .find(|q| q.section_member == "LoadToModel")
+        .expect("LoadToModel query missing");
+    assert!(!model.metadata.load_to_sheet);
+    assert!(model.metadata.load_to_model);
+}
+
+#[test]
+fn metadata_join_url_encoding() {
+    let dm = load_datamashup("metadata_url_encoding.xlsx");
+    let queries = build_queries(&dm).expect("queries should build");
+
+    assert_eq!(queries.len(), 1);
+    let q = &queries[0];
+    assert_eq!(q.name, "Section1/Query with space & #");
+    assert_eq!(q.section_member, "Query with space & #");
+    assert!(q.metadata.load_to_sheet || q.metadata.load_to_model);
+}
+
+#[test]
+fn member_without_metadata_is_preserved() {
+    let dm = load_datamashup("metadata_missing_entry.xlsx");
+    let queries = build_queries(&dm).expect("queries should build");
+
+    assert_eq!(queries.len(), 1);
+    let q = &queries[0];
+    assert_eq!(q.name, "Section1/MissingMetadata");
+    assert_eq!(q.section_member, "MissingMetadata");
+    assert_eq!(q.metadata.item_path, "Section1/MissingMetadata");
+    assert!(!q.metadata.load_to_sheet);
+    assert!(!q.metadata.load_to_model);
+    assert!(q.metadata.is_connection_only);
+    assert_eq!(q.metadata.group_path, None);
+}
+
+#[test]
+fn query_names_unique() {
+    let dm = load_datamashup("metadata_simple.xlsx");
+    let queries = build_queries(&dm).expect("queries should build");
+
+    let mut seen = HashSet::new();
+    for q in &queries {
+        assert!(seen.insert(&q.name));
+    }
+}
+
+#[test]
+fn metadata_orphan_entries() {
+    let dm = load_datamashup("metadata_orphan_entries.xlsx");
+    let queries = build_queries(&dm).expect("queries should build");
+
+    assert_eq!(queries.len(), 1);
+    assert_eq!(queries[0].name, "Section1/Foo");
+    assert!(
+        dm.metadata
+            .formulas
+            .iter()
+            .any(|m| m.item_path == "Section1/Nonexistent")
+    );
 }
 ```
 
@@ -7638,6 +7859,27 @@ scenarios:
       base_file: "templates/base_query.xlsx"
     output: "metadata_hidden_queries.xlsx"
 
+  - id: "metadata_missing_entry"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "metadata_missing_entry"
+      base_file: "templates/base_query.xlsx"
+    output: "metadata_missing_entry.xlsx"
+
+  - id: "metadata_url_encoding"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "metadata_url_encoding"
+      base_file: "templates/base_query.xlsx"
+    output: "metadata_url_encoding.xlsx"
+
+  - id: "metadata_orphan_entries"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "metadata_orphan_entries"
+      base_file: "templates/base_query.xlsx"
+    output: "metadata_orphan_entries.xlsx"
+
   # --- Milestone 6: Basic M Diffs ---
   - id: "m_change_literal"
     generator: "mashup_inject"
@@ -9144,6 +9386,77 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
                             ("FillEnabled", True),
                             ("FillToDataModelEnabled", False),
                         ],
+                    },
+                ],
+            }
+
+        if self.mode == "metadata_missing_entry":
+            section_text = "\n".join(
+                [
+                    "section Section1;",
+                    "",
+                    "shared MissingMetadata = 1;",
+                ]
+            )
+            return {
+                "section_text": section_text,
+                "permissions": {
+                    "can_eval": False,
+                    "firewall_enabled": True,
+                    "group_type": "Organizational",
+                },
+                "metadata_entries": [],
+            }
+
+        if self.mode == "metadata_url_encoding":
+            section_text = "\n".join(
+                [
+                    "section Section1;",
+                    "",
+                    'shared #"Query with space & #" = 1;',
+                ]
+            )
+            return {
+                "section_text": section_text,
+                "permissions": {
+                    "can_eval": False,
+                    "firewall_enabled": True,
+                    "group_type": "Organizational",
+                },
+                "metadata_entries": [
+                    {
+                        "path": "Section1/Query%20with%20space%20%26%20%23",
+                        "entries": [
+                            ("FillEnabled", True),
+                            ("FillToDataModelEnabled", False),
+                        ],
+                    },
+                ],
+            }
+
+        if self.mode == "metadata_orphan_entries":
+            section_text = "\n".join(
+                [
+                    "section Section1;",
+                    "",
+                    "shared Foo = 1;",
+                ]
+            )
+            return {
+                "section_text": section_text,
+                "permissions": {
+                    "can_eval": False,
+                    "firewall_enabled": True,
+                    "group_type": "Organizational",
+                },
+                "metadata_entries": [
+                    {
+                        "path": "Section1/Foo",
+                        "entries": [("FillEnabled", True)],
+                    },
+                    {
+                        "path": "Section1/Nonexistent",
+                        "entries": [("FillEnabled", False)],
                     },
                 ],
             }

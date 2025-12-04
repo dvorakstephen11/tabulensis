@@ -236,6 +236,13 @@ scenarios:
       base_file: "templates/base_query.xlsx"
     output: "metadata_hidden_queries.xlsx"
 
+  - id: "metadata_missing_entry"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "metadata_missing_entry"
+      base_file: "templates/base_query.xlsx"
+    output: "metadata_missing_entry.xlsx"
+
   - id: "metadata_url_encoding"
     generator: "mashup:permissions_metadata"
     args:

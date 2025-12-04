@@ -10,3 +10,10 @@
 - Added core/tests/m5_query_domain_tests.rs covering metadata join semantics, URL decoding, uniqueness invariant, and orphan metadata behavior.
 - Added regression guard in core/tests/m4_permissions_metadata_tests.rs to ensure build_queries remains compatible with existing metadata fixtures.
 - Ran cargo fmt, cargo clippy (clean), and cargo test (all suites passing with new fixtures).
+
+## Remediation Round 1
+- Addressed Fix 1 (Queries Without Metadata are Dropped): build_queries now synthesizes default QueryMetadata for Section1 members missing metadata instead of skipping them.
+- Added metadata_missing_entry.xlsx via new MashupPermissionsMetadataGenerator mode in fixtures/src/generators/mashup.py and manifest entry.
+- Added member_without_metadata_is_preserved test in core/tests/m5_query_domain_tests.rs validating default connection-only metadata synthesis.
+- Commands run: cargo fmt, cargo test, cargo build, cargo clippy.
+- Complication resolved: prior behavior discarded M queries with absent metadata; default metadata path ensures queries remain visible.

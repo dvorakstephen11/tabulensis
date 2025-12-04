@@ -52,6 +52,22 @@ fn metadata_join_url_encoding() {
 }
 
 #[test]
+fn member_without_metadata_is_preserved() {
+    let dm = load_datamashup("metadata_missing_entry.xlsx");
+    let queries = build_queries(&dm).expect("queries should build");
+
+    assert_eq!(queries.len(), 1);
+    let q = &queries[0];
+    assert_eq!(q.name, "Section1/MissingMetadata");
+    assert_eq!(q.section_member, "MissingMetadata");
+    assert_eq!(q.metadata.item_path, "Section1/MissingMetadata");
+    assert!(!q.metadata.load_to_sheet);
+    assert!(!q.metadata.load_to_model);
+    assert!(q.metadata.is_connection_only);
+    assert_eq!(q.metadata.group_path, None);
+}
+
+#[test]
 fn query_names_unique() {
     let dm = load_datamashup("metadata_simple.xlsx");
     let queries = build_queries(&dm).expect("queries should build");

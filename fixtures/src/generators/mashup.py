@@ -800,6 +800,24 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
                 ],
             }
 
+        if self.mode == "metadata_missing_entry":
+            section_text = "\n".join(
+                [
+                    "section Section1;",
+                    "",
+                    "shared MissingMetadata = 1;",
+                ]
+            )
+            return {
+                "section_text": section_text,
+                "permissions": {
+                    "can_eval": False,
+                    "firewall_enabled": True,
+                    "group_type": "Organizational",
+                },
+                "metadata_entries": [],
+            }
+
         if self.mode == "metadata_url_encoding":
             section_text = "\n".join(
                 [

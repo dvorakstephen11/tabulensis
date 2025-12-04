@@ -73,26 +73,40 @@ pub fn build_data_mashup(raw: &RawDataMashup) -> Result<DataMashup, DataMashupEr
 pub fn build_queries(dm: &DataMashup) -> Result<Vec<Query>, SectionParseError> {
     let members = parse_section_members(&dm.package_parts.main_section.source)?;
 
-    let mut metadata_index: HashMap<(String, String), &QueryMetadata> = HashMap::new();
+    let mut metadata_index: HashMap<(String, String), QueryMetadata> = HashMap::new();
     for meta in &dm.metadata.formulas {
-        metadata_index.insert((meta.section_name.clone(), meta.formula_name.clone()), meta);
+        metadata_index.insert(
+            (meta.section_name.clone(), meta.formula_name.clone()),
+            meta.clone(),
+        );
     }
 
     let mut positions: HashMap<String, usize> = HashMap::new();
     let mut queries = Vec::new();
 
     for member in members {
-        let key = (member.section_name.clone(), member.member_name.clone());
-        let Some(meta) = metadata_index.get(&key) else {
-            continue;
-        };
+        let section_name = member.section_name.clone();
+        let member_name = member.member_name.clone();
+        let key = (section_name.clone(), member_name.clone());
+        let metadata = metadata_index
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| QueryMetadata {
+                item_path: format!("{}/{}", section_name, member_name),
+                section_name: section_name.clone(),
+                formula_name: member_name.clone(),
+                load_to_sheet: false,
+                load_to_model: false,
+                is_connection_only: true,
+                group_path: None,
+            });
 
-        let name = format!("{}/{}", member.section_name, member.member_name);
+        let name = format!("{}/{}", section_name, member_name);
         let query = Query {
             name: name.clone(),
             section_member: member.member_name,
             expression_m: member.expression_m,
-            metadata: (*meta).clone(),
+            metadata,
         };
 
         if let Some(idx) = positions.get(&name) {
