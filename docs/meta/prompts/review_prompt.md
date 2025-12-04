@@ -2446,9 +2446,9 @@ pub fn parse_section_members(source: &str) -> Result<Vec<SectionMember>, Section
             continue;
         }
 
-        if let Some(member) = parse_shared_member(trimmed, &mut lines, &section_name) {
-            members.push(member);
-        }
+        let member = parse_shared_member(trimmed, &mut lines, &section_name)
+            .ok_or(SectionParseError::InvalidMemberSyntax)?;
+        members.push(member);
     }
 
     Ok(members)
@@ -4689,7 +4689,7 @@ fn build_queries_is_compatible_with_metadata_simple() {
 ```rust
 use std::collections::HashSet;
 
-use excel_diff::{build_data_mashup, build_queries, open_data_mashup};
+use excel_diff::{build_data_mashup, build_queries, open_data_mashup, parse_section_members};
 
 mod common;
 use common::fixture_path;
@@ -4743,6 +4743,7 @@ fn metadata_join_url_encoding() {
 #[test]
 fn member_without_metadata_is_preserved() {
     let dm = load_datamashup("metadata_missing_entry.xlsx");
+    assert!(dm.metadata.formulas.is_empty());
     let queries = build_queries(&dm).expect("queries should build");
 
     assert_eq!(queries.len(), 1);
@@ -4780,6 +4781,23 @@ fn metadata_orphan_entries() {
             .iter()
             .any(|m| m.item_path == "Section1/Nonexistent")
     );
+}
+
+#[test]
+fn queries_preserve_section_member_order() {
+    let dm = load_datamashup("metadata_simple.xlsx");
+    let members = parse_section_members(&dm.package_parts.main_section.source)
+        .expect("Section1 should parse");
+    let queries = build_queries(&dm).expect("queries should build");
+
+    assert_eq!(members.len(), queries.len());
+    for (idx, (member, query)) in members.iter().zip(queries.iter()).enumerate() {
+        assert_eq!(
+            query.section_member, member.member_name,
+            "query at position {} should match Section1 member order",
+            idx
+        );
+    }
 }
 ```
 
@@ -4820,6 +4838,18 @@ shared Foo = 1;
 "#;
 
 const SECTION_WITH_BOM: &str = "\u{FEFF}section Section1;\nshared Foo = 1;";
+
+const SECTION_WITH_QUOTED_IDENTIFIER: &str = r#"
+    section Section1;
+
+    shared #"Query with space & #" = 1;
+"#;
+
+const SECTION_INVALID_SHARED: &str = r#"
+    section Section1;
+
+    shared Broken // missing '=' and ';'
+"#;
 
 #[test]
 fn parse_single_member_section() {
@@ -4886,6 +4916,25 @@ fn section_parsing_tolerates_utf8_bom() {
     assert_eq!(member.section_name, "Section1");
     assert_eq!(member.expression_m, "1");
     assert!(member.is_shared);
+}
+
+#[test]
+fn parse_quoted_identifier_member() {
+    let members = parse_section_members(SECTION_WITH_QUOTED_IDENTIFIER)
+        .expect("quoted identifier should parse");
+    assert_eq!(members.len(), 1);
+
+    let member = &members[0];
+    assert_eq!(member.section_name, "Section1");
+    assert_eq!(member.member_name, "Query with space & #");
+    assert_eq!(member.expression_m, "1");
+    assert!(member.is_shared);
+}
+
+#[test]
+fn error_on_invalid_shared_member_syntax() {
+    let result = parse_section_members(SECTION_INVALID_SHARED);
+    assert_eq!(result, Err(SectionParseError::InvalidMemberSyntax));
 }
 ```
 
