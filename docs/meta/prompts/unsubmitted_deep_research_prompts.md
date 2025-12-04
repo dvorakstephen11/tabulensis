@@ -112,26 +112,3 @@
    * Phase 3: DAX diff and model schema comparison.
  * Flag the riskiest unknowns and suggest mitigations (e.g., where specs are incomplete, where reverse-engineering is fragile).
    Return a technical design doc that could be implemented in Rust, but you may reference other languages for inspiration (e.g., existing grammars).
-
-
- **Prompt 7 — Algorithm selection & performance tradeoffs for 2D alignment**
-
- Given a requirement to diff large Excel workbooks efficiently (tens of MB, hundreds of thousands of cells), evaluate which alignment algorithms and heuristics are most appropriate for v1 vs later phases.
-
- * Compare practical performance and implementation complexity of:
-   * Simple row/column hashing + LCS on row sequences,
-   * Hunt–Szymanski vs Myers vs other LCS variants in this 2D context,
-   * Block-based approaches (anchor rows + local alignments),
-   * Hungarian algorithm vs greedy matching for within-block cell pairing,
-   * Various move-detection heuristics.
- * Look for existing spreadsheet diff implementations or research papers that share real-world performance data or algorithm descriptions.
- * Propose 3 ‘algorithm bundles’:
-   * Minimal v1 (simple but good-enough)
-   * Intermediate (better handling of complex row inserts/moves)
-   * Advanced
- * For each bundle, estimate:
-   * Engineering effort,
-   * Expected asymptotic and observed performance,
-   * Edge cases it handles well vs poorly.
-   End with a recommendation of which bundle to implement first and how to instrument the engine so you can later swap in more advanced components without breaking UI or tests.
-
