@@ -13,6 +13,7 @@
     src/
       addressing.rs
       container.rs
+      datamashup.rs
       datamashup_framing.rs
       datamashup_package.rs
       diff.rs
@@ -33,6 +34,7 @@
       excel_open_xml_tests.rs
       integration_test.rs
       m4_package_parts_tests.rs
+      m4_permissions_metadata_tests.rs
       m_section_splitting_tests.rs
       output_tests.rs
       pg1_ir_tests.rs
@@ -67,12 +69,17 @@
       mashup_base64_whitespace.xlsx
       mashup_utf16_be.xlsx
       mashup_utf16_le.xlsx
+      metadata_hidden_queries.xlsx
+      metadata_query_groups.xlsx
+      metadata_simple.xlsx
       minimal.xlsx
       multi_query_with_embedded.xlsx
       m_change_literal_b.xlsx
       not_a_zip.txt
       no_content_types.xlsx
       one_query.xlsx
+      permissions_defaults.xlsx
+      permissions_firewall_off.xlsx
       pg1_basic_two_sheets.xlsx
       pg1_empty_and_mixed_sheets.xlsx
       pg1_sparse_used_range.xlsx
@@ -350,6 +357,467 @@ impl OpcContainer {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+}
+```
+
+---
+
+### File: `core\src\datamashup.rs`
+
+```rust
+use crate::datamashup_framing::{DataMashupError, RawDataMashup};
+use crate::datamashup_package::{PackageParts, parse_package_parts};
+use quick_xml::Reader;
+use quick_xml::events::Event;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataMashup {
+    pub version: u32,
+    pub package_parts: PackageParts,
+    pub permissions: Permissions,
+    pub metadata: Metadata,
+    pub permission_bindings_raw: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Permissions {
+    pub can_evaluate_future_packages: bool,
+    pub firewall_enabled: bool,
+    pub workbook_group_type: Option<String>,
+}
+
+impl Default for Permissions {
+    fn default() -> Self {
+        Permissions {
+            can_evaluate_future_packages: false,
+            firewall_enabled: true,
+            workbook_group_type: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Metadata {
+    pub formulas: Vec<QueryMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueryMetadata {
+    pub item_path: String,
+    pub section_name: String,
+    pub formula_name: String,
+    pub load_to_sheet: bool,
+    pub load_to_model: bool,
+    pub is_connection_only: bool,
+    pub group_path: Option<String>,
+}
+
+pub fn build_data_mashup(raw: &RawDataMashup) -> Result<DataMashup, DataMashupError> {
+    let package_parts = parse_package_parts(&raw.package_parts)?;
+    let permissions = parse_permissions(&raw.permissions);
+    let metadata = parse_metadata(&raw.metadata)?;
+
+    Ok(DataMashup {
+        version: raw.version,
+        package_parts,
+        permissions,
+        metadata,
+        permission_bindings_raw: raw.permission_bindings.clone(),
+    })
+}
+
+pub fn parse_permissions(xml_bytes: &[u8]) -> Permissions {
+    if xml_bytes.is_empty() {
+        return Permissions::default();
+    }
+
+    let Ok(mut text) = String::from_utf8(xml_bytes.to_vec()) else {
+        return Permissions::default();
+    };
+    if let Some(stripped) = text.strip_prefix('\u{FEFF}') {
+        text = stripped.to_string();
+    }
+
+    let mut reader = Reader::from_str(&text);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    let mut current_tag: Option<String> = None;
+    let mut permissions = Permissions::default();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                current_tag =
+                    Some(String::from_utf8_lossy(local_name(e.name().as_ref())).to_string());
+            }
+            Ok(Event::Text(t)) => {
+                if let Some(tag) = current_tag.as_deref() {
+                    let value = match t.unescape() {
+                        Ok(v) => v.into_owned(),
+                        Err(_) => {
+                            buf.clear();
+                            continue;
+                        }
+                    };
+                    match tag {
+                        "CanEvaluateFuturePackages" => {
+                            if let Some(v) = parse_bool(&value) {
+                                permissions.can_evaluate_future_packages = v;
+                            }
+                        }
+                        "FirewallEnabled" => {
+                            if let Some(v) = parse_bool(&value) {
+                                permissions.firewall_enabled = v;
+                            }
+                        }
+                        "WorkbookGroupType" => {
+                            let trimmed = value.trim();
+                            if !trimmed.is_empty() {
+                                permissions.workbook_group_type = Some(trimmed.to_string());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Ok(Event::CData(t)) => {
+                if let Some(tag) = current_tag.as_deref() {
+                    let value = String::from_utf8_lossy(&t.into_inner()).to_string();
+                    match tag {
+                        "CanEvaluateFuturePackages" => {
+                            if let Some(v) = parse_bool(&value) {
+                                permissions.can_evaluate_future_packages = v;
+                            }
+                        }
+                        "FirewallEnabled" => {
+                            if let Some(v) = parse_bool(&value) {
+                                permissions.firewall_enabled = v;
+                            }
+                        }
+                        "WorkbookGroupType" => {
+                            let trimmed = value.trim();
+                            if !trimmed.is_empty() {
+                                permissions.workbook_group_type = Some(trimmed.to_string());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Ok(Event::End(_)) => current_tag = None,
+            Ok(Event::Eof) => break,
+            Err(_) => return Permissions::default(),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    permissions
+}
+
+pub fn parse_metadata(metadata_bytes: &[u8]) -> Result<Metadata, DataMashupError> {
+    if metadata_bytes.is_empty() {
+        return Ok(Metadata {
+            formulas: Vec::new(),
+        });
+    }
+
+    let xml_bytes = metadata_xml_bytes(metadata_bytes)?;
+    let mut text = String::from_utf8(xml_bytes)
+        .map_err(|_| DataMashupError::XmlError("metadata is not valid UTF-8".into()))?;
+    if let Some(stripped) = text.strip_prefix('\u{FEFF}') {
+        text = stripped.to_string();
+    }
+
+    let mut reader = Reader::from_str(&text);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+
+    let mut element_stack: Vec<String> = Vec::new();
+    let mut item_type: Option<String> = None;
+    let mut item_path: Option<String> = None;
+    let mut entries: Vec<(String, String)> = Vec::new();
+    let mut formulas: Vec<QueryMetadata> = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Empty(e)) => {
+                let name = String::from_utf8_lossy(local_name(e.name().as_ref())).to_string();
+                if name == "Entry"
+                    && let Some((typ, val)) = parse_entry_attributes(&e)?
+                {
+                    entries.push((typ, val));
+                }
+            }
+            Ok(Event::Start(e)) => {
+                let name = String::from_utf8_lossy(local_name(e.name().as_ref())).to_string();
+                if name == "Item" {
+                    item_type = None;
+                    item_path = None;
+                    entries.clear();
+                }
+                if name == "Entry"
+                    && let Some((typ, val)) = parse_entry_attributes(&e)?
+                {
+                    entries.push((typ, val));
+                }
+                element_stack.push(name);
+            }
+            Ok(Event::Text(t)) => {
+                if let Some(tag) = element_stack.last() {
+                    let value = t
+                        .unescape()
+                        .map_err(|e| DataMashupError::XmlError(e.to_string()))?
+                        .into_owned();
+                    match tag.as_str() {
+                        "ItemType" => {
+                            item_type = Some(value.trim().to_string());
+                        }
+                        "ItemPath" => {
+                            item_path = Some(value.trim().to_string());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Ok(Event::CData(t)) => {
+                if let Some(tag) = element_stack.last() {
+                    let value = String::from_utf8_lossy(&t.into_inner()).to_string();
+                    match tag.as_str() {
+                        "ItemType" => {
+                            item_type = Some(value.trim().to_string());
+                        }
+                        "ItemPath" => {
+                            item_path = Some(value.trim().to_string());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Ok(Event::End(e)) => {
+                let name_bytes = local_name(e.name().as_ref()).to_vec();
+                if name_bytes.as_slice() == b"Item" && item_type.as_deref() == Some("Formula") {
+                    let raw_path = item_path.clone().ok_or_else(|| {
+                        DataMashupError::XmlError("Formula item missing ItemPath".into())
+                    })?;
+                    let decoded_path = decode_item_path(&raw_path)?;
+                    let (section_name, formula_name) = split_item_path(&decoded_path)?;
+                    let load_to_sheet =
+                        entry_bool(&entries, &["FillEnabled", "LoadEnabled"]).unwrap_or(false);
+                    let load_to_model = entry_bool(
+                        &entries,
+                        &[
+                            "FillToDataModelEnabled",
+                            "AddedToDataModel",
+                            "LoadToDataModel",
+                        ],
+                    )
+                    .unwrap_or(false);
+                    let group_path = entry_string(
+                        &entries,
+                        &[
+                            "QueryGroupId",
+                            "QueryGroupID",
+                            "QueryGroupPath",
+                            "QueryGroup",
+                        ],
+                    );
+
+                    let metadata = QueryMetadata {
+                        item_path: decoded_path.clone(),
+                        section_name,
+                        formula_name,
+                        load_to_sheet,
+                        load_to_model,
+                        is_connection_only: !(load_to_sheet || load_to_model),
+                        group_path,
+                    };
+                    formulas.push(metadata);
+                }
+
+                if let Some(last) = element_stack.last()
+                    && last.as_bytes() == name_bytes.as_slice()
+                {
+                    element_stack.pop();
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(DataMashupError::XmlError(e.to_string())),
+            _ => {}
+        }
+
+        buf.clear();
+    }
+
+    Ok(Metadata { formulas })
+}
+
+fn metadata_xml_bytes(metadata_bytes: &[u8]) -> Result<Vec<u8>, DataMashupError> {
+    if looks_like_xml(metadata_bytes) {
+        return Ok(metadata_bytes.to_vec());
+    }
+
+    if metadata_bytes.len() >= 8 {
+        let content_len = u32::from_le_bytes(metadata_bytes[0..4].try_into().unwrap()) as usize;
+        let xml_len = u32::from_le_bytes(metadata_bytes[4..8].try_into().unwrap()) as usize;
+        let start = 8usize
+            .checked_add(content_len)
+            .ok_or_else(|| DataMashupError::XmlError("metadata length overflow".into()))?;
+        let end = start
+            .checked_add(xml_len)
+            .ok_or_else(|| DataMashupError::XmlError("metadata length overflow".into()))?;
+        if end <= metadata_bytes.len() {
+            return Ok(metadata_bytes[start..end].to_vec());
+        }
+        return Err(DataMashupError::XmlError(
+            "metadata length prefix invalid".into(),
+        ));
+    }
+
+    Err(DataMashupError::XmlError("metadata XML not found".into()))
+}
+
+fn looks_like_xml(bytes: &[u8]) -> bool {
+    let mut idx = 0;
+    while idx < bytes.len() && bytes[idx].is_ascii_whitespace() {
+        idx += 1;
+    }
+
+    if idx >= bytes.len() {
+        return false;
+    }
+
+    let slice = &bytes[idx..];
+    slice.starts_with(b"<")
+        || slice.starts_with(&[0xEF, 0xBB, 0xBF])
+        || slice.starts_with(&[0xFE, 0xFF])
+        || slice.starts_with(&[0xFF, 0xFE])
+}
+
+fn local_name(name: &[u8]) -> &[u8] {
+    match name.iter().rposition(|&b| b == b':') {
+        Some(idx) => name.get(idx + 1..).unwrap_or(name),
+        None => name,
+    }
+}
+
+fn parse_bool(text: &str) -> Option<bool> {
+    let trimmed = text.trim();
+    let payload = trimmed
+        .strip_prefix(|c| c == 'l' || c == 'L')
+        .unwrap_or(trimmed);
+    let lowered = payload.to_ascii_lowercase();
+    match lowered.as_str() {
+        "1" | "true" | "yes" => Some(true),
+        "0" | "false" | "no" => Some(false),
+        _ => None,
+    }
+}
+
+fn parse_entry_attributes(
+    e: &quick_xml::events::BytesStart<'_>,
+) -> Result<Option<(String, String)>, DataMashupError> {
+    let mut typ: Option<String> = None;
+    let mut value: Option<String> = None;
+
+    for attr in e.attributes().with_checks(false) {
+        let attr = attr.map_err(|e| DataMashupError::XmlError(e.to_string()))?;
+        let key = local_name(attr.key.as_ref());
+        if key == b"Type" {
+            typ = Some(
+                String::from_utf8(attr.value.as_ref().to_vec())
+                    .map_err(|e| DataMashupError::XmlError(e.to_string()))?,
+            );
+        } else if key == b"Value" {
+            value = Some(
+                String::from_utf8(attr.value.as_ref().to_vec())
+                    .map_err(|e| DataMashupError::XmlError(e.to_string()))?,
+            );
+        }
+    }
+
+    match (typ, value) {
+        (Some(t), Some(v)) => Ok(Some((t, v))),
+        _ => Ok(None),
+    }
+}
+
+fn entry_bool(entries: &[(String, String)], keys: &[&str]) -> Option<bool> {
+    for (key, val) in entries {
+        if keys.iter().any(|k| k.eq_ignore_ascii_case(key))
+            && let Some(b) = parse_bool(val)
+        {
+            return Some(b);
+        }
+    }
+    None
+}
+
+fn entry_string(entries: &[(String, String)], keys: &[&str]) -> Option<String> {
+    for (key, val) in entries {
+        if keys.iter().any(|k| k.eq_ignore_ascii_case(key)) {
+            let trimmed = val.trim();
+            let without_prefix = trimmed
+                .strip_prefix('s')
+                .or_else(|| trimmed.strip_prefix('S'))
+                .unwrap_or(trimmed);
+            if without_prefix.is_empty() {
+                return None;
+            }
+            return Some(without_prefix.to_string());
+        }
+    }
+    None
+}
+
+fn decode_item_path(path: &str) -> Result<String, DataMashupError> {
+    let mut decoded = String::with_capacity(path.len());
+    let bytes = path.as_bytes();
+    let mut idx = 0;
+    while idx < bytes.len() {
+        let b = bytes[idx];
+        if b == b'%' {
+            if idx + 2 >= bytes.len() {
+                return Err(DataMashupError::XmlError(
+                    "invalid percent-encoding in ItemPath".into(),
+                ));
+            }
+            let hi = hex_value(bytes[idx + 1]).ok_or_else(|| {
+                DataMashupError::XmlError("invalid percent-encoding in ItemPath".into())
+            })?;
+            let lo = hex_value(bytes[idx + 2]).ok_or_else(|| {
+                DataMashupError::XmlError("invalid percent-encoding in ItemPath".into())
+            })?;
+            decoded.push((hi << 4 | lo) as char);
+            idx += 3;
+            continue;
+        }
+        decoded.push(b as char);
+        idx += 1;
+    }
+    Ok(decoded)
+}
+
+fn hex_value(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(10 + b - b'a'),
+        b'A'..=b'F' => Some(10 + b - b'A'),
+        _ => None,
+    }
+}
+
+fn split_item_path(path: &str) -> Result<(String, String), DataMashupError> {
+    let mut parts = path.split('/');
+    let section = parts.next().unwrap_or_default();
+    let rest: Vec<&str> = parts.collect();
+    if section.is_empty() || rest.is_empty() {
+        return Err(DataMashupError::XmlError(
+            "invalid ItemPath in metadata".into(),
+        ));
+    }
+    let formula = rest.join("/");
+    Ok((section.to_string(), formula))
 }
 ```
 
@@ -1823,6 +2291,7 @@ mod tests {
 ```rust
 pub mod addressing;
 pub mod container;
+pub mod datamashup;
 pub mod datamashup_framing;
 pub mod datamashup_package;
 pub mod diff;
@@ -1836,6 +2305,7 @@ pub mod workbook;
 
 pub use addressing::{address_to_index, index_to_address};
 pub use container::{ContainerError, OpcContainer};
+pub use datamashup::{DataMashup, Metadata, Permissions, QueryMetadata, build_data_mashup};
 pub use datamashup_framing::{DataMashupError, RawDataMashup};
 pub use datamashup_package::{
     EmbeddedContent, PackageParts, PackageXml, SectionDocument, parse_package_parts,
@@ -2667,7 +3137,8 @@ use std::io::{ErrorKind, Read};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use excel_diff::{
-    ContainerError, DataMashupError, ExcelOpenError, RawDataMashup, open_data_mashup,
+    ContainerError, DataMashupError, ExcelOpenError, RawDataMashup, build_data_mashup,
+    open_data_mashup,
 };
 use quick_xml::{Reader, events::Event};
 use zip::ZipArchive;
@@ -2799,6 +3270,23 @@ fn non_zip_file_returns_not_zip_error() {
         err,
         ExcelOpenError::Container(ContainerError::NotZipContainer)
     ));
+}
+
+#[test]
+fn build_data_mashup_smoke_from_fixture() {
+    let raw = open_data_mashup(fixture_path("one_query.xlsx"))
+        .expect("fixture should load")
+        .expect("DataMashup should be present");
+    let dm = build_data_mashup(&raw).expect("build_data_mashup should succeed");
+
+    assert_eq!(dm.version, 0);
+    assert!(
+        dm.package_parts
+            .main_section
+            .source
+            .contains("section Section1;")
+    );
+    assert!(!dm.metadata.formulas.is_empty());
 }
 
 fn datamashup_bytes_from_fixture(path: &std::path::Path) -> Vec<u8> {
@@ -3694,7 +4182,7 @@ fn embedded_content_section1_with_bom_parses_via_parse_section_members() {
 
     let parts = parse_package_parts(&bytes).expect("outer package should parse");
     assert!(
-        parts.embedded_contents.len() >= 1,
+        !parts.embedded_contents.is_empty(),
         "embedded package should be detected"
     );
 
@@ -3766,6 +4254,163 @@ fn random_bytes(seed: u64, len: usize) -> Vec<u8> {
         bytes.push((state >> 32) as u8);
     }
     bytes
+}
+```
+
+---
+
+### File: `core\tests\m4_permissions_metadata_tests.rs`
+
+```rust
+use excel_diff::{
+    Permissions, RawDataMashup, build_data_mashup, datamashup::parse_metadata, open_data_mashup,
+    parse_package_parts, parse_section_members,
+};
+
+mod common;
+use common::fixture_path;
+
+fn load_datamashup(path: &str) -> excel_diff::DataMashup {
+    let raw = open_data_mashup(fixture_path(path))
+        .expect("fixture should load")
+        .expect("DataMashup should be present");
+    build_data_mashup(&raw).expect("DataMashup should build")
+}
+
+#[test]
+fn permissions_parsed_flags_default_vs_firewall_off() {
+    let defaults = load_datamashup("permissions_defaults.xlsx");
+    let firewall_off = load_datamashup("permissions_firewall_off.xlsx");
+
+    assert_eq!(defaults.version, 0);
+    assert_eq!(firewall_off.version, 0);
+
+    assert!(defaults.permissions.firewall_enabled);
+    assert!(!defaults.permissions.can_evaluate_future_packages);
+    assert!(!firewall_off.permissions.firewall_enabled);
+    assert_eq!(
+        defaults.permissions.workbook_group_type,
+        firewall_off.permissions.workbook_group_type
+    );
+}
+
+#[test]
+fn permissions_missing_or_malformed_yields_defaults() {
+    let base_raw = open_data_mashup(fixture_path("one_query.xlsx"))
+        .expect("fixture should load")
+        .expect("DataMashup should be present");
+
+    let mut missing = base_raw.clone();
+    missing.permissions = Vec::new();
+    missing.permission_bindings = Vec::new();
+    let dm = build_data_mashup(&missing).expect("missing permissions should default");
+    assert_eq!(dm.permissions, Permissions::default());
+
+    let mut malformed = base_raw.clone();
+    malformed.permissions = b"<not-xml".to_vec();
+    let dm = build_data_mashup(&malformed).expect("malformed permissions should default");
+    assert_eq!(dm.permissions, Permissions::default());
+}
+
+#[test]
+fn metadata_formulas_match_section_members() {
+    let raw = open_data_mashup(fixture_path("metadata_simple.xlsx"))
+        .expect("fixture should load")
+        .expect("DataMashup should be present");
+    let package = parse_package_parts(&raw.package_parts).expect("package parts should parse");
+    let metadata = parse_metadata(&raw.metadata).expect("metadata should parse");
+    let members =
+        parse_section_members(&package.main_section.source).expect("section members should parse");
+
+    let section1_formulas: Vec<_> = metadata
+        .formulas
+        .iter()
+        .filter(|m| m.section_name == "Section1" && !m.is_connection_only)
+        .collect();
+
+    assert_eq!(section1_formulas.len(), members.len());
+    for meta in section1_formulas {
+        assert!(!meta.formula_name.is_empty());
+    }
+}
+
+#[test]
+fn metadata_load_destinations_simple() {
+    let dm = load_datamashup("metadata_simple.xlsx");
+    let load_to_sheet = dm
+        .metadata
+        .formulas
+        .iter()
+        .find(|m| m.item_path == "Section1/LoadToSheet")
+        .expect("LoadToSheet metadata missing");
+    assert!(load_to_sheet.load_to_sheet);
+    assert!(!load_to_sheet.load_to_model);
+    assert!(!load_to_sheet.is_connection_only);
+
+    let load_to_model = dm
+        .metadata
+        .formulas
+        .iter()
+        .find(|m| m.item_path == "Section1/LoadToModel")
+        .expect("LoadToModel metadata missing");
+    assert!(!load_to_model.load_to_sheet);
+    assert!(load_to_model.load_to_model);
+    assert!(!load_to_model.is_connection_only);
+}
+
+#[test]
+fn metadata_groups_basic_hierarchy() {
+    let dm = load_datamashup("metadata_query_groups.xlsx");
+    let grouped = dm
+        .metadata
+        .formulas
+        .iter()
+        .find(|m| m.item_path == "Section1/GroupedFoo")
+        .expect("GroupedFoo metadata missing");
+    assert_eq!(grouped.group_path.as_deref(), Some("Inputs/DimTables"));
+
+    let root = dm
+        .metadata
+        .formulas
+        .iter()
+        .find(|m| m.item_path == "Section1/RootQuery")
+        .expect("RootQuery metadata missing");
+    assert!(root.group_path.is_none());
+}
+
+#[test]
+fn metadata_hidden_queries_connection_only() {
+    let dm = load_datamashup("metadata_hidden_queries.xlsx");
+    let has_connection_only = dm
+        .metadata
+        .formulas
+        .iter()
+        .any(|m| !m.load_to_sheet && !m.load_to_model && m.is_connection_only);
+    assert!(has_connection_only);
+}
+
+#[test]
+fn permission_bindings_present_flag() {
+    let dm = load_datamashup("permissions_defaults.xlsx");
+    assert!(!dm.permission_bindings_raw.is_empty());
+}
+
+#[test]
+fn permission_bindings_missing_ok() {
+    let base_raw = open_data_mashup(fixture_path("one_query.xlsx"))
+        .expect("fixture should load")
+        .expect("DataMashup should be present");
+
+    let mut synthetic = RawDataMashup {
+        permission_bindings: Vec::new(),
+        ..base_raw.clone()
+    };
+    synthetic.permissions = Vec::new();
+    synthetic.metadata = Vec::new();
+
+    let dm = build_data_mashup(&synthetic).expect("empty bindings should build");
+    assert!(dm.permission_bindings_raw.is_empty());
+    assert_eq!(dm.permissions, Permissions::default());
 }
 ```
 
@@ -6809,6 +7454,42 @@ scenarios:
       base_file: "templates/base_query.xlsx"
     output: "multi_query_with_embedded.xlsx"
 
+  # --- Milestone 4.2-4.4: Permissions / Metadata ---
+  - id: "permissions_defaults"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "permissions_defaults"
+      base_file: "templates/base_query.xlsx"
+    output: "permissions_defaults.xlsx"
+
+  - id: "permissions_firewall_off"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "permissions_firewall_off"
+      base_file: "templates/base_query.xlsx"
+    output: "permissions_firewall_off.xlsx"
+
+  - id: "metadata_simple"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "metadata_simple"
+      base_file: "templates/base_query.xlsx"
+    output: "metadata_simple.xlsx"
+
+  - id: "metadata_query_groups"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "metadata_query_groups"
+      base_file: "templates/base_query.xlsx"
+    output: "metadata_query_groups.xlsx"
+
+  - id: "metadata_hidden_queries"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "metadata_hidden_queries"
+      base_file: "templates/base_query.xlsx"
+    output: "metadata_hidden_queries.xlsx"
+
   # --- Milestone 6: Basic M Diffs ---
   - id: "m_change_literal"
     generator: "mashup_inject"
@@ -6928,6 +7609,7 @@ from generators.mashup import (
     MashupEncodeGenerator,
     MashupMultiEmbeddedGenerator,
     MashupOneQueryGenerator,
+    MashupPermissionsMetadataGenerator,
 )
 from generators.perf import LargeGridGenerator
 from generators.database import KeyedTableGenerator
@@ -6949,6 +7631,7 @@ GENERATORS: Dict[str, Any] = {
     "mashup_encode": MashupEncodeGenerator,
     "mashup:one_query": MashupOneQueryGenerator,
     "mashup:multi_query_with_embedded": MashupMultiEmbeddedGenerator,
+    "mashup:permissions_metadata": MashupPermissionsMetadataGenerator,
     "perf_large": LargeGridGenerator,
     "db_keyed": KeyedTableGenerator,
 }
@@ -8156,6 +8839,284 @@ class MashupEncodeGenerator(MashupBaseGenerator):
         if text.startswith(prefix):
             return text.replace(prefix, "<?xml version='1.0' encoding='UTF-16'?>", 1)
         return text
+
+
+class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
+    """
+    Builds fixtures that exercise Permissions and Metadata parsing by rewriting
+    the PackageParts Section1.m, Permissions XML, and Metadata XML inside
+    the DataMashup stream.
+    """
+
+    def __init__(self, args):
+        super().__init__(args)
+        self.mode = args.get("mode")
+
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if not self.mode:
+            raise ValueError("MashupPermissionsMetadataGenerator requires 'mode' argument")
+
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        base_file_arg = self.args.get("base_file", "templates/base_query.xlsx")
+        base = Path(base_file_arg)
+        if not base.exists():
+            candidate = Path("fixtures") / base_file_arg
+            if candidate.exists():
+                base = candidate
+            else:
+                raise FileNotFoundError(f"Template {base} not found.")
+
+        for name in output_names:
+            target_path = (output_dir / name).resolve()
+            self._process_excel_container(base.resolve(), target_path, self._rewrite_datamashup)
+
+    def _rewrite_datamashup(self, raw_bytes: bytes) -> bytes:
+        version, package_parts, _, _, bindings = self._split_sections(raw_bytes)
+        scenario = self._scenario_definition()
+
+        updated_package_parts = self._replace_section(
+            package_parts,
+            scenario["section_text"],
+        )
+        permissions_bytes = self._permissions_bytes(**scenario["permissions"])
+        metadata_bytes = self._metadata_bytes(scenario["metadata_entries"])
+
+        return self._assemble_sections(
+            version,
+            updated_package_parts,
+            permissions_bytes,
+            metadata_bytes,
+            bindings,
+        )
+
+    def _scenario_definition(self):
+        shared_section_simple = "\n".join(
+            [
+                "section Section1;",
+                "",
+                "shared LoadToSheet = 1;",
+                "shared LoadToModel = 2;",
+            ]
+        )
+
+        if self.mode in ("permissions_defaults", "permissions_firewall_off", "metadata_simple"):
+            return {
+                "section_text": shared_section_simple,
+                "permissions": {
+                    "can_eval": False,
+                    "firewall_enabled": self.mode != "permissions_firewall_off",
+                    "group_type": "Organizational",
+                },
+                "metadata_entries": [
+                    {
+                        "path": "Section1/LoadToSheet",
+                        "entries": [
+                            ("FillEnabled", True),
+                            ("FillToDataModelEnabled", False),
+                        ],
+                    },
+                    {
+                        "path": "Section1/LoadToModel",
+                        "entries": [
+                            ("FillEnabled", False),
+                            ("FillToDataModelEnabled", True),
+                        ],
+                    },
+                ],
+            }
+
+        if self.mode == "metadata_query_groups":
+            section_text = "\n".join(
+                [
+                    "section Section1;",
+                    "",
+                    "shared RootQuery = 1;",
+                    "shared GroupedFoo = 2;",
+                    "shared NestedBar = 3;",
+                ]
+            )
+            return {
+                "section_text": section_text,
+                "permissions": {
+                    "can_eval": False,
+                    "firewall_enabled": True,
+                    "group_type": "Organizational",
+                },
+                "metadata_entries": [
+                    {
+                        "path": "Section1/RootQuery",
+                        "entries": [("FillEnabled", True)],
+                    },
+                    {
+                        "path": "Section1/GroupedFoo",
+                        "entries": [
+                            ("FillEnabled", True),
+                            ("QueryGroupPath", "Inputs/DimTables"),
+                        ],
+                    },
+                    {
+                        "path": "Section1/NestedBar",
+                        "entries": [
+                            ("FillToDataModelEnabled", True),
+                            ("QueryGroupPath", "Inputs/DimTables"),
+                        ],
+                    },
+                ],
+            }
+
+        if self.mode == "metadata_hidden_queries":
+            section_text = "\n".join(
+                [
+                    "section Section1;",
+                    "",
+                    "shared ConnectionOnly = 1;",
+                    "shared VisibleLoad = 2;",
+                ]
+            )
+            return {
+                "section_text": section_text,
+                "permissions": {
+                    "can_eval": False,
+                    "firewall_enabled": True,
+                    "group_type": "Organizational",
+                },
+                "metadata_entries": [
+                    {
+                        "path": "Section1/ConnectionOnly",
+                        "entries": [
+                            ("FillEnabled", False),
+                            ("FillToDataModelEnabled", False),
+                        ],
+                    },
+                    {
+                        "path": "Section1/VisibleLoad",
+                        "entries": [
+                            ("FillEnabled", True),
+                            ("FillToDataModelEnabled", False),
+                        ],
+                    },
+                ],
+            }
+
+        raise ValueError(f"Unsupported mode: {self.mode}")
+
+    def _split_sections(self, raw_bytes: bytes):
+        min_size = 4 + 4 * 4
+        if len(raw_bytes) < min_size:
+            raise ValueError("DataMashup stream too short")
+
+        offset = 0
+        version = struct.unpack_from("<I", raw_bytes, offset)[0]
+        offset += 4
+
+        package_parts_len = struct.unpack_from("<I", raw_bytes, offset)[0]
+        offset += 4
+        package_parts = raw_bytes[offset : offset + package_parts_len]
+        offset += package_parts_len
+
+        permissions_len = struct.unpack_from("<I", raw_bytes, offset)[0]
+        offset += 4
+        permissions = raw_bytes[offset : offset + permissions_len]
+        offset += permissions_len
+
+        metadata_len = struct.unpack_from("<I", raw_bytes, offset)[0]
+        offset += 4
+        metadata = raw_bytes[offset : offset + metadata_len]
+        offset += metadata_len
+
+        bindings_len = struct.unpack_from("<I", raw_bytes, offset)[0]
+        offset += 4
+        bindings = raw_bytes[offset : offset + bindings_len]
+
+        return version, package_parts, permissions, metadata, bindings
+
+    def _assemble_sections(
+        self,
+        version: int,
+        package_parts: bytes,
+        permissions: bytes,
+        metadata: bytes,
+        bindings: bytes,
+    ) -> bytes:
+        return b"".join(
+            [
+                struct.pack("<I", version),
+                struct.pack("<I", len(package_parts)),
+                package_parts,
+                struct.pack("<I", len(permissions)),
+                permissions,
+                struct.pack("<I", len(metadata)),
+                metadata,
+                struct.pack("<I", len(bindings)),
+                bindings,
+            ]
+        )
+
+    def _replace_section(self, package_parts: bytes, section_text: str) -> bytes:
+        return self._replace_in_zip(package_parts, "Formulas/Section1.m", section_text)
+
+    def _replace_in_zip(self, zip_bytes: bytes, filename: str, new_content: str) -> bytes:
+        in_buffer = io.BytesIO(zip_bytes)
+        out_buffer = io.BytesIO()
+
+        with zipfile.ZipFile(in_buffer, "r") as zin:
+            with zipfile.ZipFile(out_buffer, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+                for item in zin.infolist():
+                    if item.filename == filename:
+                        zout.writestr(filename, new_content.encode("utf-8"))
+                    else:
+                        zout.writestr(item, zin.read(item.filename))
+        return out_buffer.getvalue()
+
+    def _permissions_bytes(self, can_eval: bool, firewall_enabled: bool, group_type: str) -> bytes:
+        xml = (
+            '<?xml version="1.0" encoding="utf-8"?>'
+            "<PermissionList xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\" "
+            "xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">"
+            f"<CanEvaluateFuturePackages>{str(can_eval).lower()}</CanEvaluateFuturePackages>"
+            f"<FirewallEnabled>{str(firewall_enabled).lower()}</FirewallEnabled>"
+            f"<WorkbookGroupType>{group_type}</WorkbookGroupType>"
+            "</PermissionList>"
+        )
+        return ("\ufeff" + xml).encode("utf-8")
+
+    def _metadata_bytes(self, items: List[dict]) -> bytes:
+        xml = self._metadata_xml(items)
+        xml_bytes = ("\ufeff" + xml).encode("utf-8")
+        header = struct.pack("<I", 0) + struct.pack("<I", len(xml_bytes))
+        return header + xml_bytes
+
+    def _metadata_xml(self, items: List[dict]) -> str:
+        parts = [
+            '<?xml version="1.0" encoding="utf-8"?>',
+            '<LocalPackageMetadataFile xmlns:xsd="http://www.w3.org/2001/XMLSchema" '
+            'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">',
+            "<Items>",
+            "<Item><ItemLocation><ItemType>AllFormulas</ItemType><ItemPath /></ItemLocation><StableEntries /></Item>",
+        ]
+
+        for item in items:
+            parts.append("<Item>")
+            parts.append("<ItemLocation>")
+            parts.append("<ItemType>Formula</ItemType>")
+            parts.append(f"<ItemPath>{item['path']}</ItemPath>")
+            parts.append("</ItemLocation>")
+            parts.append("<StableEntries>")
+            for entry_name, entry_value in item.get("entries", []):
+                value = self._format_entry_value(entry_value)
+                parts.append(f'<Entry Type="{entry_name}" Value="{value}" />')
+            parts.append("</StableEntries>")
+            parts.append("</Item>")
+
+        parts.append("</Items></LocalPackageMetadataFile>")
+        return "".join(parts)
+
+    def _format_entry_value(self, value):
+        if isinstance(value, bool):
+            return f"l{'1' if value else '0'}"
+        return f"s{value}"
 
 ```
 

@@ -88,8 +88,8 @@ pub fn parse_permissions(xml_bytes: &[u8]) -> Permissions {
                     let value = match t.unescape() {
                         Ok(v) => v.into_owned(),
                         Err(_) => {
-                            buf.clear();
-                            continue;
+                            // Any unescape failure means the permissions payload is unusable; fall back to defaults.
+                            return Permissions::default();
                         }
                     };
                     match tag {
@@ -246,6 +246,7 @@ pub fn parse_metadata(metadata_bytes: &[u8]) -> Result<Metadata, DataMashupError
                         ],
                     )
                     .unwrap_or(false);
+                    // Group paths are derived solely from per-formula entries for now; the AllFormulas tree is not parsed yet.
                     let group_path = entry_string(
                         &entries,
                         &[
@@ -404,7 +405,7 @@ fn entry_string(entries: &[(String, String)], keys: &[&str]) -> Option<String> {
 }
 
 fn decode_item_path(path: &str) -> Result<String, DataMashupError> {
-    let mut decoded = String::with_capacity(path.len());
+    let mut decoded = Vec::with_capacity(path.len());
     let bytes = path.as_bytes();
     let mut idx = 0;
     while idx < bytes.len() {
@@ -421,14 +422,15 @@ fn decode_item_path(path: &str) -> Result<String, DataMashupError> {
             let lo = hex_value(bytes[idx + 2]).ok_or_else(|| {
                 DataMashupError::XmlError("invalid percent-encoding in ItemPath".into())
             })?;
-            decoded.push((hi << 4 | lo) as char);
+            decoded.push(hi << 4 | lo);
             idx += 3;
             continue;
         }
-        decoded.push(b as char);
+        decoded.push(b);
         idx += 1;
     }
-    Ok(decoded)
+    String::from_utf8(decoded)
+        .map_err(|_| DataMashupError::XmlError("invalid UTF-8 in ItemPath".into()))
 }
 
 fn hex_value(b: u8) -> Option<u8> {

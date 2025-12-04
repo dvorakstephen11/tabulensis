@@ -154,6 +154,23 @@ fn build_data_mashup_smoke_from_fixture() {
             .contains("section Section1;")
     );
     assert!(!dm.metadata.formulas.is_empty());
+
+    let non_connection: Vec<_> = dm
+        .metadata
+        .formulas
+        .iter()
+        .filter(|m| m.section_name == "Section1" && !m.is_connection_only)
+        .collect();
+    assert_eq!(non_connection.len(), 1);
+    let meta = non_connection[0];
+    assert_eq!(
+        meta.item_path,
+        format!("{}/{}", meta.section_name, meta.formula_name)
+    );
+    assert_eq!(meta.item_path, "Section1/Query1");
+    assert_eq!(meta.section_name, "Section1");
+    assert_eq!(meta.formula_name, "Query1");
+    assert!(meta.load_to_sheet || meta.load_to_model);
 }
 
 fn datamashup_bytes_from_fixture(path: &std::path::Path) -> Vec<u8> {
