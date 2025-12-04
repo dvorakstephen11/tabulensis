@@ -47,6 +47,30 @@ scenarios:
     generator: "value_formula"
     output: "pg3_value_and_formula_cells.xlsx"
 
+  # --- Phase 3: Spreadsheet-mode G1/G2 ---
+  - id: "g1_equal_sheet"
+    generator: "basic_grid"
+    args:
+      rows: 5
+      cols: 5
+      sheet: "Sheet1"
+    output:
+      - "equal_sheet_a.xlsx"
+      - "equal_sheet_b.xlsx"
+
+  - id: "g2_single_cell_value"
+    generator: "single_cell_diff"
+    args:
+      rows: 5
+      cols: 5
+      sheet: "Sheet1"
+      target_cell: "C3"
+      value_a: 1.0
+      value_b: 2.0
+    output:
+      - "single_cell_value_a.xlsx"
+      - "single_cell_value_b.xlsx"
+
   # --- JSON diff: simple non-empty change ---
   - id: "json_diff_single_cell"
     generator: "single_cell_diff"

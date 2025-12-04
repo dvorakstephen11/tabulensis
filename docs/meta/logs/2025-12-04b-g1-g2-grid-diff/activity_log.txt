@@ -1,0 +1,6 @@
+- Reviewed excel_diff_meta_programming.md Section 4 implementer duties plus mini-spec and decision record for branch 2025-12-04b-g1-g2-grid-diff; noted spec text lists branch without the trailing 'b', but actual git branch includes it.
+- Inspected diff_workbooks/diff_grids implementation, fixture generators, and current tests to confirm baseline behavior for G1/G2 scenarios.
+- Added G1/G2 spreadsheet-mode scenarios to fixtures/manifest.yaml using basic_grid and single_cell_diff generators (Sheet1, 5x5 grid, C3 numeric delta).
+- Regenerated fixtures with `python fixtures/src/generate.py` (longer timeout) to create equal_sheet_{a,b}.xlsx and single_cell_value_{a,b}.xlsx alongside refreshed existing scenarios.
+- Added core/tests/g1_g2_grid_workbook_tests.rs asserting G1 empty diff and G2 single CellEdited (no structural ops) using new workbook fixtures.
+- Ran cargo fmt; cargo clippy --all-targets --all-features (clean); cargo test --all-features from core and cargo test from workspace root (all suites passing including new G1/G2 tests).

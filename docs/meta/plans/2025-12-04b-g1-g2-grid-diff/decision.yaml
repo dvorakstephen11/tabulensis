@@ -1,0 +1,32 @@
+branch_name: 2025-12-04-g1-g2-grid-diff
+work_type: milestone_progress
+target_subsystem: grid_diff_spreadsheet_mode
+linked_milestones:
+  - phase: 3
+    kind: spreadsheet_mode
+    ids: ["G1", "G2"]
+
+rationale:
+  - "Phase 3 starts with G1/G2, which exercise the full workbook -> sheet -> grid -> diff pipeline on small, deterministic spreadsheets; today we only have in-memory PG5 grid tests plus JSON-focused fixtures."
+  - "G1 (identical sheet) and G2 (single cell literal change) can be satisfied by the existing naive diff_grids implementation and the BasicGrid/SingleCellDiff fixture generators, so this is a small, low-risk step that cleanly advances the testing plan."
+  - "Locking in workbook-level behavior for the simplest spreadsheet-mode scenarios creates a baseline contract before we implement advanced row/column alignment and block moves (the main H1 risk)."
+  - "These tests also validate ExcelOpenXml parsing and fixture generation for small sheets, which is important for the first CLI / API MVP that users will try on toy workbooks."
+
+risks_of_deferral:
+  - "Without G1/G2, the engine could regress on identical or single-edit workbooks when we change parsing or diff_grids, and only PG5 in-memory tests would catch it (missing issues in the real Excel path)."
+  - "Advanced alignment work (G5+ and G8+) would proceed without a stable baseline; regressions in no-op and single-edit semantics would be harder to detect and diagnose."
+  - "User-reported bugs on tiny example workbooks would be harder to reproduce because we would lack canonical fixtures and tests for the simplest spreadsheet-mode flows."
+
+references:
+  - "docs/meta/excel_diff_testing_plan.md (Phase 3 spreadsheet-mode milestones G1–G7)"
+  - "docs/rust_docs/excel_diff_specification.md (grid diff semantics and DiffOp definitions)"
+  - "docs/design/docs_versus_implementation/unified_grid_diff_algorithm_specification.md"
+  - "core/src/engine.rs (diff_workbooks and diff_grids)"
+  - "core/tests/pg5_grid_diff_tests.rs and core/tests/engine_tests.rs"
+  - "fixtures/manifest.yaml and fixtures/src/generators/grid.py"
+  - "docs/meta/excel_diff_difficulty_analysis.md (H1 grid alignment difficulty and risk)"
+
+difficulty_estimate:
+  score: 3
+  scale_max: 10
+  scale_reference: "10 = H1 high-performance grid alignment and database-mode diff (Phase 4 G8-G13, D1-D4)"
