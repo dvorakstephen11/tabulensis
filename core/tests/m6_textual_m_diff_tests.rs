@@ -1,5 +1,6 @@
 use excel_diff::{
-    DataMashup, QueryChangeKind, build_data_mashup, diff_m_queries, open_data_mashup,
+    DataMashup, QueryChangeKind, SectionParseError, build_data_mashup, diff_m_queries,
+    open_data_mashup,
 };
 
 mod common;
@@ -10,6 +11,13 @@ fn load_datamashup(name: &str) -> DataMashup {
         .expect("fixture should open")
         .expect("DataMashup should be present");
     build_data_mashup(&raw).expect("DataMashup should build")
+}
+
+fn datamashup_with_section(lines: &[&str]) -> DataMashup {
+    let mut dm = load_datamashup("one_query.xlsx");
+    let body = lines.join("\n");
+    dm.package_parts.main_section.source = format!("section Section1;\n\n{body}\n");
+    dm
 }
 
 #[test]
@@ -69,6 +77,23 @@ fn metadata_change_produces_metadataonly() {
 }
 
 #[test]
+fn definition_and_metadata_change_prefers_definitionchanged() {
+    let dm_a = load_datamashup("m_def_and_metadata_change_a.xlsx");
+    let dm_b = load_datamashup("m_def_and_metadata_change_b.xlsx");
+
+    let diffs = diff_m_queries(&dm_a, &dm_b).expect("diff should succeed");
+
+    assert_eq!(
+        diffs.len(),
+        1,
+        "expected one diff even when both definition and metadata change"
+    );
+    let diff = &diffs[0];
+    assert_eq!(diff.name, "Section1/Foo");
+    assert_eq!(diff.kind, QueryChangeKind::DefinitionChanged);
+}
+
+#[test]
 fn identical_workbooks_produce_no_diffs() {
     let dm = load_datamashup("one_query.xlsx");
 
@@ -85,18 +110,49 @@ fn rename_reports_add_and_remove() {
     let dm_a = load_datamashup("m_rename_query_a.xlsx");
     let dm_b = load_datamashup("m_rename_query_b.xlsx");
 
-    let mut diffs = diff_m_queries(&dm_a, &dm_b).expect("diff should succeed");
-    diffs.sort_by(|a, b| a.name.cmp(&b.name));
+    let diffs = diff_m_queries(&dm_a, &dm_b).expect("diff should succeed");
 
     assert_eq!(diffs.len(), 2, "expected add + remove for rename scenario");
 
-    let names: Vec<_> = diffs.iter().map(|d| (&d.name, &d.kind)).collect();
+    assert_eq!(diffs[0].name, "Section1/Bar");
+    assert_eq!(diffs[0].kind, QueryChangeKind::Added);
+    assert_eq!(diffs[1].name, "Section1/Foo");
+    assert_eq!(diffs[1].kind, QueryChangeKind::Removed);
+}
+
+#[test]
+fn multiple_diffs_are_sorted_by_name() {
+    let dm_a = datamashup_with_section(&["shared Zeta = 1;", "shared Bravo = 1;"]);
+    let dm_b = datamashup_with_section(&["shared Alpha = 1;", "shared Delta = 1;"]);
+
+    let diffs = diff_m_queries(&dm_a, &dm_b).expect("diff should succeed");
+
+    assert_eq!(diffs.len(), 4, "expected four diffs across both sides");
     assert!(
-        names.contains(&(&"Section1/Foo".to_string(), &QueryChangeKind::Removed)),
-        "Foo should be reported as Removed"
+        diffs.windows(2).all(|w| w[0].name <= w[1].name),
+        "diffs should already be sorted by name"
     );
-    assert!(
-        names.contains(&(&"Section1/Bar".to_string(), &QueryChangeKind::Added)),
-        "Bar should be reported as Added"
+    let names: Vec<_> = diffs.iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec![
+            "Section1/Alpha",
+            "Section1/Bravo",
+            "Section1/Delta",
+            "Section1/Zeta"
+        ],
+        "lexicographic ordering should be preserved without resorting"
     );
+}
+
+#[test]
+fn invalid_section_syntax_propagates_error() {
+    let dm_invalid = datamashup_with_section(&["shared Broken // missing '=' and ';'"]);
+
+    let result = diff_m_queries(&dm_invalid, &dm_invalid);
+
+    assert!(matches!(
+        result,
+        Err(SectionParseError::InvalidMemberSyntax)
+    ));
 }

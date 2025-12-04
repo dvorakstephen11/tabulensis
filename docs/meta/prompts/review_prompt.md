@@ -22,6 +22,7 @@
       grid_parser.rs
       lib.rs
       main.rs
+      m_diff.rs
       m_section.rs
       workbook.rs
       output/
@@ -37,6 +38,7 @@
       m4_package_parts_tests.rs
       m4_permissions_metadata_tests.rs
       m5_query_domain_tests.rs
+      m6_textual_m_diff_tests.rs
       m_section_splitting_tests.rs
       output_tests.rs
       pg1_ir_tests.rs
@@ -81,7 +83,16 @@
       metadata_url_encoding.xlsx
       minimal.xlsx
       multi_query_with_embedded.xlsx
+      m_add_query_a.xlsx
+      m_add_query_b.xlsx
+      m_change_literal_a.xlsx
       m_change_literal_b.xlsx
+      m_metadata_only_change_a.xlsx
+      m_metadata_only_change_b.xlsx
+      m_remove_query_a.xlsx
+      m_remove_query_b.xlsx
+      m_rename_query_a.xlsx
+      m_rename_query_b.xlsx
       not_a_zip.txt
       no_content_types.xlsx
       one_query.xlsx
@@ -2372,6 +2383,7 @@ pub mod engine;
 #[cfg(feature = "excel-open-xml")]
 pub mod excel_open_xml;
 pub mod grid_parser;
+pub mod m_diff;
 pub mod m_section;
 pub mod output;
 pub mod workbook;
@@ -2390,6 +2402,7 @@ pub use engine::diff_workbooks;
 #[cfg(feature = "excel-open-xml")]
 pub use excel_open_xml::{ExcelOpenError, open_data_mashup, open_workbook};
 pub use grid_parser::{GridParseError, SheetDescriptor};
+pub use m_diff::{MQueryDiff, QueryChangeKind, diff_m_queries};
 pub use m_section::{SectionMember, SectionParseError, parse_section_members};
 #[cfg(feature = "excel-open-xml")]
 pub use output::json::diff_workbooks_to_json;
@@ -2407,6 +2420,91 @@ pub use workbook::{
 ```rust
 fn main() {
     println!("Hello, world!");
+}
+```
+
+---
+
+### File: `core\src\m_diff.rs`
+
+```rust
+use std::collections::HashMap;
+
+use crate::datamashup::{DataMashup, Query, build_queries};
+use crate::m_section::SectionParseError;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QueryChangeKind {
+    Added,
+    Removed,
+    Renamed { from: String, to: String }, // present for forward compatibility; not emitted yet
+    DefinitionChanged,
+    MetadataChangedOnly,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MQueryDiff {
+    pub name: String,
+    pub kind: QueryChangeKind,
+}
+
+pub fn diff_m_queries(
+    old_dm: &DataMashup,
+    new_dm: &DataMashup,
+) -> Result<Vec<MQueryDiff>, SectionParseError> {
+    let old_queries = build_queries(old_dm)?;
+    let new_queries = build_queries(new_dm)?;
+    Ok(diff_queries(&old_queries, &new_queries))
+}
+
+fn diff_queries(old_queries: &[Query], new_queries: &[Query]) -> Vec<MQueryDiff> {
+    let mut old_map: HashMap<String, &Query> = HashMap::new();
+    for query in old_queries {
+        old_map.insert(query.name.clone(), query);
+    }
+
+    let mut new_map: HashMap<String, &Query> = HashMap::new();
+    for query in new_queries {
+        new_map.insert(query.name.clone(), query);
+    }
+
+    let mut names: Vec<String> = old_map.keys().chain(new_map.keys()).cloned().collect();
+    names.sort();
+    names.dedup();
+
+    let mut diffs = Vec::new();
+    for name in names {
+        match (old_map.get(&name), new_map.get(&name)) {
+            (None, Some(_)) => diffs.push(MQueryDiff {
+                name,
+                kind: QueryChangeKind::Added,
+            }),
+            (Some(_), None) => diffs.push(MQueryDiff {
+                name,
+                kind: QueryChangeKind::Removed,
+            }),
+            (Some(old_q), Some(new_q)) => {
+                if old_q.expression_m == new_q.expression_m {
+                    if old_q.metadata != new_q.metadata {
+                        diffs.push(MQueryDiff {
+                            name,
+                            kind: QueryChangeKind::MetadataChangedOnly,
+                        });
+                    }
+                } else {
+                    diffs.push(MQueryDiff {
+                        name,
+                        kind: QueryChangeKind::DefinitionChanged,
+                    });
+                }
+            }
+            (None, None) => {
+                debug_assert!(false, "query name missing from both maps");
+            }
+        }
+    }
+
+    diffs
 }
 ```
 
@@ -4872,6 +4970,115 @@ fn queries_preserve_section_member_order() {
             idx
         );
     }
+}
+```
+
+---
+
+### File: `core\tests\m6_textual_m_diff_tests.rs`
+
+```rust
+use excel_diff::{
+    DataMashup, QueryChangeKind, build_data_mashup, diff_m_queries, open_data_mashup,
+};
+
+mod common;
+use common::fixture_path;
+
+fn load_datamashup(name: &str) -> DataMashup {
+    let raw = open_data_mashup(fixture_path(name))
+        .expect("fixture should open")
+        .expect("DataMashup should be present");
+    build_data_mashup(&raw).expect("DataMashup should build")
+}
+
+#[test]
+fn basic_add_query_diff() {
+    let dm_a = load_datamashup("m_add_query_a.xlsx");
+    let dm_b = load_datamashup("m_add_query_b.xlsx");
+
+    let diffs = diff_m_queries(&dm_a, &dm_b).expect("diff should succeed");
+
+    assert_eq!(diffs.len(), 1, "expected exactly one diff for added query");
+    let diff = &diffs[0];
+    assert_eq!(diff.name, "Section1/Bar");
+    assert_eq!(diff.kind, QueryChangeKind::Added);
+}
+
+#[test]
+fn basic_remove_query_diff() {
+    let dm_a = load_datamashup("m_remove_query_a.xlsx");
+    let dm_b = load_datamashup("m_remove_query_b.xlsx");
+
+    let diffs = diff_m_queries(&dm_a, &dm_b).expect("diff should succeed");
+
+    assert_eq!(
+        diffs.len(),
+        1,
+        "expected exactly one diff for removed query"
+    );
+    let diff = &diffs[0];
+    assert_eq!(diff.name, "Section1/Bar");
+    assert_eq!(diff.kind, QueryChangeKind::Removed);
+}
+
+#[test]
+fn literal_change_produces_definitionchanged() {
+    let dm_a = load_datamashup("m_change_literal_a.xlsx");
+    let dm_b = load_datamashup("m_change_literal_b.xlsx");
+
+    let diffs = diff_m_queries(&dm_a, &dm_b).expect("diff should succeed");
+
+    assert_eq!(diffs.len(), 1, "expected one diff for changed literal");
+    let diff = &diffs[0];
+    assert_eq!(diff.name, "Section1/Foo");
+    assert_eq!(diff.kind, QueryChangeKind::DefinitionChanged);
+}
+
+#[test]
+fn metadata_change_produces_metadataonly() {
+    let dm_a = load_datamashup("m_metadata_only_change_a.xlsx");
+    let dm_b = load_datamashup("m_metadata_only_change_b.xlsx");
+
+    let diffs = diff_m_queries(&dm_a, &dm_b).expect("diff should succeed");
+
+    assert_eq!(diffs.len(), 1, "expected one diff for metadata-only change");
+    let diff = &diffs[0];
+    assert_eq!(diff.name, "Section1/Foo");
+    assert_eq!(diff.kind, QueryChangeKind::MetadataChangedOnly);
+}
+
+#[test]
+fn identical_workbooks_produce_no_diffs() {
+    let dm = load_datamashup("one_query.xlsx");
+
+    let diffs = diff_m_queries(&dm, &dm).expect("diff should succeed");
+
+    assert!(
+        diffs.is_empty(),
+        "identical DataMashup should produce no diffs"
+    );
+}
+
+#[test]
+fn rename_reports_add_and_remove() {
+    let dm_a = load_datamashup("m_rename_query_a.xlsx");
+    let dm_b = load_datamashup("m_rename_query_b.xlsx");
+
+    let mut diffs = diff_m_queries(&dm_a, &dm_b).expect("diff should succeed");
+    diffs.sort_by(|a, b| a.name.cmp(&b.name));
+
+    assert_eq!(diffs.len(), 2, "expected add + remove for rename scenario");
+
+    let names: Vec<_> = diffs.iter().map(|d| (&d.name, &d.kind)).collect();
+    assert!(
+        names.contains(&(&"Section1/Foo".to_string(), &QueryChangeKind::Removed)),
+        "Foo should be reported as Removed"
+    );
+    assert!(
+        names.contains(&(&"Section1/Bar".to_string(), &QueryChangeKind::Added)),
+        "Bar should be reported as Added"
+    );
 }
 ```
 
@@ -8028,20 +8235,75 @@ scenarios:
     output: "metadata_orphan_entries.xlsx"
 
   # --- Milestone 6: Basic M Diffs ---
-  - id: "m_change_literal"
-    generator: "mashup_inject"
+  - id: "m_add_query_a"
+    generator: "mashup:permissions_metadata"
     args:
+      mode: "m_add_query_a"
       base_file: "templates/base_query.xlsx"
-      # This query adds a step, changing the definition
-      m_code: |
-        section Section1;
-        shared Query1 = let
-            Source = Csv.Document(File.Contents("C:\data.csv"),[Delimiter=",", Columns=2, Encoding=1252, QuoteStyle=QuoteStyle.None]),
-            #"Changed Type" = Table.TransformColumnTypes(Source,{{"Column1", type text}, {"Column2", type text}}),
-            #"Added Custom" = Table.AddColumn(#"Changed Type", "Custom", each 2)
-        in
-            #"Added Custom";
+    output: "m_add_query_a.xlsx"
+
+  - id: "m_add_query_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_add_query_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_add_query_b.xlsx"
+
+  - id: "m_remove_query_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_remove_query_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_remove_query_a.xlsx"
+
+  - id: "m_remove_query_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_remove_query_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_remove_query_b.xlsx"
+
+  - id: "m_change_literal_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_change_literal_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_change_literal_a.xlsx"
+
+  - id: "m_change_literal_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_change_literal_b"
+      base_file: "templates/base_query.xlsx"
     output: "m_change_literal_b.xlsx"
+
+  - id: "m_metadata_only_change_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_metadata_only_change_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_metadata_only_change_a.xlsx"
+
+  - id: "m_metadata_only_change_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_metadata_only_change_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_metadata_only_change_b.xlsx"
+
+  - id: "m_rename_query_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_rename_query_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_rename_query_a.xlsx"
+
+  - id: "m_rename_query_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_rename_query_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_rename_query_b.xlsx"
 
   # --- P1: Large Dense Grid (Performance Baseline) ---
   - id: "p1_large_dense"
@@ -9438,6 +9700,42 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
             ]
         )
 
+        def default_permissions():
+            return {
+                "can_eval": False,
+                "firewall_enabled": True,
+                "group_type": "Organizational",
+            }
+
+        def build_section_text(query_specs):
+            lines = ["section Section1;", ""]
+            for spec in query_specs:
+                lines.append(f"shared {spec['name']} = {spec['body']};")
+            return "\n".join(lines)
+
+        def build_metadata_entries(query_specs):
+            entries = []
+            for spec in query_specs:
+                stable_entries = []
+                if spec.get("load_to_sheet"):
+                    stable_entries.append(("FillEnabled", True))
+                if spec.get("load_to_model"):
+                    stable_entries.append(("FillToDataModelEnabled", True))
+                entries.append(
+                    {
+                        "path": f"Section1/{spec['name']}",
+                        "entries": stable_entries,
+                    }
+                )
+            return entries
+
+        def m_diff_scenario(query_specs):
+            return {
+                "section_text": build_section_text(query_specs),
+                "permissions": default_permissions(),
+                "metadata_entries": build_metadata_entries(query_specs),
+            }
+
         if self.mode in ("permissions_defaults", "permissions_firewall_off", "metadata_simple"):
             return {
                 "section_text": shared_section_simple,
@@ -9463,6 +9761,78 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
                     },
                 ],
             }
+
+        if self.mode == "m_add_query_a":
+            return m_diff_scenario(
+                [
+                    {"name": "Foo", "body": "1", "load_to_sheet": True, "load_to_model": False},
+                ]
+            )
+
+        if self.mode == "m_add_query_b":
+            return m_diff_scenario(
+                [
+                    {"name": "Foo", "body": "1", "load_to_sheet": True, "load_to_model": False},
+                    {"name": "Bar", "body": "2", "load_to_sheet": True, "load_to_model": False},
+                ]
+            )
+
+        if self.mode == "m_remove_query_a":
+            return m_diff_scenario(
+                [
+                    {"name": "Foo", "body": "1", "load_to_sheet": True, "load_to_model": False},
+                    {"name": "Bar", "body": "2", "load_to_sheet": True, "load_to_model": False},
+                ]
+            )
+
+        if self.mode == "m_remove_query_b":
+            return m_diff_scenario(
+                [
+                    {"name": "Foo", "body": "1", "load_to_sheet": True, "load_to_model": False},
+                ]
+            )
+
+        if self.mode == "m_change_literal_a":
+            return m_diff_scenario(
+                [
+                    {"name": "Foo", "body": "1", "load_to_sheet": True, "load_to_model": False},
+                ]
+            )
+
+        if self.mode == "m_change_literal_b":
+            return m_diff_scenario(
+                [
+                    {"name": "Foo", "body": "2", "load_to_sheet": True, "load_to_model": False},
+                ]
+            )
+
+        if self.mode == "m_metadata_only_change_a":
+            return m_diff_scenario(
+                [
+                    {"name": "Foo", "body": "1", "load_to_sheet": True, "load_to_model": False},
+                ]
+            )
+
+        if self.mode == "m_metadata_only_change_b":
+            return m_diff_scenario(
+                [
+                    {"name": "Foo", "body": "1", "load_to_sheet": False, "load_to_model": True},
+                ]
+            )
+
+        if self.mode == "m_rename_query_a":
+            return m_diff_scenario(
+                [
+                    {"name": "Foo", "body": "1", "load_to_sheet": True, "load_to_model": False},
+                ]
+            )
+
+        if self.mode == "m_rename_query_b":
+            return m_diff_scenario(
+                [
+                    {"name": "Bar", "body": "1", "load_to_sheet": True, "load_to_model": False},
+                ]
+            )
 
         if self.mode == "metadata_query_groups":
             section_text = "\n".join(

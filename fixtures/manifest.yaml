@@ -338,6 +338,20 @@ scenarios:
       base_file: "templates/base_query.xlsx"
     output: "m_metadata_only_change_b.xlsx"
 
+  - id: "m_def_and_metadata_change_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_def_and_metadata_change_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_def_and_metadata_change_a.xlsx"
+
+  - id: "m_def_and_metadata_change_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_def_and_metadata_change_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_def_and_metadata_change_b.xlsx"
+
   - id: "m_rename_query_a"
     generator: "mashup:permissions_metadata"
     args:

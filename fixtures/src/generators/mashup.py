@@ -821,6 +821,20 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
                 ]
             )
 
+        if self.mode == "m_def_and_metadata_change_a":
+            return m_diff_scenario(
+                [
+                    {"name": "Foo", "body": "1", "load_to_sheet": True, "load_to_model": False},
+                ]
+            )
+
+        if self.mode == "m_def_and_metadata_change_b":
+            return m_diff_scenario(
+                [
+                    {"name": "Foo", "body": "2", "load_to_sheet": False, "load_to_model": True},
+                ]
+            )
+
         if self.mode == "m_rename_query_a":
             return m_diff_scenario(
                 [
