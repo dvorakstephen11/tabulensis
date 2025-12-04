@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+
 use crate::datamashup_framing::{DataMashupError, RawDataMashup};
 use crate::datamashup_package::{PackageParts, parse_package_parts};
+use crate::m_section::{SectionParseError, parse_section_members};
 use quick_xml::Reader;
 use quick_xml::events::Event;
 
@@ -45,6 +48,14 @@ pub struct QueryMetadata {
     pub group_path: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Query {
+    pub name: String,
+    pub section_member: String,
+    pub expression_m: String,
+    pub metadata: QueryMetadata,
+}
+
 pub fn build_data_mashup(raw: &RawDataMashup) -> Result<DataMashup, DataMashupError> {
     let package_parts = parse_package_parts(&raw.package_parts)?;
     let permissions = parse_permissions(&raw.permissions);
@@ -57,6 +68,43 @@ pub fn build_data_mashup(raw: &RawDataMashup) -> Result<DataMashup, DataMashupEr
         metadata,
         permission_bindings_raw: raw.permission_bindings.clone(),
     })
+}
+
+pub fn build_queries(dm: &DataMashup) -> Result<Vec<Query>, SectionParseError> {
+    let members = parse_section_members(&dm.package_parts.main_section.source)?;
+
+    let mut metadata_index: HashMap<(String, String), &QueryMetadata> = HashMap::new();
+    for meta in &dm.metadata.formulas {
+        metadata_index.insert((meta.section_name.clone(), meta.formula_name.clone()), meta);
+    }
+
+    let mut positions: HashMap<String, usize> = HashMap::new();
+    let mut queries = Vec::new();
+
+    for member in members {
+        let key = (member.section_name.clone(), member.member_name.clone());
+        let Some(meta) = metadata_index.get(&key) else {
+            continue;
+        };
+
+        let name = format!("{}/{}", member.section_name, member.member_name);
+        let query = Query {
+            name: name.clone(),
+            section_member: member.member_name,
+            expression_m: member.expression_m,
+            metadata: (*meta).clone(),
+        };
+
+        if let Some(idx) = positions.get(&name) {
+            debug_assert!(false, "duplicate query name {}", name);
+            queries[*idx] = query;
+        } else {
+            positions.insert(name, queries.len());
+            queries.push(query);
+        }
+    }
+
+    Ok(queries)
 }
 
 pub fn parse_permissions(xml_bytes: &[u8]) -> Permissions {

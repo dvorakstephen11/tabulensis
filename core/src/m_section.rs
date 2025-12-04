@@ -107,10 +107,7 @@ fn parse_shared_member(
         return None;
     }
 
-    let (member_name, after_name) = split_identifier(body)?;
-    if !is_valid_identifier(member_name) {
-        return None;
-    }
+    let (member_name, after_name) = parse_identifier(body)?;
 
     let mut expression_source = after_name;
     let eq_index = expression_source.find('=')?;
@@ -154,14 +151,26 @@ fn parse_shared_member(
     })
 }
 
-fn split_identifier(text: &str) -> Option<(&str, &str)> {
+fn parse_identifier(text: &str) -> Option<(String, &str)> {
     let trimmed = text.trim_start();
     if trimmed.is_empty() {
         return None;
     }
 
+    if trimmed.starts_with("#\"") {
+        return parse_quoted_identifier(trimmed);
+    }
+
+    parse_unquoted_identifier(trimmed)
+}
+
+fn parse_unquoted_identifier(text: &str) -> Option<(String, &str)> {
+    if text.is_empty() {
+        return None;
+    }
+
     let mut end = 0;
-    for ch in trimmed.chars() {
+    for ch in text.chars() {
         if ch.is_whitespace() || ch == '=' {
             break;
         }
@@ -172,7 +181,43 @@ fn split_identifier(text: &str) -> Option<(&str, &str)> {
         return None;
     }
 
-    Some(trimmed.split_at(end))
+    let (name, rest) = text.split_at(end);
+    if !is_valid_identifier(name) {
+        return None;
+    }
+
+    Some((name.to_string(), rest))
+}
+
+fn parse_quoted_identifier(text: &str) -> Option<(String, &str)> {
+    let mut chars = text.char_indices();
+    let (_, hash) = chars.next()?;
+    if hash != '#' {
+        return None;
+    }
+    if !matches!(chars.next(), Some((_, '"'))) {
+        return None;
+    }
+
+    let mut name = String::new();
+    while let Some((idx, ch)) = chars.next() {
+        if ch == '"' {
+            if let Some((_, next_ch)) = chars.clone().next()
+                && next_ch == '"'
+            {
+                name.push('"');
+                chars.next();
+                continue;
+            }
+            let rest_start = idx + 1;
+            let rest = &text[rest_start..];
+            return Some((name, rest));
+        }
+
+        name.push(ch);
+    }
+
+    None
 }
 
 fn is_valid_identifier(name: &str) -> bool {

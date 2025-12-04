@@ -800,6 +800,59 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
                 ],
             }
 
+        if self.mode == "metadata_url_encoding":
+            section_text = "\n".join(
+                [
+                    "section Section1;",
+                    "",
+                    'shared #"Query with space & #" = 1;',
+                ]
+            )
+            return {
+                "section_text": section_text,
+                "permissions": {
+                    "can_eval": False,
+                    "firewall_enabled": True,
+                    "group_type": "Organizational",
+                },
+                "metadata_entries": [
+                    {
+                        "path": "Section1/Query%20with%20space%20%26%20%23",
+                        "entries": [
+                            ("FillEnabled", True),
+                            ("FillToDataModelEnabled", False),
+                        ],
+                    },
+                ],
+            }
+
+        if self.mode == "metadata_orphan_entries":
+            section_text = "\n".join(
+                [
+                    "section Section1;",
+                    "",
+                    "shared Foo = 1;",
+                ]
+            )
+            return {
+                "section_text": section_text,
+                "permissions": {
+                    "can_eval": False,
+                    "firewall_enabled": True,
+                    "group_type": "Organizational",
+                },
+                "metadata_entries": [
+                    {
+                        "path": "Section1/Foo",
+                        "entries": [("FillEnabled", True)],
+                    },
+                    {
+                        "path": "Section1/Nonexistent",
+                        "entries": [("FillEnabled", False)],
+                    },
+                ],
+            }
+
         raise ValueError(f"Unsupported mode: {self.mode}")
 
     def _split_sections(self, raw_bytes: bytes):

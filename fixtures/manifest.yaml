@@ -236,6 +236,20 @@ scenarios:
       base_file: "templates/base_query.xlsx"
     output: "metadata_hidden_queries.xlsx"
 
+  - id: "metadata_url_encoding"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "metadata_url_encoding"
+      base_file: "templates/base_query.xlsx"
+    output: "metadata_url_encoding.xlsx"
+
+  - id: "metadata_orphan_entries"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "metadata_orphan_entries"
+      base_file: "templates/base_query.xlsx"
+    output: "metadata_orphan_entries.xlsx"
+
   # --- Milestone 6: Basic M Diffs ---
   - id: "m_change_literal"
     generator: "mashup_inject"

@@ -1,6 +1,6 @@
 use excel_diff::{
-    DataMashupError, Permissions, RawDataMashup, build_data_mashup, datamashup::parse_metadata,
-    open_data_mashup, parse_package_parts, parse_section_members,
+    DataMashupError, Permissions, RawDataMashup, build_data_mashup, build_queries,
+    datamashup::parse_metadata, open_data_mashup, parse_package_parts, parse_section_members,
 };
 
 mod common;
@@ -276,4 +276,11 @@ fn permission_bindings_missing_ok() {
     let dm = build_data_mashup(&synthetic).expect("empty bindings should build");
     assert!(dm.permission_bindings_raw.is_empty());
     assert_eq!(dm.permissions, Permissions::default());
+}
+
+#[test]
+fn build_queries_is_compatible_with_metadata_simple() {
+    let dm = load_datamashup("metadata_simple.xlsx");
+    let queries = build_queries(&dm).expect("queries should build");
+    assert!(!queries.is_empty());
 }
