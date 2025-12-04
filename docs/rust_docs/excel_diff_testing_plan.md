@@ -740,7 +740,7 @@ Per `excel_diff_specification.md` Section 4.4, Metadata XML has `LocalPackageMet
 
   * Parse Metadata XML.
   * Parse `Section1.m` into members.
-  * Assert number of `ItemType=Formula` entries equals number of shared members in `Section1.m` (minus known oddities like step entries) - the specification calls this out as an invariant. 
+  * Assert each metadata entry maps to a `Section1` member by `SectionName/FormulaName`, and note/allow that malformed workbooks may have fewer metadata entries than shared members (synthetic defaults in `build_queries` cover that case). In well‑formed fixtures like `metadata_simple.xlsx`, counts should still align.
 * `metadata_load_destinations`:
 
   * For each query, assert load settings from Metadata (sheet vs model vs both) match what you manually configured when creating the fixtures.
@@ -779,7 +779,7 @@ struct Query {
 **Rust capability**
 
 * Split `Section1.m` into named members.
-* Associate each member with its metadata entry by `SectionName/FormulaName`.
+* Associate each member with its metadata entry by `SectionName/FormulaName`, **synthesizing default connection‑only metadata** when a matching entry is missing.
 * Produce an ordered `Vec<Query>` and top‑level `Metadata` object.
 
 **Tests**
@@ -822,12 +822,19 @@ struct Query {
 
   * Create a query with special characters in the name that require URL encoding (`"Query with space & #"`).
   * Ensure you correctly map metadata `ItemPath` to section member after decoding.
+* `member_without_metadata_is_preserved`:
+
+  * Fixture with a shared Section1 member that has **no metadata entry**.
+  * Assert `build_queries` still emits the query with a synthesized `QueryMetadata` (`item_path` derived from section/member, `load_to_sheet=false`, `load_to_model=false`, `is_connection_only=true`, `group_path=None`).
 
 ### 5.3 Domain invariants
 
 * `query_names_unique`:
 
   * Ensure `name` is unique within a DataMashup instance.
+* `synthetic_metadata_when_missing`:
+
+  * For incomplete metadata XML, `queries.len()` may exceed `dm.metadata.formulas.len()` because shared members still produce queries with synthesized metadata structs.
 * `metadata_orphan_entries`:
 
   * Build a fixture where metadata lists a `Section1/Nonexistent` formula (edit XML manually). Your parser should:

@@ -17,3 +17,9 @@
 - Added member_without_metadata_is_preserved test in core/tests/m5_query_domain_tests.rs validating default connection-only metadata synthesis.
 - Commands run: cargo fmt, cargo test, cargo build, cargo clippy.
 - Complication resolved: prior behavior discarded M queries with absent metadata; default metadata path ensures queries remain visible.
+
+## Remediation Round 2
+- Findings addressed: Fix 1 (spec/test docs aligned with synthetic metadata policy), Fix 2 (invalid `shared` syntax now surfaces `InvalidMemberSyntax` and is documented), Fix 3 (query ordering preserved), Fix 4 (quoted identifiers covered at parser layer).
+- Files modified: docs/meta/plans/2025-12-04-m5-query-domain-layer/spec.md; docs/rust_docs/excel_diff_testing_plan.md; docs/rust_docs/excel_diff_specification.md; core/src/m_section.rs; core/tests/m_section_splitting_tests.rs; core/tests/m5_query_domain_tests.rs.
+- Complications: Selected Option B for Fix 2 (malformed `shared` lines now error instead of being skipped) to make parser behavior explicit.
+- Tests run: cargo fmt; cargo clippy; cargo test.

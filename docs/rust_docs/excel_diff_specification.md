@@ -280,6 +280,10 @@ MStep {
 
 `steps` is the crucial structure for semantic diff. Each step corresponds to a meaningful UI operation (filter, join, column removal, etc.) when possible. The metadata struct mirrors the fields surfaced in the Metadata XML and should preserve unknown attributes for forward compatibility.
 
+Query lists are built by joining `Section1` shared members to Metadata formulas in **Section1 order**. Every shared member produces a `Query`; if Metadata is missing for that member, the builder synthesizes a `QueryMetadata` with `item_path = "{SectionName}/{MemberName}"`, `load_to_sheet = false`, `load_to_model = false`, `is_connection_only = true`, and `group_path = None`. Orphan metadata entries remain in `Metadata.formulas` but are not surfaced as `Query` values.
+
+`parse_section_members` returns `SectionParseError::InvalidMemberSyntax` when a line starting with `shared` is malformed (missing identifier, `=`, or `;`), rather than silently ignoring the line, so `build_queries` only succeeds on syntactically valid section documents.
+
 ### 5.4 Data Model (DAX) - Future Phase
 
 ```text

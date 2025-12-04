@@ -34,9 +34,9 @@ pub fn parse_section_members(source: &str) -> Result<Vec<SectionMember>, Section
             continue;
         }
 
-        if let Some(member) = parse_shared_member(trimmed, &mut lines, &section_name) {
-            members.push(member);
-        }
+        let member = parse_shared_member(trimmed, &mut lines, &section_name)
+            .ok_or(SectionParseError::InvalidMemberSyntax)?;
+        members.push(member);
     }
 
     Ok(members)

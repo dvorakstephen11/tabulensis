@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use excel_diff::{build_data_mashup, build_queries, open_data_mashup};
+use excel_diff::{build_data_mashup, build_queries, open_data_mashup, parse_section_members};
 
 mod common;
 use common::fixture_path;
@@ -54,6 +54,7 @@ fn metadata_join_url_encoding() {
 #[test]
 fn member_without_metadata_is_preserved() {
     let dm = load_datamashup("metadata_missing_entry.xlsx");
+    assert!(dm.metadata.formulas.is_empty());
     let queries = build_queries(&dm).expect("queries should build");
 
     assert_eq!(queries.len(), 1);
@@ -91,4 +92,21 @@ fn metadata_orphan_entries() {
             .iter()
             .any(|m| m.item_path == "Section1/Nonexistent")
     );
+}
+
+#[test]
+fn queries_preserve_section_member_order() {
+    let dm = load_datamashup("metadata_simple.xlsx");
+    let members = parse_section_members(&dm.package_parts.main_section.source)
+        .expect("Section1 should parse");
+    let queries = build_queries(&dm).expect("queries should build");
+
+    assert_eq!(members.len(), queries.len());
+    for (idx, (member, query)) in members.iter().zip(queries.iter()).enumerate() {
+        assert_eq!(
+            query.section_member, member.member_name,
+            "query at position {} should match Section1 member order",
+            idx
+        );
+    }
 }

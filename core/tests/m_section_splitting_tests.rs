@@ -31,6 +31,18 @@ shared Foo = 1;
 
 const SECTION_WITH_BOM: &str = "\u{FEFF}section Section1;\nshared Foo = 1;";
 
+const SECTION_WITH_QUOTED_IDENTIFIER: &str = r#"
+    section Section1;
+
+    shared #"Query with space & #" = 1;
+"#;
+
+const SECTION_INVALID_SHARED: &str = r#"
+    section Section1;
+
+    shared Broken // missing '=' and ';'
+"#;
+
 #[test]
 fn parse_single_member_section() {
     let members = parse_section_members(SECTION_SINGLE).expect("single member section parses");
@@ -96,4 +108,23 @@ fn section_parsing_tolerates_utf8_bom() {
     assert_eq!(member.section_name, "Section1");
     assert_eq!(member.expression_m, "1");
     assert!(member.is_shared);
+}
+
+#[test]
+fn parse_quoted_identifier_member() {
+    let members = parse_section_members(SECTION_WITH_QUOTED_IDENTIFIER)
+        .expect("quoted identifier should parse");
+    assert_eq!(members.len(), 1);
+
+    let member = &members[0];
+    assert_eq!(member.section_name, "Section1");
+    assert_eq!(member.member_name, "Query with space & #");
+    assert_eq!(member.expression_m, "1");
+    assert!(member.is_shared);
+}
+
+#[test]
+fn error_on_invalid_shared_member_syntax() {
+    let result = parse_section_members(SECTION_INVALID_SHARED);
+    assert_eq!(result, Err(SectionParseError::InvalidMemberSyntax));
 }

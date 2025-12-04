@@ -112,9 +112,12 @@ Informal semantics:
        * Emit a `Query { name, section_member: member_name, expression_m, metadata: cloned_metadata }`.
      * If not found:
 
-       * Still emit a `Query`?
+       * Still emit a `Query` with **synthetic metadata**:
 
-         * **Decision for this cycle:** do **not** emit a `Query` without metadata; those cases will be covered by the orphan invariant (see below).
+         * `item_path = "{SectionName}/{MemberName}"`
+         * `load_to_sheet = false`, `load_to_model = false`
+         * `is_connection_only = true`
+         * `group_path = None`
 
 4. **Ordering**
 
@@ -244,7 +247,7 @@ Informal semantics:
 * `build_queries` can fail only due to `SectionParseError` coming from `parse_section_members`:
 
   * Missing/invalid section header.
-  * Invalid member syntax.
+  * Invalid member syntax (a line beginning with `shared` that lacks an identifier, `=`, `;`, or a complete expression results in `Err(SectionParseError::InvalidMemberSyntax)` instead of being ignored).
 * For normal DataMashup fixtures:
 
   * `parse_package_parts` already ensures `Section1.m` exists and is UTF-8; tests cover BOM handling and invalid UTF-8.
@@ -255,14 +258,14 @@ Informal semantics:
 
 * For any successfully-built query list:
 
-  * `queries.len() <= dm.metadata.formulas.len()` (no synthetic queries beyond what Metadata knows).
+  * Synthetic metadata is possible when `Metadata` is incomplete; `queries.len()` may exceed `dm.metadata.formulas.len()` in those cases.
   * Every `Query.name` occurs at most once:
 
     * Enforced via `debug_assert!` in the builder; tests confirm uniqueness on realistic fixtures.
-  * Every `Query` has both:
+  * Every `Query` has:
 
     * A Section1 member, and
-    * A Metadata formula entry.
+    * A `QueryMetadata` struct (either joined from XML or synthesized with the defaults above).
 * Orphan metadata entries:
 
   * Never cause a panic.
