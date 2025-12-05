@@ -52,4 +52,3 @@ pub(crate) fn compute_col_signature<'a>(
         });
     ColSignature { hash }
 }
-

@@ -1,28 +1,42 @@
-work_type: milestone_progress
-target_subsystem: "Spreadsheet-mode grid diff on real Excel workbooks (Phase 3: G5–G7)"
+branch: 2025-12-05-gridview-layer1
+work_type: incremental_milestone
+target_subsystem: grid_diff_preprocessing
 
 rationale:
-  - "Phase 3 of the testing plan defines spreadsheet-mode milestones G1–G7 as the basic Excel grid-diff slice. G1–G2 are already implemented with real Excel fixtures; G5–G7 remain unimplemented at the workbook level (currently only covered by in-memory PG5 tests)."
-  - "The existing PG5 in-memory grid diff tests already exercise the required semantics for multiple scattered cell edits and simple tail row/column append/truncate (CellEdited-only for same-shape edits, and RowAdded/RowRemoved/ColumnAdded/ColumnRemoved for tail shape changes). Implementing G5–G7 at the workbook level is therefore primarily a fixture and test wiring task, not a new algorithm. "
-  - "We now have `diff_workbooks` wired to `diff_grids`, plus workbook-level tests for G1–G2 and PG6 sheet-level behavior. Extending this to G5–G7 will give us an end-to-end Excel vertical slice for all basic spreadsheet cases that do not involve alignment or formatting/AST semantics. "
-  - "The unified grid diff algorithm spec treats UC‑03 (multiple scattered cell edits), UC‑04 (row append at end), and UC‑05 (column append at edge) as must-have basic cases. G5–G7 are the workbook-level manifestations of these UCs; adding fixtures and tests now aligns the Rust implementation with the algorithm design before we attempt the advanced alignment pipeline. "
-  - "Finishing G5–G7 workbook tests makes it much safer to refactor `diff_grids` toward the H1 'advanced 2D grid diff' design in later phases, because we will have both in-memory (PG5) and real-workbook (G1–G7) guards against regressions in basic spreadsheet behavior. "
+  - The unified grid diff design defines a layered pipeline where Phase 1 builds ephemeral GridViews with row/column metadata and hash frequency analysis before any alignment is attempted (Sections 4.1 and 5.2–5.6 of unified_grid_diff_algorithm_specification.md). These structures are currently absent from the implementation, so later phases (dimension decision, AMR alignment, database mode) have nothing concrete to build on.
+  - The codebase already has sparse Grid storage and stable row/column signatures (RowSignature/ColSignature + XXHash64 hashing in workbook.rs and hashing.rs, validated by signature_tests.rs), and PG5/G1–G7 grid tests confirm a minimal overlapping-rectangle diff_grids implementation. However, this implementation never uses precomputed signatures or any GridView layer, so it cannot scale to the adversarial and move-heavy scenarios described for Phase 4 (G8–G13, D1–D10) in excel_diff_testing_plan.md.
+  - excel_diff_difficulty_analysis.md identifies high‑performance 2D grid diff (H1: G8–G13, D1–D10) as one of the hardest milestones. Building GridView and basic hash statistics is the lowest‑risk, most mechanical slice of that work and is explicitly called out as Layer 1 in the unified_grid_diff_algorithm_specification.md. Landing this layer now reduces architectural risk before more complex AMR alignment and database-mode behavior.
+  - Previous cycles already invested in row/column hashing semantics and tests (2025-11-29-refactor for sparse Grid + signatures, 2025-12-02-row-signatures-v1 for commutative hashing). A dedicated GridView layer lets the engine reuse that work rather than reinvent ad‑hoc row/column access patterns inside diff_grids, keeping the implementation aligned with the documented architecture.
+  - Phase 3 grid tests (G1–G2, G5–G7) now exist at the workbook level and are green, which makes this a good moment to introduce an internal pre-alignment layer without changing observable diff behavior. This cycle can focus on data structure correctness and invariants, while leaving behavioral changes (new row/column ops, moves, and noise reduction) to later cycles that explicitly target G8+ and D‑series milestones.
 
 risks_of_deferral:
-  - "Without G5–G7 workbook tests, future work on row/column signatures, alignment, and move detection could accidentally regress simple tail and multi-edit behaviors on real Excel files while still passing PG5 in-memory tests."
-  - "Product-wise, we would still lack an end-to-end demo where a user edits multiple cells or appends/truncates rows/columns in Excel and sees intuitive, minimal diff output (`CellEdited` vs `RowAdded/Removed` / `ColumnAdded/Removed`)."
-  - "Deferring these fixtures leaves a gap between the testing plan and the implemented suite: Phase 3 would appear partially complete, making it harder for planner agents and humans to track when the basic spreadsheet slice is actually stable."
-  - "Advanced alignment (G8–G13) will reuse the same UC‑03/UC‑04/UC‑05 semantics; implementing those UCs against real Excel grids later without the simpler G5–G7 tests raises the risk of subtle off-by-one and used-range bugs."
+  - Advanced grid milestones (Phase 4: G8–G13 and D1–D10) depend on fast row/column access, row hashes, low‑information row classification, and frequency analysis. Deferring GridView forces later cycles either to bolt algorithms directly onto the sparse Grid (risking O(M·R) behavior) or to introduce ad‑hoc views that diverge from the documented GridView design.
+  - Without this layer, implementers may prematurely modify diff_grids to do alignment work directly over HashMap-backed Grids, creating entangled code that must later be refactored to match the six-phase pipeline (Phase 1–6) in the unified spec. That increases both rework and review burden for the hardest milestones.
+  - Upcoming database mode and dimension-ordering features rely on column metadata (ColMeta) and hash frequency information to decide whether to align rows first or columns first. If GridView and HashStats remain unimplemented, there is no clean place to hang these decisions, which could tempt shortcuts that violate the memory and complexity constraints in Sections 5.1–5.3 and 4.6–4.8.
+  - Keeping all grid behavior in a single diff_grids function makes it harder for reviewers to reason about algorithmic complexity. Introducing GridView and HashStats as separate, well-tested units gives clear boundaries for future performance testing and makes it easier to spot regressions.
+  - Planner agents will lack concrete metrics or invariants for Phase 4 preprocessing (e.g., “row_meta.hash matches RowSignature”, “no O(R×C) allocation”), making it harder to assert that the implementation actually follows the architecture rather than drifting towards undocumented shortcuts.
 
 references:
-  - "docs/rust_docs/excel_diff_testing_plan.md (G1–G7 definitions, Phase 3 grid milestones) "
-  - "docs/rust_docs/unified_grid_diff_algorithm_specification.md (UC‑03, UC‑04, UC‑05 basic grid cases) "
-  - "docs/rust_docs/excel_diff_specification.md (DiffOp types, spreadsheet-mode grid semantics; implied by PG4/PG5/PG6 tests) "
-  - "core/src/engine.rs (`diff_workbooks`, `diff_grids` current behavior) "
-  - "core/tests/pg5_grid_diff_tests.rs (in-memory PG5 grid diff behaviors) :contentReference[oaicite:9]{index=9}"
-  - "core/tests/g1_g2_grid_workbook_tests.rs and fixtures/manifest.yaml (existing Phase 3 workbook fixtures/tests) "
-  - "docs/rust_docs/excel_diff_difficulty_analysis.md (H1 advanced 2D grid diff risk) :contentReference[oaicite:11]{index=11}"
+  - docs/rust_docs/unified_grid_diff_algorithm_specification.md
+    - Section 4: Pipeline Architecture (Phase 1 preprocessing and memory lifecycle)
+    - Section 5.2–5.3: Layer 0 Grid vs Layer 1 GridView structure and construction algorithm
+    - Section 5.5–5.6: RowMeta/ColMeta fields and HashStats frequency analysis
+    - Section 6.9–6.12: Hash stability and reuse expectations
+  - docs/rust_docs/excel_diff_testing_plan.md
+    - Phase overview table: Phase 4 “Algorithmic heavy lifting” (M7, G8–G13, D1–D10; H1, H4)
+    - Grid milestones G1–G7 (already implemented) and upcoming advanced grid tests G8+ and D-series
+  - docs/rust_docs/excel_diff_specification.md
+    - Grid IR and diff operation semantics (DiffOp RowAdded/Removed, ColumnAdded/Removed, CellEdited, BlockMoved*),
+      which future GridView-based alignment must feed.
+  - core/src/workbook.rs and core/src/hashing.rs
+    - Sparse Grid representation, RowSignature/ColSignature, hash_cell_contribution, combine_hashes.
+  - core/tests/signature_tests.rs, core/tests/pg5_grid_diff_tests.rs, core/tests/g1_g2_grid_workbook_tests.rs, core/tests/g5_g7_grid_workbook_tests.rs
+    - Existing tests validating signature semantics and current (overlap-only) grid diff behavior.
 
 difficulty_estimate:
-  score: 3
-  ten_is: "H1 advanced 2D grid alignment and move detection across G8–G13 and D1–D10"
+  value: 6
+  scale: "1–10, where 10 = H1 high-performance 2D grid diff (Phase 4 G8–G13 and D1–D10) as described in excel_diff_difficulty_analysis.md"
+  hardest_milestone: "H1 – High-performance 2D grid diff (adversarial grids, row/column moves, database mode integration)"
+  notes:
+    - Implementing GridView and HashStats is algorithmically straightforward (single-pass construction, metadata aggregation) but must respect strict memory and complexity constraints and stay consistent with existing hashing semantics.
+    - No behavioral changes to diff outputs are planned in this cycle; risk is primarily around IR design, correctness of invariants, and avoiding hidden O(R×C×M) work.

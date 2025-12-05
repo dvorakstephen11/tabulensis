@@ -1,5 +1,7 @@
 //! Common test utilities shared across integration tests.
 
+#![allow(dead_code)]
+
 use excel_diff::{Cell, CellAddress, CellValue, Grid, Sheet, SheetKind, Workbook};
 use std::path::PathBuf;
 

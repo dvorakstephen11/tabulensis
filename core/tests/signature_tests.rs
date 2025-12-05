@@ -1,4 +1,4 @@
-use excel_diff::{Cell, CellAddress, CellValue, Grid};
+use excel_diff::{Cell, CellAddress, CellValue, Grid, GridView};
 
 fn make_cell(row: u32, col: u32, value: Option<CellValue>, formula: Option<&str>) -> Cell {
     Cell {
@@ -394,4 +394,40 @@ fn row_signature_golden_constant_with_formula() {
 
     let sig = grid.compute_row_signature(0);
     assert_eq!(sig.hash, ROW_SIGNATURE_WITH_FORMULA_GOLDEN);
+}
+
+#[test]
+fn gridview_rowmeta_hash_matches_compute_all_signatures() {
+    let mut grid = Grid::new(3, 2);
+    grid.insert(make_cell(
+        0,
+        0,
+        Some(CellValue::Number(std::f64::consts::PI)),
+        Some("=PI()"),
+    ));
+    grid.insert(make_cell(1, 1, Some(CellValue::Text("text".into())), None));
+    grid.insert(make_cell(2, 0, Some(CellValue::Bool(true)), Some("=A1")));
+
+    grid.compute_all_signatures();
+
+    let row_signatures = grid
+        .row_signatures
+        .as_ref()
+        .expect("row signatures should be computed")
+        .clone();
+    let col_signatures = grid
+        .col_signatures
+        .as_ref()
+        .expect("col signatures should be computed")
+        .clone();
+
+    let view = GridView::from_grid(&grid);
+
+    for (idx, meta) in view.row_meta.iter().enumerate() {
+        assert_eq!(meta.hash, row_signatures[idx].hash);
+    }
+
+    for (idx, meta) in view.col_meta.iter().enumerate() {
+        assert_eq!(meta.hash, col_signatures[idx].hash);
+    }
 }

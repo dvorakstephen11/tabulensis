@@ -1,0 +1,8 @@
+2025-12-05: Started implementation per docs/meta/plans/2025-12-05b-gridview-layer1/spec.md (GridView preprocessing layer).
+- Reviewed implementer prompt Section 4 meta guide and mini-spec scope/tests.
+- Noted g5-g7 workbook tests/fixtures already present; current branch focuses on GridView/HashStats layer.
+2025-12-05: Implemented GridView layer in core/src/grid_view.rs with RowView/RowMeta/ColMeta, non-blank counts, low-info classification, and HashStats built on existing hashing helpers; added exports via lib.rs.
+- Added grid_view_tests.rs (dense layout/metadata, low-info rows, signature alignment, empty grid, large sparse grid) and grid_view_hashstats_tests.rs plus GridView hash alignment test in signature_tests.rs.
+- Added dead_code allow on tests/common helpers to silence clippy across per-crate builds; adjusted HashStats::is_common to be threshold-inclusive but ignore missing hashes; removed unreachable pattern in low-info helper.
+- Ran cargo fmt; cargo clippy --all-targets --all-features (clean).
+- cargo test: full suite passed after rerunning pg6_object_vs_grid_tests separately due to harness broken pipe (targeted run succeeded).

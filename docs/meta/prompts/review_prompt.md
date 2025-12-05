@@ -20,8 +20,8 @@
       engine.rs
       excel_open_xml.rs
       grid_parser.rs
+      hashing.rs
       lib.rs
-      main.rs
       m_diff.rs
       m_section.rs
       workbook.rs
@@ -197,6 +197,10 @@ name = "excel_diff"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "excel_diff"
+path = "src/lib.rs"
+
 [features]
 default = ["excel-open-xml"]
 excel-open-xml = []
@@ -211,6 +215,8 @@ serde_json = "1.0"
 xxhash-rust = { version = "0.8", features = ["xxh64"] }
 
 [dev-dependencies]
+pretty_assertions = "1.4"
+tempfile = "3.10"
 ```
 
 ---
@@ -218,6 +224,27 @@ xxhash-rust = { version = "0.8", features = ["xxh64"] }
 ### File: `core\src\addressing.rs`
 
 ```rust
+//! Excel cell addressing utilities.
+//!
+//! Provides conversion between A1-style cell addresses (e.g., "B2", "AA10") and
+//! zero-based (row, column) index pairs.
+
+use std::fmt;
+
+/// Error returned when parsing an invalid A1-style cell address.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddressParseError {
+    pub input: String,
+}
+
+impl fmt::Display for AddressParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "invalid cell address: '{}'", self.input)
+    }
+}
+
+impl std::error::Error for AddressParseError {}
+
 /// Convert zero-based (row, col) indices to an Excel A1 address string.
 pub fn index_to_address(row: u32, col: u32) -> String {
     let mut col_index = col;
@@ -316,6 +343,11 @@ mod tests {
 ### File: `core\src\container.rs`
 
 ```rust
+//! OPC (Open Packaging Conventions) container handling.
+//!
+//! Provides abstraction over ZIP-based Office Open XML packages, validating
+//! that required structural elements like `[Content_Types].xml` are present.
+
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -323,11 +355,14 @@ use thiserror::Error;
 use zip::ZipArchive;
 use zip::result::ZipError;
 
+/// Errors that can occur when opening or reading an OPC container.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ContainerError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("ZIP error: {0}")]
+    Zip(String),
     #[error("not a ZIP container")]
     NotZipContainer,
     #[error("not an OPC package (missing [Content_Types].xml)")]
@@ -398,6 +433,11 @@ impl OpcContainer {
 ### File: `core\src\datamashup.rs`
 
 ```rust
+//! High-level DataMashup (Power Query) parsing and query extraction.
+//!
+//! Builds on the low-level framing and package parsing to provide structured
+//! access to queries, permissions, and metadata stored in Excel DataMashup sections.
+
 use std::collections::HashMap;
 
 use crate::datamashup_framing::{DataMashupError, RawDataMashup};
@@ -510,7 +550,12 @@ pub fn build_queries(dm: &DataMashup) -> Result<Vec<Query>, SectionParseError> {
         };
 
         if let Some(idx) = positions.get(&name) {
-            debug_assert!(false, "duplicate query name {}", name);
+            debug_assert!(
+                false,
+                "duplicate query name '{}' found in DataMashup section; \
+                 later definition will overwrite earlier one",
+                name
+            );
             queries[*idx] = query;
         } else {
             positions.insert(name, queries.len());
@@ -1457,10 +1502,20 @@ fn strip_leading_bom(text: String) -> String {
 ### File: `core\src\diff.rs`
 
 ```rust
+//! Diff operations and reports for workbook comparison.
+//!
+//! This module defines the types used to represent differences between two workbooks:
+//! - [`DiffOp`]: Individual operations representing a single change (cell edit, row/column add/remove, etc.)
+//! - [`DiffReport`]: A versioned collection of diff operations
+
 use crate::workbook::{CellAddress, CellSnapshot, ColSignature, RowSignature};
 
 pub type SheetId = String;
 
+/// A single diff operation representing one logical change between workbooks.
+///
+/// Operations are emitted by the diff engine and collected into a [`DiffReport`].
+/// The enum is marked `#[non_exhaustive]` to allow future additions.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind")]
 #[non_exhaustive]
@@ -1528,9 +1583,14 @@ pub enum DiffOp {
     },
 }
 
+/// A versioned collection of diff operations between two workbooks.
+///
+/// The `version` field indicates the schema version for forwards compatibility.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DiffReport {
+    /// Schema version (currently "1").
     pub version: String,
+    /// The list of diff operations.
     pub ops: Vec<DiffOp>,
 }
 
@@ -1645,6 +1705,11 @@ impl DiffOp {
 ### File: `core\src\engine.rs`
 
 ```rust
+//! Core diffing engine for workbook comparison.
+//!
+//! Provides the main entry point [`diff_workbooks`] for comparing two workbooks
+//! and generating a [`DiffReport`] of all changes.
+
 use crate::diff::{DiffOp, DiffReport, SheetId};
 use crate::workbook::{CellAddress, CellSnapshot, Grid, Sheet, SheetKind, Workbook};
 use std::collections::HashMap;
@@ -1800,6 +1865,11 @@ mod tests {
 ### File: `core\src\excel_open_xml.rs`
 
 ```rust
+//! Excel Open XML file parsing.
+//!
+//! Provides functions for opening `.xlsx` files and parsing their contents into
+//! the internal representation used for diffing.
+
 use crate::container::{ContainerError, OpcContainer};
 use crate::datamashup_framing::{
     DataMashupError, RawDataMashup, decode_datamashup_base64, parse_data_mashup,
@@ -1893,7 +1963,7 @@ pub fn open_data_mashup(path: impl AsRef<Path>) -> Result<Option<RawDataMashup>,
 
             let bytes = container
                 .read_file(&name)
-                .map_err(|e| ContainerError::Io(std::io::Error::other(e.to_string())))?;
+                .map_err(|e| ContainerError::Zip(e.to_string()))?;
 
             if let Some(text) = read_datamashup_text(&bytes)? {
                 let decoded = decode_datamashup_base64(&text)?;
@@ -1915,6 +1985,11 @@ pub fn open_data_mashup(path: impl AsRef<Path>) -> Result<Option<RawDataMashup>,
 ### File: `core\src\grid_parser.rs`
 
 ```rust
+//! XML parsing for Excel worksheet grids.
+//!
+//! Handles parsing of worksheet XML, shared strings, workbook structure, and
+//! relationship files to construct [`Grid`] representations of sheet data.
+
 use crate::addressing::address_to_index;
 use crate::workbook::{Cell, CellAddress, CellValue, Grid};
 use quick_xml::Reader;
@@ -2383,9 +2458,93 @@ mod tests {
 
 ---
 
+### File: `core\src\hashing.rs`
+
+```rust
+//! Hash utilities for row/column signature computation.
+//!
+//! Provides consistent hashing functions used for computing structural
+//! signatures that enable efficient alignment during diffing.
+
+use std::hash::{Hash, Hasher};
+use xxhash_rust::xxh64::Xxh64;
+
+use crate::workbook::{Cell, ColSignature, RowSignature};
+
+pub(crate) const XXH64_SEED: u64 = 0;
+const HASH_MIX_CONSTANT: u64 = 0x9e3779b97f4a7c15;
+
+pub(crate) fn hash_cell_contribution(position: u32, cell: &Cell) -> u64 {
+    let mut hasher = Xxh64::new(XXH64_SEED);
+    position.hash(&mut hasher);
+    cell.value.hash(&mut hasher);
+    cell.formula.hash(&mut hasher);
+    hasher.finish()
+}
+
+pub(crate) fn mix_hash(hash: u64) -> u64 {
+    hash.rotate_left(13) ^ HASH_MIX_CONSTANT
+}
+
+pub(crate) fn combine_hashes(current: u64, contribution: u64) -> u64 {
+    current.wrapping_add(mix_hash(contribution))
+}
+
+#[allow(dead_code)]
+pub(crate) fn compute_row_signature<'a>(
+    cells: impl Iterator<Item = (u32, &'a Cell)>,
+    row: u32,
+) -> RowSignature {
+    let hash = cells
+        .filter(|(_, cell)| cell.row == row)
+        .fold(0u64, |acc, (col, cell)| {
+            combine_hashes(acc, hash_cell_contribution(col, cell))
+        });
+    RowSignature { hash }
+}
+
+#[allow(dead_code)]
+pub(crate) fn compute_col_signature<'a>(
+    cells: impl Iterator<Item = (u32, &'a Cell)>,
+    col: u32,
+) -> ColSignature {
+    let hash = cells
+        .filter(|(_, cell)| cell.col == col)
+        .fold(0u64, |acc, (row, cell)| {
+            combine_hashes(acc, hash_cell_contribution(row, cell))
+        });
+    ColSignature { hash }
+}
+
+```
+
+---
+
 ### File: `core\src\lib.rs`
 
 ```rust
+//! Excel Diff: A library for comparing Excel workbooks.
+//!
+//! This crate provides functionality for:
+//! - Opening and parsing Excel workbooks (`.xlsx` files)
+//! - Computing structural and cell-level differences between workbooks
+//! - Serializing diff reports to JSON
+//! - Parsing Power Query (M) code from DataMashup sections
+//!
+//! # Quick Start
+//!
+//! ```ignore
+//! use excel_diff::{open_workbook, diff_workbooks};
+//!
+//! let wb_a = open_workbook("file_a.xlsx")?;
+//! let wb_b = open_workbook("file_b.xlsx")?;
+//! let report = diff_workbooks(&wb_a, &wb_b);
+//!
+//! for op in &report.ops {
+//!     println!("{:?}", op);
+//! }
+//! ```
+
 pub mod addressing;
 pub mod container;
 pub mod datamashup;
@@ -2396,12 +2555,13 @@ pub mod engine;
 #[cfg(feature = "excel-open-xml")]
 pub mod excel_open_xml;
 pub mod grid_parser;
+pub(crate) mod hashing;
 pub mod m_diff;
 pub mod m_section;
 pub mod output;
 pub mod workbook;
 
-pub use addressing::{address_to_index, index_to_address};
+pub use addressing::{AddressParseError, address_to_index, index_to_address};
 pub use container::{ContainerError, OpcContainer};
 pub use datamashup::{
     DataMashup, Metadata, Permissions, Query, QueryMetadata, build_data_mashup, build_queries,
@@ -2424,16 +2584,6 @@ pub use workbook::{
     Cell, CellAddress, CellSnapshot, CellValue, ColSignature, Grid, RowSignature, Sheet, SheetKind,
     Workbook,
 };
-```
-
----
-
-### File: `core\src\main.rs`
-
-```rust
-fn main() {
-    println!("Hello, world!");
-}
 ```
 
 ---
@@ -2762,15 +2912,26 @@ fn strip_leading_bom(text: &str) -> &str {
 ### File: `core\src\workbook.rs`
 
 ```rust
-use crate::addressing::{address_to_index, index_to_address};
+//! Workbook, sheet, and grid data structures.
+//!
+//! This module defines the core intermediate representation (IR) for Excel workbooks:
+//! - [`Workbook`]: A collection of sheets
+//! - [`Sheet`]: A named sheet with a grid of cells
+//! - [`Grid`]: A sparse 2D grid of cells with optional row/column signatures
+//! - [`Cell`]: Individual cell with address, value, and optional formula
+
+use crate::addressing::{AddressParseError, address_to_index, index_to_address};
+use crate::hashing::{combine_hashes, hash_cell_contribution};
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
-use xxhash_rust::xxh64::Xxh64;
 
-/// A snapshot of a cell's logical content (address, value, formula).
+/// A snapshot of a cell's logical content for comparison purposes.
+///
+/// Used in [`DiffOp::CellEdited`] to represent the "before" and "after" states.
+/// Equality comparison intentionally ignores `addr` and compares only `(value, formula)`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CellSnapshot {
     pub addr: CellAddress,
@@ -2796,18 +2957,24 @@ impl CellSnapshot {
     }
 }
 
+/// An Excel workbook containing one or more sheets.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Workbook {
     pub sheets: Vec<Sheet>,
 }
 
+/// A single sheet within a workbook.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Sheet {
+    /// The display name of the sheet (e.g., "Sheet1", "Data").
     pub name: String,
+    /// The type of sheet (worksheet, chart, macro, etc.).
     pub kind: SheetKind,
+    /// The grid of cell data.
     pub grid: Grid,
 }
 
+/// The type of an Excel sheet.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SheetKind {
     Worksheet,
@@ -2816,28 +2983,48 @@ pub enum SheetKind {
     Other,
 }
 
+/// A sparse 2D grid of cells representing sheet data.
+///
+/// # Invariants
+///
+/// All cells stored in `cells` must satisfy `row < nrows` and `col < ncols`.
 #[derive(Debug, Clone, PartialEq)]
-/// Invariant: all cells stored in `cells` must satisfy `row < nrows` and `col < ncols`.
 pub struct Grid {
+    /// Number of rows in the grid's bounding rectangle.
     pub nrows: u32,
+    /// Number of columns in the grid's bounding rectangle.
     pub ncols: u32,
+    /// Sparse storage of non-empty cells, keyed by (row, col).
     pub cells: HashMap<(u32, u32), Cell>,
+    /// Optional precomputed row signatures for alignment.
     pub row_signatures: Option<Vec<RowSignature>>,
+    /// Optional precomputed column signatures for alignment.
     pub col_signatures: Option<Vec<ColSignature>>,
 }
 
+/// A single cell within a grid.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Cell {
+    /// Zero-based row index.
     pub row: u32,
+    /// Zero-based column index.
     pub col: u32,
+    /// The cell's A1-style address (e.g., "B2").
     pub address: CellAddress,
+    /// The cell's value, if any.
     pub value: Option<CellValue>,
+    /// The cell's formula text (without leading '='), if any.
     pub formula: Option<String>,
 }
 
+/// A cell address representing a position in a grid.
+///
+/// Can be parsed from A1-style strings (e.g., "B2", "AA10") and converted back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CellAddress {
+    /// Zero-based row index.
     pub row: u32,
+    /// Zero-based column index.
     pub col: u32,
 }
 
@@ -2852,10 +3039,12 @@ impl CellAddress {
 }
 
 impl std::str::FromStr for CellAddress {
-    type Err = ();
+    type Err = AddressParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (row, col) = address_to_index(s).ok_or(())?;
+        let (row, col) = address_to_index(s).ok_or_else(|| AddressParseError {
+            input: s.to_string(),
+        })?;
         Ok(CellAddress { row, col })
     }
 }
@@ -2881,8 +3070,7 @@ impl<'de> Deserialize<'de> for CellAddress {
         D: Deserializer<'de>,
     {
         let a1 = String::deserialize(deserializer)?;
-        CellAddress::from_str(&a1)
-            .map_err(|_| DeError::custom(format!("invalid cell address: {a1}")))
+        CellAddress::from_str(&a1).map_err(|e| DeError::custom(e.to_string()))
     }
 }
 
@@ -2921,9 +3109,6 @@ pub struct RowSignature {
 pub struct ColSignature {
     pub hash: u64,
 }
-
-const XXH64_SEED: u64 = 0;
-const HASH_MIX_CONSTANT: u64 = 0x9e3779b97f4a7c15;
 
 impl Grid {
     pub fn new(nrows: u32, ncols: u32) -> Grid {
@@ -3028,22 +3213,6 @@ impl Grid {
                 .collect(),
         );
     }
-}
-
-fn hash_cell_contribution(position: u32, cell: &Cell) -> u64 {
-    let mut hasher = Xxh64::new(XXH64_SEED);
-    position.hash(&mut hasher);
-    cell.value.hash(&mut hasher);
-    cell.formula.hash(&mut hasher);
-    hasher.finish()
-}
-
-fn mix_hash(hash: u64) -> u64 {
-    hash.rotate_left(13) ^ HASH_MIX_CONSTANT
-}
-
-fn combine_hashes(current: u64, contribution: u64) -> u64 {
-    current.wrapping_add(mix_hash(contribution))
 }
 
 impl PartialEq for CellSnapshot {
@@ -4155,10 +4324,10 @@ use common::fixture_path;
 
 #[test]
 fn g1_equal_sheet_produces_empty_diff() {
-    let wb_a =
-        open_workbook(fixture_path("equal_sheet_a.xlsx")).expect("equal_sheet_a.xlsx should open");
-    let wb_b =
-        open_workbook(fixture_path("equal_sheet_b.xlsx")).expect("equal_sheet_b.xlsx should open");
+    let wb_a = open_workbook(fixture_path("equal_sheet_a.xlsx"))
+        .expect("failed to open fixture: equal_sheet_a.xlsx");
+    let wb_b = open_workbook(fixture_path("equal_sheet_b.xlsx"))
+        .expect("failed to open fixture: equal_sheet_b.xlsx");
 
     let report = diff_workbooks(&wb_a, &wb_b);
 
@@ -4171,9 +4340,9 @@ fn g1_equal_sheet_produces_empty_diff() {
 #[test]
 fn g2_single_cell_literal_change_produces_one_celledited() {
     let wb_a = open_workbook(fixture_path("single_cell_value_a.xlsx"))
-        .expect("single_cell_value_a.xlsx should open");
+        .expect("failed to open fixture: single_cell_value_a.xlsx");
     let wb_b = open_workbook(fixture_path("single_cell_value_b.xlsx"))
-        .expect("single_cell_value_b.xlsx should open");
+        .expect("failed to open fixture: single_cell_value_b.xlsx");
 
     let report = diff_workbooks(&wb_a, &wb_b);
 
@@ -4226,9 +4395,9 @@ use common::fixture_path;
 #[test]
 fn g5_multi_cell_edits_produces_only_celledited_ops() {
     let wb_a = open_workbook(fixture_path("multi_cell_edits_a.xlsx"))
-        .expect("multi_cell_edits_a.xlsx should open");
+        .expect("failed to open fixture: multi_cell_edits_a.xlsx");
     let wb_b = open_workbook(fixture_path("multi_cell_edits_b.xlsx"))
-        .expect("multi_cell_edits_b.xlsx should open");
+        .expect("failed to open fixture: multi_cell_edits_b.xlsx");
 
     let report = diff_workbooks(&wb_a, &wb_b);
 
@@ -4292,9 +4461,9 @@ fn g5_multi_cell_edits_produces_only_celledited_ops() {
 #[test]
 fn g6_row_append_bottom_emits_two_rowadded_and_no_celledited() {
     let wb_a = open_workbook(fixture_path("row_append_bottom_a.xlsx"))
-        .expect("row_append_bottom_a.xlsx should open");
+        .expect("failed to open fixture: row_append_bottom_a.xlsx");
     let wb_b = open_workbook(fixture_path("row_append_bottom_b.xlsx"))
-        .expect("row_append_bottom_b.xlsx should open");
+        .expect("failed to open fixture: row_append_bottom_b.xlsx");
 
     let report = diff_workbooks(&wb_a, &wb_b);
 
@@ -4339,9 +4508,9 @@ fn g6_row_append_bottom_emits_two_rowadded_and_no_celledited() {
 #[test]
 fn g6_row_delete_bottom_emits_two_rowremoved_and_no_celledited() {
     let wb_a = open_workbook(fixture_path("row_delete_bottom_a.xlsx"))
-        .expect("row_delete_bottom_a.xlsx should open");
+        .expect("failed to open fixture: row_delete_bottom_a.xlsx");
     let wb_b = open_workbook(fixture_path("row_delete_bottom_b.xlsx"))
-        .expect("row_delete_bottom_b.xlsx should open");
+        .expect("failed to open fixture: row_delete_bottom_b.xlsx");
 
     let report = diff_workbooks(&wb_a, &wb_b);
 
@@ -4386,9 +4555,9 @@ fn g6_row_delete_bottom_emits_two_rowremoved_and_no_celledited() {
 #[test]
 fn g7_col_append_right_emits_two_columnadded_and_no_celledited() {
     let wb_a = open_workbook(fixture_path("col_append_right_a.xlsx"))
-        .expect("col_append_right_a.xlsx should open");
+        .expect("failed to open fixture: col_append_right_a.xlsx");
     let wb_b = open_workbook(fixture_path("col_append_right_b.xlsx"))
-        .expect("col_append_right_b.xlsx should open");
+        .expect("failed to open fixture: col_append_right_b.xlsx");
 
     let report = diff_workbooks(&wb_a, &wb_b);
 
@@ -4433,9 +4602,9 @@ fn g7_col_append_right_emits_two_columnadded_and_no_celledited() {
 #[test]
 fn g7_col_delete_right_emits_two_columnremoved_and_no_celledited() {
     let wb_a = open_workbook(fixture_path("col_delete_right_a.xlsx"))
-        .expect("col_delete_right_a.xlsx should open");
+        .expect("failed to open fixture: col_delete_right_a.xlsx");
     let wb_b = open_workbook(fixture_path("col_delete_right_b.xlsx"))
-        .expect("col_delete_right_b.xlsx should open");
+        .expect("failed to open fixture: col_delete_right_b.xlsx");
 
     let report = diff_workbooks(&wb_a, &wb_b);
 
@@ -7196,44 +7365,11 @@ fn pg4_cell_edited_invariant_helper_rejects_mismatched_snapshot_addr() {
 ### File: `core\tests\pg5_grid_diff_tests.rs`
 
 ```rust
-use excel_diff::{
-    Cell, CellAddress, CellValue, DiffOp, Grid, Sheet, SheetKind, Workbook, diff_workbooks,
-};
+use excel_diff::{CellValue, DiffOp, Grid, diff_workbooks};
 use std::collections::BTreeSet;
 
-fn grid_from_numbers(values: &[&[i32]]) -> Grid {
-    let nrows = values.len() as u32;
-    let ncols = if nrows == 0 {
-        0
-    } else {
-        values[0].len() as u32
-    };
-
-    let mut grid = Grid::new(nrows, ncols);
-    for (r, row_vals) in values.iter().enumerate() {
-        for (c, v) in row_vals.iter().enumerate() {
-            grid.insert(Cell {
-                row: r as u32,
-                col: c as u32,
-                address: CellAddress::from_indices(r as u32, c as u32),
-                value: Some(CellValue::Number(*v as f64)),
-                formula: None,
-            });
-        }
-    }
-
-    grid
-}
-
-fn single_sheet_workbook(name: &str, grid: Grid) -> Workbook {
-    Workbook {
-        sheets: vec![Sheet {
-            name: name.to_string(),
-            kind: SheetKind::Worksheet,
-            grid,
-        }],
-    }
-}
+mod common;
+use common::{grid_from_numbers, single_sheet_workbook};
 
 #[test]
 fn pg5_1_grid_diff_1x1_identical_empty_diff() {
@@ -8271,6 +8407,9 @@ fn compute_all_signatures_matches_direct_computation() {
 ### File: `core\tests\common\mod.rs`
 
 ```rust
+//! Common test utilities shared across integration tests.
+
+use excel_diff::{Cell, CellAddress, CellValue, Grid, Sheet, SheetKind, Workbook};
 use std::path::PathBuf;
 
 pub fn fixture_path(filename: &str) -> PathBuf {
@@ -8278,6 +8417,40 @@ pub fn fixture_path(filename: &str) -> PathBuf {
     path.push("../fixtures/generated");
     path.push(filename);
     path
+}
+
+pub fn grid_from_numbers(values: &[&[i32]]) -> Grid {
+    let nrows = values.len() as u32;
+    let ncols = if nrows == 0 {
+        0
+    } else {
+        values[0].len() as u32
+    };
+
+    let mut grid = Grid::new(nrows, ncols);
+    for (r, row_vals) in values.iter().enumerate() {
+        for (c, v) in row_vals.iter().enumerate() {
+            grid.insert(Cell {
+                row: r as u32,
+                col: c as u32,
+                address: CellAddress::from_indices(r as u32, c as u32),
+                value: Some(CellValue::Number(*v as f64)),
+                formula: None,
+            });
+        }
+    }
+
+    grid
+}
+
+pub fn single_sheet_workbook(name: &str, grid: Grid) -> Workbook {
+    Workbook {
+        sheets: vec![Sheet {
+            name: name.to_string(),
+            kind: SheetKind::Worksheet,
+            grid,
+        }],
+    }
 }
 ```
 
@@ -8927,38 +9100,28 @@ if __name__ == "__main__":
 ### File: `fixtures\src\generators\base.py`
 
 ```python
+"""Base classes for fixture generators."""
+
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Dict, Any, Union, List
 
+
 class BaseGenerator(ABC):
-    """
-    Abstract base class for all fixture generators.
-    """
+    """Abstract base class for all fixture generators."""
+
     def __init__(self, args: Dict[str, Any]):
         self.args = args
 
     @abstractmethod
     def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
-        """
-        Generates the fixture file(s).
-        
-        :param output_dir: The directory to save the file(s) in.
-        :param output_names: The name(s) of the output file(s) as specified in the manifest.
+        """Generate the fixture file(s).
+
+        Args:
+            output_dir: The directory to save the file(s) in.
+            output_names: The name(s) of the output file(s) as specified in the manifest.
         """
         pass
-
-    def _post_process_injection(self, file_path: Path, injection_callback):
-        """
-        Implements the "Pass 2" architecture:
-        1. Opens the generated xlsx (zip).
-        2. Injects/Modifies streams (DataMashup, etc).
-        3. Saves back.
-        
-        This is a crucial architectural decision to handle openpyxl stripping customXml.
-        """
-        pass
-
 ```
 
 ---
