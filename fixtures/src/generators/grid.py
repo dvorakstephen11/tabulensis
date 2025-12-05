@@ -343,6 +343,74 @@ class GridTailDiffGenerator(BaseGenerator):
 
         wb.save(path)
 
+class RowAlignmentG8Generator(BaseGenerator):
+    """Generates workbook pairs for G8-style middle row insert/delete scenarios."""
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        if len(output_names) != 2:
+            raise ValueError("row_alignment_g8 generator expects exactly two output filenames")
+
+        mode = self.args.get("mode")
+        sheet = self.args.get("sheet", "Sheet1")
+        base_rows = self.args.get("base_rows", 10)
+        cols = self.args.get("cols", 5)
+        insert_at = self.args.get("insert_at", 6)  # 1-based position in B
+        delete_row = self.args.get("delete_row", 6)  # 1-based position in A
+        edit_row = self.args.get("edit_row")  # Optional extra edit row (1-based in B after insert)
+        edit_col = self.args.get("edit_col", 2)  # 1-based column for extra edit
+
+        base_data = [self._base_row_values(idx, cols) for idx in range(1, base_rows + 1)]
+
+        if mode == "insert":
+            data_a = base_data
+            data_b = self._with_insert(base_data, insert_at, cols)
+        elif mode == "delete":
+            data_a = base_data
+            data_b = self._with_delete(base_data, delete_row)
+        elif mode == "insert_with_edit":
+            data_a = base_data
+            data_b = self._with_insert(base_data, insert_at, cols)
+            target_row = edit_row or (insert_at + 2)
+            if 1 <= target_row <= len(data_b):
+                row_values = list(data_b[target_row - 1])
+                col_index = max(1, min(edit_col, cols)) - 1
+                row_values[col_index] = "EditedAfterInsert"
+                data_b[target_row - 1] = row_values
+        else:
+            raise ValueError(f"Unsupported row_alignment_g8 mode: {mode}")
+
+        self._write_workbook(output_dir / output_names[0], sheet, data_a)
+        self._write_workbook(output_dir / output_names[1], sheet, data_b)
+
+    def _base_row_values(self, row_number: int, cols: int) -> List[str]:
+        return [f"Row{row_number}_Col{c}" for c in range(1, cols + 1)]
+
+    def _insert_row_values(self, cols: int) -> List[str]:
+        return [f"Inserted_Row_Col{c}" for c in range(1, cols + 1)]
+
+    def _with_insert(self, base_data: List[List[str]], insert_at: int, cols: int) -> List[List[str]]:
+        insert_idx = max(1, min(insert_at, len(base_data) + 1))
+        insert_row = self._insert_row_values(cols)
+        return base_data[: insert_idx - 1] + [insert_row] + base_data[insert_idx - 1 :]
+
+    def _with_delete(self, base_data: List[List[str]], delete_row: int) -> List[List[str]]:
+        if not (1 <= delete_row <= len(base_data)):
+            raise ValueError(f"delete_row must be within 1..{len(base_data)}")
+        return base_data[: delete_row - 1] + base_data[delete_row:]
+
+    def _write_workbook(self, path: Path, sheet: str, rows: List[List[str]]):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = sheet
+
+        for r_idx, row_values in enumerate(rows, start=1):
+            for c_idx, value in enumerate(row_values, start=1):
+                ws.cell(row=r_idx, column=c_idx, value=value)
+
+        wb.save(path)
+
 class SheetCaseRenameGenerator(BaseGenerator):
     """Generates a pair of workbooks that differ only by sheet name casing, with optional cell edit."""
     def generate(self, output_dir: Path, output_names: Union[str, List[str]]):

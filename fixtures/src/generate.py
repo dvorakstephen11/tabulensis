@@ -14,6 +14,7 @@ from generators.grid import (
     SingleCellDiffGenerator,
     MultiCellDiffGenerator,
     GridTailDiffGenerator,
+    RowAlignmentG8Generator,
     SheetCaseRenameGenerator,
     Pg6SheetScenarioGenerator,
 )
@@ -40,6 +41,7 @@ GENERATORS: Dict[str, Any] = {
     "single_cell_diff": SingleCellDiffGenerator,
     "multi_cell_diff": MultiCellDiffGenerator,
     "grid_tail_diff": GridTailDiffGenerator,
+    "row_alignment_g8": RowAlignmentG8Generator,
     "sheet_case_rename": SheetCaseRenameGenerator,
     "pg6_sheet_scenario": Pg6SheetScenarioGenerator,
     "corrupt_container": ContainerCorruptGenerator,

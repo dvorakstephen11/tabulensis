@@ -132,6 +132,45 @@ scenarios:
       - "col_delete_right_a.xlsx"
       - "col_delete_right_b.xlsx"
 
+  # --- Phase 4: Spreadsheet-mode G8 ---
+  - id: "g8_row_insert_middle"
+    generator: "row_alignment_g8"
+    args:
+      mode: "insert"
+      sheet: "Sheet1"
+      base_rows: 10
+      cols: 5
+      insert_at: 6
+    output:
+      - "row_insert_middle_a.xlsx"
+      - "row_insert_middle_b.xlsx"
+
+  - id: "g8_row_delete_middle"
+    generator: "row_alignment_g8"
+    args:
+      mode: "delete"
+      sheet: "Sheet1"
+      base_rows: 10
+      cols: 5
+      delete_row: 6
+    output:
+      - "row_delete_middle_a.xlsx"
+      - "row_delete_middle_b.xlsx"
+
+  - id: "g8_row_insert_with_edit_below"
+    generator: "row_alignment_g8"
+    args:
+      mode: "insert_with_edit"
+      sheet: "Sheet1"
+      base_rows: 10
+      cols: 5
+      insert_at: 6
+      edit_row: 8
+      edit_col: 3
+    output:
+      - "row_insert_with_edit_a.xlsx"
+      - "row_insert_with_edit_b.xlsx"
+
   # --- JSON diff: simple non-empty change ---
   - id: "json_diff_single_cell"
     generator: "single_cell_diff"

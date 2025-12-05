@@ -35,6 +35,7 @@ pub(crate) mod hashing;
 pub mod m_diff;
 pub mod m_section;
 pub mod output;
+pub(crate) mod row_alignment;
 pub mod workbook;
 
 pub use addressing::{AddressParseError, address_to_index, index_to_address};

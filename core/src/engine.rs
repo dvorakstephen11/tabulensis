@@ -4,7 +4,8 @@
 //! and generating a [`DiffReport`] of all changes.
 
 use crate::diff::{DiffOp, DiffReport, SheetId};
-use crate::workbook::{CellAddress, CellSnapshot, Grid, Sheet, SheetKind, Workbook};
+use crate::row_alignment::{RowAlignment, align_single_row_change};
+use crate::workbook::{Cell, CellAddress, CellSnapshot, Grid, Sheet, SheetKind, Workbook};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -89,25 +90,19 @@ pub fn diff_workbooks(old: &Workbook, new: &Workbook) -> DiffReport {
 }
 
 fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>) {
+    if let Some(alignment) = align_single_row_change(old, new) {
+        emit_aligned_diffs(sheet_id, old, new, &alignment, ops);
+    } else {
+        positional_diff(sheet_id, old, new, ops);
+    }
+}
+
+fn positional_diff(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>) {
     let overlap_rows = old.nrows.min(new.nrows);
     let overlap_cols = old.ncols.min(new.ncols);
 
     for row in 0..overlap_rows {
-        for col in 0..overlap_cols {
-            let old_cell = old.get(row, col);
-            let new_cell = new.get(row, col);
-
-            let old_snapshot = old_cell.map(CellSnapshot::from_cell);
-            let new_snapshot = new_cell.map(CellSnapshot::from_cell);
-
-            if old_snapshot != new_snapshot {
-                let addr = CellAddress::from_indices(row, col);
-                let from = old_snapshot.unwrap_or_else(|| CellSnapshot::empty(addr));
-                let to = new_snapshot.unwrap_or_else(|| CellSnapshot::empty(addr));
-
-                ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
-            }
-        }
+        diff_row_pair(sheet_id, old, new, row, row, overlap_cols, ops);
     }
 
     if new.nrows > old.nrows {
@@ -128,6 +123,62 @@ fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>)
         for col_idx in new.ncols..old.ncols {
             ops.push(DiffOp::column_removed(sheet_id.clone(), col_idx, None));
         }
+    }
+}
+
+fn emit_aligned_diffs(
+    sheet_id: &SheetId,
+    old: &Grid,
+    new: &Grid,
+    alignment: &RowAlignment,
+    ops: &mut Vec<DiffOp>,
+) {
+    let overlap_cols = old.ncols.min(new.ncols);
+
+    for (row_a, row_b) in &alignment.matched {
+        diff_row_pair(sheet_id, old, new, *row_a, *row_b, overlap_cols, ops);
+    }
+
+    for row_idx in &alignment.inserted {
+        ops.push(DiffOp::row_added(sheet_id.clone(), *row_idx, None));
+    }
+
+    for row_idx in &alignment.deleted {
+        ops.push(DiffOp::row_removed(sheet_id.clone(), *row_idx, None));
+    }
+}
+
+fn diff_row_pair(
+    sheet_id: &SheetId,
+    old: &Grid,
+    new: &Grid,
+    row_a: u32,
+    row_b: u32,
+    overlap_cols: u32,
+    ops: &mut Vec<DiffOp>,
+) {
+    for col in 0..overlap_cols {
+        let addr = CellAddress::from_indices(row_b, col);
+        let old_cell = old.get(row_a, col);
+        let new_cell = new.get(row_b, col);
+
+        let from = snapshot_with_addr(old_cell, addr);
+        let to = snapshot_with_addr(new_cell, addr);
+
+        if from != to {
+            ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
+        }
+    }
+}
+
+fn snapshot_with_addr(cell: Option<&Cell>, addr: CellAddress) -> CellSnapshot {
+    match cell {
+        Some(cell) => CellSnapshot {
+            addr,
+            value: cell.value.clone(),
+            formula: cell.formula.clone(),
+        },
+        None => CellSnapshot::empty(addr),
     }
 }
 
