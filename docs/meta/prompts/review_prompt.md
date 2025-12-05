@@ -12,6 +12,7 @@
     Cargo.toml
     src/
       addressing.rs
+      column_alignment.rs
       container.rs
       datamashup.rs
       datamashup_framing.rs
@@ -38,6 +39,7 @@
       g1_g2_grid_workbook_tests.rs
       g5_g7_grid_workbook_tests.rs
       g8_row_alignment_grid_workbook_tests.rs
+      g9_column_alignment_grid_workbook_tests.rs
       grid_view_hashstats_tests.rs
       grid_view_tests.rs
       integration_test.rs
@@ -64,8 +66,14 @@
     generated/
       col_append_right_a.xlsx
       col_append_right_b.xlsx
+      col_delete_middle_a.xlsx
+      col_delete_middle_b.xlsx
       col_delete_right_a.xlsx
       col_delete_right_b.xlsx
+      col_insert_middle_a.xlsx
+      col_insert_middle_b.xlsx
+      col_insert_with_edit_a.xlsx
+      col_insert_with_edit_b.xlsx
       corrupt_base64.xlsx
       db_equal_ordered_a.xlsx
       db_equal_ordered_b.xlsx
@@ -345,6 +353,295 @@ mod tests {
         for addr in invalid {
             assert!(address_to_index(addr).is_none(), "{addr} should be invalid");
         }
+    }
+}
+```
+
+---
+
+### File: `core\src\column_alignment.rs`
+
+```rust
+use crate::grid_view::{ColHash, ColMeta, GridView, HashStats};
+use crate::workbook::Grid;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ColumnAlignment {
+    pub(crate) matched: Vec<(u32, u32)>, // (col_idx_a, col_idx_b)
+    pub(crate) inserted: Vec<u32>,       // columns present only in B
+    pub(crate) deleted: Vec<u32>,        // columns present only in A
+}
+
+const MAX_ALIGN_ROWS: u32 = 2_000;
+const MAX_ALIGN_COLS: u32 = 64;
+const MAX_HASH_REPEAT: u32 = 8;
+
+pub(crate) fn align_single_column_change(old: &Grid, new: &Grid) -> Option<ColumnAlignment> {
+    if !is_within_size_bounds(old, new) {
+        return None;
+    }
+
+    if old.nrows != new.nrows {
+        return None;
+    }
+
+    let col_diff = new.ncols as i64 - old.ncols as i64;
+    if col_diff.abs() != 1 {
+        return None;
+    }
+
+    let view_a = GridView::from_grid(old);
+    let view_b = GridView::from_grid(new);
+
+    let stats = HashStats::from_col_meta(&view_a.col_meta, &view_b.col_meta);
+    if has_heavy_repetition(&stats) {
+        return None;
+    }
+
+    if col_diff == 1 {
+        find_single_gap_alignment(
+            &view_a.col_meta,
+            &view_b.col_meta,
+            &stats,
+            ColumnChange::Insert,
+        )
+    } else {
+        find_single_gap_alignment(
+            &view_a.col_meta,
+            &view_b.col_meta,
+            &stats,
+            ColumnChange::Delete,
+        )
+    }
+}
+
+enum ColumnChange {
+    Insert,
+    Delete,
+}
+
+fn find_single_gap_alignment(
+    cols_a: &[ColMeta],
+    cols_b: &[ColMeta],
+    stats: &HashStats<ColHash>,
+    change: ColumnChange,
+) -> Option<ColumnAlignment> {
+    let mut matched = Vec::new();
+    let mut inserted = Vec::new();
+    let mut deleted = Vec::new();
+    let mut skipped = false;
+
+    let mut idx_a = 0usize;
+    let mut idx_b = 0usize;
+
+    while idx_a < cols_a.len() && idx_b < cols_b.len() {
+        let meta_a = cols_a[idx_a];
+        let meta_b = cols_b[idx_b];
+
+        if meta_a.hash == meta_b.hash {
+            matched.push((meta_a.col_idx, meta_b.col_idx));
+            idx_a += 1;
+            idx_b += 1;
+            continue;
+        }
+
+        if skipped {
+            return None;
+        }
+
+        match change {
+            ColumnChange::Insert => {
+                if !is_unique_to_b(meta_b.hash, stats) {
+                    return None;
+                }
+                inserted.push(meta_b.col_idx);
+                idx_b += 1;
+            }
+            ColumnChange::Delete => {
+                if !is_unique_to_a(meta_a.hash, stats) {
+                    return None;
+                }
+                deleted.push(meta_a.col_idx);
+                idx_a += 1;
+            }
+        }
+
+        skipped = true;
+    }
+
+    if idx_a < cols_a.len() || idx_b < cols_b.len() {
+        if skipped {
+            return None;
+        }
+
+        match change {
+            ColumnChange::Insert if idx_a == cols_a.len() && cols_b.len() == idx_b + 1 => {
+                let meta_b = cols_b[idx_b];
+                if !is_unique_to_b(meta_b.hash, stats) {
+                    return None;
+                }
+                inserted.push(meta_b.col_idx);
+            }
+            ColumnChange::Delete if idx_b == cols_b.len() && cols_a.len() == idx_a + 1 => {
+                let meta_a = cols_a[idx_a];
+                if !is_unique_to_a(meta_a.hash, stats) {
+                    return None;
+                }
+                deleted.push(meta_a.col_idx);
+            }
+            _ => return None,
+        }
+    }
+
+    if inserted.len() + deleted.len() != 1 {
+        return None;
+    }
+
+    let alignment = ColumnAlignment {
+        matched,
+        inserted,
+        deleted,
+    };
+
+    debug_assert!(
+        is_monotonic(&alignment.matched),
+        "matched pairs must be strictly increasing in both dimensions"
+    );
+
+    Some(alignment)
+}
+
+fn is_monotonic(pairs: &[(u32, u32)]) -> bool {
+    pairs.windows(2).all(|w| w[0].0 < w[1].0 && w[0].1 < w[1].1)
+}
+
+fn is_unique_to_b(hash: ColHash, stats: &HashStats<ColHash>) -> bool {
+    stats.freq_a.get(&hash).copied().unwrap_or(0) == 0
+        && stats.freq_b.get(&hash).copied().unwrap_or(0) == 1
+}
+
+fn is_unique_to_a(hash: ColHash, stats: &HashStats<ColHash>) -> bool {
+    stats.freq_a.get(&hash).copied().unwrap_or(0) == 1
+        && stats.freq_b.get(&hash).copied().unwrap_or(0) == 0
+}
+
+fn is_within_size_bounds(old: &Grid, new: &Grid) -> bool {
+    let rows = old.nrows.max(new.nrows);
+    let cols = old.ncols.max(new.ncols);
+    rows <= MAX_ALIGN_ROWS && cols <= MAX_ALIGN_COLS
+}
+
+fn has_heavy_repetition(stats: &HashStats<ColHash>) -> bool {
+    stats
+        .freq_a
+        .values()
+        .chain(stats.freq_b.values())
+        .copied()
+        .max()
+        .unwrap_or(0)
+        > MAX_HASH_REPEAT
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workbook::{Cell, CellAddress, CellValue};
+
+    fn grid_from_numbers(rows: &[&[i32]]) -> Grid {
+        let nrows = rows.len() as u32;
+        let ncols = if nrows == 0 { 0 } else { rows[0].len() as u32 };
+        let mut grid = Grid::new(nrows, ncols);
+
+        for (r_idx, row_vals) in rows.iter().enumerate() {
+            for (c_idx, value) in row_vals.iter().enumerate() {
+                grid.insert(Cell {
+                    row: r_idx as u32,
+                    col: c_idx as u32,
+                    address: CellAddress::from_indices(r_idx as u32, c_idx as u32),
+                    value: Some(CellValue::Number(*value as f64)),
+                    formula: None,
+                });
+            }
+        }
+
+        grid
+    }
+
+    #[test]
+    fn single_insert_aligns_all_columns() {
+        let base_rows: Vec<Vec<i32>> =
+            vec![vec![1, 2, 3, 4], vec![5, 6, 7, 8], vec![9, 10, 11, 12]];
+        let base_refs: Vec<&[i32]> = base_rows.iter().map(|r| r.as_slice()).collect();
+        let grid_a = grid_from_numbers(&base_refs);
+
+        let inserted_rows: Vec<Vec<i32>> = base_rows
+            .iter()
+            .enumerate()
+            .map(|(idx, row)| {
+                let mut new_row = row.clone();
+                new_row.insert(2, 100 + idx as i32); // insert at index 2 (0-based)
+                new_row
+            })
+            .collect();
+        let inserted_refs: Vec<&[i32]> = inserted_rows.iter().map(|r| r.as_slice()).collect();
+        let grid_b = grid_from_numbers(&inserted_refs);
+
+        let alignment =
+            align_single_column_change(&grid_a, &grid_b).expect("alignment should succeed");
+
+        assert_eq!(alignment.inserted, vec![2]);
+        assert!(alignment.deleted.is_empty());
+        assert_eq!(alignment.matched.len(), 4);
+        assert_eq!(alignment.matched[0], (0, 0));
+        assert_eq!(alignment.matched[1], (1, 1));
+        assert_eq!(alignment.matched[2], (2, 3));
+        assert_eq!(alignment.matched[3], (3, 4));
+    }
+
+    #[test]
+    fn multiple_unique_columns_causes_bailout() {
+        let base_rows: Vec<Vec<i32>> = vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]];
+        let base_refs: Vec<&[i32]> = base_rows.iter().map(|r| r.as_slice()).collect();
+        let grid_a = grid_from_numbers(&base_refs);
+
+        let mut rows_b: Vec<Vec<i32>> = base_rows
+            .iter()
+            .enumerate()
+            .map(|(idx, row)| {
+                let mut new_row = row.clone();
+                new_row.insert(1, 100 + idx as i32); // inserted column
+                new_row
+            })
+            .collect();
+        if let Some(cell) = rows_b.get_mut(1).and_then(|row| row.get_mut(3)) {
+            *cell = 999;
+        }
+        let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|r| r.as_slice()).collect();
+        let grid_b = grid_from_numbers(&rows_b_refs);
+
+        assert!(align_single_column_change(&grid_a, &grid_b).is_none());
+    }
+
+    #[test]
+    fn heavy_repetition_causes_bailout() {
+        let repetitive_cols = 9;
+        let rows: usize = 3;
+
+        let values_a: Vec<Vec<i32>> = (0..rows).map(|_| vec![1; repetitive_cols]).collect();
+        let refs_a: Vec<&[i32]> = values_a.iter().map(|r| r.as_slice()).collect();
+        let grid_a = grid_from_numbers(&refs_a);
+
+        let values_b: Vec<Vec<i32>> = (0..rows)
+            .map(|row_idx| {
+                let mut row = vec![1; repetitive_cols];
+                row.insert(4, 2 + row_idx as i32);
+                row
+            })
+            .collect();
+        let refs_b: Vec<&[i32]> = values_b.iter().map(|r| r.as_slice()).collect();
+        let grid_b = grid_from_numbers(&refs_b);
+
+        assert!(align_single_column_change(&grid_a, &grid_b).is_none());
     }
 }
 ```
@@ -1721,6 +2018,7 @@ impl DiffOp {
 //! Provides the main entry point [`diff_workbooks`] for comparing two workbooks
 //! and generating a [`DiffReport`] of all changes.
 
+use crate::column_alignment::{ColumnAlignment, align_single_column_change};
 use crate::diff::{DiffOp, DiffReport, SheetId};
 use crate::row_alignment::{RowAlignment, align_single_row_change};
 use crate::workbook::{Cell, CellAddress, CellSnapshot, Grid, Sheet, SheetKind, Workbook};
@@ -1810,6 +2108,8 @@ pub fn diff_workbooks(old: &Workbook, new: &Workbook) -> DiffReport {
 fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>) {
     if let Some(alignment) = align_single_row_change(old, new) {
         emit_aligned_diffs(sheet_id, old, new, &alignment, ops);
+    } else if let Some(alignment) = align_single_column_change(old, new) {
+        emit_column_aligned_diffs(sheet_id, old, new, &alignment, ops);
     } else {
         positional_diff(sheet_id, old, new, ops);
     }
@@ -1886,6 +2186,39 @@ fn diff_row_pair(
         if from != to {
             ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
         }
+    }
+}
+
+fn emit_column_aligned_diffs(
+    sheet_id: &SheetId,
+    old: &Grid,
+    new: &Grid,
+    alignment: &ColumnAlignment,
+    ops: &mut Vec<DiffOp>,
+) {
+    let overlap_rows = old.nrows.min(new.nrows);
+
+    for row in 0..overlap_rows {
+        for (col_a, col_b) in &alignment.matched {
+            let addr = CellAddress::from_indices(row, *col_b);
+            let old_cell = old.get(row, *col_a);
+            let new_cell = new.get(row, *col_b);
+
+            let from = snapshot_with_addr(old_cell, addr);
+            let to = snapshot_with_addr(new_cell, addr);
+
+            if from != to {
+                ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
+            }
+        }
+    }
+
+    for col_idx in &alignment.inserted {
+        ops.push(DiffOp::column_added(sheet_id.clone(), *col_idx, None));
+    }
+
+    for col_idx in &alignment.deleted {
+        ops.push(DiffOp::column_removed(sheet_id.clone(), *col_idx, None));
     }
 }
 
@@ -2681,6 +3014,27 @@ impl HashStats<RowHash> {
     }
 }
 
+impl HashStats<ColHash> {
+    pub fn from_col_meta(cols_a: &[ColMeta], cols_b: &[ColMeta]) -> HashStats<ColHash> {
+        let mut stats = HashStats::default();
+
+        for meta in cols_a {
+            *stats.freq_a.entry(meta.hash).or_insert(0) += 1;
+        }
+
+        for meta in cols_b {
+            *stats.freq_b.entry(meta.hash).or_insert(0) += 1;
+            stats
+                .hash_to_positions_b
+                .entry(meta.hash)
+                .or_insert_with(Vec::new)
+                .push(meta.col_idx);
+        }
+
+        stats
+    }
+}
+
 impl<H> HashStats<H>
 where
     H: Eq + Hash + Copy,
@@ -2842,6 +3196,7 @@ pub(crate) fn compute_col_signature<'a>(
 //! ```
 
 pub mod addressing;
+pub(crate) mod column_alignment;
 pub mod container;
 pub mod datamashup;
 pub mod datamashup_framing;
@@ -3459,19 +3814,14 @@ mod tests {
 
     #[test]
     fn rejects_non_monotonic_alignment_with_extra_mismatch() {
-        let base_rows = [
-            [11, 12, 13],
-            [21, 22, 23],
-            [31, 32, 33],
-            [41, 42, 43],
-        ];
+        let base_rows = [[11, 12, 13], [21, 22, 23], [31, 32, 33], [41, 42, 43]];
         let base_refs: Vec<&[i32]> = base_rows.iter().map(|row| row.as_slice()).collect();
         let grid_a = grid_from_rows(&base_refs);
 
         let rows_b: Vec<&[i32]> = vec![
-            base_refs[0],          // same
-            &[999, 1000, 1001],    // inserted unique row
-            base_refs[2],          // move row 3 before row 2 to break monotonicity
+            base_refs[0],       // same
+            &[999, 1000, 1001], // inserted unique row
+            base_refs[2],       // move row 3 before row 2 to break monotonicity
             base_refs[1],
             base_refs[3],
         ];
@@ -5518,10 +5868,169 @@ fn alignment_bails_out_when_additional_edits_present() {
 
 ---
 
+### File: `core\tests\g9_column_alignment_grid_workbook_tests.rs`
+
+```rust
+use excel_diff::{CellValue, DiffOp, Workbook, diff_workbooks, open_workbook};
+
+mod common;
+use common::fixture_path;
+
+#[test]
+fn g9_col_insert_middle_emits_one_columnadded_and_no_noise() {
+    let wb_a = open_workbook(fixture_path("col_insert_middle_a.xlsx"))
+        .expect("failed to open fixture: col_insert_middle_a.xlsx");
+    let wb_b = open_workbook(fixture_path("col_insert_middle_b.xlsx"))
+        .expect("failed to open fixture: col_insert_middle_b.xlsx");
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    let cols_added: Vec<u32> = report
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            DiffOp::ColumnAdded {
+                sheet,
+                col_idx,
+                col_signature,
+            } => {
+                assert_eq!(sheet, "Data");
+                assert!(col_signature.is_none());
+                Some(*col_idx)
+            }
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        cols_added,
+        vec![3],
+        "expected single ColumnAdded at inserted position"
+    );
+
+    assert!(
+        !report.ops.iter().any(|op| matches!(
+            op,
+            DiffOp::ColumnRemoved { .. } | DiffOp::RowAdded { .. } | DiffOp::RowRemoved { .. }
+        )),
+        "column insert should not emit row ops or ColumnRemoved"
+    );
+
+    assert!(
+        !report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::CellEdited { .. })),
+        "aligned insert should not emit CellEdited noise"
+    );
+}
+
+#[test]
+fn g9_col_delete_middle_emits_one_columnremoved_and_no_noise() {
+    let wb_a = open_workbook(fixture_path("col_delete_middle_a.xlsx"))
+        .expect("failed to open fixture: col_delete_middle_a.xlsx");
+    let wb_b = open_workbook(fixture_path("col_delete_middle_b.xlsx"))
+        .expect("failed to open fixture: col_delete_middle_b.xlsx");
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    let cols_removed: Vec<u32> = report
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            DiffOp::ColumnRemoved {
+                sheet,
+                col_idx,
+                col_signature,
+            } => {
+                assert_eq!(sheet, "Data");
+                assert!(col_signature.is_none());
+                Some(*col_idx)
+            }
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        cols_removed,
+        vec![3],
+        "expected single ColumnRemoved at deleted position"
+    );
+
+    assert!(
+        !report.ops.iter().any(|op| matches!(
+            op,
+            DiffOp::ColumnAdded { .. } | DiffOp::RowAdded { .. } | DiffOp::RowRemoved { .. }
+        )),
+        "column delete should not emit ColumnAdded or row ops"
+    );
+
+    assert!(
+        !report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::CellEdited { .. })),
+        "aligned delete should not emit CellEdited noise"
+    );
+}
+
+#[test]
+fn g9_alignment_bails_out_when_additional_edits_present() {
+    let wb_a = open_workbook(fixture_path("col_insert_with_edit_a.xlsx"))
+        .expect("failed to open fixture: col_insert_with_edit_a.xlsx");
+    let wb_b = open_workbook(fixture_path("col_insert_with_edit_b.xlsx"))
+        .expect("failed to open fixture: col_insert_with_edit_b.xlsx");
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+    let inserted_idx = find_header_col(&wb_b, "Inserted");
+
+    let has_middle_column_add = report.ops.iter().any(|op| match op {
+        DiffOp::ColumnAdded { col_idx, .. } => *col_idx == inserted_idx,
+        _ => false,
+    });
+    assert!(
+        !has_middle_column_add,
+        "alignment should bail out; no ColumnAdded at the inserted index"
+    );
+
+    let edited_cols: Vec<u32> = report
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            DiffOp::CellEdited { addr, .. } => Some(addr.col),
+            _ => None,
+        })
+        .collect();
+
+    assert!(
+        !edited_cols.is_empty(),
+        "fallback positional diff should emit CellEdited ops"
+    );
+    assert!(
+        edited_cols.iter().any(|col| *col > inserted_idx),
+        "CellEdited ops should appear in columns to the right of the insertion"
+    );
+}
+
+fn find_header_col(workbook: &Workbook, header: &str) -> u32 {
+    workbook
+        .sheets
+        .iter()
+        .flat_map(|sheet| sheet.grid.cells.iter())
+        .find_map(|((row, col), cell)| match &cell.value {
+            Some(CellValue::Text(text)) if *row == 0 && text == header => Some(*col),
+            _ => None,
+        })
+        .expect("header column should exist in fixture")
+}
+```
+
+---
+
 ### File: `core\tests\grid_view_hashstats_tests.rs`
 
 ```rust
-use excel_diff::{HashStats, RowHash, RowMeta};
+use excel_diff::{ColHash, ColMeta, HashStats, RowHash, RowMeta};
 
 fn row_meta(row_idx: u32, hash: RowHash) -> RowMeta {
     RowMeta {
@@ -5530,6 +6039,15 @@ fn row_meta(row_idx: u32, hash: RowHash) -> RowMeta {
         non_blank_count: 0,
         first_non_blank_col: 0,
         is_low_info: false,
+    }
+}
+
+fn col_meta(col_idx: u32, hash: ColHash) -> ColMeta {
+    ColMeta {
+        col_idx,
+        hash,
+        non_blank_count: 0,
+        first_non_blank_row: 0,
     }
 }
 
@@ -5627,6 +6145,44 @@ fn hashstats_empty_inputs() {
     assert!(!stats.is_rare(dummy_hash, 1));
     assert!(!stats.is_common(dummy_hash, 0));
     assert!(!stats.appears_in_both(dummy_hash));
+}
+
+#[test]
+fn hashstats_from_col_meta_tracks_positions() {
+    let h1: ColHash = 10;
+    let h2: ColHash = 20;
+    let h3: ColHash = 30;
+
+    let cols_a = vec![col_meta(0, h1), col_meta(1, h2), col_meta(2, h2)];
+    let cols_b = vec![col_meta(0, h2), col_meta(1, h3)];
+
+    let stats = HashStats::from_col_meta(&cols_a, &cols_b);
+
+    assert_eq!(stats.freq_a.get(&h1).copied().unwrap_or(0), 1);
+    assert_eq!(stats.freq_b.get(&h1).copied().unwrap_or(0), 0);
+
+    assert_eq!(stats.freq_a.get(&h2).copied().unwrap_or(0), 2);
+    assert_eq!(stats.freq_b.get(&h2).copied().unwrap_or(0), 1);
+
+    assert_eq!(stats.freq_b.get(&h3).copied().unwrap_or(0), 1);
+    assert_eq!(stats.freq_a.get(&h3).copied().unwrap_or(0), 0);
+
+    assert_eq!(
+        stats
+            .hash_to_positions_b
+            .get(&h2)
+            .cloned()
+            .unwrap_or_default(),
+        vec![0]
+    );
+    assert_eq!(
+        stats
+            .hash_to_positions_b
+            .get(&h3)
+            .cloned()
+            .unwrap_or_default(),
+        vec![1]
+    );
 }
 ```
 
@@ -9836,6 +10392,45 @@ scenarios:
       - "row_insert_with_edit_a.xlsx"
       - "row_insert_with_edit_b.xlsx"
 
+  # --- Phase 4: Spreadsheet-mode G9 ---
+  - id: "g9_col_insert_middle"
+    generator: "column_alignment_g9"
+    args:
+      mode: "insert"
+      sheet: "Data"
+      cols: 8
+      data_rows: 9
+      insert_at: 4
+    output:
+      - "col_insert_middle_a.xlsx"
+      - "col_insert_middle_b.xlsx"
+
+  - id: "g9_col_delete_middle"
+    generator: "column_alignment_g9"
+    args:
+      mode: "delete"
+      sheet: "Data"
+      cols: 8
+      data_rows: 9
+      delete_col: 4
+    output:
+      - "col_delete_middle_a.xlsx"
+      - "col_delete_middle_b.xlsx"
+
+  - id: "g9_col_insert_with_edit"
+    generator: "column_alignment_g9"
+    args:
+      mode: "insert_with_edit"
+      sheet: "Data"
+      cols: 8
+      data_rows: 9
+      insert_at: 4
+      edit_row: 8
+      edit_col_after_insert: 7
+    output:
+      - "col_insert_with_edit_a.xlsx"
+      - "col_insert_with_edit_b.xlsx"
+
   # --- JSON diff: simple non-empty change ---
   - id: "json_diff_single_cell"
     generator: "single_cell_diff"
@@ -10226,6 +10821,7 @@ from generators.grid import (
     MultiCellDiffGenerator,
     GridTailDiffGenerator,
     RowAlignmentG8Generator,
+    ColumnAlignmentG9Generator,
     SheetCaseRenameGenerator,
     Pg6SheetScenarioGenerator,
 )
@@ -10253,6 +10849,7 @@ GENERATORS: Dict[str, Any] = {
     "multi_cell_diff": MultiCellDiffGenerator,
     "grid_tail_diff": GridTailDiffGenerator,
     "row_alignment_g8": RowAlignmentG8Generator,
+    "column_alignment_g9": ColumnAlignmentG9Generator,
     "sheet_case_rename": SheetCaseRenameGenerator,
     "pg6_sheet_scenario": Pg6SheetScenarioGenerator,
     "corrupt_container": ContainerCorruptGenerator,
@@ -10896,6 +11493,87 @@ class RowAlignmentG8Generator(BaseGenerator):
         if not (1 <= delete_row <= len(base_data)):
             raise ValueError(f"delete_row must be within 1..{len(base_data)}")
         return base_data[: delete_row - 1] + base_data[delete_row:]
+
+    def _write_workbook(self, path: Path, sheet: str, rows: List[List[str]]):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = sheet
+
+        for r_idx, row_values in enumerate(rows, start=1):
+            for c_idx, value in enumerate(row_values, start=1):
+                ws.cell(row=r_idx, column=c_idx, value=value)
+
+        wb.save(path)
+
+class ColumnAlignmentG9Generator(BaseGenerator):
+    """Generates workbook pairs for G9-style middle column insert/delete scenarios."""
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        if len(output_names) != 2:
+            raise ValueError("column_alignment_g9 generator expects exactly two output filenames")
+
+        mode = self.args.get("mode")
+        sheet = self.args.get("sheet", "Data")
+        base_cols = self.args.get("cols", 8)
+        data_rows = self.args.get("data_rows", 9)  # excludes header
+        insert_at = self.args.get("insert_at", 4)  # 1-based position in B after insert
+        delete_col = self.args.get("delete_col", 4)
+        edit_row = self.args.get("edit_row", 8)
+        edit_col_after_insert = self.args.get("edit_col_after_insert", 7)
+
+        base_table = self._base_table(base_cols, data_rows)
+
+        if mode == "insert":
+            data_a = self._clone_rows(base_table)
+            data_b = self._with_insert(base_table, insert_at)
+        elif mode == "delete":
+            data_a = self._clone_rows(base_table)
+            data_b = self._with_delete(base_table, delete_col)
+        elif mode == "insert_with_edit":
+            data_a = self._clone_rows(base_table)
+            data_b = self._with_insert(base_table, insert_at)
+            row_idx = max(2, min(edit_row, len(data_b))) - 1  # stay below header
+            col_idx = max(1, min(edit_col_after_insert, len(data_b[row_idx]))) - 1
+            data_b[row_idx][col_idx] = "EditedAfterInsert"
+        else:
+            raise ValueError(f"Unsupported column_alignment_g9 mode: {mode}")
+
+        self._write_workbook(output_dir / output_names[0], sheet, data_a)
+        self._write_workbook(output_dir / output_names[1], sheet, data_b)
+
+    def _base_table(self, cols: int, data_rows: int) -> List[List[str]]:
+        header = [f"Col{c}" for c in range(1, cols + 1)]
+        rows = [header]
+        for r in range(1, data_rows + 1):
+            rows.append([f"R{r}_C{c}" for c in range(1, cols + 1)])
+        return rows
+
+    def _with_insert(self, base_data: List[List[str]], insert_at: int) -> List[List[str]]:
+        insert_idx = max(1, min(insert_at, len(base_data[0]) + 1))
+        result: List[List[str]] = []
+        for row_idx, row in enumerate(base_data):
+            new_row = list(row)
+            value = "Inserted" if row_idx == 0 else f"Inserted_{row_idx}"
+            new_row.insert(insert_idx - 1, value)
+            result.append(new_row)
+        return result
+
+    def _with_delete(self, base_data: List[List[str]], delete_col: int) -> List[List[str]]:
+        if not base_data:
+            return []
+        if not (1 <= delete_col <= len(base_data[0])):
+            raise ValueError(f"delete_col must be within 1..{len(base_data[0])}")
+        result: List[List[str]] = []
+        for row in base_data:
+            new_row = list(row)
+            del new_row[delete_col - 1]
+            result.append(new_row)
+        return result
+
+    def _clone_rows(self, rows: List[List[str]]) -> List[List[str]]:
+        return [list(r) for r in rows]
 
     def _write_workbook(self, path: Path, sheet: str, rows: List[List[str]]):
         wb = openpyxl.Workbook()
