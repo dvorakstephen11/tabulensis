@@ -20,6 +20,7 @@
       engine.rs
       excel_open_xml.rs
       grid_parser.rs
+      grid_view.rs
       hashing.rs
       lib.rs
       m_diff.rs
@@ -35,6 +36,8 @@
       excel_open_xml_tests.rs
       g1_g2_grid_workbook_tests.rs
       g5_g7_grid_workbook_tests.rs
+      grid_view_hashstats_tests.rs
+      grid_view_tests.rs
       integration_test.rs
       m4_package_parts_tests.rs
       m4_permissions_metadata_tests.rs
@@ -2458,6 +2461,245 @@ mod tests {
 
 ---
 
+### File: `core\src\grid_view.rs`
+
+```rust
+use std::collections::HashMap;
+use std::hash::Hash;
+
+use crate::hashing::{combine_hashes, hash_cell_contribution};
+use crate::workbook::{Cell, CellValue, Grid};
+
+pub type RowHash = u64;
+pub type ColHash = u64;
+
+#[derive(Debug)]
+pub struct RowView<'a> {
+    pub cells: Vec<(u32, &'a Cell)>, // sorted by column index
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RowMeta {
+    pub row_idx: u32,
+    pub hash: RowHash,
+    pub non_blank_count: u16,
+    pub first_non_blank_col: u16,
+    pub is_low_info: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ColMeta {
+    pub col_idx: u32,
+    pub hash: ColHash,
+    pub non_blank_count: u16,
+    pub first_non_blank_row: u16,
+}
+
+#[derive(Debug)]
+pub struct GridView<'a> {
+    pub rows: Vec<RowView<'a>>,
+    pub row_meta: Vec<RowMeta>,
+    pub col_meta: Vec<ColMeta>,
+    pub source: &'a Grid,
+}
+
+impl<'a> GridView<'a> {
+    pub fn from_grid(grid: &'a Grid) -> GridView<'a> {
+        let nrows = grid.nrows as usize;
+        let ncols = grid.ncols as usize;
+
+        let mut rows: Vec<RowView<'a>> =
+            (0..nrows).map(|_| RowView { cells: Vec::new() }).collect();
+
+        let mut row_hashes = vec![0u64; nrows];
+        let mut row_counts = vec![0u32; nrows];
+        let mut row_first_non_blank: Vec<Option<u32>> = vec![None; nrows];
+
+        let mut col_hashes = vec![0u64; ncols];
+        let mut col_counts = vec![0u32; ncols];
+        let mut col_first_non_blank: Vec<Option<u32>> = vec![None; ncols];
+
+        for ((row, col), cell) in &grid.cells {
+            let r = *row as usize;
+            let c = *col as usize;
+
+            debug_assert!(
+                r < nrows && c < ncols,
+                "cell coordinates must lie within the grid bounds"
+            );
+
+            rows[r].cells.push((*col, cell));
+
+            let row_contribution = hash_cell_contribution(*col, cell);
+            row_hashes[r] = combine_hashes(row_hashes[r], row_contribution);
+
+            let col_contribution = hash_cell_contribution(*row, cell);
+            col_hashes[c] = combine_hashes(col_hashes[c], col_contribution);
+
+            if is_non_blank(cell) {
+                row_counts[r] = row_counts[r].saturating_add(1);
+                col_counts[c] = col_counts[c].saturating_add(1);
+
+                row_first_non_blank[r] =
+                    Some(row_first_non_blank[r].map_or(*col, |cur| cur.min(*col)));
+                col_first_non_blank[c] =
+                    Some(col_first_non_blank[c].map_or(*row, |cur| cur.min(*row)));
+            }
+        }
+
+        for row_view in rows.iter_mut() {
+            row_view.cells.sort_by_key(|(col, _)| *col);
+        }
+
+        let row_meta = rows
+            .iter()
+            .enumerate()
+            .map(|(idx, row_view)| {
+                let count = row_counts.get(idx).copied().unwrap_or(0);
+                let non_blank_count = to_u16(count);
+                let first_non_blank_col = row_first_non_blank
+                    .get(idx)
+                    .and_then(|c| c.map(to_u16))
+                    .unwrap_or(0);
+                let is_low_info = compute_is_low_info(non_blank_count, row_view);
+
+                RowMeta {
+                    row_idx: idx as u32,
+                    hash: row_hashes.get(idx).copied().unwrap_or(0),
+                    non_blank_count,
+                    first_non_blank_col,
+                    is_low_info,
+                }
+            })
+            .collect();
+
+        let col_meta = (0..ncols)
+            .map(|idx| ColMeta {
+                col_idx: idx as u32,
+                hash: col_hashes.get(idx).copied().unwrap_or(0),
+                non_blank_count: to_u16(col_counts.get(idx).copied().unwrap_or(0)),
+                first_non_blank_row: col_first_non_blank
+                    .get(idx)
+                    .and_then(|r| r.map(to_u16))
+                    .unwrap_or(0),
+            })
+            .collect();
+
+        GridView {
+            rows,
+            row_meta,
+            col_meta,
+            source: grid,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct HashStats<H> {
+    pub freq_a: HashMap<H, u32>,
+    pub freq_b: HashMap<H, u32>,
+    pub hash_to_positions_b: HashMap<H, Vec<u32>>,
+}
+
+impl HashStats<RowHash> {
+    pub fn from_row_meta(rows_a: &[RowMeta], rows_b: &[RowMeta]) -> HashStats<RowHash> {
+        let mut stats = HashStats::default();
+
+        for meta in rows_a {
+            *stats.freq_a.entry(meta.hash).or_insert(0) += 1;
+        }
+
+        for meta in rows_b {
+            *stats.freq_b.entry(meta.hash).or_insert(0) += 1;
+            stats
+                .hash_to_positions_b
+                .entry(meta.hash)
+                .or_insert_with(Vec::new)
+                .push(meta.row_idx);
+        }
+
+        for positions in stats.hash_to_positions_b.values_mut() {
+            positions.sort_unstable();
+        }
+
+        stats
+    }
+}
+
+impl<H> HashStats<H>
+where
+    H: Eq + Hash + Copy,
+{
+    pub fn is_unique(&self, hash: H) -> bool {
+        self.freq_a.get(&hash).copied().unwrap_or(0) == 1
+            && self.freq_b.get(&hash).copied().unwrap_or(0) == 1
+    }
+
+    pub fn is_rare(&self, hash: H, threshold: u32) -> bool {
+        let freq_a = self.freq_a.get(&hash).copied().unwrap_or(0);
+        let freq_b = self.freq_b.get(&hash).copied().unwrap_or(0);
+
+        if freq_a == 0 || freq_b == 0 || self.is_unique(hash) {
+            return false;
+        }
+
+        freq_a <= threshold && freq_b <= threshold
+    }
+
+    pub fn is_common(&self, hash: H, threshold: u32) -> bool {
+        let freq_a = self.freq_a.get(&hash).copied().unwrap_or(0);
+        let freq_b = self.freq_b.get(&hash).copied().unwrap_or(0);
+
+        if freq_a == 0 && freq_b == 0 {
+            return false;
+        }
+
+        freq_a >= threshold || freq_b >= threshold
+    }
+
+    pub fn appears_in_both(&self, hash: H) -> bool {
+        self.freq_a.get(&hash).copied().unwrap_or(0) > 0
+            && self.freq_b.get(&hash).copied().unwrap_or(0) > 0
+    }
+}
+
+fn is_non_blank(cell: &Cell) -> bool {
+    cell.value.is_some() || cell.formula.is_some()
+}
+
+fn compute_is_low_info(non_blank_count: u16, row_view: &RowView<'_>) -> bool {
+    if non_blank_count == 0 {
+        return true;
+    }
+
+    if non_blank_count > 1 {
+        return false;
+    }
+
+    let cell = row_view
+        .cells
+        .iter()
+        .find_map(|(_, cell)| is_non_blank(cell).then_some(*cell));
+
+    match cell {
+        None => true,
+        Some(cell) => match (&cell.value, &cell.formula) {
+            (_, Some(_)) => false,
+            (Some(CellValue::Text(s)), None) => s.trim().is_empty(),
+            (Some(CellValue::Number(_)), _) => false,
+            (Some(CellValue::Bool(_)), _) => false,
+            (None, None) => true,
+        },
+    }
+}
+
+fn to_u16(value: u32) -> u16 {
+    u16::try_from(value).unwrap_or(u16::MAX)
+}
+```
+
+---
+
 ### File: `core\src\hashing.rs`
 
 ```rust
@@ -2515,7 +2757,6 @@ pub(crate) fn compute_col_signature<'a>(
         });
     ColSignature { hash }
 }
-
 ```
 
 ---
@@ -2555,6 +2796,7 @@ pub mod engine;
 #[cfg(feature = "excel-open-xml")]
 pub mod excel_open_xml;
 pub mod grid_parser;
+pub mod grid_view;
 pub(crate) mod hashing;
 pub mod m_diff;
 pub mod m_section;
@@ -2575,6 +2817,7 @@ pub use engine::diff_workbooks;
 #[cfg(feature = "excel-open-xml")]
 pub use excel_open_xml::{ExcelOpenError, open_data_mashup, open_workbook};
 pub use grid_parser::{GridParseError, SheetDescriptor};
+pub use grid_view::{ColHash, ColMeta, GridView, HashStats, RowHash, RowMeta, RowView};
 pub use m_diff::{MQueryDiff, QueryChangeKind, diff_m_queries};
 pub use m_section::{SectionMember, SectionParseError, parse_section_members};
 #[cfg(feature = "excel-open-xml")]
@@ -4643,6 +4886,262 @@ fn g7_col_delete_right_emits_two_columnremoved_and_no_celledited() {
                 | DiffOp::CellEdited { .. }
         )),
         "column delete should not emit additions, row ops, or cell edits"
+    );
+}
+```
+
+---
+
+### File: `core\tests\grid_view_hashstats_tests.rs`
+
+```rust
+use excel_diff::{HashStats, RowHash, RowMeta};
+
+fn row_meta(row_idx: u32, hash: RowHash) -> RowMeta {
+    RowMeta {
+        row_idx,
+        hash,
+        non_blank_count: 0,
+        first_non_blank_col: 0,
+        is_low_info: false,
+    }
+}
+
+#[test]
+fn hashstats_counts_and_positions_basic() {
+    let h1: RowHash = 1;
+    let h2: RowHash = 2;
+    let h3: RowHash = 3;
+    let h4: RowHash = 4;
+
+    let rows_a = vec![
+        row_meta(0, h1),
+        row_meta(1, h2),
+        row_meta(2, h2),
+        row_meta(3, h3),
+    ];
+    let rows_b = vec![row_meta(0, h2), row_meta(1, h3), row_meta(2, h4)];
+
+    let stats = HashStats::from_row_meta(&rows_a, &rows_b);
+
+    assert_eq!(stats.freq_a.get(&h1).copied().unwrap_or(0), 1);
+    assert_eq!(stats.freq_b.get(&h1).copied().unwrap_or(0), 0);
+
+    assert_eq!(stats.freq_a.get(&h2).copied().unwrap_or(0), 2);
+    assert_eq!(stats.freq_b.get(&h2).copied().unwrap_or(0), 1);
+
+    assert_eq!(stats.freq_a.get(&h3).copied().unwrap_or(0), 1);
+    assert_eq!(stats.freq_b.get(&h3).copied().unwrap_or(0), 1);
+
+    assert_eq!(stats.freq_a.get(&h4).copied().unwrap_or(0), 0);
+    assert_eq!(stats.freq_b.get(&h4).copied().unwrap_or(0), 1);
+
+    assert_eq!(
+        stats.hash_to_positions_b.get(&h2).cloned().unwrap(),
+        vec![0]
+    );
+    assert_eq!(
+        stats.hash_to_positions_b.get(&h3).cloned().unwrap(),
+        vec![1]
+    );
+    assert_eq!(
+        stats.hash_to_positions_b.get(&h4).cloned().unwrap(),
+        vec![2]
+    );
+
+    let threshold = 2;
+    assert!(stats.is_unique(h3));
+    assert!(stats.is_common(h2, threshold));
+    assert!(!stats.is_rare(h3, threshold));
+    assert!(stats.appears_in_both(h3));
+    assert!(!stats.appears_in_both(h1));
+    assert!(!stats.appears_in_both(h4));
+}
+
+#[test]
+fn hashstats_empty_inputs() {
+    let stats = HashStats::from_row_meta(&[], &[]);
+    let dummy_hash: RowHash = 123;
+
+    assert!(stats.freq_a.is_empty());
+    assert!(stats.freq_b.is_empty());
+    assert!(stats.hash_to_positions_b.is_empty());
+
+    assert!(!stats.is_unique(dummy_hash));
+    assert!(!stats.is_rare(dummy_hash, 1));
+    assert!(!stats.is_common(dummy_hash, 0));
+    assert!(!stats.appears_in_both(dummy_hash));
+}
+```
+
+---
+
+### File: `core\tests\grid_view_tests.rs`
+
+```rust
+use excel_diff::{Cell, CellAddress, CellValue, Grid, GridView};
+
+mod common;
+use common::grid_from_numbers;
+
+fn make_cell(row: u32, col: u32, value: Option<CellValue>, formula: Option<&str>) -> Cell {
+    Cell {
+        row,
+        col,
+        address: CellAddress::from_indices(row, col),
+        value,
+        formula: formula.map(|s| s.to_string()),
+    }
+}
+
+#[test]
+fn gridview_dense_3x3_layout_and_metadata() {
+    let grid = grid_from_numbers(&[&[1, 2, 3], &[4, 5, 6], &[7, 8, 9]]);
+
+    let view = GridView::from_grid(&grid);
+
+    assert_eq!(view.rows.len(), 3);
+    assert_eq!(view.row_meta.len(), 3);
+    assert_eq!(view.col_meta.len(), 3);
+
+    for (row_idx, row_view) in view.rows.iter().enumerate() {
+        assert_eq!(row_view.cells.len(), 3);
+        for (col_idx, (col, cell)) in row_view.cells.iter().enumerate() {
+            assert_eq!(*col as usize, col_idx);
+            assert_eq!(cell.row as usize, row_idx);
+            assert_eq!(cell.col as usize, col_idx);
+        }
+
+        let meta = &view.row_meta[row_idx];
+        assert_eq!(meta.non_blank_count, 3);
+        assert_eq!(meta.first_non_blank_col, 0);
+        assert!(!meta.is_low_info);
+    }
+
+    for (col_idx, col_meta) in view.col_meta.iter().enumerate() {
+        assert_eq!(col_meta.non_blank_count, 3);
+        assert_eq!(col_meta.first_non_blank_row, 0);
+        assert_eq!(col_meta.col_idx as usize, col_idx);
+    }
+}
+
+#[test]
+fn gridview_sparse_rows_low_info_classification() {
+    let mut grid = Grid::new(4, 4);
+    grid.insert(make_cell(
+        0,
+        0,
+        Some(CellValue::Text("Header".into())),
+        None,
+    ));
+    grid.insert(make_cell(2, 2, Some(CellValue::Number(10.0)), None));
+    grid.insert(make_cell(3, 1, Some(CellValue::Text("   ".into())), None));
+
+    let view = GridView::from_grid(&grid);
+
+    assert_eq!(view.row_meta[0].non_blank_count, 1);
+    assert!(!view.row_meta[0].is_low_info);
+    assert_eq!(view.row_meta[0].first_non_blank_col, 0);
+
+    assert_eq!(view.row_meta[1].non_blank_count, 0);
+    assert!(view.row_meta[1].is_low_info);
+    assert_eq!(view.row_meta[1].first_non_blank_col, 0);
+
+    assert_eq!(view.row_meta[2].non_blank_count, 1);
+    assert!(!view.row_meta[2].is_low_info);
+    assert_eq!(view.row_meta[2].first_non_blank_col, 2);
+
+    assert_eq!(view.row_meta[3].non_blank_count, 1);
+    assert!(view.row_meta[3].is_low_info);
+    assert_eq!(view.row_meta[3].first_non_blank_col, 1);
+}
+
+#[test]
+fn gridview_column_metadata_matches_signatures() {
+    let mut grid = Grid::new(4, 4);
+    grid.insert(make_cell(
+        0,
+        1,
+        Some(CellValue::Text("a".into())),
+        Some("=B1"),
+    ));
+    grid.insert(make_cell(1, 3, Some(CellValue::Number(2.0)), Some("=1+1")));
+    grid.insert(make_cell(2, 0, Some(CellValue::Bool(true)), None));
+    grid.insert(make_cell(2, 2, Some(CellValue::Text("mid".into())), None));
+    grid.insert(make_cell(3, 0, None, Some("=A1")));
+
+    grid.compute_all_signatures();
+    let row_signatures = grid
+        .row_signatures
+        .as_ref()
+        .expect("row signatures should be computed")
+        .clone();
+    let col_signatures = grid
+        .col_signatures
+        .as_ref()
+        .expect("col signatures should be computed")
+        .clone();
+
+    let view = GridView::from_grid(&grid);
+
+    for (idx, meta) in view.col_meta.iter().enumerate() {
+        assert_eq!(meta.hash, col_signatures[idx].hash);
+    }
+
+    for (idx, meta) in view.row_meta.iter().enumerate() {
+        assert_eq!(meta.hash, row_signatures[idx].hash);
+    }
+
+    assert_eq!(view.col_meta[0].non_blank_count, 2);
+    assert_eq!(view.col_meta[0].first_non_blank_row, 2);
+    assert_eq!(view.col_meta[1].non_blank_count, 1);
+    assert_eq!(view.col_meta[1].first_non_blank_row, 0);
+    assert_eq!(view.col_meta[2].non_blank_count, 1);
+    assert_eq!(view.col_meta[2].first_non_blank_row, 2);
+    assert_eq!(view.col_meta[3].non_blank_count, 1);
+    assert_eq!(view.col_meta[3].first_non_blank_row, 1);
+}
+
+#[test]
+fn gridview_empty_grid_is_stable() {
+    let grid = Grid::new(0, 0);
+
+    let view = GridView::from_grid(&grid);
+
+    assert!(view.rows.is_empty());
+    assert!(view.row_meta.is_empty());
+    assert!(view.col_meta.is_empty());
+}
+
+#[test]
+fn gridview_large_sparse_grid_constructs_without_panic() {
+    let nrows = 10_000;
+    let ncols = 10;
+    let mut grid = Grid::new(nrows, ncols);
+
+    for r in (0..nrows).step_by(100) {
+        let col = (r / 100) % ncols;
+        grid.insert(make_cell(
+            r,
+            col,
+            Some(CellValue::Number((r / 100) as f64)),
+            None,
+        ));
+    }
+
+    let view = GridView::from_grid(&grid);
+
+    assert_eq!(view.rows.len(), nrows as usize);
+    assert_eq!(view.col_meta.len(), ncols as usize);
+
+    assert_eq!(view.row_meta[1].non_blank_count, 0);
+    assert_eq!(view.row_meta[100].non_blank_count, 1);
+    assert_eq!(view.row_meta[100].first_non_blank_col, 1);
+
+    assert!(
+        view.col_meta
+            .iter()
+            .any(|meta| meta.non_blank_count > 0 && meta.first_non_blank_row == 0)
     );
 }
 ```
@@ -7823,7 +8322,7 @@ fn pg6_4_sheet_and_grid_change_composed_cleanly() {
 ### File: `core\tests\signature_tests.rs`
 
 ```rust
-use excel_diff::{Cell, CellAddress, CellValue, Grid};
+use excel_diff::{Cell, CellAddress, CellValue, Grid, GridView};
 
 fn make_cell(row: u32, col: u32, value: Option<CellValue>, formula: Option<&str>) -> Cell {
     Cell {
@@ -8220,6 +8719,42 @@ fn row_signature_golden_constant_with_formula() {
     let sig = grid.compute_row_signature(0);
     assert_eq!(sig.hash, ROW_SIGNATURE_WITH_FORMULA_GOLDEN);
 }
+
+#[test]
+fn gridview_rowmeta_hash_matches_compute_all_signatures() {
+    let mut grid = Grid::new(3, 2);
+    grid.insert(make_cell(
+        0,
+        0,
+        Some(CellValue::Number(std::f64::consts::PI)),
+        Some("=PI()"),
+    ));
+    grid.insert(make_cell(1, 1, Some(CellValue::Text("text".into())), None));
+    grid.insert(make_cell(2, 0, Some(CellValue::Bool(true)), Some("=A1")));
+
+    grid.compute_all_signatures();
+
+    let row_signatures = grid
+        .row_signatures
+        .as_ref()
+        .expect("row signatures should be computed")
+        .clone();
+    let col_signatures = grid
+        .col_signatures
+        .as_ref()
+        .expect("col signatures should be computed")
+        .clone();
+
+    let view = GridView::from_grid(&grid);
+
+    for (idx, meta) in view.row_meta.iter().enumerate() {
+        assert_eq!(meta.hash, row_signatures[idx].hash);
+    }
+
+    for (idx, meta) in view.col_meta.iter().enumerate() {
+        assert_eq!(meta.hash, col_signatures[idx].hash);
+    }
+}
 ```
 
 ---
@@ -8408,6 +8943,8 @@ fn compute_all_signatures_matches_direct_computation() {
 
 ```rust
 //! Common test utilities shared across integration tests.
+
+#![allow(dead_code)]
 
 use excel_diff::{Cell, CellAddress, CellValue, Grid, Sheet, SheetKind, Workbook};
 use std::path::PathBuf;

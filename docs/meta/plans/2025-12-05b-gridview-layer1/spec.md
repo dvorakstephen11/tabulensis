@@ -209,7 +209,7 @@ Example:
 
 * Grid A row hashes: `[h1, h2, h2, h3]` → freq_a `{h1:1, h2:2, h3:1}`
 * Grid B row hashes: `[h2, h3, h4]` → freq_b `{h2:1, h3:1, h4:1}`
-* With threshold = 2:
+* With threshold = 1:
 
   * `h1`: freq_a=1, freq_b=0 → appears only in A (unmatched).
   * `h2`: freq_a=2, freq_b=1 → `is_common(h2) == true` (above threshold in A).
@@ -337,6 +337,8 @@ where
     pub fn appears_in_both(&self, hash: H) -> bool;
 }
 ```
+
+For GV1, only the `HashStats<RowHash>` instantiation is supported; `from_row_meta` is used as `HashStats::<RowHash>::from_row_meta(&[RowMeta], &[RowMeta])` and other generic constructors are deferred to later cycles.
 
 Exports:
 

@@ -188,7 +188,7 @@ where
             return false;
         }
 
-        freq_a >= threshold || freq_b >= threshold
+        freq_a > threshold || freq_b > threshold
     }
 
     pub fn appears_in_both(&self, hash: H) -> bool {

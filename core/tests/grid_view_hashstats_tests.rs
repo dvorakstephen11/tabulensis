@@ -52,13 +52,43 @@ fn hashstats_counts_and_positions_basic() {
         vec![2]
     );
 
-    let threshold = 2;
+    let threshold = 1;
     assert!(stats.is_unique(h3));
     assert!(stats.is_common(h2, threshold));
     assert!(!stats.is_rare(h3, threshold));
     assert!(stats.appears_in_both(h3));
     assert!(!stats.appears_in_both(h1));
     assert!(!stats.appears_in_both(h4));
+}
+
+#[test]
+fn hashstats_rare_but_not_common_boundary() {
+    let h: RowHash = 42;
+    let rows_a = vec![row_meta(0, h), row_meta(1, h)];
+    let rows_b = vec![row_meta(0, h)];
+
+    let stats = HashStats::from_row_meta(&rows_a, &rows_b);
+    let threshold = 2;
+
+    assert!(stats.is_rare(h, threshold));
+    assert!(!stats.is_common(h, threshold));
+    assert!(stats.appears_in_both(h));
+    assert!(!stats.is_unique(h));
+}
+
+#[test]
+fn hashstats_equal_to_threshold_behavior() {
+    let h: RowHash = 99;
+    let rows_a = vec![row_meta(0, h), row_meta(1, h), row_meta(2, h)];
+    let rows_b = vec![row_meta(0, h), row_meta(1, h), row_meta(2, h)];
+
+    let stats = HashStats::from_row_meta(&rows_a, &rows_b);
+    let threshold = 3;
+
+    assert!(stats.is_rare(h, threshold));
+    assert!(!stats.is_common(h, threshold));
+    assert!(stats.appears_in_both(h));
+    assert!(!stats.is_unique(h));
 }
 
 #[test]

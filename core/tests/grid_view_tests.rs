@@ -76,6 +76,17 @@ fn gridview_sparse_rows_low_info_classification() {
 }
 
 #[test]
+fn gridview_formula_only_row_is_not_low_info() {
+    let mut grid = Grid::new(2, 2);
+    grid.insert(make_cell(0, 0, None, Some("=A1+1")));
+
+    let view = GridView::from_grid(&grid);
+
+    assert_eq!(view.row_meta[0].non_blank_count, 1);
+    assert!(!view.row_meta[0].is_low_info);
+}
+
+#[test]
 fn gridview_column_metadata_matches_signatures() {
     let mut grid = Grid::new(4, 4);
     grid.insert(make_cell(

@@ -1770,6 +1770,7 @@ fn is_unique(&self, hash: H) -> bool:
 fn is_rare(&self, hash: H, threshold: u32) -> bool:
     freq_a[hash] <= threshold AND freq_b[hash] <= threshold
     AND freq_a[hash] > 0 AND freq_b[hash] > 0
+    AND NOT is_unique(hash)
 
 fn is_common(&self, hash: H, threshold: u32) -> bool:
     freq_a[hash] > threshold OR freq_b[hash] > threshold
@@ -1777,6 +1778,10 @@ fn is_common(&self, hash: H, threshold: u32) -> bool:
 fn appears_in_both(&self, hash: H) -> bool:
     freq_a[hash] > 0 AND freq_b[hash] > 0
 ```
+
+Rare and common classifications are disjoint at the threshold because rare hashes must be non-unique and at or below the boundary, while common hashes are strictly above it.
+
+GV1 uses this structure as `HashStats<RowHash>::from_row_meta(&[RowMeta], &[RowMeta])`; broader generic constructors remain future work.
 
 Default threshold for rare/common boundary: 3-8 occurrences.
 
