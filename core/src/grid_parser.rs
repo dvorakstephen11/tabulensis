@@ -1,3 +1,8 @@
+//! XML parsing for Excel worksheet grids.
+//!
+//! Handles parsing of worksheet XML, shared strings, workbook structure, and
+//! relationship files to construct [`Grid`] representations of sheet data.
+
 use crate::addressing::address_to_index;
 use crate::workbook::{Cell, CellAddress, CellValue, Grid};
 use quick_xml::Reader;

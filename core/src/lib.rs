@@ -1,3 +1,25 @@
+//! Excel Diff: A library for comparing Excel workbooks.
+//!
+//! This crate provides functionality for:
+//! - Opening and parsing Excel workbooks (`.xlsx` files)
+//! - Computing structural and cell-level differences between workbooks
+//! - Serializing diff reports to JSON
+//! - Parsing Power Query (M) code from DataMashup sections
+//!
+//! # Quick Start
+//!
+//! ```ignore
+//! use excel_diff::{open_workbook, diff_workbooks};
+//!
+//! let wb_a = open_workbook("file_a.xlsx")?;
+//! let wb_b = open_workbook("file_b.xlsx")?;
+//! let report = diff_workbooks(&wb_a, &wb_b);
+//!
+//! for op in &report.ops {
+//!     println!("{:?}", op);
+//! }
+//! ```
+
 pub mod addressing;
 pub mod container;
 pub mod datamashup;
@@ -8,12 +30,13 @@ pub mod engine;
 #[cfg(feature = "excel-open-xml")]
 pub mod excel_open_xml;
 pub mod grid_parser;
+pub(crate) mod hashing;
 pub mod m_diff;
 pub mod m_section;
 pub mod output;
 pub mod workbook;
 
-pub use addressing::{address_to_index, index_to_address};
+pub use addressing::{AddressParseError, address_to_index, index_to_address};
 pub use container::{ContainerError, OpcContainer};
 pub use datamashup::{
     DataMashup, Metadata, Permissions, Query, QueryMetadata, build_data_mashup, build_queries,

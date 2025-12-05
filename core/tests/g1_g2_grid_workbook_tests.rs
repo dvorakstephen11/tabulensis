@@ -5,10 +5,10 @@ use common::fixture_path;
 
 #[test]
 fn g1_equal_sheet_produces_empty_diff() {
-    let wb_a =
-        open_workbook(fixture_path("equal_sheet_a.xlsx")).expect("equal_sheet_a.xlsx should open");
-    let wb_b =
-        open_workbook(fixture_path("equal_sheet_b.xlsx")).expect("equal_sheet_b.xlsx should open");
+    let wb_a = open_workbook(fixture_path("equal_sheet_a.xlsx"))
+        .expect("failed to open fixture: equal_sheet_a.xlsx");
+    let wb_b = open_workbook(fixture_path("equal_sheet_b.xlsx"))
+        .expect("failed to open fixture: equal_sheet_b.xlsx");
 
     let report = diff_workbooks(&wb_a, &wb_b);
 
@@ -21,9 +21,9 @@ fn g1_equal_sheet_produces_empty_diff() {
 #[test]
 fn g2_single_cell_literal_change_produces_one_celledited() {
     let wb_a = open_workbook(fixture_path("single_cell_value_a.xlsx"))
-        .expect("single_cell_value_a.xlsx should open");
+        .expect("failed to open fixture: single_cell_value_a.xlsx");
     let wb_b = open_workbook(fixture_path("single_cell_value_b.xlsx"))
-        .expect("single_cell_value_b.xlsx should open");
+        .expect("failed to open fixture: single_cell_value_b.xlsx");
 
     let report = diff_workbooks(&wb_a, &wb_b);
 

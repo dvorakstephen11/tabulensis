@@ -1,3 +1,8 @@
+//! Core diffing engine for workbook comparison.
+//!
+//! Provides the main entry point [`diff_workbooks`] for comparing two workbooks
+//! and generating a [`DiffReport`] of all changes.
+
 use crate::diff::{DiffOp, DiffReport, SheetId};
 use crate::workbook::{CellAddress, CellSnapshot, Grid, Sheet, SheetKind, Workbook};
 use std::collections::HashMap;

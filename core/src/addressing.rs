@@ -1,3 +1,24 @@
+//! Excel cell addressing utilities.
+//!
+//! Provides conversion between A1-style cell addresses (e.g., "B2", "AA10") and
+//! zero-based (row, column) index pairs.
+
+use std::fmt;
+
+/// Error returned when parsing an invalid A1-style cell address.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddressParseError {
+    pub input: String,
+}
+
+impl fmt::Display for AddressParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "invalid cell address: '{}'", self.input)
+    }
+}
+
+impl std::error::Error for AddressParseError {}
+
 /// Convert zero-based (row, col) indices to an Excel A1 address string.
 pub fn index_to_address(row: u32, col: u32) -> String {
     let mut col_index = col;

@@ -1,3 +1,8 @@
+//! High-level DataMashup (Power Query) parsing and query extraction.
+//!
+//! Builds on the low-level framing and package parsing to provide structured
+//! access to queries, permissions, and metadata stored in Excel DataMashup sections.
+
 use std::collections::HashMap;
 
 use crate::datamashup_framing::{DataMashupError, RawDataMashup};
@@ -110,7 +115,12 @@ pub fn build_queries(dm: &DataMashup) -> Result<Vec<Query>, SectionParseError> {
         };
 
         if let Some(idx) = positions.get(&name) {
-            debug_assert!(false, "duplicate query name {}", name);
+            debug_assert!(
+                false,
+                "duplicate query name '{}' found in DataMashup section; \
+                 later definition will overwrite earlier one",
+                name
+            );
             queries[*idx] = query;
         } else {
             positions.insert(name, queries.len());

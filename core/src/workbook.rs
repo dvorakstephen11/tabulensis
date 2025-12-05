@@ -1,12 +1,23 @@
-use crate::addressing::{address_to_index, index_to_address};
+//! Workbook, sheet, and grid data structures.
+//!
+//! This module defines the core intermediate representation (IR) for Excel workbooks:
+//! - [`Workbook`]: A collection of sheets
+//! - [`Sheet`]: A named sheet with a grid of cells
+//! - [`Grid`]: A sparse 2D grid of cells with optional row/column signatures
+//! - [`Cell`]: Individual cell with address, value, and optional formula
+
+use crate::addressing::{AddressParseError, address_to_index, index_to_address};
+use crate::hashing::{combine_hashes, hash_cell_contribution};
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
-use xxhash_rust::xxh64::Xxh64;
 
-/// A snapshot of a cell's logical content (address, value, formula).
+/// A snapshot of a cell's logical content for comparison purposes.
+///
+/// Used in [`DiffOp::CellEdited`] to represent the "before" and "after" states.
+/// Equality comparison intentionally ignores `addr` and compares only `(value, formula)`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CellSnapshot {
     pub addr: CellAddress,
@@ -32,18 +43,24 @@ impl CellSnapshot {
     }
 }
 
+/// An Excel workbook containing one or more sheets.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Workbook {
     pub sheets: Vec<Sheet>,
 }
 
+/// A single sheet within a workbook.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Sheet {
+    /// The display name of the sheet (e.g., "Sheet1", "Data").
     pub name: String,
+    /// The type of sheet (worksheet, chart, macro, etc.).
     pub kind: SheetKind,
+    /// The grid of cell data.
     pub grid: Grid,
 }
 
+/// The type of an Excel sheet.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SheetKind {
     Worksheet,
@@ -52,28 +69,48 @@ pub enum SheetKind {
     Other,
 }
 
+/// A sparse 2D grid of cells representing sheet data.
+///
+/// # Invariants
+///
+/// All cells stored in `cells` must satisfy `row < nrows` and `col < ncols`.
 #[derive(Debug, Clone, PartialEq)]
-/// Invariant: all cells stored in `cells` must satisfy `row < nrows` and `col < ncols`.
 pub struct Grid {
+    /// Number of rows in the grid's bounding rectangle.
     pub nrows: u32,
+    /// Number of columns in the grid's bounding rectangle.
     pub ncols: u32,
+    /// Sparse storage of non-empty cells, keyed by (row, col).
     pub cells: HashMap<(u32, u32), Cell>,
+    /// Optional precomputed row signatures for alignment.
     pub row_signatures: Option<Vec<RowSignature>>,
+    /// Optional precomputed column signatures for alignment.
     pub col_signatures: Option<Vec<ColSignature>>,
 }
 
+/// A single cell within a grid.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Cell {
+    /// Zero-based row index.
     pub row: u32,
+    /// Zero-based column index.
     pub col: u32,
+    /// The cell's A1-style address (e.g., "B2").
     pub address: CellAddress,
+    /// The cell's value, if any.
     pub value: Option<CellValue>,
+    /// The cell's formula text (without leading '='), if any.
     pub formula: Option<String>,
 }
 
+/// A cell address representing a position in a grid.
+///
+/// Can be parsed from A1-style strings (e.g., "B2", "AA10") and converted back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CellAddress {
+    /// Zero-based row index.
     pub row: u32,
+    /// Zero-based column index.
     pub col: u32,
 }
 
@@ -88,10 +125,12 @@ impl CellAddress {
 }
 
 impl std::str::FromStr for CellAddress {
-    type Err = ();
+    type Err = AddressParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (row, col) = address_to_index(s).ok_or(())?;
+        let (row, col) = address_to_index(s).ok_or_else(|| AddressParseError {
+            input: s.to_string(),
+        })?;
         Ok(CellAddress { row, col })
     }
 }
@@ -117,8 +156,7 @@ impl<'de> Deserialize<'de> for CellAddress {
         D: Deserializer<'de>,
     {
         let a1 = String::deserialize(deserializer)?;
-        CellAddress::from_str(&a1)
-            .map_err(|_| DeError::custom(format!("invalid cell address: {a1}")))
+        CellAddress::from_str(&a1).map_err(|e| DeError::custom(e.to_string()))
     }
 }
 
@@ -157,9 +195,6 @@ pub struct RowSignature {
 pub struct ColSignature {
     pub hash: u64,
 }
-
-const XXH64_SEED: u64 = 0;
-const HASH_MIX_CONSTANT: u64 = 0x9e3779b97f4a7c15;
 
 impl Grid {
     pub fn new(nrows: u32, ncols: u32) -> Grid {
@@ -264,22 +299,6 @@ impl Grid {
                 .collect(),
         );
     }
-}
-
-fn hash_cell_contribution(position: u32, cell: &Cell) -> u64 {
-    let mut hasher = Xxh64::new(XXH64_SEED);
-    position.hash(&mut hasher);
-    cell.value.hash(&mut hasher);
-    cell.formula.hash(&mut hasher);
-    hasher.finish()
-}
-
-fn mix_hash(hash: u64) -> u64 {
-    hash.rotate_left(13) ^ HASH_MIX_CONSTANT
-}
-
-fn combine_hashes(current: u64, contribution: u64) -> u64 {
-    current.wrapping_add(mix_hash(contribution))
 }
 
 impl PartialEq for CellSnapshot {

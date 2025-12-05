@@ -1,3 +1,8 @@
+//! OPC (Open Packaging Conventions) container handling.
+//!
+//! Provides abstraction over ZIP-based Office Open XML packages, validating
+//! that required structural elements like `[Content_Types].xml` are present.
+
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -5,11 +10,14 @@ use thiserror::Error;
 use zip::ZipArchive;
 use zip::result::ZipError;
 
+/// Errors that can occur when opening or reading an OPC container.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ContainerError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("ZIP error: {0}")]
+    Zip(String),
     #[error("not a ZIP container")]
     NotZipContainer,
     #[error("not an OPC package (missing [Content_Types].xml)")]

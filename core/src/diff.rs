@@ -1,7 +1,17 @@
+//! Diff operations and reports for workbook comparison.
+//!
+//! This module defines the types used to represent differences between two workbooks:
+//! - [`DiffOp`]: Individual operations representing a single change (cell edit, row/column add/remove, etc.)
+//! - [`DiffReport`]: A versioned collection of diff operations
+
 use crate::workbook::{CellAddress, CellSnapshot, ColSignature, RowSignature};
 
 pub type SheetId = String;
 
+/// A single diff operation representing one logical change between workbooks.
+///
+/// Operations are emitted by the diff engine and collected into a [`DiffReport`].
+/// The enum is marked `#[non_exhaustive]` to allow future additions.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind")]
 #[non_exhaustive]
@@ -69,9 +79,14 @@ pub enum DiffOp {
     },
 }
 
+/// A versioned collection of diff operations between two workbooks.
+///
+/// The `version` field indicates the schema version for forwards compatibility.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DiffReport {
+    /// Schema version (currently "1").
     pub version: String,
+    /// The list of diff operations.
     pub ops: Vec<DiffOp>,
 }
 

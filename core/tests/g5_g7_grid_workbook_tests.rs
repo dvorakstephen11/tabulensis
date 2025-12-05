@@ -7,9 +7,9 @@ use common::fixture_path;
 #[test]
 fn g5_multi_cell_edits_produces_only_celledited_ops() {
     let wb_a = open_workbook(fixture_path("multi_cell_edits_a.xlsx"))
-        .expect("multi_cell_edits_a.xlsx should open");
+        .expect("failed to open fixture: multi_cell_edits_a.xlsx");
     let wb_b = open_workbook(fixture_path("multi_cell_edits_b.xlsx"))
-        .expect("multi_cell_edits_b.xlsx should open");
+        .expect("failed to open fixture: multi_cell_edits_b.xlsx");
 
     let report = diff_workbooks(&wb_a, &wb_b);
 
@@ -73,9 +73,9 @@ fn g5_multi_cell_edits_produces_only_celledited_ops() {
 #[test]
 fn g6_row_append_bottom_emits_two_rowadded_and_no_celledited() {
     let wb_a = open_workbook(fixture_path("row_append_bottom_a.xlsx"))
-        .expect("row_append_bottom_a.xlsx should open");
+        .expect("failed to open fixture: row_append_bottom_a.xlsx");
     let wb_b = open_workbook(fixture_path("row_append_bottom_b.xlsx"))
-        .expect("row_append_bottom_b.xlsx should open");
+        .expect("failed to open fixture: row_append_bottom_b.xlsx");
 
     let report = diff_workbooks(&wb_a, &wb_b);
 
@@ -120,9 +120,9 @@ fn g6_row_append_bottom_emits_two_rowadded_and_no_celledited() {
 #[test]
 fn g6_row_delete_bottom_emits_two_rowremoved_and_no_celledited() {
     let wb_a = open_workbook(fixture_path("row_delete_bottom_a.xlsx"))
-        .expect("row_delete_bottom_a.xlsx should open");
+        .expect("failed to open fixture: row_delete_bottom_a.xlsx");
     let wb_b = open_workbook(fixture_path("row_delete_bottom_b.xlsx"))
-        .expect("row_delete_bottom_b.xlsx should open");
+        .expect("failed to open fixture: row_delete_bottom_b.xlsx");
 
     let report = diff_workbooks(&wb_a, &wb_b);
 
@@ -167,9 +167,9 @@ fn g6_row_delete_bottom_emits_two_rowremoved_and_no_celledited() {
 #[test]
 fn g7_col_append_right_emits_two_columnadded_and_no_celledited() {
     let wb_a = open_workbook(fixture_path("col_append_right_a.xlsx"))
-        .expect("col_append_right_a.xlsx should open");
+        .expect("failed to open fixture: col_append_right_a.xlsx");
     let wb_b = open_workbook(fixture_path("col_append_right_b.xlsx"))
-        .expect("col_append_right_b.xlsx should open");
+        .expect("failed to open fixture: col_append_right_b.xlsx");
 
     let report = diff_workbooks(&wb_a, &wb_b);
 
@@ -214,9 +214,9 @@ fn g7_col_append_right_emits_two_columnadded_and_no_celledited() {
 #[test]
 fn g7_col_delete_right_emits_two_columnremoved_and_no_celledited() {
     let wb_a = open_workbook(fixture_path("col_delete_right_a.xlsx"))
-        .expect("col_delete_right_a.xlsx should open");
+        .expect("failed to open fixture: col_delete_right_a.xlsx");
     let wb_b = open_workbook(fixture_path("col_delete_right_b.xlsx"))
-        .expect("col_delete_right_b.xlsx should open");
+        .expect("failed to open fixture: col_delete_right_b.xlsx");
 
     let report = diff_workbooks(&wb_a, &wb_b);
 

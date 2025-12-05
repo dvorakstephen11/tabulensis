@@ -3,6 +3,10 @@ name = "excel_diff"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "excel_diff"
+path = "src/lib.rs"
+
 [features]
 default = ["excel-open-xml"]
 excel-open-xml = []
@@ -17,3 +21,5 @@ serde_json = "1.0"
 xxhash-rust = { version = "0.8", features = ["xxh64"] }
 
 [dev-dependencies]
+pretty_assertions = "1.4"
+tempfile = "3.10"

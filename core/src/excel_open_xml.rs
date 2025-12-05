@@ -1,3 +1,8 @@
+//! Excel Open XML file parsing.
+//!
+//! Provides functions for opening `.xlsx` files and parsing their contents into
+//! the internal representation used for diffing.
+
 use crate::container::{ContainerError, OpcContainer};
 use crate::datamashup_framing::{
     DataMashupError, RawDataMashup, decode_datamashup_base64, parse_data_mashup,
@@ -91,7 +96,7 @@ pub fn open_data_mashup(path: impl AsRef<Path>) -> Result<Option<RawDataMashup>,
 
             let bytes = container
                 .read_file(&name)
-                .map_err(|e| ContainerError::Io(std::io::Error::other(e.to_string())))?;
+                .map_err(|e| ContainerError::Zip(e.to_string()))?;
 
             if let Some(text) = read_datamashup_text(&bytes)? {
                 let decoded = decode_datamashup_base64(&text)?;
