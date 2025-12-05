@@ -21,6 +21,7 @@
 //! ```
 
 pub mod addressing;
+pub(crate) mod column_alignment;
 pub mod container;
 pub mod datamashup;
 pub mod datamashup_framing;

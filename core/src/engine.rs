@@ -3,6 +3,7 @@
 //! Provides the main entry point [`diff_workbooks`] for comparing two workbooks
 //! and generating a [`DiffReport`] of all changes.
 
+use crate::column_alignment::{ColumnAlignment, align_single_column_change};
 use crate::diff::{DiffOp, DiffReport, SheetId};
 use crate::row_alignment::{RowAlignment, align_single_row_change};
 use crate::workbook::{Cell, CellAddress, CellSnapshot, Grid, Sheet, SheetKind, Workbook};
@@ -92,6 +93,8 @@ pub fn diff_workbooks(old: &Workbook, new: &Workbook) -> DiffReport {
 fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>) {
     if let Some(alignment) = align_single_row_change(old, new) {
         emit_aligned_diffs(sheet_id, old, new, &alignment, ops);
+    } else if let Some(alignment) = align_single_column_change(old, new) {
+        emit_column_aligned_diffs(sheet_id, old, new, &alignment, ops);
     } else {
         positional_diff(sheet_id, old, new, ops);
     }
@@ -168,6 +171,39 @@ fn diff_row_pair(
         if from != to {
             ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
         }
+    }
+}
+
+fn emit_column_aligned_diffs(
+    sheet_id: &SheetId,
+    old: &Grid,
+    new: &Grid,
+    alignment: &ColumnAlignment,
+    ops: &mut Vec<DiffOp>,
+) {
+    let overlap_rows = old.nrows.min(new.nrows);
+
+    for row in 0..overlap_rows {
+        for (col_a, col_b) in &alignment.matched {
+            let addr = CellAddress::from_indices(row, *col_b);
+            let old_cell = old.get(row, *col_a);
+            let new_cell = new.get(row, *col_b);
+
+            let from = snapshot_with_addr(old_cell, addr);
+            let to = snapshot_with_addr(new_cell, addr);
+
+            if from != to {
+                ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
+            }
+        }
+    }
+
+    for col_idx in &alignment.inserted {
+        ops.push(DiffOp::column_added(sheet_id.clone(), *col_idx, None));
+    }
+
+    for col_idx in &alignment.deleted {
+        ops.push(DiffOp::column_removed(sheet_id.clone(), *col_idx, None));
     }
 }
 

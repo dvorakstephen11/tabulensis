@@ -246,19 +246,14 @@ mod tests {
 
     #[test]
     fn rejects_non_monotonic_alignment_with_extra_mismatch() {
-        let base_rows = [
-            [11, 12, 13],
-            [21, 22, 23],
-            [31, 32, 33],
-            [41, 42, 43],
-        ];
+        let base_rows = [[11, 12, 13], [21, 22, 23], [31, 32, 33], [41, 42, 43]];
         let base_refs: Vec<&[i32]> = base_rows.iter().map(|row| row.as_slice()).collect();
         let grid_a = grid_from_rows(&base_refs);
 
         let rows_b: Vec<&[i32]> = vec![
-            base_refs[0],          // same
-            &[999, 1000, 1001],    // inserted unique row
-            base_refs[2],          // move row 3 before row 2 to break monotonicity
+            base_refs[0],       // same
+            &[999, 1000, 1001], // inserted unique row
+            base_refs[2],       // move row 3 before row 2 to break monotonicity
             base_refs[1],
             base_refs[3],
         ];

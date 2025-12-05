@@ -1,0 +1,5 @@
+Started implementation for branch 2025-12-05d-g9-column-alignment. Reviewed spec, decision, meta programming guide.
+Implemented column alignment core scaffolding (HashStats col support, new column_alignment module, engine integration). Added G9 fixtures/generator entries.
+Generated fixtures via fixtures/src/generate.py including new G9 column alignment pairs.
+Added G9 column alignment tests (workbook-level and module unit tests) and HashStats column coverage; generated fixtures. Ran cargo fmt, cargo clippy --all-targets --all-features, and cargo test (all passing).
+ColumnAlignment unit tests live inside core/src/column_alignment.rs to keep the helper internal while still covering single insert, multi-unique bailout, and repetition guard.

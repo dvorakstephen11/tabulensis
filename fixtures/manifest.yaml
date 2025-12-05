@@ -171,6 +171,45 @@ scenarios:
       - "row_insert_with_edit_a.xlsx"
       - "row_insert_with_edit_b.xlsx"
 
+  # --- Phase 4: Spreadsheet-mode G9 ---
+  - id: "g9_col_insert_middle"
+    generator: "column_alignment_g9"
+    args:
+      mode: "insert"
+      sheet: "Data"
+      cols: 8
+      data_rows: 9
+      insert_at: 4
+    output:
+      - "col_insert_middle_a.xlsx"
+      - "col_insert_middle_b.xlsx"
+
+  - id: "g9_col_delete_middle"
+    generator: "column_alignment_g9"
+    args:
+      mode: "delete"
+      sheet: "Data"
+      cols: 8
+      data_rows: 9
+      delete_col: 4
+    output:
+      - "col_delete_middle_a.xlsx"
+      - "col_delete_middle_b.xlsx"
+
+  - id: "g9_col_insert_with_edit"
+    generator: "column_alignment_g9"
+    args:
+      mode: "insert_with_edit"
+      sheet: "Data"
+      cols: 8
+      data_rows: 9
+      insert_at: 4
+      edit_row: 8
+      edit_col_after_insert: 7
+    output:
+      - "col_insert_with_edit_a.xlsx"
+      - "col_insert_with_edit_b.xlsx"
+
   # --- JSON diff: simple non-empty change ---
   - id: "json_diff_single_cell"
     generator: "single_cell_diff"

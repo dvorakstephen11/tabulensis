@@ -1,4 +1,4 @@
-use excel_diff::{HashStats, RowHash, RowMeta};
+use excel_diff::{ColHash, ColMeta, HashStats, RowHash, RowMeta};
 
 fn row_meta(row_idx: u32, hash: RowHash) -> RowMeta {
     RowMeta {
@@ -7,6 +7,15 @@ fn row_meta(row_idx: u32, hash: RowHash) -> RowMeta {
         non_blank_count: 0,
         first_non_blank_col: 0,
         is_low_info: false,
+    }
+}
+
+fn col_meta(col_idx: u32, hash: ColHash) -> ColMeta {
+    ColMeta {
+        col_idx,
+        hash,
+        non_blank_count: 0,
+        first_non_blank_row: 0,
     }
 }
 
@@ -104,4 +113,42 @@ fn hashstats_empty_inputs() {
     assert!(!stats.is_rare(dummy_hash, 1));
     assert!(!stats.is_common(dummy_hash, 0));
     assert!(!stats.appears_in_both(dummy_hash));
+}
+
+#[test]
+fn hashstats_from_col_meta_tracks_positions() {
+    let h1: ColHash = 10;
+    let h2: ColHash = 20;
+    let h3: ColHash = 30;
+
+    let cols_a = vec![col_meta(0, h1), col_meta(1, h2), col_meta(2, h2)];
+    let cols_b = vec![col_meta(0, h2), col_meta(1, h3)];
+
+    let stats = HashStats::from_col_meta(&cols_a, &cols_b);
+
+    assert_eq!(stats.freq_a.get(&h1).copied().unwrap_or(0), 1);
+    assert_eq!(stats.freq_b.get(&h1).copied().unwrap_or(0), 0);
+
+    assert_eq!(stats.freq_a.get(&h2).copied().unwrap_or(0), 2);
+    assert_eq!(stats.freq_b.get(&h2).copied().unwrap_or(0), 1);
+
+    assert_eq!(stats.freq_b.get(&h3).copied().unwrap_or(0), 1);
+    assert_eq!(stats.freq_a.get(&h3).copied().unwrap_or(0), 0);
+
+    assert_eq!(
+        stats
+            .hash_to_positions_b
+            .get(&h2)
+            .cloned()
+            .unwrap_or_default(),
+        vec![0]
+    );
+    assert_eq!(
+        stats
+            .hash_to_positions_b
+            .get(&h3)
+            .cloned()
+            .unwrap_or_default(),
+        vec![1]
+    );
 }

@@ -156,6 +156,27 @@ impl HashStats<RowHash> {
     }
 }
 
+impl HashStats<ColHash> {
+    pub fn from_col_meta(cols_a: &[ColMeta], cols_b: &[ColMeta]) -> HashStats<ColHash> {
+        let mut stats = HashStats::default();
+
+        for meta in cols_a {
+            *stats.freq_a.entry(meta.hash).or_insert(0) += 1;
+        }
+
+        for meta in cols_b {
+            *stats.freq_b.entry(meta.hash).or_insert(0) += 1;
+            stats
+                .hash_to_positions_b
+                .entry(meta.hash)
+                .or_insert_with(Vec::new)
+                .push(meta.col_idx);
+        }
+
+        stats
+    }
+}
+
 impl<H> HashStats<H>
 where
     H: Eq + Hash + Copy,
