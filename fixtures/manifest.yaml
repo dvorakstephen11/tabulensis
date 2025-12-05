@@ -71,6 +71,67 @@ scenarios:
       - "single_cell_value_a.xlsx"
       - "single_cell_value_b.xlsx"
 
+  # --- Phase 3: Spreadsheet-mode G5-G7 ---
+
+  - id: "g5_multi_cell_edits"
+    generator: "multi_cell_diff"
+    args:
+      rows: 20
+      cols: 10
+      sheet: "Sheet1"
+      edits:
+        - { addr: "B2", value_a: 1.0, value_b: 42.0 }
+        - { addr: "D5", value_a: 2.0, value_b: 99.0 }
+        - { addr: "H7", value_a: 3.0, value_b: 3.5 }
+        - { addr: "J10", value_a: "x", value_b: "y" }
+    output:
+      - "multi_cell_edits_a.xlsx"
+      - "multi_cell_edits_b.xlsx"
+
+  - id: "g6_row_append_bottom"
+    generator: "grid_tail_diff"
+    args:
+      mode: "row_append_bottom"
+      sheet: "Sheet1"
+      base_rows: 10
+      tail_rows: 2
+    output:
+      - "row_append_bottom_a.xlsx"
+      - "row_append_bottom_b.xlsx"
+
+  - id: "g6_row_delete_bottom"
+    generator: "grid_tail_diff"
+    args:
+      mode: "row_delete_bottom"
+      sheet: "Sheet1"
+      base_rows: 10
+      tail_rows: 2
+    output:
+      - "row_delete_bottom_a.xlsx"
+      - "row_delete_bottom_b.xlsx"
+
+  - id: "g7_col_append_right"
+    generator: "grid_tail_diff"
+    args:
+      mode: "col_append_right"
+      sheet: "Sheet1"
+      base_cols: 4
+      tail_cols: 2
+    output:
+      - "col_append_right_a.xlsx"
+      - "col_append_right_b.xlsx"
+
+  - id: "g7_col_delete_right"
+    generator: "grid_tail_diff"
+    args:
+      mode: "col_delete_right"
+      sheet: "Sheet1"
+      base_cols: 4
+      tail_cols: 2
+    output:
+      - "col_delete_right_a.xlsx"
+      - "col_delete_right_b.xlsx"
+
   # --- JSON diff: simple non-empty change ---
   - id: "json_diff_single_cell"
     generator: "single_cell_diff"

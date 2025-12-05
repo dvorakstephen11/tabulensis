@@ -3,7 +3,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 from openpyxl.utils import get_column_letter
 from pathlib import Path
-from typing import Union, List
+from typing import Union, List, Dict, Any
 from .base import BaseGenerator
 
 class BasicGridGenerator(BaseGenerator):
@@ -191,6 +191,157 @@ class SingleCellDiffGenerator(BaseGenerator):
 
         create_workbook(value_a, output_names[0])
         create_workbook(value_b, output_names[1])
+
+class MultiCellDiffGenerator(BaseGenerator):
+    """Generates workbook pairs that differ in multiple scattered cells."""
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        if len(output_names) != 2:
+            raise ValueError("multi_cell_diff generator expects exactly two output filenames")
+
+        rows = self.args.get("rows", 20)
+        cols = self.args.get("cols", 10)
+        sheet = self.args.get("sheet", "Sheet1")
+        edits: List[Dict[str, Any]] = self.args.get("edits", [])
+
+        self._create_workbook(output_dir / output_names[0], sheet, rows, cols, edits, "a")
+        self._create_workbook(output_dir / output_names[1], sheet, rows, cols, edits, "b")
+
+    def _create_workbook(
+        self,
+        path: Path,
+        sheet: str,
+        rows: int,
+        cols: int,
+        edits: List[Dict[str, Any]],
+        value_key: str,
+    ):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = sheet
+
+        self._fill_base_grid(ws, rows, cols)
+        self._apply_edits(ws, edits, value_key)
+
+        wb.save(path)
+
+    def _fill_base_grid(self, ws, rows: int, cols: int):
+        for r in range(1, rows + 1):
+            for c in range(1, cols + 1):
+                ws.cell(row=r, column=c, value=f"R{r}C{c}")
+
+    def _apply_edits(self, ws, edits: List[Dict[str, Any]], value_key: str):
+        value_field = f"value_{value_key}"
+
+        for edit in edits:
+            addr = edit.get("addr")
+            if not addr:
+                raise ValueError("multi_cell_diff edits require 'addr'")
+            if value_field not in edit:
+                raise ValueError(f"multi_cell_diff edits require '{value_field}'")
+            ws[addr] = edit[value_field]
+
+class GridTailDiffGenerator(BaseGenerator):
+    """Generates workbook pairs for simple row/column tail append/delete scenarios."""
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        if len(output_names) != 2:
+            raise ValueError("grid_tail_diff generator expects exactly two output filenames")
+
+        mode = self.args.get("mode")
+        sheet = self.args.get("sheet", "Sheet1")
+
+        if mode == "row_append_bottom":
+            self._row_append_bottom(output_dir, output_names, sheet)
+        elif mode == "row_delete_bottom":
+            self._row_delete_bottom(output_dir, output_names, sheet)
+        elif mode == "col_append_right":
+            self._col_append_right(output_dir, output_names, sheet)
+        elif mode == "col_delete_right":
+            self._col_delete_right(output_dir, output_names, sheet)
+        else:
+            raise ValueError(f"Unsupported grid_tail_diff mode: {mode}")
+
+    def _row_append_bottom(self, output_dir: Path, output_names: List[str], sheet: str):
+        base_rows = self.args.get("base_rows", 10)
+        tail_rows = self.args.get("tail_rows", 2)
+        cols = self.args.get("cols", 3)
+
+        self._write_rows(output_dir / output_names[0], sheet, base_rows, cols, 1)
+        self._write_rows(
+            output_dir / output_names[1],
+            sheet,
+            base_rows + tail_rows,
+            cols,
+            1,
+        )
+
+    def _row_delete_bottom(self, output_dir: Path, output_names: List[str], sheet: str):
+        base_rows = self.args.get("base_rows", 10)
+        tail_rows = self.args.get("tail_rows", 2)
+        cols = self.args.get("cols", 3)
+
+        self._write_rows(
+            output_dir / output_names[0],
+            sheet,
+            base_rows + tail_rows,
+            cols,
+            1,
+        )
+        self._write_rows(output_dir / output_names[1], sheet, base_rows, cols, 1)
+
+    def _col_append_right(self, output_dir: Path, output_names: List[str], sheet: str):
+        base_cols = self.args.get("base_cols", 4)
+        tail_cols = self.args.get("tail_cols", 2)
+        rows = self.args.get("rows", 5)
+
+        self._write_cols(output_dir / output_names[0], sheet, rows, base_cols)
+        self._write_cols(
+            output_dir / output_names[1],
+            sheet,
+            rows,
+            base_cols + tail_cols,
+        )
+
+    def _col_delete_right(self, output_dir: Path, output_names: List[str], sheet: str):
+        base_cols = self.args.get("base_cols", 4)
+        tail_cols = self.args.get("tail_cols", 2)
+        rows = self.args.get("rows", 5)
+
+        self._write_cols(
+            output_dir / output_names[0],
+            sheet,
+            rows,
+            base_cols + tail_cols,
+        )
+        self._write_cols(output_dir / output_names[1], sheet, rows, base_cols)
+
+    def _write_rows(self, path: Path, sheet: str, rows: int, cols: int, start_value: int):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = sheet
+
+        for r in range(1, rows + 1):
+            ws.cell(row=r, column=1, value=start_value + r - 1)
+            for c in range(2, cols + 1):
+                ws.cell(row=r, column=c, value=f"R{r}C{c}")
+
+        wb.save(path)
+
+    def _write_cols(self, path: Path, sheet: str, rows: int, cols: int):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = sheet
+
+        for r in range(1, rows + 1):
+            for c in range(1, cols + 1):
+                ws.cell(row=r, column=c, value=f"R{r}C{c}")
+
+        wb.save(path)
 
 class SheetCaseRenameGenerator(BaseGenerator):
     """Generates a pair of workbooks that differ only by sheet name casing, with optional cell edit."""

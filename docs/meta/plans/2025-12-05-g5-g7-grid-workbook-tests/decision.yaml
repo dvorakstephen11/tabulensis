@@ -1,0 +1,28 @@
+work_type: milestone_progress
+target_subsystem: "Spreadsheet-mode grid diff on real Excel workbooks (Phase 3: G5–G7)"
+
+rationale:
+  - "Phase 3 of the testing plan defines spreadsheet-mode milestones G1–G7 as the basic Excel grid-diff slice. G1–G2 are already implemented with real Excel fixtures; G5–G7 remain unimplemented at the workbook level (currently only covered by in-memory PG5 tests)."
+  - "The existing PG5 in-memory grid diff tests already exercise the required semantics for multiple scattered cell edits and simple tail row/column append/truncate (CellEdited-only for same-shape edits, and RowAdded/RowRemoved/ColumnAdded/ColumnRemoved for tail shape changes). Implementing G5–G7 at the workbook level is therefore primarily a fixture and test wiring task, not a new algorithm. "
+  - "We now have `diff_workbooks` wired to `diff_grids`, plus workbook-level tests for G1–G2 and PG6 sheet-level behavior. Extending this to G5–G7 will give us an end-to-end Excel vertical slice for all basic spreadsheet cases that do not involve alignment or formatting/AST semantics. "
+  - "The unified grid diff algorithm spec treats UC‑03 (multiple scattered cell edits), UC‑04 (row append at end), and UC‑05 (column append at edge) as must-have basic cases. G5–G7 are the workbook-level manifestations of these UCs; adding fixtures and tests now aligns the Rust implementation with the algorithm design before we attempt the advanced alignment pipeline. "
+  - "Finishing G5–G7 workbook tests makes it much safer to refactor `diff_grids` toward the H1 'advanced 2D grid diff' design in later phases, because we will have both in-memory (PG5) and real-workbook (G1–G7) guards against regressions in basic spreadsheet behavior. "
+
+risks_of_deferral:
+  - "Without G5–G7 workbook tests, future work on row/column signatures, alignment, and move detection could accidentally regress simple tail and multi-edit behaviors on real Excel files while still passing PG5 in-memory tests."
+  - "Product-wise, we would still lack an end-to-end demo where a user edits multiple cells or appends/truncates rows/columns in Excel and sees intuitive, minimal diff output (`CellEdited` vs `RowAdded/Removed` / `ColumnAdded/Removed`)."
+  - "Deferring these fixtures leaves a gap between the testing plan and the implemented suite: Phase 3 would appear partially complete, making it harder for planner agents and humans to track when the basic spreadsheet slice is actually stable."
+  - "Advanced alignment (G8–G13) will reuse the same UC‑03/UC‑04/UC‑05 semantics; implementing those UCs against real Excel grids later without the simpler G5–G7 tests raises the risk of subtle off-by-one and used-range bugs."
+
+references:
+  - "docs/rust_docs/excel_diff_testing_plan.md (G1–G7 definitions, Phase 3 grid milestones) "
+  - "docs/rust_docs/unified_grid_diff_algorithm_specification.md (UC‑03, UC‑04, UC‑05 basic grid cases) "
+  - "docs/rust_docs/excel_diff_specification.md (DiffOp types, spreadsheet-mode grid semantics; implied by PG4/PG5/PG6 tests) "
+  - "core/src/engine.rs (`diff_workbooks`, `diff_grids` current behavior) "
+  - "core/tests/pg5_grid_diff_tests.rs (in-memory PG5 grid diff behaviors) :contentReference[oaicite:9]{index=9}"
+  - "core/tests/g1_g2_grid_workbook_tests.rs and fixtures/manifest.yaml (existing Phase 3 workbook fixtures/tests) "
+  - "docs/rust_docs/excel_diff_difficulty_analysis.md (H1 advanced 2D grid diff risk) :contentReference[oaicite:11]{index=11}"
+
+difficulty_estimate:
+  score: 3
+  ten_is: "H1 advanced 2D grid alignment and move detection across G8–G13 and D1–D10"

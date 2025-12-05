@@ -12,6 +12,8 @@ from generators.grid import (
     AddressSanityGenerator,
     ValueFormulaGenerator,
     SingleCellDiffGenerator,
+    MultiCellDiffGenerator,
+    GridTailDiffGenerator,
     SheetCaseRenameGenerator,
     Pg6SheetScenarioGenerator,
 )
@@ -36,6 +38,8 @@ GENERATORS: Dict[str, Any] = {
     "address_sanity": AddressSanityGenerator,
     "value_formula": ValueFormulaGenerator,
     "single_cell_diff": SingleCellDiffGenerator,
+    "multi_cell_diff": MultiCellDiffGenerator,
+    "grid_tail_diff": GridTailDiffGenerator,
     "sheet_case_rename": SheetCaseRenameGenerator,
     "pg6_sheet_scenario": Pg6SheetScenarioGenerator,
     "corrupt_container": ContainerCorruptGenerator,
