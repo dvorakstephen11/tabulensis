@@ -51,6 +51,17 @@ Turn the mini-spec into working code and tests. Every scope item must be address
    - If you must deviate from the mini-spec, document the reason.
    - Minor implementation details (private helper names, internal structure) are flexible.
    - Public API shapes and behavioral contracts are not flexible without justification.
+   - When you intentionally deviate from the mini-spec (e.g., found a better approach, aligned with a different spec, or deferred something), document it in the activity log using this format:
+
+     ```
+     ## Intentional Spec Deviations
+
+     | Spec Detail | Actual Implementation | Rationale |
+     |-------------|----------------------|-----------|
+     | ... | ... | ... |
+     ```
+
+   - Be conservative: only deviate when you have strong justification. The mini-spec was designed with context you may not have.
 
 ### Phase 3: Verification
 
@@ -64,9 +75,11 @@ Create an activity log at `docs/meta/logs/[branch-name]/activity_log.txt` as you
 
 - Files created or modified and why.
 - Key structural decisions made.
-- Any deviations from the mini-spec with reasoning.
+- Any deviations from the mini-spec with reasoning (use the "Intentional Spec Deviations" table format).
 - Troubles you encountered and how you resolved them.
 - Open questions or follow-ups for future cycles.
+
+If you have intentional spec deviations, include a dedicated section at the end of the activity log with the table format shown above. This helps the verification reviewer distinguish intentional changes from accidental omissions.
 
 This log is used by the Post-Implementation Verification Reviewer and in retrospectives.
 

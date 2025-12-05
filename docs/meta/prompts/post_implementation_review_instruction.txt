@@ -9,6 +9,20 @@ You have been provided with:
 4. **Cycle Summary**: `cycle_summary.txt` contains the activity log (implementer's changes), test results, and a manifest of all provided files.
 5. **Prior Remediation Plans** (if present): `combined_remediations.md` contains all previous remediation plans generated during this cycle, concatenated in chronological order. Review these to understand what issues were previously identified and whether they have been addressed.
 
+## Understanding the Document Hierarchy
+
+When reviewing, understand how these documents relate:
+
+1. **Mini-Spec** (in cycle_plan.md): The *original planning document* written before implementation. It represents intended design, not a binding contract.
+2. **Activity Log** (in cycle_summary.txt): The implementer's record of what was done, including any "Intentional Spec Deviations" table documenting deliberate changes from the mini-spec.
+3. **Remediation Plans** (if present): May document additional intentional deviations made during remediation.
+4. **Code**: The source of truth for actual behavior.
+
+**Key principle**: Implementers may discover better approaches during implementation. When they do, they should document deviations explicitly. Your job is to:
+- **Accept documented deviations** if they are well-justified
+- **Flag undocumented deviations** as potential oversights or bugs
+- Focus "spec deviation" findings on discrepancies that are NOT explained in the activity log or remediation plans
+
 ## Your Goal
 
 Your goal is to independently verify that the implementation correctly and completely fulfills the original plan, and to identify any gaps, bugs, or missing tests that the initial review and test suite may have missed.
@@ -37,7 +51,7 @@ Your goal is to independently verify that the implementation correctly and compl
     *   Identify any architectural drift or violations of invariants described in the documentation.
     *   Check for incomplete error handling or resource management issues.
     *   Look for performance concerns not addressed by the current test suite.
-    *   Identify any deviations from the mini-spec that were not documented in the activity log.
+    *   Identify any **undocumented** deviations from the mini-spec (check the activity log's "Intentional Spec Deviations" section first—documented deviations with good rationale are acceptable).
 
 5.  **Assess Severity**:
     *   For each finding, assign a severity:
@@ -89,7 +103,7 @@ Your goal is to independently verify that the implementation correctly and compl
 - [ ] All scope items from mini-spec addressed
 - [ ] All specified tests created
 - [ ] Behavioral contract satisfied
-- [ ] No undocumented deviations from spec
+- [ ] No undocumented deviations from spec (documented deviations with rationale are acceptable)
 - [ ] Error handling adequate
 - [ ] No obvious performance regressions
 ```

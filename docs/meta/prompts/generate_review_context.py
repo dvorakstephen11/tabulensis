@@ -347,6 +347,16 @@ def collate_post_implementation_review(branch_name=None, downloads_dir=None):
     with open(cycle_plan_path, 'w', encoding='utf-8') as f:
         f.write(f"# Cycle Plan: {branch_name}\n\n")
         f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        f.write("## Document Hierarchy Note\n\n")
+        f.write("The **Mini-Spec** below is the original planning document written before implementation. ")
+        f.write("It represents intended design, not a binding contract.\n\n")
+        f.write("During implementation, the implementer may have discovered better approaches and documented ")
+        f.write("them as **Intentional Spec Deviations** in the activity log (see `cycle_summary.txt`). ")
+        f.write("Subsequent remediation plans may also document additional intentional deviations.\n\n")
+        f.write("When reviewing:\n")
+        f.write("- **Documented deviations** (in activity log or remediations) are acceptable if well-justified\n")
+        f.write("- **Undocumented deviations** should be flagged as potential oversights\n\n")
+        f.write("---\n\n")
         
         f.write("## Decision Record\n\n")
         if decision_file and decision_file.exists() and decision_file.stat().st_size > 0:

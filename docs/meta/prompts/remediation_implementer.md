@@ -47,7 +47,21 @@ Execute the fixes specified in the remediation plan. Each "Fix Required" section
    - Keep changes minimal and targeted.
    - Do not refactor or "improve" unrelated code.
 
-4. **Maintain quality gates**:
+4. **If you must deviate from the original mini-spec**:
+   - Be conservative: only deviate when you have strong justification.
+   - Document intentional deviations in the activity log using this format:
+
+     ```
+     ## Intentional Spec Deviations
+
+     | Spec Detail | Actual Implementation | Rationale |
+     |-------------|----------------------|-----------|
+     | ... | ... | ... |
+     ```
+
+   - This helps the verification reviewer distinguish intentional changes from accidental omissions.
+
+5. **Maintain quality gates**:
    - Code must compile without errors.
    - Run `cargo fmt` to ensure consistent formatting.
    - Run `cargo clippy` and address warnings.

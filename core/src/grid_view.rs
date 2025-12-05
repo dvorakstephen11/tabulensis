@@ -152,10 +152,6 @@ impl HashStats<RowHash> {
                 .push(meta.row_idx);
         }
 
-        for positions in stats.hash_to_positions_b.values_mut() {
-            positions.sort_unstable();
-        }
-
         stats
     }
 }
