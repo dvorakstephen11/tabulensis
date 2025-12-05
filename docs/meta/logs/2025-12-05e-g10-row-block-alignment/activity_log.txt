@@ -1,0 +1,9 @@
+2025-12-05e-g10-row-block-alignment activity log
+
+- Initialized log; read mini-spec and decision record for G10 row block alignment.
+- Reviewed core/src/row_alignment.rs, core/src/engine.rs, and fixtures manifest/generator structure to understand current row/column alignment and fixture generation.
+- Implemented block row alignment helper supporting multi-row contiguous gaps with safety gates and new unit tests in core/src/row_alignment.rs.
+- Updated engine grid diff to call generalized row alignment helper for block/single row cases.
+- Added row_alignment_g10 generator, manifest scenarios, and generated row_block_insert/delete fixtures.
+- Created G10 workbook tests and ensured fixtures available in fixtures/generated.
+- Ran cargo fmt, cargo clippy, and cargo test (all passing).

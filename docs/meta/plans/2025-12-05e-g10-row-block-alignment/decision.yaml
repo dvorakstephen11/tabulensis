@@ -1,0 +1,64 @@
+# Decision Record: 2025-12-05e-g10-row-block-alignment
+# Paste decision YAML content here
+# docs/meta/plans/2025-12-05-g10-row-block-alignment/decision.yaml
+
+work_type: milestone_progress
+branch_name: 2025-12-05-g10-row-block-alignment
+target_subsystem: grid_row_alignment_block_insert_delete
+
+milestone:
+  id: G10
+  name: Contiguous block of rows inserted or deleted
+  phase: 4
+
+summary: >
+  Extend the existing row alignment path (G8) so that contiguous middle-of-sheet
+  row inserts and deletes are recognized as a block rather than causing spurious
+  CellEdited noise below the block.
+
+rationale:
+  - Phase 4 of the testing plan calls for advanced spreadsheet alignment and includes
+    milestones G8-G13; G8 and G9 now have fixtures, tests, and implementation, but
+    there is no coverage for G10 and multi-row inserts are still treated as positional
+    shifts in the engine.
+  - The unified grid diff specification calls out block insert/delete as a core
+    spreadsheet-mode use case and expects sequences of RowAdded/RowRemoved (or a
+    block op) rather than noisy CellEdited cascades for these scenarios.
+  - Recent branches 2025-12-05b-gridview-layer1 and 2025-12-05c-g8-row-alignment
+    established GridView, HashStats, and a guarded single-row alignment helper;
+    extending that infrastructure to small contiguous row blocks keeps the design
+    coherent and leverages fresh context.
+  - Excel grid diff is a must-have MVP capability and a primary product
+    differentiator; noisy output when users insert or delete short blocks of rows
+    in the middle of a sheet would directly undermine perceived quality in common
+    financial model workflows.
+  - G10 exercises the same high-risk area (grid alignment and edit-script minimality)
+    as the harder G11-G13 cases but with a much smaller scope, making it a good
+    next step toward the full Anchor-Move-Refine pipeline.
+
+risks_of_deferral:
+  - Middle-of-sheet block row edits will continue to generate cascades of CellEdited
+    operations, making diffs noisy and harder to interpret for realistic scenarios
+    like inserting a new section into a model.
+  - The row alignment implementation will remain limited to single-row changes,
+    widening the gap between the codebase and the unified grid diff specification
+    and increasing the chance of ad hoc patches later.
+  - Phase 4 "advanced alignment" progress on the spreadsheet side will stall while
+    work shifts to other domains (M AST diff, database mode), leaving the highest
+    difficulty area under-tested.
+  - Scenario-level and perf tests that depend on clean row-block semantics cannot
+    be written yet, delaying feedback about alignment quality and performance on
+    larger block-insert workloads.
+
+references:
+  - excel_diff_testing_plan.md - Phase 4 and milestone G10 description
+  - unified_grid_diff_algorithm_specification.md - spreadsheet-mode alignment use cases UC-06 to UC-10
+  - excel_diff_specification.md - grid diff overview and DiffOp contract
+  - excel_diff_difficulty_analysis.md - H1 high-performance 2D grid diff difficulty rating
+  - excel_diff_product_differentiation_plan.md - core engine and grid alignment positioning
+  - excel_diff_meta_programming.md - planner role and tests-first cycle requirements
+  - codebase_context.md and development_history.txt - existing G6-G9 tests, GridView, row_alignment, and column_alignment work
+
+difficulty_estimate:
+  value: 6
+  scale_10_hardest: 10 = H1 - High-performance 2D grid diff engine (row/column alignment, moves, database mode)

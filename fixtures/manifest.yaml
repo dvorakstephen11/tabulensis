@@ -210,6 +210,33 @@ scenarios:
       - "col_insert_with_edit_a.xlsx"
       - "col_insert_with_edit_b.xlsx"
 
+  # --- Phase 4: Spreadsheet-mode G10 ---
+  - id: "g10_row_block_insert"
+    generator: "row_alignment_g10"
+    args:
+      mode: "block_insert"
+      sheet: "Sheet1"
+      base_rows: 10
+      cols: 5
+      block_rows: 4
+      insert_at: 4
+    output:
+      - "row_block_insert_a.xlsx"
+      - "row_block_insert_b.xlsx"
+
+  - id: "g10_row_block_delete"
+    generator: "row_alignment_g10"
+    args:
+      mode: "block_delete"
+      sheet: "Sheet1"
+      base_rows: 10
+      cols: 5
+      block_rows: 4
+      delete_start: 4
+    output:
+      - "row_block_delete_a.xlsx"
+      - "row_block_delete_b.xlsx"
+
   # --- JSON diff: simple non-empty change ---
   - id: "json_diff_single_cell"
     generator: "single_cell_diff"

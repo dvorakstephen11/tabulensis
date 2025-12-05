@@ -11,10 +11,24 @@ pub(crate) struct RowAlignment {
 const MAX_ALIGN_ROWS: u32 = 2_000;
 const MAX_ALIGN_COLS: u32 = 64;
 const MAX_HASH_REPEAT: u32 = 8;
+const MAX_BLOCK_GAP: u32 = 32;
 const _HASH_COLLISION_NOTE: &str = "64-bit hash collision probability ~0.00006% at 2K rows; \
                                     secondary verification deferred to G8a (50K-row adversarial)";
 
+pub(crate) fn align_row_changes(old: &Grid, new: &Grid) -> Option<RowAlignment> {
+    let row_diff = new.nrows as i64 - old.nrows as i64;
+    if row_diff.abs() == 1 {
+        return align_single_row_change(old, new);
+    }
+
+    align_rows_internal(old, new, true)
+}
+
 pub(crate) fn align_single_row_change(old: &Grid, new: &Grid) -> Option<RowAlignment> {
+    align_rows_internal(old, new, false)
+}
+
+fn align_rows_internal(old: &Grid, new: &Grid, allow_blocks: bool) -> Option<RowAlignment> {
     if !is_within_size_bounds(old, new) {
         return None;
     }
@@ -24,7 +38,17 @@ pub(crate) fn align_single_row_change(old: &Grid, new: &Grid) -> Option<RowAlign
     }
 
     let row_diff = new.nrows as i64 - old.nrows as i64;
-    if row_diff.abs() != 1 {
+    if row_diff == 0 {
+        return None;
+    }
+
+    let abs_diff = row_diff.unsigned_abs() as u32;
+
+    if !allow_blocks && abs_diff != 1 {
+        return None;
+    }
+
+    if abs_diff != 1 && (!allow_blocks || abs_diff > MAX_BLOCK_GAP) {
         return None;
     }
 
@@ -47,12 +71,30 @@ pub(crate) fn align_single_row_change(old: &Grid, new: &Grid) -> Option<RowAlign
             &stats,
             RowChange::Insert,
         )
-    } else {
+    } else if row_diff == -1 {
         find_single_gap_alignment(
             &view_a.row_meta,
             &view_b.row_meta,
             &stats,
             RowChange::Delete,
+        )
+    } else if !allow_blocks {
+        None
+    } else if row_diff > 0 {
+        find_block_gap_alignment(
+            &view_a.row_meta,
+            &view_b.row_meta,
+            &stats,
+            RowChange::Insert,
+            abs_diff,
+        )
+    } else {
+        find_block_gap_alignment(
+            &view_a.row_meta,
+            &view_b.row_meta,
+            &stats,
+            RowChange::Delete,
+            abs_diff,
         )
     }
 }
@@ -153,6 +195,113 @@ fn find_single_gap_alignment(
     Some(alignment)
 }
 
+fn find_block_gap_alignment(
+    rows_a: &[crate::grid_view::RowMeta],
+    rows_b: &[crate::grid_view::RowMeta],
+    stats: &HashStats<RowHash>,
+    change: RowChange,
+    gap: u32,
+) -> Option<RowAlignment> {
+    let gap = gap as usize;
+    if gap == 0 {
+        return None;
+    }
+
+    let (shorter_len, longer_len) = match change {
+        RowChange::Insert => (rows_a.len(), rows_b.len()),
+        RowChange::Delete => (rows_b.len(), rows_a.len()),
+    };
+
+    if longer_len.saturating_sub(shorter_len) != gap {
+        return None;
+    }
+
+    let mut prefix = 0usize;
+    while prefix < rows_a.len()
+        && prefix < rows_b.len()
+        && rows_a[prefix].hash == rows_b[prefix].hash
+    {
+        prefix += 1;
+    }
+
+    let mut suffix = 0usize;
+    while suffix < shorter_len.saturating_sub(prefix) {
+        let idx_a = rows_a.len() - 1 - suffix;
+        let idx_b = rows_b.len() - 1 - suffix;
+        if rows_a[idx_a].hash == rows_b[idx_b].hash {
+            suffix += 1;
+        } else {
+            break;
+        }
+    }
+
+    if prefix + suffix != shorter_len {
+        return None;
+    }
+
+    let mut matched = Vec::with_capacity(shorter_len);
+    let mut inserted = Vec::new();
+    let mut deleted = Vec::new();
+
+    match change {
+        RowChange::Insert => {
+            let block_start = prefix;
+            let block_end = block_start + gap;
+            if block_end > rows_b.len() {
+                return None;
+            }
+
+            for meta in &rows_b[block_start..block_end] {
+                if !is_unique_to_b(meta.hash, stats) {
+                    return None;
+                }
+                inserted.push(meta.row_idx);
+            }
+
+            for (idx, meta_a) in rows_a.iter().enumerate() {
+                let b_idx = if idx < block_start { idx } else { idx + gap };
+                matched.push((meta_a.row_idx, rows_b[b_idx].row_idx));
+            }
+        }
+        RowChange::Delete => {
+            let block_start = prefix;
+            let block_end = block_start + gap;
+            if block_end > rows_a.len() {
+                return None;
+            }
+
+            for meta in &rows_a[block_start..block_end] {
+                if !is_unique_to_a(meta.hash, stats) {
+                    return None;
+                }
+                deleted.push(meta.row_idx);
+            }
+
+            for (idx_b, meta_b) in rows_b.iter().enumerate() {
+                let a_idx = if idx_b < block_start {
+                    idx_b
+                } else {
+                    idx_b + gap
+                };
+                matched.push((rows_a[a_idx].row_idx, meta_b.row_idx));
+            }
+        }
+    }
+
+    let alignment = RowAlignment {
+        matched,
+        inserted,
+        deleted,
+    };
+
+    debug_assert!(
+        is_monotonic(&alignment.matched),
+        "matched pairs must be strictly increasing in both dimensions"
+    );
+
+    Some(alignment)
+}
+
 fn is_monotonic(pairs: &[(u32, u32)]) -> bool {
     pairs.windows(2).all(|w| w[0].0 < w[1].0 && w[0].1 < w[1].1)
 }
@@ -216,6 +365,74 @@ mod tests {
         }
 
         grid
+    }
+
+    #[test]
+    fn aligns_contiguous_block_insert_middle() {
+        let base: Vec<Vec<i32>> = (1..=10)
+            .map(|r| (1..=4).map(|c| r * 10 + c).collect())
+            .collect();
+        let base_refs: Vec<&[i32]> = base.iter().map(|row| row.as_slice()).collect();
+        let grid_a = grid_from_rows(&base_refs);
+
+        let inserted_block: Vec<Vec<i32>> = (0..4)
+            .map(|idx| vec![1_000 + idx, 2_000 + idx, 3_000 + idx, 4_000 + idx])
+            .collect();
+        let mut rows_b = base.clone();
+        rows_b.splice(3..3, inserted_block);
+        let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
+        let grid_b = grid_from_rows(&rows_b_refs);
+
+        let alignment = align_row_changes(&grid_a, &grid_b).expect("alignment should succeed");
+        assert_eq!(alignment.inserted, vec![3, 4, 5, 6]);
+        assert!(alignment.deleted.is_empty());
+        assert_eq!(alignment.matched.len(), 10);
+        assert_eq!(alignment.matched[0], (0, 0));
+        assert_eq!(alignment.matched[2], (2, 2));
+        assert_eq!(alignment.matched[3], (3, 7));
+        assert_eq!(alignment.matched.last(), Some(&(9, 13)));
+        assert!(is_monotonic(&alignment.matched));
+    }
+
+    #[test]
+    fn aligns_contiguous_block_delete_middle() {
+        let base: Vec<Vec<i32>> = (1..=10)
+            .map(|r| (1..=4).map(|c| r * 10 + c).collect())
+            .collect();
+        let base_refs: Vec<&[i32]> = base.iter().map(|row| row.as_slice()).collect();
+        let grid_a = grid_from_rows(&base_refs);
+
+        let mut rows_b = base.clone();
+        rows_b.drain(3..7);
+        let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
+        let grid_b = grid_from_rows(&rows_b_refs);
+
+        let alignment = align_row_changes(&grid_a, &grid_b).expect("alignment should succeed");
+        assert_eq!(alignment.deleted, vec![3, 4, 5, 6]);
+        assert!(alignment.inserted.is_empty());
+        assert_eq!(alignment.matched.len(), 6);
+        assert_eq!(alignment.matched[0], (0, 0));
+        assert_eq!(alignment.matched[2], (2, 2));
+        assert_eq!(alignment.matched[3], (7, 3));
+        assert_eq!(alignment.matched.last(), Some(&(9, 5)));
+        assert!(is_monotonic(&alignment.matched));
+    }
+
+    #[test]
+    fn block_alignment_bails_on_noncontiguous_changes() {
+        let base: Vec<Vec<i32>> = (1..=8)
+            .map(|r| (1..=3).map(|c| r * 10 + c).collect())
+            .collect();
+        let base_refs: Vec<&[i32]> = base.iter().map(|row| row.as_slice()).collect();
+        let grid_a = grid_from_rows(&base_refs);
+
+        let mut rows_b = base.clone();
+        rows_b.insert(1, vec![999, 1_000, 1_001]);
+        rows_b.insert(5, vec![2_000, 2_001, 2_002]);
+        let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
+        let grid_b = grid_from_rows(&rows_b_refs);
+
+        assert!(align_row_changes(&grid_a, &grid_b).is_none());
     }
 
     #[test]

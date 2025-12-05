@@ -411,6 +411,76 @@ class RowAlignmentG8Generator(BaseGenerator):
 
         wb.save(path)
 
+class RowAlignmentG10Generator(BaseGenerator):
+    """Generates workbook pairs for G10 contiguous row block insert/delete scenarios."""
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        if len(output_names) != 2:
+            raise ValueError("row_alignment_g10 generator expects exactly two output filenames")
+
+        mode = self.args.get("mode")
+        sheet = self.args.get("sheet", "Sheet1")
+        base_rows = self.args.get("base_rows", 10)
+        cols = self.args.get("cols", 5)
+        block_rows = self.args.get("block_rows", 4)
+        insert_at = self.args.get("insert_at", 4)  # 1-based position of first inserted row in B
+        delete_start = self.args.get("delete_start", 4)  # 1-based starting row in A to delete
+
+        base_data = [self._row_values(idx, cols, 0) for idx in range(1, base_rows + 1)]
+
+        if mode == "block_insert":
+            data_a = base_data
+            data_b = self._with_block_insert(base_data, insert_at, block_rows, cols)
+        elif mode == "block_delete":
+            data_a = base_data
+            data_b = self._with_block_delete(base_data, delete_start, block_rows)
+        else:
+            raise ValueError(f"Unsupported row_alignment_g10 mode: {mode}")
+
+        self._write_workbook(output_dir / output_names[0], sheet, data_a)
+        self._write_workbook(output_dir / output_names[1], sheet, data_b)
+
+    def _row_values(self, row_number: int, cols: int, offset: int) -> List[int]:
+        row_id = row_number + offset
+        values = [row_id]
+        for c in range(1, cols):
+            values.append(row_id * 10 + c)
+        return values
+
+    def _block_rows(self, count: int, cols: int) -> List[List[int]]:
+        return [self._row_values(1000 + idx, cols, 0) for idx in range(1, count + 1)]
+
+    def _with_block_insert(
+        self, base_data: List[List[int]], insert_at: int, block_rows: int, cols: int
+    ) -> List[List[int]]:
+        insert_idx = max(1, min(insert_at, len(base_data) + 1)) - 1
+        block = self._block_rows(block_rows, cols)
+        return base_data[:insert_idx] + block + base_data[insert_idx:]
+
+    def _with_block_delete(
+        self, base_data: List[List[int]], delete_start: int, block_rows: int
+    ) -> List[List[int]]:
+        if not (1 <= delete_start <= len(base_data)):
+            raise ValueError(f"delete_start must be within 1..{len(base_data)}")
+        if delete_start - 1 + block_rows > len(base_data):
+            raise ValueError("delete block exceeds base data length")
+
+        delete_idx = delete_start - 1
+        return base_data[:delete_idx] + base_data[delete_idx + block_rows :]
+
+    def _write_workbook(self, path: Path, sheet: str, rows: List[List[int]]):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = sheet
+
+        for r_idx, row_values in enumerate(rows, start=1):
+            for c_idx, value in enumerate(row_values, start=1):
+                ws.cell(row=r_idx, column=c_idx, value=value)
+
+        wb.save(path)
+
 class ColumnAlignmentG9Generator(BaseGenerator):
     """Generates workbook pairs for G9-style middle column insert/delete scenarios."""
     def generate(self, output_dir: Path, output_names: Union[str, List[str]]):

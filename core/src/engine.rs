@@ -5,7 +5,7 @@
 
 use crate::column_alignment::{ColumnAlignment, align_single_column_change};
 use crate::diff::{DiffOp, DiffReport, SheetId};
-use crate::row_alignment::{RowAlignment, align_single_row_change};
+use crate::row_alignment::{RowAlignment, align_row_changes};
 use crate::workbook::{Cell, CellAddress, CellSnapshot, Grid, Sheet, SheetKind, Workbook};
 use std::collections::HashMap;
 
@@ -91,7 +91,7 @@ pub fn diff_workbooks(old: &Workbook, new: &Workbook) -> DiffReport {
 }
 
 fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>) {
-    if let Some(alignment) = align_single_row_change(old, new) {
+    if let Some(alignment) = align_row_changes(old, new) {
         emit_aligned_diffs(sheet_id, old, new, &alignment, ops);
     } else if let Some(alignment) = align_single_column_change(old, new) {
         emit_column_aligned_diffs(sheet_id, old, new, &alignment, ops);
