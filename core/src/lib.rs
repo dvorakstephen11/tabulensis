@@ -23,6 +23,7 @@
 pub mod addressing;
 pub(crate) mod column_alignment;
 pub mod container;
+pub(crate) mod database_alignment;
 pub mod datamashup;
 pub mod datamashup_framing;
 pub mod datamashup_package;
@@ -49,7 +50,7 @@ pub use datamashup_package::{
     EmbeddedContent, PackageParts, PackageXml, SectionDocument, parse_package_parts,
 };
 pub use diff::{DiffOp, DiffReport, SheetId};
-pub use engine::diff_workbooks;
+pub use engine::{diff_grids_database_mode, diff_workbooks};
 #[cfg(feature = "excel-open-xml")]
 pub use excel_open_xml::{ExcelOpenError, open_data_mashup, open_workbook};
 pub use grid_parser::{GridParseError, SheetDescriptor};

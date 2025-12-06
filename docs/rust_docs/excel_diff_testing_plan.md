@@ -1451,6 +1451,7 @@ These milestones exercise the **keyed, database‑mode diff** where row order is
 **Core capability**
 
 When a sheet/table is in Database Mode with a known key, identical data produces **no row/cell diffs**, regardless of row order.
+Status: Implemented at the engine level via `diff_grids_database_mode` for explicit single-column unique keys (db_equal_ordered_{a,b}).
 
 **Fixture sketch**
 

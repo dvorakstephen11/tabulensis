@@ -1,0 +1,8 @@
+2025-12-06
+- Reviewed excel_diff_meta_programming.md Section 4 guardrails, mini-spec at docs/meta/plans/2025-12-06b-d1-database-mode-keyed-equality/spec.md, and decision.yaml for this branch; noted scope (database-mode keyed diff entrypoint + alignment helper), tests (module-level + D1 fixtures), and docs updates required.
+- Planned tasks: add database_alignment helper (unique-key hash join), expose diff_grids_database_mode in engine/lib, implement unit + fixture-based tests, update docs/testing status, keep existing spreadsheet-mode behavior unchanged, then run fmt/clippy/test.
+- Implemented core/src/database_alignment.rs with KeyColumnSpec/KeyValueRepr and hash-join diff_table_by_key that rejects duplicate keys; added module tests for reorder alignment, insert/delete classification, and duplicate-key error.
+- Added diff_grids_database_mode in engine.rs (re-exported via lib.rs) using keyed alignment to ignore row order and emit DiffOps on non-key differences; duplicates fall back to spreadsheet-mode diff to avoid silent misalignment.
+- Created core/tests/d1_database_mode_tests.rs exercising db_equal_ordered_{a,b}.xlsx fixtures to assert empty diffs under keyed database mode.
+- Updated docs/rust_docs/2025-11-30-docs-vs-implementation.md, excel_diff_testing_plan.md, and excel_diff_product_differentiation_plan.md to record D1 keyed equality implementation (explicit unique key) and engine-level coverage.
+- Ran cargo fmt, cargo clippy --all-targets (clean), and cargo test (full suite; reran m4_package_parts_tests once after a broken pipe); all tests now pass.

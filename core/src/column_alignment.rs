@@ -492,15 +492,9 @@ mod tests {
 
     #[test]
     fn detect_exact_column_block_move_rejects_two_independent_moves() {
-        let grid_a = grid_from_numbers(&[
-            &[10, 20, 30, 40, 50, 60],
-            &[11, 21, 31, 41, 51, 61],
-        ]);
+        let grid_a = grid_from_numbers(&[&[10, 20, 30, 40, 50, 60], &[11, 21, 31, 41, 51, 61]]);
 
-        let grid_b = grid_from_numbers(&[
-            &[20, 10, 30, 40, 60, 50],
-            &[21, 11, 31, 41, 61, 51],
-        ]);
+        let grid_b = grid_from_numbers(&[&[20, 10, 30, 40, 60, 50], &[21, 11, 31, 41, 61, 51]]);
 
         assert!(
             detect_exact_column_block_move(&grid_a, &grid_b).is_none(),
@@ -510,15 +504,9 @@ mod tests {
 
     #[test]
     fn detect_exact_column_block_move_swap_as_single_move() {
-        let grid_a = grid_from_numbers(&[
-            &[10, 20, 30, 40],
-            &[11, 21, 31, 41],
-        ]);
+        let grid_a = grid_from_numbers(&[&[10, 20, 30, 40], &[11, 21, 31, 41]]);
 
-        let grid_b = grid_from_numbers(&[
-            &[20, 10, 30, 40],
-            &[21, 11, 31, 41],
-        ]);
+        let grid_b = grid_from_numbers(&[&[20, 10, 30, 40], &[21, 11, 31, 41]]);
 
         let mv = detect_exact_column_block_move(&grid_a, &grid_b)
             .expect("swap of adjacent columns should be detected as single-column move");

@@ -107,7 +107,11 @@ fn g12_multi_column_block_move_emits_blockmovedcolumns() {
 
     let report = diff_workbooks(&wb_a, &wb_b);
 
-    assert_eq!(report.ops.len(), 1, "expected a single diff op for multi-column move");
+    assert_eq!(
+        report.ops.len(),
+        1,
+        "expected a single diff op for multi-column move"
+    );
 
     match &report.ops[0] {
         DiffOp::BlockMovedColumns {
@@ -129,15 +133,9 @@ fn g12_multi_column_block_move_emits_blockmovedcolumns() {
 
 #[test]
 fn g12_two_independent_column_moves_do_not_emit_blockmovedcolumns() {
-    let grid_a = grid_from_numbers(&[
-        &[10, 20, 30, 40, 50, 60],
-        &[11, 21, 31, 41, 51, 61],
-    ]);
+    let grid_a = grid_from_numbers(&[&[10, 20, 30, 40, 50, 60], &[11, 21, 31, 41, 51, 61]]);
 
-    let grid_b = grid_from_numbers(&[
-        &[20, 10, 30, 40, 60, 50],
-        &[21, 11, 31, 41, 61, 51],
-    ]);
+    let grid_b = grid_from_numbers(&[&[20, 10, 30, 40, 60, 50], &[21, 11, 31, 41, 61, 51]]);
 
     let wb_a = single_sheet_workbook("Data", grid_a);
     let wb_b = single_sheet_workbook("Data", grid_b);
@@ -160,22 +158,20 @@ fn g12_two_independent_column_moves_do_not_emit_blockmovedcolumns() {
 
 #[test]
 fn g12_column_swap_emits_blockmovedcolumns() {
-    let grid_a = grid_from_numbers(&[
-        &[10, 20, 30, 40],
-        &[11, 21, 31, 41],
-    ]);
+    let grid_a = grid_from_numbers(&[&[10, 20, 30, 40], &[11, 21, 31, 41]]);
 
-    let grid_b = grid_from_numbers(&[
-        &[20, 10, 30, 40],
-        &[21, 11, 31, 41],
-    ]);
+    let grid_b = grid_from_numbers(&[&[20, 10, 30, 40], &[21, 11, 31, 41]]);
 
     let wb_a = single_sheet_workbook("Data", grid_a);
     let wb_b = single_sheet_workbook("Data", grid_b);
 
     let report = diff_workbooks(&wb_a, &wb_b);
 
-    assert_eq!(report.ops.len(), 1, "swap should produce single BlockMovedColumns op");
+    assert_eq!(
+        report.ops.len(),
+        1,
+        "swap should produce single BlockMovedColumns op"
+    );
 
     match &report.ops[0] {
         DiffOp::BlockMovedColumns {

@@ -6,12 +6,15 @@
 use crate::column_alignment::{
     ColumnAlignment, ColumnBlockMove, align_single_column_change, detect_exact_column_block_move,
 };
+use crate::database_alignment::{KeyColumnSpec, diff_table_by_key};
 use crate::diff::{DiffOp, DiffReport, SheetId};
 use crate::row_alignment::{
     RowAlignment, RowBlockMove, align_row_changes, detect_exact_row_block_move,
 };
 use crate::workbook::{Cell, CellAddress, CellSnapshot, Grid, Sheet, SheetKind, Workbook};
 use std::collections::HashMap;
+
+const DATABASE_MODE_SHEET_ID: &str = "<database>";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SheetKey {
@@ -88,6 +91,49 @@ pub fn diff_workbooks(old: &Workbook, new: &Workbook) -> DiffReport {
                 diff_grids(&sheet_id, &old_sheet.grid, &new_sheet.grid, &mut ops);
             }
             (None, None) => unreachable!(),
+        }
+    }
+
+    DiffReport::new(ops)
+}
+
+pub fn diff_grids_database_mode(old: &Grid, new: &Grid, key_columns: &[u32]) -> DiffReport {
+    let spec = KeyColumnSpec::new(key_columns.to_vec());
+    let alignment = match diff_table_by_key(old, new, key_columns) {
+        Ok(alignment) => alignment,
+        Err(_) => {
+            let mut ops = Vec::new();
+            let sheet_id: SheetId = DATABASE_MODE_SHEET_ID.to_string();
+            diff_grids(&sheet_id, old, new, &mut ops);
+            return DiffReport::new(ops);
+        }
+    };
+
+    let mut ops = Vec::new();
+    let sheet_id: SheetId = DATABASE_MODE_SHEET_ID.to_string();
+    let max_cols = old.ncols.max(new.ncols);
+
+    for row_idx in &alignment.left_only_rows {
+        ops.push(DiffOp::row_removed(sheet_id.clone(), *row_idx, None));
+    }
+
+    for row_idx in &alignment.right_only_rows {
+        ops.push(DiffOp::row_added(sheet_id.clone(), *row_idx, None));
+    }
+
+    for (row_a, row_b) in &alignment.matched_rows {
+        for col in 0..max_cols {
+            if spec.is_key_column(col) {
+                continue;
+            }
+
+            let addr = CellAddress::from_indices(*row_b, col);
+            let from = snapshot_with_addr(old.get(*row_a, col), addr);
+            let to = snapshot_with_addr(new.get(*row_b, col), addr);
+
+            if from != to {
+                ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
+            }
         }
     }
 

@@ -27,7 +27,7 @@ The current implementation represents approximately **25-35% of the end-state sy
 | Part II: Architecture | 40% | Data structures implemented; pipeline scaffolding missing |
 | Part III: Preprocessing | 35% | Row/column signatures now deterministic (XXHash64 with position/type tags); normalization and frequency analysis not implemented |
 | Part IV: Spreadsheet Mode Alignment | 5% | Overlap-only cell comparison with tail row/column adds/removes; no alignment |
-| Part V: Database Mode | 0% | Not started |
+| Part V: Database Mode | 10% | D1 keyed equality implemented via explicit unique key columns in `diff_grids_database_mode`; composite/duplicate-key handling deferred |
 | Part VI: Cell-Level Comparison | 70% | Basic cell diff works; formula semantics missing |
 | Part VII: Result Assembly | 60% | DiffOp/DiffReport types complete; coalescing not implemented |
 | Part VIII: Robustness | 20% | Error handling present; memory management not implemented |
@@ -59,7 +59,7 @@ The spec defines 20 use cases (UC-01 through UC-20) across five categories:
 | UC-06–10: Alignment | ❌ No | No row/column alignment implemented |
 | UC-11–13: Move detection | ❌ No | DiffOp variants exist but not detected |
 | UC-14–16: Adversarial | ❌ No | No special handling |
-| UC-17–20: Database mode | ❌ No | Not started |
+| UC-17-20: Database mode | Partial | UC-17/D1 keyed equality implemented (explicit single-column unique key); UC-18-20 not started |
 
 #### Assessment
 
@@ -327,13 +327,13 @@ Database mode provides key-based row matching:
 
 #### Current Implementation
 
-**Not implemented.** No key-based alignment, no mode selection, no region detection.
+**Partial.** `diff_grids_database_mode` adds a database-mode entry point for explicit single-column unique keys (hash-join alignment). D1 fixtures align by key and produce empty diffs on reorder/equality. Duplicate keys return an internal error/fallback; no mode selection or region detection yet.
 
 #### Assessment
 
-Database mode is a significant differentiator from competitors. The spec explicitly calls out that incumbent tools rarely support this. However, spreadsheet mode is the more common use case and should be prioritized.
+Database mode is a significant differentiator from competitors. The keyed-equality slice (UC-17/D1) now exists at the engine level, but composite/duplicate keys, table-region detection, and workbook-level wiring are still missing. Spreadsheet mode remains the default path.
 
-**Verdict**: Deferred work; not critical for MVP.
+**Verdict**: Initial slice implemented; broader database-mode work remains deferred.
 
 ---
 

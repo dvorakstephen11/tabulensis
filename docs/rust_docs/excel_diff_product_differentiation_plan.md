@@ -91,6 +91,8 @@ Synkronizer explicitly bifurcates its logic into two modes :
 * **Spreadsheet Mode:** This is a cell-by-cell comparison. It assumes the grid structure is paramount. This is ideal for financial models where the position of a cell (e.g., B12 \= "Net Income") is fixed.  
 * **Database Mode:** This mode treats the worksheet as a flat-file database. It requires the user to select a **Primary Key** (similar to xlCompare). Synkronizer then ignores the row order and matches records based on the key. This is essential for reconciling lists, such as vendor payments or employee rosters, where the data might be sorted differently between versions.
 
+Engine status: Database Mode keyed equality (explicit single-column key) is implemented at the engine layer via `diff_grids_database_mode` and validated against the D1 fixtures, anchoring this differentiator in practice.
+
 ### **3.3 Pricing and Licensing Model**
 
 Synkronizer positions itself as a premium, professional-grade tool with a higher entry price point than xlCompare.
