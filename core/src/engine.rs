@@ -3,7 +3,9 @@
 //! Provides the main entry point [`diff_workbooks`] for comparing two workbooks
 //! and generating a [`DiffReport`] of all changes.
 
-use crate::column_alignment::{ColumnAlignment, align_single_column_change};
+use crate::column_alignment::{
+    ColumnAlignment, ColumnBlockMove, align_single_column_change, detect_exact_column_block_move,
+};
 use crate::diff::{DiffOp, DiffReport, SheetId};
 use crate::row_alignment::{
     RowAlignment, RowBlockMove, align_row_changes, detect_exact_row_block_move,
@@ -95,6 +97,8 @@ pub fn diff_workbooks(old: &Workbook, new: &Workbook) -> DiffReport {
 fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>) {
     if let Some(mv) = detect_exact_row_block_move(old, new) {
         emit_row_block_move(sheet_id, mv, ops);
+    } else if let Some(mv) = detect_exact_column_block_move(old, new) {
+        emit_column_block_move(sheet_id, mv, ops);
     } else if let Some(alignment) = align_row_changes(old, new) {
         emit_aligned_diffs(sheet_id, old, new, &alignment, ops);
     } else if let Some(alignment) = align_single_column_change(old, new) {
@@ -139,6 +143,16 @@ fn emit_row_block_move(sheet_id: &SheetId, mv: RowBlockMove, ops: &mut Vec<DiffO
         src_start_row: mv.src_start_row,
         row_count: mv.row_count,
         dst_start_row: mv.dst_start_row,
+        block_hash: None,
+    });
+}
+
+fn emit_column_block_move(sheet_id: &SheetId, mv: ColumnBlockMove, ops: &mut Vec<DiffOp>) {
+    ops.push(DiffOp::BlockMovedColumns {
+        sheet: sheet_id.clone(),
+        src_start_col: mv.src_start_col,
+        col_count: mv.col_count,
+        dst_start_col: mv.dst_start_col,
         block_hash: None,
     });
 }

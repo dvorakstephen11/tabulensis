@@ -8,9 +8,150 @@ pub(crate) struct ColumnAlignment {
     pub(crate) deleted: Vec<u32>,        // columns present only in A
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ColumnBlockMove {
+    pub src_start_col: u32,
+    pub dst_start_col: u32,
+    pub col_count: u32,
+}
+
 const MAX_ALIGN_ROWS: u32 = 2_000;
 const MAX_ALIGN_COLS: u32 = 64;
 const MAX_HASH_REPEAT: u32 = 8;
+
+pub(crate) fn detect_exact_column_block_move(old: &Grid, new: &Grid) -> Option<ColumnBlockMove> {
+    if old.ncols != new.ncols || old.nrows != new.nrows {
+        return None;
+    }
+
+    if old.ncols == 0 {
+        return None;
+    }
+
+    if !is_within_size_bounds(old, new) {
+        return None;
+    }
+
+    let view_a = GridView::from_grid(old);
+    let view_b = GridView::from_grid(new);
+
+    if blank_dominated(&view_a) || blank_dominated(&view_b) {
+        return None;
+    }
+
+    let stats = HashStats::from_col_meta(&view_a.col_meta, &view_b.col_meta);
+    if has_heavy_repetition(&stats) {
+        return None;
+    }
+
+    let meta_a = &view_a.col_meta;
+    let meta_b = &view_b.col_meta;
+    let n = meta_a.len();
+
+    if meta_a
+        .iter()
+        .zip(meta_b.iter())
+        .all(|(a, b)| a.hash == b.hash)
+    {
+        return None;
+    }
+
+    let prefix = (0..n).find(|&idx| meta_a[idx].hash != meta_b[idx].hash)?;
+
+    let mut suffix_len = 0usize;
+    while suffix_len < n.saturating_sub(prefix) {
+        let idx_a = n - 1 - suffix_len;
+        let idx_b = n - 1 - suffix_len;
+        if meta_a[idx_a].hash == meta_b[idx_b].hash {
+            suffix_len += 1;
+        } else {
+            break;
+        }
+    }
+    let tail_start = n - suffix_len;
+
+    let try_candidate = |src_start: usize, dst_start: usize| -> Option<ColumnBlockMove> {
+        if src_start >= tail_start || dst_start >= tail_start {
+            return None;
+        }
+
+        let mut len = 0usize;
+        while src_start + len < tail_start && dst_start + len < tail_start {
+            if meta_a[src_start + len].hash != meta_b[dst_start + len].hash {
+                break;
+            }
+            len += 1;
+        }
+
+        if len == 0 {
+            return None;
+        }
+
+        let src_end = src_start + len;
+        let dst_end = dst_start + len;
+
+        if !(src_end <= dst_start || dst_end <= src_start) {
+            return None;
+        }
+
+        let mut idx_a = 0usize;
+        let mut idx_b = 0usize;
+
+        loop {
+            if idx_a == src_start {
+                idx_a = src_end;
+            }
+            if idx_b == dst_start {
+                idx_b = dst_end;
+            }
+
+            if idx_a >= n && idx_b >= n {
+                break;
+            }
+
+            if idx_a >= n || idx_b >= n {
+                return None;
+            }
+
+            if meta_a[idx_a].hash != meta_b[idx_b].hash {
+                return None;
+            }
+
+            idx_a += 1;
+            idx_b += 1;
+        }
+
+        for meta in &meta_a[src_start..src_end] {
+            if stats.freq_a.get(&meta.hash).copied().unwrap_or(0) != 1
+                || stats.freq_b.get(&meta.hash).copied().unwrap_or(0) != 1
+            {
+                return None;
+            }
+        }
+
+        Some(ColumnBlockMove {
+            src_start_col: meta_a[src_start].col_idx,
+            dst_start_col: meta_b[dst_start].col_idx,
+            col_count: len as u32,
+        })
+    };
+
+    if let Some(src_start) =
+        (prefix..tail_start).find(|&idx| meta_a[idx].hash == meta_b[prefix].hash)
+        && let Some(mv) = try_candidate(src_start, prefix)
+    {
+        return Some(mv);
+    }
+
+    if let Some(dst_start) =
+        (prefix..tail_start).find(|&idx| meta_b[idx].hash == meta_a[prefix].hash)
+        && let Some(mv) = try_candidate(prefix, dst_start)
+    {
+        return Some(mv);
+    }
+
+    None
+}
 
 pub(crate) fn align_single_column_change(old: &Grid, new: &Grid) -> Option<ColumnAlignment> {
     if !is_within_size_bounds(old, new) {
@@ -178,6 +319,20 @@ fn has_heavy_repetition(stats: &HashStats<ColHash>) -> bool {
         > MAX_HASH_REPEAT
 }
 
+fn blank_dominated(view: &GridView<'_>) -> bool {
+    if view.col_meta.is_empty() {
+        return false;
+    }
+
+    let blank_cols = view
+        .col_meta
+        .iter()
+        .filter(|meta| meta.non_blank_count == 0)
+        .count();
+
+    blank_cols * 2 > view.col_meta.len()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,5 +433,39 @@ mod tests {
         let grid_b = grid_from_numbers(&refs_b);
 
         assert!(align_single_column_change(&grid_a, &grid_b).is_none());
+    }
+
+    #[test]
+    fn detect_exact_column_block_move_simple_case() {
+        let grid_a = grid_from_numbers(&[&[10, 20, 30, 40], &[11, 21, 31, 41]]);
+
+        let grid_b = grid_from_numbers(&[&[10, 30, 40, 20], &[11, 31, 41, 21]]);
+
+        let mv =
+            detect_exact_column_block_move(&grid_a, &grid_b).expect("expected column move found");
+        assert_eq!(mv.src_start_col, 1);
+        assert_eq!(mv.col_count, 1);
+        assert_eq!(mv.dst_start_col, 3);
+    }
+
+    #[test]
+    fn detect_exact_column_block_move_rejects_internal_edits() {
+        let grid_a = grid_from_numbers(&[&[1, 2, 3, 4], &[5, 6, 7, 8], &[9, 10, 11, 12]]);
+
+        let grid_b = grid_from_numbers(&[
+            &[1, 3, 4, 2],
+            &[5, 7, 8, 6],
+            &[9, 11, 12, 999], // edit inside moved column
+        ]);
+
+        assert!(detect_exact_column_block_move(&grid_a, &grid_b).is_none());
+    }
+
+    #[test]
+    fn detect_exact_column_block_move_rejects_repetition() {
+        let grid_a = grid_from_numbers(&[&[1, 1, 2, 2], &[10, 10, 20, 20]]);
+        let grid_b = grid_from_numbers(&[&[2, 2, 1, 1], &[20, 20, 10, 10]]);
+
+        assert!(detect_exact_column_block_move(&grid_a, &grid_b).is_none());
     }
 }

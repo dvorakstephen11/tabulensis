@@ -251,6 +251,19 @@ scenarios:
       - "row_block_move_a.xlsx"
       - "row_block_move_b.xlsx"
 
+  # --- Phase 4: Spreadsheet-mode G12 (column move only - G12a) ---
+  - id: "g12_column_block_move"
+    generator: "column_move_g12"
+    args:
+      sheet: "Data"
+      cols: 8
+      data_rows: 9
+      src_col: 3      # 1-based: C
+      dst_col: 6      # 1-based: F
+    output:
+      - "column_move_a.xlsx"
+      - "column_move_b.xlsx"
+
   # --- JSON diff: simple non-empty change ---
   - id: "json_diff_single_cell"
     generator: "single_cell_diff"

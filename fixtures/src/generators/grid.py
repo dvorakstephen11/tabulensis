@@ -550,6 +550,81 @@ class RowBlockMoveG11Generator(BaseGenerator):
 
         wb.save(path)
 
+class ColumnMoveG12Generator(BaseGenerator):
+    """Generates workbook pairs for G12 exact column move scenarios."""
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        if len(output_names) != 2:
+            raise ValueError("column_move_g12 generator expects exactly two output filenames")
+
+        sheet = self.args.get("sheet", "Data")
+        cols = self.args.get("cols", 8)
+        data_rows = self.args.get("data_rows", 9)
+        src_col = self.args.get("src_col", 3)
+        dst_col = self.args.get("dst_col", 6)
+
+        if not (1 <= src_col <= cols):
+            raise ValueError("src_col must be within 1..cols")
+        if not (1 <= dst_col <= cols):
+            raise ValueError("dst_col must be within 1..cols")
+        if src_col == dst_col:
+            raise ValueError("src_col and dst_col must differ for a move")
+
+        base_rows = self._build_rows(cols, data_rows, src_col)
+        moved_rows = self._move_column(base_rows, src_col, dst_col)
+
+        self._write_workbook(output_dir / output_names[0], sheet, base_rows)
+        self._write_workbook(output_dir / output_names[1], sheet, moved_rows)
+
+    def _build_rows(self, cols: int, data_rows: int, key_col: int) -> List[List[Any]]:
+        header: List[Any] = []
+        for c in range(1, cols + 1):
+            if c == key_col:
+                header.append("C_key")
+            else:
+                header.append(f"Col{c}")
+
+        rows: List[List[Any]] = [header]
+        for r in range(1, data_rows + 1):
+            row: List[Any] = []
+            for c in range(1, cols + 1):
+                if c == key_col:
+                    row.append(100 * r)
+                else:
+                    row.append(r * 10 + c)
+            rows.append(row)
+
+        return rows
+
+    def _move_column(
+        self, rows: List[List[Any]], src_col: int, dst_col: int
+    ) -> List[List[Any]]:
+        src_idx = src_col - 1
+        dst_idx = dst_col - 1
+        moved_rows: List[List[Any]] = []
+
+        for row in rows:
+            new_row = list(row)
+            value = new_row.pop(src_idx)
+            insert_at = max(0, min(dst_idx, len(new_row)))
+            new_row.insert(insert_at, value)
+            moved_rows.append(new_row)
+
+        return moved_rows
+
+    def _write_workbook(self, path: Path, sheet: str, rows: List[List[Any]]):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = sheet
+
+        for r_idx, row_values in enumerate(rows, start=1):
+            for c_idx, value in enumerate(row_values, start=1):
+                ws.cell(row=r_idx, column=c_idx, value=value)
+
+        wb.save(path)
+
 class ColumnAlignmentG9Generator(BaseGenerator):
     """Generates workbook pairs for G9-style middle column insert/delete scenarios."""
     def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
