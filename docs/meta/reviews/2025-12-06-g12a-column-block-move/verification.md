@@ -1,243 +1,166 @@
-# Verification Report: 2025-12-06-g12a-column-block-move
+````markdown
+# Verification Report: 2025-12-06b-d1-database-mode-keyed-equality
 
 ## Summary
 
-The G12a implementation cleanly adds exact column block move detection for small spreadsheet-mode grids and wires it into the diff engine without disturbing existing behavior. The detector mirrors the existing row-block move logic, uses the same GridView/HashStats infrastructure and guards, and emits `BlockMovedColumns` exactly as specified for the new G12 fixture and ambiguity guard scenario. All tests described in the mini-spec (fixtures, workbook-level tests, and detector unit tests) are present and passing, and existing G8–G11 tests still pass unchanged. The remaining issues are minor and mostly about expanding test coverage and clarifying corner-case behavior (multi-column moves, column swaps).
+The branch successfully adds a Database Mode entrypoint (`diff_grids_database_mode`), a keyed-alignment helper module (`database_alignment`), and D1-specific tests, and updates documentation to mark D1 as implemented. The implementation matches the D1 / UC‑17 behavioral contract: when grids contain the same unique keys and identical non-key data (even in different row orders), the database-mode diff produces an empty `DiffReport`. All tests in the suite (including new unit and integration tests) pass, and Spreadsheet Mode behavior remains unchanged. The remaining issues are minor and mostly about documentation clarity and future-test coverage rather than correctness. I recommend proceeding to release for this D1 slice.
 
 ## Recommendation
 
 [x] Proceed to release  
 [ ] Remediation required
 
----
-
 ## Findings
 
-### 1. Column block move detector matches the planned contract
+### 1. D1 Behavioral Contract: Implemented and Verified
 
-- **Severity**: Minor (verification note; no action required)
-- **Category**: Gap / Spec Alignment
+- **Severity**: Minor (positive confirmation; no fix required)
+- **Category**: Gap (closed) / Spec Conformance
 - **Description**:  
-  The `ColumnBlockMove` detector is implemented in `core/src/column_alignment.rs` and closely mirrors the existing row-block move detector:
+  The mini-spec requires a new Database Mode API that:
+  - Operates on `Grid` values and returns a `DiffReport`. :contentReference[oaicite:0]{index=0}  
+  - Uses keyed alignment (hash-join by key) where row identity is by key, row order is ignored, and unique keys are assumed for D1.   
+  - Produces an empty diff when keys and non-key contents match (UC‑17 / D1).   
 
-  - Requires identical shapes (`nrows` and `ncols` equal) and non-empty column count.  
-  - Applies the same size envelope as G8–G11 (`MAX_ALIGN_ROWS = 2000`, `MAX_ALIGN_COLS = 64`).   
-  - Uses `GridView::from_grid` to derive `col_meta` and `HashStats<ColHash>` for both grids.   
-  - Bails out when more than half of the columns are entirely blank (`blank_dominated`) or when any column hash repeats more than `MAX_HASH_REPEAT` in either grid.   
-  - Finds the first mismatching column (`prefix`), computes a matching suffix (`tail_start`), then searches for a *single* contiguous candidate block that:  
-    - Matches exactly between A and B in that region,  
-    - Does not overlap between source and destination, and  
-    - Leaves the rest of the columns matching 1:1 after removing that block from both sides. :contentReference[oaicite:3]{index=3}  
-  - Validates that each column hash in the candidate block is unique in both grids (frequency 1 in `freq_a` and `freq_b`), enforcing the “unambiguous by hash” constraint.   
+  The implementation provides:
+  - `pub fn diff_grids_database_mode(old: &Grid, new: &Grid, key_columns: &[u32]) -> DiffReport` in `core/src/engine.rs`. :contentReference[oaicite:3]{index=3}  
+  - A new `core/src/database_alignment.rs` module with `KeyColumnSpec`, `KeyedAlignment`, and `diff_table_by_key` implementing a hash-join over keys with O(N) construction and deterministic behavior (no reliance on `HashMap` iteration order for output).   
+  - D1 integration tests in `core/tests/d1_database_mode_tests.rs` that load `db_equal_ordered_a.xlsx` and `db_equal_ordered_b.xlsx`, call `diff_grids_database_mode(&grid_a, &grid_b, &[0])`, and assert `report.ops.is_empty()` in both ordered and reordered cases.   
 
-  This matches the mini-spec’s behavior: “exact column block move detection” that returns `Some(ColumnBlockMove)` only when there is exactly one contiguous column block moved, no internal edits, and no ambiguous matches. 
-
-- **Evidence**:  
-  - `ColumnBlockMove` struct and `detect_exact_column_block_move` implementation. :contentReference[oaicite:6]{index=6}  
-  - `GridView` / `HashStats` design and usage.   
-  - Mini-spec Section 4.2 (“Internal helper APIs”). :contentReference[oaicite:8]{index=8}  
+- **Evidence**:
+  - Mini-spec behavioral contract and interface for `diff_grids_database_mode`. :contentReference[oaicite:6]{index=6}  
+  - `database_alignment` module implementing key extraction, key representation, and alignment.   
+  - `diff_grids_database_mode` integrating keyed alignment and emitting DiffOps only for non-key differences.   
+  - D1 tests and overall test run (59 tests) passing.   
 
 - **Impact**:  
-  The implementation satisfies the intended behavioral contract; this finding is recorded to confirm alignment, not to call for remediation.
+  The core D1 promise—“Database Mode keyed equality produces no diffs when data is identical up to row order”—is met and codified in tests. This is the primary release gate for this branch.
 
 ---
 
-### 2. `diff_grids` integration and DiffOp shape are correct
+### 2. Database Alignment Helper Returns `Result` Instead of Bare Struct (Documented Deviation)
 
-- **Severity**: Minor (verification note)
-- **Category**: Gap / Spec Alignment
+- **Severity**: Minor  
+- **Category**: Spec Deviation (benign, documented)  
 - **Description**:  
-  `diff_grids` in `core/src/engine.rs` has been updated to insert column block move detection as an early fast path, immediately after row-block moves and before row/column alignment:
-
-  1. Try `detect_exact_row_block_move` → if `Some`, emit `BlockMovedRows` and return.  
-  2. Else try `detect_exact_column_block_move` → if `Some`, emit `BlockMovedColumns` and return.  
-  3. Else fall back to row alignment, column alignment, then positional diff. :contentReference[oaicite:9]{index=9}  
-
-  The new helper:
+  The mini-spec sketches `diff_table_by_key` as returning a `KeyedAlignment` directly. :contentReference[oaicite:10]{index=10}  
+  The implementation instead defines:
 
   ```rust
-  fn emit_column_block_move(sheet_id: &SheetId, mv: ColumnBlockMove, ops: &mut Vec<DiffOp>) {
-      ops.push(DiffOp::BlockMovedColumns {
-          sheet: sheet_id.clone(),
-          src_start_col: mv.src_start_col,
-          col_count: mv.col_count,
-          dst_start_col: mv.dst_start_col,
-          block_hash: None,
-      });
-  }
+  pub(crate) fn diff_table_by_key(
+      old: &Grid,
+      new: &Grid,
+      key_columns: &[u32],
+  ) -> Result<KeyedAlignment, KeyAlignmentError>
 ````
 
-uses the existing `DiffOp::BlockMovedColumns` variant without changing its shape.
+with `KeyAlignmentError::{DuplicateKeyLeft, DuplicateKeyRight}`. 
 
-For pure column moves, `row`-level hashes *do* change (because row hashing incorporates the column index), so `detect_exact_row_block_move` will properly return `None`, and column detection gets the chance to fire as intended.
+This allows the helper to enforce the unique-key invariant by erroring on duplicates, which aligns with the spec’s allowance for an “internal error used only in tests” when keys are not globally unique.
 
 * **Evidence**:
 
-  * `diff_grids` early-return ordering and `emit_column_block_move` helper. 
-  * `DiffOp` enum definition with `BlockMovedColumns`. 
-  * `GridView` hashing semantics (row hashes are position-sensitive).
+  * Mini-spec interface description for `diff_table_by_key`. 
+  * Actual signature and error enum in `database_alignment.rs`. 
+  * Activity log explicitly noting that duplicate keys are rejected and handled. 
 
 * **Impact**:
-  Pure column moves are now recognized as a single `BlockMovedColumns` op, as required, and existing phases still run for all other cases. No regressions are apparent.
+  This is a strengthening of the original plan and improves safety around duplicates. It is internal to the crate (no public API change) and consistent with the documented “error-or-unsupported” behavior for duplicate keys. No remediation needed; just be aware of the divergence between the planning sketch and the implemented signature.
 
 ---
 
-### 3. All planned tests and fixtures for G12a are present and passing
-
-* **Severity**: Minor (verification note)
-
-* **Category**: Gap / Missing Test (resolved)
-
-* **Description**:
-  The mini-spec’s testing plan for G12a is fully implemented:
-
-  * **Fixtures & generator**
-
-    * `fixtures/manifest.yaml` includes a Phase 4 G12 entry `g12_column_block_move` with the expected args and outputs (`column_move_a.xlsx`, `column_move_b.xlsx`).
-    * `ColumnMoveG12Generator` in `fixtures/src/generators/grid.py` creates a `Data` sheet with 8 columns where one “key” column has distinctive header `"C_key"` and data (`100 * r`), and other columns use different numeric patterns (`r * 10 + c`) so that the key column’s hash is unique. It writes the unmodified grid as `column_move_a.xlsx` and a version with the key column moved from `src_col` to `dst_col` as `column_move_b.xlsx`.
-
-  * **Workbook-level tests**
-
-    * `core/tests/g12_column_block_move_grid_workbook_tests.rs` contains:
-
-      * `g12_column_move_emits_single_blockmovedcolumns`: asserts that diffing the G12 fixture yields exactly one `BlockMovedColumns` op with `sheet == "Data"`, `src_start_col == 2` (0-based C), `col_count == 1`, `dst_start_col == 5` (0-based F), `block_hash.is_none()`, and no `ColumnAdded/ColumnRemoved/RowAdded/RowRemoved/CellEdited` ops.
-      * `g12_repeated_columns_do_not_emit_blockmovedcolumns`: constructs an in-memory scenario with repeated, swapped columns and asserts `DiffOp::BlockMovedColumns` is *not* produced and that some other diff op exists, confirming the ambiguity guard.
-
-  * **Unit tests in the detector**
-
-    * `column_alignment::tests` includes:
-
-      * `detect_exact_column_block_move_simple_case` — small `Grid` with a single unique column moved, expecting `Some(ColumnBlockMove { src_start_col, col_count: 1, dst_start_col })`.
-      * `detect_exact_column_block_move_rejects_internal_edits` — same setup but with a single changed cell inside the moved column; asserts `None`.
-      * `detect_exact_column_block_move_rejects_repetition` — repeated identical columns swapped; asserts `None`.
-
-  * **Regression safety**
-
-    * `cycle_summary.txt` shows `cargo test` runs 53 tests successfully, including all existing G8–G11 workbook tests and the new G12 tests. 
-
-* **Impact**:
-  The behavioral contract for G12a is well covered by tests at both the detector and workbook levels, and basic regression safety is satisfied.
-
----
-
-### 4. Multi-column block moves are supported in code but untested
+### 3. Duplicate-Key Behavior: Helper Tested, Entrypoint Fallback Not Explicitly Tested
 
 * **Severity**: Minor
 
 * **Category**: Missing Test
 
 * **Description**:
-  The `ColumnBlockMove` type and detector are general over `col_count` and are perfectly capable of representing moves of a contiguous block of *multiple* columns:
+  The mini-spec says that when keys are not globally unique it is acceptable to treat such tables as “not-database-mode-safe yet,” but the engine **must not** silently misalign rows or panic. 
 
-  * `ColumnBlockMove` tracks `col_count: u32`. 
-  * The detector’s `len` variable can span multiple columns, and `try_candidate` checks that the entire candidate range matches and the remainder of the columns align 1:1. 
+  Implementation strategy:
 
-  However, all current tests (both workbook-level and unit tests) focus on **single-column** moves (`col_count == 1`):
-
-  * G12 fixture moves only column C to position F.
-  * The unit tests explicitly assert `col_count == 1` in the simple case.
-
-  There is no test that diffing a workbook with a genuinely multi-column contiguous block move yields a `BlockMovedColumns` op with `col_count > 1`.
+  * `diff_table_by_key` detects duplicates and returns a `KeyAlignmentError` instead of producing a potentially misaligned mapping. 
+  * `diff_grids_database_mode` catches any error from `diff_table_by_key` and falls back to existing spreadsheet-mode `diff_grids`, using a synthetic `"<database>"` sheet id.
+  * Module tests cover the helper’s error case (`duplicate_keys_error_or_unsupported`) but there is no test that exercises the fallback path of `diff_grids_database_mode` itself with a duplicate-key fixture.
 
 * **Evidence**:
 
-  * `ColumnBlockMove` and `detect_exact_column_block_move` implementation. 
-  * G12 fixture specification and generator.
-  * Detector unit tests’ expectations.
+  * Safety / fallback constraints in the mini-spec. 
+  * Activity log note: “duplicates fall back to spreadsheet-mode diff to avoid silent misalignment.” 
+  * Unit test only validates the error from `diff_table_by_key`, not the entrypoint’s behavior.
 
 * **Impact**:
-  For this G12a milestone, the explicit spec example is a single-column move, so the core contract is satisfied. However, the name “column block move” and the generalized implementation suggest that multi-column moves are *intended* to work; without tests, regressions in this behavior would be easy to miss. This is a good candidate for a future small follow-up test-only change.
+  For D1 (which only exercises unique keys), this path is not part of acceptance and does not affect correctness of current fixtures. However, when a caller accidentally passes duplicate keys, the observable behavior of the public API (`diff_grids_database_mode`) depends on this fallback path. Without an explicit test, regressions (e.g., removing the fallback or changing it to a panic) would not be caught. This is a **test coverage gap**, not a functional bug, and can be addressed in a future cycle.
 
 ---
 
-### 5. No explicit negative tests for “two independent column moves” at the workbook level
+### 4. D1 Integration Tests Only Cover “Empty Diff” Paths
 
 * **Severity**: Minor
 
 * **Category**: Missing Test
 
 * **Description**:
-  The mini-spec requires `detect_exact_column_block_move` to return `None` when there are multiple moved blocks or overlapping candidates.  The implementation enforces this via:
+  The new `d1_database_mode_tests.rs` file contains the two planned tests:
 
-  * Rest-of-array validation that, after removing a *single* candidate block from A and B, all remaining columns match 1:1 in order. If more than one block moved, this check fails and the function returns `None`. 
+  * `d1_equal_ordered_database_mode_empty_diff` (A vs A).
+  * `d1_equal_reordered_database_mode_empty_diff` (A vs B, same keys, permuted rows).
 
-  The unit tests do cover:
+  Both only assert that `report.ops.is_empty()`; they do not:
 
-  * Internal cell edits (must return `None`).
-  * Repetition-based ambiguity (must return `None`).
-
-  But there is no explicit workbook-level test for a sheet where **two disjoint column blocks move**. In such a case, the detector should bail out and let the alignment/positional diff handle the scenario.
+  * Validate that Spreadsheet Mode (`diff_workbooks`) **would** produce a non-empty diff on the reordered pair (optional contrast test from the mini-spec).
+  * Exercise non-empty database-mode outputs (row additions/removals or cell edits) even in small in-memory grids (e.g., a tiny D2-style case). The engine-side mapping from `KeyedAlignment` to `DiffOp::{RowAdded, RowRemoved, CellEdited}` is currently untested at the integration level.
 
 * **Evidence**:
 
-  * Mini-spec multi-block rejection requirement. 
-  * Candidate validation logic in `detect_exact_column_block_move`. 
-  * Existing G12 tests (only single-block scenarios covered).
+  * Test plan for D1 integration tests. 
+  * Actual test file contents and assertions. 
+  * Code path in `diff_grids_database_mode` that emits non-empty diffs (row-only and cell-only cases).
 
 * **Impact**:
-  This is not a correctness bug in the current implementation; the code logically rejects multi-block moves. But a regression test would help ensure future refactors don’t accidentally loosen this invariant.
+  For the strict D1/UC‑17 slice, “empty diff when data is identical up to row order” is fully covered. However, the untested non-empty paths represent potential future risk when you move into D2–D3 (row added/removed, row updated). If those paths contain bugs, they will remain latent until a later cycle. Given D1’s explicit scope, this is acceptable today but worth codifying as follow-up work.
 
 ---
 
-### 6. Minor internal spec deviation: `ColumnBlockMove` doesn’t carry `sheet` name
+### 5. Synthetic `"<database>"` Sheet Identifier vs. Real Sheet Names
 
 * **Severity**: Minor
 
-* **Category**: Spec Deviation (internal, documented here)
+* **Category**: Spec Deviation / Design Note
 
 * **Description**:
-  The mini-spec’s sketch of the helper API suggested a `detect_exact_column_block_move(sheet_name: &str, old: &Grid, new: &Grid) -> Option<ColumnBlockMove>` where the helper might store the `sheet` name in the move struct. 
+  The Database Mode entrypoint uses a constant `DATABASE_MODE_SHEET_ID: &str = "<database>"` for all emitted `DiffOp`s, rather than propagating the actual worksheet name.
 
-  The actual implementation is:
-
-  ```rust
-  pub(crate) struct ColumnBlockMove {
-      pub src_start_col: u32,
-      pub dst_start_col: u32,
-      pub col_count: u32,
-  }
-
-  pub(crate) fn detect_exact_column_block_move(old: &Grid, new: &Grid) -> Option<ColumnBlockMove> { ... }
-  ```
-
-  with the sheet name passed separately into `emit_column_block_move` from `diff_grids`.
-
-  This is a purely internal design deviation; the external `DiffOp::BlockMovedColumns` still includes the `sheet` field and is emitted correctly.
+  The D1 behavioral examples in the mini-spec talk about “that sheet” and show expectations phrased in terms of the primary data sheet, but they never pin down the sheet identifier in the diff for Database Mode.
 
 * **Evidence**:
 
-  * Mini-spec helper API sketch. 
-  * `ColumnBlockMove` definition and `emit_column_block_move` usage.
+  * `DATABASE_MODE_SHEET_ID` definition and its use in `diff_grids_database_mode` for row and cell operations.
+  * D1 / UC‑17 spec text referring to behavior “for the primary data sheet,” but not specifying how Database Mode names that sheet in IR.
 
 * **Impact**:
-  No behavioral impact. The separation of concerns is arguably cleaner (detector works on `Grid`s only). This deviation does not require remediation but is worth noting as “code diverges slightly from earlier planning doc.”
+  For D1, all tested cases require an **empty** diff, so the sheet ID never appears in assertions and the behavior is effectively unspecified. This design is forward-compatible (you can later treat `<database>` as a virtual sheet or refine it to use real names). However, it’s a slight drift from how Spreadsheet Mode uses actual worksheet names in DiffOps. Documenting this in higher-level docs or comments would avoid surprises for future consumers of `diff_grids_database_mode`.
 
 ---
 
-### 7. Behavior for column swaps is under-specified but likely acceptable
+### 6. Docs/Test Plan vs. Fixture Naming Drift
 
 * **Severity**: Minor
 
-* **Category**: Gap / Spec Clarification
+* **Category**: Gap (Documentation)
 
 * **Description**:
-  Because the detector looks for *any* single contiguous block whose movement explains the difference between A and B, some patterns that are intuitively “two columns swapped” can also be expressed as “a single column moved past another”. For example, swapping columns 0 and 1 while keeping others fixed can be seen as “move column 1 in A to position 0 in B”.
-
-  The current algorithm:
-
-  * Finds the first mismatch index (`prefix`).
-  * Searches for a matching column hash from the other grid in the `[prefix..tail_start)` region.
-  * Once a candidate block is found that makes the remainder align 1:1, it is accepted as a valid single-block move (subject to uniqueness and repetition checks). 
-
-  There is no test asserting whether swaps should be treated as a move vs. a more general structural diff. The unified grid spec is neutral here; it just defines `BlockMovedColumns` structurally, without singling out swaps.
+  The testing plan describes fixtures for D1 as `db_equal_ordered_{a,b}.xlsx` and `db_equal_reordered_{a,b}.xlsx`.
+  The actual tests and mini-spec examples for D1 use the pair `db_equal_ordered_a.xlsx` and `db_equal_ordered_b.xlsx`, with B understood to be the permuted version.
 
 * **Evidence**:
 
-  * Column block detection algorithm structure. 
-  * Unified grid spec for `BlockMovedColumns`. 
+  * Testing plan D1 fixture sketch. 
+  * Mini-spec Example 3 and integration test using `db_equal_ordered_a` vs `db_equal_ordered_b`.
 
 * **Impact**:
-  In practice, representing a swap as a “move of one column past another” is reasonable and probably desirable. The only risk is surprise if future consumers expected “swap” to be modeled purely as two moves or as add/remove. This is best addressed by adding explicit tests clarifying the intended behavior, but it is *not* a blocker.
+  This is a naming/documentation mismatch rather than a functional issue; the underlying fixtures and tests are consistent with each other. It may cause confusion when someone reads the testing plan in isolation and goes looking for `db_equal_reordered_*` files. A future doc pass can fix this easily.
 
 ---
 
@@ -245,29 +168,34 @@ For pure column moves, `row`-level hashes *do* change (because row hashing incor
 
 * [x] All scope items from mini-spec addressed
 
-  * Engine fast-path integration, detector implementation, generator, fixtures, and tests all match the planned scope.
+  * New engine API `diff_grids_database_mode` implemented and exported. 
+  * New `database_alignment` helper module created. 
+  * D1 integration tests and unit tests added.
 
 * [x] All specified tests created
 
-  * Workbook-level G12 tests and detector unit tests are present and match the mini-spec’s descriptions.
+  * `d1_equal_ordered_database_mode_empty_diff` and `d1_equal_reordered_database_mode_empty_diff`.
+  * `unique_keys_reorder_no_changes`, `unique_keys_insert_delete_classified`, `duplicate_keys_error_or_unsupported`.
 
 * [x] Behavioral contract satisfied
 
-  * Simple column move → single `BlockMovedColumns` with correct indices and no noise.
-  * Ambiguous repeated columns → no `BlockMovedColumns`; fallback ops present.
+  * Unique-key Database Mode produces an empty diff when keys and non-key data match regardless of row order (UC‑17 / D1).
 
 * [x] No undocumented deviations from spec (documented deviations with rationale are acceptable)
 
-  * Only notable deviation is the internal helper signature/struct field choice for `ColumnBlockMove`, which does not affect observable behavior and is documented above.
+  * Duplicate-key fallback behavior is described in the activity log. 
+  * Helper signature change (returning `Result`) is a reasonable strengthening, not a silent divergence.
 
 * [x] Error handling adequate
 
-  * All new logic returns `Option` with early bailouts on non-supported shapes, size limits, blank dominance, and heavy repetition; no panics or unwraps in production paths.
+  * Duplicate keys cause a controlled `KeyAlignmentError` in the helper and a safe Spreadsheet Mode fallback in the public API.
 
 * [x] No obvious performance regressions
 
-  * Detector reuses `GridView` and `HashStats` with the same small-grid bounds as G8–G11; heavy repetition and blank-dominated guards remain in place to avoid pathological cases.
+  * Alignment is an O(N) hash join over keys with O(N×M) cell comparison, consistent with the mini-spec and unified spec constraints.
+  * All existing PG1–PG6 and M1–M6 tests remain green. 
 
----
+```
 
-Overall, the implementation is solid, aligned with the plan, and safe to ship. The remaining items are incremental test and spec-clarification opportunities rather than blockers.
+If you’d like, I can also sketch a lightweight follow-up test plan for D2/D3 that specifically exercises the non-empty `diff_grids_database_mode` paths and the duplicate-key fallback.
+```

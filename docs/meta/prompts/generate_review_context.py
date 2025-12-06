@@ -960,6 +960,64 @@ def collate_projections(downloads_dir=None):
     return output_dir
 
 
+def apply_verification():
+    script_dir = Path(__file__).parent.resolve()
+    repo_root = script_dir.parent.parent.parent
+    
+    plans_dir = repo_root / "docs" / "meta" / "plans"
+    if not plans_dir.exists():
+        print(f"Error: Plans directory not found: {plans_dir}")
+        return None
+    
+    branch_dirs = sorted([d for d in plans_dir.iterdir() if d.is_dir()])
+    if not branch_dirs:
+        print(f"Error: No branch directories found in {plans_dir}")
+        return None
+    
+    latest_branch_dir = branch_dirs[-1]
+    branch_name = latest_branch_dir.name
+    
+    print(f"Latest branch: {branch_name}")
+    
+    decision_file = latest_branch_dir / "decision.yaml"
+    spec_file = latest_branch_dir / "spec.md"
+    
+    reviews_dir = repo_root / "docs" / "meta" / "reviews" / branch_name
+    verification_file = reviews_dir / "verification.md"
+    
+    decision_path = f"docs/meta/plans/{branch_name}/decision.yaml"
+    spec_path = f"docs/meta/plans/{branch_name}/spec.md"
+    verification_path = f"docs/meta/reviews/{branch_name}/verification.md"
+    
+    missing_files = []
+    if not decision_file.exists():
+        missing_files.append(decision_path)
+    if not spec_file.exists():
+        missing_files.append(spec_path)
+    if not verification_file.exists():
+        missing_files.append(verification_path)
+    
+    if missing_files:
+        print(f"Warning: The following files do not exist:")
+        for mf in missing_files:
+            print(f"  - {mf}")
+    
+    prompt_text = f"""I have a verification report (@{verification_path}) that references @{decision_path} and @{spec_path}. Please implement ____ from the verification report."""
+    
+    print(f"\nGenerated prompt:")
+    print(f"  Decision: {decision_path}")
+    print(f"  Spec: {spec_path}")
+    print(f"  Verification: {verification_path}")
+    
+    try:
+        copy_to_clipboard(prompt_text)
+        print(f"\nApply verification prompt copied to clipboard!")
+    except Exception as e:
+        print(f"\nWarning: Could not copy to clipboard: {e}")
+    
+    return branch_name
+
+
 if __name__ == "__main__":
     import sys
     
@@ -981,6 +1039,8 @@ if __name__ == "__main__":
         update_remediation_implementer()
     elif len(sys.argv) > 1 and sys.argv[1] == "--projections":
         collate_projections()
+    elif len(sys.argv) > 1 and sys.argv[1] == "--apply":
+        apply_verification()
     else:
         generate_review_context()
         print("\nTip: Run with --timestamps [output_file] to generate a document freshness report")
@@ -989,4 +1049,5 @@ if __name__ == "__main__":
         print("Tip: Run with --plan to collate planner context for next cycle planning")
         print("Tip: Run with --remediate to update remediation_implementer.md with latest remediation file")
         print("Tip: Run with --projections to collate revenue projection analysis context")
+        print("Tip: Run with --apply to copy verification apply prompt for latest branch")
 

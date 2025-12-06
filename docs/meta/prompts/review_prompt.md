@@ -14,6 +14,7 @@
       addressing.rs
       column_alignment.rs
       container.rs
+      database_alignment.rs
       datamashup.rs
       datamashup_framing.rs
       datamashup_package.rs
@@ -33,6 +34,7 @@
         mod.rs
     tests/
       addressing_pg2_tests.rs
+      d1_database_mode_tests.rs
       data_mashup_tests.rs
       engine_tests.rs
       excel_open_xml_tests.rs
@@ -867,15 +869,9 @@ mod tests {
 
     #[test]
     fn detect_exact_column_block_move_rejects_two_independent_moves() {
-        let grid_a = grid_from_numbers(&[
-            &[10, 20, 30, 40, 50, 60],
-            &[11, 21, 31, 41, 51, 61],
-        ]);
+        let grid_a = grid_from_numbers(&[&[10, 20, 30, 40, 50, 60], &[11, 21, 31, 41, 51, 61]]);
 
-        let grid_b = grid_from_numbers(&[
-            &[20, 10, 30, 40, 60, 50],
-            &[21, 11, 31, 41, 61, 51],
-        ]);
+        let grid_b = grid_from_numbers(&[&[20, 10, 30, 40, 60, 50], &[21, 11, 31, 41, 61, 51]]);
 
         assert!(
             detect_exact_column_block_move(&grid_a, &grid_b).is_none(),
@@ -885,15 +881,9 @@ mod tests {
 
     #[test]
     fn detect_exact_column_block_move_swap_as_single_move() {
-        let grid_a = grid_from_numbers(&[
-            &[10, 20, 30, 40],
-            &[11, 21, 31, 41],
-        ]);
+        let grid_a = grid_from_numbers(&[&[10, 20, 30, 40], &[11, 21, 31, 41]]);
 
-        let grid_b = grid_from_numbers(&[
-            &[20, 10, 30, 40],
-            &[21, 11, 31, 41],
-        ]);
+        let grid_b = grid_from_numbers(&[&[20, 10, 30, 40], &[21, 11, 31, 41]]);
 
         let mv = detect_exact_column_block_move(&grid_a, &grid_b)
             .expect("swap of adjacent columns should be detected as single-column move");
@@ -993,6 +983,226 @@ impl OpcContainer {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+```
+
+---
+
+### File: `core\src\database_alignment.rs`
+
+```rust
+use crate::workbook::{CellValue, Grid};
+use std::collections::{HashMap, HashSet};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KeyColumnSpec {
+    pub columns: Vec<u32>,
+}
+
+impl KeyColumnSpec {
+    pub fn new(columns: Vec<u32>) -> KeyColumnSpec {
+        KeyColumnSpec { columns }
+    }
+
+    pub fn is_key_column(&self, col: u32) -> bool {
+        self.columns.contains(&col)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum KeyValueRepr {
+    None,
+    Number(u64),
+    Text(String),
+    Bool(bool),
+}
+
+impl KeyValueRepr {
+    fn from_cell_value(value: Option<&CellValue>) -> KeyValueRepr {
+        match value {
+            Some(CellValue::Number(n)) => KeyValueRepr::Number(n.to_bits()),
+            Some(CellValue::Text(s)) => KeyValueRepr::Text(s.clone()),
+            Some(CellValue::Bool(b)) => KeyValueRepr::Bool(*b),
+            None => KeyValueRepr::None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct KeyComponent {
+    pub value: KeyValueRepr,
+    pub formula: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct KeyValue {
+    components: Vec<KeyComponent>,
+}
+
+impl KeyValue {
+    fn new(components: Vec<KeyComponent>) -> KeyValue {
+        KeyValue { components }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KeyedRow {
+    pub key: KeyValue,
+    pub row_idx: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KeyedAlignment {
+    pub matched_rows: Vec<(u32, u32)>, // (row_idx_a, row_idx_b)
+    pub left_only_rows: Vec<u32>,
+    pub right_only_rows: Vec<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum KeyAlignmentError {
+    DuplicateKeyLeft(KeyValue),
+    DuplicateKeyRight(KeyValue),
+}
+
+pub(crate) fn diff_table_by_key(
+    old: &Grid,
+    new: &Grid,
+    key_columns: &[u32],
+) -> Result<KeyedAlignment, KeyAlignmentError> {
+    let spec = KeyColumnSpec::new(key_columns.to_vec());
+    let (left_rows, _left_lookup) = build_keyed_rows(old, &spec, true)?;
+    let (right_rows, right_lookup) = build_keyed_rows(new, &spec, false)?;
+
+    let mut matched_rows = Vec::new();
+    let mut left_only_rows = Vec::new();
+    let mut right_only_rows = Vec::new();
+
+    let mut matched_right_rows: HashSet<u32> = HashSet::new();
+
+    for row in &left_rows {
+        if let Some(&row_b) = right_lookup.get(&row.key) {
+            matched_rows.push((row.row_idx, row_b));
+            matched_right_rows.insert(row_b);
+        } else {
+            left_only_rows.push(row.row_idx);
+        }
+    }
+
+    for row in &right_rows {
+        if !matched_right_rows.contains(&row.row_idx) {
+            right_only_rows.push(row.row_idx);
+        }
+    }
+
+    Ok(KeyedAlignment {
+        matched_rows,
+        left_only_rows,
+        right_only_rows,
+    })
+}
+
+fn build_keyed_rows(
+    grid: &Grid,
+    spec: &KeyColumnSpec,
+    is_left: bool,
+) -> Result<(Vec<KeyedRow>, HashMap<KeyValue, u32>), KeyAlignmentError> {
+    let mut rows = Vec::with_capacity(grid.nrows as usize);
+    let mut lookup = HashMap::new();
+
+    for row_idx in 0..grid.nrows {
+        let key = extract_key(grid, row_idx, spec);
+        if lookup.insert(key.clone(), row_idx).is_some() {
+            return Err(if is_left {
+                KeyAlignmentError::DuplicateKeyLeft(key)
+            } else {
+                KeyAlignmentError::DuplicateKeyRight(key)
+            });
+        }
+        rows.push(KeyedRow { key, row_idx });
+    }
+
+    Ok((rows, lookup))
+}
+
+fn extract_key(grid: &Grid, row_idx: u32, spec: &KeyColumnSpec) -> KeyValue {
+    let mut components = Vec::with_capacity(spec.columns.len());
+
+    for &col in &spec.columns {
+        let component = match grid.get(row_idx, col) {
+            Some(cell) => KeyComponent {
+                value: KeyValueRepr::from_cell_value(cell.value.as_ref()),
+                formula: cell.formula.clone(),
+            },
+            None => KeyComponent {
+                value: KeyValueRepr::None,
+                formula: None,
+            },
+        };
+        components.push(component);
+    }
+
+    KeyValue::new(components)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workbook::{Cell, CellAddress};
+
+    fn grid_from_rows(rows: &[&[i32]]) -> Grid {
+        let nrows = rows.len() as u32;
+        let ncols = if nrows == 0 { 0 } else { rows[0].len() as u32 };
+        let mut grid = Grid::new(nrows, ncols);
+
+        for (r_idx, row_vals) in rows.iter().enumerate() {
+            for (c_idx, value) in row_vals.iter().enumerate() {
+                grid.insert(Cell {
+                    row: r_idx as u32,
+                    col: c_idx as u32,
+                    address: CellAddress::from_indices(r_idx as u32, c_idx as u32),
+                    value: Some(CellValue::Number(*value as f64)),
+                    formula: None,
+                });
+            }
+        }
+
+        grid
+    }
+
+    #[test]
+    fn unique_keys_reorder_no_changes() {
+        let grid_a = grid_from_rows(&[&[1, 10], &[2, 20], &[3, 30]]);
+        let grid_b = grid_from_rows(&[&[3, 30], &[1, 10], &[2, 20]]);
+
+        let alignment = diff_table_by_key(&grid_a, &grid_b, &[0]).expect("unique keys");
+        assert_eq!(
+            alignment.matched_rows,
+            vec![(0, 1), (1, 2), (2, 0)],
+            "all keys should align regardless of order"
+        );
+        assert!(alignment.left_only_rows.is_empty());
+        assert!(alignment.right_only_rows.is_empty());
+    }
+
+    #[test]
+    fn unique_keys_insert_delete_classified() {
+        let grid_a = grid_from_rows(&[&[1, 10], &[2, 20]]);
+        let grid_b = grid_from_rows(&[&[1, 10], &[2, 20], &[3, 30]]);
+
+        let alignment = diff_table_by_key(&grid_a, &grid_b, &[0]).expect("unique keys");
+        assert_eq!(alignment.matched_rows, vec![(0, 0), (1, 1)]);
+        assert!(alignment.left_only_rows.is_empty());
+        assert_eq!(alignment.right_only_rows, vec![2]);
+    }
+
+    #[test]
+    fn duplicate_keys_error_or_unsupported() {
+        let grid_a = grid_from_rows(&[&[1, 10], &[1, 99]]);
+        let grid_b = grid_from_rows(&[&[1, 10]]);
+
+        let err = diff_table_by_key(&grid_a, &grid_b, &[0]).expect_err("duplicate keys");
+        assert!(matches!(err, KeyAlignmentError::DuplicateKeyLeft(_)));
     }
 }
 ```
@@ -2282,12 +2492,15 @@ impl DiffOp {
 use crate::column_alignment::{
     ColumnAlignment, ColumnBlockMove, align_single_column_change, detect_exact_column_block_move,
 };
+use crate::database_alignment::{KeyColumnSpec, diff_table_by_key};
 use crate::diff::{DiffOp, DiffReport, SheetId};
 use crate::row_alignment::{
     RowAlignment, RowBlockMove, align_row_changes, detect_exact_row_block_move,
 };
 use crate::workbook::{Cell, CellAddress, CellSnapshot, Grid, Sheet, SheetKind, Workbook};
 use std::collections::HashMap;
+
+const DATABASE_MODE_SHEET_ID: &str = "<database>";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SheetKey {
@@ -2364,6 +2577,49 @@ pub fn diff_workbooks(old: &Workbook, new: &Workbook) -> DiffReport {
                 diff_grids(&sheet_id, &old_sheet.grid, &new_sheet.grid, &mut ops);
             }
             (None, None) => unreachable!(),
+        }
+    }
+
+    DiffReport::new(ops)
+}
+
+pub fn diff_grids_database_mode(old: &Grid, new: &Grid, key_columns: &[u32]) -> DiffReport {
+    let spec = KeyColumnSpec::new(key_columns.to_vec());
+    let alignment = match diff_table_by_key(old, new, key_columns) {
+        Ok(alignment) => alignment,
+        Err(_) => {
+            let mut ops = Vec::new();
+            let sheet_id: SheetId = DATABASE_MODE_SHEET_ID.to_string();
+            diff_grids(&sheet_id, old, new, &mut ops);
+            return DiffReport::new(ops);
+        }
+    };
+
+    let mut ops = Vec::new();
+    let sheet_id: SheetId = DATABASE_MODE_SHEET_ID.to_string();
+    let max_cols = old.ncols.max(new.ncols);
+
+    for row_idx in &alignment.left_only_rows {
+        ops.push(DiffOp::row_removed(sheet_id.clone(), *row_idx, None));
+    }
+
+    for row_idx in &alignment.right_only_rows {
+        ops.push(DiffOp::row_added(sheet_id.clone(), *row_idx, None));
+    }
+
+    for (row_a, row_b) in &alignment.matched_rows {
+        for col in 0..max_cols {
+            if spec.is_key_column(col) {
+                continue;
+            }
+
+            let addr = CellAddress::from_indices(*row_b, col);
+            let from = snapshot_with_addr(old.get(*row_a, col), addr);
+            let to = snapshot_with_addr(new.get(*row_b, col), addr);
+
+            if from != to {
+                ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
+            }
         }
     }
 
@@ -3487,6 +3743,7 @@ pub(crate) fn compute_col_signature<'a>(
 pub mod addressing;
 pub(crate) mod column_alignment;
 pub mod container;
+pub(crate) mod database_alignment;
 pub mod datamashup;
 pub mod datamashup_framing;
 pub mod datamashup_package;
@@ -3513,7 +3770,7 @@ pub use datamashup_package::{
     EmbeddedContent, PackageParts, PackageXml, SectionDocument, parse_package_parts,
 };
 pub use diff::{DiffOp, DiffReport, SheetId};
-pub use engine::diff_workbooks;
+pub use engine::{diff_grids_database_mode, diff_workbooks};
 #[cfg(feature = "excel-open-xml")]
 pub use excel_open_xml::{ExcelOpenError, open_data_mashup, open_workbook};
 pub use grid_parser::{GridParseError, SheetDescriptor};
@@ -5287,6 +5544,53 @@ fn pg2_addressing_matrix_consistency() {
 
 ---
 
+### File: `core\tests\d1_database_mode_tests.rs`
+
+```rust
+use excel_diff::{Grid, Workbook, diff_grids_database_mode, open_workbook};
+
+mod common;
+use common::fixture_path;
+
+fn data_grid(workbook: &Workbook) -> &Grid {
+    workbook
+        .sheets
+        .iter()
+        .find(|s| s.name == "Data")
+        .map(|s| &s.grid)
+        .expect("Data sheet present")
+}
+
+#[test]
+fn d1_equal_ordered_database_mode_empty_diff() {
+    let workbook = open_workbook(fixture_path("db_equal_ordered_a.xlsx")).expect("fixture A opens");
+    let grid = data_grid(&workbook);
+
+    let report = diff_grids_database_mode(grid, grid, &[0]);
+    assert!(
+        report.ops.is_empty(),
+        "database mode should ignore row order when keyed rows are identical"
+    );
+}
+
+#[test]
+fn d1_equal_reordered_database_mode_empty_diff() {
+    let wb_a = open_workbook(fixture_path("db_equal_ordered_a.xlsx")).expect("fixture A opens");
+    let wb_b = open_workbook(fixture_path("db_equal_ordered_b.xlsx")).expect("fixture B opens");
+
+    let grid_a = data_grid(&wb_a);
+    let grid_b = data_grid(&wb_b);
+
+    let report = diff_grids_database_mode(grid_a, grid_b, &[0]);
+    assert!(
+        report.ops.is_empty(),
+        "keyed alignment should match rows by key and ignore reordering"
+    );
+}
+```
+
+---
+
 ### File: `core\tests\data_mashup_tests.rs`
 
 ```rust
@@ -6384,7 +6688,11 @@ fn g12_multi_column_block_move_emits_blockmovedcolumns() {
 
     let report = diff_workbooks(&wb_a, &wb_b);
 
-    assert_eq!(report.ops.len(), 1, "expected a single diff op for multi-column move");
+    assert_eq!(
+        report.ops.len(),
+        1,
+        "expected a single diff op for multi-column move"
+    );
 
     match &report.ops[0] {
         DiffOp::BlockMovedColumns {
@@ -6406,15 +6714,9 @@ fn g12_multi_column_block_move_emits_blockmovedcolumns() {
 
 #[test]
 fn g12_two_independent_column_moves_do_not_emit_blockmovedcolumns() {
-    let grid_a = grid_from_numbers(&[
-        &[10, 20, 30, 40, 50, 60],
-        &[11, 21, 31, 41, 51, 61],
-    ]);
+    let grid_a = grid_from_numbers(&[&[10, 20, 30, 40, 50, 60], &[11, 21, 31, 41, 51, 61]]);
 
-    let grid_b = grid_from_numbers(&[
-        &[20, 10, 30, 40, 60, 50],
-        &[21, 11, 31, 41, 61, 51],
-    ]);
+    let grid_b = grid_from_numbers(&[&[20, 10, 30, 40, 60, 50], &[21, 11, 31, 41, 61, 51]]);
 
     let wb_a = single_sheet_workbook("Data", grid_a);
     let wb_b = single_sheet_workbook("Data", grid_b);
@@ -6437,22 +6739,20 @@ fn g12_two_independent_column_moves_do_not_emit_blockmovedcolumns() {
 
 #[test]
 fn g12_column_swap_emits_blockmovedcolumns() {
-    let grid_a = grid_from_numbers(&[
-        &[10, 20, 30, 40],
-        &[11, 21, 31, 41],
-    ]);
+    let grid_a = grid_from_numbers(&[&[10, 20, 30, 40], &[11, 21, 31, 41]]);
 
-    let grid_b = grid_from_numbers(&[
-        &[20, 10, 30, 40],
-        &[21, 11, 31, 41],
-    ]);
+    let grid_b = grid_from_numbers(&[&[20, 10, 30, 40], &[21, 11, 31, 41]]);
 
     let wb_a = single_sheet_workbook("Data", grid_a);
     let wb_b = single_sheet_workbook("Data", grid_b);
 
     let report = diff_workbooks(&wb_a, &wb_b);
 
-    assert_eq!(report.ops.len(), 1, "swap should produce single BlockMovedColumns op");
+    assert_eq!(
+        report.ops.len(),
+        1,
+        "swap should produce single BlockMovedColumns op"
+    );
 
     match &report.ops[0] {
         DiffOp::BlockMovedColumns {
