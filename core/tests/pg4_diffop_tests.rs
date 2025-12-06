@@ -55,6 +55,7 @@ fn op_kind(op: &DiffOp) -> &'static str {
         DiffOp::ColumnRemoved { .. } => "ColumnRemoved",
         DiffOp::BlockMovedRows { .. } => "BlockMovedRows",
         DiffOp::BlockMovedColumns { .. } => "BlockMovedColumns",
+        DiffOp::BlockMovedRect { .. } => "BlockMovedRect",
         DiffOp::CellEdited { .. } => "CellEdited",
         _ => "Unknown",
     }
@@ -332,6 +333,78 @@ fn pg4_construct_block_move_diffops() {
 
     assert_ne!(block_rows_with_hash, block_rows_without_hash);
     assert_ne!(block_cols_with_hash, block_cols_without_hash);
+}
+
+#[test]
+fn pg4_construct_block_rect_diffops() {
+    let rect_with_hash = DiffOp::BlockMovedRect {
+        sheet: "Sheet1".to_string(),
+        src_start_row: 5,
+        src_row_count: 3,
+        src_start_col: 2,
+        src_col_count: 4,
+        dst_start_row: 10,
+        dst_start_col: 6,
+        block_hash: Some(0xCAFEBABE),
+    };
+    let rect_without_hash = DiffOp::BlockMovedRect {
+        sheet: "Sheet1".to_string(),
+        src_start_row: 0,
+        src_row_count: 1,
+        src_start_col: 0,
+        src_col_count: 1,
+        dst_start_row: 20,
+        dst_start_col: 10,
+        block_hash: None,
+    };
+
+    if let DiffOp::BlockMovedRect {
+        sheet,
+        src_start_row,
+        src_row_count,
+        src_start_col,
+        src_col_count,
+        dst_start_row,
+        dst_start_col,
+        block_hash,
+    } = &rect_with_hash
+    {
+        assert_eq!(sheet, "Sheet1");
+        assert_eq!(*src_start_row, 5);
+        assert_eq!(*src_row_count, 3);
+        assert_eq!(*src_start_col, 2);
+        assert_eq!(*src_col_count, 4);
+        assert_eq!(*dst_start_row, 10);
+        assert_eq!(*dst_start_col, 6);
+        assert_eq!(block_hash.unwrap(), 0xCAFEBABE);
+    } else {
+        panic!("expected BlockMovedRect with hash");
+    }
+
+    if let DiffOp::BlockMovedRect {
+        sheet,
+        src_start_row,
+        src_row_count,
+        src_start_col,
+        src_col_count,
+        dst_start_row,
+        dst_start_col,
+        block_hash,
+    } = &rect_without_hash
+    {
+        assert_eq!(sheet, "Sheet1");
+        assert_eq!(*src_start_row, 0);
+        assert_eq!(*src_row_count, 1);
+        assert_eq!(*src_start_col, 0);
+        assert_eq!(*src_col_count, 1);
+        assert_eq!(*dst_start_row, 20);
+        assert_eq!(*dst_start_col, 10);
+        assert!(block_hash.is_none());
+    } else {
+        panic!("expected BlockMovedRect without hash");
+    }
+
+    assert_ne!(rect_with_hash, rect_without_hash);
 }
 
 #[test]
@@ -649,6 +722,33 @@ fn pg4_block_move_json_shape_keysets() {
     .into_iter()
     .map(String::from)
     .collect();
+    let expected_rect_with_hash: BTreeSet<String> = [
+        "block_hash",
+        "dst_start_col",
+        "dst_start_row",
+        "kind",
+        "sheet",
+        "src_col_count",
+        "src_row_count",
+        "src_start_col",
+        "src_start_row",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    let expected_rect_without_hash: BTreeSet<String> = [
+        "dst_start_col",
+        "dst_start_row",
+        "kind",
+        "sheet",
+        "src_col_count",
+        "src_row_count",
+        "src_start_col",
+        "src_start_row",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
 
     let block_rows_with_hash = DiffOp::BlockMovedRows {
         sheet: "Sheet1".to_string(),
@@ -678,6 +778,26 @@ fn pg4_block_move_json_shape_keysets() {
         dst_start_col: 9,
         block_hash: None,
     };
+    let block_rect_with_hash = DiffOp::BlockMovedRect {
+        sheet: "SheetZ".to_string(),
+        src_start_row: 2,
+        src_row_count: 2,
+        src_start_col: 3,
+        src_col_count: 4,
+        dst_start_row: 8,
+        dst_start_col: 1,
+        block_hash: Some(0xAABBCCDD),
+    };
+    let block_rect_without_hash = DiffOp::BlockMovedRect {
+        sheet: "SheetZ".to_string(),
+        src_start_row: 5,
+        src_row_count: 1,
+        src_start_col: 0,
+        src_col_count: 2,
+        dst_start_row: 10,
+        dst_start_col: 4,
+        block_hash: None,
+    };
 
     let cases = vec![
         (
@@ -700,6 +820,16 @@ fn pg4_block_move_json_shape_keysets() {
             "BlockMovedColumns",
             expected_cols_without_hash.clone(),
         ),
+        (
+            block_rect_with_hash,
+            "BlockMovedRect",
+            expected_rect_with_hash.clone(),
+        ),
+        (
+            block_rect_without_hash,
+            "BlockMovedRect",
+            expected_rect_without_hash.clone(),
+        ),
     ];
 
     for (op, expected_kind, expected_keys) in cases {
@@ -708,6 +838,57 @@ fn pg4_block_move_json_shape_keysets() {
         let keys = json_keys(&json);
         assert_eq!(keys, expected_keys);
     }
+}
+
+#[test]
+fn pg4_block_rect_json_shape_and_roundtrip() {
+    let without_hash = DiffOp::BlockMovedRect {
+        sheet: "Sheet1".to_string(),
+        src_start_row: 2,
+        src_row_count: 3,
+        src_start_col: 1,
+        src_col_count: 2,
+        dst_start_row: 10,
+        dst_start_col: 5,
+        block_hash: None,
+    };
+    let with_hash = DiffOp::BlockMovedRect {
+        sheet: "Sheet1".to_string(),
+        src_start_row: 4,
+        src_row_count: 1,
+        src_start_col: 0,
+        src_col_count: 1,
+        dst_start_row: 20,
+        dst_start_col: 7,
+        block_hash: Some(0x55AA),
+    };
+
+    let report = DiffReport::new(vec![without_hash.clone(), with_hash.clone()]);
+    let json = serde_json::to_value(&report).expect("serialize rect report");
+
+    let ops_json = json["ops"]
+        .as_array()
+        .expect("ops should be array for report");
+    assert_eq!(ops_json.len(), 2);
+    assert_eq!(ops_json[0]["kind"], "BlockMovedRect");
+    assert_eq!(ops_json[0]["sheet"], "Sheet1");
+    assert_eq!(ops_json[0]["src_start_row"], 2);
+    assert_eq!(ops_json[0]["src_row_count"], 3);
+    assert_eq!(ops_json[0]["src_start_col"], 1);
+    assert_eq!(ops_json[0]["src_col_count"], 2);
+    assert_eq!(ops_json[0]["dst_start_row"], 10);
+    assert_eq!(ops_json[0]["dst_start_col"], 5);
+    assert!(
+        ops_json[0].get("block_hash").is_none(),
+        "block_hash should be omitted when None"
+    );
+
+    assert_eq!(ops_json[1]["kind"], "BlockMovedRect");
+    assert_eq!(ops_json[1]["block_hash"], Value::from(0x55AA));
+
+    let roundtrip: DiffReport =
+        serde_json::from_value(json).expect("roundtrip deserialize rect report");
+    assert_eq!(roundtrip.ops, vec![without_hash, with_hash]);
 }
 
 #[test]
@@ -765,6 +946,26 @@ fn pg4_diffop_roundtrip_each_variant() {
             src_start_col: 4,
             col_count: 1,
             dst_start_col: 6,
+            block_hash: None,
+        },
+        DiffOp::BlockMovedRect {
+            sheet: "Sheet3".to_string(),
+            src_start_row: 1,
+            src_row_count: 2,
+            src_start_col: 3,
+            src_col_count: 4,
+            dst_start_row: 10,
+            dst_start_col: 20,
+            block_hash: Some(0xABCD),
+        },
+        DiffOp::BlockMovedRect {
+            sheet: "Sheet3".to_string(),
+            src_start_row: 1,
+            src_row_count: 2,
+            src_start_col: 3,
+            src_col_count: 4,
+            dst_start_row: 10,
+            dst_start_col: 20,
             block_hash: None,
         },
         sample_cell_edited(),

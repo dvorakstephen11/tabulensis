@@ -8,6 +8,7 @@ use crate::column_alignment::{
 };
 use crate::database_alignment::{KeyColumnSpec, diff_table_by_key};
 use crate::diff::{DiffOp, DiffReport, SheetId};
+use crate::rect_block_move::{RectBlockMove, detect_exact_rect_block_move};
 use crate::row_alignment::{
     RowAlignment, RowBlockMove, align_row_changes, detect_exact_row_block_move,
 };
@@ -141,6 +142,11 @@ pub fn diff_grids_database_mode(old: &Grid, new: &Grid, key_columns: &[u32]) -> 
 }
 
 fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>) {
+    if let Some(mv) = detect_exact_rect_block_move(old, new) {
+        emit_rect_block_move(sheet_id, mv, ops);
+        return;
+    }
+
     if let Some(mv) = detect_exact_row_block_move(old, new) {
         emit_row_block_move(sheet_id, mv, ops);
     } else if let Some(mv) = detect_exact_column_block_move(old, new) {
@@ -200,6 +206,19 @@ fn emit_column_block_move(sheet_id: &SheetId, mv: ColumnBlockMove, ops: &mut Vec
         col_count: mv.col_count,
         dst_start_col: mv.dst_start_col,
         block_hash: None,
+    });
+}
+
+fn emit_rect_block_move(sheet_id: &SheetId, mv: RectBlockMove, ops: &mut Vec<DiffOp>) {
+    ops.push(DiffOp::BlockMovedRect {
+        sheet: sheet_id.clone(),
+        src_start_row: mv.src_start_row,
+        src_row_count: mv.src_row_count,
+        src_start_col: mv.src_start_col,
+        src_col_count: mv.src_col_count,
+        dst_start_row: mv.dst_start_row,
+        dst_start_col: mv.dst_start_col,
+        block_hash: mv.block_hash,
     });
 }
 

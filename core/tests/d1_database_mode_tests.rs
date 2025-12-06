@@ -1,6 +1,4 @@
-use excel_diff::{
-    DiffOp, Grid, Workbook, diff_grids_database_mode, diff_workbooks, open_workbook,
-};
+use excel_diff::{DiffOp, Grid, Workbook, diff_grids_database_mode, diff_workbooks, open_workbook};
 
 mod common;
 use common::{fixture_path, grid_from_numbers};

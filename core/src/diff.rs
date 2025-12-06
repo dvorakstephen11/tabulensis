@@ -62,6 +62,17 @@ pub enum DiffOp {
         #[serde(skip_serializing_if = "Option::is_none")]
         block_hash: Option<u64>,
     },
+    BlockMovedRect {
+        sheet: SheetId,
+        src_start_row: u32,
+        src_row_count: u32,
+        src_start_col: u32,
+        src_col_count: u32,
+        dst_start_row: u32,
+        dst_start_col: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        block_hash: Option<u64>,
+    },
     /// Logical change to a single cell.
     ///
     /// Invariants (maintained by producers and tests, not by the type system):
@@ -189,6 +200,29 @@ impl DiffOp {
             sheet,
             src_start_col,
             col_count,
+            dst_start_col,
+            block_hash,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn block_moved_rect(
+        sheet: SheetId,
+        src_start_row: u32,
+        src_row_count: u32,
+        src_start_col: u32,
+        src_col_count: u32,
+        dst_start_row: u32,
+        dst_start_col: u32,
+        block_hash: Option<u64>,
+    ) -> DiffOp {
+        DiffOp::BlockMovedRect {
+            sheet,
+            src_start_row,
+            src_row_count,
+            src_start_col,
+            src_col_count,
+            dst_start_row,
             dst_start_col,
             block_hash,
         }

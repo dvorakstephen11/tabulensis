@@ -264,6 +264,22 @@ scenarios:
       - "column_move_a.xlsx"
       - "column_move_b.xlsx"
 
+  - id: "g12_rect_block_move"
+    generator: "rect_block_move_g12"
+    args:
+      sheet: "Data"
+      rows: 15
+      cols: 15
+      src_top: 3      # 1-based row in A (Excel row 3)
+      src_left: 2     # 1-based column in A (Excel column B)
+      dst_top: 10     # 1-based row in B (Excel row 10)
+      dst_left: 7     # 1-based column in B (Excel column G)
+      block_rows: 3
+      block_cols: 3
+    output:
+      - "rect_block_move_a.xlsx"
+      - "rect_block_move_b.xlsx"
+
   # --- JSON diff: simple non-empty change ---
   - id: "json_diff_single_cell"
     generator: "single_cell_diff"

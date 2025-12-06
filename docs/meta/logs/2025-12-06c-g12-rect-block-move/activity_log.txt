@@ -1,0 +1,9 @@
+Activity Log - 2025-12-06c-g12-rect-block-move
+
+- Initialized log and reviewed mini-spec + decision record; noted scope: add BlockMovedRect DiffOp, rectangular move detection, fixtures, PG4 + G12 tests.
+- Reviewed implementer prompt and key docs (excel_diff_meta_programming, unified grid diff spec sections on BlockMovedRect) to align approach.
+- Added DiffOp::BlockMovedRect variant with constructor and expanded PG4 DiffOp/JSON shape tests to cover optional block_hash handling and round-trips.
+- Implemented rectangular move detection module with size/repetition guards, per-grid uniqueness checks, disjoint row/col range requirement, and ambiguity rejection; wired diff_grids to short-circuit with BlockMovedRect emission.
+- Added rect_block_move_g12 fixture generator, manifest entry, and generated rect_block_move_{a,b}.xlsx for the G12 workbook scenario.
+- Introduced g12_rect_block_move_grid_workbook_tests (fixture success, ambiguous block swap fallback, move-with-edit fallback) with small helpers for matrix construction.
+- Ran cargo fmt; cargo clippy (clean after allowing constructor args); cargo test (all suites passing).

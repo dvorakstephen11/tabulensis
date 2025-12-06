@@ -37,6 +37,7 @@ pub(crate) mod hashing;
 pub mod m_diff;
 pub mod m_section;
 pub mod output;
+pub(crate) mod rect_block_move;
 pub(crate) mod row_alignment;
 pub mod workbook;
 

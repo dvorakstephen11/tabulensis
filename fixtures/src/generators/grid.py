@@ -625,6 +625,80 @@ class ColumnMoveG12Generator(BaseGenerator):
 
         wb.save(path)
 
+class RectBlockMoveG12Generator(BaseGenerator):
+    """Generates workbook pairs for G12 exact rectangular block move scenarios."""
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        if len(output_names) != 2:
+            raise ValueError("rect_block_move_g12 generator expects exactly two output filenames")
+
+        sheet = self.args.get("sheet", "Data")
+        rows = self.args.get("rows", 15)
+        cols = self.args.get("cols", 15)
+        src_top = self.args.get("src_top", 3)  # 1-based
+        src_left = self.args.get("src_left", 2)  # 1-based (column B)
+        dst_top = self.args.get("dst_top", 10)  # 1-based
+        dst_left = self.args.get("dst_left", 7)  # 1-based (column G)
+        block_rows = self.args.get("block_rows", 3)
+        block_cols = self.args.get("block_cols", 3)
+
+        self._write_workbook(
+            output_dir / output_names[0],
+            sheet,
+            rows,
+            cols,
+            src_top,
+            src_left,
+            block_rows,
+            block_cols,
+        )
+        self._write_workbook(
+            output_dir / output_names[1],
+            sheet,
+            rows,
+            cols,
+            dst_top,
+            dst_left,
+            block_rows,
+            block_cols,
+        )
+
+    def _write_workbook(
+        self,
+        path: Path,
+        sheet: str,
+        rows: int,
+        cols: int,
+        block_top: int,
+        block_left: int,
+        block_rows: int,
+        block_cols: int,
+    ):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = sheet
+
+        self._fill_background(ws, rows, cols)
+        self._write_block(ws, block_top, block_left, block_rows, block_cols)
+
+        wb.save(path)
+
+    def _fill_background(self, ws, rows: int, cols: int):
+        for r in range(1, rows + 1):
+            for c in range(1, cols + 1):
+                ws.cell(row=r, column=c, value=self._background_value(r, c))
+
+    def _background_value(self, row: int, col: int) -> int:
+        return 1000 * row + col
+
+    def _write_block(self, ws, top: int, left: int, block_rows: int, block_cols: int):
+        for r_offset in range(block_rows):
+            for c_offset in range(block_cols):
+                value = 9000 + r_offset * 10 + c_offset
+                ws.cell(row=top + r_offset, column=left + c_offset, value=value)
+
 class ColumnAlignmentG9Generator(BaseGenerator):
     """Generates workbook pairs for G9-style middle column insert/delete scenarios."""
     def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
