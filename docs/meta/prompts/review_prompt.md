@@ -27,6 +27,7 @@
       lib.rs
       m_diff.rs
       m_section.rs
+      rect_block_move.rs
       row_alignment.rs
       workbook.rs
       output/
@@ -41,6 +42,7 @@
       g10_row_block_alignment_grid_workbook_tests.rs
       g11_row_block_move_grid_workbook_tests.rs
       g12_column_block_move_grid_workbook_tests.rs
+      g12_rect_block_move_grid_workbook_tests.rs
       g1_g2_grid_workbook_tests.rs
       g5_g7_grid_workbook_tests.rs
       g8_row_alignment_grid_workbook_tests.rs
@@ -141,6 +143,8 @@
       pg6_sheet_renamed_a.xlsx
       pg6_sheet_renamed_b.xlsx
       random_zip.zip
+      rect_block_move_a.xlsx
+      rect_block_move_b.xlsx
       row_append_bottom_a.xlsx
       row_append_bottom_b.xlsx
       row_block_delete_a.xlsx
@@ -2345,6 +2349,17 @@ pub enum DiffOp {
         #[serde(skip_serializing_if = "Option::is_none")]
         block_hash: Option<u64>,
     },
+    BlockMovedRect {
+        sheet: SheetId,
+        src_start_row: u32,
+        src_row_count: u32,
+        src_start_col: u32,
+        src_col_count: u32,
+        dst_start_row: u32,
+        dst_start_col: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        block_hash: Option<u64>,
+    },
     /// Logical change to a single cell.
     ///
     /// Invariants (maintained by producers and tests, not by the type system):
@@ -2476,6 +2491,29 @@ impl DiffOp {
             block_hash,
         }
     }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn block_moved_rect(
+        sheet: SheetId,
+        src_start_row: u32,
+        src_row_count: u32,
+        src_start_col: u32,
+        src_col_count: u32,
+        dst_start_row: u32,
+        dst_start_col: u32,
+        block_hash: Option<u64>,
+    ) -> DiffOp {
+        DiffOp::BlockMovedRect {
+            sheet,
+            src_start_row,
+            src_row_count,
+            src_start_col,
+            src_col_count,
+            dst_start_row,
+            dst_start_col,
+            block_hash,
+        }
+    }
 }
 ```
 
@@ -2494,6 +2532,7 @@ use crate::column_alignment::{
 };
 use crate::database_alignment::{KeyColumnSpec, diff_table_by_key};
 use crate::diff::{DiffOp, DiffReport, SheetId};
+use crate::rect_block_move::{RectBlockMove, detect_exact_rect_block_move};
 use crate::row_alignment::{
     RowAlignment, RowBlockMove, align_row_changes, detect_exact_row_block_move,
 };
@@ -2627,6 +2666,11 @@ pub fn diff_grids_database_mode(old: &Grid, new: &Grid, key_columns: &[u32]) -> 
 }
 
 fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>) {
+    if let Some(mv) = detect_exact_rect_block_move(old, new) {
+        emit_rect_block_move(sheet_id, mv, ops);
+        return;
+    }
+
     if let Some(mv) = detect_exact_row_block_move(old, new) {
         emit_row_block_move(sheet_id, mv, ops);
     } else if let Some(mv) = detect_exact_column_block_move(old, new) {
@@ -2686,6 +2730,19 @@ fn emit_column_block_move(sheet_id: &SheetId, mv: ColumnBlockMove, ops: &mut Vec
         col_count: mv.col_count,
         dst_start_col: mv.dst_start_col,
         block_hash: None,
+    });
+}
+
+fn emit_rect_block_move(sheet_id: &SheetId, mv: RectBlockMove, ops: &mut Vec<DiffOp>) {
+    ops.push(DiffOp::BlockMovedRect {
+        sheet: sheet_id.clone(),
+        src_start_row: mv.src_start_row,
+        src_row_count: mv.src_row_count,
+        src_start_col: mv.src_start_col,
+        src_col_count: mv.src_col_count,
+        dst_start_row: mv.dst_start_row,
+        dst_start_col: mv.dst_start_col,
+        block_hash: mv.block_hash,
     });
 }
 
@@ -3757,6 +3814,7 @@ pub(crate) mod hashing;
 pub mod m_diff;
 pub mod m_section;
 pub mod output;
+pub(crate) mod rect_block_move;
 pub(crate) mod row_alignment;
 pub mod workbook;
 
@@ -4104,6 +4162,374 @@ fn is_valid_identifier(name: &str) -> bool {
 
 fn strip_leading_bom(text: &str) -> &str {
     text.strip_prefix('\u{FEFF}').unwrap_or(text)
+}
+```
+
+---
+
+### File: `core\src\rect_block_move.rs`
+
+```rust
+use crate::grid_view::{ColHash, ColMeta, GridView, HashStats, RowHash};
+use crate::workbook::{Cell, Grid};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RectBlockMove {
+    pub src_start_row: u32,
+    pub src_row_count: u32,
+    pub src_start_col: u32,
+    pub src_col_count: u32,
+    pub dst_start_row: u32,
+    pub dst_start_col: u32,
+    pub block_hash: Option<u64>,
+}
+
+const MAX_RECT_ROWS: u32 = 2_000;
+const MAX_RECT_COLS: u32 = 128;
+const MAX_HASH_REPEAT: u32 = 8;
+
+pub(crate) fn detect_exact_rect_block_move(old: &Grid, new: &Grid) -> Option<RectBlockMove> {
+    if old.nrows != new.nrows || old.ncols != new.ncols {
+        return None;
+    }
+
+    if old.nrows == 0 || old.ncols == 0 {
+        return None;
+    }
+
+    if !is_within_size_bounds(old, new) {
+        return None;
+    }
+
+    let view_a = GridView::from_grid(old);
+    let view_b = GridView::from_grid(new);
+
+    if low_info_dominated(&view_a) || low_info_dominated(&view_b) {
+        return None;
+    }
+
+    if blank_dominated(&view_a) || blank_dominated(&view_b) {
+        return None;
+    }
+
+    let row_stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
+    let col_stats = HashStats::from_col_meta(&view_a.col_meta, &view_b.col_meta);
+
+    if has_heavy_repetition(&row_stats) || has_heavy_repetition(&col_stats) {
+        return None;
+    }
+
+    let diff_positions = collect_differences(old, new);
+    if diff_positions.is_empty() {
+        return None;
+    }
+
+    let row_ranges = find_two_equal_ranges(diff_positions.iter().map(|(r, _)| *r))?;
+    let col_ranges = find_two_equal_ranges(diff_positions.iter().map(|(_, c)| *c))?;
+
+    let row_count = range_len(row_ranges.0);
+    let col_count = range_len(col_ranges.0);
+
+    let expected_mismatches = row_count.checked_mul(col_count)?.checked_mul(2)?;
+    if diff_positions.len() as u32 != expected_mismatches {
+        return None;
+    }
+
+    let mismatches = count_rect_mismatches(old, new, row_ranges.0, col_ranges.0)
+        + count_rect_mismatches(old, new, row_ranges.1, col_ranges.1);
+    if mismatches != diff_positions.len() as u32 {
+        return None;
+    }
+
+    if !has_unique_meta(
+        &view_a, &view_b, &row_stats, &col_stats, row_ranges, col_ranges,
+    ) {
+        return None;
+    }
+
+    let primary = validate_orientation(old, new, row_ranges, col_ranges);
+    let swapped_ranges = ((row_ranges.1, row_ranges.0), (col_ranges.1, col_ranges.0));
+    let alternate = validate_orientation(old, new, swapped_ranges.0, swapped_ranges.1);
+
+    match (primary, alternate) {
+        (Some(mv), None) => Some(mv),
+        (None, Some(mv)) => Some(mv),
+        _ => None,
+    }
+}
+
+fn validate_orientation(
+    old: &Grid,
+    new: &Grid,
+    row_ranges: ((u32, u32), (u32, u32)),
+    col_ranges: ((u32, u32), (u32, u32)),
+) -> Option<RectBlockMove> {
+    if ranges_overlap(row_ranges.0, row_ranges.1) || ranges_overlap(col_ranges.0, col_ranges.1) {
+        return None;
+    }
+
+    let row_count = range_len(row_ranges.0);
+    let col_count = range_len(col_ranges.0);
+
+    if rectangles_correspond(
+        old,
+        new,
+        row_ranges.0,
+        col_ranges.0,
+        row_ranges.1,
+        col_ranges.1,
+    ) {
+        return Some(RectBlockMove {
+            src_start_row: row_ranges.0.0,
+            src_row_count: row_count,
+            src_start_col: col_ranges.0.0,
+            src_col_count: col_count,
+            dst_start_row: row_ranges.1.0,
+            dst_start_col: col_ranges.1.0,
+            block_hash: None,
+        });
+    }
+
+    None
+}
+
+fn rectangles_correspond(
+    old: &Grid,
+    new: &Grid,
+    src_rows: (u32, u32),
+    src_cols: (u32, u32),
+    dst_rows: (u32, u32),
+    dst_cols: (u32, u32),
+) -> bool {
+    let row_count = range_len(src_rows);
+    let col_count = range_len(src_cols);
+
+    if row_count != range_len(dst_rows) || col_count != range_len(dst_cols) {
+        return false;
+    }
+
+    for dr in 0..row_count {
+        for dc in 0..col_count {
+            let src_r = src_rows.0 + dr;
+            let src_c = src_cols.0 + dc;
+            let dst_r = dst_rows.0 + dr;
+            let dst_c = dst_cols.0 + dc;
+
+            if !cell_content_equal(old.get(src_r, src_c), new.get(dst_r, dst_c)) {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
+fn collect_differences(old: &Grid, new: &Grid) -> Vec<(u32, u32)> {
+    let mut diffs = Vec::new();
+
+    for row in 0..old.nrows {
+        for col in 0..old.ncols {
+            if !cell_content_equal(old.get(row, col), new.get(row, col)) {
+                diffs.push((row, col));
+            }
+        }
+    }
+
+    diffs
+}
+
+fn cell_content_equal(a: Option<&Cell>, b: Option<&Cell>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(cell_a), Some(cell_b)) => {
+            cell_a.value == cell_b.value && cell_a.formula == cell_b.formula
+        }
+        (Some(cell_a), None) => cell_a.value.is_none() && cell_a.formula.is_none(),
+        (None, Some(cell_b)) => cell_b.value.is_none() && cell_b.formula.is_none(),
+    }
+}
+
+fn count_rect_mismatches(old: &Grid, new: &Grid, rows: (u32, u32), cols: (u32, u32)) -> u32 {
+    let mut mismatches = 0u32;
+    for row in rows.0..=rows.1 {
+        for col in cols.0..=cols.1 {
+            if !cell_content_equal(old.get(row, col), new.get(row, col)) {
+                mismatches = mismatches.saturating_add(1);
+            }
+        }
+    }
+    mismatches
+}
+
+fn has_unique_meta(
+    view_a: &GridView<'_>,
+    view_b: &GridView<'_>,
+    row_stats: &HashStats<RowHash>,
+    col_stats: &HashStats<ColHash>,
+    row_ranges: ((u32, u32), (u32, u32)),
+    col_ranges: ((u32, u32), (u32, u32)),
+) -> bool {
+    for range in [row_ranges.0, row_ranges.1] {
+        for idx in range.0..=range.1 {
+            if !is_unique_row_in_a(idx, view_a, row_stats)
+                || !is_unique_row_in_b(idx, view_b, row_stats)
+            {
+                return false;
+            }
+        }
+    }
+
+    for range in [col_ranges.0, col_ranges.1] {
+        for idx in range.0..=range.1 {
+            if !is_unique_col_in_a(idx, view_a, col_stats)
+                || !is_unique_col_in_b(idx, view_b, col_stats)
+            {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
+fn is_unique_row_in_a(idx: u32, view: &GridView<'_>, stats: &HashStats<RowHash>) -> bool {
+    view.row_meta
+        .get(idx as usize)
+        .map(|meta| unique_in_a(meta.hash, stats))
+        .unwrap_or(false)
+}
+
+fn is_unique_row_in_b(idx: u32, view: &GridView<'_>, stats: &HashStats<RowHash>) -> bool {
+    view.row_meta
+        .get(idx as usize)
+        .map(|meta| unique_in_b(meta.hash, stats))
+        .unwrap_or(false)
+}
+
+fn is_unique_col_in_a(idx: u32, view: &GridView<'_>, stats: &HashStats<ColHash>) -> bool {
+    view.col_meta
+        .get(idx as usize)
+        .map(|meta| unique_in_a(meta.hash, stats))
+        .unwrap_or(false)
+}
+
+fn is_unique_col_in_b(idx: u32, view: &GridView<'_>, stats: &HashStats<ColHash>) -> bool {
+    view.col_meta
+        .get(idx as usize)
+        .map(|meta| unique_in_b(meta.hash, stats))
+        .unwrap_or(false)
+}
+
+fn find_two_equal_ranges<I>(indices: I) -> Option<((u32, u32), (u32, u32))>
+where
+    I: IntoIterator<Item = u32>,
+{
+    let mut values: Vec<u32> = indices.into_iter().collect();
+    if values.is_empty() {
+        return None;
+    }
+
+    values.sort_unstable();
+    values.dedup();
+
+    let mut ranges: Vec<(u32, u32)> = Vec::new();
+    let mut start = values[0];
+    let mut prev = values[0];
+
+    for &val in values.iter().skip(1) {
+        if val == prev + 1 {
+            prev = val;
+            continue;
+        }
+
+        ranges.push((start, prev));
+        start = val;
+        prev = val;
+    }
+    ranges.push((start, prev));
+
+    if ranges.len() != 2 {
+        return None;
+    }
+
+    let len0 = range_len(ranges[0]);
+    let len1 = range_len(ranges[1]);
+    if len0 != len1 {
+        return None;
+    }
+
+    Some((ranges[0], ranges[1]))
+}
+
+fn range_len(range: (u32, u32)) -> u32 {
+    range.1.saturating_sub(range.0).saturating_add(1)
+}
+
+fn ranges_overlap(a: (u32, u32), b: (u32, u32)) -> bool {
+    !(a.1 < b.0 || b.1 < a.0)
+}
+
+fn is_within_size_bounds(old: &Grid, new: &Grid) -> bool {
+    let rows = old.nrows.max(new.nrows);
+    let cols = old.ncols.max(new.ncols);
+    rows <= MAX_RECT_ROWS && cols <= MAX_RECT_COLS
+}
+
+fn low_info_dominated(view: &GridView<'_>) -> bool {
+    if view.row_meta.is_empty() {
+        return false;
+    }
+
+    let low_info_count = view.row_meta.iter().filter(|m| m.is_low_info).count();
+    low_info_count * 2 > view.row_meta.len()
+}
+
+fn blank_dominated(view: &GridView<'_>) -> bool {
+    if view.col_meta.is_empty() {
+        return false;
+    }
+
+    let blank_cols = view
+        .col_meta
+        .iter()
+        .filter(
+            |ColMeta {
+                 non_blank_count, ..
+             }| *non_blank_count == 0,
+        )
+        .count();
+
+    blank_cols * 2 > view.col_meta.len()
+}
+
+fn has_heavy_repetition<H>(stats: &HashStats<H>) -> bool
+where
+    H: Eq + std::hash::Hash + Copy,
+{
+    stats
+        .freq_a
+        .values()
+        .chain(stats.freq_b.values())
+        .copied()
+        .max()
+        .unwrap_or(0)
+        > MAX_HASH_REPEAT
+}
+
+fn unique_in_a<H>(hash: H, stats: &HashStats<H>) -> bool
+where
+    H: Eq + std::hash::Hash + Copy,
+{
+    stats.freq_a.get(&hash).copied().unwrap_or(0) == 1
+        && stats.freq_b.get(&hash).copied().unwrap_or(0) <= 1
+}
+
+fn unique_in_b<H>(hash: H, stats: &HashStats<H>) -> bool
+where
+    H: Eq + std::hash::Hash + Copy,
+{
+    stats.freq_b.get(&hash).copied().unwrap_or(0) == 1
+        && stats.freq_a.get(&hash).copied().unwrap_or(0) <= 1
 }
 ```
 
@@ -5547,9 +5973,7 @@ fn pg2_addressing_matrix_consistency() {
 ### File: `core\tests\d1_database_mode_tests.rs`
 
 ```rust
-use excel_diff::{
-    DiffOp, Grid, Workbook, diff_grids_database_mode, diff_workbooks, open_workbook,
-};
+use excel_diff::{DiffOp, Grid, Workbook, diff_grids_database_mode, diff_workbooks, open_workbook};
 
 mod common;
 use common::{fixture_path, grid_from_numbers};
@@ -6882,6 +7306,154 @@ fn g12_column_swap_emits_blockmovedcolumns() {
         }
         other => panic!("expected BlockMovedColumns, got {:?}", other),
     }
+}
+```
+
+---
+
+### File: `core\tests\g12_rect_block_move_grid_workbook_tests.rs`
+
+```rust
+use excel_diff::{DiffOp, diff_workbooks, open_workbook};
+
+mod common;
+use common::{fixture_path, grid_from_numbers, single_sheet_workbook};
+
+#[test]
+fn g12_rect_block_move_emits_single_blockmovedrect() {
+    let wb_a = open_workbook(fixture_path("rect_block_move_a.xlsx"))
+        .expect("failed to open fixture: rect_block_move_a.xlsx");
+    let wb_b = open_workbook(fixture_path("rect_block_move_b.xlsx"))
+        .expect("failed to open fixture: rect_block_move_b.xlsx");
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    assert_eq!(report.ops.len(), 1, "expected a single diff op");
+
+    match &report.ops[0] {
+        DiffOp::BlockMovedRect {
+            sheet,
+            src_start_row,
+            src_row_count,
+            src_start_col,
+            src_col_count,
+            dst_start_row,
+            dst_start_col,
+            block_hash: _,
+        } => {
+            assert_eq!(sheet, "Data");
+            assert_eq!(*src_start_row, 2);
+            assert_eq!(*src_row_count, 3);
+            assert_eq!(*src_start_col, 1);
+            assert_eq!(*src_col_count, 3);
+            assert_eq!(*dst_start_row, 9);
+            assert_eq!(*dst_start_col, 6);
+        }
+        other => panic!("expected BlockMovedRect op, got {:?}", other),
+    }
+}
+
+#[test]
+fn g12_rect_block_move_ambiguous_swap_does_not_emit_blockmovedrect() {
+    let (grid_a, grid_b) = swap_two_blocks();
+    let wb_a = single_sheet_workbook("Data", grid_a);
+    let wb_b = single_sheet_workbook("Data", grid_b);
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    assert!(
+        !report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::BlockMovedRect { .. })),
+        "ambiguous block swap must not emit BlockMovedRect"
+    );
+    assert!(
+        !report.ops.is_empty(),
+        "fallback path should emit some diff operations"
+    );
+}
+
+#[test]
+fn g12_rect_block_move_with_internal_edit_falls_back() {
+    let (grid_a, grid_b) = move_with_edit();
+    let wb_a = single_sheet_workbook("Data", grid_a);
+    let wb_b = single_sheet_workbook("Data", grid_b);
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    assert!(
+        !report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::BlockMovedRect { .. })),
+        "move with internal edit should not be treated as exact rectangular move"
+    );
+    assert!(
+        report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::CellEdited { .. })),
+        "edited block should surface as cell edits or structural diffs"
+    );
+}
+
+fn swap_two_blocks() -> (excel_diff::Grid, excel_diff::Grid) {
+    let base: Vec<Vec<i32>> = (0..6)
+        .map(|r| (0..6).map(|c| 100 * r as i32 + c as i32).collect())
+        .collect();
+    let mut grid_a = base.clone();
+    let mut grid_b = base.clone();
+
+    let block_one = vec![vec![900, 901], vec![902, 903]];
+    let block_two = vec![vec![700, 701], vec![702, 703]];
+
+    place_block(&mut grid_a, 0, 0, &block_one);
+    place_block(&mut grid_a, 3, 3, &block_two);
+
+    // Swap the two distinct blocks in grid B.
+    place_block(&mut grid_b, 0, 0, &block_two);
+    place_block(&mut grid_b, 3, 3, &block_one);
+
+    (grid_from_matrix(grid_a), grid_from_matrix(grid_b))
+}
+
+fn move_with_edit() -> (excel_diff::Grid, excel_diff::Grid) {
+    let mut grid_a = base_background(10, 10);
+    let mut grid_b = base_background(10, 10);
+
+    let block = vec![vec![11, 12, 13], vec![21, 22, 23], vec![31, 32, 33]];
+
+    place_block(&mut grid_a, 1, 1, &block);
+    place_block(&mut grid_b, 6, 4, &block);
+    grid_b[7][5] = 9_999; // edit inside the moved block
+
+    (grid_from_matrix(grid_a), grid_from_matrix(grid_b))
+}
+
+fn base_background(rows: usize, cols: usize) -> Vec<Vec<i32>> {
+    (0..rows)
+        .map(|r| (0..cols).map(|c| (r as i32) * 1_000 + c as i32).collect())
+        .collect()
+}
+
+fn place_block(target: &mut [Vec<i32>], top: usize, left: usize, block: &[Vec<i32>]) {
+    for (r_offset, row_vals) in block.iter().enumerate() {
+        for (c_offset, value) in row_vals.iter().enumerate() {
+            let row = top + r_offset;
+            let col = left + c_offset;
+            if let Some(row_slice) = target.get_mut(row) {
+                if let Some(cell) = row_slice.get_mut(col) {
+                    *cell = *value;
+                }
+            }
+        }
+    }
+}
+
+fn grid_from_matrix(matrix: Vec<Vec<i32>>) -> excel_diff::Grid {
+    let refs: Vec<&[i32]> = matrix.iter().map(|row| row.as_slice()).collect();
+    grid_from_numbers(&refs)
 }
 ```
 
@@ -9723,6 +10295,7 @@ fn op_kind(op: &DiffOp) -> &'static str {
         DiffOp::ColumnRemoved { .. } => "ColumnRemoved",
         DiffOp::BlockMovedRows { .. } => "BlockMovedRows",
         DiffOp::BlockMovedColumns { .. } => "BlockMovedColumns",
+        DiffOp::BlockMovedRect { .. } => "BlockMovedRect",
         DiffOp::CellEdited { .. } => "CellEdited",
         _ => "Unknown",
     }
@@ -10000,6 +10573,78 @@ fn pg4_construct_block_move_diffops() {
 
     assert_ne!(block_rows_with_hash, block_rows_without_hash);
     assert_ne!(block_cols_with_hash, block_cols_without_hash);
+}
+
+#[test]
+fn pg4_construct_block_rect_diffops() {
+    let rect_with_hash = DiffOp::BlockMovedRect {
+        sheet: "Sheet1".to_string(),
+        src_start_row: 5,
+        src_row_count: 3,
+        src_start_col: 2,
+        src_col_count: 4,
+        dst_start_row: 10,
+        dst_start_col: 6,
+        block_hash: Some(0xCAFEBABE),
+    };
+    let rect_without_hash = DiffOp::BlockMovedRect {
+        sheet: "Sheet1".to_string(),
+        src_start_row: 0,
+        src_row_count: 1,
+        src_start_col: 0,
+        src_col_count: 1,
+        dst_start_row: 20,
+        dst_start_col: 10,
+        block_hash: None,
+    };
+
+    if let DiffOp::BlockMovedRect {
+        sheet,
+        src_start_row,
+        src_row_count,
+        src_start_col,
+        src_col_count,
+        dst_start_row,
+        dst_start_col,
+        block_hash,
+    } = &rect_with_hash
+    {
+        assert_eq!(sheet, "Sheet1");
+        assert_eq!(*src_start_row, 5);
+        assert_eq!(*src_row_count, 3);
+        assert_eq!(*src_start_col, 2);
+        assert_eq!(*src_col_count, 4);
+        assert_eq!(*dst_start_row, 10);
+        assert_eq!(*dst_start_col, 6);
+        assert_eq!(block_hash.unwrap(), 0xCAFEBABE);
+    } else {
+        panic!("expected BlockMovedRect with hash");
+    }
+
+    if let DiffOp::BlockMovedRect {
+        sheet,
+        src_start_row,
+        src_row_count,
+        src_start_col,
+        src_col_count,
+        dst_start_row,
+        dst_start_col,
+        block_hash,
+    } = &rect_without_hash
+    {
+        assert_eq!(sheet, "Sheet1");
+        assert_eq!(*src_start_row, 0);
+        assert_eq!(*src_row_count, 1);
+        assert_eq!(*src_start_col, 0);
+        assert_eq!(*src_col_count, 1);
+        assert_eq!(*dst_start_row, 20);
+        assert_eq!(*dst_start_col, 10);
+        assert!(block_hash.is_none());
+    } else {
+        panic!("expected BlockMovedRect without hash");
+    }
+
+    assert_ne!(rect_with_hash, rect_without_hash);
 }
 
 #[test]
@@ -10317,6 +10962,33 @@ fn pg4_block_move_json_shape_keysets() {
     .into_iter()
     .map(String::from)
     .collect();
+    let expected_rect_with_hash: BTreeSet<String> = [
+        "block_hash",
+        "dst_start_col",
+        "dst_start_row",
+        "kind",
+        "sheet",
+        "src_col_count",
+        "src_row_count",
+        "src_start_col",
+        "src_start_row",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    let expected_rect_without_hash: BTreeSet<String> = [
+        "dst_start_col",
+        "dst_start_row",
+        "kind",
+        "sheet",
+        "src_col_count",
+        "src_row_count",
+        "src_start_col",
+        "src_start_row",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
 
     let block_rows_with_hash = DiffOp::BlockMovedRows {
         sheet: "Sheet1".to_string(),
@@ -10346,6 +11018,26 @@ fn pg4_block_move_json_shape_keysets() {
         dst_start_col: 9,
         block_hash: None,
     };
+    let block_rect_with_hash = DiffOp::BlockMovedRect {
+        sheet: "SheetZ".to_string(),
+        src_start_row: 2,
+        src_row_count: 2,
+        src_start_col: 3,
+        src_col_count: 4,
+        dst_start_row: 8,
+        dst_start_col: 1,
+        block_hash: Some(0xAABBCCDD),
+    };
+    let block_rect_without_hash = DiffOp::BlockMovedRect {
+        sheet: "SheetZ".to_string(),
+        src_start_row: 5,
+        src_row_count: 1,
+        src_start_col: 0,
+        src_col_count: 2,
+        dst_start_row: 10,
+        dst_start_col: 4,
+        block_hash: None,
+    };
 
     let cases = vec![
         (
@@ -10368,6 +11060,16 @@ fn pg4_block_move_json_shape_keysets() {
             "BlockMovedColumns",
             expected_cols_without_hash.clone(),
         ),
+        (
+            block_rect_with_hash,
+            "BlockMovedRect",
+            expected_rect_with_hash.clone(),
+        ),
+        (
+            block_rect_without_hash,
+            "BlockMovedRect",
+            expected_rect_without_hash.clone(),
+        ),
     ];
 
     for (op, expected_kind, expected_keys) in cases {
@@ -10376,6 +11078,57 @@ fn pg4_block_move_json_shape_keysets() {
         let keys = json_keys(&json);
         assert_eq!(keys, expected_keys);
     }
+}
+
+#[test]
+fn pg4_block_rect_json_shape_and_roundtrip() {
+    let without_hash = DiffOp::BlockMovedRect {
+        sheet: "Sheet1".to_string(),
+        src_start_row: 2,
+        src_row_count: 3,
+        src_start_col: 1,
+        src_col_count: 2,
+        dst_start_row: 10,
+        dst_start_col: 5,
+        block_hash: None,
+    };
+    let with_hash = DiffOp::BlockMovedRect {
+        sheet: "Sheet1".to_string(),
+        src_start_row: 4,
+        src_row_count: 1,
+        src_start_col: 0,
+        src_col_count: 1,
+        dst_start_row: 20,
+        dst_start_col: 7,
+        block_hash: Some(0x55AA),
+    };
+
+    let report = DiffReport::new(vec![without_hash.clone(), with_hash.clone()]);
+    let json = serde_json::to_value(&report).expect("serialize rect report");
+
+    let ops_json = json["ops"]
+        .as_array()
+        .expect("ops should be array for report");
+    assert_eq!(ops_json.len(), 2);
+    assert_eq!(ops_json[0]["kind"], "BlockMovedRect");
+    assert_eq!(ops_json[0]["sheet"], "Sheet1");
+    assert_eq!(ops_json[0]["src_start_row"], 2);
+    assert_eq!(ops_json[0]["src_row_count"], 3);
+    assert_eq!(ops_json[0]["src_start_col"], 1);
+    assert_eq!(ops_json[0]["src_col_count"], 2);
+    assert_eq!(ops_json[0]["dst_start_row"], 10);
+    assert_eq!(ops_json[0]["dst_start_col"], 5);
+    assert!(
+        ops_json[0].get("block_hash").is_none(),
+        "block_hash should be omitted when None"
+    );
+
+    assert_eq!(ops_json[1]["kind"], "BlockMovedRect");
+    assert_eq!(ops_json[1]["block_hash"], Value::from(0x55AA));
+
+    let roundtrip: DiffReport =
+        serde_json::from_value(json).expect("roundtrip deserialize rect report");
+    assert_eq!(roundtrip.ops, vec![without_hash, with_hash]);
 }
 
 #[test]
@@ -10433,6 +11186,26 @@ fn pg4_diffop_roundtrip_each_variant() {
             src_start_col: 4,
             col_count: 1,
             dst_start_col: 6,
+            block_hash: None,
+        },
+        DiffOp::BlockMovedRect {
+            sheet: "Sheet3".to_string(),
+            src_start_row: 1,
+            src_row_count: 2,
+            src_start_col: 3,
+            src_col_count: 4,
+            dst_start_row: 10,
+            dst_start_col: 20,
+            block_hash: Some(0xABCD),
+        },
+        DiffOp::BlockMovedRect {
+            sheet: "Sheet3".to_string(),
+            src_start_row: 1,
+            src_row_count: 2,
+            src_start_col: 3,
+            src_col_count: 4,
+            dst_start_row: 10,
+            dst_start_col: 20,
             block_hash: None,
         },
         sample_cell_edited(),
@@ -11990,6 +12763,22 @@ scenarios:
       - "column_move_a.xlsx"
       - "column_move_b.xlsx"
 
+  - id: "g12_rect_block_move"
+    generator: "rect_block_move_g12"
+    args:
+      sheet: "Data"
+      rows: 15
+      cols: 15
+      src_top: 3      # 1-based row in A (Excel row 3)
+      src_left: 2     # 1-based column in A (Excel column B)
+      dst_top: 10     # 1-based row in B (Excel row 10)
+      dst_left: 7     # 1-based column in B (Excel column G)
+      block_rows: 3
+      block_cols: 3
+    output:
+      - "rect_block_move_a.xlsx"
+      - "rect_block_move_b.xlsx"
+
   # --- JSON diff: simple non-empty change ---
   - id: "json_diff_single_cell"
     generator: "single_cell_diff"
@@ -12383,6 +13172,7 @@ from generators.grid import (
     RowAlignmentG10Generator,
     RowBlockMoveG11Generator,
     ColumnMoveG12Generator,
+    RectBlockMoveG12Generator,
     ColumnAlignmentG9Generator,
     SheetCaseRenameGenerator,
     Pg6SheetScenarioGenerator,
@@ -12414,6 +13204,7 @@ GENERATORS: Dict[str, Any] = {
     "row_alignment_g10": RowAlignmentG10Generator,
     "row_block_move_g11": RowBlockMoveG11Generator,
     "column_move_g12": ColumnMoveG12Generator,
+    "rect_block_move_g12": RectBlockMoveG12Generator,
     "column_alignment_g9": ColumnAlignmentG9Generator,
     "sheet_case_rename": SheetCaseRenameGenerator,
     "pg6_sheet_scenario": Pg6SheetScenarioGenerator,
@@ -13283,6 +14074,80 @@ class ColumnMoveG12Generator(BaseGenerator):
                 ws.cell(row=r_idx, column=c_idx, value=value)
 
         wb.save(path)
+
+class RectBlockMoveG12Generator(BaseGenerator):
+    """Generates workbook pairs for G12 exact rectangular block move scenarios."""
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        if len(output_names) != 2:
+            raise ValueError("rect_block_move_g12 generator expects exactly two output filenames")
+
+        sheet = self.args.get("sheet", "Data")
+        rows = self.args.get("rows", 15)
+        cols = self.args.get("cols", 15)
+        src_top = self.args.get("src_top", 3)  # 1-based
+        src_left = self.args.get("src_left", 2)  # 1-based (column B)
+        dst_top = self.args.get("dst_top", 10)  # 1-based
+        dst_left = self.args.get("dst_left", 7)  # 1-based (column G)
+        block_rows = self.args.get("block_rows", 3)
+        block_cols = self.args.get("block_cols", 3)
+
+        self._write_workbook(
+            output_dir / output_names[0],
+            sheet,
+            rows,
+            cols,
+            src_top,
+            src_left,
+            block_rows,
+            block_cols,
+        )
+        self._write_workbook(
+            output_dir / output_names[1],
+            sheet,
+            rows,
+            cols,
+            dst_top,
+            dst_left,
+            block_rows,
+            block_cols,
+        )
+
+    def _write_workbook(
+        self,
+        path: Path,
+        sheet: str,
+        rows: int,
+        cols: int,
+        block_top: int,
+        block_left: int,
+        block_rows: int,
+        block_cols: int,
+    ):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = sheet
+
+        self._fill_background(ws, rows, cols)
+        self._write_block(ws, block_top, block_left, block_rows, block_cols)
+
+        wb.save(path)
+
+    def _fill_background(self, ws, rows: int, cols: int):
+        for r in range(1, rows + 1):
+            for c in range(1, cols + 1):
+                ws.cell(row=r, column=c, value=self._background_value(r, c))
+
+    def _background_value(self, row: int, col: int) -> int:
+        return 1000 * row + col
+
+    def _write_block(self, ws, top: int, left: int, block_rows: int, block_cols: int):
+        for r_offset in range(block_rows):
+            for c_offset in range(block_cols):
+                value = 9000 + r_offset * 10 + c_offset
+                ws.cell(row=top + r_offset, column=left + c_offset, value=value)
 
 class ColumnAlignmentG9Generator(BaseGenerator):
     """Generates workbook pairs for G9-style middle column insert/delete scenarios."""

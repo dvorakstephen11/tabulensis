@@ -76,6 +76,55 @@ fn diff_report_to_cell_diffs_filters_non_cell_ops() {
 }
 
 #[test]
+fn diff_report_to_cell_diffs_ignores_block_moved_rect() {
+    let addr = CellAddress::from_indices(2, 2);
+
+    let report = DiffReport::new(vec![
+        DiffOp::block_moved_rect(
+            "Sheet1".into(),
+            2,
+            3,
+            1,
+            3,
+            9,
+            6,
+            Some(0xCAFEBABE),
+        ),
+        DiffOp::cell_edited(
+            "Sheet1".into(),
+            addr,
+            make_cell_snapshot(addr, Some(CellValue::Number(10.0))),
+            make_cell_snapshot(addr, Some(CellValue::Number(20.0))),
+        ),
+        DiffOp::BlockMovedRows {
+            sheet: "Sheet1".into(),
+            src_start_row: 0,
+            row_count: 2,
+            dst_start_row: 5,
+            block_hash: None,
+        },
+        DiffOp::BlockMovedColumns {
+            sheet: "Sheet1".into(),
+            src_start_col: 0,
+            col_count: 2,
+            dst_start_col: 5,
+            block_hash: None,
+        },
+    ]);
+
+    let cell_diffs = diff_report_to_cell_diffs(&report);
+    assert_eq!(
+        cell_diffs.len(),
+        1,
+        "only CellEdited should be projected; BlockMovedRect and other block moves should be ignored"
+    );
+
+    assert_eq!(cell_diffs[0].coords, addr.to_a1());
+    assert_eq!(cell_diffs[0].value_file1, Some("10".into()));
+    assert_eq!(cell_diffs[0].value_file2, Some("20".into()));
+}
+
+#[test]
 fn diff_report_to_cell_diffs_maps_values_correctly() {
     let addr_num = CellAddress::from_indices(2, 2); // C3
     let addr_bool = CellAddress::from_indices(3, 3); // D4
