@@ -37,6 +37,7 @@
       engine_tests.rs
       excel_open_xml_tests.rs
       g10_row_block_alignment_grid_workbook_tests.rs
+      g11_row_block_move_grid_workbook_tests.rs
       g1_g2_grid_workbook_tests.rs
       g5_g7_grid_workbook_tests.rs
       g8_row_alignment_grid_workbook_tests.rs
@@ -141,6 +142,8 @@
       row_block_delete_b.xlsx
       row_block_insert_a.xlsx
       row_block_insert_b.xlsx
+      row_block_move_a.xlsx
+      row_block_move_b.xlsx
       row_delete_bottom_a.xlsx
       row_delete_bottom_b.xlsx
       row_delete_middle_a.xlsx
@@ -2025,7 +2028,9 @@ impl DiffOp {
 
 use crate::column_alignment::{ColumnAlignment, align_single_column_change};
 use crate::diff::{DiffOp, DiffReport, SheetId};
-use crate::row_alignment::{RowAlignment, align_row_changes};
+use crate::row_alignment::{
+    RowAlignment, RowBlockMove, align_row_changes, detect_exact_row_block_move,
+};
 use crate::workbook::{Cell, CellAddress, CellSnapshot, Grid, Sheet, SheetKind, Workbook};
 use std::collections::HashMap;
 
@@ -2111,7 +2116,9 @@ pub fn diff_workbooks(old: &Workbook, new: &Workbook) -> DiffReport {
 }
 
 fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>) {
-    if let Some(alignment) = align_row_changes(old, new) {
+    if let Some(mv) = detect_exact_row_block_move(old, new) {
+        emit_row_block_move(sheet_id, mv, ops);
+    } else if let Some(alignment) = align_row_changes(old, new) {
         emit_aligned_diffs(sheet_id, old, new, &alignment, ops);
     } else if let Some(alignment) = align_single_column_change(old, new) {
         emit_column_aligned_diffs(sheet_id, old, new, &alignment, ops);
@@ -2147,6 +2154,16 @@ fn positional_diff(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<Dif
             ops.push(DiffOp::column_removed(sheet_id.clone(), col_idx, None));
         }
     }
+}
+
+fn emit_row_block_move(sheet_id: &SheetId, mv: RowBlockMove, ops: &mut Vec<DiffOp>) {
+    ops.push(DiffOp::BlockMovedRows {
+        sheet: sheet_id.clone(),
+        src_start_row: mv.src_start_row,
+        row_count: mv.row_count,
+        dst_start_row: mv.dst_start_row,
+        block_hash: None,
+    });
 }
 
 fn emit_aligned_diffs(
@@ -3581,12 +3598,153 @@ pub(crate) struct RowAlignment {
     pub deleted: Vec<u32>,        // row indices in A
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RowBlockMove {
+    pub src_start_row: u32,
+    pub dst_start_row: u32,
+    pub row_count: u32,
+}
+
 const MAX_ALIGN_ROWS: u32 = 2_000;
 const MAX_ALIGN_COLS: u32 = 64;
 const MAX_HASH_REPEAT: u32 = 8;
 const MAX_BLOCK_GAP: u32 = 32;
 const _HASH_COLLISION_NOTE: &str = "64-bit hash collision probability ~0.00006% at 2K rows; \
                                     secondary verification deferred to G8a (50K-row adversarial)";
+
+pub(crate) fn detect_exact_row_block_move(old: &Grid, new: &Grid) -> Option<RowBlockMove> {
+    if old.nrows != new.nrows || old.ncols != new.ncols {
+        return None;
+    }
+
+    if old.nrows == 0 {
+        return None;
+    }
+
+    if !is_within_size_bounds(old, new) {
+        return None;
+    }
+
+    let view_a = GridView::from_grid(old);
+    let view_b = GridView::from_grid(new);
+
+    if low_info_dominated(&view_a) || low_info_dominated(&view_b) {
+        return None;
+    }
+
+    let stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
+    if has_heavy_repetition(&stats) {
+        return None;
+    }
+
+    let meta_a = &view_a.row_meta;
+    let meta_b = &view_b.row_meta;
+    let n = meta_a.len();
+
+    if meta_a
+        .iter()
+        .zip(meta_b.iter())
+        .all(|(a, b)| a.hash == b.hash)
+    {
+        return None;
+    }
+
+    let prefix = (0..n).find(|&idx| meta_a[idx].hash != meta_b[idx].hash)?;
+
+    let mut suffix_len = 0usize;
+    while suffix_len < n.saturating_sub(prefix) {
+        let idx_a = n - 1 - suffix_len;
+        let idx_b = n - 1 - suffix_len;
+        if meta_a[idx_a].hash == meta_b[idx_b].hash {
+            suffix_len += 1;
+        } else {
+            break;
+        }
+    }
+    let tail_start = n - suffix_len;
+
+    let try_candidate = |src_start: usize, dst_start: usize| -> Option<RowBlockMove> {
+        if src_start >= tail_start || dst_start >= tail_start {
+            return None;
+        }
+
+        let mut len = 0usize;
+        while src_start + len < tail_start && dst_start + len < tail_start {
+            if meta_a[src_start + len].hash != meta_b[dst_start + len].hash {
+                break;
+            }
+            len += 1;
+        }
+
+        if len == 0 {
+            return None;
+        }
+
+        let src_end = src_start + len;
+        let dst_end = dst_start + len;
+
+        if !(src_end <= dst_start || dst_end <= src_start) {
+            return None;
+        }
+
+        let mut idx_a = 0usize;
+        let mut idx_b = 0usize;
+
+        loop {
+            if idx_a == src_start {
+                idx_a = src_end;
+            }
+            if idx_b == dst_start {
+                idx_b = dst_end;
+            }
+
+            if idx_a >= n && idx_b >= n {
+                break;
+            }
+
+            if idx_a >= n || idx_b >= n {
+                return None;
+            }
+
+            if meta_a[idx_a].hash != meta_b[idx_b].hash {
+                return None;
+            }
+
+            idx_a += 1;
+            idx_b += 1;
+        }
+
+        for meta in &meta_a[src_start..src_end] {
+            if stats.freq_a.get(&meta.hash).copied().unwrap_or(0) != 1
+                || stats.freq_b.get(&meta.hash).copied().unwrap_or(0) != 1
+            {
+                return None;
+            }
+        }
+
+        Some(RowBlockMove {
+            src_start_row: meta_a[src_start].row_idx,
+            dst_start_row: meta_b[dst_start].row_idx,
+            row_count: len as u32,
+        })
+    };
+
+    if let Some(src_start) =
+        (prefix..tail_start).find(|&idx| meta_a[idx].hash == meta_b[prefix].hash)
+        && let Some(mv) = try_candidate(src_start, prefix)
+    {
+        return Some(mv);
+    }
+
+    if let Some(dst_start) =
+        (prefix..tail_start).find(|&idx| meta_b[idx].hash == meta_a[prefix].hash)
+        && let Some(mv) = try_candidate(prefix, dst_start)
+    {
+        return Some(mv);
+    }
+
+    None
+}
 
 pub(crate) fn align_row_changes(old: &Grid, new: &Grid) -> Option<RowAlignment> {
     let row_diff = new.nrows as i64 - old.nrows as i64;
@@ -3938,6 +4096,50 @@ mod tests {
         }
 
         grid
+    }
+
+    #[test]
+    fn detects_exact_row_block_move() {
+        let base: Vec<Vec<i32>> = (1..=20)
+            .map(|r| (1..=3).map(|c| r * 10 + c).collect())
+            .collect();
+        let base_refs: Vec<&[i32]> = base.iter().map(|row| row.as_slice()).collect();
+        let grid_a = grid_from_rows(&base_refs);
+
+        let mut rows_b = base.clone();
+        let moved_block: Vec<Vec<i32>> = rows_b.drain(4..8).collect();
+        rows_b.splice(12..12, moved_block);
+        let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
+        let grid_b = grid_from_rows(&rows_b_refs);
+
+        let mv =
+            detect_exact_row_block_move(&grid_a, &grid_b).expect("expected block move to be found");
+        assert_eq!(
+            mv,
+            RowBlockMove {
+                src_start_row: 4,
+                dst_start_row: 12,
+                row_count: 4
+            }
+        );
+    }
+
+    #[test]
+    fn block_move_detection_rejects_internal_edits() {
+        let base: Vec<Vec<i32>> = (1..=12)
+            .map(|r| (1..=2).map(|c| r * 10 + c).collect())
+            .collect();
+        let base_refs: Vec<&[i32]> = base.iter().map(|row| row.as_slice()).collect();
+        let grid_a = grid_from_rows(&base_refs);
+
+        let mut rows_b = base.clone();
+        let mut moved_block: Vec<Vec<i32>> = rows_b.drain(2..5).collect();
+        moved_block[1][0] = 9_999;
+        rows_b.splice(6..6, moved_block);
+        let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
+        let grid_b = grid_from_rows(&rows_b_refs);
+
+        assert!(detect_exact_row_block_move(&grid_a, &grid_b).is_none());
     }
 
     #[test]
@@ -5707,6 +5909,96 @@ fn g10_row_block_delete_middle_emits_four_rowremoved_and_no_noise() {
             .iter()
             .any(|op| matches!(op, DiffOp::CellEdited { .. })),
         "aligned block delete should not emit CellEdited noise"
+    );
+}
+```
+
+---
+
+### File: `core\tests\g11_row_block_move_grid_workbook_tests.rs`
+
+```rust
+use excel_diff::{DiffOp, diff_workbooks, open_workbook};
+
+mod common;
+use common::{fixture_path, grid_from_numbers, single_sheet_workbook};
+
+#[test]
+fn g11_row_block_move_emits_single_blockmovedrows() {
+    let wb_a = open_workbook(fixture_path("row_block_move_a.xlsx"))
+        .expect("failed to open fixture: row_block_move_a.xlsx");
+    let wb_b = open_workbook(fixture_path("row_block_move_b.xlsx"))
+        .expect("failed to open fixture: row_block_move_b.xlsx");
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    assert_eq!(report.ops.len(), 1, "expected a single diff op");
+
+    match &report.ops[0] {
+        DiffOp::BlockMovedRows {
+            sheet,
+            src_start_row,
+            row_count,
+            dst_start_row,
+            block_hash,
+        } => {
+            assert_eq!(sheet, "Sheet1");
+            assert_eq!(*src_start_row, 4);
+            assert_eq!(*row_count, 4);
+            assert_eq!(*dst_start_row, 12);
+            assert!(block_hash.is_none());
+        }
+        other => panic!("expected BlockMovedRows op, got {:?}", other),
+    }
+
+    assert!(
+        !report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::RowAdded { .. })),
+        "pure move should not emit RowAdded"
+    );
+    assert!(
+        !report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::RowRemoved { .. })),
+        "pure move should not emit RowRemoved"
+    );
+    assert!(
+        !report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::CellEdited { .. })),
+        "pure move should not emit CellEdited noise"
+    );
+}
+
+#[test]
+fn g11_repeated_rows_do_not_emit_blockmove() {
+    let grid_a = grid_from_numbers(&[&[1, 10], &[1, 10], &[2, 20], &[2, 20]]);
+
+    let grid_b = grid_from_numbers(&[&[2, 20], &[2, 20], &[1, 10], &[1, 10]]);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    assert!(
+        !report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::BlockMovedRows { .. })),
+        "ambiguous repeated rows must not emit BlockMovedRows"
+    );
+
+    assert!(
+        report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::CellEdited { .. })),
+        "fallback path should emit positional CellEdited noise"
     );
 }
 ```
@@ -10789,6 +11081,20 @@ scenarios:
       - "row_block_delete_a.xlsx"
       - "row_block_delete_b.xlsx"
 
+  # --- Phase 4: Spreadsheet-mode G11 ---
+  - id: "g11_row_block_move"
+    generator: "row_block_move_g11"
+    args:
+      sheet: "Sheet1"
+      total_rows: 20
+      cols: 5
+      block_rows: 4
+      src_start: 5    # 1-based in A
+      dst_start: 13   # 1-based in B
+    output:
+      - "row_block_move_a.xlsx"
+      - "row_block_move_b.xlsx"
+
   # --- JSON diff: simple non-empty change ---
   - id: "json_diff_single_cell"
     generator: "single_cell_diff"
@@ -11180,6 +11486,7 @@ from generators.grid import (
     GridTailDiffGenerator,
     RowAlignmentG8Generator,
     RowAlignmentG10Generator,
+    RowBlockMoveG11Generator,
     ColumnAlignmentG9Generator,
     SheetCaseRenameGenerator,
     Pg6SheetScenarioGenerator,
@@ -11209,6 +11516,7 @@ GENERATORS: Dict[str, Any] = {
     "grid_tail_diff": GridTailDiffGenerator,
     "row_alignment_g8": RowAlignmentG8Generator,
     "row_alignment_g10": RowAlignmentG10Generator,
+    "row_block_move_g11": RowBlockMoveG11Generator,
     "column_alignment_g9": ColumnAlignmentG9Generator,
     "sheet_case_rename": SheetCaseRenameGenerator,
     "pg6_sheet_scenario": Pg6SheetScenarioGenerator,
@@ -11925,6 +12233,75 @@ class RowAlignmentG10Generator(BaseGenerator):
         return base_data[:delete_idx] + base_data[delete_idx + block_rows :]
 
     def _write_workbook(self, path: Path, sheet: str, rows: List[List[int]]):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = sheet
+
+        for r_idx, row_values in enumerate(rows, start=1):
+            for c_idx, value in enumerate(row_values, start=1):
+                ws.cell(row=r_idx, column=c_idx, value=value)
+
+        wb.save(path)
+
+class RowBlockMoveG11Generator(BaseGenerator):
+    """Generates workbook pairs for G11 exact row block move scenarios."""
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        if len(output_names) != 2:
+            raise ValueError("row_block_move_g11 generator expects exactly two output filenames")
+
+        sheet = self.args.get("sheet", "Sheet1")
+        total_rows = self.args.get("total_rows", 20)
+        cols = self.args.get("cols", 5)
+        block_rows = self.args.get("block_rows", 4)
+        src_start = self.args.get("src_start", 5)
+        dst_start = self.args.get("dst_start", 13)
+
+        if block_rows <= 0:
+            raise ValueError("block_rows must be positive")
+        if src_start < 1 or src_start + block_rows - 1 > total_rows:
+            raise ValueError("source block must fit within total_rows")
+        if dst_start < 1 or dst_start + block_rows - 1 > total_rows:
+            raise ValueError("destination block must fit within total_rows")
+
+        src_end = src_start + block_rows - 1
+        dst_end = dst_start + block_rows - 1
+        if not (src_end < dst_start or dst_end < src_start):
+            raise ValueError("source and destination blocks must not overlap")
+
+        rows_a = self._build_rows(total_rows, cols, src_start, block_rows)
+        rows_b = self._move_block(rows_a, src_start, block_rows, dst_start)
+
+        self._write_workbook(output_dir / output_names[0], sheet, rows_a)
+        self._write_workbook(output_dir / output_names[1], sheet, rows_b)
+
+    def _build_rows(self, total_rows: int, cols: int, src_start: int, block_rows: int) -> List[List[str]]:
+        block_end = src_start + block_rows - 1
+        rows: List[List[str]] = []
+        for r in range(1, total_rows + 1):
+            if src_start <= r <= block_end:
+                rows.append([f"BLOCK_r{r}_c{c}" for c in range(1, cols + 1)])
+            else:
+                rows.append([f"R{r}_C{c}" for c in range(1, cols + 1)])
+        return rows
+
+    def _move_block(
+        self, rows: List[List[str]], src_start: int, block_rows: int, dst_start: int
+    ) -> List[List[str]]:
+        rows_b = [list(r) for r in rows]
+        src_idx = src_start - 1
+        src_end = src_idx + block_rows
+        block = rows_b[src_idx:src_end]
+        del rows_b[src_idx:src_end]
+
+        dst_idx = min(dst_start - 1, len(rows_b))
+
+        rows_b[dst_idx:dst_idx] = block
+        return rows_b
+
+    def _write_workbook(self, path: Path, sheet: str, rows: List[List[str]]):
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = sheet
