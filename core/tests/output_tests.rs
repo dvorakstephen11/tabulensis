@@ -80,16 +80,7 @@ fn diff_report_to_cell_diffs_ignores_block_moved_rect() {
     let addr = CellAddress::from_indices(2, 2);
 
     let report = DiffReport::new(vec![
-        DiffOp::block_moved_rect(
-            "Sheet1".into(),
-            2,
-            3,
-            1,
-            3,
-            9,
-            6,
-            Some(0xCAFEBABE),
-        ),
+        DiffOp::block_moved_rect("Sheet1".into(), 2, 3, 1, 3, 9, 6, Some(0xCAFEBABE)),
         DiffOp::cell_edited(
             "Sheet1".into(),
             addr,

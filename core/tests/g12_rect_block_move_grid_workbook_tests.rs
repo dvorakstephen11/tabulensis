@@ -84,7 +84,7 @@ fn g12_rect_block_move_with_internal_edit_falls_back() {
 
 fn swap_two_blocks() -> (excel_diff::Grid, excel_diff::Grid) {
     let base: Vec<Vec<i32>> = (0..6)
-        .map(|r| (0..6).map(|c| 100 * r as i32 + c as i32).collect())
+        .map(|r| (0..6).map(|c| 100 * r + c).collect())
         .collect();
     let mut grid_a = base.clone();
     let mut grid_b = base.clone();
@@ -126,10 +126,10 @@ fn place_block(target: &mut [Vec<i32>], top: usize, left: usize, block: &[Vec<i3
         for (c_offset, value) in row_vals.iter().enumerate() {
             let row = top + r_offset;
             let col = left + c_offset;
-            if let Some(row_slice) = target.get_mut(row) {
-                if let Some(cell) = row_slice.get_mut(col) {
-                    *cell = *value;
-                }
+            if let Some(row_slice) = target.get_mut(row)
+                && let Some(cell) = row_slice.get_mut(col)
+            {
+                *cell = *value;
             }
         }
     }

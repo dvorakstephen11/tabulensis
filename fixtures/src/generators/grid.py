@@ -550,6 +550,111 @@ class RowBlockMoveG11Generator(BaseGenerator):
 
         wb.save(path)
 
+class RowFuzzyMoveG13Generator(BaseGenerator):
+    """Generates workbook pairs for G13 fuzzy row block move scenarios with internal edits."""
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        if len(output_names) != 2:
+            raise ValueError("row_fuzzy_move_g13 generator expects exactly two output filenames")
+
+        sheet = self.args.get("sheet", "Data")
+        total_rows = self.args.get("total_rows", 24)
+        cols = self.args.get("cols", 6)
+        block_rows = self.args.get("block_rows", 4)
+        src_start = self.args.get("src_start", 5)
+        dst_start = self.args.get("dst_start", 14)
+        edits = self.args.get(
+            "edits",
+            [
+                {"row_offset": 1, "col": 3, "delta": 1},
+            ],
+        )
+
+        if block_rows <= 0:
+            raise ValueError("block_rows must be positive")
+        if src_start < 1 or src_start + block_rows - 1 > total_rows:
+            raise ValueError("source block must fit within total_rows")
+        if dst_start < 1 or dst_start + block_rows - 1 > total_rows:
+            raise ValueError("destination block must fit within total_rows")
+
+        src_end = src_start + block_rows - 1
+        dst_end = dst_start + block_rows - 1
+        if not (src_end < dst_start or dst_end < src_start):
+            raise ValueError("source and destination blocks must not overlap")
+
+        rows_a = self._build_rows(total_rows, cols, src_start, block_rows)
+        rows_b = self._move_block(rows_a, src_start, block_rows, dst_start)
+        self._apply_edits(rows_b, dst_start, block_rows, cols, edits)
+
+        self._write_workbook(output_dir / output_names[0], sheet, rows_a)
+        self._write_workbook(output_dir / output_names[1], sheet, rows_b)
+
+    def _build_rows(self, total_rows: int, cols: int, block_start: int, block_rows: int) -> List[List[int]]:
+        block_end = block_start + block_rows - 1
+        rows: List[List[int]] = []
+        for r in range(1, total_rows + 1):
+            if block_start <= r <= block_end:
+                row_id = 1_000 + (r - block_start)
+            else:
+                row_id = r
+            row_values = [row_id]
+            for c in range(1, cols):
+                row_values.append(row_id * 10 + c)
+            rows.append(row_values)
+        return rows
+
+    def _move_block(
+        self, rows: List[List[int]], src_start: int, block_rows: int, dst_start: int
+    ) -> List[List[int]]:
+        rows_b = [list(r) for r in rows]
+        src_idx = src_start - 1
+        src_end = src_idx + block_rows
+        block = rows_b[src_idx:src_end]
+        del rows_b[src_idx:src_end]
+
+        dst_idx = min(dst_start - 1, len(rows_b))
+        rows_b[dst_idx:dst_idx] = block
+        return rows_b
+
+    def _apply_edits(
+        self,
+        rows: List[List[int]],
+        dst_start: int,
+        block_rows: int,
+        cols: int,
+        edits: List[Dict[str, Any]],
+    ):
+        dst_idx = dst_start - 1
+        if dst_idx + block_rows > len(rows):
+            return
+
+        for edit in edits:
+            row_offset = int(edit.get("row_offset", 0))
+            col = int(edit.get("col", 1))
+            delta = int(edit.get("delta", 1))
+
+            if row_offset < 0 or row_offset >= block_rows:
+                continue
+
+            col_idx = max(1, min(col, cols)) - 1
+            target_row = dst_idx + row_offset
+            if col_idx >= len(rows[target_row]):
+                continue
+            rows[target_row][col_idx] += delta
+
+    def _write_workbook(self, path: Path, sheet: str, rows: List[List[int]]):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = sheet
+
+        for r_idx, row_values in enumerate(rows, start=1):
+            for c_idx, value in enumerate(row_values, start=1):
+                ws.cell(row=r_idx, column=c_idx, value=value)
+
+        wb.save(path)
+
 class ColumnMoveG12Generator(BaseGenerator):
     """Generates workbook pairs for G12 exact column move scenarios."""
     def generate(self, output_dir: Path, output_names: Union[str, List[str]]):

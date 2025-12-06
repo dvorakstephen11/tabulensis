@@ -400,10 +400,10 @@ mod tests {
             for (c_offset, value) in row_vals.iter().enumerate() {
                 let row = top + r_offset;
                 let col = left + c_offset;
-                if let Some(row_slice) = target.get_mut(row) {
-                    if let Some(cell) = row_slice.get_mut(col) {
-                        *cell = *value;
-                    }
+                if let Some(row_slice) = target.get_mut(row)
+                    && let Some(cell) = row_slice.get_mut(col)
+                {
+                    *cell = *value;
                 }
             }
         }
@@ -428,7 +428,10 @@ mod tests {
         let new = grid_from_matrix(grid_b);
 
         let result = detect_exact_rect_block_move(&old, &new);
-        assert!(result.is_some(), "should detect exact rectangular block move");
+        assert!(
+            result.is_some(),
+            "should detect exact rectangular block move"
+        );
 
         let mv = result.unwrap();
         assert_eq!(mv.src_start_row, 1);
@@ -463,7 +466,10 @@ mod tests {
         let new = grid_from_numbers(&[&[1, 2], &[3, 4]]);
 
         let result = detect_exact_rect_block_move(&old, &new);
-        assert!(result.is_none(), "identical grids should bail (no differences)");
+        assert!(
+            result.is_none(),
+            "identical grids should bail (no differences)"
+        );
     }
 
     #[test]
@@ -490,7 +496,7 @@ mod tests {
     #[test]
     fn detect_bails_on_ambiguous_block_swap() {
         let base: Vec<Vec<i32>> = (0..6)
-            .map(|r| (0..6).map(|c| 100 * r as i32 + c as i32).collect())
+            .map(|r| (0..6).map(|c| 100 * r + c).collect())
             .collect();
         let mut grid_a = base.clone();
         let mut grid_b = base.clone();

@@ -4531,6 +4531,231 @@ where
     stats.freq_b.get(&hash).copied().unwrap_or(0) == 1
         && stats.freq_a.get(&hash).copied().unwrap_or(0) <= 1
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workbook::{CellAddress, CellValue};
+
+    fn grid_from_numbers(values: &[&[i32]]) -> Grid {
+        let nrows = values.len() as u32;
+        let ncols = if nrows == 0 {
+            0
+        } else {
+            values[0].len() as u32
+        };
+
+        let mut grid = Grid::new(nrows, ncols);
+        for (r, row_vals) in values.iter().enumerate() {
+            for (c, v) in row_vals.iter().enumerate() {
+                grid.insert(Cell {
+                    row: r as u32,
+                    col: c as u32,
+                    address: CellAddress::from_indices(r as u32, c as u32),
+                    value: Some(CellValue::Number(*v as f64)),
+                    formula: None,
+                });
+            }
+        }
+
+        grid
+    }
+
+    fn base_background(rows: usize, cols: usize) -> Vec<Vec<i32>> {
+        (0..rows)
+            .map(|r| (0..cols).map(|c| (r as i32) * 1_000 + c as i32).collect())
+            .collect()
+    }
+
+    fn place_block(target: &mut [Vec<i32>], top: usize, left: usize, block: &[Vec<i32>]) {
+        for (r_offset, row_vals) in block.iter().enumerate() {
+            for (c_offset, value) in row_vals.iter().enumerate() {
+                let row = top + r_offset;
+                let col = left + c_offset;
+                if let Some(row_slice) = target.get_mut(row) {
+                    if let Some(cell) = row_slice.get_mut(col) {
+                        *cell = *value;
+                    }
+                }
+            }
+        }
+    }
+
+    fn grid_from_matrix(matrix: Vec<Vec<i32>>) -> Grid {
+        let refs: Vec<&[i32]> = matrix.iter().map(|row| row.as_slice()).collect();
+        grid_from_numbers(&refs)
+    }
+
+    #[test]
+    fn detect_simple_rect_block_move_success() {
+        let mut grid_a = base_background(12, 12);
+        let mut grid_b = base_background(12, 12);
+
+        let block = vec![vec![11, 12, 13], vec![21, 22, 23], vec![31, 32, 33]];
+
+        place_block(&mut grid_a, 1, 1, &block);
+        place_block(&mut grid_b, 7, 6, &block);
+
+        let old = grid_from_matrix(grid_a);
+        let new = grid_from_matrix(grid_b);
+
+        let result = detect_exact_rect_block_move(&old, &new);
+        assert!(result.is_some(), "should detect exact rectangular block move");
+
+        let mv = result.unwrap();
+        assert_eq!(mv.src_start_row, 1);
+        assert_eq!(mv.src_row_count, 3);
+        assert_eq!(mv.src_start_col, 1);
+        assert_eq!(mv.src_col_count, 3);
+        assert_eq!(mv.dst_start_row, 7);
+        assert_eq!(mv.dst_start_col, 6);
+    }
+
+    #[test]
+    fn detect_bails_on_different_grid_dimensions() {
+        let old = grid_from_numbers(&[&[1, 2], &[3, 4]]);
+        let new = grid_from_numbers(&[&[1, 2, 5], &[3, 4, 6]]);
+
+        let result = detect_exact_rect_block_move(&old, &new);
+        assert!(result.is_none(), "different dimensions should bail");
+    }
+
+    #[test]
+    fn detect_bails_on_empty_grid() {
+        let old = Grid::new(0, 0);
+        let new = Grid::new(0, 0);
+
+        let result = detect_exact_rect_block_move(&old, &new);
+        assert!(result.is_none(), "empty grid should bail");
+    }
+
+    #[test]
+    fn detect_bails_on_identical_grids() {
+        let old = grid_from_numbers(&[&[1, 2], &[3, 4]]);
+        let new = grid_from_numbers(&[&[1, 2], &[3, 4]]);
+
+        let result = detect_exact_rect_block_move(&old, &new);
+        assert!(result.is_none(), "identical grids should bail (no differences)");
+    }
+
+    #[test]
+    fn detect_bails_on_internal_cell_edit() {
+        let mut grid_a = base_background(10, 10);
+        let mut grid_b = base_background(10, 10);
+
+        let block = vec![vec![11, 12, 13], vec![21, 22, 23], vec![31, 32, 33]];
+
+        place_block(&mut grid_a, 1, 1, &block);
+        place_block(&mut grid_b, 6, 4, &block);
+        grid_b[7][5] = 9_999;
+
+        let old = grid_from_matrix(grid_a);
+        let new = grid_from_matrix(grid_b);
+
+        let result = detect_exact_rect_block_move(&old, &new);
+        assert!(
+            result.is_none(),
+            "move with internal edit should not be detected as exact rectangular move"
+        );
+    }
+
+    #[test]
+    fn detect_bails_on_ambiguous_block_swap() {
+        let base: Vec<Vec<i32>> = (0..6)
+            .map(|r| (0..6).map(|c| 100 * r as i32 + c as i32).collect())
+            .collect();
+        let mut grid_a = base.clone();
+        let mut grid_b = base.clone();
+
+        let block_one = vec![vec![900, 901], vec![902, 903]];
+        let block_two = vec![vec![700, 701], vec![702, 703]];
+
+        place_block(&mut grid_a, 0, 0, &block_one);
+        place_block(&mut grid_a, 3, 3, &block_two);
+
+        place_block(&mut grid_b, 0, 0, &block_two);
+        place_block(&mut grid_b, 3, 3, &block_one);
+
+        let old = grid_from_matrix(grid_a);
+        let new = grid_from_matrix(grid_b);
+
+        let result = detect_exact_rect_block_move(&old, &new);
+        assert!(
+            result.is_none(),
+            "ambiguous block swap should not emit a rectangular move"
+        );
+    }
+
+    #[test]
+    fn detect_bails_on_oversized_row_count() {
+        let old = Grid::new(MAX_RECT_ROWS + 1, 10);
+        let new = Grid::new(MAX_RECT_ROWS + 1, 10);
+
+        let result = detect_exact_rect_block_move(&old, &new);
+        assert!(
+            result.is_none(),
+            "grids exceeding MAX_RECT_ROWS should bail"
+        );
+    }
+
+    #[test]
+    fn detect_bails_on_oversized_col_count() {
+        let old = Grid::new(10, MAX_RECT_COLS + 1);
+        let new = Grid::new(10, MAX_RECT_COLS + 1);
+
+        let result = detect_exact_rect_block_move(&old, &new);
+        assert!(
+            result.is_none(),
+            "grids exceeding MAX_RECT_COLS should bail"
+        );
+    }
+
+    #[test]
+    fn detect_bails_on_single_cell_edit() {
+        let old = grid_from_numbers(&[&[1, 2, 3], &[4, 5, 6], &[7, 8, 9]]);
+        let new = grid_from_numbers(&[&[1, 2, 3], &[4, 99, 6], &[7, 8, 9]]);
+
+        let result = detect_exact_rect_block_move(&old, &new);
+        assert!(
+            result.is_none(),
+            "single cell edit is not a rectangular block move"
+        );
+    }
+
+    #[test]
+    fn detect_bails_on_pure_row_move_pattern() {
+        let old = grid_from_numbers(&[&[1, 2, 3], &[4, 5, 6], &[7, 8, 9], &[10, 11, 12]]);
+        let new = grid_from_numbers(&[&[7, 8, 9], &[4, 5, 6], &[1, 2, 3], &[10, 11, 12]]);
+
+        let result = detect_exact_rect_block_move(&old, &new);
+        assert!(
+            result.is_none(),
+            "pure row swap without column displacement is not a rectangular block move"
+        );
+    }
+
+    #[test]
+    fn detect_bails_on_non_contiguous_differences() {
+        let mut grid_a = base_background(8, 8);
+        let mut grid_b = base_background(8, 8);
+
+        grid_a[1][1] = 111;
+        grid_a[5][5] = 555;
+        grid_a[1][5] = 115;
+        grid_b[1][1] = 555;
+        grid_b[5][5] = 111;
+        grid_b[1][5] = 999;
+
+        let old = grid_from_matrix(grid_a);
+        let new = grid_from_matrix(grid_b);
+
+        let result = detect_exact_rect_block_move(&old, &new);
+        assert!(
+            result.is_none(),
+            "non-contiguous differences should not form a rectangular block move"
+        );
+    }
+}
 ```
 
 ---
@@ -9602,6 +9827,55 @@ fn diff_report_to_cell_diffs_filters_non_cell_ops() {
     assert_eq!(cell_diffs[1].coords, addr2.to_a1());
     assert_eq!(cell_diffs[1].value_file1, Some("old".into()));
     assert_eq!(cell_diffs[1].value_file2, Some("new".into()));
+}
+
+#[test]
+fn diff_report_to_cell_diffs_ignores_block_moved_rect() {
+    let addr = CellAddress::from_indices(2, 2);
+
+    let report = DiffReport::new(vec![
+        DiffOp::block_moved_rect(
+            "Sheet1".into(),
+            2,
+            3,
+            1,
+            3,
+            9,
+            6,
+            Some(0xCAFEBABE),
+        ),
+        DiffOp::cell_edited(
+            "Sheet1".into(),
+            addr,
+            make_cell_snapshot(addr, Some(CellValue::Number(10.0))),
+            make_cell_snapshot(addr, Some(CellValue::Number(20.0))),
+        ),
+        DiffOp::BlockMovedRows {
+            sheet: "Sheet1".into(),
+            src_start_row: 0,
+            row_count: 2,
+            dst_start_row: 5,
+            block_hash: None,
+        },
+        DiffOp::BlockMovedColumns {
+            sheet: "Sheet1".into(),
+            src_start_col: 0,
+            col_count: 2,
+            dst_start_col: 5,
+            block_hash: None,
+        },
+    ]);
+
+    let cell_diffs = diff_report_to_cell_diffs(&report);
+    assert_eq!(
+        cell_diffs.len(),
+        1,
+        "only CellEdited should be projected; BlockMovedRect and other block moves should be ignored"
+    );
+
+    assert_eq!(cell_diffs[0].coords, addr.to_a1());
+    assert_eq!(cell_diffs[0].value_file1, Some("10".into()));
+    assert_eq!(cell_diffs[0].value_file2, Some("20".into()));
 }
 
 #[test]

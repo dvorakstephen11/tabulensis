@@ -280,6 +280,22 @@ scenarios:
       - "rect_block_move_a.xlsx"
       - "rect_block_move_b.xlsx"
 
+  # --- Phase 4: Spreadsheet-mode G13 ---
+  - id: "g13_fuzzy_row_move"
+    generator: "row_fuzzy_move_g13"
+    args:
+      sheet: "Data"
+      total_rows: 24
+      cols: 6
+      block_rows: 4
+      src_start: 5      # 1-based in A
+      dst_start: 14     # 1-based in B
+      edits:
+        - { row_offset: 1, col: 3, delta: 1 }
+    output:
+      - "grid_move_and_edit_a.xlsx"
+      - "grid_move_and_edit_b.xlsx"
+
   # --- JSON diff: simple non-empty change ---
   - id: "json_diff_single_cell"
     generator: "single_cell_diff"

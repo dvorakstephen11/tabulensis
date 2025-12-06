@@ -1,4 +1,6 @@
-use crate::grid_view::{GridView, HashStats, RowHash};
+use std::collections::HashSet;
+
+use crate::grid_view::{GridView, HashStats, RowHash, RowMeta};
 use crate::workbook::Grid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,6 +21,8 @@ const MAX_ALIGN_ROWS: u32 = 2_000;
 const MAX_ALIGN_COLS: u32 = 64;
 const MAX_HASH_REPEAT: u32 = 8;
 const MAX_BLOCK_GAP: u32 = 32;
+const MAX_FUZZY_BLOCK_ROWS: u32 = 32;
+const FUZZY_SIMILARITY_THRESHOLD: f64 = 0.80;
 const _HASH_COLLISION_NOTE: &str = "64-bit hash collision probability ~0.00006% at 2K rows; \
                                     secondary verification deferred to G8a (50K-row adversarial)";
 
@@ -154,6 +158,132 @@ pub(crate) fn detect_exact_row_block_move(old: &Grid, new: &Grid) -> Option<RowB
     }
 
     None
+}
+
+pub(crate) fn detect_fuzzy_row_block_move(old: &Grid, new: &Grid) -> Option<RowBlockMove> {
+    if old.nrows != new.nrows || old.ncols != new.ncols {
+        return None;
+    }
+
+    if old.nrows == 0 {
+        return None;
+    }
+
+    if !is_within_size_bounds(old, new) {
+        return None;
+    }
+
+    let view_a = GridView::from_grid(old);
+    let view_b = GridView::from_grid(new);
+
+    if low_info_dominated(&view_a) || low_info_dominated(&view_b) {
+        return None;
+    }
+
+    let stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
+    if has_heavy_repetition(&stats) {
+        return None;
+    }
+
+    let meta_a = &view_a.row_meta;
+    let meta_b = &view_b.row_meta;
+
+    if meta_a
+        .iter()
+        .zip(meta_b.iter())
+        .all(|(a, b)| a.hash == b.hash)
+    {
+        return None;
+    }
+
+    let n = meta_a.len();
+    let mut prefix = 0usize;
+    while prefix < n && meta_a[prefix].hash == meta_b[prefix].hash {
+        prefix += 1;
+    }
+    if prefix == n {
+        return None;
+    }
+
+    let mut suffix_len = 0usize;
+    while suffix_len < n.saturating_sub(prefix) {
+        let idx_a = n - 1 - suffix_len;
+        let idx_b = idx_a;
+        if meta_a[idx_a].hash == meta_b[idx_b].hash {
+            suffix_len += 1;
+        } else {
+            break;
+        }
+    }
+
+    let mismatch_end = n - suffix_len;
+    if mismatch_end <= prefix {
+        return None;
+    }
+
+    let mid_len = mismatch_end - prefix;
+    if mid_len <= 1 {
+        return None;
+    }
+
+    let max_block_len = mid_len.saturating_sub(1).min(MAX_FUZZY_BLOCK_ROWS as usize);
+    if max_block_len == 0 {
+        return None;
+    }
+
+    let mut candidate: Option<RowBlockMove> = None;
+
+    for block_len in 1..=max_block_len {
+        let remaining = mid_len - block_len;
+
+        // Block moved upward: [middle][block] -> [block'][middle]
+        if hashes_match(
+            &meta_a[prefix..prefix + remaining],
+            &meta_b[prefix + block_len..mismatch_end],
+        ) {
+            let src_block = &meta_a[prefix + remaining..mismatch_end];
+            let dst_block = &meta_b[prefix..prefix + block_len];
+
+            if block_similarity(src_block, dst_block) >= FUZZY_SIMILARITY_THRESHOLD {
+                let mv = RowBlockMove {
+                    src_start_row: src_block[0].row_idx,
+                    dst_start_row: dst_block[0].row_idx,
+                    row_count: block_len as u32,
+                };
+                if mv.src_start_row != mv.dst_start_row {
+                    if candidate.is_some() {
+                        return None;
+                    }
+                    candidate = Some(mv);
+                }
+            }
+        }
+
+        // Block moved downward: [block][middle] -> [middle][block']
+        if hashes_match(
+            &meta_a[prefix + block_len..mismatch_end],
+            &meta_b[prefix..prefix + remaining],
+        ) {
+            let src_block = &meta_a[prefix..prefix + block_len];
+            let dst_block = &meta_b[prefix + remaining..mismatch_end];
+
+            if block_similarity(src_block, dst_block) >= FUZZY_SIMILARITY_THRESHOLD {
+                let mv = RowBlockMove {
+                    src_start_row: src_block[0].row_idx,
+                    dst_start_row: dst_block[0].row_idx,
+                    row_count: block_len as u32,
+                };
+                if mv.src_start_row != mv.dst_start_row {
+                    if candidate.is_some() {
+                        return None;
+                    }
+                    candidate = Some(mv);
+                }
+            }
+        }
+    }
+
+    candidate
 }
 
 pub(crate) fn align_row_changes(old: &Grid, new: &Grid) -> Option<RowAlignment> {
@@ -483,6 +613,36 @@ fn has_heavy_repetition(stats: &HashStats<RowHash>) -> bool {
         > MAX_HASH_REPEAT
 }
 
+fn hashes_match(slice_a: &[RowMeta], slice_b: &[RowMeta]) -> bool {
+    slice_a.len() == slice_b.len()
+        && slice_a
+            .iter()
+            .zip(slice_b.iter())
+            .all(|(a, b)| a.hash == b.hash)
+}
+
+fn block_similarity(slice_a: &[RowMeta], slice_b: &[RowMeta]) -> f64 {
+    let tokens_a: HashSet<RowHash> = slice_a.iter().map(|m| m.hash).collect();
+    let tokens_b: HashSet<RowHash> = slice_b.iter().map(|m| m.hash).collect();
+
+    let intersection = tokens_a.intersection(&tokens_b).count();
+    let union = tokens_a.union(&tokens_b).count();
+    let jaccard = if union == 0 {
+        0.0
+    } else {
+        intersection as f64 / union as f64
+    };
+
+    let positional_matches = slice_a
+        .iter()
+        .zip(slice_b.iter())
+        .filter(|(a, b)| a.hash == b.hash)
+        .count();
+    let positional_ratio = (positional_matches as f64 + 1.0) / (slice_a.len() as f64 + 1.0);
+
+    jaccard.max(positional_ratio)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -550,6 +710,97 @@ mod tests {
         let grid_b = grid_from_rows(&rows_b_refs);
 
         assert!(detect_exact_row_block_move(&grid_a, &grid_b).is_none());
+    }
+
+    #[test]
+    fn detects_fuzzy_row_block_move_with_single_internal_edit() {
+        let base: Vec<Vec<i32>> = (1..=18)
+            .map(|r| (1..=3).map(|c| r * 10 + c).collect())
+            .collect();
+        let base_refs: Vec<&[i32]> = base.iter().map(|row| row.as_slice()).collect();
+        let grid_a = grid_from_rows(&base_refs);
+
+        let mut rows_b = base.clone();
+        let mut moved_block: Vec<Vec<i32>> = rows_b.drain(4..8).collect();
+        moved_block[1][1] = 9_999;
+        rows_b.splice(12..12, moved_block);
+        let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
+        let grid_b = grid_from_rows(&rows_b_refs);
+
+        assert!(
+            detect_exact_row_block_move(&grid_a, &grid_b).is_none(),
+            "internal edits should prevent exact move detection"
+        );
+
+        let mv = detect_fuzzy_row_block_move(&grid_a, &grid_b)
+            .expect("expected fuzzy row block move to be detected");
+        assert_eq!(
+            mv,
+            RowBlockMove {
+                src_start_row: 4,
+                dst_start_row: 12,
+                row_count: 4
+            }
+        );
+    }
+
+    #[test]
+    fn fuzzy_move_rejects_low_similarity_block() {
+        let base: Vec<Vec<i32>> = (1..=16)
+            .map(|r| (1..=3).map(|c| r * 10 + c).collect())
+            .collect();
+        let base_refs: Vec<&[i32]> = base.iter().map(|row| row.as_slice()).collect();
+        let grid_a = grid_from_rows(&base_refs);
+
+        let mut rows_b = base.clone();
+        let mut moved_block: Vec<Vec<i32>> = rows_b.drain(3..7).collect();
+        for row in &mut moved_block {
+            for value in row.iter_mut() {
+                *value += 50_000;
+            }
+        }
+        rows_b.splice(10..10, moved_block);
+        let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
+        let grid_b = grid_from_rows(&rows_b_refs);
+
+        assert!(detect_exact_row_block_move(&grid_a, &grid_b).is_none());
+        assert!(
+            detect_fuzzy_row_block_move(&grid_a, &grid_b).is_none(),
+            "similarity below threshold should bail out"
+        );
+    }
+
+    #[test]
+    fn fuzzy_move_bails_on_heavy_repetition_or_ambiguous_candidates() {
+        let repeated_row = [1, 2];
+        let rows_a: Vec<Vec<i32>> = (0..10).map(|_| repeated_row.to_vec()).collect();
+        let mut rows_b = rows_a.clone();
+
+        let block: Vec<Vec<i32>> = rows_b.drain(0..3).collect();
+        rows_b.splice(5..5, block);
+
+        let rows_a_refs: Vec<&[i32]> = rows_a.iter().map(|row| row.as_slice()).collect();
+        let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
+        let grid_a = grid_from_rows(&rows_a_refs);
+        let grid_b = grid_from_rows(&rows_b_refs);
+
+        assert!(
+            detect_fuzzy_row_block_move(&grid_a, &grid_b).is_none(),
+            "heavy repetition or ambiguous candidates should not emit a move"
+        );
+    }
+
+    #[test]
+    fn fuzzy_move_noop_when_grids_identical() {
+        let base: Vec<Vec<i32>> = (1..=6)
+            .map(|r| (1..=2).map(|c| r * 10 + c).collect())
+            .collect();
+        let base_refs: Vec<&[i32]> = base.iter().map(|row| row.as_slice()).collect();
+        let grid_a = grid_from_rows(&base_refs);
+        let grid_b = grid_from_rows(&base_refs);
+
+        assert!(detect_exact_row_block_move(&grid_a, &grid_b).is_none());
+        assert!(detect_fuzzy_row_block_move(&grid_a, &grid_b).is_none());
     }
 
     #[test]

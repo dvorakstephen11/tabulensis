@@ -11,6 +11,7 @@ use crate::diff::{DiffOp, DiffReport, SheetId};
 use crate::rect_block_move::{RectBlockMove, detect_exact_rect_block_move};
 use crate::row_alignment::{
     RowAlignment, RowBlockMove, align_row_changes, detect_exact_row_block_move,
+    detect_fuzzy_row_block_move,
 };
 use crate::workbook::{Cell, CellAddress, CellSnapshot, Grid, Sheet, SheetKind, Workbook};
 use std::collections::HashMap;
@@ -151,6 +152,9 @@ fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>)
         emit_row_block_move(sheet_id, mv, ops);
     } else if let Some(mv) = detect_exact_column_block_move(old, new) {
         emit_column_block_move(sheet_id, mv, ops);
+    } else if let Some(mv) = detect_fuzzy_row_block_move(old, new) {
+        emit_row_block_move(sheet_id, mv, ops);
+        emit_moved_row_block_edits(sheet_id, old, new, mv, ops);
     } else if let Some(alignment) = align_row_changes(old, new) {
         emit_aligned_diffs(sheet_id, old, new, &alignment, ops);
     } else if let Some(alignment) = align_single_column_change(old, new) {
@@ -220,6 +224,27 @@ fn emit_rect_block_move(sheet_id: &SheetId, mv: RectBlockMove, ops: &mut Vec<Dif
         dst_start_col: mv.dst_start_col,
         block_hash: mv.block_hash,
     });
+}
+
+fn emit_moved_row_block_edits(
+    sheet_id: &SheetId,
+    old: &Grid,
+    new: &Grid,
+    mv: RowBlockMove,
+    ops: &mut Vec<DiffOp>,
+) {
+    let overlap_cols = old.ncols.min(new.ncols);
+    for offset in 0..mv.row_count {
+        diff_row_pair(
+            sheet_id,
+            old,
+            new,
+            mv.src_start_row + offset,
+            mv.dst_start_row + offset,
+            overlap_cols,
+            ops,
+        );
+    }
 }
 
 fn emit_aligned_diffs(
