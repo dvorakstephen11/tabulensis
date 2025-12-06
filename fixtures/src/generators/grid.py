@@ -481,6 +481,75 @@ class RowAlignmentG10Generator(BaseGenerator):
 
         wb.save(path)
 
+class RowBlockMoveG11Generator(BaseGenerator):
+    """Generates workbook pairs for G11 exact row block move scenarios."""
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        if len(output_names) != 2:
+            raise ValueError("row_block_move_g11 generator expects exactly two output filenames")
+
+        sheet = self.args.get("sheet", "Sheet1")
+        total_rows = self.args.get("total_rows", 20)
+        cols = self.args.get("cols", 5)
+        block_rows = self.args.get("block_rows", 4)
+        src_start = self.args.get("src_start", 5)
+        dst_start = self.args.get("dst_start", 13)
+
+        if block_rows <= 0:
+            raise ValueError("block_rows must be positive")
+        if src_start < 1 or src_start + block_rows - 1 > total_rows:
+            raise ValueError("source block must fit within total_rows")
+        if dst_start < 1 or dst_start + block_rows - 1 > total_rows:
+            raise ValueError("destination block must fit within total_rows")
+
+        src_end = src_start + block_rows - 1
+        dst_end = dst_start + block_rows - 1
+        if not (src_end < dst_start or dst_end < src_start):
+            raise ValueError("source and destination blocks must not overlap")
+
+        rows_a = self._build_rows(total_rows, cols, src_start, block_rows)
+        rows_b = self._move_block(rows_a, src_start, block_rows, dst_start)
+
+        self._write_workbook(output_dir / output_names[0], sheet, rows_a)
+        self._write_workbook(output_dir / output_names[1], sheet, rows_b)
+
+    def _build_rows(self, total_rows: int, cols: int, src_start: int, block_rows: int) -> List[List[str]]:
+        block_end = src_start + block_rows - 1
+        rows: List[List[str]] = []
+        for r in range(1, total_rows + 1):
+            if src_start <= r <= block_end:
+                rows.append([f"BLOCK_r{r}_c{c}" for c in range(1, cols + 1)])
+            else:
+                rows.append([f"R{r}_C{c}" for c in range(1, cols + 1)])
+        return rows
+
+    def _move_block(
+        self, rows: List[List[str]], src_start: int, block_rows: int, dst_start: int
+    ) -> List[List[str]]:
+        rows_b = [list(r) for r in rows]
+        src_idx = src_start - 1
+        src_end = src_idx + block_rows
+        block = rows_b[src_idx:src_end]
+        del rows_b[src_idx:src_end]
+
+        dst_idx = min(dst_start - 1, len(rows_b))
+
+        rows_b[dst_idx:dst_idx] = block
+        return rows_b
+
+    def _write_workbook(self, path: Path, sheet: str, rows: List[List[str]]):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = sheet
+
+        for r_idx, row_values in enumerate(rows, start=1):
+            for c_idx, value in enumerate(row_values, start=1):
+                ws.cell(row=r_idx, column=c_idx, value=value)
+
+        wb.save(path)
+
 class ColumnAlignmentG9Generator(BaseGenerator):
     """Generates workbook pairs for G9-style middle column insert/delete scenarios."""
     def generate(self, output_dir: Path, output_names: Union[str, List[str]]):

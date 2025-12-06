@@ -8,12 +8,153 @@ pub(crate) struct RowAlignment {
     pub deleted: Vec<u32>,        // row indices in A
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RowBlockMove {
+    pub src_start_row: u32,
+    pub dst_start_row: u32,
+    pub row_count: u32,
+}
+
 const MAX_ALIGN_ROWS: u32 = 2_000;
 const MAX_ALIGN_COLS: u32 = 64;
 const MAX_HASH_REPEAT: u32 = 8;
 const MAX_BLOCK_GAP: u32 = 32;
 const _HASH_COLLISION_NOTE: &str = "64-bit hash collision probability ~0.00006% at 2K rows; \
                                     secondary verification deferred to G8a (50K-row adversarial)";
+
+pub(crate) fn detect_exact_row_block_move(old: &Grid, new: &Grid) -> Option<RowBlockMove> {
+    if old.nrows != new.nrows || old.ncols != new.ncols {
+        return None;
+    }
+
+    if old.nrows == 0 {
+        return None;
+    }
+
+    if !is_within_size_bounds(old, new) {
+        return None;
+    }
+
+    let view_a = GridView::from_grid(old);
+    let view_b = GridView::from_grid(new);
+
+    if low_info_dominated(&view_a) || low_info_dominated(&view_b) {
+        return None;
+    }
+
+    let stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
+    if has_heavy_repetition(&stats) {
+        return None;
+    }
+
+    let meta_a = &view_a.row_meta;
+    let meta_b = &view_b.row_meta;
+    let n = meta_a.len();
+
+    if meta_a
+        .iter()
+        .zip(meta_b.iter())
+        .all(|(a, b)| a.hash == b.hash)
+    {
+        return None;
+    }
+
+    let prefix = (0..n).find(|&idx| meta_a[idx].hash != meta_b[idx].hash)?;
+
+    let mut suffix_len = 0usize;
+    while suffix_len < n.saturating_sub(prefix) {
+        let idx_a = n - 1 - suffix_len;
+        let idx_b = n - 1 - suffix_len;
+        if meta_a[idx_a].hash == meta_b[idx_b].hash {
+            suffix_len += 1;
+        } else {
+            break;
+        }
+    }
+    let tail_start = n - suffix_len;
+
+    let try_candidate = |src_start: usize, dst_start: usize| -> Option<RowBlockMove> {
+        if src_start >= tail_start || dst_start >= tail_start {
+            return None;
+        }
+
+        let mut len = 0usize;
+        while src_start + len < tail_start && dst_start + len < tail_start {
+            if meta_a[src_start + len].hash != meta_b[dst_start + len].hash {
+                break;
+            }
+            len += 1;
+        }
+
+        if len == 0 {
+            return None;
+        }
+
+        let src_end = src_start + len;
+        let dst_end = dst_start + len;
+
+        if !(src_end <= dst_start || dst_end <= src_start) {
+            return None;
+        }
+
+        let mut idx_a = 0usize;
+        let mut idx_b = 0usize;
+
+        loop {
+            if idx_a == src_start {
+                idx_a = src_end;
+            }
+            if idx_b == dst_start {
+                idx_b = dst_end;
+            }
+
+            if idx_a >= n && idx_b >= n {
+                break;
+            }
+
+            if idx_a >= n || idx_b >= n {
+                return None;
+            }
+
+            if meta_a[idx_a].hash != meta_b[idx_b].hash {
+                return None;
+            }
+
+            idx_a += 1;
+            idx_b += 1;
+        }
+
+        for meta in &meta_a[src_start..src_end] {
+            if stats.freq_a.get(&meta.hash).copied().unwrap_or(0) != 1
+                || stats.freq_b.get(&meta.hash).copied().unwrap_or(0) != 1
+            {
+                return None;
+            }
+        }
+
+        Some(RowBlockMove {
+            src_start_row: meta_a[src_start].row_idx,
+            dst_start_row: meta_b[dst_start].row_idx,
+            row_count: len as u32,
+        })
+    };
+
+    if let Some(src_start) =
+        (prefix..tail_start).find(|&idx| meta_a[idx].hash == meta_b[prefix].hash)
+        && let Some(mv) = try_candidate(src_start, prefix)
+    {
+        return Some(mv);
+    }
+
+    if let Some(dst_start) =
+        (prefix..tail_start).find(|&idx| meta_b[idx].hash == meta_a[prefix].hash)
+        && let Some(mv) = try_candidate(prefix, dst_start)
+    {
+        return Some(mv);
+    }
+
+    None
+}
 
 pub(crate) fn align_row_changes(old: &Grid, new: &Grid) -> Option<RowAlignment> {
     let row_diff = new.nrows as i64 - old.nrows as i64;
@@ -365,6 +506,50 @@ mod tests {
         }
 
         grid
+    }
+
+    #[test]
+    fn detects_exact_row_block_move() {
+        let base: Vec<Vec<i32>> = (1..=20)
+            .map(|r| (1..=3).map(|c| r * 10 + c).collect())
+            .collect();
+        let base_refs: Vec<&[i32]> = base.iter().map(|row| row.as_slice()).collect();
+        let grid_a = grid_from_rows(&base_refs);
+
+        let mut rows_b = base.clone();
+        let moved_block: Vec<Vec<i32>> = rows_b.drain(4..8).collect();
+        rows_b.splice(12..12, moved_block);
+        let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
+        let grid_b = grid_from_rows(&rows_b_refs);
+
+        let mv =
+            detect_exact_row_block_move(&grid_a, &grid_b).expect("expected block move to be found");
+        assert_eq!(
+            mv,
+            RowBlockMove {
+                src_start_row: 4,
+                dst_start_row: 12,
+                row_count: 4
+            }
+        );
+    }
+
+    #[test]
+    fn block_move_detection_rejects_internal_edits() {
+        let base: Vec<Vec<i32>> = (1..=12)
+            .map(|r| (1..=2).map(|c| r * 10 + c).collect())
+            .collect();
+        let base_refs: Vec<&[i32]> = base.iter().map(|row| row.as_slice()).collect();
+        let grid_a = grid_from_rows(&base_refs);
+
+        let mut rows_b = base.clone();
+        let mut moved_block: Vec<Vec<i32>> = rows_b.drain(2..5).collect();
+        moved_block[1][0] = 9_999;
+        rows_b.splice(6..6, moved_block);
+        let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
+        let grid_b = grid_from_rows(&rows_b_refs);
+
+        assert!(detect_exact_row_block_move(&grid_a, &grid_b).is_none());
     }
 
     #[test]

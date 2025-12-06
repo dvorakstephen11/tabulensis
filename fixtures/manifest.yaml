@@ -237,6 +237,20 @@ scenarios:
       - "row_block_delete_a.xlsx"
       - "row_block_delete_b.xlsx"
 
+  # --- Phase 4: Spreadsheet-mode G11 ---
+  - id: "g11_row_block_move"
+    generator: "row_block_move_g11"
+    args:
+      sheet: "Sheet1"
+      total_rows: 20
+      cols: 5
+      block_rows: 4
+      src_start: 5    # 1-based in A
+      dst_start: 13   # 1-based in B
+    output:
+      - "row_block_move_a.xlsx"
+      - "row_block_move_b.xlsx"
+
   # --- JSON diff: simple non-empty change ---
   - id: "json_diff_single_cell"
     generator: "single_cell_diff"

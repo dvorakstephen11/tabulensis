@@ -5,7 +5,9 @@
 
 use crate::column_alignment::{ColumnAlignment, align_single_column_change};
 use crate::diff::{DiffOp, DiffReport, SheetId};
-use crate::row_alignment::{RowAlignment, align_row_changes};
+use crate::row_alignment::{
+    RowAlignment, RowBlockMove, align_row_changes, detect_exact_row_block_move,
+};
 use crate::workbook::{Cell, CellAddress, CellSnapshot, Grid, Sheet, SheetKind, Workbook};
 use std::collections::HashMap;
 
@@ -91,7 +93,9 @@ pub fn diff_workbooks(old: &Workbook, new: &Workbook) -> DiffReport {
 }
 
 fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>) {
-    if let Some(alignment) = align_row_changes(old, new) {
+    if let Some(mv) = detect_exact_row_block_move(old, new) {
+        emit_row_block_move(sheet_id, mv, ops);
+    } else if let Some(alignment) = align_row_changes(old, new) {
         emit_aligned_diffs(sheet_id, old, new, &alignment, ops);
     } else if let Some(alignment) = align_single_column_change(old, new) {
         emit_column_aligned_diffs(sheet_id, old, new, &alignment, ops);
@@ -127,6 +131,16 @@ fn positional_diff(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<Dif
             ops.push(DiffOp::column_removed(sheet_id.clone(), col_idx, None));
         }
     }
+}
+
+fn emit_row_block_move(sheet_id: &SheetId, mv: RowBlockMove, ops: &mut Vec<DiffOp>) {
+    ops.push(DiffOp::BlockMovedRows {
+        sheet: sheet_id.clone(),
+        src_start_row: mv.src_start_row,
+        row_count: mv.row_count,
+        dst_start_row: mv.dst_start_row,
+        block_hash: None,
+    });
 }
 
 fn emit_aligned_diffs(

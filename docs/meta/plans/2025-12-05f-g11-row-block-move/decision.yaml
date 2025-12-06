@@ -1,0 +1,39 @@
+# docs/meta/plans/2025-12-06-g11-row-block-move/decision.yaml
+
+branch_name: "2025-12-06-g11-row-block-move"
+
+work_type: "milestone_progress"
+target_subsystem: "grid_diff.spreadsheet_mode.row_block_moves"
+
+milestone:
+  id: "G11"
+  name: "Block move (rows) detection"
+  phase: 4
+
+rationale:
+  - "Phase 4 spreadsheet-mode grid milestones G8–G10 are implemented (row/column alignment + row block insert/delete). G11 (row block move detection) is the next planned milestone in the test plan and is currently unimplemented." # 
+  - "The engine has DiffOp::BlockMovedRows and PG4 constructor tests, but diff_grids never emits BlockMovedRows; pure row moves are currently surfaced as noisy CellEdited sequences or as delete+insert patterns." # 
+  - "The unified grid diff spec treats UC‑11 (block of rows moved, unchanged) as a must‑have and as the motivating case for move-aware alignment; without at least exact move detection, we fail that acceptance criteria." # 
+  - "GridView + row hashing + HashStats already exist and are exercised by G8–G10; they provide all the primitives needed for a small, safe, exact block-move detector without introducing new core data structures." # 
+  - "Addressing G11 now keeps the spreadsheet-mode pipeline cohesive before starting database-mode (D1–D4) or fuzzy moves (G12–G13), which the difficulty analysis groups into the hardest H1 grid diff work." # 
+  - "Development history shows recent, successful cycles around row alignment and block handling (G8–G10); working on G11 while that context is still fresh minimizes integration and regression risk." # 
+
+risks_of_deferral:
+  - "User-visible diffs for cut‑and‑paste of row blocks remain extremely noisy: a pure move produces many CellEdited operations instead of a single structural move, undermining product value for common workflows." # 
+  - "Database mode and future AMR-based alignment also depend on move semantics; deferring G11 increases the chance we bolt on a second, incompatible move detector later rather than converging on a unified path." # 
+  - "DiffOp::BlockMovedRows would continue to be tested only via constructor/serde cases, raising the risk of API drift or unused fields (e.g., block_hash) that never get exercised against real grid inputs." # 
+  - "If we move on to D‑series milestones first, we may need to revisit and refactor the spreadsheet-mode alignment layering later to share move detection, creating avoidable churn in engine.rs and row_alignment.rs."
+
+references:
+  - "excel_diff_testing_plan.md – Phase 4 G8–G13, G11 Block move (rows) detection section" # :contentReference[oaicite:9]{index=9}
+  - "unified_grid_diff_algorithm_specification.md – UC‑11 Block of Rows Moved, AMR move detection, result assembly" # 
+  - "excel_diff_specification.md – DiffOp definitions, BlockMovedRows/BlockMovedColumns shape" # :contentReference[oaicite:11]{index=11}
+  - "core/src/engine.rs – current diff_grids pipeline (row alignment, column alignment, positional diff)" # :contentReference[oaicite:12]{index=12}
+  - "core/src/row_alignment.rs – single-row and block row alignment helpers and guards" # 
+  - "core/src/grid_view.rs – GridView, RowMeta, HashStats and repetition/low-info heuristics" # :contentReference[oaicite:14]{index=14}
+  - "development_history.txt – recent branches 2025-12-05b/c/d/e for GridView, G8, G9, G10" # 
+
+difficulty_estimate:
+  score: 6
+  reference_hardest_milestone: "Full AMR-based grid diff with fuzzy block moves and database mode (G8–G13 + D1–D10)"
+
