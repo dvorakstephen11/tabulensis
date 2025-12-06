@@ -36,6 +36,7 @@
       data_mashup_tests.rs
       engine_tests.rs
       excel_open_xml_tests.rs
+      g10_row_block_alignment_grid_workbook_tests.rs
       g1_g2_grid_workbook_tests.rs
       g5_g7_grid_workbook_tests.rs
       g8_row_alignment_grid_workbook_tests.rs
@@ -136,6 +137,10 @@
       random_zip.zip
       row_append_bottom_a.xlsx
       row_append_bottom_b.xlsx
+      row_block_delete_a.xlsx
+      row_block_delete_b.xlsx
+      row_block_insert_a.xlsx
+      row_block_insert_b.xlsx
       row_delete_bottom_a.xlsx
       row_delete_bottom_b.xlsx
       row_delete_middle_a.xlsx
@@ -2020,7 +2025,7 @@ impl DiffOp {
 
 use crate::column_alignment::{ColumnAlignment, align_single_column_change};
 use crate::diff::{DiffOp, DiffReport, SheetId};
-use crate::row_alignment::{RowAlignment, align_single_row_change};
+use crate::row_alignment::{RowAlignment, align_row_changes};
 use crate::workbook::{Cell, CellAddress, CellSnapshot, Grid, Sheet, SheetKind, Workbook};
 use std::collections::HashMap;
 
@@ -2106,7 +2111,7 @@ pub fn diff_workbooks(old: &Workbook, new: &Workbook) -> DiffReport {
 }
 
 fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>) {
-    if let Some(alignment) = align_single_row_change(old, new) {
+    if let Some(alignment) = align_row_changes(old, new) {
         emit_aligned_diffs(sheet_id, old, new, &alignment, ops);
     } else if let Some(alignment) = align_single_column_change(old, new) {
         emit_column_aligned_diffs(sheet_id, old, new, &alignment, ops);
@@ -3579,10 +3584,24 @@ pub(crate) struct RowAlignment {
 const MAX_ALIGN_ROWS: u32 = 2_000;
 const MAX_ALIGN_COLS: u32 = 64;
 const MAX_HASH_REPEAT: u32 = 8;
+const MAX_BLOCK_GAP: u32 = 32;
 const _HASH_COLLISION_NOTE: &str = "64-bit hash collision probability ~0.00006% at 2K rows; \
                                     secondary verification deferred to G8a (50K-row adversarial)";
 
+pub(crate) fn align_row_changes(old: &Grid, new: &Grid) -> Option<RowAlignment> {
+    let row_diff = new.nrows as i64 - old.nrows as i64;
+    if row_diff.abs() == 1 {
+        return align_single_row_change(old, new);
+    }
+
+    align_rows_internal(old, new, true)
+}
+
 pub(crate) fn align_single_row_change(old: &Grid, new: &Grid) -> Option<RowAlignment> {
+    align_rows_internal(old, new, false)
+}
+
+fn align_rows_internal(old: &Grid, new: &Grid, allow_blocks: bool) -> Option<RowAlignment> {
     if !is_within_size_bounds(old, new) {
         return None;
     }
@@ -3592,7 +3611,17 @@ pub(crate) fn align_single_row_change(old: &Grid, new: &Grid) -> Option<RowAlign
     }
 
     let row_diff = new.nrows as i64 - old.nrows as i64;
-    if row_diff.abs() != 1 {
+    if row_diff == 0 {
+        return None;
+    }
+
+    let abs_diff = row_diff.unsigned_abs() as u32;
+
+    if !allow_blocks && abs_diff != 1 {
+        return None;
+    }
+
+    if abs_diff != 1 && (!allow_blocks || abs_diff > MAX_BLOCK_GAP) {
         return None;
     }
 
@@ -3615,12 +3644,30 @@ pub(crate) fn align_single_row_change(old: &Grid, new: &Grid) -> Option<RowAlign
             &stats,
             RowChange::Insert,
         )
-    } else {
+    } else if row_diff == -1 {
         find_single_gap_alignment(
             &view_a.row_meta,
             &view_b.row_meta,
             &stats,
             RowChange::Delete,
+        )
+    } else if !allow_blocks {
+        None
+    } else if row_diff > 0 {
+        find_block_gap_alignment(
+            &view_a.row_meta,
+            &view_b.row_meta,
+            &stats,
+            RowChange::Insert,
+            abs_diff,
+        )
+    } else {
+        find_block_gap_alignment(
+            &view_a.row_meta,
+            &view_b.row_meta,
+            &stats,
+            RowChange::Delete,
+            abs_diff,
         )
     }
 }
@@ -3721,6 +3768,113 @@ fn find_single_gap_alignment(
     Some(alignment)
 }
 
+fn find_block_gap_alignment(
+    rows_a: &[crate::grid_view::RowMeta],
+    rows_b: &[crate::grid_view::RowMeta],
+    stats: &HashStats<RowHash>,
+    change: RowChange,
+    gap: u32,
+) -> Option<RowAlignment> {
+    let gap = gap as usize;
+    if gap == 0 {
+        return None;
+    }
+
+    let (shorter_len, longer_len) = match change {
+        RowChange::Insert => (rows_a.len(), rows_b.len()),
+        RowChange::Delete => (rows_b.len(), rows_a.len()),
+    };
+
+    if longer_len.saturating_sub(shorter_len) != gap {
+        return None;
+    }
+
+    let mut prefix = 0usize;
+    while prefix < rows_a.len()
+        && prefix < rows_b.len()
+        && rows_a[prefix].hash == rows_b[prefix].hash
+    {
+        prefix += 1;
+    }
+
+    let mut suffix = 0usize;
+    while suffix < shorter_len.saturating_sub(prefix) {
+        let idx_a = rows_a.len() - 1 - suffix;
+        let idx_b = rows_b.len() - 1 - suffix;
+        if rows_a[idx_a].hash == rows_b[idx_b].hash {
+            suffix += 1;
+        } else {
+            break;
+        }
+    }
+
+    if prefix + suffix != shorter_len {
+        return None;
+    }
+
+    let mut matched = Vec::with_capacity(shorter_len);
+    let mut inserted = Vec::new();
+    let mut deleted = Vec::new();
+
+    match change {
+        RowChange::Insert => {
+            let block_start = prefix;
+            let block_end = block_start + gap;
+            if block_end > rows_b.len() {
+                return None;
+            }
+
+            for meta in &rows_b[block_start..block_end] {
+                if !is_unique_to_b(meta.hash, stats) {
+                    return None;
+                }
+                inserted.push(meta.row_idx);
+            }
+
+            for (idx, meta_a) in rows_a.iter().enumerate() {
+                let b_idx = if idx < block_start { idx } else { idx + gap };
+                matched.push((meta_a.row_idx, rows_b[b_idx].row_idx));
+            }
+        }
+        RowChange::Delete => {
+            let block_start = prefix;
+            let block_end = block_start + gap;
+            if block_end > rows_a.len() {
+                return None;
+            }
+
+            for meta in &rows_a[block_start..block_end] {
+                if !is_unique_to_a(meta.hash, stats) {
+                    return None;
+                }
+                deleted.push(meta.row_idx);
+            }
+
+            for (idx_b, meta_b) in rows_b.iter().enumerate() {
+                let a_idx = if idx_b < block_start {
+                    idx_b
+                } else {
+                    idx_b + gap
+                };
+                matched.push((rows_a[a_idx].row_idx, meta_b.row_idx));
+            }
+        }
+    }
+
+    let alignment = RowAlignment {
+        matched,
+        inserted,
+        deleted,
+    };
+
+    debug_assert!(
+        is_monotonic(&alignment.matched),
+        "matched pairs must be strictly increasing in both dimensions"
+    );
+
+    Some(alignment)
+}
+
 fn is_monotonic(pairs: &[(u32, u32)]) -> bool {
     pairs.windows(2).all(|w| w[0].0 < w[1].0 && w[0].1 < w[1].1)
 }
@@ -3784,6 +3938,74 @@ mod tests {
         }
 
         grid
+    }
+
+    #[test]
+    fn aligns_contiguous_block_insert_middle() {
+        let base: Vec<Vec<i32>> = (1..=10)
+            .map(|r| (1..=4).map(|c| r * 10 + c).collect())
+            .collect();
+        let base_refs: Vec<&[i32]> = base.iter().map(|row| row.as_slice()).collect();
+        let grid_a = grid_from_rows(&base_refs);
+
+        let inserted_block: Vec<Vec<i32>> = (0..4)
+            .map(|idx| vec![1_000 + idx, 2_000 + idx, 3_000 + idx, 4_000 + idx])
+            .collect();
+        let mut rows_b = base.clone();
+        rows_b.splice(3..3, inserted_block);
+        let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
+        let grid_b = grid_from_rows(&rows_b_refs);
+
+        let alignment = align_row_changes(&grid_a, &grid_b).expect("alignment should succeed");
+        assert_eq!(alignment.inserted, vec![3, 4, 5, 6]);
+        assert!(alignment.deleted.is_empty());
+        assert_eq!(alignment.matched.len(), 10);
+        assert_eq!(alignment.matched[0], (0, 0));
+        assert_eq!(alignment.matched[2], (2, 2));
+        assert_eq!(alignment.matched[3], (3, 7));
+        assert_eq!(alignment.matched.last(), Some(&(9, 13)));
+        assert!(is_monotonic(&alignment.matched));
+    }
+
+    #[test]
+    fn aligns_contiguous_block_delete_middle() {
+        let base: Vec<Vec<i32>> = (1..=10)
+            .map(|r| (1..=4).map(|c| r * 10 + c).collect())
+            .collect();
+        let base_refs: Vec<&[i32]> = base.iter().map(|row| row.as_slice()).collect();
+        let grid_a = grid_from_rows(&base_refs);
+
+        let mut rows_b = base.clone();
+        rows_b.drain(3..7);
+        let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
+        let grid_b = grid_from_rows(&rows_b_refs);
+
+        let alignment = align_row_changes(&grid_a, &grid_b).expect("alignment should succeed");
+        assert_eq!(alignment.deleted, vec![3, 4, 5, 6]);
+        assert!(alignment.inserted.is_empty());
+        assert_eq!(alignment.matched.len(), 6);
+        assert_eq!(alignment.matched[0], (0, 0));
+        assert_eq!(alignment.matched[2], (2, 2));
+        assert_eq!(alignment.matched[3], (7, 3));
+        assert_eq!(alignment.matched.last(), Some(&(9, 5)));
+        assert!(is_monotonic(&alignment.matched));
+    }
+
+    #[test]
+    fn block_alignment_bails_on_noncontiguous_changes() {
+        let base: Vec<Vec<i32>> = (1..=8)
+            .map(|r| (1..=3).map(|c| r * 10 + c).collect())
+            .collect();
+        let base_refs: Vec<&[i32]> = base.iter().map(|row| row.as_slice()).collect();
+        let grid_a = grid_from_rows(&base_refs);
+
+        let mut rows_b = base.clone();
+        rows_b.insert(1, vec![999, 1_000, 1_001]);
+        rows_b.insert(5, vec![2_000, 2_001, 2_002]);
+        let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
+        let grid_b = grid_from_rows(&rows_b_refs);
+
+        assert!(align_row_changes(&grid_a, &grid_b).is_none());
     }
 
     #[test]
@@ -5377,6 +5599,115 @@ fn missing_worksheet_xml_returns_worksheetxmlmissing() {
     }
 
     let _ = fs::remove_file(&path);
+}
+```
+
+---
+
+### File: `core\tests\g10_row_block_alignment_grid_workbook_tests.rs`
+
+```rust
+use excel_diff::{DiffOp, diff_workbooks, open_workbook};
+
+mod common;
+use common::fixture_path;
+
+#[test]
+fn g10_row_block_insert_middle_emits_four_rowadded_and_no_noise() {
+    let wb_a = open_workbook(fixture_path("row_block_insert_a.xlsx"))
+        .expect("failed to open fixture: row_block_insert_a.xlsx");
+    let wb_b = open_workbook(fixture_path("row_block_insert_b.xlsx"))
+        .expect("failed to open fixture: row_block_insert_b.xlsx");
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    let rows_added: Vec<u32> = report
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            DiffOp::RowAdded {
+                sheet,
+                row_idx,
+                row_signature,
+            } => {
+                assert_eq!(sheet, "Sheet1");
+                assert!(row_signature.is_none());
+                Some(*row_idx)
+            }
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        rows_added,
+        vec![3, 4, 5, 6],
+        "expected four RowAdded ops for the inserted block"
+    );
+
+    assert!(
+        !report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::RowRemoved { .. })),
+        "no rows should be removed for block insert"
+    );
+
+    assert!(
+        !report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::CellEdited { .. })),
+        "aligned block insert should not emit CellEdited noise"
+    );
+}
+
+#[test]
+fn g10_row_block_delete_middle_emits_four_rowremoved_and_no_noise() {
+    let wb_a = open_workbook(fixture_path("row_block_delete_a.xlsx"))
+        .expect("failed to open fixture: row_block_delete_a.xlsx");
+    let wb_b = open_workbook(fixture_path("row_block_delete_b.xlsx"))
+        .expect("failed to open fixture: row_block_delete_b.xlsx");
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    let rows_removed: Vec<u32> = report
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            DiffOp::RowRemoved {
+                sheet,
+                row_idx,
+                row_signature,
+            } => {
+                assert_eq!(sheet, "Sheet1");
+                assert!(row_signature.is_none());
+                Some(*row_idx)
+            }
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        rows_removed,
+        vec![3, 4, 5, 6],
+        "expected four RowRemoved ops for the deleted block"
+    );
+
+    assert!(
+        !report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::RowAdded { .. })),
+        "no rows should be added for block delete"
+    );
+
+    assert!(
+        !report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::CellEdited { .. })),
+        "aligned block delete should not emit CellEdited noise"
+    );
 }
 ```
 
@@ -10431,6 +10762,33 @@ scenarios:
       - "col_insert_with_edit_a.xlsx"
       - "col_insert_with_edit_b.xlsx"
 
+  # --- Phase 4: Spreadsheet-mode G10 ---
+  - id: "g10_row_block_insert"
+    generator: "row_alignment_g10"
+    args:
+      mode: "block_insert"
+      sheet: "Sheet1"
+      base_rows: 10
+      cols: 5
+      block_rows: 4
+      insert_at: 4
+    output:
+      - "row_block_insert_a.xlsx"
+      - "row_block_insert_b.xlsx"
+
+  - id: "g10_row_block_delete"
+    generator: "row_alignment_g10"
+    args:
+      mode: "block_delete"
+      sheet: "Sheet1"
+      base_rows: 10
+      cols: 5
+      block_rows: 4
+      delete_start: 4
+    output:
+      - "row_block_delete_a.xlsx"
+      - "row_block_delete_b.xlsx"
+
   # --- JSON diff: simple non-empty change ---
   - id: "json_diff_single_cell"
     generator: "single_cell_diff"
@@ -10821,6 +11179,7 @@ from generators.grid import (
     MultiCellDiffGenerator,
     GridTailDiffGenerator,
     RowAlignmentG8Generator,
+    RowAlignmentG10Generator,
     ColumnAlignmentG9Generator,
     SheetCaseRenameGenerator,
     Pg6SheetScenarioGenerator,
@@ -10849,6 +11208,7 @@ GENERATORS: Dict[str, Any] = {
     "multi_cell_diff": MultiCellDiffGenerator,
     "grid_tail_diff": GridTailDiffGenerator,
     "row_alignment_g8": RowAlignmentG8Generator,
+    "row_alignment_g10": RowAlignmentG10Generator,
     "column_alignment_g9": ColumnAlignmentG9Generator,
     "sheet_case_rename": SheetCaseRenameGenerator,
     "pg6_sheet_scenario": Pg6SheetScenarioGenerator,
@@ -11495,6 +11855,76 @@ class RowAlignmentG8Generator(BaseGenerator):
         return base_data[: delete_row - 1] + base_data[delete_row:]
 
     def _write_workbook(self, path: Path, sheet: str, rows: List[List[str]]):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = sheet
+
+        for r_idx, row_values in enumerate(rows, start=1):
+            for c_idx, value in enumerate(row_values, start=1):
+                ws.cell(row=r_idx, column=c_idx, value=value)
+
+        wb.save(path)
+
+class RowAlignmentG10Generator(BaseGenerator):
+    """Generates workbook pairs for G10 contiguous row block insert/delete scenarios."""
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        if len(output_names) != 2:
+            raise ValueError("row_alignment_g10 generator expects exactly two output filenames")
+
+        mode = self.args.get("mode")
+        sheet = self.args.get("sheet", "Sheet1")
+        base_rows = self.args.get("base_rows", 10)
+        cols = self.args.get("cols", 5)
+        block_rows = self.args.get("block_rows", 4)
+        insert_at = self.args.get("insert_at", 4)  # 1-based position of first inserted row in B
+        delete_start = self.args.get("delete_start", 4)  # 1-based starting row in A to delete
+
+        base_data = [self._row_values(idx, cols, 0) for idx in range(1, base_rows + 1)]
+
+        if mode == "block_insert":
+            data_a = base_data
+            data_b = self._with_block_insert(base_data, insert_at, block_rows, cols)
+        elif mode == "block_delete":
+            data_a = base_data
+            data_b = self._with_block_delete(base_data, delete_start, block_rows)
+        else:
+            raise ValueError(f"Unsupported row_alignment_g10 mode: {mode}")
+
+        self._write_workbook(output_dir / output_names[0], sheet, data_a)
+        self._write_workbook(output_dir / output_names[1], sheet, data_b)
+
+    def _row_values(self, row_number: int, cols: int, offset: int) -> List[int]:
+        row_id = row_number + offset
+        values = [row_id]
+        for c in range(1, cols):
+            values.append(row_id * 10 + c)
+        return values
+
+    def _block_rows(self, count: int, cols: int) -> List[List[int]]:
+        return [self._row_values(1000 + idx, cols, 0) for idx in range(1, count + 1)]
+
+    def _with_block_insert(
+        self, base_data: List[List[int]], insert_at: int, block_rows: int, cols: int
+    ) -> List[List[int]]:
+        insert_idx = max(1, min(insert_at, len(base_data) + 1)) - 1
+        block = self._block_rows(block_rows, cols)
+        return base_data[:insert_idx] + block + base_data[insert_idx:]
+
+    def _with_block_delete(
+        self, base_data: List[List[int]], delete_start: int, block_rows: int
+    ) -> List[List[int]]:
+        if not (1 <= delete_start <= len(base_data)):
+            raise ValueError(f"delete_start must be within 1..{len(base_data)}")
+        if delete_start - 1 + block_rows > len(base_data):
+            raise ValueError("delete block exceeds base data length")
+
+        delete_idx = delete_start - 1
+        return base_data[:delete_idx] + base_data[delete_idx + block_rows :]
+
+    def _write_workbook(self, path: Path, sheet: str, rows: List[List[int]]):
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = sheet
