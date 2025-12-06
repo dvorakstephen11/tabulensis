@@ -468,4 +468,65 @@ mod tests {
 
         assert!(detect_exact_column_block_move(&grid_a, &grid_b).is_none());
     }
+
+    #[test]
+    fn detect_exact_column_block_move_multi_column_block() {
+        let grid_a = grid_from_numbers(&[
+            &[10, 20, 30, 40, 50, 60],
+            &[11, 21, 31, 41, 51, 61],
+            &[12, 22, 32, 42, 52, 62],
+        ]);
+
+        let grid_b = grid_from_numbers(&[
+            &[10, 40, 50, 20, 30, 60],
+            &[11, 41, 51, 21, 31, 61],
+            &[12, 42, 52, 22, 32, 62],
+        ]);
+
+        let mv =
+            detect_exact_column_block_move(&grid_a, &grid_b).expect("expected multi-column move");
+        assert_eq!(mv.src_start_col, 3);
+        assert_eq!(mv.col_count, 2);
+        assert_eq!(mv.dst_start_col, 1);
+    }
+
+    #[test]
+    fn detect_exact_column_block_move_rejects_two_independent_moves() {
+        let grid_a = grid_from_numbers(&[
+            &[10, 20, 30, 40, 50, 60],
+            &[11, 21, 31, 41, 51, 61],
+        ]);
+
+        let grid_b = grid_from_numbers(&[
+            &[20, 10, 30, 40, 60, 50],
+            &[21, 11, 31, 41, 61, 51],
+        ]);
+
+        assert!(
+            detect_exact_column_block_move(&grid_a, &grid_b).is_none(),
+            "two independent column swaps must not be detected as a single block move"
+        );
+    }
+
+    #[test]
+    fn detect_exact_column_block_move_swap_as_single_move() {
+        let grid_a = grid_from_numbers(&[
+            &[10, 20, 30, 40],
+            &[11, 21, 31, 41],
+        ]);
+
+        let grid_b = grid_from_numbers(&[
+            &[20, 10, 30, 40],
+            &[21, 11, 31, 41],
+        ]);
+
+        let mv = detect_exact_column_block_move(&grid_a, &grid_b)
+            .expect("swap of adjacent columns should be detected as single-column move");
+        assert_eq!(mv.col_count, 1);
+        assert!(
+            (mv.src_start_col == 0 && mv.dst_start_col == 1)
+                || (mv.src_start_col == 1 && mv.dst_start_col == 0),
+            "swap should be represented as moving one column past the other"
+        );
+    }
 }
