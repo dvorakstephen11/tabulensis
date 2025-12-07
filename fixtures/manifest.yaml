@@ -591,6 +591,28 @@ scenarios:
       base_file: "templates/base_query.xlsx"
     output: "m_rename_query_b.xlsx"
 
+  # --- Milestone 7: M AST canonicalization ---
+  - id: "m_formatting_only_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_formatting_only_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_formatting_only_a.xlsx"
+
+  - id: "m_formatting_only_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_formatting_only_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_formatting_only_b.xlsx"
+
+  - id: "m_formatting_only_b_variant"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_formatting_only_b_variant"
+      base_file: "templates/base_query.xlsx"
+    output: "m_formatting_only_b_variant.xlsx"
+
   # --- P1: Large Dense Grid (Performance Baseline) ---
   - id: "p1_large_dense"
     generator: "perf_large"

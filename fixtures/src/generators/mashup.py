@@ -849,6 +849,60 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
                 ]
             )
 
+        if self.mode == "m_formatting_only_a":
+            return m_diff_scenario(
+                [
+                    {
+                        "name": "FormatTest",
+                        "body": 'let Source=Excel.CurrentWorkbook(){[Name="Table1"]}[Content] in Source',
+                        "load_to_sheet": True,
+                        "load_to_model": False,
+                    },
+                ]
+            )
+
+        if self.mode == "m_formatting_only_b":
+            body = "\n".join(
+                [
+                    "let",
+                    "    // Load the current workbook table",
+                    "    Source = Excel.CurrentWorkbook(){[Name = \"Table1\"]}[Content]",
+                    "in",
+                    "    Source",
+                ]
+            )
+            return m_diff_scenario(
+                [
+                    {
+                        "name": "FormatTest",
+                        "body": body,
+                        "load_to_sheet": True,
+                        "load_to_model": False,
+                    },
+                ]
+            )
+
+        if self.mode == "m_formatting_only_b_variant":
+            body = "\n".join(
+                [
+                    "let",
+                    "    // Load a different table",
+                    "    Source = Excel.CurrentWorkbook(){[Name = \"Table2\"]}[Content]",
+                    "in",
+                    "    Source",
+                ]
+            )
+            return m_diff_scenario(
+                [
+                    {
+                        "name": "FormatTest",
+                        "body": body,
+                        "load_to_sheet": True,
+                        "load_to_model": False,
+                    },
+                ]
+            )
+
         if self.mode == "metadata_query_groups":
             section_text = "\n".join(
                 [

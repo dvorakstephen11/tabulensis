@@ -34,6 +34,7 @@ pub mod excel_open_xml;
 pub mod grid_parser;
 pub mod grid_view;
 pub(crate) mod hashing;
+pub mod m_ast;
 pub mod m_diff;
 pub mod m_section;
 pub mod output;
@@ -56,6 +57,9 @@ pub use engine::{diff_grids_database_mode, diff_workbooks};
 pub use excel_open_xml::{ExcelOpenError, open_data_mashup, open_workbook};
 pub use grid_parser::{GridParseError, SheetDescriptor};
 pub use grid_view::{ColHash, ColMeta, GridView, HashStats, RowHash, RowMeta, RowView};
+pub use m_ast::{
+    MModuleAst, MParseError, ast_semantically_equal, canonicalize_m_ast, parse_m_expression,
+};
 pub use m_diff::{MQueryDiff, QueryChangeKind, diff_m_queries};
 pub use m_section::{SectionMember, SectionParseError, parse_section_members};
 #[cfg(feature = "excel-open-xml")]

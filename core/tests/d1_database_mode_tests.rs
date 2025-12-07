@@ -270,16 +270,8 @@ fn d5_composite_key_duplicate_keys_fallback_to_spreadsheet_mode() {
 
 #[test]
 fn d5_non_contiguous_key_columns_equal_reordered_empty_diff() {
-    let grid_a = grid_from_numbers(&[
-        &[1, 999, 10, 100],
-        &[1, 888, 20, 200],
-        &[2, 777, 10, 300],
-    ]);
-    let grid_b = grid_from_numbers(&[
-        &[2, 777, 10, 300],
-        &[1, 999, 10, 100],
-        &[1, 888, 20, 200],
-    ]);
+    let grid_a = grid_from_numbers(&[&[1, 999, 10, 100], &[1, 888, 20, 200], &[2, 777, 10, 300]]);
+    let grid_b = grid_from_numbers(&[&[2, 777, 10, 300], &[1, 999, 10, 100], &[1, 888, 20, 200]]);
 
     let report = diff_grids_database_mode(&grid_a, &grid_b, &[0, 2]);
     assert!(
@@ -290,16 +282,8 @@ fn d5_non_contiguous_key_columns_equal_reordered_empty_diff() {
 
 #[test]
 fn d5_non_contiguous_key_columns_detects_edits_in_skipped_column() {
-    let grid_a = grid_from_numbers(&[
-        &[1, 999, 10, 100],
-        &[1, 888, 20, 200],
-        &[2, 777, 10, 300],
-    ]);
-    let grid_b = grid_from_numbers(&[
-        &[2, 111, 10, 300],
-        &[1, 222, 10, 100],
-        &[1, 333, 20, 200],
-    ]);
+    let grid_a = grid_from_numbers(&[&[1, 999, 10, 100], &[1, 888, 20, 200], &[2, 777, 10, 300]]);
+    let grid_b = grid_from_numbers(&[&[2, 111, 10, 300], &[1, 222, 10, 100], &[1, 333, 20, 200]]);
 
     let report = diff_grids_database_mode(&grid_a, &grid_b, &[0, 2]);
 
@@ -345,15 +329,8 @@ fn d5_non_contiguous_key_columns_detects_edits_in_skipped_column() {
 
 #[test]
 fn d5_non_contiguous_key_columns_row_added_and_cell_edited() {
-    let grid_a = grid_from_numbers(&[
-        &[1, 999, 10, 100],
-        &[1, 888, 20, 200],
-    ]);
-    let grid_b = grid_from_numbers(&[
-        &[1, 999, 10, 150],
-        &[1, 888, 20, 200],
-        &[2, 777, 30, 300],
-    ]);
+    let grid_a = grid_from_numbers(&[&[1, 999, 10, 100], &[1, 888, 20, 200]]);
+    let grid_b = grid_from_numbers(&[&[1, 999, 10, 150], &[1, 888, 20, 200], &[2, 777, 30, 300]]);
 
     let report = diff_grids_database_mode(&grid_a, &grid_b, &[0, 2]);
 
@@ -409,12 +386,8 @@ fn d5_three_column_composite_key_equal_reordered_empty_diff() {
 
 #[test]
 fn d5_three_column_composite_key_partial_match_yields_add_and_remove() {
-    let grid_a = grid_from_numbers(&[
-        &[1, 10, 100, 1000],
-    ]);
-    let grid_b = grid_from_numbers(&[
-        &[1, 10, 200, 1000],
-    ]);
+    let grid_a = grid_from_numbers(&[&[1, 10, 100, 1000]]);
+    let grid_b = grid_from_numbers(&[&[1, 10, 200, 1000]]);
 
     let report = diff_grids_database_mode(&grid_a, &grid_b, &[0, 1, 2]);
 

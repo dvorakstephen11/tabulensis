@@ -1,0 +1,8 @@
+2025-12-07
+- Read mini-spec at docs/meta/plans/2025-12-07-m-ast-equality/spec.md and decision.yaml; noted scope (M AST parse/canonicalize/equality) and test/fixture requirements.
+- Reviewed implementer guidance (docs/meta/prompts/implementer.md) and Section 4 of docs/rust_docs/excel_diff_meta_programming.md; constraints: no scope creep, determinism, keep existing M5/M6 behavior unchanged.
+- Collected current context: datamashup/m_diff structures, fixture generator setup, manifest sections for M scenarios.
+- Implemented new M AST module core/src/m_ast.rs with tokenizer, let parsing/error reporting, canonicalization hook, and public exports wired via core/src/lib.rs.
+- Added formatting-only M scenarios to fixtures/src/generators/mashup.py (m_formatting_only_{a,b,b_variant}) and fixtures/manifest.yaml; generated fixtures/generated/m_formatting_only_*.xlsx via MashupPermissionsMetadataGenerator.
+- Added AST parsing/canonicalization/equality coverage in core/tests/m7_ast_canonicalization_tests.rs using new fixtures (formatting-equal/variant, malformed, idempotence).
+- Ran cargo fmt, cargo clippy --all-targets (clean after silencing iterator lint in comment skip helpers), and cargo test -- --test-threads=1; full suite green after rerunning serial due to a BrokenPipe during initial parallel run.

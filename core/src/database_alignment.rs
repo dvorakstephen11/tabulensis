@@ -242,16 +242,8 @@ mod tests {
 
     #[test]
     fn non_contiguous_key_columns_alignment() {
-        let grid_a = grid_from_rows(&[
-            &[1, 999, 10, 100],
-            &[1, 888, 20, 200],
-            &[2, 777, 10, 300],
-        ]);
-        let grid_b = grid_from_rows(&[
-            &[2, 777, 10, 300],
-            &[1, 999, 10, 100],
-            &[1, 888, 20, 200],
-        ]);
+        let grid_a = grid_from_rows(&[&[1, 999, 10, 100], &[1, 888, 20, 200], &[2, 777, 10, 300]]);
+        let grid_b = grid_from_rows(&[&[2, 777, 10, 300], &[1, 999, 10, 100], &[1, 888, 20, 200]]);
 
         let alignment =
             diff_table_by_key(&grid_a, &grid_b, &[0, 2]).expect("unique non-contiguous keys");
@@ -308,8 +300,14 @@ mod tests {
     fn is_key_column_single_column() {
         let spec = KeyColumnSpec::new(vec![0]);
         assert!(spec.is_key_column(0), "column 0 should be a key column");
-        assert!(!spec.is_key_column(1), "column 1 should not be a key column");
-        assert!(!spec.is_key_column(2), "column 2 should not be a key column");
+        assert!(
+            !spec.is_key_column(1),
+            "column 1 should not be a key column"
+        );
+        assert!(
+            !spec.is_key_column(2),
+            "column 2 should not be a key column"
+        );
     }
 
     #[test]
@@ -317,17 +315,29 @@ mod tests {
         let spec = KeyColumnSpec::new(vec![0, 1]);
         assert!(spec.is_key_column(0), "column 0 should be a key column");
         assert!(spec.is_key_column(1), "column 1 should be a key column");
-        assert!(!spec.is_key_column(2), "column 2 should not be a key column");
-        assert!(!spec.is_key_column(3), "column 3 should not be a key column");
+        assert!(
+            !spec.is_key_column(2),
+            "column 2 should not be a key column"
+        );
+        assert!(
+            !spec.is_key_column(3),
+            "column 3 should not be a key column"
+        );
     }
 
     #[test]
     fn is_key_column_non_contiguous_columns() {
         let spec = KeyColumnSpec::new(vec![0, 2]);
         assert!(spec.is_key_column(0), "column 0 should be a key column");
-        assert!(!spec.is_key_column(1), "column 1 should not be a key column");
+        assert!(
+            !spec.is_key_column(1),
+            "column 1 should not be a key column"
+        );
         assert!(spec.is_key_column(2), "column 2 should be a key column");
-        assert!(!spec.is_key_column(3), "column 3 should not be a key column");
+        assert!(
+            !spec.is_key_column(3),
+            "column 3 should not be a key column"
+        );
     }
 
     #[test]
@@ -342,12 +352,24 @@ mod tests {
     #[test]
     fn is_key_column_non_contiguous_three_columns() {
         let spec = KeyColumnSpec::new(vec![1, 3, 5]);
-        assert!(!spec.is_key_column(0), "column 0 should not be a key column");
+        assert!(
+            !spec.is_key_column(0),
+            "column 0 should not be a key column"
+        );
         assert!(spec.is_key_column(1), "column 1 should be a key column");
-        assert!(!spec.is_key_column(2), "column 2 should not be a key column");
+        assert!(
+            !spec.is_key_column(2),
+            "column 2 should not be a key column"
+        );
         assert!(spec.is_key_column(3), "column 3 should be a key column");
-        assert!(!spec.is_key_column(4), "column 4 should not be a key column");
+        assert!(
+            !spec.is_key_column(4),
+            "column 4 should not be a key column"
+        );
         assert!(spec.is_key_column(5), "column 5 should be a key column");
-        assert!(!spec.is_key_column(6), "column 6 should not be a key column");
+        assert!(
+            !spec.is_key_column(6),
+            "column 6 should not be a key column"
+        );
     }
 }

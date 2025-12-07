@@ -1240,6 +1240,117 @@ mod tests {
             "composite keys should align rows sharing the same key tuple regardless of order"
         );
     }
+
+    #[test]
+    fn non_contiguous_key_columns_alignment() {
+        let grid_a = grid_from_rows(&[
+            &[1, 999, 10, 100],
+            &[1, 888, 20, 200],
+            &[2, 777, 10, 300],
+        ]);
+        let grid_b = grid_from_rows(&[
+            &[2, 777, 10, 300],
+            &[1, 999, 10, 100],
+            &[1, 888, 20, 200],
+        ]);
+
+        let alignment =
+            diff_table_by_key(&grid_a, &grid_b, &[0, 2]).expect("unique non-contiguous keys");
+
+        assert!(alignment.left_only_rows.is_empty());
+        assert!(alignment.right_only_rows.is_empty());
+
+        let mut matched = alignment.matched_rows.clone();
+        matched.sort_unstable();
+
+        let mut expected = vec![(0, 1), (1, 2), (2, 0)];
+        expected.sort_unstable();
+
+        assert_eq!(
+            matched, expected,
+            "non-contiguous key columns [0,2] should align correctly"
+        );
+    }
+
+    #[test]
+    fn three_column_composite_key_alignment() {
+        let grid_a = grid_from_rows(&[
+            &[1, 10, 100, 1000],
+            &[1, 10, 200, 2000],
+            &[1, 20, 100, 3000],
+            &[2, 10, 100, 4000],
+        ]);
+        let grid_b = grid_from_rows(&[
+            &[2, 10, 100, 4000],
+            &[1, 20, 100, 3000],
+            &[1, 10, 200, 2000],
+            &[1, 10, 100, 1000],
+        ]);
+
+        let alignment =
+            diff_table_by_key(&grid_a, &grid_b, &[0, 1, 2]).expect("unique three-column keys");
+
+        assert!(alignment.left_only_rows.is_empty());
+        assert!(alignment.right_only_rows.is_empty());
+
+        let mut matched = alignment.matched_rows.clone();
+        matched.sort_unstable();
+
+        let mut expected = vec![(0, 3), (1, 2), (2, 1), (3, 0)];
+        expected.sort_unstable();
+
+        assert_eq!(
+            matched, expected,
+            "three-column composite keys should align correctly"
+        );
+    }
+
+    #[test]
+    fn is_key_column_single_column() {
+        let spec = KeyColumnSpec::new(vec![0]);
+        assert!(spec.is_key_column(0), "column 0 should be a key column");
+        assert!(!spec.is_key_column(1), "column 1 should not be a key column");
+        assert!(!spec.is_key_column(2), "column 2 should not be a key column");
+    }
+
+    #[test]
+    fn is_key_column_contiguous_columns() {
+        let spec = KeyColumnSpec::new(vec![0, 1]);
+        assert!(spec.is_key_column(0), "column 0 should be a key column");
+        assert!(spec.is_key_column(1), "column 1 should be a key column");
+        assert!(!spec.is_key_column(2), "column 2 should not be a key column");
+        assert!(!spec.is_key_column(3), "column 3 should not be a key column");
+    }
+
+    #[test]
+    fn is_key_column_non_contiguous_columns() {
+        let spec = KeyColumnSpec::new(vec![0, 2]);
+        assert!(spec.is_key_column(0), "column 0 should be a key column");
+        assert!(!spec.is_key_column(1), "column 1 should not be a key column");
+        assert!(spec.is_key_column(2), "column 2 should be a key column");
+        assert!(!spec.is_key_column(3), "column 3 should not be a key column");
+    }
+
+    #[test]
+    fn is_key_column_three_columns() {
+        let spec = KeyColumnSpec::new(vec![0, 1, 2]);
+        assert!(spec.is_key_column(0));
+        assert!(spec.is_key_column(1));
+        assert!(spec.is_key_column(2));
+        assert!(!spec.is_key_column(3));
+    }
+
+    #[test]
+    fn is_key_column_non_contiguous_three_columns() {
+        let spec = KeyColumnSpec::new(vec![1, 3, 5]);
+        assert!(!spec.is_key_column(0), "column 0 should not be a key column");
+        assert!(spec.is_key_column(1), "column 1 should be a key column");
+        assert!(!spec.is_key_column(2), "column 2 should not be a key column");
+        assert!(spec.is_key_column(3), "column 3 should be a key column");
+        assert!(!spec.is_key_column(4), "column 4 should not be a key column");
+        assert!(spec.is_key_column(5), "column 5 should be a key column");
+        assert!(!spec.is_key_column(6), "column 6 should not be a key column");
+    }
 }
 ```
 
@@ -6957,6 +7068,187 @@ fn d5_composite_key_duplicate_keys_fallback_to_spreadsheet_mode() {
     assert!(
         has_row_removed,
         "fallback should emit a RowRemoved reflecting duplicate handling"
+    );
+}
+
+#[test]
+fn d5_non_contiguous_key_columns_equal_reordered_empty_diff() {
+    let grid_a = grid_from_numbers(&[
+        &[1, 999, 10, 100],
+        &[1, 888, 20, 200],
+        &[2, 777, 10, 300],
+    ]);
+    let grid_b = grid_from_numbers(&[
+        &[2, 777, 10, 300],
+        &[1, 999, 10, 100],
+        &[1, 888, 20, 200],
+    ]);
+
+    let report = diff_grids_database_mode(&grid_a, &grid_b, &[0, 2]);
+    assert!(
+        report.ops.is_empty(),
+        "non-contiguous key columns [0,2] should align correctly ignoring row order"
+    );
+}
+
+#[test]
+fn d5_non_contiguous_key_columns_detects_edits_in_skipped_column() {
+    let grid_a = grid_from_numbers(&[
+        &[1, 999, 10, 100],
+        &[1, 888, 20, 200],
+        &[2, 777, 10, 300],
+    ]);
+    let grid_b = grid_from_numbers(&[
+        &[2, 111, 10, 300],
+        &[1, 222, 10, 100],
+        &[1, 333, 20, 200],
+    ]);
+
+    let report = diff_grids_database_mode(&grid_a, &grid_b, &[0, 2]);
+
+    let cell_edited_ops: Vec<_> = report
+        .ops
+        .iter()
+        .filter_map(|op| {
+            if let DiffOp::CellEdited { addr, .. } = op {
+                Some(addr)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    assert_eq!(
+        cell_edited_ops.len(),
+        3,
+        "should detect 3 edits in skipped non-key column 1"
+    );
+
+    for addr in &cell_edited_ops {
+        assert_eq!(
+            addr.col, 1,
+            "all edits should be in the skipped column 1, not key columns 0 or 2"
+        );
+    }
+
+    let row_added_count = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::RowAdded { .. }))
+        .count();
+    assert_eq!(row_added_count, 0, "no rows should be added");
+
+    let row_removed_count = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::RowRemoved { .. }))
+        .count();
+    assert_eq!(row_removed_count, 0, "no rows should be removed");
+}
+
+#[test]
+fn d5_non_contiguous_key_columns_row_added_and_cell_edited() {
+    let grid_a = grid_from_numbers(&[
+        &[1, 999, 10, 100],
+        &[1, 888, 20, 200],
+    ]);
+    let grid_b = grid_from_numbers(&[
+        &[1, 999, 10, 150],
+        &[1, 888, 20, 200],
+        &[2, 777, 30, 300],
+    ]);
+
+    let report = diff_grids_database_mode(&grid_a, &grid_b, &[0, 2]);
+
+    let row_added_count = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::RowAdded { .. }))
+        .count();
+    assert_eq!(
+        row_added_count, 1,
+        "new non-contiguous composite key should produce exactly one RowAdded"
+    );
+
+    let row_removed_count = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::RowRemoved { .. }))
+        .count();
+    assert_eq!(row_removed_count, 0, "no rows should be removed");
+
+    let cell_edited_count = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::CellEdited { .. }))
+        .count();
+    assert_eq!(
+        cell_edited_count, 1,
+        "changed non-key column should produce exactly one CellEdited"
+    );
+}
+
+#[test]
+fn d5_three_column_composite_key_equal_reordered_empty_diff() {
+    let grid_a = grid_from_numbers(&[
+        &[1, 10, 100, 1000],
+        &[1, 10, 200, 2000],
+        &[1, 20, 100, 3000],
+        &[2, 10, 100, 4000],
+    ]);
+    let grid_b = grid_from_numbers(&[
+        &[2, 10, 100, 4000],
+        &[1, 20, 100, 3000],
+        &[1, 10, 200, 2000],
+        &[1, 10, 100, 1000],
+    ]);
+
+    let report = diff_grids_database_mode(&grid_a, &grid_b, &[0, 1, 2]);
+    assert!(
+        report.ops.is_empty(),
+        "three-column composite key should align correctly ignoring row order"
+    );
+}
+
+#[test]
+fn d5_three_column_composite_key_partial_match_yields_add_and_remove() {
+    let grid_a = grid_from_numbers(&[
+        &[1, 10, 100, 1000],
+    ]);
+    let grid_b = grid_from_numbers(&[
+        &[1, 10, 200, 1000],
+    ]);
+
+    let report = diff_grids_database_mode(&grid_a, &grid_b, &[0, 1, 2]);
+
+    let row_removed_count = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::RowRemoved { .. }))
+        .count();
+    assert_eq!(
+        row_removed_count, 1,
+        "changed third key column should remove the old tuple"
+    );
+
+    let row_added_count = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::RowAdded { .. }))
+        .count();
+    assert_eq!(
+        row_added_count, 1,
+        "changed third key column should add the new tuple"
+    );
+
+    let cell_edited_count = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::CellEdited { .. }))
+        .count();
+    assert_eq!(
+        cell_edited_count, 0,
+        "partial three-column key match must not be treated as a cell edit"
     );
 }
 ```
