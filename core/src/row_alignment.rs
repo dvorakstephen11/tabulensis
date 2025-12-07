@@ -804,6 +804,183 @@ mod tests {
     }
 
     #[test]
+    fn detects_fuzzy_row_block_move_upward_with_single_internal_edit() {
+        let base: Vec<Vec<i32>> = (1..=18)
+            .map(|r| (1..=3).map(|c| r * 10 + c).collect())
+            .collect();
+        let base_refs: Vec<&[i32]> = base.iter().map(|row| row.as_slice()).collect();
+        let grid_a = grid_from_rows(&base_refs);
+
+        let mut rows_b = base.clone();
+        let mut moved_block: Vec<Vec<i32>> = rows_b.drain(12..16).collect();
+        moved_block[1][1] = 9_999;
+        rows_b.splice(4..4, moved_block);
+        let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
+        let grid_b = grid_from_rows(&rows_b_refs);
+
+        assert!(
+            detect_exact_row_block_move(&grid_a, &grid_b).is_none(),
+            "internal edits should prevent exact move detection"
+        );
+
+        let mv = detect_fuzzy_row_block_move(&grid_a, &grid_b)
+            .expect("expected fuzzy row block move upward to be detected");
+        assert_eq!(
+            mv,
+            RowBlockMove {
+                src_start_row: 12,
+                dst_start_row: 4,
+                row_count: 4
+            }
+        );
+    }
+
+    #[test]
+    fn fuzzy_move_bails_on_ambiguous_candidates_below_repetition_threshold() {
+        let base: Vec<Vec<i32>> = (1..=16)
+            .map(|r| (1..=3).map(|c| r * 10 + c).collect())
+            .collect();
+        let base_refs: Vec<&[i32]> = base.iter().map(|row| row.as_slice()).collect();
+        let grid_baseline_a = grid_from_rows(&base_refs);
+
+        let mut rows_baseline_b = base.clone();
+        let mut moved: Vec<Vec<i32>> = rows_baseline_b.drain(3..7).collect();
+        moved[1][1] = 9999;
+        rows_baseline_b.splice(10..10, moved);
+        let refs_baseline_b: Vec<&[i32]> = rows_baseline_b.iter().map(|row| row.as_slice()).collect();
+        let grid_baseline_b = grid_from_rows(&refs_baseline_b);
+
+        assert!(
+            detect_fuzzy_row_block_move(&grid_baseline_a, &grid_baseline_b).is_some(),
+            "baseline: non-ambiguous fuzzy move should be detected"
+        );
+
+        let rows_a: Vec<Vec<i32>> = vec![
+            vec![1, 2, 3],
+            vec![4, 5, 6],
+            vec![100, 200, 300],
+            vec![101, 201, 301],
+            vec![102, 202, 302],
+            vec![103, 203, 303],
+            vec![100, 200, 300],
+            vec![101, 201, 301],
+            vec![102, 202, 302],
+            vec![103, 203, 999],
+            vec![31, 32, 33],
+            vec![34, 35, 36],
+        ];
+
+        let mut rows_b = rows_a.clone();
+        let block1: Vec<Vec<i32>> = rows_b.drain(2..6).collect();
+        rows_b.splice(6..6, block1);
+
+        let refs_a: Vec<&[i32]> = rows_a.iter().map(|r| r.as_slice()).collect();
+        let refs_b: Vec<&[i32]> = rows_b.iter().map(|r| r.as_slice()).collect();
+        let grid_a = grid_from_rows(&refs_a);
+        let grid_b = grid_from_rows(&refs_b);
+
+        assert!(
+            detect_fuzzy_row_block_move(&grid_a, &grid_b).is_none(),
+            "ambiguous candidates: two similar blocks swapped should trigger ambiguity bail-out"
+        );
+    }
+
+    #[test]
+    fn fuzzy_move_at_max_block_rows_threshold() {
+        let base: Vec<Vec<i32>> = (1..=70)
+            .map(|r| (1..=3).map(|c| r * 10 + c).collect())
+            .collect();
+        let base_refs: Vec<&[i32]> = base.iter().map(|row| row.as_slice()).collect();
+        let grid_a = grid_from_rows(&base_refs);
+
+        let mut rows_b = base.clone();
+        let mut moved_block: Vec<Vec<i32>> = rows_b.drain(4..36).collect();
+        moved_block[15][1] = 9_999;
+        rows_b.splice(36..36, moved_block);
+        let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
+        let grid_b = grid_from_rows(&rows_b_refs);
+
+        assert!(
+            detect_exact_row_block_move(&grid_a, &grid_b).is_none(),
+            "internal edits should prevent exact move detection"
+        );
+
+        let mv = detect_fuzzy_row_block_move(&grid_a, &grid_b)
+            .expect("expected fuzzy move at MAX_FUZZY_BLOCK_ROWS to be detected");
+        assert_eq!(
+            mv,
+            RowBlockMove {
+                src_start_row: 4,
+                dst_start_row: 36,
+                row_count: 32
+            }
+        );
+    }
+
+    #[test]
+    fn fuzzy_move_at_max_hash_repeat_boundary() {
+        let base: Vec<Vec<i32>> = (1..=18)
+            .map(|r| (1..=3).map(|c| r * 10 + c).collect())
+            .collect();
+        let base_refs: Vec<&[i32]> = base.iter().map(|row| row.as_slice()).collect();
+        let grid_base = grid_from_rows(&base_refs);
+
+        let mut rows_moved = base.clone();
+        let mut moved_block: Vec<Vec<i32>> = rows_moved.drain(4..8).collect();
+        moved_block[1][1] = 9_999;
+        rows_moved.splice(12..12, moved_block);
+        let moved_refs: Vec<&[i32]> = rows_moved.iter().map(|row| row.as_slice()).collect();
+        let grid_moved = grid_from_rows(&moved_refs);
+
+        assert!(
+            detect_fuzzy_row_block_move(&grid_base, &grid_moved).is_some(),
+            "baseline: fuzzy move should work with unique rows"
+        );
+
+        let mut base_9_repeat: Vec<Vec<i32>> = (1..=18)
+            .map(|r| (1..=3).map(|c| r * 10 + c).collect())
+            .collect();
+        for row in base_9_repeat.iter_mut().take(9) {
+            *row = vec![999, 888, 777];
+        }
+        let refs_9a: Vec<&[i32]> = base_9_repeat.iter().map(|r| r.as_slice()).collect();
+        let grid_9a = grid_from_rows(&refs_9a);
+
+        let mut rows_9b = base_9_repeat.clone();
+        let mut moved_9: Vec<Vec<i32>> = rows_9b.drain(10..14).collect();
+        moved_9[1][1] = 8_888;
+        rows_9b.splice(14..14, moved_9);
+        let refs_9b: Vec<&[i32]> = rows_9b.iter().map(|r| r.as_slice()).collect();
+        let grid_9b = grid_from_rows(&refs_9b);
+
+        assert!(
+            detect_fuzzy_row_block_move(&grid_9a, &grid_9b).is_none(),
+            "9 repeated rows (> MAX_HASH_REPEAT) should trigger heavy repetition guard"
+        );
+
+        let mut base_8_repeat: Vec<Vec<i32>> = (1..=18)
+            .map(|r| (1..=3).map(|c| r * 10 + c).collect())
+            .collect();
+        for row in base_8_repeat.iter_mut().take(8) {
+            *row = vec![999, 888, 777];
+        }
+        let refs_8a: Vec<&[i32]> = base_8_repeat.iter().map(|r| r.as_slice()).collect();
+        let grid_8a = grid_from_rows(&refs_8a);
+
+        let mut rows_8b = base_8_repeat.clone();
+        let mut moved_8: Vec<Vec<i32>> = rows_8b.drain(9..13).collect();
+        moved_8[1][1] = 8_888;
+        rows_8b.splice(14..14, moved_8);
+        let refs_8b: Vec<&[i32]> = rows_8b.iter().map(|r| r.as_slice()).collect();
+        let grid_8b = grid_from_rows(&refs_8b);
+
+        assert!(
+            detect_fuzzy_row_block_move(&grid_8a, &grid_8b).is_some(),
+            "exactly 8 repeated rows (= MAX_HASH_REPEAT, not >) should NOT trigger heavy repetition guard"
+        );
+    }
+
+    #[test]
     fn aligns_contiguous_block_insert_middle() {
         let base: Vec<Vec<i32>> = (1..=10)
             .map(|r| (1..=4).map(|c| r * 10 + c).collect())

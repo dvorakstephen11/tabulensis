@@ -43,6 +43,7 @@
       g11_row_block_move_grid_workbook_tests.rs
       g12_column_block_move_grid_workbook_tests.rs
       g12_rect_block_move_grid_workbook_tests.rs
+      g13_fuzzy_row_move_grid_workbook_tests.rs
       g1_g2_grid_workbook_tests.rs
       g5_g7_grid_workbook_tests.rs
       g8_row_alignment_grid_workbook_tests.rs
@@ -93,6 +94,8 @@
       equal_sheet_b.xlsx
       grid_large_dense.xlsx
       grid_large_noise.xlsx
+      grid_move_and_edit_a.xlsx
+      grid_move_and_edit_b.xlsx
       json_diff_bool_a.xlsx
       json_diff_bool_b.xlsx
       json_diff_single_cell_a.xlsx
@@ -2535,6 +2538,7 @@ use crate::diff::{DiffOp, DiffReport, SheetId};
 use crate::rect_block_move::{RectBlockMove, detect_exact_rect_block_move};
 use crate::row_alignment::{
     RowAlignment, RowBlockMove, align_row_changes, detect_exact_row_block_move,
+    detect_fuzzy_row_block_move,
 };
 use crate::workbook::{Cell, CellAddress, CellSnapshot, Grid, Sheet, SheetKind, Workbook};
 use std::collections::HashMap;
@@ -2675,6 +2679,9 @@ fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>)
         emit_row_block_move(sheet_id, mv, ops);
     } else if let Some(mv) = detect_exact_column_block_move(old, new) {
         emit_column_block_move(sheet_id, mv, ops);
+    } else if let Some(mv) = detect_fuzzy_row_block_move(old, new) {
+        emit_row_block_move(sheet_id, mv, ops);
+        emit_moved_row_block_edits(sheet_id, old, new, mv, ops);
     } else if let Some(alignment) = align_row_changes(old, new) {
         emit_aligned_diffs(sheet_id, old, new, &alignment, ops);
     } else if let Some(alignment) = align_single_column_change(old, new) {
@@ -2744,6 +2751,27 @@ fn emit_rect_block_move(sheet_id: &SheetId, mv: RectBlockMove, ops: &mut Vec<Dif
         dst_start_col: mv.dst_start_col,
         block_hash: mv.block_hash,
     });
+}
+
+fn emit_moved_row_block_edits(
+    sheet_id: &SheetId,
+    old: &Grid,
+    new: &Grid,
+    mv: RowBlockMove,
+    ops: &mut Vec<DiffOp>,
+) {
+    let overlap_cols = old.ncols.min(new.ncols);
+    for offset in 0..mv.row_count {
+        diff_row_pair(
+            sheet_id,
+            old,
+            new,
+            mv.src_start_row + offset,
+            mv.dst_start_row + offset,
+            overlap_cols,
+            ops,
+        );
+    }
 }
 
 fn emit_aligned_diffs(
@@ -4572,10 +4600,10 @@ mod tests {
             for (c_offset, value) in row_vals.iter().enumerate() {
                 let row = top + r_offset;
                 let col = left + c_offset;
-                if let Some(row_slice) = target.get_mut(row) {
-                    if let Some(cell) = row_slice.get_mut(col) {
-                        *cell = *value;
-                    }
+                if let Some(row_slice) = target.get_mut(row)
+                    && let Some(cell) = row_slice.get_mut(col)
+                {
+                    *cell = *value;
                 }
             }
         }
@@ -4600,7 +4628,10 @@ mod tests {
         let new = grid_from_matrix(grid_b);
 
         let result = detect_exact_rect_block_move(&old, &new);
-        assert!(result.is_some(), "should detect exact rectangular block move");
+        assert!(
+            result.is_some(),
+            "should detect exact rectangular block move"
+        );
 
         let mv = result.unwrap();
         assert_eq!(mv.src_start_row, 1);
@@ -4635,7 +4666,10 @@ mod tests {
         let new = grid_from_numbers(&[&[1, 2], &[3, 4]]);
 
         let result = detect_exact_rect_block_move(&old, &new);
-        assert!(result.is_none(), "identical grids should bail (no differences)");
+        assert!(
+            result.is_none(),
+            "identical grids should bail (no differences)"
+        );
     }
 
     #[test]
@@ -4662,7 +4696,7 @@ mod tests {
     #[test]
     fn detect_bails_on_ambiguous_block_swap() {
         let base: Vec<Vec<i32>> = (0..6)
-            .map(|r| (0..6).map(|c| 100 * r as i32 + c as i32).collect())
+            .map(|r| (0..6).map(|c| 100 * r + c).collect())
             .collect();
         let mut grid_a = base.clone();
         let mut grid_b = base.clone();
@@ -4763,7 +4797,9 @@ mod tests {
 ### File: `core\src\row_alignment.rs`
 
 ```rust
-use crate::grid_view::{GridView, HashStats, RowHash};
+use std::collections::HashSet;
+
+use crate::grid_view::{GridView, HashStats, RowHash, RowMeta};
 use crate::workbook::Grid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4784,6 +4820,8 @@ const MAX_ALIGN_ROWS: u32 = 2_000;
 const MAX_ALIGN_COLS: u32 = 64;
 const MAX_HASH_REPEAT: u32 = 8;
 const MAX_BLOCK_GAP: u32 = 32;
+const MAX_FUZZY_BLOCK_ROWS: u32 = 32;
+const FUZZY_SIMILARITY_THRESHOLD: f64 = 0.80;
 const _HASH_COLLISION_NOTE: &str = "64-bit hash collision probability ~0.00006% at 2K rows; \
                                     secondary verification deferred to G8a (50K-row adversarial)";
 
@@ -4919,6 +4957,132 @@ pub(crate) fn detect_exact_row_block_move(old: &Grid, new: &Grid) -> Option<RowB
     }
 
     None
+}
+
+pub(crate) fn detect_fuzzy_row_block_move(old: &Grid, new: &Grid) -> Option<RowBlockMove> {
+    if old.nrows != new.nrows || old.ncols != new.ncols {
+        return None;
+    }
+
+    if old.nrows == 0 {
+        return None;
+    }
+
+    if !is_within_size_bounds(old, new) {
+        return None;
+    }
+
+    let view_a = GridView::from_grid(old);
+    let view_b = GridView::from_grid(new);
+
+    if low_info_dominated(&view_a) || low_info_dominated(&view_b) {
+        return None;
+    }
+
+    let stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
+    if has_heavy_repetition(&stats) {
+        return None;
+    }
+
+    let meta_a = &view_a.row_meta;
+    let meta_b = &view_b.row_meta;
+
+    if meta_a
+        .iter()
+        .zip(meta_b.iter())
+        .all(|(a, b)| a.hash == b.hash)
+    {
+        return None;
+    }
+
+    let n = meta_a.len();
+    let mut prefix = 0usize;
+    while prefix < n && meta_a[prefix].hash == meta_b[prefix].hash {
+        prefix += 1;
+    }
+    if prefix == n {
+        return None;
+    }
+
+    let mut suffix_len = 0usize;
+    while suffix_len < n.saturating_sub(prefix) {
+        let idx_a = n - 1 - suffix_len;
+        let idx_b = idx_a;
+        if meta_a[idx_a].hash == meta_b[idx_b].hash {
+            suffix_len += 1;
+        } else {
+            break;
+        }
+    }
+
+    let mismatch_end = n - suffix_len;
+    if mismatch_end <= prefix {
+        return None;
+    }
+
+    let mid_len = mismatch_end - prefix;
+    if mid_len <= 1 {
+        return None;
+    }
+
+    let max_block_len = mid_len.saturating_sub(1).min(MAX_FUZZY_BLOCK_ROWS as usize);
+    if max_block_len == 0 {
+        return None;
+    }
+
+    let mut candidate: Option<RowBlockMove> = None;
+
+    for block_len in 1..=max_block_len {
+        let remaining = mid_len - block_len;
+
+        // Block moved upward: [middle][block] -> [block'][middle]
+        if hashes_match(
+            &meta_a[prefix..prefix + remaining],
+            &meta_b[prefix + block_len..mismatch_end],
+        ) {
+            let src_block = &meta_a[prefix + remaining..mismatch_end];
+            let dst_block = &meta_b[prefix..prefix + block_len];
+
+            if block_similarity(src_block, dst_block) >= FUZZY_SIMILARITY_THRESHOLD {
+                let mv = RowBlockMove {
+                    src_start_row: src_block[0].row_idx,
+                    dst_start_row: dst_block[0].row_idx,
+                    row_count: block_len as u32,
+                };
+                if mv.src_start_row != mv.dst_start_row {
+                    if candidate.is_some() {
+                        return None;
+                    }
+                    candidate = Some(mv);
+                }
+            }
+        }
+
+        // Block moved downward: [block][middle] -> [middle][block']
+        if hashes_match(
+            &meta_a[prefix + block_len..mismatch_end],
+            &meta_b[prefix..prefix + remaining],
+        ) {
+            let src_block = &meta_a[prefix..prefix + block_len];
+            let dst_block = &meta_b[prefix + remaining..mismatch_end];
+
+            if block_similarity(src_block, dst_block) >= FUZZY_SIMILARITY_THRESHOLD {
+                let mv = RowBlockMove {
+                    src_start_row: src_block[0].row_idx,
+                    dst_start_row: dst_block[0].row_idx,
+                    row_count: block_len as u32,
+                };
+                if mv.src_start_row != mv.dst_start_row {
+                    if candidate.is_some() {
+                        return None;
+                    }
+                    candidate = Some(mv);
+                }
+            }
+        }
+    }
+
+    candidate
 }
 
 pub(crate) fn align_row_changes(old: &Grid, new: &Grid) -> Option<RowAlignment> {
@@ -5248,6 +5412,36 @@ fn has_heavy_repetition(stats: &HashStats<RowHash>) -> bool {
         > MAX_HASH_REPEAT
 }
 
+fn hashes_match(slice_a: &[RowMeta], slice_b: &[RowMeta]) -> bool {
+    slice_a.len() == slice_b.len()
+        && slice_a
+            .iter()
+            .zip(slice_b.iter())
+            .all(|(a, b)| a.hash == b.hash)
+}
+
+fn block_similarity(slice_a: &[RowMeta], slice_b: &[RowMeta]) -> f64 {
+    let tokens_a: HashSet<RowHash> = slice_a.iter().map(|m| m.hash).collect();
+    let tokens_b: HashSet<RowHash> = slice_b.iter().map(|m| m.hash).collect();
+
+    let intersection = tokens_a.intersection(&tokens_b).count();
+    let union = tokens_a.union(&tokens_b).count();
+    let jaccard = if union == 0 {
+        0.0
+    } else {
+        intersection as f64 / union as f64
+    };
+
+    let positional_matches = slice_a
+        .iter()
+        .zip(slice_b.iter())
+        .filter(|(a, b)| a.hash == b.hash)
+        .count();
+    let positional_ratio = (positional_matches as f64 + 1.0) / (slice_a.len() as f64 + 1.0);
+
+    jaccard.max(positional_ratio)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5315,6 +5509,274 @@ mod tests {
         let grid_b = grid_from_rows(&rows_b_refs);
 
         assert!(detect_exact_row_block_move(&grid_a, &grid_b).is_none());
+    }
+
+    #[test]
+    fn detects_fuzzy_row_block_move_with_single_internal_edit() {
+        let base: Vec<Vec<i32>> = (1..=18)
+            .map(|r| (1..=3).map(|c| r * 10 + c).collect())
+            .collect();
+        let base_refs: Vec<&[i32]> = base.iter().map(|row| row.as_slice()).collect();
+        let grid_a = grid_from_rows(&base_refs);
+
+        let mut rows_b = base.clone();
+        let mut moved_block: Vec<Vec<i32>> = rows_b.drain(4..8).collect();
+        moved_block[1][1] = 9_999;
+        rows_b.splice(12..12, moved_block);
+        let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
+        let grid_b = grid_from_rows(&rows_b_refs);
+
+        assert!(
+            detect_exact_row_block_move(&grid_a, &grid_b).is_none(),
+            "internal edits should prevent exact move detection"
+        );
+
+        let mv = detect_fuzzy_row_block_move(&grid_a, &grid_b)
+            .expect("expected fuzzy row block move to be detected");
+        assert_eq!(
+            mv,
+            RowBlockMove {
+                src_start_row: 4,
+                dst_start_row: 12,
+                row_count: 4
+            }
+        );
+    }
+
+    #[test]
+    fn fuzzy_move_rejects_low_similarity_block() {
+        let base: Vec<Vec<i32>> = (1..=16)
+            .map(|r| (1..=3).map(|c| r * 10 + c).collect())
+            .collect();
+        let base_refs: Vec<&[i32]> = base.iter().map(|row| row.as_slice()).collect();
+        let grid_a = grid_from_rows(&base_refs);
+
+        let mut rows_b = base.clone();
+        let mut moved_block: Vec<Vec<i32>> = rows_b.drain(3..7).collect();
+        for row in &mut moved_block {
+            for value in row.iter_mut() {
+                *value += 50_000;
+            }
+        }
+        rows_b.splice(10..10, moved_block);
+        let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
+        let grid_b = grid_from_rows(&rows_b_refs);
+
+        assert!(detect_exact_row_block_move(&grid_a, &grid_b).is_none());
+        assert!(
+            detect_fuzzy_row_block_move(&grid_a, &grid_b).is_none(),
+            "similarity below threshold should bail out"
+        );
+    }
+
+    #[test]
+    fn fuzzy_move_bails_on_heavy_repetition_or_ambiguous_candidates() {
+        let repeated_row = [1, 2];
+        let rows_a: Vec<Vec<i32>> = (0..10).map(|_| repeated_row.to_vec()).collect();
+        let mut rows_b = rows_a.clone();
+
+        let block: Vec<Vec<i32>> = rows_b.drain(0..3).collect();
+        rows_b.splice(5..5, block);
+
+        let rows_a_refs: Vec<&[i32]> = rows_a.iter().map(|row| row.as_slice()).collect();
+        let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
+        let grid_a = grid_from_rows(&rows_a_refs);
+        let grid_b = grid_from_rows(&rows_b_refs);
+
+        assert!(
+            detect_fuzzy_row_block_move(&grid_a, &grid_b).is_none(),
+            "heavy repetition or ambiguous candidates should not emit a move"
+        );
+    }
+
+    #[test]
+    fn fuzzy_move_noop_when_grids_identical() {
+        let base: Vec<Vec<i32>> = (1..=6)
+            .map(|r| (1..=2).map(|c| r * 10 + c).collect())
+            .collect();
+        let base_refs: Vec<&[i32]> = base.iter().map(|row| row.as_slice()).collect();
+        let grid_a = grid_from_rows(&base_refs);
+        let grid_b = grid_from_rows(&base_refs);
+
+        assert!(detect_exact_row_block_move(&grid_a, &grid_b).is_none());
+        assert!(detect_fuzzy_row_block_move(&grid_a, &grid_b).is_none());
+    }
+
+    #[test]
+    fn detects_fuzzy_row_block_move_upward_with_single_internal_edit() {
+        let base: Vec<Vec<i32>> = (1..=18)
+            .map(|r| (1..=3).map(|c| r * 10 + c).collect())
+            .collect();
+        let base_refs: Vec<&[i32]> = base.iter().map(|row| row.as_slice()).collect();
+        let grid_a = grid_from_rows(&base_refs);
+
+        let mut rows_b = base.clone();
+        let mut moved_block: Vec<Vec<i32>> = rows_b.drain(12..16).collect();
+        moved_block[1][1] = 9_999;
+        rows_b.splice(4..4, moved_block);
+        let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
+        let grid_b = grid_from_rows(&rows_b_refs);
+
+        assert!(
+            detect_exact_row_block_move(&grid_a, &grid_b).is_none(),
+            "internal edits should prevent exact move detection"
+        );
+
+        let mv = detect_fuzzy_row_block_move(&grid_a, &grid_b)
+            .expect("expected fuzzy row block move upward to be detected");
+        assert_eq!(
+            mv,
+            RowBlockMove {
+                src_start_row: 12,
+                dst_start_row: 4,
+                row_count: 4
+            }
+        );
+    }
+
+    #[test]
+    fn fuzzy_move_bails_on_ambiguous_candidates_below_repetition_threshold() {
+        let base: Vec<Vec<i32>> = (1..=16)
+            .map(|r| (1..=3).map(|c| r * 10 + c).collect())
+            .collect();
+        let base_refs: Vec<&[i32]> = base.iter().map(|row| row.as_slice()).collect();
+        let grid_baseline_a = grid_from_rows(&base_refs);
+
+        let mut rows_baseline_b = base.clone();
+        let mut moved: Vec<Vec<i32>> = rows_baseline_b.drain(3..7).collect();
+        moved[1][1] = 9999;
+        rows_baseline_b.splice(10..10, moved);
+        let refs_baseline_b: Vec<&[i32]> = rows_baseline_b.iter().map(|row| row.as_slice()).collect();
+        let grid_baseline_b = grid_from_rows(&refs_baseline_b);
+
+        assert!(
+            detect_fuzzy_row_block_move(&grid_baseline_a, &grid_baseline_b).is_some(),
+            "baseline: non-ambiguous fuzzy move should be detected"
+        );
+
+        let rows_a: Vec<Vec<i32>> = vec![
+            vec![1, 2, 3],
+            vec![4, 5, 6],
+            vec![100, 200, 300],
+            vec![101, 201, 301],
+            vec![102, 202, 302],
+            vec![103, 203, 303],
+            vec![100, 200, 300],
+            vec![101, 201, 301],
+            vec![102, 202, 302],
+            vec![103, 203, 999],
+            vec![31, 32, 33],
+            vec![34, 35, 36],
+        ];
+
+        let mut rows_b = rows_a.clone();
+        let block1: Vec<Vec<i32>> = rows_b.drain(2..6).collect();
+        rows_b.splice(6..6, block1);
+
+        let refs_a: Vec<&[i32]> = rows_a.iter().map(|r| r.as_slice()).collect();
+        let refs_b: Vec<&[i32]> = rows_b.iter().map(|r| r.as_slice()).collect();
+        let grid_a = grid_from_rows(&refs_a);
+        let grid_b = grid_from_rows(&refs_b);
+
+        assert!(
+            detect_fuzzy_row_block_move(&grid_a, &grid_b).is_none(),
+            "ambiguous candidates: two similar blocks swapped should trigger ambiguity bail-out"
+        );
+    }
+
+    #[test]
+    fn fuzzy_move_at_max_block_rows_threshold() {
+        let base: Vec<Vec<i32>> = (1..=70)
+            .map(|r| (1..=3).map(|c| r * 10 + c).collect())
+            .collect();
+        let base_refs: Vec<&[i32]> = base.iter().map(|row| row.as_slice()).collect();
+        let grid_a = grid_from_rows(&base_refs);
+
+        let mut rows_b = base.clone();
+        let mut moved_block: Vec<Vec<i32>> = rows_b.drain(4..36).collect();
+        moved_block[15][1] = 9_999;
+        rows_b.splice(36..36, moved_block);
+        let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
+        let grid_b = grid_from_rows(&rows_b_refs);
+
+        assert!(
+            detect_exact_row_block_move(&grid_a, &grid_b).is_none(),
+            "internal edits should prevent exact move detection"
+        );
+
+        let mv = detect_fuzzy_row_block_move(&grid_a, &grid_b)
+            .expect("expected fuzzy move at MAX_FUZZY_BLOCK_ROWS to be detected");
+        assert_eq!(
+            mv,
+            RowBlockMove {
+                src_start_row: 4,
+                dst_start_row: 36,
+                row_count: 32
+            }
+        );
+    }
+
+    #[test]
+    fn fuzzy_move_at_max_hash_repeat_boundary() {
+        let base: Vec<Vec<i32>> = (1..=18)
+            .map(|r| (1..=3).map(|c| r * 10 + c).collect())
+            .collect();
+        let base_refs: Vec<&[i32]> = base.iter().map(|row| row.as_slice()).collect();
+        let grid_base = grid_from_rows(&base_refs);
+
+        let mut rows_moved = base.clone();
+        let mut moved_block: Vec<Vec<i32>> = rows_moved.drain(4..8).collect();
+        moved_block[1][1] = 9_999;
+        rows_moved.splice(12..12, moved_block);
+        let moved_refs: Vec<&[i32]> = rows_moved.iter().map(|row| row.as_slice()).collect();
+        let grid_moved = grid_from_rows(&moved_refs);
+
+        assert!(
+            detect_fuzzy_row_block_move(&grid_base, &grid_moved).is_some(),
+            "baseline: fuzzy move should work with unique rows"
+        );
+
+        let mut base_9_repeat: Vec<Vec<i32>> = (1..=18)
+            .map(|r| (1..=3).map(|c| r * 10 + c).collect())
+            .collect();
+        for row in base_9_repeat.iter_mut().take(9) {
+            *row = vec![999, 888, 777];
+        }
+        let refs_9a: Vec<&[i32]> = base_9_repeat.iter().map(|r| r.as_slice()).collect();
+        let grid_9a = grid_from_rows(&refs_9a);
+
+        let mut rows_9b = base_9_repeat.clone();
+        let mut moved_9: Vec<Vec<i32>> = rows_9b.drain(10..14).collect();
+        moved_9[1][1] = 8_888;
+        rows_9b.splice(14..14, moved_9);
+        let refs_9b: Vec<&[i32]> = rows_9b.iter().map(|r| r.as_slice()).collect();
+        let grid_9b = grid_from_rows(&refs_9b);
+
+        assert!(
+            detect_fuzzy_row_block_move(&grid_9a, &grid_9b).is_none(),
+            "9 repeated rows (> MAX_HASH_REPEAT) should trigger heavy repetition guard"
+        );
+
+        let mut base_8_repeat: Vec<Vec<i32>> = (1..=18)
+            .map(|r| (1..=3).map(|c| r * 10 + c).collect())
+            .collect();
+        for row in base_8_repeat.iter_mut().take(8) {
+            *row = vec![999, 888, 777];
+        }
+        let refs_8a: Vec<&[i32]> = base_8_repeat.iter().map(|r| r.as_slice()).collect();
+        let grid_8a = grid_from_rows(&refs_8a);
+
+        let mut rows_8b = base_8_repeat.clone();
+        let mut moved_8: Vec<Vec<i32>> = rows_8b.drain(9..13).collect();
+        moved_8[1][1] = 8_888;
+        rows_8b.splice(14..14, moved_8);
+        let refs_8b: Vec<&[i32]> = rows_8b.iter().map(|r| r.as_slice()).collect();
+        let grid_8b = grid_from_rows(&refs_8b);
+
+        assert!(
+            detect_fuzzy_row_block_move(&grid_8a, &grid_8b).is_some(),
+            "exactly 8 repeated rows (= MAX_HASH_REPEAT, not >) should NOT trigger heavy repetition guard"
+        );
     }
 
     #[test]
@@ -7625,7 +8087,7 @@ fn g12_rect_block_move_with_internal_edit_falls_back() {
 
 fn swap_two_blocks() -> (excel_diff::Grid, excel_diff::Grid) {
     let base: Vec<Vec<i32>> = (0..6)
-        .map(|r| (0..6).map(|c| 100 * r as i32 + c as i32).collect())
+        .map(|r| (0..6).map(|c| 100 * r + c).collect())
         .collect();
     let mut grid_a = base.clone();
     let mut grid_b = base.clone();
@@ -7667,10 +8129,10 @@ fn place_block(target: &mut [Vec<i32>], top: usize, left: usize, block: &[Vec<i3
         for (c_offset, value) in row_vals.iter().enumerate() {
             let row = top + r_offset;
             let col = left + c_offset;
-            if let Some(row_slice) = target.get_mut(row) {
-                if let Some(cell) = row_slice.get_mut(col) {
-                    *cell = *value;
-                }
+            if let Some(row_slice) = target.get_mut(row)
+                && let Some(cell) = row_slice.get_mut(col)
+            {
+                *cell = *value;
             }
         }
     }
@@ -7679,6 +8141,148 @@ fn place_block(target: &mut [Vec<i32>], top: usize, left: usize, block: &[Vec<i3
 fn grid_from_matrix(matrix: Vec<Vec<i32>>) -> excel_diff::Grid {
     let refs: Vec<&[i32]> = matrix.iter().map(|row| row.as_slice()).collect();
     grid_from_numbers(&refs)
+}
+```
+
+---
+
+### File: `core\tests\g13_fuzzy_row_move_grid_workbook_tests.rs`
+
+```rust
+use excel_diff::{DiffOp, diff_workbooks, open_workbook};
+
+mod common;
+use common::{fixture_path, grid_from_numbers, single_sheet_workbook};
+
+#[test]
+fn g13_fuzzy_row_move_emits_blockmovedrows_and_celledited() {
+    let wb_a = open_workbook(fixture_path("grid_move_and_edit_a.xlsx"))
+        .expect("failed to open fixture: grid_move_and_edit_a.xlsx");
+    let wb_b = open_workbook(fixture_path("grid_move_and_edit_b.xlsx"))
+        .expect("failed to open fixture: grid_move_and_edit_b.xlsx");
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    let block_moves: Vec<(u32, u32, u32, Option<u64>)> = report
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            DiffOp::BlockMovedRows {
+                src_start_row,
+                row_count,
+                dst_start_row,
+                block_hash,
+                ..
+            } => Some((*src_start_row, *row_count, *dst_start_row, *block_hash)),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(block_moves.len(), 1, "expected a single BlockMovedRows op");
+    let (src_start_row, row_count, dst_start_row, block_hash) = block_moves[0];
+    assert_eq!(src_start_row, 4);
+    assert_eq!(row_count, 4);
+    assert_eq!(dst_start_row, 13);
+    assert!(block_hash.is_none());
+
+    let edited_rows: Vec<u32> = report
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            DiffOp::CellEdited { addr, .. } => Some(addr.row),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        edited_rows
+            .iter()
+            .any(|r| *r >= dst_start_row && *r < dst_start_row + row_count),
+        "expected a CellEdited inside the moved block"
+    );
+
+    assert!(
+        !report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::RowAdded { row_idx, .. } if *row_idx >= dst_start_row && *row_idx < dst_start_row + row_count)),
+        "moved rows must not be reported as added"
+    );
+    assert!(
+        !report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::RowRemoved { row_idx, .. } if *row_idx >= src_start_row && *row_idx < src_start_row + row_count)),
+        "moved rows must not be reported as removed"
+    );
+}
+
+#[test]
+fn g13_in_place_edits_do_not_emit_blockmovedrows() {
+    let rows: Vec<Vec<i32>> = (1..=12)
+        .map(|r| (1..=3).map(|c| r * 10 + c).collect())
+        .collect();
+    let rows_refs: Vec<&[i32]> = rows.iter().map(|r| r.as_slice()).collect();
+    let grid_a = grid_from_numbers(&rows_refs);
+
+    let mut edited_rows = rows.clone();
+    if let Some(cell) = edited_rows.get_mut(5).and_then(|row| row.get_mut(1)) {
+        *cell += 7;
+    }
+    let edited_refs: Vec<&[i32]> = edited_rows.iter().map(|r| r.as_slice()).collect();
+    let grid_b = grid_from_numbers(&edited_refs);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    assert!(
+        !report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::BlockMovedRows { .. })),
+        "in-place edits must not be classified as BlockMovedRows"
+    );
+    assert!(
+        report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::CellEdited { .. })),
+        "edits should still be surfaced as CellEdited"
+    );
+}
+
+#[test]
+fn g13_ambiguous_repeated_blocks_do_not_emit_blockmovedrows() {
+    let mut rows_a: Vec<Vec<i32>> = vec![vec![1, 1]; 10];
+    rows_a.push(vec![99, 99]);
+    rows_a.push(vec![2, 2]);
+
+    let mut rows_b = rows_a.clone();
+    let moved = rows_b.remove(10);
+    rows_b.insert(3, moved);
+
+    let refs_a: Vec<&[i32]> = rows_a.iter().map(|r| r.as_slice()).collect();
+    let refs_b: Vec<&[i32]> = rows_b.iter().map(|r| r.as_slice()).collect();
+    let grid_a = grid_from_numbers(&refs_a);
+    let grid_b = grid_from_numbers(&refs_b);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    assert!(
+        !report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::BlockMovedRows { .. })),
+        "ambiguous repeated patterns should not emit BlockMovedRows"
+    );
+    assert!(
+        !report.ops.is_empty(),
+        "fallback path should produce some diff noise"
+    );
 }
 ```
 
@@ -9834,16 +10438,7 @@ fn diff_report_to_cell_diffs_ignores_block_moved_rect() {
     let addr = CellAddress::from_indices(2, 2);
 
     let report = DiffReport::new(vec![
-        DiffOp::block_moved_rect(
-            "Sheet1".into(),
-            2,
-            3,
-            1,
-            3,
-            9,
-            6,
-            Some(0xCAFEBABE),
-        ),
+        DiffOp::block_moved_rect("Sheet1".into(), 2, 3, 1, 3, 9, 6, Some(0xCAFEBABE)),
         DiffOp::cell_edited(
             "Sheet1".into(),
             addr,
@@ -13053,6 +13648,22 @@ scenarios:
       - "rect_block_move_a.xlsx"
       - "rect_block_move_b.xlsx"
 
+  # --- Phase 4: Spreadsheet-mode G13 ---
+  - id: "g13_fuzzy_row_move"
+    generator: "row_fuzzy_move_g13"
+    args:
+      sheet: "Data"
+      total_rows: 24
+      cols: 6
+      block_rows: 4
+      src_start: 5      # 1-based in A
+      dst_start: 14     # 1-based in B
+      edits:
+        - { row_offset: 1, col: 3, delta: 1 }
+    output:
+      - "grid_move_and_edit_a.xlsx"
+      - "grid_move_and_edit_b.xlsx"
+
   # --- JSON diff: simple non-empty change ---
   - id: "json_diff_single_cell"
     generator: "single_cell_diff"
@@ -13445,6 +14056,7 @@ from generators.grid import (
     RowAlignmentG8Generator,
     RowAlignmentG10Generator,
     RowBlockMoveG11Generator,
+    RowFuzzyMoveG13Generator,
     ColumnMoveG12Generator,
     RectBlockMoveG12Generator,
     ColumnAlignmentG9Generator,
@@ -13477,6 +14089,7 @@ GENERATORS: Dict[str, Any] = {
     "row_alignment_g8": RowAlignmentG8Generator,
     "row_alignment_g10": RowAlignmentG10Generator,
     "row_block_move_g11": RowBlockMoveG11Generator,
+    "row_fuzzy_move_g13": RowFuzzyMoveG13Generator,
     "column_move_g12": ColumnMoveG12Generator,
     "rect_block_move_g12": RectBlockMoveG12Generator,
     "column_alignment_g9": ColumnAlignmentG9Generator,
@@ -14264,6 +14877,111 @@ class RowBlockMoveG11Generator(BaseGenerator):
         return rows_b
 
     def _write_workbook(self, path: Path, sheet: str, rows: List[List[str]]):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = sheet
+
+        for r_idx, row_values in enumerate(rows, start=1):
+            for c_idx, value in enumerate(row_values, start=1):
+                ws.cell(row=r_idx, column=c_idx, value=value)
+
+        wb.save(path)
+
+class RowFuzzyMoveG13Generator(BaseGenerator):
+    """Generates workbook pairs for G13 fuzzy row block move scenarios with internal edits."""
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        if len(output_names) != 2:
+            raise ValueError("row_fuzzy_move_g13 generator expects exactly two output filenames")
+
+        sheet = self.args.get("sheet", "Data")
+        total_rows = self.args.get("total_rows", 24)
+        cols = self.args.get("cols", 6)
+        block_rows = self.args.get("block_rows", 4)
+        src_start = self.args.get("src_start", 5)
+        dst_start = self.args.get("dst_start", 14)
+        edits = self.args.get(
+            "edits",
+            [
+                {"row_offset": 1, "col": 3, "delta": 1},
+            ],
+        )
+
+        if block_rows <= 0:
+            raise ValueError("block_rows must be positive")
+        if src_start < 1 or src_start + block_rows - 1 > total_rows:
+            raise ValueError("source block must fit within total_rows")
+        if dst_start < 1 or dst_start + block_rows - 1 > total_rows:
+            raise ValueError("destination block must fit within total_rows")
+
+        src_end = src_start + block_rows - 1
+        dst_end = dst_start + block_rows - 1
+        if not (src_end < dst_start or dst_end < src_start):
+            raise ValueError("source and destination blocks must not overlap")
+
+        rows_a = self._build_rows(total_rows, cols, src_start, block_rows)
+        rows_b = self._move_block(rows_a, src_start, block_rows, dst_start)
+        self._apply_edits(rows_b, dst_start, block_rows, cols, edits)
+
+        self._write_workbook(output_dir / output_names[0], sheet, rows_a)
+        self._write_workbook(output_dir / output_names[1], sheet, rows_b)
+
+    def _build_rows(self, total_rows: int, cols: int, block_start: int, block_rows: int) -> List[List[int]]:
+        block_end = block_start + block_rows - 1
+        rows: List[List[int]] = []
+        for r in range(1, total_rows + 1):
+            if block_start <= r <= block_end:
+                row_id = 1_000 + (r - block_start)
+            else:
+                row_id = r
+            row_values = [row_id]
+            for c in range(1, cols):
+                row_values.append(row_id * 10 + c)
+            rows.append(row_values)
+        return rows
+
+    def _move_block(
+        self, rows: List[List[int]], src_start: int, block_rows: int, dst_start: int
+    ) -> List[List[int]]:
+        rows_b = [list(r) for r in rows]
+        src_idx = src_start - 1
+        src_end = src_idx + block_rows
+        block = rows_b[src_idx:src_end]
+        del rows_b[src_idx:src_end]
+
+        dst_idx = min(dst_start - 1, len(rows_b))
+        rows_b[dst_idx:dst_idx] = block
+        return rows_b
+
+    def _apply_edits(
+        self,
+        rows: List[List[int]],
+        dst_start: int,
+        block_rows: int,
+        cols: int,
+        edits: List[Dict[str, Any]],
+    ):
+        dst_idx = dst_start - 1
+        if dst_idx + block_rows > len(rows):
+            return
+
+        for edit in edits:
+            row_offset = int(edit.get("row_offset", 0))
+            col = int(edit.get("col", 1))
+            delta = int(edit.get("delta", 1))
+
+            if row_offset < 0 or row_offset >= block_rows:
+                continue
+
+            col_idx = max(1, min(col, cols)) - 1
+            target_row = dst_idx + row_offset
+            if col_idx >= len(rows[target_row]):
+                continue
+            rows[target_row][col_idx] += delta
+
+    def _write_workbook(self, path: Path, sheet: str, rows: List[List[int]]):
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = sheet
