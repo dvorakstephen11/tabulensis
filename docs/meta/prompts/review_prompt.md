@@ -25,6 +25,7 @@
       grid_view.rs
       hashing.rs
       lib.rs
+      m_ast.rs
       m_diff.rs
       m_section.rs
       rect_block_move.rs
@@ -55,6 +56,7 @@
       m4_permissions_metadata_tests.rs
       m5_query_domain_tests.rs
       m6_textual_m_diff_tests.rs
+      m7_ast_canonicalization_tests.rs
       m_section_splitting_tests.rs
       output_tests.rs
       pg1_ir_tests.rs
@@ -121,6 +123,9 @@
       m_change_literal_b.xlsx
       m_def_and_metadata_change_a.xlsx
       m_def_and_metadata_change_b.xlsx
+      m_formatting_only_a.xlsx
+      m_formatting_only_b.xlsx
+      m_formatting_only_b_variant.xlsx
       m_metadata_only_change_a.xlsx
       m_metadata_only_change_b.xlsx
       m_remove_query_a.xlsx
@@ -1243,16 +1248,8 @@ mod tests {
 
     #[test]
     fn non_contiguous_key_columns_alignment() {
-        let grid_a = grid_from_rows(&[
-            &[1, 999, 10, 100],
-            &[1, 888, 20, 200],
-            &[2, 777, 10, 300],
-        ]);
-        let grid_b = grid_from_rows(&[
-            &[2, 777, 10, 300],
-            &[1, 999, 10, 100],
-            &[1, 888, 20, 200],
-        ]);
+        let grid_a = grid_from_rows(&[&[1, 999, 10, 100], &[1, 888, 20, 200], &[2, 777, 10, 300]]);
+        let grid_b = grid_from_rows(&[&[2, 777, 10, 300], &[1, 999, 10, 100], &[1, 888, 20, 200]]);
 
         let alignment =
             diff_table_by_key(&grid_a, &grid_b, &[0, 2]).expect("unique non-contiguous keys");
@@ -1309,8 +1306,14 @@ mod tests {
     fn is_key_column_single_column() {
         let spec = KeyColumnSpec::new(vec![0]);
         assert!(spec.is_key_column(0), "column 0 should be a key column");
-        assert!(!spec.is_key_column(1), "column 1 should not be a key column");
-        assert!(!spec.is_key_column(2), "column 2 should not be a key column");
+        assert!(
+            !spec.is_key_column(1),
+            "column 1 should not be a key column"
+        );
+        assert!(
+            !spec.is_key_column(2),
+            "column 2 should not be a key column"
+        );
     }
 
     #[test]
@@ -1318,17 +1321,29 @@ mod tests {
         let spec = KeyColumnSpec::new(vec![0, 1]);
         assert!(spec.is_key_column(0), "column 0 should be a key column");
         assert!(spec.is_key_column(1), "column 1 should be a key column");
-        assert!(!spec.is_key_column(2), "column 2 should not be a key column");
-        assert!(!spec.is_key_column(3), "column 3 should not be a key column");
+        assert!(
+            !spec.is_key_column(2),
+            "column 2 should not be a key column"
+        );
+        assert!(
+            !spec.is_key_column(3),
+            "column 3 should not be a key column"
+        );
     }
 
     #[test]
     fn is_key_column_non_contiguous_columns() {
         let spec = KeyColumnSpec::new(vec![0, 2]);
         assert!(spec.is_key_column(0), "column 0 should be a key column");
-        assert!(!spec.is_key_column(1), "column 1 should not be a key column");
+        assert!(
+            !spec.is_key_column(1),
+            "column 1 should not be a key column"
+        );
         assert!(spec.is_key_column(2), "column 2 should be a key column");
-        assert!(!spec.is_key_column(3), "column 3 should not be a key column");
+        assert!(
+            !spec.is_key_column(3),
+            "column 3 should not be a key column"
+        );
     }
 
     #[test]
@@ -1343,13 +1358,25 @@ mod tests {
     #[test]
     fn is_key_column_non_contiguous_three_columns() {
         let spec = KeyColumnSpec::new(vec![1, 3, 5]);
-        assert!(!spec.is_key_column(0), "column 0 should not be a key column");
+        assert!(
+            !spec.is_key_column(0),
+            "column 0 should not be a key column"
+        );
         assert!(spec.is_key_column(1), "column 1 should be a key column");
-        assert!(!spec.is_key_column(2), "column 2 should not be a key column");
+        assert!(
+            !spec.is_key_column(2),
+            "column 2 should not be a key column"
+        );
         assert!(spec.is_key_column(3), "column 3 should be a key column");
-        assert!(!spec.is_key_column(4), "column 4 should not be a key column");
+        assert!(
+            !spec.is_key_column(4),
+            "column 4 should not be a key column"
+        );
         assert!(spec.is_key_column(5), "column 5 should be a key column");
-        assert!(!spec.is_key_column(6), "column 6 should not be a key column");
+        assert!(
+            !spec.is_key_column(6),
+            "column 6 should not be a key column"
+        );
     }
 }
 ```
@@ -3979,6 +4006,7 @@ pub mod excel_open_xml;
 pub mod grid_parser;
 pub mod grid_view;
 pub(crate) mod hashing;
+pub mod m_ast;
 pub mod m_diff;
 pub mod m_section;
 pub mod output;
@@ -4001,6 +4029,9 @@ pub use engine::{diff_grids_database_mode, diff_workbooks};
 pub use excel_open_xml::{ExcelOpenError, open_data_mashup, open_workbook};
 pub use grid_parser::{GridParseError, SheetDescriptor};
 pub use grid_view::{ColHash, ColMeta, GridView, HashStats, RowHash, RowMeta, RowView};
+pub use m_ast::{
+    MModuleAst, MParseError, ast_semantically_equal, canonicalize_m_ast, parse_m_expression,
+};
 pub use m_diff::{MQueryDiff, QueryChangeKind, diff_m_queries};
 pub use m_section::{SectionMember, SectionParseError, parse_section_members};
 #[cfg(feature = "excel-open-xml")]
@@ -4010,6 +4041,362 @@ pub use workbook::{
     Cell, CellAddress, CellSnapshot, CellValue, ColSignature, Grid, RowSignature, Sheet, SheetKind,
     Workbook,
 };
+```
+
+---
+
+### File: `core\src\m_ast.rs`
+
+```rust
+use std::iter::Peekable;
+use std::str::Chars;
+
+use thiserror::Error;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MModuleAst {
+    root: MExpr,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum MExpr {
+    Let {
+        bindings: Vec<LetBinding>,
+        body: Box<MExpr>,
+    },
+    Sequence(Vec<MToken>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LetBinding {
+    name: String,
+    value: Box<MExpr>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum MToken {
+    KeywordLet,
+    KeywordIn,
+    Identifier(String),
+    StringLiteral(String),
+    Number(String),
+    Symbol(char),
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum MParseError {
+    #[error("expression is empty")]
+    Empty,
+    #[error("unterminated string literal")]
+    UnterminatedString,
+    #[error("unterminated block comment")]
+    UnterminatedBlockComment,
+    #[error("unbalanced delimiter")]
+    UnbalancedDelimiter,
+    #[error("invalid let binding syntax")]
+    InvalidLetBinding,
+    #[error("missing 'in' clause in let expression")]
+    MissingInClause,
+}
+
+pub fn parse_m_expression(source: &str) -> Result<MModuleAst, MParseError> {
+    let tokens = tokenize(source)?;
+    if tokens.is_empty() {
+        return Err(MParseError::Empty);
+    }
+
+    let root = parse_expression(&tokens)?;
+    Ok(MModuleAst { root })
+}
+
+pub fn canonicalize_m_ast(ast: &mut MModuleAst) {
+    canonicalize_expr(&mut ast.root);
+}
+
+pub fn ast_semantically_equal(a: &MModuleAst, b: &MModuleAst) -> bool {
+    a == b
+}
+
+fn canonicalize_expr(expr: &mut MExpr) {
+    match expr {
+        MExpr::Let { bindings, body } => {
+            for binding in bindings {
+                canonicalize_expr(&mut binding.value);
+            }
+            canonicalize_expr(body);
+        }
+        MExpr::Sequence(tokens) => canonicalize_tokens(tokens),
+    }
+}
+
+fn canonicalize_tokens(tokens: &mut Vec<MToken>) {
+    // Tokens are already whitespace/comment free; no additional normalization needed yet.
+    let _ = tokens;
+}
+
+fn parse_expression(tokens: &[MToken]) -> Result<MExpr, MParseError> {
+    if let Some(let_ast) = parse_let(tokens)? {
+        return Ok(let_ast);
+    }
+
+    Ok(MExpr::Sequence(tokens.to_vec()))
+}
+
+fn parse_let(tokens: &[MToken]) -> Result<Option<MExpr>, MParseError> {
+    if !matches!(tokens.first(), Some(MToken::KeywordLet)) {
+        return Ok(None);
+    }
+
+    let mut idx = 1usize;
+    let mut bindings = Vec::new();
+    let mut found_in = false;
+
+    while idx < tokens.len() {
+        let name = match tokens.get(idx) {
+            Some(MToken::Identifier(name)) => name.clone(),
+            _ => return Err(MParseError::InvalidLetBinding),
+        };
+        idx += 1;
+
+        if !matches!(tokens.get(idx), Some(MToken::Symbol('='))) {
+            return Err(MParseError::InvalidLetBinding);
+        }
+        idx += 1;
+
+        let value_start = idx;
+        let mut depth = 0i32;
+        let mut value_end: Option<usize> = None;
+
+        while idx < tokens.len() {
+            match &tokens[idx] {
+                MToken::Symbol(c) if *c == '(' || *c == '[' || *c == '{' => depth += 1,
+                MToken::Symbol(c) if *c == ')' || *c == ']' || *c == '}' => {
+                    if depth > 0 {
+                        depth -= 1;
+                    }
+                }
+                MToken::Symbol(',') if depth == 0 => {
+                    value_end = Some(idx);
+                    idx += 1;
+                    break;
+                }
+                MToken::KeywordIn if depth == 0 => {
+                    value_end = Some(idx);
+                    found_in = true;
+                    break;
+                }
+                _ => {}
+            }
+
+            idx += 1;
+        }
+
+        let end = value_end.ok_or(MParseError::MissingInClause)?;
+        if end <= value_start {
+            return Err(MParseError::InvalidLetBinding);
+        }
+
+        let value_expr = parse_expression(&tokens[value_start..end])?;
+        bindings.push(LetBinding {
+            name,
+            value: Box::new(value_expr),
+        });
+
+        if found_in {
+            idx = end + 1; // skip the 'in' token
+            break;
+        }
+    }
+
+    if !found_in {
+        return Err(MParseError::MissingInClause);
+    }
+
+    if idx > tokens.len() {
+        return Err(MParseError::InvalidLetBinding);
+    }
+
+    let body_tokens = &tokens[idx..];
+    if body_tokens.is_empty() {
+        return Err(MParseError::InvalidLetBinding);
+    }
+    let body = parse_expression(body_tokens)?;
+
+    Ok(Some(MExpr::Let {
+        bindings,
+        body: Box::new(body),
+    }))
+}
+
+fn tokenize(source: &str) -> Result<Vec<MToken>, MParseError> {
+    let mut tokens = Vec::new();
+    let mut chars = source.chars().peekable();
+    let mut delimiters: Vec<char> = Vec::new();
+
+    while let Some(ch) = chars.next() {
+        if ch.is_whitespace() {
+            continue;
+        }
+
+        if ch == '/' {
+            if matches!(chars.peek(), Some('/')) {
+                skip_line_comment(&mut chars);
+                continue;
+            }
+            if matches!(chars.peek(), Some('*')) {
+                chars.next();
+                skip_block_comment(&mut chars)?;
+                continue;
+            }
+        }
+
+        if ch == '"' {
+            let literal = parse_string(&mut chars)?;
+            tokens.push(MToken::StringLiteral(literal));
+            continue;
+        }
+
+        if ch == '#' {
+            if matches!(chars.peek(), Some('"')) {
+                chars.next();
+                let ident = parse_string(&mut chars)?;
+                tokens.push(MToken::Identifier(ident));
+                continue;
+            }
+            tokens.push(MToken::Symbol('#'));
+            continue;
+        }
+
+        if is_identifier_start(ch) {
+            let ident = parse_identifier(ch, &mut chars);
+            if ident.eq_ignore_ascii_case("let") {
+                tokens.push(MToken::KeywordLet);
+            } else if ident.eq_ignore_ascii_case("in") {
+                tokens.push(MToken::KeywordIn);
+            } else {
+                tokens.push(MToken::Identifier(ident));
+            }
+            continue;
+        }
+
+        if ch.is_ascii_digit() {
+            let number = parse_number(ch, &mut chars);
+            tokens.push(MToken::Number(number));
+            continue;
+        }
+
+        if is_open_delimiter(ch) {
+            delimiters.push(ch);
+        } else if is_close_delimiter(ch) {
+            let Some(open) = delimiters.pop() else {
+                return Err(MParseError::UnbalancedDelimiter);
+            };
+            if !delimiters_match(open, ch) {
+                return Err(MParseError::UnbalancedDelimiter);
+            }
+        }
+
+        tokens.push(MToken::Symbol(ch));
+    }
+
+    if !delimiters.is_empty() {
+        return Err(MParseError::UnbalancedDelimiter);
+    }
+
+    Ok(tokens)
+}
+
+#[allow(clippy::while_let_on_iterator)]
+fn skip_line_comment(chars: &mut Peekable<Chars<'_>>) {
+    while let Some(ch) = chars.next() {
+        if ch == '\n' {
+            break;
+        }
+    }
+}
+
+#[allow(clippy::while_let_on_iterator)]
+fn skip_block_comment(chars: &mut Peekable<Chars<'_>>) -> Result<(), MParseError> {
+    while let Some(ch) = chars.next() {
+        if ch == '*' && matches!(chars.peek(), Some('/')) {
+            chars.next();
+            return Ok(());
+        }
+    }
+
+    Err(MParseError::UnterminatedBlockComment)
+}
+
+fn parse_string(chars: &mut Peekable<Chars<'_>>) -> Result<String, MParseError> {
+    let mut buf = String::new();
+
+    while let Some(ch) = chars.next() {
+        if ch == '"' {
+            if matches!(chars.peek(), Some('"')) {
+                buf.push('"');
+                chars.next();
+                continue;
+            }
+            return Ok(buf);
+        }
+
+        buf.push(ch);
+    }
+
+    Err(MParseError::UnterminatedString)
+}
+
+fn parse_identifier(first: char, chars: &mut Peekable<Chars<'_>>) -> String {
+    let mut ident = String::new();
+    ident.push(first);
+
+    while let Some(&next) = chars.peek() {
+        if is_identifier_continue(next) {
+            ident.push(next);
+            chars.next();
+        } else {
+            break;
+        }
+    }
+
+    ident
+}
+
+fn parse_number(first: char, chars: &mut Peekable<Chars<'_>>) -> String {
+    let mut number = String::new();
+    number.push(first);
+
+    while let Some(&next) = chars.peek() {
+        if next.is_ascii_digit() || next == '.' {
+            number.push(next);
+            chars.next();
+        } else {
+            break;
+        }
+    }
+
+    number
+}
+
+fn is_identifier_start(ch: char) -> bool {
+    ch.is_ascii_alphabetic() || ch == '_'
+}
+
+fn is_identifier_continue(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_'
+}
+
+fn is_open_delimiter(ch: char) -> bool {
+    matches!(ch, '(' | '[' | '{')
+}
+
+fn is_close_delimiter(ch: char) -> bool {
+    matches!(ch, ')' | ']' | '}')
+}
+
+fn delimiters_match(open: char, close: char) -> bool {
+    matches!((open, close), ('(', ')') | ('[', ']') | ('{', '}'))
+}
 ```
 
 ---
@@ -7073,16 +7460,8 @@ fn d5_composite_key_duplicate_keys_fallback_to_spreadsheet_mode() {
 
 #[test]
 fn d5_non_contiguous_key_columns_equal_reordered_empty_diff() {
-    let grid_a = grid_from_numbers(&[
-        &[1, 999, 10, 100],
-        &[1, 888, 20, 200],
-        &[2, 777, 10, 300],
-    ]);
-    let grid_b = grid_from_numbers(&[
-        &[2, 777, 10, 300],
-        &[1, 999, 10, 100],
-        &[1, 888, 20, 200],
-    ]);
+    let grid_a = grid_from_numbers(&[&[1, 999, 10, 100], &[1, 888, 20, 200], &[2, 777, 10, 300]]);
+    let grid_b = grid_from_numbers(&[&[2, 777, 10, 300], &[1, 999, 10, 100], &[1, 888, 20, 200]]);
 
     let report = diff_grids_database_mode(&grid_a, &grid_b, &[0, 2]);
     assert!(
@@ -7093,16 +7472,8 @@ fn d5_non_contiguous_key_columns_equal_reordered_empty_diff() {
 
 #[test]
 fn d5_non_contiguous_key_columns_detects_edits_in_skipped_column() {
-    let grid_a = grid_from_numbers(&[
-        &[1, 999, 10, 100],
-        &[1, 888, 20, 200],
-        &[2, 777, 10, 300],
-    ]);
-    let grid_b = grid_from_numbers(&[
-        &[2, 111, 10, 300],
-        &[1, 222, 10, 100],
-        &[1, 333, 20, 200],
-    ]);
+    let grid_a = grid_from_numbers(&[&[1, 999, 10, 100], &[1, 888, 20, 200], &[2, 777, 10, 300]]);
+    let grid_b = grid_from_numbers(&[&[2, 111, 10, 300], &[1, 222, 10, 100], &[1, 333, 20, 200]]);
 
     let report = diff_grids_database_mode(&grid_a, &grid_b, &[0, 2]);
 
@@ -7148,15 +7519,8 @@ fn d5_non_contiguous_key_columns_detects_edits_in_skipped_column() {
 
 #[test]
 fn d5_non_contiguous_key_columns_row_added_and_cell_edited() {
-    let grid_a = grid_from_numbers(&[
-        &[1, 999, 10, 100],
-        &[1, 888, 20, 200],
-    ]);
-    let grid_b = grid_from_numbers(&[
-        &[1, 999, 10, 150],
-        &[1, 888, 20, 200],
-        &[2, 777, 30, 300],
-    ]);
+    let grid_a = grid_from_numbers(&[&[1, 999, 10, 100], &[1, 888, 20, 200]]);
+    let grid_b = grid_from_numbers(&[&[1, 999, 10, 150], &[1, 888, 20, 200], &[2, 777, 30, 300]]);
 
     let report = diff_grids_database_mode(&grid_a, &grid_b, &[0, 2]);
 
@@ -7212,12 +7576,8 @@ fn d5_three_column_composite_key_equal_reordered_empty_diff() {
 
 #[test]
 fn d5_three_column_composite_key_partial_match_yields_add_and_remove() {
-    let grid_a = grid_from_numbers(&[
-        &[1, 10, 100, 1000],
-    ]);
-    let grid_b = grid_from_numbers(&[
-        &[1, 10, 200, 1000],
-    ]);
+    let grid_a = grid_from_numbers(&[&[1, 10, 100, 1000]]);
+    let grid_b = grid_from_numbers(&[&[1, 10, 200, 1000]]);
 
     let report = diff_grids_database_mode(&grid_a, &grid_b, &[0, 1, 2]);
 
@@ -10654,6 +11014,124 @@ fn invalid_section_syntax_propagates_error() {
         result,
         Err(SectionParseError::InvalidMemberSyntax)
     ));
+}
+```
+
+---
+
+### File: `core\tests\m7_ast_canonicalization_tests.rs`
+
+```rust
+use excel_diff::{
+    DataMashup, MParseError, ast_semantically_equal, build_data_mashup, build_queries,
+    canonicalize_m_ast, open_data_mashup, parse_m_expression,
+};
+
+mod common;
+use common::fixture_path;
+
+fn load_datamashup(name: &str) -> DataMashup {
+    let raw = open_data_mashup(fixture_path(name))
+        .expect("fixture should open")
+        .expect("DataMashup should be present");
+    build_data_mashup(&raw).expect("DataMashup should build")
+}
+
+fn load_single_query_expression(workbook: &str) -> String {
+    let dm = load_datamashup(workbook);
+    let queries = build_queries(&dm).expect("queries should parse");
+    queries
+        .first()
+        .expect("fixture should contain a query")
+        .expression_m
+        .clone()
+}
+
+fn load_query_expression(workbook: &str, query_name: &str) -> String {
+    let dm = load_datamashup(workbook);
+    let queries = build_queries(&dm).expect("queries should parse");
+    queries
+        .into_iter()
+        .find(|q| q.name == query_name)
+        .expect("expected query to exist")
+        .expression_m
+}
+
+#[test]
+fn parse_basic_let_query_succeeds() {
+    let expr = load_single_query_expression("one_query.xlsx");
+
+    let result = parse_m_expression(&expr);
+
+    assert!(result.is_ok(), "expected parse to succeed");
+}
+
+#[test]
+fn formatting_only_queries_semantically_equal() {
+    let expr_a = load_query_expression("m_formatting_only_a.xlsx", "Section1/FormatTest");
+    let expr_b = load_query_expression("m_formatting_only_b.xlsx", "Section1/FormatTest");
+
+    let mut ast_a = parse_m_expression(&expr_a).expect("formatting-only A should parse");
+    let mut ast_b = parse_m_expression(&expr_b).expect("formatting-only B should parse");
+
+    canonicalize_m_ast(&mut ast_a);
+    canonicalize_m_ast(&mut ast_b);
+
+    assert!(
+        ast_semantically_equal(&ast_a, &ast_b),
+        "formatting-only variants should be equal after canonicalization"
+    );
+}
+
+#[test]
+fn formatting_only_variant_detects_semantic_change() {
+    let expr_b = load_query_expression("m_formatting_only_b.xlsx", "Section1/FormatTest");
+    let expr_variant =
+        load_query_expression("m_formatting_only_b_variant.xlsx", "Section1/FormatTest");
+
+    let mut ast_b = parse_m_expression(&expr_b).expect("formatting-only B should parse");
+    let mut ast_variant =
+        parse_m_expression(&expr_variant).expect("formatting-only B variant should parse");
+
+    canonicalize_m_ast(&mut ast_b);
+    canonicalize_m_ast(&mut ast_variant);
+
+    assert!(
+        !ast_semantically_equal(&ast_b, &ast_variant),
+        "semantic change should be detected even after canonicalization"
+    );
+}
+
+#[test]
+fn malformed_query_yields_parse_error() {
+    let malformed = "let\n    Source = 1\n// missing 'in' and expression";
+
+    let result = parse_m_expression(malformed);
+
+    assert!(
+        matches!(
+            result,
+            Err(MParseError::MissingInClause | MParseError::InvalidLetBinding)
+        ),
+        "missing 'in' should produce a parse error"
+    );
+}
+
+#[test]
+fn canonicalization_is_idempotent() {
+    let expr = load_query_expression("m_formatting_only_b.xlsx", "Section1/FormatTest");
+
+    let mut ast_once = parse_m_expression(&expr).expect("formatting-only B should parse");
+    let mut ast_twice = ast_once.clone();
+
+    canonicalize_m_ast(&mut ast_once);
+    canonicalize_m_ast(&mut ast_twice);
+    canonicalize_m_ast(&mut ast_twice);
+
+    assert_eq!(
+        ast_once, ast_twice,
+        "canonicalization should produce a stable AST"
+    );
 }
 ```
 
@@ -14402,6 +14880,28 @@ scenarios:
       base_file: "templates/base_query.xlsx"
     output: "m_rename_query_b.xlsx"
 
+  # --- Milestone 7: M AST canonicalization ---
+  - id: "m_formatting_only_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_formatting_only_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_formatting_only_a.xlsx"
+
+  - id: "m_formatting_only_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_formatting_only_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_formatting_only_b.xlsx"
+
+  - id: "m_formatting_only_b_variant"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_formatting_only_b_variant"
+      base_file: "templates/base_query.xlsx"
+    output: "m_formatting_only_b_variant.xlsx"
+
   # --- P1: Large Dense Grid (Performance Baseline) ---
   - id: "p1_large_dense"
     generator: "perf_large"
@@ -16643,6 +17143,60 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
             return m_diff_scenario(
                 [
                     {"name": "Bar", "body": "1", "load_to_sheet": True, "load_to_model": False},
+                ]
+            )
+
+        if self.mode == "m_formatting_only_a":
+            return m_diff_scenario(
+                [
+                    {
+                        "name": "FormatTest",
+                        "body": 'let Source=Excel.CurrentWorkbook(){[Name="Table1"]}[Content] in Source',
+                        "load_to_sheet": True,
+                        "load_to_model": False,
+                    },
+                ]
+            )
+
+        if self.mode == "m_formatting_only_b":
+            body = "\n".join(
+                [
+                    "let",
+                    "    // Load the current workbook table",
+                    "    Source = Excel.CurrentWorkbook(){[Name = \"Table1\"]}[Content]",
+                    "in",
+                    "    Source",
+                ]
+            )
+            return m_diff_scenario(
+                [
+                    {
+                        "name": "FormatTest",
+                        "body": body,
+                        "load_to_sheet": True,
+                        "load_to_model": False,
+                    },
+                ]
+            )
+
+        if self.mode == "m_formatting_only_b_variant":
+            body = "\n".join(
+                [
+                    "let",
+                    "    // Load a different table",
+                    "    Source = Excel.CurrentWorkbook(){[Name = \"Table2\"]}[Content]",
+                    "in",
+                    "    Source",
+                ]
+            )
+            return m_diff_scenario(
+                [
+                    {
+                        "name": "FormatTest",
+                        "body": body,
+                        "load_to_sheet": True,
+                        "load_to_model": False,
+                    },
                 ]
             )
 

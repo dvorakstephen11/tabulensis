@@ -278,6 +278,12 @@ MStep {
 }
 ```
 
+Current parser scope (M7a) is intentionally narrow while the AST surface stabilizes:
+
+- `parse_m_expression` understands top-level `let ... in ...` with nested `let` bindings inside values; other expressions are preserved as opaque token sequences.
+- The lexer special-cases only `let`/`in`, quoted identifiers (`#"Foo"`), and hash-prefixed literals like `#date`/`#datetime`, treating other keywords generically.
+- Callers should treat failures on richer M syntax as "unsupported grammar" rather than malformed input until broader grammar support lands.
+
 `steps` is the crucial structure for semantic diff. Each step corresponds to a meaningful UI operation (filter, join, column removal, etc.) when possible. The metadata struct mirrors the fields surfaced in the Metadata XML and should preserve unknown attributes for forward compatibility.
 
 Query lists are built by joining `Section1` shared members to Metadata formulas in **Section1 order**. Every shared member produces a `Query`; if Metadata is missing for that member, the builder synthesizes a `QueryMetadata` with `item_path = "{SectionName}/{MemberName}"`, `load_to_sheet = false`, `load_to_model = false`, `is_connection_only = true`, and `group_path = None`. Orphan metadata entries remain in `Metadata.formulas` but are not surfaced as `Query` values.

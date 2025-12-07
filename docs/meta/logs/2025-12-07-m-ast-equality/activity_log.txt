@@ -6,3 +6,9 @@
 - Added formatting-only M scenarios to fixtures/src/generators/mashup.py (m_formatting_only_{a,b,b_variant}) and fixtures/manifest.yaml; generated fixtures/generated/m_formatting_only_*.xlsx via MashupPermissionsMetadataGenerator.
 - Added AST parsing/canonicalization/equality coverage in core/tests/m7_ast_canonicalization_tests.rs using new fixtures (formatting-equal/variant, malformed, idempotence).
 - Ran cargo fmt, cargo clippy --all-targets (clean after silencing iterator lint in comment skip helpers), and cargo test -- --test-threads=1; full suite green after rerunning serial due to a BrokenPipe during initial parallel run.
+
+## Remediation Round 1
+- Addressed Findings 1-5 from verification: fixed nested `let` parsing (tracks nested let/in depth), documented current parser scope/limitations, improved hash-literal lexing (`#date` etc.), and added direct coverage for error variants plus AST shape checks.
+- Changes: core/src/m_ast.rs, core/tests/m7_ast_canonicalization_tests.rs, docs/rust_docs/excel_diff_specification.md.
+- Added tests for nested lets, empty/unterminated input errors, unbalanced delimiters, hash literal tokenization, and root AST shape assertions for the basic let query.
+- Commands: cargo fmt; cargo clippy --all-targets; cargo test -- --test-threads=1 (initial parallel run hit BrokenPipe, reran serial successfully).

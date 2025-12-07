@@ -9,6 +9,12 @@ pub struct MModuleAst {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MAstKind {
+    Let { binding_count: usize },
+    Sequence { token_count: usize },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum MExpr {
     Let {
         bindings: Vec<LetBinding>,
@@ -33,6 +39,16 @@ enum MToken {
     Symbol(char),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MTokenDebug {
+    KeywordLet,
+    KeywordIn,
+    Identifier(String),
+    StringLiteral(String),
+    Number(String),
+    Symbol(char),
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum MParseError {
     #[error("expression is empty")]
@@ -49,6 +65,51 @@ pub enum MParseError {
     MissingInClause,
 }
 
+impl From<&MToken> for MTokenDebug {
+    fn from(token: &MToken) -> Self {
+        match token {
+            MToken::KeywordLet => MTokenDebug::KeywordLet,
+            MToken::KeywordIn => MTokenDebug::KeywordIn,
+            MToken::Identifier(v) => MTokenDebug::Identifier(v.clone()),
+            MToken::StringLiteral(v) => MTokenDebug::StringLiteral(v.clone()),
+            MToken::Number(v) => MTokenDebug::Number(v.clone()),
+            MToken::Symbol(v) => MTokenDebug::Symbol(*v),
+        }
+    }
+}
+
+impl MModuleAst {
+    /// Returns a minimal view of the root expression kind for tests and debugging.
+    ///
+    /// This keeps the AST opaque for production consumers while allowing
+    /// tests to assert the expected structure.
+    pub fn root_kind_for_testing(&self) -> MAstKind {
+        match &self.root {
+            MExpr::Let { bindings, .. } => MAstKind::Let {
+                binding_count: bindings.len(),
+            },
+            MExpr::Sequence(tokens) => MAstKind::Sequence {
+                token_count: tokens.len(),
+            },
+        }
+    }
+}
+
+/// Tokenize an M expression for testing and diagnostics.
+///
+/// The returned tokens are a debug-friendly mirror of the internal lexer output
+/// and are not part of the stable public API.
+pub fn tokenize_for_testing(source: &str) -> Result<Vec<MTokenDebug>, MParseError> {
+    tokenize(source).map(|tokens| tokens.iter().map(MTokenDebug::from).collect())
+}
+
+/// Parse a Power Query M expression into a minimal AST.
+///
+/// Currently supports top-level `let ... in ...` expressions with simple identifier
+/// bindings. Non-`let` inputs are preserved as opaque token sequences. The lexer
+/// recognizes `let`/`in`, quoted identifiers (`#"Foo"`), and hash-prefixed literals
+/// like `#date`/`#datetime` as single identifiers; other M constructs are parsed
+/// best-effort and may be treated as generic tokens.
 pub fn parse_m_expression(source: &str) -> Result<MModuleAst, MParseError> {
     let tokens = tokenize(source)?;
     if tokens.is_empty() {
@@ -116,6 +177,7 @@ fn parse_let(tokens: &[MToken]) -> Result<Option<MExpr>, MParseError> {
         let value_start = idx;
         let mut depth = 0i32;
         let mut value_end: Option<usize> = None;
+        let mut let_depth_in_value = 0i32;
 
         while idx < tokens.len() {
             match &tokens[idx] {
@@ -125,14 +187,21 @@ fn parse_let(tokens: &[MToken]) -> Result<Option<MExpr>, MParseError> {
                         depth -= 1;
                     }
                 }
-                MToken::Symbol(',') if depth == 0 => {
+                MToken::KeywordLet => {
+                    let_depth_in_value += 1;
+                }
+                MToken::KeywordIn => {
+                    if let_depth_in_value > 0 {
+                        let_depth_in_value -= 1;
+                    } else if depth == 0 {
+                        value_end = Some(idx);
+                        found_in = true;
+                        break;
+                    }
+                }
+                MToken::Symbol(',') if depth == 0 && let_depth_in_value == 0 => {
                     value_end = Some(idx);
                     idx += 1;
-                    break;
-                }
-                MToken::KeywordIn if depth == 0 => {
-                    value_end = Some(idx);
-                    found_in = true;
                     break;
                 }
                 _ => {}
@@ -211,6 +280,14 @@ fn tokenize(source: &str) -> Result<Vec<MToken>, MParseError> {
                 chars.next();
                 let ident = parse_string(&mut chars)?;
                 tokens.push(MToken::Identifier(ident));
+                continue;
+            }
+            if let Some(next) = chars.peek().copied()
+                && is_identifier_start(next)
+            {
+                chars.next();
+                let ident = parse_identifier(next, &mut chars);
+                tokens.push(MToken::Identifier(format!("#{ident}")));
                 continue;
             }
             tokens.push(MToken::Symbol('#'));
