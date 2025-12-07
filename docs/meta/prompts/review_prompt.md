@@ -4059,6 +4059,12 @@ pub struct MModuleAst {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MAstKind {
+    Let { binding_count: usize },
+    Sequence { token_count: usize },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum MExpr {
     Let {
         bindings: Vec<LetBinding>,
@@ -4083,6 +4089,16 @@ enum MToken {
     Symbol(char),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MTokenDebug {
+    KeywordLet,
+    KeywordIn,
+    Identifier(String),
+    StringLiteral(String),
+    Number(String),
+    Symbol(char),
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum MParseError {
     #[error("expression is empty")]
@@ -4099,6 +4115,51 @@ pub enum MParseError {
     MissingInClause,
 }
 
+impl From<&MToken> for MTokenDebug {
+    fn from(token: &MToken) -> Self {
+        match token {
+            MToken::KeywordLet => MTokenDebug::KeywordLet,
+            MToken::KeywordIn => MTokenDebug::KeywordIn,
+            MToken::Identifier(v) => MTokenDebug::Identifier(v.clone()),
+            MToken::StringLiteral(v) => MTokenDebug::StringLiteral(v.clone()),
+            MToken::Number(v) => MTokenDebug::Number(v.clone()),
+            MToken::Symbol(v) => MTokenDebug::Symbol(*v),
+        }
+    }
+}
+
+impl MModuleAst {
+    /// Returns a minimal view of the root expression kind for tests and debugging.
+    ///
+    /// This keeps the AST opaque for production consumers while allowing
+    /// tests to assert the expected structure.
+    pub fn root_kind_for_testing(&self) -> MAstKind {
+        match &self.root {
+            MExpr::Let { bindings, .. } => MAstKind::Let {
+                binding_count: bindings.len(),
+            },
+            MExpr::Sequence(tokens) => MAstKind::Sequence {
+                token_count: tokens.len(),
+            },
+        }
+    }
+}
+
+/// Tokenize an M expression for testing and diagnostics.
+///
+/// The returned tokens are a debug-friendly mirror of the internal lexer output
+/// and are not part of the stable public API.
+pub fn tokenize_for_testing(source: &str) -> Result<Vec<MTokenDebug>, MParseError> {
+    tokenize(source).map(|tokens| tokens.iter().map(MTokenDebug::from).collect())
+}
+
+/// Parse a Power Query M expression into a minimal AST.
+///
+/// Currently supports top-level `let ... in ...` expressions with simple identifier
+/// bindings. Non-`let` inputs are preserved as opaque token sequences. The lexer
+/// recognizes `let`/`in`, quoted identifiers (`#"Foo"`), and hash-prefixed literals
+/// like `#date`/`#datetime` as single identifiers; other M constructs are parsed
+/// best-effort and may be treated as generic tokens.
 pub fn parse_m_expression(source: &str) -> Result<MModuleAst, MParseError> {
     let tokens = tokenize(source)?;
     if tokens.is_empty() {
@@ -4166,6 +4227,7 @@ fn parse_let(tokens: &[MToken]) -> Result<Option<MExpr>, MParseError> {
         let value_start = idx;
         let mut depth = 0i32;
         let mut value_end: Option<usize> = None;
+        let mut let_depth_in_value = 0i32;
 
         while idx < tokens.len() {
             match &tokens[idx] {
@@ -4175,14 +4237,21 @@ fn parse_let(tokens: &[MToken]) -> Result<Option<MExpr>, MParseError> {
                         depth -= 1;
                     }
                 }
-                MToken::Symbol(',') if depth == 0 => {
+                MToken::KeywordLet => {
+                    let_depth_in_value += 1;
+                }
+                MToken::KeywordIn => {
+                    if let_depth_in_value > 0 {
+                        let_depth_in_value -= 1;
+                    } else if depth == 0 {
+                        value_end = Some(idx);
+                        found_in = true;
+                        break;
+                    }
+                }
+                MToken::Symbol(',') if depth == 0 && let_depth_in_value == 0 => {
                     value_end = Some(idx);
                     idx += 1;
-                    break;
-                }
-                MToken::KeywordIn if depth == 0 => {
-                    value_end = Some(idx);
-                    found_in = true;
                     break;
                 }
                 _ => {}
@@ -4261,6 +4330,14 @@ fn tokenize(source: &str) -> Result<Vec<MToken>, MParseError> {
                 chars.next();
                 let ident = parse_string(&mut chars)?;
                 tokens.push(MToken::Identifier(ident));
+                continue;
+            }
+            if let Some(next) = chars.peek().copied()
+                && is_identifier_start(next)
+            {
+                chars.next();
+                let ident = parse_identifier(next, &mut chars);
+                tokens.push(MToken::Identifier(format!("#{ident}")));
                 continue;
             }
             tokens.push(MToken::Symbol('#'));
@@ -11022,6 +11099,7 @@ fn invalid_section_syntax_propagates_error() {
 ### File: `core\tests\m7_ast_canonicalization_tests.rs`
 
 ```rust
+use excel_diff::m_ast::{MAstKind, MTokenDebug, tokenize_for_testing};
 use excel_diff::{
     DataMashup, MParseError, ast_semantically_equal, build_data_mashup, build_queries,
     canonicalize_m_ast, open_data_mashup, parse_m_expression,
@@ -11064,6 +11142,67 @@ fn parse_basic_let_query_succeeds() {
     let result = parse_m_expression(&expr);
 
     assert!(result.is_ok(), "expected parse to succeed");
+}
+
+#[test]
+fn basic_let_query_ast_is_let() {
+    let expr = load_single_query_expression("one_query.xlsx");
+
+    let ast = parse_m_expression(&expr).expect("expected parse to succeed");
+    match ast.root_kind_for_testing() {
+        MAstKind::Let { binding_count } => {
+            assert!(
+                binding_count >= 1,
+                "expected at least one binding in basic let query"
+            );
+        }
+        other => panic!("expected let root, got {:?}", other),
+    }
+}
+
+#[test]
+fn nested_let_in_binding_parses_successfully() {
+    let expr = r#"
+        let
+            Source = let x = 1 in x,
+            Result = Source
+        in
+            Result
+    "#;
+
+    let mut ast = parse_m_expression(expr).expect("nested let should parse");
+    let mut ast_again = ast.clone();
+
+    canonicalize_m_ast(&mut ast);
+    canonicalize_m_ast(&mut ast_again);
+
+    assert!(
+        ast_semantically_equal(&ast, &ast_again),
+        "canonicalization should not change equality for nested lets"
+    );
+}
+
+#[test]
+fn nested_let_formatting_only_equal() {
+    let expr_a = r#"
+        let
+            Source = let x = 1 in x,
+            Result = Source
+        in
+            Result
+    "#;
+    let expr_b = r#"let Source = let x = 1 in x, Result = Source in Result"#;
+
+    let mut ast_a = parse_m_expression(expr_a).expect("first nested let should parse");
+    let mut ast_b = parse_m_expression(expr_b).expect("second nested let should parse");
+
+    canonicalize_m_ast(&mut ast_a);
+    canonicalize_m_ast(&mut ast_b);
+
+    assert!(
+        ast_semantically_equal(&ast_a, &ast_b),
+        "formatting-only differences with nested lets should compare equal"
+    );
 }
 
 #[test]
@@ -11118,6 +11257,59 @@ fn malformed_query_yields_parse_error() {
 }
 
 #[test]
+fn empty_expression_is_error() {
+    let cases = ["", "   // only comment", "/* only block comment */"];
+
+    for case in cases {
+        let result = parse_m_expression(case);
+        assert!(
+            matches!(result, Err(MParseError::Empty)),
+            "empty or comment-only input should return Empty, got {:?}",
+            result
+        );
+    }
+}
+
+#[test]
+fn unterminated_string_yields_error() {
+    let result = parse_m_expression("\"unterminated");
+
+    assert!(
+        matches!(result, Err(MParseError::UnterminatedString)),
+        "unterminated string should surface the correct error"
+    );
+}
+
+#[test]
+fn unterminated_block_comment_yields_error() {
+    let result = parse_m_expression("let Source = 1 /* unterminated");
+
+    assert!(
+        matches!(result, Err(MParseError::UnterminatedBlockComment)),
+        "unterminated block comment should surface the correct error"
+    );
+}
+
+#[test]
+fn unbalanced_delimiter_yields_error() {
+    let cases = [
+        "let Source = (1",
+        "let Source = [1",
+        "let Source = {1",
+        "let Source = (1]",
+    ];
+
+    for case in cases {
+        let result = parse_m_expression(case);
+        assert!(
+            matches!(result, Err(MParseError::UnbalancedDelimiter)),
+            "unbalanced delimiters should error, got {:?}",
+            result
+        );
+    }
+}
+
+#[test]
 fn canonicalization_is_idempotent() {
     let expr = load_query_expression("m_formatting_only_b.xlsx", "Section1/FormatTest");
 
@@ -11131,6 +11323,30 @@ fn canonicalization_is_idempotent() {
     assert_eq!(
         ast_once, ast_twice,
         "canonicalization should produce a stable AST"
+    );
+}
+
+#[test]
+fn hash_date_tokenization_is_atomic() {
+    let tokens = tokenize_for_testing(r#"#"Foo" = #date(2020,1,1)"#)
+        .expect("hash literal tokenization should succeed");
+
+    let expected = vec![
+        MTokenDebug::Identifier("Foo".to_string()),
+        MTokenDebug::Symbol('='),
+        MTokenDebug::Identifier("#date".to_string()),
+        MTokenDebug::Symbol('('),
+        MTokenDebug::Number("2020".to_string()),
+        MTokenDebug::Symbol(','),
+        MTokenDebug::Number("1".to_string()),
+        MTokenDebug::Symbol(','),
+        MTokenDebug::Number("1".to_string()),
+        MTokenDebug::Symbol(')'),
+    ];
+
+    assert_eq!(
+        expected, tokens,
+        "hash-prefixed literals should be lexed as single identifiers"
     );
 }
 ```
