@@ -146,3 +146,124 @@ fn d1_database_mode_cell_edited_with_reorder() {
         "database mode should ignore reordering and find only the cell edit for key 2"
     );
 }
+
+#[test]
+fn d5_composite_key_equal_reordered_database_mode_empty_diff() {
+    let grid_a = grid_from_numbers(&[&[1, 10, 100], &[1, 20, 200], &[2, 10, 300]]);
+    let grid_b = grid_from_numbers(&[&[2, 10, 300], &[1, 10, 100], &[1, 20, 200]]);
+
+    let report = diff_grids_database_mode(&grid_a, &grid_b, &[0, 1]);
+    assert!(
+        report.ops.is_empty(),
+        "composite keyed alignment should ignore row order differences"
+    );
+}
+
+#[test]
+fn d5_composite_key_row_added_and_cell_edited() {
+    let grid_a = grid_from_numbers(&[&[1, 10, 100], &[1, 20, 200]]);
+    let grid_b = grid_from_numbers(&[&[1, 10, 150], &[1, 20, 200], &[2, 30, 300]]);
+
+    let report = diff_grids_database_mode(&grid_a, &grid_b, &[0, 1]);
+
+    let row_added_count = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::RowAdded { .. }))
+        .count();
+    assert_eq!(
+        row_added_count, 1,
+        "new composite key should produce exactly one RowAdded"
+    );
+
+    let row_removed_count = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::RowRemoved { .. }))
+        .count();
+    assert_eq!(
+        row_removed_count, 0,
+        "no rows should be removed when only a new composite key is introduced"
+    );
+
+    let mut cell_edited_iter = report.ops.iter().filter_map(|op| {
+        if let DiffOp::CellEdited { addr, .. } = op {
+            Some(addr)
+        } else {
+            None
+        }
+    });
+
+    let edited_addr = cell_edited_iter
+        .next()
+        .expect("one cell edit for changed non-key value");
+    assert!(
+        cell_edited_iter.next().is_none(),
+        "only one CellEdited should be present"
+    );
+    assert_eq!(edited_addr.col, 2, "only non-key column should be edited");
+    assert_eq!(
+        edited_addr.row, 0,
+        "cell edit should reference the row of key (1,10) in the new grid"
+    );
+}
+
+#[test]
+fn d5_composite_key_partial_key_mismatch_yields_add_and_remove() {
+    let grid_a = grid_from_numbers(&[&[1, 10, 100]]);
+    let grid_b = grid_from_numbers(&[&[1, 20, 100]]);
+
+    let report = diff_grids_database_mode(&grid_a, &grid_b, &[0, 1]);
+
+    let row_removed_count = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::RowRemoved { .. }))
+        .count();
+    assert_eq!(
+        row_removed_count, 1,
+        "changed composite key should remove the old tuple"
+    );
+
+    let row_added_count = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::RowAdded { .. }))
+        .count();
+    assert_eq!(
+        row_added_count, 1,
+        "changed composite key should add the new tuple"
+    );
+
+    let cell_edited_count = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::CellEdited { .. }))
+        .count();
+    assert_eq!(
+        cell_edited_count, 0,
+        "partial key match must not be treated as a cell edit"
+    );
+}
+
+#[test]
+fn d5_composite_key_duplicate_keys_fallback_to_spreadsheet_mode() {
+    let grid_a = grid_from_numbers(&[&[1, 10, 100], &[1, 10, 200]]);
+    let grid_b = grid_from_numbers(&[&[1, 10, 100]]);
+
+    let report = diff_grids_database_mode(&grid_a, &grid_b, &[0, 1]);
+
+    assert!(
+        !report.ops.is_empty(),
+        "duplicate composite keys should trigger spreadsheet-mode fallback"
+    );
+
+    let has_row_removed = report
+        .ops
+        .iter()
+        .any(|op| matches!(op, DiffOp::RowRemoved { .. }));
+    assert!(
+        has_row_removed,
+        "fallback should emit a RowRemoved reflecting duplicate handling"
+    );
+}

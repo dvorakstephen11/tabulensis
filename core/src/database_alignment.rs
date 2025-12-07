@@ -210,4 +210,33 @@ mod tests {
         let err = diff_table_by_key(&grid_a, &grid_b, &[0]).expect_err("duplicate keys");
         assert!(matches!(err, KeyAlignmentError::DuplicateKeyLeft(_)));
     }
+
+    #[test]
+    fn composite_key_alignment_matches_rows_correctly() {
+        let grid_a = grid_from_rows(&[&[1, 10, 100], &[1, 20, 200], &[2, 10, 300]]);
+        let grid_b = grid_from_rows(&[&[1, 20, 200], &[2, 10, 300], &[1, 10, 100]]);
+
+        let alignment =
+            diff_table_by_key(&grid_a, &grid_b, &[0, 1]).expect("unique composite keys");
+
+        assert!(
+            alignment.left_only_rows.is_empty(),
+            "no left-only rows expected"
+        );
+        assert!(
+            alignment.right_only_rows.is_empty(),
+            "no right-only rows expected"
+        );
+
+        let mut matched = alignment.matched_rows.clone();
+        matched.sort_unstable();
+
+        let mut expected = vec![(0, 2), (1, 0), (2, 1)];
+        expected.sort_unstable();
+
+        assert_eq!(
+            matched, expected,
+            "composite keys should align rows sharing the same key tuple regardless of order"
+        );
+    }
 }
