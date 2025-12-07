@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::datamashup::{DataMashup, Query, build_queries};
+use crate::m_ast::{ast_semantically_equal, canonicalize_m_ast, parse_m_expression};
 use crate::m_section::SectionParseError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,12 +62,19 @@ fn diff_queries(old_queries: &[Query], new_queries: &[Query]) -> Vec<MQueryDiff>
                             kind: QueryChangeKind::MetadataChangedOnly,
                         });
                     }
-                } else {
-                    diffs.push(MQueryDiff {
-                        name,
-                        kind: QueryChangeKind::DefinitionChanged,
-                    });
+                    continue;
                 }
+
+                if old_q.metadata == new_q.metadata
+                    && expressions_semantically_equal(&old_q.expression_m, &new_q.expression_m)
+                {
+                    continue;
+                }
+
+                diffs.push(MQueryDiff {
+                    name,
+                    kind: QueryChangeKind::DefinitionChanged,
+                });
             }
             (None, None) => {
                 debug_assert!(false, "query name missing from both maps");
@@ -75,4 +83,18 @@ fn diff_queries(old_queries: &[Query], new_queries: &[Query]) -> Vec<MQueryDiff>
     }
 
     diffs
+}
+
+fn expressions_semantically_equal(old_expr: &str, new_expr: &str) -> bool {
+    let Ok(mut old_ast) = parse_m_expression(old_expr) else {
+        return false;
+    };
+    let Ok(mut new_ast) = parse_m_expression(new_expr) else {
+        return false;
+    };
+
+    canonicalize_m_ast(&mut old_ast);
+    canonicalize_m_ast(&mut new_ast);
+
+    ast_semantically_equal(&old_ast, &new_ast)
 }

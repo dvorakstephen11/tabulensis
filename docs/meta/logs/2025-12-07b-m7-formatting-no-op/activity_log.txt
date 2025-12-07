@@ -1,0 +1,11 @@
+2025-12-07
+- Reviewed implementer prompt and Section 4 of docs/rust_docs/excel_diff_meta_programming.md; read mini-spec/decision for branch 2025-12-07b-m7-formatting-no-op to extract scope (semantic gate for formatting-only M changes) and test requirements.
+- Inspected current m_diff and m_ast implementations plus m6/m7 test suites to understand existing behavior and AST helpers.
+- Implemented semantic gate in core/src/m_diff.rs via expressions_semantically_equal best-effort helper; diff_m_queries now suppresses DefinitionChanged when metadata matches and canonical ASTs are equal while falling back to textual behavior on AST errors.
+- Added coverage in new core/tests/m7_semantic_m_diff_tests.rs for formatting-only no-op, variant semantic change, metadata-only/definition+metadata regressions, and AST-parse-failure fallback.
+- Updated docs/rust_docs/excel_diff_testing_plan.md to note M7.1 query-level formatting-only suppression is implemented; clarified docs/rust_docs/excel_diff_specification.md Canonicalization section on current usage.
+
+## Commands
+- cargo fmt
+- cargo clippy --all-targets
+- cargo test -- --test-threads=1 (initial run hit BrokenPipe listing m6_textual_m_diff_tests; reran same command successfully)

@@ -1204,6 +1204,8 @@ Goal: tackle the hardest algorithms. Add semantic M AST diffing (M7), advanced s
 
 This is where your differentiator shows up: semantic AST diffing rather than raw text diff, using a hybrid **GumTree + APTED** strategy.
 
+**Status:** M7.1 formatting-only semantic gate is implemented at the query level using canonical AST equality to suppress `DefinitionChanged` for whitespace/comment-only edits. Step-aware diffing and move/rename detection remain pending.
+
 **Rust capability**
 
 * Parse `expression_m` into AST.

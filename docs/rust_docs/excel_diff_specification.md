@@ -553,6 +553,8 @@ Before diffing:
 
 If two canonical ASTs are byte-identical, treat the queries as semantically equal even if text is very different. (This supports the "formatting only" milestone.)
 
+Current code applies this equality at the `MQueryDiff` layer to suppress `DefinitionChanged` for formatting-only edits; structured step-aware semantic diffs are still pending.
+
 #### 10.3.2 Step-Aware Diff
 
 Most user-visible changes correspond to adding/removing/modifying **steps** in the query's transformation pipeline.
