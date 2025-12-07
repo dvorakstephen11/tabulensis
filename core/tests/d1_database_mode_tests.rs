@@ -267,3 +267,129 @@ fn d5_composite_key_duplicate_keys_fallback_to_spreadsheet_mode() {
         "fallback should emit a RowRemoved reflecting duplicate handling"
     );
 }
+
+#[test]
+fn d5_non_contiguous_key_columns_equal_reordered_empty_diff() {
+    let grid_a = grid_from_numbers(&[
+        &[1, 999, 10, 100],
+        &[1, 888, 20, 200],
+        &[2, 777, 10, 300],
+    ]);
+    let grid_b = grid_from_numbers(&[
+        &[2, 777, 10, 300],
+        &[1, 999, 10, 100],
+        &[1, 888, 20, 200],
+    ]);
+
+    let report = diff_grids_database_mode(&grid_a, &grid_b, &[0, 2]);
+    assert!(
+        report.ops.is_empty(),
+        "non-contiguous key columns [0,2] should align correctly ignoring row order"
+    );
+}
+
+#[test]
+fn d5_non_contiguous_key_columns_row_added_and_cell_edited() {
+    let grid_a = grid_from_numbers(&[
+        &[1, 999, 10, 100],
+        &[1, 888, 20, 200],
+    ]);
+    let grid_b = grid_from_numbers(&[
+        &[1, 999, 10, 150],
+        &[1, 888, 20, 200],
+        &[2, 777, 30, 300],
+    ]);
+
+    let report = diff_grids_database_mode(&grid_a, &grid_b, &[0, 2]);
+
+    let row_added_count = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::RowAdded { .. }))
+        .count();
+    assert_eq!(
+        row_added_count, 1,
+        "new non-contiguous composite key should produce exactly one RowAdded"
+    );
+
+    let row_removed_count = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::RowRemoved { .. }))
+        .count();
+    assert_eq!(row_removed_count, 0, "no rows should be removed");
+
+    let cell_edited_count = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::CellEdited { .. }))
+        .count();
+    assert_eq!(
+        cell_edited_count, 1,
+        "changed non-key column should produce exactly one CellEdited"
+    );
+}
+
+#[test]
+fn d5_three_column_composite_key_equal_reordered_empty_diff() {
+    let grid_a = grid_from_numbers(&[
+        &[1, 10, 100, 1000],
+        &[1, 10, 200, 2000],
+        &[1, 20, 100, 3000],
+        &[2, 10, 100, 4000],
+    ]);
+    let grid_b = grid_from_numbers(&[
+        &[2, 10, 100, 4000],
+        &[1, 20, 100, 3000],
+        &[1, 10, 200, 2000],
+        &[1, 10, 100, 1000],
+    ]);
+
+    let report = diff_grids_database_mode(&grid_a, &grid_b, &[0, 1, 2]);
+    assert!(
+        report.ops.is_empty(),
+        "three-column composite key should align correctly ignoring row order"
+    );
+}
+
+#[test]
+fn d5_three_column_composite_key_partial_match_yields_add_and_remove() {
+    let grid_a = grid_from_numbers(&[
+        &[1, 10, 100, 1000],
+    ]);
+    let grid_b = grid_from_numbers(&[
+        &[1, 10, 200, 1000],
+    ]);
+
+    let report = diff_grids_database_mode(&grid_a, &grid_b, &[0, 1, 2]);
+
+    let row_removed_count = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::RowRemoved { .. }))
+        .count();
+    assert_eq!(
+        row_removed_count, 1,
+        "changed third key column should remove the old tuple"
+    );
+
+    let row_added_count = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::RowAdded { .. }))
+        .count();
+    assert_eq!(
+        row_added_count, 1,
+        "changed third key column should add the new tuple"
+    );
+
+    let cell_edited_count = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::CellEdited { .. }))
+        .count();
+    assert_eq!(
+        cell_edited_count, 0,
+        "partial three-column key match must not be treated as a cell edit"
+    );
+}
