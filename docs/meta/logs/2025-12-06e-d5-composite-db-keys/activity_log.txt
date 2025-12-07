@@ -1,0 +1,6 @@
+Implementation log for branch 2025-12-06e-d5-composite-db-keys (D5 composite primary key)
+
+- Added D5 composite-key engine-level coverage in `core/tests/d1_database_mode_tests.rs` for reorder no-op, row added + non-key edit, partial key mismatch, and composite duplicate fallback behavior.
+- Added alignment-layer composite-key test in `core/src/database_alignment.rs` to lock multi-column key matching independent of DiffOp emission.
+- No intentional spec deviations noted.
+- Ran `cargo fmt`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test`; all passed.

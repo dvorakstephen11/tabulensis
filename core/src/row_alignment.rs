@@ -847,7 +847,8 @@ mod tests {
         let mut moved: Vec<Vec<i32>> = rows_baseline_b.drain(3..7).collect();
         moved[1][1] = 9999;
         rows_baseline_b.splice(10..10, moved);
-        let refs_baseline_b: Vec<&[i32]> = rows_baseline_b.iter().map(|row| row.as_slice()).collect();
+        let refs_baseline_b: Vec<&[i32]> =
+            rows_baseline_b.iter().map(|row| row.as_slice()).collect();
         let grid_baseline_b = grid_from_rows(&refs_baseline_b);
 
         assert!(
