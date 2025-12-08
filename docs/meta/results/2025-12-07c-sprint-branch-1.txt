@@ -584,3 +584,6 @@ test core\src\lib.rs - (line 11) ... ignored
 
 test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
+---
+Coverage update (2025-12-08): Branch 1 acceptance criteria are now fully covered by integration tests g14_rect_move_plus_row_insertion_outside_no_silent_data_loss, g14_rect_move_plus_row_deletion_outside_no_silent_data_loss, g14_row_block_move_plus_row_insertion_outside_no_silent_data_loss, and the g15_* column structure row-alignment suite.
+

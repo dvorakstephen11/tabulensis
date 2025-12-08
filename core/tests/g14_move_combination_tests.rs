@@ -489,3 +489,116 @@ fn g14_two_disjoint_rect_moves_plus_outside_edits_no_silent_data_loss() {
         "cell edits outside moved rects should be surfaced"
     );
 }
+
+#[test]
+fn g14_rect_move_plus_row_insertion_outside_no_silent_data_loss() {
+    let mut grid_a = base_grid(12, 10);
+    let block = vec![vec![9001, 9002], vec![9003, 9004]];
+    place_block(&mut grid_a, 2, 2, &block);
+
+    let mut grid_b = base_grid(13, 10);
+
+    for col in 0..10 {
+        grid_b[0][col] = 50000 + col as i32;
+    }
+
+    for row in 1..13 {
+        for col in 0..10 {
+            grid_b[row][col] = (row as i32) * 100 + col as i32 + 1;
+        }
+    }
+
+    place_block(&mut grid_b, 9, 6, &block);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
+    let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    assert!(
+        !report.ops.is_empty(),
+        "should not have silent data loss - rect move + row insertion must be reported"
+    );
+
+    let row_adds: Vec<u32> = report
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            DiffOp::RowAdded { row_idx, .. } => Some(*row_idx),
+            _ => None,
+        })
+        .collect();
+
+    assert!(
+        !row_adds.is_empty(),
+        "row insertion should be detected and reported"
+    );
+}
+
+#[test]
+fn g14_rect_move_plus_row_deletion_outside_no_silent_data_loss() {
+    let mut grid_a = base_grid(14, 10);
+    let block = vec![vec![8001, 8002], vec![8003, 8004]];
+    place_block(&mut grid_a, 3, 3, &block);
+
+    let mut grid_b = base_grid(13, 10);
+
+    place_block(&mut grid_b, 8, 6, &block);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
+    let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    assert!(
+        !report.ops.is_empty(),
+        "should not have silent data loss - rect move + row deletion must be reported"
+    );
+
+    let has_structural_change = report.ops.iter().any(|op| {
+        matches!(
+            op,
+            DiffOp::RowAdded { .. }
+                | DiffOp::RowRemoved { .. }
+                | DiffOp::BlockMovedRows { .. }
+                | DiffOp::BlockMovedRect { .. }
+                | DiffOp::CellEdited { .. }
+        )
+    });
+
+    assert!(
+        has_structural_change,
+        "rect move + row deletion should produce some detectable changes"
+    );
+}
+
+#[test]
+fn g14_row_block_move_plus_row_insertion_outside_no_silent_data_loss() {
+    let rows: Vec<Vec<i32>> = (1..=20)
+        .map(|r| (1..=4).map(|c| r * 10 + c).collect())
+        .collect();
+    let refs: Vec<&[i32]> = rows.iter().map(|r| r.as_slice()).collect();
+    let grid_a = grid_from_numbers(&refs);
+
+    let mut rows_b: Vec<Vec<i32>> = Vec::with_capacity(21);
+
+    rows_b.push(vec![9991, 9992, 9993, 9994]);
+
+    let mut original = rows.clone();
+    let moved_block: Vec<Vec<i32>> = original.drain(4..8).collect();
+    original.splice(12..12, moved_block);
+    rows_b.extend(original);
+
+    let refs_b: Vec<&[i32]> = rows_b.iter().map(|r| r.as_slice()).collect();
+    let grid_b = grid_from_numbers(&refs_b);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    assert!(
+        !report.ops.is_empty(),
+        "row block move + row insertion should produce operations"
+    );
+}

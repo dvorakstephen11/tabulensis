@@ -12,3 +12,10 @@
 - Files touched: core/src/workbook.rs; core/tests/g1_g2_grid_workbook_tests.rs; core/tests/grid_view_tests.rs; core/src/database_alignment.rs; core/tests/d1_database_mode_tests.rs; core/src/row_alignment.rs; core/src/hashing.rs; core/tests/g14_move_combination_tests.rs.
 - Complications: CellValue equality originally used raw f64 equality, so ULP drift and NaN bit-pattern differences surfaced as edits; now uses normalized float comparison alongside hashing. Clippy flagged existing test patterns in g14 suite; resolved with minor control-flow cleanup.
 - Verification: cargo fmt; cargo clippy --all-targets -- -D warnings; cargo test.
+
+## Remediation Round 3
+
+- Findings addressed: Gap 1 rect/row move with external row insert/delete coverage; Gap 2 column insert/delete row alignment integration coverage.
+- Files touched: core/tests/g14_move_combination_tests.rs; core/tests/g15_column_structure_row_alignment_tests.rs.
+- Complications: None encountered; new integration scenarios aligned with existing helpers without code changes.
+- Verification: cargo fmt; cargo clippy; cargo test; cargo test g15_; cargo test g14_rect_move_plus_row; cargo test g14_row_block_move_plus_row.
