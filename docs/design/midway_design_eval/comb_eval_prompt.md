@@ -1,3 +1,5 @@
+I presented the codebase and documentation files (which are attached for you as well) to two excellent software reviewers, along with the following prompt:
+```
 # Design Evaluation Prompt
 
 You are an elite software architect conducting a deep, contemplative evaluation of the Excel Diff Engine codebase. Your role is not merely to review code, but to understand its essence—to perceive the architecture as a living system with its own internal logic, tensions, and possibilities.
@@ -23,6 +25,209 @@ Begin by deeply absorbing these foundational documents in `docs/rust_docs/`:
 5. **`unified_grid_diff_algorithm_specification.md`** — The definitive algorithmic specification for the 2D grid diff engine, detailing alignment strategies, complexity guarantees, and the mathematical foundations underpinning spreadsheet and database mode comparisons.
 
 Then examine the implementation in `core/src/` with fresh eyes, informed by but not enslaved to the documentation.
+---
+
+## Codebase Structure for Evaluation
+
+### Directory Tree: core/
+
+```
+core/
+  Cargo.lock
+  Cargo.toml
+  src/
+    addressing.rs
+    column_alignment.rs
+    container.rs
+    database_alignment.rs
+    datamashup.rs
+    datamashup_framing.rs
+    datamashup_package.rs
+    diff.rs
+    engine.rs
+    excel_open_xml.rs
+    grid_parser.rs
+    grid_view.rs
+    hashing.rs
+    lib.rs
+    m_ast.rs
+    m_diff.rs
+    m_section.rs
+    output/
+      json.rs
+      mod.rs
+    rect_block_move.rs
+    row_alignment.rs
+    workbook.rs
+  tests/
+    addressing_pg2_tests.rs
+    common/
+      mod.rs
+    d1_database_mode_tests.rs
+    data_mashup_tests.rs
+    engine_tests.rs
+    excel_open_xml_tests.rs
+    g10_row_block_alignment_grid_workbook_tests.rs
+    g11_row_block_move_grid_workbook_tests.rs
+    g12_column_block_move_grid_workbook_tests.rs
+    g12_rect_block_move_grid_workbook_tests.rs
+    g13_fuzzy_row_move_grid_workbook_tests.rs
+    g1_g2_grid_workbook_tests.rs
+    g5_g7_grid_workbook_tests.rs
+    g8_row_alignment_grid_workbook_tests.rs
+    g9_column_alignment_grid_workbook_tests.rs
+    grid_view_hashstats_tests.rs
+    grid_view_tests.rs
+    integration_test.rs
+    m4_package_parts_tests.rs
+    m4_permissions_metadata_tests.rs
+    m5_query_domain_tests.rs
+    m6_textual_m_diff_tests.rs
+    m7_ast_canonicalization_tests.rs
+    m7_semantic_m_diff_tests.rs
+    m_section_splitting_tests.rs
+    output_tests.rs
+    pg1_ir_tests.rs
+    pg3_snapshot_tests.rs
+    pg4_diffop_tests.rs
+    pg5_grid_diff_tests.rs
+    pg6_object_vs_grid_tests.rs
+    signature_tests.rs
+    sparse_grid_tests.rs
+```
+
+### Directory Tree: fixtures/
+
+```
+fixtures/
+  generated/
+    col_append_right_a.xlsx
+    col_append_right_b.xlsx
+    col_delete_middle_a.xlsx
+    col_delete_middle_b.xlsx
+    col_delete_right_a.xlsx
+    col_delete_right_b.xlsx
+    col_insert_middle_a.xlsx
+    col_insert_middle_b.xlsx
+    col_insert_with_edit_a.xlsx
+    col_insert_with_edit_b.xlsx
+    column_move_a.xlsx
+    column_move_b.xlsx
+    corrupt_base64.xlsx
+    db_equal_ordered_a.xlsx
+    db_equal_ordered_b.xlsx
+    db_row_added_b.xlsx
+    duplicate_datamashup_elements.xlsx
+    duplicate_datamashup_parts.xlsx
+    equal_sheet_a.xlsx
+    equal_sheet_b.xlsx
+    grid_large_dense.xlsx
+    grid_large_noise.xlsx
+    grid_move_and_edit_a.xlsx
+    grid_move_and_edit_b.xlsx
+    json_diff_bool_a.xlsx
+    json_diff_bool_b.xlsx
+    json_diff_single_cell_a.xlsx
+    json_diff_single_cell_b.xlsx
+    json_diff_value_to_empty_a.xlsx
+    json_diff_value_to_empty_b.xlsx
+    m_add_query_a.xlsx
+    m_add_query_b.xlsx
+    m_change_literal_a.xlsx
+    m_change_literal_b.xlsx
+    m_def_and_metadata_change_a.xlsx
+    m_def_and_metadata_change_b.xlsx
+    m_formatting_only_a.xlsx
+    m_formatting_only_b.xlsx
+    m_formatting_only_b_variant.xlsx
+    m_metadata_only_change_a.xlsx
+    m_metadata_only_change_b.xlsx
+    m_remove_query_a.xlsx
+    m_remove_query_b.xlsx
+    m_rename_query_a.xlsx
+    m_rename_query_b.xlsx
+    mashup_base64_whitespace.xlsx
+    mashup_utf16_be.xlsx
+    mashup_utf16_le.xlsx
+    metadata_hidden_queries.xlsx
+    metadata_missing_entry.xlsx
+    metadata_orphan_entries.xlsx
+    metadata_query_groups.xlsx
+    metadata_simple.xlsx
+    metadata_url_encoding.xlsx
+    minimal.xlsx
+    multi_cell_edits_a.xlsx
+    multi_cell_edits_b.xlsx
+    multi_query_with_embedded.xlsx
+    no_content_types.xlsx
+    not_a_zip.txt
+    one_query.xlsx
+    permissions_defaults.xlsx
+    permissions_firewall_off.xlsx
+    pg1_basic_two_sheets.xlsx
+    pg1_empty_and_mixed_sheets.xlsx
+    pg1_sparse_used_range.xlsx
+    pg2_addressing_matrix.xlsx
+    pg3_value_and_formula_cells.xlsx
+    pg6_sheet_added_a.xlsx
+    pg6_sheet_added_b.xlsx
+    pg6_sheet_and_grid_change_a.xlsx
+    pg6_sheet_and_grid_change_b.xlsx
+    pg6_sheet_removed_a.xlsx
+    pg6_sheet_removed_b.xlsx
+    pg6_sheet_renamed_a.xlsx
+    pg6_sheet_renamed_b.xlsx
+    random_zip.zip
+    rect_block_move_a.xlsx
+    rect_block_move_b.xlsx
+    row_append_bottom_a.xlsx
+    row_append_bottom_b.xlsx
+    row_block_delete_a.xlsx
+    row_block_delete_b.xlsx
+    row_block_insert_a.xlsx
+    row_block_insert_b.xlsx
+    row_block_move_a.xlsx
+    row_block_move_b.xlsx
+    row_delete_bottom_a.xlsx
+    row_delete_bottom_b.xlsx
+    row_delete_middle_a.xlsx
+    row_delete_middle_b.xlsx
+    row_insert_middle_a.xlsx
+    row_insert_middle_b.xlsx
+    row_insert_with_edit_a.xlsx
+    row_insert_with_edit_b.xlsx
+    sheet_case_only_rename_a.xlsx
+    sheet_case_only_rename_b.xlsx
+    sheet_case_only_rename_edit_a.xlsx
+    sheet_case_only_rename_edit_b.xlsx
+    single_cell_value_a.xlsx
+    single_cell_value_b.xlsx
+  manifest.yaml
+  pyproject.toml
+  README.md
+  requirements.txt
+  src/
+    __init__.py
+    generate.py
+    generators/
+      __init__.py
+      base.py
+      corrupt.py
+      database.py
+      grid.py
+      mashup.py
+      perf.py
+  templates/
+    base_query.xlsx
+```
+
+### Codebase File Allocation Strategy
+
+- `codebase_1_core_ir_engine.md`: Core IR and Engine
+- `codebase_2_grid_processing.md`: Grid Processing (Parsing, Alignment, Block Moves)
+- `codebase_3_m_language.md`: M Language and DataMashup
+- `codebase_4_fixtures.md`: Python Fixtures
+
 ---
 
 ## Evaluation Dimensions
@@ -211,3 +416,9 @@ Approach this task with intellectual humility. The original authors made decisio
 
 *Remember: The best design evaluations are those that help the next developer make better decisions. Write for them.*
 
+
+```
+
+The resulting evaluations are attached as 51p_comb.md and dt_comb.md.
+
+Please review the evaluations and identify the truths that are common to both evaluations, the correct position where the two evaluations conflict with each other, the unique insights from each evaluation, and high-quality ideas or insights that are not present in either of the original evaluations. Make recommendations for what an improved combined evaluation would look like. 

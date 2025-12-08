@@ -12,10 +12,10 @@ fn load_datamashup(name: &str) -> DataMashup {
     build_data_mashup(&raw).expect("DataMashup should build")
 }
 
-fn datamashup_with_expression(expression: &str) -> DataMashup {
+fn datamashup_with_section(lines: &[&str]) -> DataMashup {
     let mut dm = load_datamashup("one_query.xlsx");
-    dm.package_parts.main_section.source =
-        format!("section Section1;\n\nshared Foo = {expression};\n");
+    let body = lines.join("\n");
+    dm.package_parts.main_section.source = format!("section Section1;\n\n{body}\n");
     dm
 }
 
@@ -28,62 +28,97 @@ fn formatting_only_diff_produces_no_diffs() {
 
     assert!(
         diffs.is_empty(),
-        "formatting-only changes should be ignored"
+        "formatting-only changes should be ignored, got {:?}",
+        diffs
     );
 }
 
 #[test]
 fn formatting_variant_with_real_change_still_reports_definitionchanged() {
     let dm_b = load_datamashup("m_formatting_only_b.xlsx");
-    let dm_variant = load_datamashup("m_formatting_only_b_variant.xlsx");
+    let dm_b_variant = load_datamashup("m_formatting_only_b_variant.xlsx");
 
-    let diffs = diff_m_queries(&dm_b, &dm_variant).expect("diff should succeed");
+    let diffs = diff_m_queries(&dm_b, &dm_b_variant).expect("diff should succeed");
 
-    assert_eq!(diffs.len(), 1, "expected one diff for semantic change");
-    let diff = &diffs[0];
-    assert_eq!(diff.name, "Section1/FormatTest");
-    assert_eq!(diff.kind, QueryChangeKind::DefinitionChanged);
+    assert_eq!(
+        diffs.len(),
+        1,
+        "expected exactly one diff for semantic change"
+    );
+    assert_eq!(diffs[0].name, "Section1/FormatTest");
+    assert_eq!(diffs[0].kind, QueryChangeKind::DefinitionChanged);
 }
 
 #[test]
-fn semantic_gate_does_not_mask_metadata_only_or_definition_plus_metadata_changes() {
-    let dm_meta_a = load_datamashup("m_metadata_only_change_a.xlsx");
-    let dm_meta_b = load_datamashup("m_metadata_only_change_b.xlsx");
+fn semantic_gate_does_not_mask_metadata_only_change() {
+    let dm_a = load_datamashup("m_metadata_only_change_a.xlsx");
+    let dm_b = load_datamashup("m_metadata_only_change_b.xlsx");
 
-    let meta_diffs = diff_m_queries(&dm_meta_a, &dm_meta_b).expect("diff should succeed");
+    let diffs = diff_m_queries(&dm_a, &dm_b).expect("diff should succeed");
+
     assert_eq!(
-        meta_diffs.len(),
+        diffs.len(),
         1,
-        "metadata-only change should still be reported"
+        "expected exactly one diff for metadata-only change"
     );
-    let meta_diff = &meta_diffs[0];
-    assert_eq!(meta_diff.name, "Section1/Foo");
-    assert_eq!(meta_diff.kind, QueryChangeKind::MetadataChangedOnly);
+    assert_eq!(diffs[0].name, "Section1/Foo");
+    assert_eq!(diffs[0].kind, QueryChangeKind::MetadataChangedOnly);
+}
 
-    let dm_both_a = load_datamashup("m_def_and_metadata_change_a.xlsx");
-    let dm_both_b = load_datamashup("m_def_and_metadata_change_b.xlsx");
+#[test]
+fn semantic_gate_does_not_mask_definition_plus_metadata_change() {
+    let dm_a = load_datamashup("m_def_and_metadata_change_a.xlsx");
+    let dm_b = load_datamashup("m_def_and_metadata_change_b.xlsx");
 
-    let both_diffs = diff_m_queries(&dm_both_a, &dm_both_b).expect("diff should succeed");
+    let diffs = diff_m_queries(&dm_a, &dm_b).expect("diff should succeed");
+
     assert_eq!(
-        both_diffs.len(),
+        diffs.len(),
         1,
-        "definition+metadata change should prefer DefinitionChanged"
+        "expected exactly one diff for definition+metadata change"
     );
-    let diff = &both_diffs[0];
-    assert_eq!(diff.name, "Section1/Foo");
-    assert_eq!(diff.kind, QueryChangeKind::DefinitionChanged);
+    assert_eq!(diffs[0].name, "Section1/Foo");
+    assert_eq!(diffs[0].kind, QueryChangeKind::DefinitionChanged);
 }
 
 #[test]
 fn semantic_gate_falls_back_on_ast_parse_failure() {
-    let dm_invalid = datamashup_with_expression("let Source = 1");
-    let dm_valid = datamashup_with_expression("let Source = 1 in Source");
+    let dm_a = datamashup_with_section(&["shared Foo = let Source = 1 in Source;"]);
+    let dm_b = datamashup_with_section(&["shared Foo = let Source = (1;"]);
 
-    let diffs = diff_m_queries(&dm_invalid, &dm_valid)
-        .expect("diff should fall back to textual path when AST parse fails");
+    let diffs =
+        diff_m_queries(&dm_a, &dm_b).expect("diff should succeed (not panic on AST failure)");
 
-    assert_eq!(diffs.len(), 1, "fallback should still surface a diff");
-    let diff = &diffs[0];
-    assert_eq!(diff.name, "Section1/Foo");
-    assert_eq!(diff.kind, QueryChangeKind::DefinitionChanged);
+    assert_eq!(
+        diffs.len(),
+        1,
+        "expected one diff when AST parse fails on one side"
+    );
+    assert_eq!(diffs[0].name, "Section1/Foo");
+    assert_eq!(
+        diffs[0].kind,
+        QueryChangeKind::DefinitionChanged,
+        "should fall back to textual diff when AST parse fails"
+    );
+}
+
+#[test]
+fn semantic_gate_falls_back_when_both_sides_malformed() {
+    let dm_a = datamashup_with_section(&["shared Foo = let Source = (1;"]);
+    let dm_b = datamashup_with_section(&["shared Foo = let Source = (2;"]);
+
+    let diffs =
+        diff_m_queries(&dm_a, &dm_b).expect("diff should succeed (not panic on AST failure)");
+
+    assert_eq!(
+        diffs.len(),
+        1,
+        "expected one diff when AST parse fails on both sides"
+    );
+    assert_eq!(diffs[0].name, "Section1/Foo");
+    assert_eq!(
+        diffs[0].kind,
+        QueryChangeKind::DefinitionChanged,
+        "should fall back to textual diff when both sides fail AST parse"
+    );
 }
