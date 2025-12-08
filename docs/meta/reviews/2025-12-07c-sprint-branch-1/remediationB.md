@@ -266,5 +266,4 @@ Once the changes above are implemented:
    * Float comparison semantically correct: new end‑to‑end float tests pass.
    * Hash collision probability documented at 128‑bit strength and below the <10⁻¹⁸@50k rows threshold (comment updated).
 
-3. **Optionally** check off the relevant items in `next_sprint_plan.md` so it stays in sync with the code.
 

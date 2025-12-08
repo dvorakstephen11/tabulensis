@@ -55,7 +55,7 @@ pub use datamashup_package::{
     EmbeddedContent, PackageParts, PackageXml, SectionDocument, parse_package_parts,
 };
 pub use diff::{DiffOp, DiffReport, SheetId};
-pub use engine::{diff_grids_database_mode, diff_workbooks};
+pub use engine::{diff_grids_database_mode, diff_workbooks, diff_workbooks_with_config};
 #[cfg(feature = "excel-open-xml")]
 pub use excel_open_xml::{ExcelOpenError, open_data_mashup, open_workbook};
 pub use grid_parser::{GridParseError, SheetDescriptor};

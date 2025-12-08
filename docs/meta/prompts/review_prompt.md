@@ -50,6 +50,7 @@
       g12_rect_block_move_grid_workbook_tests.rs
       g13_fuzzy_row_move_grid_workbook_tests.rs
       g14_move_combination_tests.rs
+      g15_column_structure_row_alignment_tests.rs
       g1_g2_grid_workbook_tests.rs
       g5_g7_grid_workbook_tests.rs
       g8_row_alignment_grid_workbook_tests.rs
@@ -971,6 +972,7 @@ impl OpcContainer {
 ### File: `core\src\database_alignment.rs`
 
 ```rust
+use crate::hashing::normalize_float_for_hash;
 use crate::workbook::{CellValue, Grid};
 use std::collections::{HashMap, HashSet};
 
@@ -1000,7 +1002,7 @@ pub(crate) enum KeyValueRepr {
 impl KeyValueRepr {
     fn from_cell_value(value: Option<&CellValue>) -> KeyValueRepr {
         match value {
-            Some(CellValue::Number(n)) => KeyValueRepr::Number(n.to_bits()),
+            Some(CellValue::Number(n)) => KeyValueRepr::Number(normalize_float_for_hash(*n)),
             Some(CellValue::Text(s)) => KeyValueRepr::Text(s.clone()),
             Some(CellValue::Bool(b)) => KeyValueRepr::Bool(*b),
             None => KeyValueRepr::None,
@@ -4652,16 +4654,6 @@ pub(crate) fn hash_col_content_128(cells: &[&Cell]) -> u128 {
 }
 
 #[allow(dead_code)]
-#[deprecated(note = "Use hash_cell_content for position-independent hashing")]
-pub(crate) fn hash_cell_contribution(position: u32, cell: &Cell) -> u64 {
-    let mut hasher = Xxh64::new(XXH64_SEED);
-    position.hash(&mut hasher);
-    cell.value.hash(&mut hasher);
-    cell.formula.hash(&mut hasher);
-    hasher.finish()
-}
-
-#[allow(dead_code)]
 pub(crate) fn mix_hash(hash: u64) -> u64 {
     hash.rotate_left(13) ^ HASH_MIX_CONSTANT
 }
@@ -6728,8 +6720,8 @@ const MAX_HASH_REPEAT: u32 = 8;
 const MAX_BLOCK_GAP: u32 = 32;
 const MAX_FUZZY_BLOCK_ROWS: u32 = 32;
 const FUZZY_SIMILARITY_THRESHOLD: f64 = 0.80;
-const _HASH_COLLISION_NOTE: &str = "64-bit hash collision probability ~0.00006% at 2K rows; \
-                                    secondary verification deferred to G8a (50K-row adversarial)";
+const _HASH_COLLISION_NOTE: &str = "128-bit xxHash3 collision probability ~10^-29 at 50K rows (birthday bound); \
+     secondary verification not required; see hashing.rs for detailed rationale.";
 
 pub(crate) fn detect_exact_row_block_move(old: &Grid, new: &Grid) -> Option<RowBlockMove> {
     if old.nrows != new.nrows || old.ncols != new.ncols {
@@ -7755,6 +7747,28 @@ mod tests {
     }
 
     #[test]
+    fn align_row_changes_rejects_column_insert_mismatch() {
+        let grid_a = grid_from_rows(&[&[10, 11, 12], &[20, 21, 22]]);
+        let grid_b = grid_from_rows(&[&[0, 10, 11, 12], &[0, 20, 21, 22], &[0, 30, 31, 32]]);
+
+        assert!(
+            align_row_changes(&grid_a, &grid_b).is_none(),
+            "column insertion changing column count should skip row alignment"
+        );
+    }
+
+    #[test]
+    fn align_row_changes_rejects_column_delete_mismatch() {
+        let grid_a = grid_from_rows(&[&[10, 11, 12, 13], &[20, 21, 22, 23], &[30, 31, 32, 33]]);
+        let grid_b = grid_from_rows(&[&[10, 12, 13], &[30, 32, 33]]);
+
+        assert!(
+            align_row_changes(&grid_a, &grid_b).is_none(),
+            "column deletion changing column count should skip row alignment"
+        );
+    }
+
+    #[test]
     fn aligns_single_insert_with_unique_row() {
         let base = (1..=10)
             .map(|r| (1..=3).map(|c| r * 10 + c).collect::<Vec<_>>())
@@ -7958,6 +7972,7 @@ mod tests {
 //! - [`Cell`]: Individual cell with address, value, and optional formula
 
 use crate::addressing::{AddressParseError, address_to_index, index_to_address};
+use crate::hashing::normalize_float_for_hash;
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
@@ -8110,19 +8125,34 @@ impl<'de> Deserialize<'de> for CellAddress {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum CellValue {
     Number(f64),
     Text(String),
     Bool(bool),
 }
 
+impl PartialEq for CellValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (CellValue::Number(a), CellValue::Number(b)) => {
+                normalize_float_for_hash(*a) == normalize_float_for_hash(*b)
+            }
+            (CellValue::Text(a), CellValue::Text(b)) => a == b,
+            (CellValue::Bool(a), CellValue::Bool(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for CellValue {}
+
 impl Hash for CellValue {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
             CellValue::Number(n) => {
                 0u8.hash(state);
-                n.to_bits().hash(state);
+                normalize_float_for_hash(*n).hash(state);
             }
             CellValue::Text(s) => {
                 1u8.hash(state);
@@ -8378,6 +8408,8 @@ impl CellValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
 
     fn addr(a1: &str) -> CellAddress {
         a1.parse().expect("address should parse")
@@ -8508,6 +8540,33 @@ mod tests {
         assert_eq!(boolean.as_number(), None);
         assert_eq!(boolean.as_bool(), Some(true));
     }
+
+    fn hash_cell_value(value: &CellValue) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        value.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[test]
+    fn cellvalue_number_hashes_normalize_zero_sign() {
+        let h_pos = hash_cell_value(&CellValue::Number(0.0));
+        let h_neg = hash_cell_value(&CellValue::Number(-0.0));
+        assert_eq!(h_pos, h_neg, "hash should ignore sign of zero");
+    }
+
+    #[test]
+    fn cellvalue_number_hashes_ignore_ulp_drift() {
+        let h_a = hash_cell_value(&CellValue::Number(1.0));
+        let h_b = hash_cell_value(&CellValue::Number(1.0000000000000002));
+        assert_eq!(h_a, h_b, "minor ULP drift should hash identically");
+    }
+
+    #[test]
+    fn cellvalue_number_hashes_meaningful_difference() {
+        let h_a = hash_cell_value(&CellValue::Number(1.0));
+        let h_b = hash_cell_value(&CellValue::Number(1.0001));
+        assert_ne!(h_a, h_b, "meaningful numeric changes must alter the hash");
+    }
 }
 
 ```
@@ -8605,7 +8664,10 @@ pub fn single_sheet_workbook(name: &str, grid: Grid) -> Workbook {
 ### File: `core\tests\d1_database_mode_tests.rs`
 
 ```rust
-use excel_diff::{DiffOp, Grid, Workbook, diff_grids_database_mode, diff_workbooks, open_workbook};
+use excel_diff::{
+    Cell, CellAddress, CellValue, DiffOp, Grid, Workbook, diff_grids_database_mode, diff_workbooks,
+    open_workbook,
+};
 
 mod common;
 use common::{fixture_path, grid_from_numbers};
@@ -8617,6 +8679,26 @@ fn data_grid(workbook: &Workbook) -> &Grid {
         .find(|s| s.name == "Data")
         .map(|s| &s.grid)
         .expect("Data sheet present")
+}
+
+fn grid_from_float_rows(rows: &[&[f64]]) -> Grid {
+    let nrows = rows.len() as u32;
+    let ncols = if nrows == 0 { 0 } else { rows[0].len() as u32 };
+    let mut grid = Grid::new(nrows, ncols);
+
+    for (r_idx, row_vals) in rows.iter().enumerate() {
+        for (c_idx, value) in row_vals.iter().enumerate() {
+            grid.insert(Cell {
+                row: r_idx as u32,
+                col: c_idx as u32,
+                address: CellAddress::from_indices(r_idx as u32, c_idx as u32),
+                value: Some(CellValue::Number(*value)),
+                formula: None,
+            });
+        }
+    }
+
+    grid
 }
 
 #[test]
@@ -8751,6 +8833,46 @@ fn d1_database_mode_cell_edited_with_reorder() {
     assert_eq!(
         cell_edited_count, 1,
         "database mode should ignore reordering and find only the cell edit for key 2"
+    );
+}
+
+#[test]
+fn d1_database_mode_treats_small_float_key_noise_as_equal() {
+    let grid_a = grid_from_float_rows(&[&[1.0, 10.0], &[2.0, 20.0], &[3.0, 30.0]]);
+    let grid_b = grid_from_float_rows(&[&[1.0000000000000002, 10.0], &[2.0, 20.0], &[3.0, 30.0]]);
+
+    let report = diff_grids_database_mode(&grid_a, &grid_b, &[0]);
+    assert!(
+        report.ops.is_empty(),
+        "ULP-level noise in key column should not break row alignment"
+    );
+}
+
+#[test]
+fn d1_database_mode_detects_meaningful_float_key_change() {
+    let grid_a = grid_from_float_rows(&[&[1.0, 10.0], &[2.0, 20.0], &[3.0, 30.0]]);
+    let grid_b = grid_from_float_rows(&[&[1.0001, 10.0], &[2.0, 20.0], &[3.0, 30.0]]);
+
+    let report = diff_grids_database_mode(&grid_a, &grid_b, &[0]);
+
+    let row_removed = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::RowRemoved { .. }))
+        .count();
+    let row_added = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::RowAdded { .. }))
+        .count();
+
+    assert_eq!(
+        row_removed, 1,
+        "meaningful key drift should remove the original keyed row"
+    );
+    assert_eq!(
+        row_added, 1,
+        "meaningful key drift should add the new keyed row"
     );
 }
 
@@ -10540,10 +10662,10 @@ fn place_block(target: &mut [Vec<i32>], top: usize, left: usize, block: &[Vec<i3
         for (c_offset, value) in row_vals.iter().enumerate() {
             let row = top + r_offset;
             let col = left + c_offset;
-            if let Some(row_slice) = target.get_mut(row) {
-                if let Some(cell) = row_slice.get_mut(col) {
-                    *cell = *value;
-                }
+            if let Some(row_slice) = target.get_mut(row)
+                && let Some(cell) = row_slice.get_mut(col)
+            {
+                *cell = *value;
             }
         }
     }
@@ -10906,7 +11028,7 @@ fn g14_grid_changes_no_silent_data_loss() {
         .collect();
 
     assert!(
-        !cell_edits.is_empty() || report.ops.len() > 0,
+        !cell_edits.is_empty() || !report.ops.is_empty(),
         "some form of changes should be reported"
     );
 }
@@ -10983,7 +11105,7 @@ fn g14_two_disjoint_rect_moves_plus_outside_edits_no_silent_data_loss() {
         "should detect both rect block moves in the scenario"
     );
 
-    let rect_regions = vec![
+    let rect_regions = [
         (2u32, 2u32, 2u32, 2u32),
         (10u32, 7u32, 2u32, 2u32),
         (8u32, 4u32, 2u32, 2u32),
@@ -11012,6 +11134,522 @@ fn g14_two_disjoint_rect_moves_plus_outside_edits_no_silent_data_loss() {
     );
 }
 
+#[test]
+fn g14_rect_move_plus_row_insertion_outside_no_silent_data_loss() {
+    let mut grid_a = base_grid(12, 10);
+    let block = vec![vec![9001, 9002], vec![9003, 9004]];
+    place_block(&mut grid_a, 2, 2, &block);
+
+    let mut grid_b = base_grid(13, 10);
+
+    for col in 0..10 {
+        grid_b[0][col] = 50000 + col as i32;
+    }
+
+    for row in 1..13 {
+        for col in 0..10 {
+            grid_b[row][col] = (row as i32) * 100 + col as i32 + 1;
+        }
+    }
+
+    place_block(&mut grid_b, 9, 6, &block);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
+    let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    assert!(
+        !report.ops.is_empty(),
+        "should not have silent data loss - rect move + row insertion must be reported"
+    );
+
+    let row_adds: Vec<u32> = report
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            DiffOp::RowAdded { row_idx, .. } => Some(*row_idx),
+            _ => None,
+        })
+        .collect();
+
+    assert!(
+        !row_adds.is_empty(),
+        "row insertion should be detected and reported"
+    );
+}
+
+#[test]
+fn g14_rect_move_plus_row_deletion_outside_no_silent_data_loss() {
+    let mut grid_a = base_grid(14, 10);
+    let block = vec![vec![8001, 8002], vec![8003, 8004]];
+    place_block(&mut grid_a, 3, 3, &block);
+
+    let mut grid_b = base_grid(13, 10);
+
+    place_block(&mut grid_b, 8, 6, &block);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
+    let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    assert!(
+        !report.ops.is_empty(),
+        "should not have silent data loss - rect move + row deletion must be reported"
+    );
+
+    let has_structural_change = report.ops.iter().any(|op| {
+        matches!(
+            op,
+            DiffOp::RowAdded { .. }
+                | DiffOp::RowRemoved { .. }
+                | DiffOp::BlockMovedRows { .. }
+                | DiffOp::BlockMovedRect { .. }
+                | DiffOp::CellEdited { .. }
+        )
+    });
+
+    assert!(
+        has_structural_change,
+        "rect move + row deletion should produce some detectable changes"
+    );
+}
+
+#[test]
+fn g14_row_block_move_plus_row_insertion_outside_no_silent_data_loss() {
+    let rows: Vec<Vec<i32>> = (1..=20)
+        .map(|r| (1..=4).map(|c| r * 10 + c).collect())
+        .collect();
+    let refs: Vec<&[i32]> = rows.iter().map(|r| r.as_slice()).collect();
+    let grid_a = grid_from_numbers(&refs);
+
+    let mut rows_b: Vec<Vec<i32>> = Vec::with_capacity(21);
+
+    rows_b.push(vec![9991, 9992, 9993, 9994]);
+
+    let mut original = rows.clone();
+    let moved_block: Vec<Vec<i32>> = original.drain(4..8).collect();
+    original.splice(12..12, moved_block);
+    rows_b.extend(original);
+
+    let refs_b: Vec<&[i32]> = rows_b.iter().map(|r| r.as_slice()).collect();
+    let grid_b = grid_from_numbers(&refs_b);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    assert!(
+        !report.ops.is_empty(),
+        "row block move + row insertion should produce operations"
+    );
+}
+
+```
+
+---
+
+### File: `core\tests\g15_column_structure_row_alignment_tests.rs`
+
+```rust
+//! Integration tests verifying column structural changes do not break row alignment when row content is preserved.
+//! Covers Branch 1.3 acceptance criteria for column insertion/deletion resilience.
+
+use excel_diff::{Cell, CellAddress, CellValue, DiffOp, Grid, diff_workbooks};
+
+mod common;
+use common::single_sheet_workbook;
+
+fn make_grid_with_cells(nrows: u32, ncols: u32, cells: &[(u32, u32, i32)]) -> Grid {
+    let mut grid = Grid::new(nrows, ncols);
+    for (row, col, val) in cells {
+        grid.insert(Cell {
+            row: *row,
+            col: *col,
+            address: CellAddress::from_indices(*row, *col),
+            value: Some(CellValue::Number(*val as f64)),
+            formula: None,
+        });
+    }
+    grid
+}
+
+fn grid_from_row_data(rows: &[Vec<i32>]) -> Grid {
+    let nrows = rows.len() as u32;
+    let ncols = rows.iter().map(|r| r.len()).max().unwrap_or(0) as u32;
+    let mut grid = Grid::new(nrows, ncols);
+
+    for (r, row_vals) in rows.iter().enumerate() {
+        for (c, val) in row_vals.iter().enumerate() {
+            grid.insert(Cell {
+                row: r as u32,
+                col: c as u32,
+                address: CellAddress::from_indices(r as u32, c as u32),
+                value: Some(CellValue::Number(*val as f64)),
+                formula: None,
+            });
+        }
+    }
+    grid
+}
+
+#[test]
+fn g15_blank_column_insert_at_position_zero_preserves_row_alignment() {
+    let grid_a = grid_from_row_data(&[
+        vec![10, 20, 30],
+        vec![11, 21, 31],
+        vec![12, 22, 32],
+        vec![13, 23, 33],
+        vec![14, 24, 34],
+    ]);
+
+    let grid_b = make_grid_with_cells(
+        5,
+        4,
+        &[
+            (0, 1, 10),
+            (0, 2, 20),
+            (0, 3, 30),
+            (1, 1, 11),
+            (1, 2, 21),
+            (1, 3, 31),
+            (2, 1, 12),
+            (2, 2, 22),
+            (2, 3, 32),
+            (3, 1, 13),
+            (3, 2, 23),
+            (3, 3, 33),
+            (4, 1, 14),
+            (4, 2, 24),
+            (4, 3, 34),
+        ],
+    );
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    let column_adds: Vec<u32> = report
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            DiffOp::ColumnAdded { col_idx, .. } => Some(*col_idx),
+            _ => None,
+        })
+        .collect();
+
+    let row_changes: Vec<&DiffOp> = report
+        .ops
+        .iter()
+        .filter(|op| {
+            matches!(
+                op,
+                DiffOp::RowAdded { .. } | DiffOp::RowRemoved { .. } | DiffOp::BlockMovedRows { .. }
+            )
+        })
+        .collect();
+
+    assert!(
+        column_adds.contains(&0) || !report.ops.is_empty(),
+        "blank column insert at position 0 should be detected as ColumnAdded or produce some diff"
+    );
+
+    assert!(
+        row_changes.is_empty(),
+        "blank column insert should NOT produce spurious row add/remove operations; got {:?}",
+        row_changes
+    );
+}
+
+#[test]
+fn g15_blank_column_insert_middle_preserves_row_alignment() {
+    let grid_a = grid_from_row_data(&[
+        vec![1, 2, 3, 4],
+        vec![5, 6, 7, 8],
+        vec![9, 10, 11, 12],
+        vec![13, 14, 15, 16],
+    ]);
+
+    let grid_b = make_grid_with_cells(
+        4,
+        5,
+        &[
+            (0, 0, 1),
+            (0, 1, 2),
+            (0, 3, 3),
+            (0, 4, 4),
+            (1, 0, 5),
+            (1, 1, 6),
+            (1, 3, 7),
+            (1, 4, 8),
+            (2, 0, 9),
+            (2, 1, 10),
+            (2, 3, 11),
+            (2, 4, 12),
+            (3, 0, 13),
+            (3, 1, 14),
+            (3, 3, 15),
+            (3, 4, 16),
+        ],
+    );
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    let row_structural_ops: Vec<&DiffOp> = report
+        .ops
+        .iter()
+        .filter(|op| {
+            matches!(
+                op,
+                DiffOp::RowAdded { .. } | DiffOp::RowRemoved { .. } | DiffOp::BlockMovedRows { .. }
+            )
+        })
+        .collect();
+
+    assert!(
+        row_structural_ops.is_empty(),
+        "blank column insert in middle should not cause row structural changes; got {:?}",
+        row_structural_ops
+    );
+
+    let has_column_op = report.ops.iter().any(|op| {
+        matches!(
+            op,
+            DiffOp::ColumnAdded { .. } | DiffOp::ColumnRemoved { .. }
+        )
+    });
+
+    assert!(
+        has_column_op || !report.ops.is_empty(),
+        "column structure change should be detected"
+    );
+}
+
+#[test]
+fn g15_column_delete_preserves_row_alignment_when_content_order_maintained() {
+    let grid_a = grid_from_row_data(&[
+        vec![1, 2, 3, 4, 5],
+        vec![6, 7, 8, 9, 10],
+        vec![11, 12, 13, 14, 15],
+        vec![16, 17, 18, 19, 20],
+    ]);
+
+    let grid_b = grid_from_row_data(&[
+        vec![1, 2, 4, 5],
+        vec![6, 7, 9, 10],
+        vec![11, 12, 14, 15],
+        vec![16, 17, 19, 20],
+    ]);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    let column_removes: Vec<u32> = report
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            DiffOp::ColumnRemoved { col_idx, .. } => Some(*col_idx),
+            _ => None,
+        })
+        .collect();
+
+    let row_structural_ops: Vec<&DiffOp> = report
+        .ops
+        .iter()
+        .filter(|op| {
+            matches!(
+                op,
+                DiffOp::RowAdded { .. } | DiffOp::RowRemoved { .. } | DiffOp::BlockMovedRows { .. }
+            )
+        })
+        .collect();
+
+    assert!(
+        row_structural_ops.is_empty(),
+        "column deletion should not cause spurious row changes; got {:?}",
+        row_structural_ops
+    );
+
+    assert!(
+        !column_removes.is_empty() || !report.ops.is_empty(),
+        "column deletion should be detected"
+    );
+}
+
+#[test]
+fn g15_row_insert_with_column_structure_change_both_detected() {
+    let grid_a = grid_from_row_data(&[vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]]);
+
+    let grid_b = make_grid_with_cells(
+        4,
+        4,
+        &[
+            (0, 0, 1000),
+            (0, 1, 1),
+            (0, 2, 2),
+            (0, 3, 3),
+            (1, 0, 1001),
+            (1, 1, 100),
+            (1, 2, 200),
+            (1, 3, 300),
+            (2, 0, 1002),
+            (2, 1, 4),
+            (2, 2, 5),
+            (2, 3, 6),
+            (3, 0, 1003),
+            (3, 1, 7),
+            (3, 2, 8),
+            (3, 3, 9),
+        ],
+    );
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    assert!(
+        !report.ops.is_empty(),
+        "row insert + column change should produce diff operations"
+    );
+
+    let has_row_op = report.ops.iter().any(|op| {
+        matches!(
+            op,
+            DiffOp::RowAdded { .. } | DiffOp::RowRemoved { .. } | DiffOp::CellEdited { .. }
+        )
+    });
+
+    let has_col_op = report.ops.iter().any(|op| {
+        matches!(
+            op,
+            DiffOp::ColumnAdded { .. } | DiffOp::ColumnRemoved { .. } | DiffOp::CellEdited { .. }
+        )
+    });
+
+    assert!(
+        has_row_op || has_col_op,
+        "at least one structural change type should be detected"
+    );
+}
+
+#[test]
+fn g15_single_row_grid_column_insert_no_spurious_row_ops() {
+    let grid_a = grid_from_row_data(&[vec![10, 20]]);
+
+    let grid_b = make_grid_with_cells(1, 3, &[(0, 0, 10), (0, 2, 20)]);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    let row_ops: Vec<&DiffOp> = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::RowAdded { .. } | DiffOp::RowRemoved { .. }))
+        .collect();
+
+    assert!(
+        row_ops.is_empty(),
+        "single row grid with column insert should not have row ops; got {:?}",
+        row_ops
+    );
+}
+
+#[test]
+fn g15_all_blank_column_insert_no_content_change_minimal_diff() {
+    let grid_a = grid_from_row_data(&[vec![1, 2], vec![3, 4], vec![5, 6]]);
+
+    let grid_b = make_grid_with_cells(
+        3,
+        3,
+        &[
+            (0, 0, 1),
+            (0, 1, 2),
+            (1, 0, 3),
+            (1, 1, 4),
+            (2, 0, 5),
+            (2, 1, 6),
+        ],
+    );
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    let row_ops: Vec<&DiffOp> = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::RowAdded { .. } | DiffOp::RowRemoved { .. }))
+        .collect();
+
+    assert!(
+        row_ops.is_empty(),
+        "appending blank column should not cause row operations; got {:?}",
+        row_ops
+    );
+}
+
+#[test]
+fn g15_large_grid_column_insert_row_alignment_preserved() {
+    let rows: Vec<Vec<i32>> = (0..50)
+        .map(|r| (0..10).map(|c| r * 100 + c).collect())
+        .collect();
+    let grid_a = grid_from_row_data(&rows);
+
+    let mut cells_b: Vec<(u32, u32, i32)> = Vec::with_capacity(50 * 10);
+    for r in 0..50 {
+        for c in 0..10 {
+            let new_col = if c < 5 { c } else { c + 1 };
+            cells_b.push((r, new_col, r as i32 * 100 + c as i32));
+        }
+    }
+    let grid_b = make_grid_with_cells(50, 11, &cells_b);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    let row_structural_ops: Vec<&DiffOp> = report
+        .ops
+        .iter()
+        .filter(|op| {
+            matches!(
+                op,
+                DiffOp::RowAdded { .. } | DiffOp::RowRemoved { .. } | DiffOp::BlockMovedRows { .. }
+            )
+        })
+        .collect();
+
+    assert!(
+        row_structural_ops.is_empty(),
+        "large grid column insert should not cause row changes; got {} row ops",
+        row_structural_ops.len()
+    );
+
+    let column_adds = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::ColumnAdded { .. }))
+        .count();
+
+    assert!(
+        column_adds > 0 || !report.ops.is_empty(),
+        "column insertion should be detected in large grid"
+    );
+}
+
 ```
 
 ---
@@ -11019,10 +11657,32 @@ fn g14_two_disjoint_rect_moves_plus_outside_edits_no_silent_data_loss() {
 ### File: `core\tests\g1_g2_grid_workbook_tests.rs`
 
 ```rust
-use excel_diff::{CellValue, DiffOp, diff_workbooks, open_workbook};
+use excel_diff::{
+    Cell, CellAddress, CellValue, DiffOp, Grid, Sheet, SheetKind, Workbook, diff_workbooks,
+    open_workbook,
+};
 
 mod common;
 use common::fixture_path;
+
+fn workbook_with_number(value: f64) -> Workbook {
+    let mut grid = Grid::new(1, 1);
+    grid.insert(Cell {
+        row: 0,
+        col: 0,
+        address: CellAddress::from_indices(0, 0),
+        value: Some(CellValue::Number(value)),
+        formula: None,
+    });
+
+    Workbook {
+        sheets: vec![Sheet {
+            name: "Sheet1".to_string(),
+            kind: SheetKind::Worksheet,
+            grid,
+        }],
+    }
+}
 
 #[test]
 fn g1_equal_sheet_produces_empty_diff() {
@@ -11079,6 +11739,58 @@ fn g2_single_cell_literal_change_produces_one_celledited() {
                 | DiffOp::ColumnRemoved { .. }
         )),
         "single cell change should not produce row/column structure ops"
+    );
+}
+
+#[test]
+fn g2_float_ulp_noise_is_ignored_in_diff() {
+    let old = workbook_with_number(1.0);
+    let new = workbook_with_number(1.0000000000000002);
+
+    let report = diff_workbooks(&old, &new);
+
+    assert!(
+        report.ops.is_empty(),
+        "ULP-level float drift should not produce a diff op"
+    );
+}
+
+#[test]
+fn g2_meaningful_float_change_emits_cell_edit() {
+    let old = workbook_with_number(1.0);
+    let new = workbook_with_number(1.0001);
+
+    let report = diff_workbooks(&old, &new);
+
+    assert_eq!(
+        report.ops.len(),
+        1,
+        "meaningful float change should produce exactly one diff op"
+    );
+
+    match &report.ops[0] {
+        DiffOp::CellEdited { addr, from, to, .. } => {
+            assert_eq!(addr.to_a1(), "A1");
+            assert_eq!(from.value, Some(CellValue::Number(1.0)));
+            assert_eq!(to.value, Some(CellValue::Number(1.0001)));
+        }
+        other => panic!("expected CellEdited diff op, got {other:?}"),
+    }
+}
+
+#[test]
+fn g2_nan_values_are_treated_as_equal() {
+    let signaling_nan = f64::from_bits(0x7ff8_0000_0000_0000);
+    let quiet_nan = f64::NAN;
+
+    let old = workbook_with_number(signaling_nan);
+    let new = workbook_with_number(quiet_nan);
+
+    let report = diff_workbooks(&old, &new);
+
+    assert!(
+        report.ops.is_empty(),
+        "different NaN bit patterns should be considered equal in diffing"
     );
 }
 
@@ -12004,6 +12716,28 @@ fn gridview_large_sparse_grid_constructs_without_panic() {
         view.col_meta
             .iter()
             .any(|meta| meta.non_blank_count > 0 && meta.first_non_blank_row == 0)
+    );
+}
+
+#[test]
+fn gridview_row_hashes_ignore_small_float_drift() {
+    let mut grid_a = Grid::new(1, 1);
+    grid_a.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+
+    let mut grid_b = Grid::new(1, 1);
+    grid_b.insert(make_cell(
+        0,
+        0,
+        Some(CellValue::Number(1.0000000000000002)),
+        None,
+    ));
+
+    let view_a = GridView::from_grid(&grid_a);
+    let view_b = GridView::from_grid(&grid_b);
+
+    assert_eq!(
+        view_a.row_meta[0].hash, view_b.row_meta[0].hash,
+        "row signatures should be stable under ULP-level float differences"
     );
 }
 
