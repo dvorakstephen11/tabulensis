@@ -7,7 +7,7 @@
 //! - [`Cell`]: Individual cell with address, value, and optional formula
 
 use crate::addressing::{AddressParseError, address_to_index, index_to_address};
-use crate::hashing::{combine_hashes, hash_cell_contribution};
+use crate::hashing::normalize_float_for_hash;
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
@@ -160,19 +160,34 @@ impl<'de> Deserialize<'de> for CellAddress {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum CellValue {
     Number(f64),
     Text(String),
     Bool(bool),
 }
 
+impl PartialEq for CellValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (CellValue::Number(a), CellValue::Number(b)) => {
+                normalize_float_for_hash(*a) == normalize_float_for_hash(*b)
+            }
+            (CellValue::Text(a), CellValue::Text(b)) => a == b,
+            (CellValue::Bool(a), CellValue::Bool(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for CellValue {}
+
 impl Hash for CellValue {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
             CellValue::Number(n) => {
                 0u8.hash(state);
-                n.to_bits().hash(state);
+                normalize_float_for_hash(*n).hash(state);
             }
             CellValue::Text(s) => {
                 1u8.hash(state);
@@ -186,14 +201,96 @@ impl Hash for CellValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RowSignature {
-    pub hash: u64,
+    pub hash: u128,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ColSignature {
-    pub hash: u64,
+    pub hash: u128,
+}
+
+#[allow(dead_code)]
+mod signature_serde {
+    use serde::de::Error as DeError;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize_u128<S>(val: &u128, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        format!("{:032x}", val).serialize(serializer)
+    }
+
+    pub fn deserialize_u128<'de, D>(deserializer: D) -> Result<u128, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        u128::from_str_radix(&s, 16)
+            .map_err(|e| DeError::custom(format!("invalid hex hash: {}", e)))
+    }
+}
+
+impl serde::Serialize for RowSignature {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("RowSignature", 1)?;
+        s.serialize_field("hash", &format!("{:032x}", self.hash))?;
+        s.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for RowSignature {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as DeError;
+
+        #[derive(serde::Deserialize)]
+        struct Helper {
+            hash: String,
+        }
+        let helper = Helper::deserialize(deserializer)?;
+        let hash = u128::from_str_radix(&helper.hash, 16)
+            .map_err(|e| DeError::custom(format!("invalid hex hash: {}", e)))?;
+        Ok(RowSignature { hash })
+    }
+}
+
+impl serde::Serialize for ColSignature {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("ColSignature", 1)?;
+        s.serialize_field("hash", &format!("{:032x}", self.hash))?;
+        s.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ColSignature {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as DeError;
+
+        #[derive(serde::Deserialize)]
+        struct Helper {
+            hash: String,
+        }
+        let helper = Helper::deserialize(deserializer)?;
+        let hash = u128::from_str_radix(&helper.hash, 16)
+            .map_err(|e| DeError::custom(format!("invalid hex hash: {}", e)))?;
+        Ok(ColSignature { hash })
+    }
 }
 
 impl Grid {
@@ -244,58 +341,66 @@ impl Grid {
     }
 
     pub fn compute_row_signature(&self, row: u32) -> RowSignature {
-        let hash = self
+        use crate::hashing::hash_row_content_128;
+        let mut row_cells: Vec<_> = self
             .cells
             .values()
             .filter(|cell| cell.row == row)
-            .fold(0u64, |acc, cell| {
-                combine_hashes(acc, hash_cell_contribution(cell.col, cell))
-            });
+            .map(|cell| (cell.col, cell))
+            .collect();
+        row_cells.sort_by_key(|(col, _)| *col);
+
+        let hash = hash_row_content_128(&row_cells);
         RowSignature { hash }
     }
 
     pub fn compute_col_signature(&self, col: u32) -> ColSignature {
-        let hash = self
-            .cells
-            .values()
-            .filter(|cell| cell.col == col)
-            .fold(0u64, |acc, cell| {
-                combine_hashes(acc, hash_cell_contribution(cell.row, cell))
-            });
+        use crate::hashing::hash_col_content_128;
+        let mut col_cells: Vec<_> = self.cells.values().filter(|cell| cell.col == col).collect();
+        col_cells.sort_by_key(|cell| cell.row);
+
+        let hash = hash_col_content_128(&col_cells);
         ColSignature { hash }
     }
 
     pub fn compute_all_signatures(&mut self) {
-        let mut row_hashes = vec![0u64; self.nrows as usize];
-        let mut col_hashes = vec![0u64; self.ncols as usize];
+        use crate::hashing::{hash_col_content_128, hash_row_content_128};
+
+        let mut row_cells: Vec<Vec<(u32, &Cell)>> = vec![Vec::new(); self.nrows as usize];
+        let mut col_cells: Vec<Vec<&Cell>> = vec![Vec::new(); self.ncols as usize];
 
         for cell in self.cells.values() {
             let row_idx = cell.row as usize;
             let col_idx = cell.col as usize;
 
             debug_assert!(
-                row_idx < row_hashes.len() && col_idx < col_hashes.len(),
+                row_idx < row_cells.len() && col_idx < col_cells.len(),
                 "cell coordinates must lie within the grid bounds"
             );
 
-            let row_contribution = hash_cell_contribution(cell.col, cell);
-            row_hashes[row_idx] = combine_hashes(row_hashes[row_idx], row_contribution);
-
-            let col_contribution = hash_cell_contribution(cell.row, cell);
-            col_hashes[col_idx] = combine_hashes(col_hashes[col_idx], col_contribution);
+            row_cells[row_idx].push((cell.col, cell));
+            col_cells[col_idx].push(cell);
         }
 
         self.row_signatures = Some(
-            row_hashes
+            row_cells
                 .into_iter()
-                .map(|hash| RowSignature { hash })
+                .map(|mut cells| {
+                    cells.sort_by_key(|(col, _)| *col);
+                    let hash = hash_row_content_128(&cells);
+                    RowSignature { hash }
+                })
                 .collect(),
         );
 
         self.col_signatures = Some(
-            col_hashes
+            col_cells
                 .into_iter()
-                .map(|hash| ColSignature { hash })
+                .map(|mut cells| {
+                    cells.sort_by_key(|c| c.row);
+                    let hash = hash_col_content_128(&cells);
+                    ColSignature { hash }
+                })
                 .collect(),
         );
     }
@@ -338,6 +443,8 @@ impl CellValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
 
     fn addr(a1: &str) -> CellAddress {
         a1.parse().expect("address should parse")
@@ -467,5 +574,32 @@ mod tests {
         assert_eq!(boolean.as_text(), None);
         assert_eq!(boolean.as_number(), None);
         assert_eq!(boolean.as_bool(), Some(true));
+    }
+
+    fn hash_cell_value(value: &CellValue) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        value.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[test]
+    fn cellvalue_number_hashes_normalize_zero_sign() {
+        let h_pos = hash_cell_value(&CellValue::Number(0.0));
+        let h_neg = hash_cell_value(&CellValue::Number(-0.0));
+        assert_eq!(h_pos, h_neg, "hash should ignore sign of zero");
+    }
+
+    #[test]
+    fn cellvalue_number_hashes_ignore_ulp_drift() {
+        let h_a = hash_cell_value(&CellValue::Number(1.0));
+        let h_b = hash_cell_value(&CellValue::Number(1.0000000000000002));
+        assert_eq!(h_a, h_b, "minor ULP drift should hash identically");
+    }
+
+    #[test]
+    fn cellvalue_number_hashes_meaningful_difference() {
+        let h_a = hash_cell_value(&CellValue::Number(1.0));
+        let h_b = hash_cell_value(&CellValue::Number(1.0001));
+        assert_ne!(h_a, h_b, "meaningful numeric changes must alter the hash");
     }
 }

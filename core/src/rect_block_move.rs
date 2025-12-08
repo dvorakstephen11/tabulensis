@@ -92,7 +92,7 @@ fn validate_orientation(
     row_ranges: ((u32, u32), (u32, u32)),
     col_ranges: ((u32, u32), (u32, u32)),
 ) -> Option<RectBlockMove> {
-    if ranges_overlap(row_ranges.0, row_ranges.1) || ranges_overlap(col_ranges.0, col_ranges.1) {
+    if ranges_overlap(row_ranges.0, row_ranges.1) && ranges_overlap(col_ranges.0, col_ranges.1) {
         return None;
     }
 
@@ -276,17 +276,18 @@ where
     }
     ranges.push((start, prev));
 
-    if ranges.len() != 2 {
-        return None;
+    match ranges.len() {
+        1 => Some((ranges[0], ranges[0])),
+        2 => {
+            let len0 = range_len(ranges[0]);
+            let len1 = range_len(ranges[1]);
+            if len0 != len1 {
+                return None;
+            }
+            Some((ranges[0], ranges[1]))
+        }
+        _ => None,
     }
-
-    let len0 = range_len(ranges[0]);
-    let len1 = range_len(ranges[1]);
-    if len0 != len1 {
-        return None;
-    }
-
-    Some((ranges[0], ranges[1]))
 }
 
 fn range_len(range: (u32, u32)) -> u32 {
@@ -440,6 +441,34 @@ mod tests {
         assert_eq!(mv.src_col_count, 3);
         assert_eq!(mv.dst_start_row, 7);
         assert_eq!(mv.dst_start_col, 6);
+    }
+
+    #[test]
+    fn detect_rect_block_move_with_shared_columns() {
+        let mut grid_a = base_background(10, 10);
+        let mut grid_b = base_background(10, 10);
+
+        let block = vec![vec![11, 12], vec![21, 22]];
+
+        place_block(&mut grid_a, 1, 2, &block);
+        place_block(&mut grid_b, 6, 2, &block);
+
+        let old = grid_from_matrix(grid_a);
+        let new = grid_from_matrix(grid_b);
+
+        let result = detect_exact_rect_block_move(&old, &new);
+        assert!(
+            result.is_some(),
+            "should detect a vertical rect move when columns overlap"
+        );
+
+        let mv = result.unwrap();
+        assert_eq!(mv.src_start_row, 1);
+        assert_eq!(mv.dst_start_row, 6);
+        assert_eq!(mv.src_start_col, 2);
+        assert_eq!(mv.dst_start_col, 2);
+        assert_eq!(mv.src_row_count, 2);
+        assert_eq!(mv.src_col_count, 2);
     }
 
     #[test]

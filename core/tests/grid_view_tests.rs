@@ -174,3 +174,25 @@ fn gridview_large_sparse_grid_constructs_without_panic() {
             .any(|meta| meta.non_blank_count > 0 && meta.first_non_blank_row == 0)
     );
 }
+
+#[test]
+fn gridview_row_hashes_ignore_small_float_drift() {
+    let mut grid_a = Grid::new(1, 1);
+    grid_a.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+
+    let mut grid_b = Grid::new(1, 1);
+    grid_b.insert(make_cell(
+        0,
+        0,
+        Some(CellValue::Number(1.0000000000000002)),
+        None,
+    ));
+
+    let view_a = GridView::from_grid(&grid_a);
+    let view_b = GridView::from_grid(&grid_b);
+
+    assert_eq!(
+        view_a.row_meta[0].hash, view_b.row_meta[0].hash,
+        "row signatures should be stable under ULP-level float differences"
+    );
+}

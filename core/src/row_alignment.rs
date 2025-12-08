@@ -23,8 +23,8 @@ const MAX_HASH_REPEAT: u32 = 8;
 const MAX_BLOCK_GAP: u32 = 32;
 const MAX_FUZZY_BLOCK_ROWS: u32 = 32;
 const FUZZY_SIMILARITY_THRESHOLD: f64 = 0.80;
-const _HASH_COLLISION_NOTE: &str = "64-bit hash collision probability ~0.00006% at 2K rows; \
-                                    secondary verification deferred to G8a (50K-row adversarial)";
+const _HASH_COLLISION_NOTE: &str = "128-bit xxHash3 collision probability ~10^-29 at 50K rows (birthday bound); \
+     secondary verification not required; see hashing.rs for detailed rationale.";
 
 pub(crate) fn detect_exact_row_block_move(old: &Grid, new: &Grid) -> Option<RowBlockMove> {
     if old.nrows != new.nrows || old.ncols != new.ncols {
@@ -1047,6 +1047,28 @@ mod tests {
         let grid_b = grid_from_rows(&rows_b_refs);
 
         assert!(align_row_changes(&grid_a, &grid_b).is_none());
+    }
+
+    #[test]
+    fn align_row_changes_rejects_column_insert_mismatch() {
+        let grid_a = grid_from_rows(&[&[10, 11, 12], &[20, 21, 22]]);
+        let grid_b = grid_from_rows(&[&[0, 10, 11, 12], &[0, 20, 21, 22], &[0, 30, 31, 32]]);
+
+        assert!(
+            align_row_changes(&grid_a, &grid_b).is_none(),
+            "column insertion changing column count should skip row alignment"
+        );
+    }
+
+    #[test]
+    fn align_row_changes_rejects_column_delete_mismatch() {
+        let grid_a = grid_from_rows(&[&[10, 11, 12, 13], &[20, 21, 22, 23], &[30, 31, 32, 33]]);
+        let grid_b = grid_from_rows(&[&[10, 12, 13], &[30, 32, 33]]);
+
+        assert!(
+            align_row_changes(&grid_a, &grid_b).is_none(),
+            "column deletion changing column count should skip row alignment"
+        );
     }
 
     #[test]

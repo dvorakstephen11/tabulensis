@@ -448,7 +448,10 @@ fn pg4_row_added_json_optional_signature() {
         row_signature: Some(RowSignature { hash: 123 }),
     };
     let json_with = serde_json::to_value(&op_with_sig).expect("serialize with sig");
-    assert_eq!(json_with["row_signature"]["hash"], 123);
+    assert_eq!(
+        json_with["row_signature"]["hash"],
+        "0000000000000000000000000000007b"
+    );
 }
 
 #[test]
@@ -471,7 +474,10 @@ fn pg4_column_added_json_optional_signature() {
         col_signature: Some(ColSignature { hash: 321 }),
     };
     let json_added_with = serde_json::to_value(&added_with_sig).expect("serialize with sig");
-    assert_eq!(json_added_with["col_signature"]["hash"], 321);
+    assert_eq!(
+        json_added_with["col_signature"]["hash"],
+        "00000000000000000000000000000141"
+    );
 
     let removed_without_sig = DiffOp::ColumnRemoved {
         sheet: "Sheet2".to_string(),
@@ -491,7 +497,10 @@ fn pg4_column_added_json_optional_signature() {
     };
     let json_removed_with =
         serde_json::to_value(&removed_with_sig).expect("serialize removed with sig");
-    assert_eq!(json_removed_with["col_signature"]["hash"], 654);
+    assert_eq!(
+        json_removed_with["col_signature"]["hash"],
+        "0000000000000000000000000000028e"
+    );
 }
 
 #[test]

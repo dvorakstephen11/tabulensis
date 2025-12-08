@@ -1,4 +1,7 @@
-use excel_diff::{DiffOp, Grid, Workbook, diff_grids_database_mode, diff_workbooks, open_workbook};
+use excel_diff::{
+    Cell, CellAddress, CellValue, DiffOp, Grid, Workbook, diff_grids_database_mode, diff_workbooks,
+    open_workbook,
+};
 
 mod common;
 use common::{fixture_path, grid_from_numbers};
@@ -10,6 +13,26 @@ fn data_grid(workbook: &Workbook) -> &Grid {
         .find(|s| s.name == "Data")
         .map(|s| &s.grid)
         .expect("Data sheet present")
+}
+
+fn grid_from_float_rows(rows: &[&[f64]]) -> Grid {
+    let nrows = rows.len() as u32;
+    let ncols = if nrows == 0 { 0 } else { rows[0].len() as u32 };
+    let mut grid = Grid::new(nrows, ncols);
+
+    for (r_idx, row_vals) in rows.iter().enumerate() {
+        for (c_idx, value) in row_vals.iter().enumerate() {
+            grid.insert(Cell {
+                row: r_idx as u32,
+                col: c_idx as u32,
+                address: CellAddress::from_indices(r_idx as u32, c_idx as u32),
+                value: Some(CellValue::Number(*value)),
+                formula: None,
+            });
+        }
+    }
+
+    grid
 }
 
 #[test]
@@ -144,6 +167,46 @@ fn d1_database_mode_cell_edited_with_reorder() {
     assert_eq!(
         cell_edited_count, 1,
         "database mode should ignore reordering and find only the cell edit for key 2"
+    );
+}
+
+#[test]
+fn d1_database_mode_treats_small_float_key_noise_as_equal() {
+    let grid_a = grid_from_float_rows(&[&[1.0, 10.0], &[2.0, 20.0], &[3.0, 30.0]]);
+    let grid_b = grid_from_float_rows(&[&[1.0000000000000002, 10.0], &[2.0, 20.0], &[3.0, 30.0]]);
+
+    let report = diff_grids_database_mode(&grid_a, &grid_b, &[0]);
+    assert!(
+        report.ops.is_empty(),
+        "ULP-level noise in key column should not break row alignment"
+    );
+}
+
+#[test]
+fn d1_database_mode_detects_meaningful_float_key_change() {
+    let grid_a = grid_from_float_rows(&[&[1.0, 10.0], &[2.0, 20.0], &[3.0, 30.0]]);
+    let grid_b = grid_from_float_rows(&[&[1.0001, 10.0], &[2.0, 20.0], &[3.0, 30.0]]);
+
+    let report = diff_grids_database_mode(&grid_a, &grid_b, &[0]);
+
+    let row_removed = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::RowRemoved { .. }))
+        .count();
+    let row_added = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::RowAdded { .. }))
+        .count();
+
+    assert_eq!(
+        row_removed, 1,
+        "meaningful key drift should remove the original keyed row"
+    );
+    assert_eq!(
+        row_added, 1,
+        "meaningful key drift should add the new keyed row"
     );
 }
 

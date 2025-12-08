@@ -1,7 +1,29 @@
-use excel_diff::{CellValue, DiffOp, diff_workbooks, open_workbook};
+use excel_diff::{
+    Cell, CellAddress, CellValue, DiffOp, Grid, Sheet, SheetKind, Workbook, diff_workbooks,
+    open_workbook,
+};
 
 mod common;
 use common::fixture_path;
+
+fn workbook_with_number(value: f64) -> Workbook {
+    let mut grid = Grid::new(1, 1);
+    grid.insert(Cell {
+        row: 0,
+        col: 0,
+        address: CellAddress::from_indices(0, 0),
+        value: Some(CellValue::Number(value)),
+        formula: None,
+    });
+
+    Workbook {
+        sheets: vec![Sheet {
+            name: "Sheet1".to_string(),
+            kind: SheetKind::Worksheet,
+            grid,
+        }],
+    }
+}
 
 #[test]
 fn g1_equal_sheet_produces_empty_diff() {
@@ -58,5 +80,57 @@ fn g2_single_cell_literal_change_produces_one_celledited() {
                 | DiffOp::ColumnRemoved { .. }
         )),
         "single cell change should not produce row/column structure ops"
+    );
+}
+
+#[test]
+fn g2_float_ulp_noise_is_ignored_in_diff() {
+    let old = workbook_with_number(1.0);
+    let new = workbook_with_number(1.0000000000000002);
+
+    let report = diff_workbooks(&old, &new);
+
+    assert!(
+        report.ops.is_empty(),
+        "ULP-level float drift should not produce a diff op"
+    );
+}
+
+#[test]
+fn g2_meaningful_float_change_emits_cell_edit() {
+    let old = workbook_with_number(1.0);
+    let new = workbook_with_number(1.0001);
+
+    let report = diff_workbooks(&old, &new);
+
+    assert_eq!(
+        report.ops.len(),
+        1,
+        "meaningful float change should produce exactly one diff op"
+    );
+
+    match &report.ops[0] {
+        DiffOp::CellEdited { addr, from, to, .. } => {
+            assert_eq!(addr.to_a1(), "A1");
+            assert_eq!(from.value, Some(CellValue::Number(1.0)));
+            assert_eq!(to.value, Some(CellValue::Number(1.0001)));
+        }
+        other => panic!("expected CellEdited diff op, got {other:?}"),
+    }
+}
+
+#[test]
+fn g2_nan_values_are_treated_as_equal() {
+    let signaling_nan = f64::from_bits(0x7ff8_0000_0000_0000);
+    let quiet_nan = f64::NAN;
+
+    let old = workbook_with_number(signaling_nan);
+    let new = workbook_with_number(quiet_nan);
+
+    let report = diff_workbooks(&old, &new);
+
+    assert!(
+        report.ops.is_empty(),
+        "different NaN bit patterns should be considered equal in diffing"
     );
 }

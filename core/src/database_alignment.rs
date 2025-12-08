@@ -1,3 +1,4 @@
+use crate::hashing::normalize_float_for_hash;
 use crate::workbook::{CellValue, Grid};
 use std::collections::{HashMap, HashSet};
 
@@ -27,7 +28,7 @@ pub(crate) enum KeyValueRepr {
 impl KeyValueRepr {
     fn from_cell_value(value: Option<&CellValue>) -> KeyValueRepr {
         match value {
-            Some(CellValue::Number(n)) => KeyValueRepr::Number(n.to_bits()),
+            Some(CellValue::Number(n)) => KeyValueRepr::Number(normalize_float_for_hash(*n)),
             Some(CellValue::Text(s)) => KeyValueRepr::Text(s.clone()),
             Some(CellValue::Bool(b)) => KeyValueRepr::Bool(*b),
             None => KeyValueRepr::None,

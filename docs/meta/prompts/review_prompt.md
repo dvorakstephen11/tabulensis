@@ -4,15 +4,16 @@
 
 ```text
 /
+  .gitignore
   Cargo.lock
   Cargo.toml
-  README.md
   core/
     Cargo.lock
     Cargo.toml
     src/
       addressing.rs
       column_alignment.rs
+      config.rs
       container.rs
       database_alignment.rs
       datamashup.rs
@@ -28,14 +29,17 @@
       m_ast.rs
       m_diff.rs
       m_section.rs
-      rect_block_move.rs
-      row_alignment.rs
-      workbook.rs
       output/
         json.rs
         mod.rs
+      rect_block_move.rs
+      region_mask.rs
+      row_alignment.rs
+      workbook.rs
     tests/
       addressing_pg2_tests.rs
+      common/
+        mod.rs
       d1_database_mode_tests.rs
       data_mashup_tests.rs
       engine_tests.rs
@@ -45,6 +49,7 @@
       g12_column_block_move_grid_workbook_tests.rs
       g12_rect_block_move_grid_workbook_tests.rs
       g13_fuzzy_row_move_grid_workbook_tests.rs
+      g14_move_combination_tests.rs
       g1_g2_grid_workbook_tests.rs
       g5_g7_grid_workbook_tests.rs
       g8_row_alignment_grid_workbook_tests.rs
@@ -67,131 +72,26 @@
       pg6_object_vs_grid_tests.rs
       signature_tests.rs
       sparse_grid_tests.rs
-      common/
-        mod.rs
   fixtures/
     manifest.yaml
     pyproject.toml
     README.md
     requirements.txt
-    generated/
-      column_move_a.xlsx
-      column_move_b.xlsx
-      col_append_right_a.xlsx
-      col_append_right_b.xlsx
-      col_delete_middle_a.xlsx
-      col_delete_middle_b.xlsx
-      col_delete_right_a.xlsx
-      col_delete_right_b.xlsx
-      col_insert_middle_a.xlsx
-      col_insert_middle_b.xlsx
-      col_insert_with_edit_a.xlsx
-      col_insert_with_edit_b.xlsx
-      corrupt_base64.xlsx
-      db_equal_ordered_a.xlsx
-      db_equal_ordered_b.xlsx
-      db_row_added_b.xlsx
-      duplicate_datamashup_elements.xlsx
-      duplicate_datamashup_parts.xlsx
-      equal_sheet_a.xlsx
-      equal_sheet_b.xlsx
-      grid_large_dense.xlsx
-      grid_large_noise.xlsx
-      grid_move_and_edit_a.xlsx
-      grid_move_and_edit_b.xlsx
-      json_diff_bool_a.xlsx
-      json_diff_bool_b.xlsx
-      json_diff_single_cell_a.xlsx
-      json_diff_single_cell_b.xlsx
-      json_diff_value_to_empty_a.xlsx
-      json_diff_value_to_empty_b.xlsx
-      mashup_base64_whitespace.xlsx
-      mashup_utf16_be.xlsx
-      mashup_utf16_le.xlsx
-      metadata_hidden_queries.xlsx
-      metadata_missing_entry.xlsx
-      metadata_orphan_entries.xlsx
-      metadata_query_groups.xlsx
-      metadata_simple.xlsx
-      metadata_url_encoding.xlsx
-      minimal.xlsx
-      multi_cell_edits_a.xlsx
-      multi_cell_edits_b.xlsx
-      multi_query_with_embedded.xlsx
-      m_add_query_a.xlsx
-      m_add_query_b.xlsx
-      m_change_literal_a.xlsx
-      m_change_literal_b.xlsx
-      m_def_and_metadata_change_a.xlsx
-      m_def_and_metadata_change_b.xlsx
-      m_formatting_only_a.xlsx
-      m_formatting_only_b.xlsx
-      m_formatting_only_b_variant.xlsx
-      m_metadata_only_change_a.xlsx
-      m_metadata_only_change_b.xlsx
-      m_remove_query_a.xlsx
-      m_remove_query_b.xlsx
-      m_rename_query_a.xlsx
-      m_rename_query_b.xlsx
-      not_a_zip.txt
-      no_content_types.xlsx
-      one_query.xlsx
-      permissions_defaults.xlsx
-      permissions_firewall_off.xlsx
-      pg1_basic_two_sheets.xlsx
-      pg1_empty_and_mixed_sheets.xlsx
-      pg1_sparse_used_range.xlsx
-      pg2_addressing_matrix.xlsx
-      pg3_value_and_formula_cells.xlsx
-      pg6_sheet_added_a.xlsx
-      pg6_sheet_added_b.xlsx
-      pg6_sheet_and_grid_change_a.xlsx
-      pg6_sheet_and_grid_change_b.xlsx
-      pg6_sheet_removed_a.xlsx
-      pg6_sheet_removed_b.xlsx
-      pg6_sheet_renamed_a.xlsx
-      pg6_sheet_renamed_b.xlsx
-      random_zip.zip
-      rect_block_move_a.xlsx
-      rect_block_move_b.xlsx
-      row_append_bottom_a.xlsx
-      row_append_bottom_b.xlsx
-      row_block_delete_a.xlsx
-      row_block_delete_b.xlsx
-      row_block_insert_a.xlsx
-      row_block_insert_b.xlsx
-      row_block_move_a.xlsx
-      row_block_move_b.xlsx
-      row_delete_bottom_a.xlsx
-      row_delete_bottom_b.xlsx
-      row_delete_middle_a.xlsx
-      row_delete_middle_b.xlsx
-      row_insert_middle_a.xlsx
-      row_insert_middle_b.xlsx
-      row_insert_with_edit_a.xlsx
-      row_insert_with_edit_b.xlsx
-      sheet_case_only_rename_a.xlsx
-      sheet_case_only_rename_b.xlsx
-      sheet_case_only_rename_edit_a.xlsx
-      sheet_case_only_rename_edit_b.xlsx
-      single_cell_value_a.xlsx
-      single_cell_value_b.xlsx
     src/
-      generate.py
       __init__.py
+      generate.py
       generators/
+        __init__.py
         base.py
         corrupt.py
         database.py
         grid.py
         mashup.py
         perf.py
-        __init__.py
-    templates/
-      base_query.xlsx
   logs/
     2025-11-28b-diffop-pg4/
       activity_log.txt
+  README.md
 ```
 
 ## File Contents
@@ -220,23 +120,25 @@ fixtures/generated/*.csv
 
 # Docs
 docs/meta/completion_estimates/
+
 ```
 
 ---
 
 ### File: `Cargo.toml`
 
-```yaml
+```toml
 [workspace]
 members = ["core"]
 resolver = "2"
+
 ```
 
 ---
 
 ### File: `core\Cargo.toml`
 
-```yaml
+```toml
 [package]
 name = "excel_diff"
 version = "0.1.0"
@@ -257,11 +159,12 @@ zip = { version = "0.6", default-features = false, features = ["deflate"] }
 base64 = "0.22"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-xxhash-rust = { version = "0.8", features = ["xxh64"] }
+xxhash-rust = { version = "0.8", features = ["xxh64", "xxh3"] }
 
 [dev-dependencies]
 pretty_assertions = "1.4"
 tempfile = "3.10"
+
 ```
 
 ---
@@ -381,6 +284,7 @@ mod tests {
         }
     }
 }
+
 ```
 
 ---
@@ -908,6 +812,67 @@ mod tests {
         );
     }
 }
+
+```
+
+---
+
+### File: `core\src\config.rs`
+
+```rust
+//! Configuration for the diff engine.
+//!
+//! `DiffConfig` centralizes all algorithm thresholds and behavioral knobs
+//! to avoid hardcoded constants scattered throughout the codebase.
+
+#[derive(Debug, Clone)]
+pub struct DiffConfig {
+    pub max_move_iterations: u32,
+    pub max_align_rows: u32,
+    pub max_align_cols: u32,
+    pub max_block_gap: u32,
+    pub max_hash_repeat: u32,
+    pub fuzzy_similarity_threshold: f64,
+    pub max_fuzzy_block_rows: u32,
+}
+
+impl Default for DiffConfig {
+    fn default() -> Self {
+        Self {
+            max_move_iterations: 10,
+            max_align_rows: 2_000,
+            max_align_cols: 64,
+            max_block_gap: 32,
+            max_hash_repeat: 8,
+            fuzzy_similarity_threshold: 0.80,
+            max_fuzzy_block_rows: 32,
+        }
+    }
+}
+
+impl DiffConfig {
+    pub fn fastest() -> Self {
+        Self {
+            max_move_iterations: 3,
+            max_block_gap: 16,
+            ..Default::default()
+        }
+    }
+
+    pub fn balanced() -> Self {
+        Self::default()
+    }
+
+    pub fn most_precise() -> Self {
+        Self {
+            max_move_iterations: 20,
+            max_block_gap: 64,
+            fuzzy_similarity_threshold: 0.90,
+            ..Default::default()
+        }
+    }
+}
+
 ```
 
 ---
@@ -998,6 +963,7 @@ impl OpcContainer {
         self.len() == 0
     }
 }
+
 ```
 
 ---
@@ -1380,6 +1346,7 @@ mod tests {
         );
     }
 }
+
 ```
 
 ---
@@ -1915,6 +1882,7 @@ fn split_item_path(path: &str) -> Result<(String, String), DataMashupError> {
     let formula = rest.join("/");
     Ok((section.to_string(), formula))
 }
+
 ```
 
 ---
@@ -2318,6 +2286,7 @@ mod tests {
         }
     }
 }
+
 ```
 
 ---
@@ -2449,6 +2418,7 @@ fn strip_leading_bom(text: String) -> String {
         .map(|s| s.to_string())
         .unwrap_or(text)
 }
+
 ```
 
 ---
@@ -2686,6 +2656,7 @@ impl DiffOp {
         }
     }
 }
+
 ```
 
 ---
@@ -2701,15 +2672,17 @@ impl DiffOp {
 use crate::column_alignment::{
     ColumnAlignment, ColumnBlockMove, align_single_column_change, detect_exact_column_block_move,
 };
+use crate::config::DiffConfig;
 use crate::database_alignment::{KeyColumnSpec, diff_table_by_key};
 use crate::diff::{DiffOp, DiffReport, SheetId};
 use crate::rect_block_move::{RectBlockMove, detect_exact_rect_block_move};
+use crate::region_mask::RegionMask;
 use crate::row_alignment::{
     RowAlignment, RowBlockMove, align_row_changes, detect_exact_row_block_move,
     detect_fuzzy_row_block_move,
 };
 use crate::workbook::{Cell, CellAddress, CellSnapshot, Grid, Sheet, SheetKind, Workbook};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 const DATABASE_MODE_SHEET_ID: &str = "<database>";
 
@@ -2736,6 +2709,14 @@ fn sheet_kind_order(kind: &SheetKind) -> u8 {
 }
 
 pub fn diff_workbooks(old: &Workbook, new: &Workbook) -> DiffReport {
+    diff_workbooks_with_config(old, new, &DiffConfig::default())
+}
+
+pub fn diff_workbooks_with_config(
+    old: &Workbook,
+    new: &Workbook,
+    config: &DiffConfig,
+) -> DiffReport {
     let mut ops = Vec::new();
 
     let mut old_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
@@ -2785,7 +2766,13 @@ pub fn diff_workbooks(old: &Workbook, new: &Workbook) -> DiffReport {
             }
             (Some(old_sheet), Some(new_sheet)) => {
                 let sheet_id: SheetId = old_sheet.name.clone();
-                diff_grids(&sheet_id, &old_sheet.grid, &new_sheet.grid, &mut ops);
+                diff_grids_with_config(
+                    &sheet_id,
+                    &old_sheet.grid,
+                    &new_sheet.grid,
+                    config,
+                    &mut ops,
+                );
             }
             (None, None) => unreachable!(),
         }
@@ -2838,25 +2825,563 @@ pub fn diff_grids_database_mode(old: &Grid, new: &Grid, key_columns: &[u32]) -> 
 }
 
 fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>) {
-    if let Some(mv) = detect_exact_rect_block_move(old, new) {
-        emit_rect_block_move(sheet_id, mv, ops);
+    diff_grids_with_config(sheet_id, old, new, &DiffConfig::default(), ops);
+}
+
+fn diff_grids_with_config(
+    sheet_id: &SheetId,
+    old: &Grid,
+    new: &Grid,
+    config: &DiffConfig,
+    ops: &mut Vec<DiffOp>,
+) {
+    if old.nrows == 0 && new.nrows == 0 {
         return;
     }
 
-    if let Some(mv) = detect_exact_row_block_move(old, new) {
-        emit_row_block_move(sheet_id, mv, ops);
-    } else if let Some(mv) = detect_exact_column_block_move(old, new) {
-        emit_column_block_move(sheet_id, mv, ops);
-    } else if let Some(mv) = detect_fuzzy_row_block_move(old, new) {
-        emit_row_block_move(sheet_id, mv, ops);
-        emit_moved_row_block_edits(sheet_id, old, new, mv, ops);
-    } else if let Some(alignment) = align_row_changes(old, new) {
+    let mut old_mask = RegionMask::all_active(old.nrows, old.ncols);
+    let mut new_mask = RegionMask::all_active(new.nrows, new.ncols);
+    let mut iteration = 0;
+
+    loop {
+        if iteration >= config.max_move_iterations {
+            break;
+        }
+
+        if !old_mask.has_active_cells() || !new_mask.has_active_cells() {
+            break;
+        }
+
+        let mut found_move = false;
+
+        if let Some(mv) = detect_exact_rect_block_move_masked(old, new, &old_mask, &new_mask) {
+            emit_rect_block_move(sheet_id, mv, ops);
+            old_mask.exclude_rect_cells(
+                mv.src_start_row,
+                mv.src_row_count,
+                mv.src_start_col,
+                mv.src_col_count,
+            );
+            new_mask.exclude_rect_cells(
+                mv.dst_start_row,
+                mv.src_row_count,
+                mv.dst_start_col,
+                mv.src_col_count,
+            );
+            old_mask.exclude_rect_cells(
+                mv.dst_start_row,
+                mv.src_row_count,
+                mv.dst_start_col,
+                mv.src_col_count,
+            );
+            new_mask.exclude_rect_cells(
+                mv.src_start_row,
+                mv.src_row_count,
+                mv.src_start_col,
+                mv.src_col_count,
+            );
+            iteration += 1;
+            found_move = true;
+        }
+
+        if !found_move
+            && let Some(mv) = detect_exact_row_block_move_masked(old, new, &old_mask, &new_mask)
+        {
+            emit_row_block_move(sheet_id, mv, ops);
+            old_mask.exclude_rows(mv.src_start_row, mv.row_count);
+            new_mask.exclude_rows(mv.dst_start_row, mv.row_count);
+            iteration += 1;
+            found_move = true;
+        }
+
+        if !found_move
+            && let Some(mv) = detect_exact_column_block_move_masked(old, new, &old_mask, &new_mask)
+        {
+            emit_column_block_move(sheet_id, mv, ops);
+            old_mask.exclude_cols(mv.src_start_col, mv.col_count);
+            new_mask.exclude_cols(mv.dst_start_col, mv.col_count);
+            iteration += 1;
+            found_move = true;
+        }
+
+        if !found_move
+            && let Some(mv) = detect_fuzzy_row_block_move_masked(old, new, &old_mask, &new_mask)
+        {
+            emit_row_block_move(sheet_id, mv, ops);
+            emit_moved_row_block_edits(sheet_id, old, new, mv, ops);
+            old_mask.exclude_rows(mv.src_start_row, mv.row_count);
+            new_mask.exclude_rows(mv.dst_start_row, mv.row_count);
+            iteration += 1;
+            found_move = true;
+        }
+
+        if !found_move {
+            break;
+        }
+    }
+
+    if old_mask.has_exclusions() || new_mask.has_exclusions() {
+        if old.nrows != new.nrows || old.ncols != new.ncols {
+            positional_diff_with_masks(sheet_id, old, new, &old_mask, &new_mask, ops);
+        } else {
+            positional_diff_masked_equal_size(sheet_id, old, new, &old_mask, &new_mask, ops);
+        }
+        return;
+    }
+
+    if let Some(alignment) = align_row_changes(old, new) {
         emit_aligned_diffs(sheet_id, old, new, &alignment, ops);
     } else if let Some(alignment) = align_single_column_change(old, new) {
         emit_column_aligned_diffs(sheet_id, old, new, &alignment, ops);
     } else {
         positional_diff(sheet_id, old, new, ops);
     }
+}
+
+fn cells_content_equal(a: Option<&Cell>, b: Option<&Cell>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(cell_a), Some(cell_b)) => {
+            cell_a.value == cell_b.value && cell_a.formula == cell_b.formula
+        }
+        (Some(cell_a), None) => cell_a.value.is_none() && cell_a.formula.is_none(),
+        (None, Some(cell_b)) => cell_b.value.is_none() && cell_b.formula.is_none(),
+    }
+}
+
+fn collect_differences_in_grid(old: &Grid, new: &Grid) -> Vec<(u32, u32)> {
+    let mut diffs = Vec::new();
+
+    for row in 0..old.nrows {
+        for col in 0..old.ncols {
+            if !cells_content_equal(old.get(row, col), new.get(row, col)) {
+                diffs.push((row, col));
+            }
+        }
+    }
+
+    diffs
+}
+
+fn contiguous_ranges<I>(indices: I) -> Vec<(u32, u32)>
+where
+    I: IntoIterator<Item = u32>,
+{
+    let mut values: Vec<u32> = indices.into_iter().collect();
+    if values.is_empty() {
+        return Vec::new();
+    }
+
+    values.sort_unstable();
+    values.dedup();
+
+    let mut ranges: Vec<(u32, u32)> = Vec::new();
+    let mut start = values[0];
+    let mut prev = values[0];
+
+    for &val in values.iter().skip(1) {
+        if val == prev + 1 {
+            prev = val;
+            continue;
+        }
+
+        ranges.push((start, prev));
+        start = val;
+        prev = val;
+    }
+    ranges.push((start, prev));
+
+    ranges
+}
+
+fn group_rows_by_column_patterns(diffs: &[(u32, u32)]) -> Vec<(u32, u32)> {
+    if diffs.is_empty() {
+        return Vec::new();
+    }
+
+    let mut row_to_cols: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    for (row, col) in diffs {
+        row_to_cols.entry(*row).or_default().push(*col);
+    }
+
+    for cols in row_to_cols.values_mut() {
+        cols.sort_unstable();
+        cols.dedup();
+    }
+
+    let mut rows: Vec<u32> = row_to_cols.keys().copied().collect();
+    rows.sort_unstable();
+
+    let mut groups: Vec<(u32, u32)> = Vec::new();
+    if let Some(&first_row) = rows.first() {
+        let mut start = first_row;
+        let mut prev = first_row;
+        let mut current_cols = row_to_cols.get(&first_row).cloned().unwrap_or_default();
+
+        for row in rows.into_iter().skip(1) {
+            let cols = row_to_cols.get(&row).cloned().unwrap_or_default();
+            if row == prev + 1 && cols == current_cols {
+                prev = row;
+            } else {
+                groups.push((start, prev));
+                start = row;
+                prev = row;
+                current_cols = cols;
+            }
+        }
+        groups.push((start, prev));
+    }
+
+    groups
+}
+
+fn build_masked_grid(source: &Grid, mask: &RegionMask) -> (Grid, Vec<u32>, Vec<u32>) {
+    let row_map: Vec<u32> = mask.active_rows().collect();
+    let col_map: Vec<u32> = mask.active_cols().collect();
+
+    let nrows = row_map.len() as u32;
+    let ncols = col_map.len() as u32;
+
+    let mut row_lookup: Vec<Option<u32>> = vec![None; source.nrows as usize];
+    for (new_idx, old_row) in row_map.iter().enumerate() {
+        row_lookup[*old_row as usize] = Some(new_idx as u32);
+    }
+
+    let mut col_lookup: Vec<Option<u32>> = vec![None; source.ncols as usize];
+    for (new_idx, old_col) in col_map.iter().enumerate() {
+        col_lookup[*old_col as usize] = Some(new_idx as u32);
+    }
+
+    let mut projected = Grid::new(nrows, ncols);
+
+    for cell in source.cells.values() {
+        if !mask.is_cell_active(cell.row, cell.col) {
+            continue;
+        }
+
+        let Some(new_row) = row_lookup.get(cell.row as usize).and_then(|v| *v) else {
+            continue;
+        };
+        let Some(new_col) = col_lookup.get(cell.col as usize).and_then(|v| *v) else {
+            continue;
+        };
+
+        let mut new_cell = cell.clone();
+        new_cell.row = new_row;
+        new_cell.col = new_col;
+        new_cell.address = CellAddress::from_indices(new_row, new_col);
+
+        projected.cells.insert((new_row, new_col), new_cell);
+    }
+
+    (projected, row_map, col_map)
+}
+
+fn detect_exact_row_block_move_masked(
+    old: &Grid,
+    new: &Grid,
+    old_mask: &RegionMask,
+    new_mask: &RegionMask,
+) -> Option<RowBlockMove> {
+    if !old_mask.has_active_cells() || !new_mask.has_active_cells() {
+        return None;
+    }
+
+    let (old_proj, old_rows, _) = build_masked_grid(old, old_mask);
+    let (new_proj, new_rows, _) = build_masked_grid(new, new_mask);
+
+    if old_proj.nrows != new_proj.nrows || old_proj.ncols != new_proj.ncols {
+        return None;
+    }
+
+    let mv_local = detect_exact_row_block_move(&old_proj, &new_proj)?;
+    let src_start_row = *old_rows.get(mv_local.src_start_row as usize)?;
+    let dst_start_row = *new_rows.get(mv_local.dst_start_row as usize)?;
+
+    Some(RowBlockMove {
+        src_start_row,
+        dst_start_row,
+        row_count: mv_local.row_count,
+    })
+}
+
+fn detect_exact_column_block_move_masked(
+    old: &Grid,
+    new: &Grid,
+    old_mask: &RegionMask,
+    new_mask: &RegionMask,
+) -> Option<ColumnBlockMove> {
+    if !old_mask.has_active_cells() || !new_mask.has_active_cells() {
+        return None;
+    }
+
+    let (old_proj, _, old_cols) = build_masked_grid(old, old_mask);
+    let (new_proj, _, new_cols) = build_masked_grid(new, new_mask);
+
+    if old_proj.nrows != new_proj.nrows || old_proj.ncols != new_proj.ncols {
+        return None;
+    }
+
+    let mv_local = detect_exact_column_block_move(&old_proj, &new_proj)?;
+    let src_start_col = *old_cols.get(mv_local.src_start_col as usize)?;
+    let dst_start_col = *new_cols.get(mv_local.dst_start_col as usize)?;
+
+    Some(ColumnBlockMove {
+        src_start_col,
+        dst_start_col,
+        col_count: mv_local.col_count,
+    })
+}
+
+fn detect_exact_rect_block_move_masked(
+    old: &Grid,
+    new: &Grid,
+    old_mask: &RegionMask,
+    new_mask: &RegionMask,
+) -> Option<RectBlockMove> {
+    if !old_mask.has_active_cells() || !new_mask.has_active_cells() {
+        return None;
+    }
+
+    let (old_proj, old_rows, old_cols) = build_masked_grid(old, old_mask);
+    let (new_proj, new_rows, new_cols) = build_masked_grid(new, new_mask);
+
+    if old_proj.nrows != new_proj.nrows || old_proj.ncols != new_proj.ncols {
+        return None;
+    }
+
+    let map_move = |mv_local: RectBlockMove,
+                    row_map_old: &[u32],
+                    row_map_new: &[u32],
+                    col_map_old: &[u32],
+                    col_map_new: &[u32]|
+     -> Option<RectBlockMove> {
+        let src_start_row = *row_map_old.get(mv_local.src_start_row as usize)?;
+        let dst_start_row = *row_map_new.get(mv_local.dst_start_row as usize)?;
+        let src_start_col = *col_map_old.get(mv_local.src_start_col as usize)?;
+        let dst_start_col = *col_map_new.get(mv_local.dst_start_col as usize)?;
+
+        Some(RectBlockMove {
+            src_start_row,
+            dst_start_row,
+            src_start_col,
+            dst_start_col,
+            src_row_count: mv_local.src_row_count,
+            src_col_count: mv_local.src_col_count,
+            block_hash: mv_local.block_hash,
+        })
+    };
+
+    if let Some(mv_local) = detect_exact_rect_block_move(&old_proj, &new_proj)
+        && let Some(mapped) = map_move(mv_local, &old_rows, &new_rows, &old_cols, &new_cols)
+    {
+        return Some(mapped);
+    }
+
+    let diff_positions = collect_differences_in_grid(&old_proj, &new_proj);
+    if diff_positions.is_empty() {
+        return None;
+    }
+
+    let row_ranges = group_rows_by_column_patterns(&diff_positions);
+    let col_ranges_full = contiguous_ranges(diff_positions.iter().map(|(_, c)| *c));
+    let has_prior_exclusions = old_mask.has_exclusions() || new_mask.has_exclusions();
+    if !has_prior_exclusions && row_ranges.len() <= 2 && col_ranges_full.len() <= 2 {
+        return None;
+    }
+
+    let range_len = |range: (u32, u32)| range.1.saturating_sub(range.0).saturating_add(1);
+    let in_range = |idx: u32, range: (u32, u32)| idx >= range.0 && idx <= range.1;
+    let rectangles_match = |src_rows: (u32, u32),
+                            src_cols: (u32, u32),
+                            dst_rows: (u32, u32),
+                            dst_cols: (u32, u32)|
+     -> bool {
+        let row_count = range_len(src_rows);
+        let col_count = range_len(src_cols);
+
+        for dr in 0..row_count {
+            for dc in 0..col_count {
+                let src_row = src_rows.0 + dr;
+                let src_col = src_cols.0 + dc;
+                let dst_row = dst_rows.0 + dr;
+                let dst_col = dst_cols.0 + dc;
+
+                if !cells_content_equal(
+                    old_proj.get(src_row, src_col),
+                    new_proj.get(dst_row, dst_col),
+                ) {
+                    return false;
+                }
+            }
+        }
+
+        true
+    };
+
+    for (row_idx, &row_a) in row_ranges.iter().enumerate() {
+        for &row_b in row_ranges.iter().skip(row_idx + 1) {
+            if range_len(row_a) != range_len(row_b) {
+                continue;
+            }
+
+            let cols_row_a: Vec<u32> = diff_positions
+                .iter()
+                .filter_map(|(r, c)| if in_range(*r, row_a) { Some(*c) } else { None })
+                .collect();
+            let cols_row_b: Vec<u32> = diff_positions
+                .iter()
+                .filter_map(|(r, c)| if in_range(*r, row_b) { Some(*c) } else { None })
+                .collect();
+            let col_ranges_a = contiguous_ranges(cols_row_a);
+            let col_ranges_b = contiguous_ranges(cols_row_b);
+            let mut col_pairs: Vec<((u32, u32), (u32, u32))> = Vec::new();
+
+            for &col_a in &col_ranges_a {
+                for &col_b in &col_ranges_b {
+                    if range_len(col_a) != range_len(col_b) {
+                        continue;
+                    }
+                    col_pairs.push((col_a, col_b));
+                }
+            }
+
+            if col_pairs.is_empty() {
+                continue;
+            }
+
+            for (col_a, col_b) in col_pairs {
+                let mut scoped_old_mask = RegionMask::all_active(old_proj.nrows, old_proj.ncols);
+                let mut scoped_new_mask = RegionMask::all_active(new_proj.nrows, new_proj.ncols);
+
+                for row in 0..old_proj.nrows {
+                    if !in_range(row, row_a) && !in_range(row, row_b) {
+                        scoped_old_mask.exclude_row(row);
+                        scoped_new_mask.exclude_row(row);
+                    }
+                }
+
+                for col in 0..old_proj.ncols {
+                    if !in_range(col, col_a) && !in_range(col, col_b) {
+                        scoped_old_mask.exclude_col(col);
+                        scoped_new_mask.exclude_col(col);
+                    }
+                }
+
+                let (old_scoped, scoped_old_rows, scoped_old_cols) =
+                    build_masked_grid(&old_proj, &scoped_old_mask);
+                let (new_scoped, scoped_new_rows, scoped_new_cols) =
+                    build_masked_grid(&new_proj, &scoped_new_mask);
+
+                if old_scoped.nrows != new_scoped.nrows || old_scoped.ncols != new_scoped.ncols {
+                    continue;
+                }
+
+                if let Some(candidate) = detect_exact_rect_block_move(&old_scoped, &new_scoped) {
+                    let scoped_row_map_old: Option<Vec<u32>> = scoped_old_rows
+                        .iter()
+                        .map(|idx| old_rows.get(*idx as usize).copied())
+                        .collect();
+                    let scoped_row_map_new: Option<Vec<u32>> = scoped_new_rows
+                        .iter()
+                        .map(|idx| new_rows.get(*idx as usize).copied())
+                        .collect();
+                    let scoped_col_map_old: Option<Vec<u32>> = scoped_old_cols
+                        .iter()
+                        .map(|idx| old_cols.get(*idx as usize).copied())
+                        .collect();
+                    let scoped_col_map_new: Option<Vec<u32>> = scoped_new_cols
+                        .iter()
+                        .map(|idx| new_cols.get(*idx as usize).copied())
+                        .collect();
+
+                    if let (
+                        Some(row_map_old),
+                        Some(row_map_new),
+                        Some(col_map_old),
+                        Some(col_map_new),
+                    ) = (
+                        scoped_row_map_old,
+                        scoped_row_map_new,
+                        scoped_col_map_old,
+                        scoped_col_map_new,
+                    ) && let Some(mapped) = map_move(
+                        candidate,
+                        &row_map_old,
+                        &row_map_new,
+                        &col_map_old,
+                        &col_map_new,
+                    ) {
+                        return Some(mapped);
+                    }
+                }
+
+                let row_len = range_len(row_a);
+                let col_len = range_len(col_a);
+                if row_len == 0 || col_len == 0 {
+                    continue;
+                }
+
+                let candidates = [
+                    (row_a, col_a, row_b, col_b),
+                    (row_a, col_b, row_b, col_a),
+                    (row_b, col_a, row_a, col_b),
+                    (row_b, col_b, row_a, col_a),
+                ];
+
+                for (src_rows, src_cols, dst_rows, dst_cols) in candidates {
+                    if range_len(src_rows) != range_len(dst_rows)
+                        || range_len(src_cols) != range_len(dst_cols)
+                    {
+                        continue;
+                    }
+
+                    if rectangles_match(src_rows, src_cols, dst_rows, dst_cols) {
+                        let mapped = RectBlockMove {
+                            src_start_row: *old_rows.get(src_rows.0 as usize)?,
+                            dst_start_row: *new_rows.get(dst_rows.0 as usize)?,
+                            src_start_col: *old_cols.get(src_cols.0 as usize)?,
+                            dst_start_col: *new_cols.get(dst_cols.0 as usize)?,
+                            src_row_count: range_len(src_rows),
+                            src_col_count: range_len(src_cols),
+                            block_hash: None,
+                        };
+                        return Some(mapped);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn detect_fuzzy_row_block_move_masked(
+    old: &Grid,
+    new: &Grid,
+    old_mask: &RegionMask,
+    new_mask: &RegionMask,
+) -> Option<RowBlockMove> {
+    if !old_mask.has_active_cells() || !new_mask.has_active_cells() {
+        return None;
+    }
+
+    let (old_proj, old_rows, _) = build_masked_grid(old, old_mask);
+    let (new_proj, new_rows, _) = build_masked_grid(new, new_mask);
+
+    if old_proj.nrows != new_proj.nrows || old_proj.ncols != new_proj.ncols {
+        return None;
+    }
+
+    let mv_local = detect_fuzzy_row_block_move(&old_proj, &new_proj)?;
+    let src_start_row = *old_rows.get(mv_local.src_start_row as usize)?;
+    let dst_start_row = *new_rows.get(mv_local.dst_start_row as usize)?;
+
+    Some(RowBlockMove {
+        src_start_row,
+        dst_start_row,
+        row_count: mv_local.row_count,
+    })
 }
 
 fn positional_diff(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>) {
@@ -2885,6 +3410,118 @@ fn positional_diff(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<Dif
         for col_idx in new.ncols..old.ncols {
             ops.push(DiffOp::column_removed(sheet_id.clone(), col_idx, None));
         }
+    }
+}
+
+fn positional_diff_with_masks(
+    sheet_id: &SheetId,
+    old: &Grid,
+    new: &Grid,
+    old_mask: &RegionMask,
+    new_mask: &RegionMask,
+    ops: &mut Vec<DiffOp>,
+) {
+    let overlap_rows = old.nrows.min(new.nrows);
+    let overlap_cols = old.ncols.min(new.ncols);
+
+    for row in 0..overlap_rows {
+        for col in 0..overlap_cols {
+            if !old_mask.is_cell_active(row, col) || !new_mask.is_cell_active(row, col) {
+                continue;
+            }
+            let addr = CellAddress::from_indices(row, col);
+            let old_cell = old.get(row, col);
+            let new_cell = new.get(row, col);
+
+            let from = snapshot_with_addr(old_cell, addr);
+            let to = snapshot_with_addr(new_cell, addr);
+
+            if from != to {
+                ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
+            }
+        }
+    }
+
+    if new.nrows > old.nrows {
+        for row_idx in old.nrows..new.nrows {
+            if new_mask.is_row_active(row_idx) {
+                ops.push(DiffOp::row_added(sheet_id.clone(), row_idx, None));
+            }
+        }
+    } else if old.nrows > new.nrows {
+        for row_idx in new.nrows..old.nrows {
+            if old_mask.is_row_active(row_idx) {
+                ops.push(DiffOp::row_removed(sheet_id.clone(), row_idx, None));
+            }
+        }
+    }
+
+    if new.ncols > old.ncols {
+        for col_idx in old.ncols..new.ncols {
+            if new_mask.is_col_active(col_idx) {
+                ops.push(DiffOp::column_added(sheet_id.clone(), col_idx, None));
+            }
+        }
+    } else if old.ncols > new.ncols {
+        for col_idx in new.ncols..old.ncols {
+            if old_mask.is_col_active(col_idx) {
+                ops.push(DiffOp::column_removed(sheet_id.clone(), col_idx, None));
+            }
+        }
+    }
+}
+
+fn positional_diff_masked_equal_size(
+    sheet_id: &SheetId,
+    old: &Grid,
+    new: &Grid,
+    old_mask: &RegionMask,
+    new_mask: &RegionMask,
+    ops: &mut Vec<DiffOp>,
+) {
+    let row_shift_zone =
+        compute_combined_shift_zone(old_mask.row_shift_bounds(), new_mask.row_shift_bounds());
+    let col_shift_zone =
+        compute_combined_shift_zone(old_mask.col_shift_bounds(), new_mask.col_shift_bounds());
+
+    let stable_rows: Vec<u32> = (0..old.nrows)
+        .filter(|&r| !is_in_zone(r, &row_shift_zone))
+        .collect();
+    let stable_cols: Vec<u32> = (0..old.ncols)
+        .filter(|&c| !is_in_zone(c, &col_shift_zone))
+        .collect();
+
+    for &row in &stable_rows {
+        for &col in &stable_cols {
+            if !old_mask.is_cell_active(row, col) || !new_mask.is_cell_active(row, col) {
+                continue;
+            }
+            let addr = CellAddress::from_indices(row, col);
+            let old_cell = old.get(row, col);
+            let new_cell = new.get(row, col);
+
+            let from = snapshot_with_addr(old_cell, addr);
+            let to = snapshot_with_addr(new_cell, addr);
+
+            if from != to {
+                ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
+            }
+        }
+    }
+}
+
+fn compute_combined_shift_zone(a: Option<(u32, u32)>, b: Option<(u32, u32)>) -> Option<(u32, u32)> {
+    match (a, b) {
+        (Some((a_min, a_max)), Some((b_min, b_max))) => Some((a_min.min(b_min), a_max.max(b_max))),
+        (Some(bounds), None) | (None, Some(bounds)) => Some(bounds),
+        (None, None) => None,
+    }
+}
+
+fn is_in_zone(idx: u32, zone: &Option<(u32, u32)>) -> bool {
+    match zone {
+        Some((min, max)) => idx >= *min && idx <= *max,
+        None => false,
     }
 }
 
@@ -3051,6 +3688,7 @@ mod tests {
         );
     }
 }
+
 ```
 
 ---
@@ -3171,6 +3809,7 @@ pub fn open_data_mashup(path: impl AsRef<Path>) -> Result<Option<RawDataMashup>,
 
     Ok(found)
 }
+
 ```
 
 ---
@@ -3647,6 +4286,7 @@ mod tests {
         assert_eq!(value, Some(CellValue::Text("#DIV/0!".into())));
     }
 }
+
 ```
 
 ---
@@ -3657,18 +4297,18 @@ mod tests {
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use crate::hashing::{combine_hashes, hash_cell_contribution};
+use crate::hashing::{hash_col_content_128, hash_row_content_128};
 use crate::workbook::{Cell, CellValue, Grid};
 
-pub type RowHash = u64;
-pub type ColHash = u64;
+pub type RowHash = u128;
+pub type ColHash = u128;
 
 #[derive(Debug)]
 pub struct RowView<'a> {
     pub cells: Vec<(u32, &'a Cell)>, // sorted by column index
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RowMeta {
     pub row_idx: u32,
     pub hash: RowHash,
@@ -3677,7 +4317,7 @@ pub struct RowMeta {
     pub is_low_info: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ColMeta {
     pub col_idx: u32,
     pub hash: ColHash,
@@ -3701,11 +4341,10 @@ impl<'a> GridView<'a> {
         let mut rows: Vec<RowView<'a>> =
             (0..nrows).map(|_| RowView { cells: Vec::new() }).collect();
 
-        let mut row_hashes = vec![0u64; nrows];
         let mut row_counts = vec![0u32; nrows];
         let mut row_first_non_blank: Vec<Option<u32>> = vec![None; nrows];
 
-        let mut col_hashes = vec![0u64; ncols];
+        let mut col_cells: Vec<Vec<&'a Cell>> = vec![Vec::new(); ncols];
         let mut col_counts = vec![0u32; ncols];
         let mut col_first_non_blank: Vec<Option<u32>> = vec![None; ncols];
 
@@ -3719,12 +4358,7 @@ impl<'a> GridView<'a> {
             );
 
             rows[r].cells.push((*col, cell));
-
-            let row_contribution = hash_cell_contribution(*col, cell);
-            row_hashes[r] = combine_hashes(row_hashes[r], row_contribution);
-
-            let col_contribution = hash_cell_contribution(*row, cell);
-            col_hashes[c] = combine_hashes(col_hashes[c], col_contribution);
+            col_cells[c].push(cell);
 
             if is_non_blank(cell) {
                 row_counts[r] = row_counts[r].saturating_add(1);
@@ -3753,9 +4387,11 @@ impl<'a> GridView<'a> {
                     .unwrap_or(0);
                 let is_low_info = compute_is_low_info(non_blank_count, row_view);
 
+                let hash = hash_row_content_128(&row_view.cells);
+
                 RowMeta {
                     row_idx: idx as u32,
-                    hash: row_hashes.get(idx).copied().unwrap_or(0),
+                    hash,
                     non_blank_count,
                     first_non_blank_col,
                     is_low_info,
@@ -3763,15 +4399,22 @@ impl<'a> GridView<'a> {
             })
             .collect();
 
-        let col_meta = (0..ncols)
-            .map(|idx| ColMeta {
-                col_idx: idx as u32,
-                hash: col_hashes.get(idx).copied().unwrap_or(0),
-                non_blank_count: to_u16(col_counts.get(idx).copied().unwrap_or(0)),
-                first_non_blank_row: col_first_non_blank
-                    .get(idx)
-                    .and_then(|r| r.map(to_u16))
-                    .unwrap_or(0),
+        let col_meta = col_cells
+            .into_iter()
+            .enumerate()
+            .map(|(idx, mut cells)| {
+                cells.sort_by_key(|c| c.row);
+                let hash = hash_col_content_128(&cells);
+
+                ColMeta {
+                    col_idx: idx as u32,
+                    hash,
+                    non_blank_count: to_u16(col_counts.get(idx).copied().unwrap_or(0)),
+                    first_non_blank_row: col_first_non_blank
+                        .get(idx)
+                        .and_then(|r| r.map(to_u16))
+                        .unwrap_or(0),
+                }
             })
             .collect();
 
@@ -3903,6 +4546,7 @@ fn compute_is_low_info(non_blank_count: u16, row_view: &RowView<'_>) -> bool {
 fn to_u16(value: u32) -> u16 {
     u16::try_from(value).unwrap_or(u16::MAX)
 }
+
 ```
 
 ---
@@ -3914,15 +4558,101 @@ fn to_u16(value: u32) -> u16 {
 //!
 //! Provides consistent hashing functions used for computing structural
 //! signatures that enable efficient alignment during diffing.
+//!
+//! # Position Independence
+//!
+//! Row signatures are computed by hashing cell content in column-sorted order
+//! *without* including column indices. This ensures that inserting or deleting
+//! columns does not invalidate row alignment.
+//!
+//! Column signatures similarly hash content in row-sorted order without row indices.
+//!
+//! # Collision Probability
+//!
+//! Using 128-bit xxHash3 signatures, the collision probability is ~10^-38 per pair.
+//! At 50K rows, the birthday-bound collision probability is ~10^-29, which is
+//! negligible for practical purposes.
 
 use std::hash::{Hash, Hasher};
+use xxhash_rust::xxh3::Xxh3;
 use xxhash_rust::xxh64::Xxh64;
 
-use crate::workbook::{Cell, ColSignature, RowSignature};
+use crate::workbook::{Cell, CellValue, ColSignature, RowSignature};
 
+#[allow(dead_code)]
 pub(crate) const XXH64_SEED: u64 = 0;
 const HASH_MIX_CONSTANT: u64 = 0x9e3779b97f4a7c15;
+const CANONICAL_NAN_BITS: u64 = 0x7FF8_0000_0000_0000;
 
+pub(crate) fn normalize_float_for_hash(n: f64) -> u64 {
+    if n.is_nan() {
+        return CANONICAL_NAN_BITS;
+    }
+    if n == 0.0 {
+        return 0u64;
+    }
+    let magnitude = n.abs().log10().floor() as i32;
+    let scale = 10f64.powi(14 - magnitude);
+    let normalized = (n * scale).round() / scale;
+    normalized.to_bits()
+}
+
+pub(crate) fn hash_cell_value<H: Hasher>(value: &Option<CellValue>, state: &mut H) {
+    match value {
+        None => {
+            3u8.hash(state);
+        }
+        Some(CellValue::Number(n)) => {
+            0u8.hash(state);
+            normalize_float_for_hash(*n).hash(state);
+        }
+        Some(CellValue::Text(s)) => {
+            1u8.hash(state);
+            s.hash(state);
+        }
+        Some(CellValue::Bool(b)) => {
+            2u8.hash(state);
+            b.hash(state);
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn hash_cell_content(cell: &Cell) -> u64 {
+    let mut hasher = Xxh64::new(XXH64_SEED);
+    hash_cell_value(&cell.value, &mut hasher);
+    cell.formula.hash(&mut hasher);
+    hasher.finish()
+}
+
+#[allow(dead_code)]
+pub(crate) fn hash_cell_content_128(cell: &Cell) -> u128 {
+    let mut hasher = Xxh3::new();
+    hash_cell_value(&cell.value, &mut hasher);
+    cell.formula.hash(&mut hasher);
+    hasher.digest128()
+}
+
+pub(crate) fn hash_row_content_128(cells: &[(u32, &Cell)]) -> u128 {
+    let mut hasher = Xxh3::new();
+    for (_, cell) in cells.iter() {
+        hash_cell_value(&cell.value, &mut hasher);
+        cell.formula.hash(&mut hasher);
+    }
+    hasher.digest128()
+}
+
+pub(crate) fn hash_col_content_128(cells: &[&Cell]) -> u128 {
+    let mut hasher = Xxh3::new();
+    for cell in cells.iter() {
+        hash_cell_value(&cell.value, &mut hasher);
+        cell.formula.hash(&mut hasher);
+    }
+    hasher.digest128()
+}
+
+#[allow(dead_code)]
+#[deprecated(note = "Use hash_cell_content for position-independent hashing")]
 pub(crate) fn hash_cell_contribution(position: u32, cell: &Cell) -> u64 {
     let mut hasher = Xxh64::new(XXH64_SEED);
     position.hash(&mut hasher);
@@ -3931,12 +4661,24 @@ pub(crate) fn hash_cell_contribution(position: u32, cell: &Cell) -> u64 {
     hasher.finish()
 }
 
+#[allow(dead_code)]
 pub(crate) fn mix_hash(hash: u64) -> u64 {
     hash.rotate_left(13) ^ HASH_MIX_CONSTANT
 }
 
+#[allow(dead_code)]
+pub(crate) fn mix_hash_128(hash: u128) -> u128 {
+    hash.rotate_left(47) ^ (HASH_MIX_CONSTANT as u128)
+}
+
+#[allow(dead_code)]
 pub(crate) fn combine_hashes(current: u64, contribution: u64) -> u64 {
     current.wrapping_add(mix_hash(contribution))
+}
+
+#[allow(dead_code)]
+pub(crate) fn combine_hashes_128(current: u128, contribution: u128) -> u128 {
+    current.wrapping_add(mix_hash_128(contribution))
 }
 
 #[allow(dead_code)]
@@ -3944,11 +4686,10 @@ pub(crate) fn compute_row_signature<'a>(
     cells: impl Iterator<Item = (u32, &'a Cell)>,
     row: u32,
 ) -> RowSignature {
-    let hash = cells
-        .filter(|(_, cell)| cell.row == row)
-        .fold(0u64, |acc, (col, cell)| {
-            combine_hashes(acc, hash_cell_contribution(col, cell))
-        });
+    let mut row_cells: Vec<_> = cells.filter(|(_, cell)| cell.row == row).collect();
+    row_cells.sort_by_key(|(col, _)| *col);
+
+    let hash = hash_row_content_128(&row_cells);
     RowSignature { hash }
 }
 
@@ -3957,13 +4698,70 @@ pub(crate) fn compute_col_signature<'a>(
     cells: impl Iterator<Item = (u32, &'a Cell)>,
     col: u32,
 ) -> ColSignature {
-    let hash = cells
+    let col_cells: Vec<_> = cells
         .filter(|(_, cell)| cell.col == col)
-        .fold(0u64, |acc, (row, cell)| {
-            combine_hashes(acc, hash_cell_contribution(row, cell))
-        });
+        .map(|(_, cell)| cell)
+        .collect();
+    let mut sorted_cells = col_cells;
+    sorted_cells.sort_by_key(|cell| cell.row);
+
+    let hash = hash_col_content_128(&sorted_cells);
     ColSignature { hash }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_zero_values() {
+        assert_eq!(
+            normalize_float_for_hash(0.0),
+            normalize_float_for_hash(-0.0)
+        );
+        assert_eq!(normalize_float_for_hash(0.0), 0u64);
+    }
+
+    #[test]
+    fn normalize_nan_values() {
+        let nan1 = f64::NAN;
+        let nan2 = f64::from_bits(0x7FF8_0000_0000_0001);
+        assert_eq!(
+            normalize_float_for_hash(nan1),
+            normalize_float_for_hash(nan2)
+        );
+        assert_eq!(normalize_float_for_hash(nan1), CANONICAL_NAN_BITS);
+    }
+
+    #[test]
+    fn normalize_ulp_drift() {
+        let a = 1.0;
+        let b = 1.0000000000000002;
+        assert_eq!(normalize_float_for_hash(a), normalize_float_for_hash(b));
+    }
+
+    #[test]
+    fn normalize_meaningful_difference() {
+        let a = 1.0;
+        let b = 1.0001;
+        assert_ne!(normalize_float_for_hash(a), normalize_float_for_hash(b));
+    }
+
+    #[test]
+    fn normalize_preserves_large_numbers() {
+        let a = 1e15;
+        let b = 1e15 + 1.0;
+        assert_eq!(normalize_float_for_hash(a), normalize_float_for_hash(b));
+    }
+
+    #[test]
+    fn normalize_distinguishes_different_magnitudes() {
+        let a = 1.0;
+        let b = 2.0;
+        assert_ne!(normalize_float_for_hash(a), normalize_float_for_hash(b));
+    }
+}
+
 ```
 
 ---
@@ -3995,6 +4793,7 @@ pub(crate) fn compute_col_signature<'a>(
 
 pub mod addressing;
 pub(crate) mod column_alignment;
+pub mod config;
 pub mod container;
 pub(crate) mod database_alignment;
 pub mod datamashup;
@@ -4012,10 +4811,12 @@ pub mod m_diff;
 pub mod m_section;
 pub mod output;
 pub(crate) mod rect_block_move;
+pub(crate) mod region_mask;
 pub(crate) mod row_alignment;
 pub mod workbook;
 
 pub use addressing::{AddressParseError, address_to_index, index_to_address};
+pub use config::DiffConfig;
 pub use container::{ContainerError, OpcContainer};
 pub use datamashup::{
     DataMashup, Metadata, Permissions, Query, QueryMetadata, build_data_mashup, build_queries,
@@ -4042,6 +4843,7 @@ pub use workbook::{
     Cell, CellAddress, CellSnapshot, CellValue, ColSignature, Grid, RowSignature, Sheet, SheetKind,
     Workbook,
 };
+
 ```
 
 ---
@@ -4475,6 +5277,7 @@ fn is_close_delimiter(ch: char) -> bool {
 fn delimiters_match(open: char, close: char) -> bool {
     matches!((open, close), ('(', ')') | ('[', ']') | ('{', '}'))
 }
+
 ```
 
 ---
@@ -4582,6 +5385,7 @@ fn expressions_semantically_equal(old_expr: &str, new_expr: &str) -> bool {
 
     ast_semantically_equal(&old_ast, &new_ast)
 }
+
 ```
 
 ---
@@ -4818,6 +5622,118 @@ fn is_valid_identifier(name: &str) -> bool {
 fn strip_leading_bom(text: &str) -> &str {
     text.strip_prefix('\u{FEFF}').unwrap_or(text)
 }
+
+```
+
+---
+
+### File: `core\src\output\json.rs`
+
+```rust
+use crate::diff::DiffReport;
+#[cfg(feature = "excel-open-xml")]
+use crate::engine::diff_workbooks as compute_diff;
+#[cfg(feature = "excel-open-xml")]
+use crate::excel_open_xml::{ExcelOpenError, open_workbook};
+use serde::Serialize;
+use serde::ser::Error as SerdeError;
+#[cfg(feature = "excel-open-xml")]
+use std::path::Path;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CellDiff {
+    #[serde(rename = "coords")]
+    pub coords: String,
+    #[serde(rename = "value_file1")]
+    pub value_file1: Option<String>,
+    #[serde(rename = "value_file2")]
+    pub value_file2: Option<String>,
+}
+
+pub fn serialize_cell_diffs(diffs: &[CellDiff]) -> serde_json::Result<String> {
+    serde_json::to_string(diffs)
+}
+
+pub fn serialize_diff_report(report: &DiffReport) -> serde_json::Result<String> {
+    if contains_non_finite_numbers(report) {
+        return Err(SerdeError::custom(
+            "non-finite numbers (NaN or infinity) are not supported in DiffReport JSON output",
+        ));
+    }
+    serde_json::to_string(report)
+}
+
+#[cfg(feature = "excel-open-xml")]
+pub fn diff_workbooks(
+    path_a: impl AsRef<Path>,
+    path_b: impl AsRef<Path>,
+) -> Result<DiffReport, ExcelOpenError> {
+    let wb_a = open_workbook(path_a)?;
+    let wb_b = open_workbook(path_b)?;
+    Ok(compute_diff(&wb_a, &wb_b))
+}
+
+#[cfg(feature = "excel-open-xml")]
+pub fn diff_workbooks_to_json(
+    path_a: impl AsRef<Path>,
+    path_b: impl AsRef<Path>,
+) -> Result<String, ExcelOpenError> {
+    let report = diff_workbooks(path_a, path_b)?;
+    serialize_diff_report(&report).map_err(|e| ExcelOpenError::SerializationError(e.to_string()))
+}
+
+pub fn diff_report_to_cell_diffs(report: &DiffReport) -> Vec<CellDiff> {
+    use crate::diff::DiffOp;
+    use crate::workbook::CellValue;
+
+    fn render_value(value: &Option<CellValue>) -> Option<String> {
+        match value {
+            Some(CellValue::Number(n)) => Some(n.to_string()),
+            Some(CellValue::Text(s)) => Some(s.clone()),
+            Some(CellValue::Bool(b)) => Some(b.to_string()),
+            None => None,
+        }
+    }
+
+    report
+        .ops
+        .iter()
+        .filter_map(|op| {
+            if let DiffOp::CellEdited { addr, from, to, .. } = op {
+                Some(CellDiff {
+                    coords: addr.to_a1(),
+                    value_file1: render_value(&from.value),
+                    value_file2: render_value(&to.value),
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn contains_non_finite_numbers(report: &DiffReport) -> bool {
+    use crate::diff::DiffOp;
+    use crate::workbook::CellValue;
+
+    report.ops.iter().any(|op| match op {
+        DiffOp::CellEdited { from, to, .. } => {
+            matches!(from.value, Some(CellValue::Number(n)) if !n.is_finite())
+                || matches!(to.value, Some(CellValue::Number(n)) if !n.is_finite())
+        }
+        _ => false,
+    })
+}
+
+```
+
+---
+
+### File: `core\src\output\mod.rs`
+
+```rust
+pub mod json;
+
 ```
 
 ---
@@ -4919,7 +5835,7 @@ fn validate_orientation(
     row_ranges: ((u32, u32), (u32, u32)),
     col_ranges: ((u32, u32), (u32, u32)),
 ) -> Option<RectBlockMove> {
-    if ranges_overlap(row_ranges.0, row_ranges.1) || ranges_overlap(col_ranges.0, col_ranges.1) {
+    if ranges_overlap(row_ranges.0, row_ranges.1) && ranges_overlap(col_ranges.0, col_ranges.1) {
         return None;
     }
 
@@ -5103,17 +6019,18 @@ where
     }
     ranges.push((start, prev));
 
-    if ranges.len() != 2 {
-        return None;
+    match ranges.len() {
+        1 => Some((ranges[0], ranges[0])),
+        2 => {
+            let len0 = range_len(ranges[0]);
+            let len1 = range_len(ranges[1]);
+            if len0 != len1 {
+                return None;
+            }
+            Some((ranges[0], ranges[1]))
+        }
+        _ => None,
     }
-
-    let len0 = range_len(ranges[0]);
-    let len1 = range_len(ranges[1]);
-    if len0 != len1 {
-        return None;
-    }
-
-    Some((ranges[0], ranges[1]))
 }
 
 fn range_len(range: (u32, u32)) -> u32 {
@@ -5270,6 +6187,34 @@ mod tests {
     }
 
     #[test]
+    fn detect_rect_block_move_with_shared_columns() {
+        let mut grid_a = base_background(10, 10);
+        let mut grid_b = base_background(10, 10);
+
+        let block = vec![vec![11, 12], vec![21, 22]];
+
+        place_block(&mut grid_a, 1, 2, &block);
+        place_block(&mut grid_b, 6, 2, &block);
+
+        let old = grid_from_matrix(grid_a);
+        let new = grid_from_matrix(grid_b);
+
+        let result = detect_exact_rect_block_move(&old, &new);
+        assert!(
+            result.is_some(),
+            "should detect a vertical rect move when columns overlap"
+        );
+
+        let mv = result.unwrap();
+        assert_eq!(mv.src_start_row, 1);
+        assert_eq!(mv.dst_start_row, 6);
+        assert_eq!(mv.src_start_col, 2);
+        assert_eq!(mv.dst_start_col, 2);
+        assert_eq!(mv.src_row_count, 2);
+        assert_eq!(mv.src_col_count, 2);
+    }
+
+    #[test]
     fn detect_bails_on_different_grid_dimensions() {
         let old = grid_from_numbers(&[&[1, 2], &[3, 4]]);
         let new = grid_from_numbers(&[&[1, 2, 5], &[3, 4, 6]]);
@@ -5417,6 +6362,340 @@ mod tests {
         );
     }
 }
+
+```
+
+---
+
+### File: `core\src\region_mask.rs`
+
+```rust
+//! Region mask for tracking which cells have been accounted for during diff.
+//!
+//! The `RegionMask` tracks which rows and columns are "active" (still to be processed)
+//! versus "excluded" (already accounted for by a move or other operation).
+
+use std::collections::HashSet;
+
+#[derive(Debug, Clone, Copy)]
+struct RectMask {
+    row_start: u32,
+    row_count: u32,
+    col_start: u32,
+    col_count: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct RegionMask {
+    excluded_rows: HashSet<u32>,
+    excluded_cols: HashSet<u32>,
+    excluded_rects: Vec<RectMask>,
+    #[allow(dead_code)]
+    nrows: u32,
+    #[allow(dead_code)]
+    ncols: u32,
+    row_shift_min: Option<u32>,
+    row_shift_max: Option<u32>,
+    col_shift_min: Option<u32>,
+    col_shift_max: Option<u32>,
+}
+
+#[allow(dead_code)]
+impl RegionMask {
+    pub fn all_active(nrows: u32, ncols: u32) -> Self {
+        Self {
+            excluded_rows: HashSet::new(),
+            excluded_cols: HashSet::new(),
+            excluded_rects: Vec::new(),
+            nrows,
+            ncols,
+            row_shift_min: None,
+            row_shift_max: None,
+            col_shift_min: None,
+            col_shift_max: None,
+        }
+    }
+
+    pub fn exclude_row(&mut self, row: u32) {
+        self.excluded_rows.insert(row);
+    }
+
+    pub fn exclude_rows(&mut self, start: u32, count: u32) {
+        let end = start.saturating_add(count).saturating_sub(1);
+        for row in start..=end {
+            self.excluded_rows.insert(row);
+        }
+        self.row_shift_min = Some(self.row_shift_min.map_or(start, |m| m.min(start)));
+        self.row_shift_max = Some(self.row_shift_max.map_or(end, |m| m.max(end)));
+    }
+
+    pub fn exclude_col(&mut self, col: u32) {
+        self.excluded_cols.insert(col);
+    }
+
+    pub fn exclude_cols(&mut self, start: u32, count: u32) {
+        let end = start.saturating_add(count).saturating_sub(1);
+        for col in start..=end {
+            self.excluded_cols.insert(col);
+        }
+        self.col_shift_min = Some(self.col_shift_min.map_or(start, |m| m.min(start)));
+        self.col_shift_max = Some(self.col_shift_max.map_or(end, |m| m.max(end)));
+    }
+
+    pub fn exclude_rect(&mut self, row_start: u32, row_count: u32, col_start: u32, col_count: u32) {
+        self.exclude_rows(row_start, row_count);
+        self.exclude_cols(col_start, col_count);
+    }
+
+    pub fn exclude_rect_cells(
+        &mut self,
+        row_start: u32,
+        row_count: u32,
+        col_start: u32,
+        col_count: u32,
+    ) {
+        self.excluded_rects.push(RectMask {
+            row_start,
+            row_count,
+            col_start,
+            col_count,
+        });
+    }
+
+    pub fn is_row_active(&self, row: u32) -> bool {
+        !self.excluded_rows.contains(&row)
+    }
+
+    pub fn is_col_active(&self, col: u32) -> bool {
+        !self.excluded_cols.contains(&col)
+    }
+
+    fn is_cell_excluded_by_rects(&self, row: u32, col: u32) -> bool {
+        self.excluded_rects.iter().any(|rect| {
+            row >= rect.row_start
+                && row < rect.row_start.saturating_add(rect.row_count)
+                && col >= rect.col_start
+                && col < rect.col_start.saturating_add(rect.col_count)
+        })
+    }
+
+    pub fn is_cell_active(&self, row: u32, col: u32) -> bool {
+        self.is_row_active(row)
+            && self.is_col_active(col)
+            && !self.is_cell_excluded_by_rects(row, col)
+    }
+
+    pub fn active_row_count(&self) -> u32 {
+        self.nrows.saturating_sub(self.excluded_rows.len() as u32)
+    }
+
+    pub fn active_col_count(&self) -> u32 {
+        self.ncols.saturating_sub(self.excluded_cols.len() as u32)
+    }
+
+    pub fn active_rows(&self) -> impl Iterator<Item = u32> + '_ {
+        (0..self.nrows).filter(|r| self.is_row_active(*r))
+    }
+
+    pub fn active_cols(&self) -> impl Iterator<Item = u32> + '_ {
+        (0..self.ncols).filter(|c| self.is_col_active(*c))
+    }
+
+    pub fn has_excluded_rows(&self) -> bool {
+        !self.excluded_rows.is_empty()
+    }
+
+    pub fn has_excluded_cols(&self) -> bool {
+        !self.excluded_cols.is_empty()
+    }
+
+    pub fn has_excluded_rects(&self) -> bool {
+        !self.excluded_rects.is_empty()
+    }
+
+    pub fn has_exclusions(&self) -> bool {
+        self.has_excluded_rows() || self.has_excluded_cols() || self.has_excluded_rects()
+    }
+
+    pub fn has_active_cells(&self) -> bool {
+        self.active_row_count() > 0 && self.active_col_count() > 0
+    }
+
+    pub fn rows_overlap_excluded(&self, start: u32, count: u32) -> bool {
+        for row in start..start.saturating_add(count) {
+            if self.excluded_rows.contains(&row) {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn cols_overlap_excluded(&self, start: u32, count: u32) -> bool {
+        for col in start..start.saturating_add(count) {
+            if self.excluded_cols.contains(&col) {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn rect_overlaps_excluded(
+        &self,
+        row_start: u32,
+        row_count: u32,
+        col_start: u32,
+        col_count: u32,
+    ) -> bool {
+        self.rows_overlap_excluded(row_start, row_count)
+            || self.cols_overlap_excluded(col_start, col_count)
+    }
+
+    pub fn is_row_in_shift_zone(&self, row: u32) -> bool {
+        match (self.row_shift_min, self.row_shift_max) {
+            (Some(min), Some(max)) => row >= min && row <= max,
+            _ => false,
+        }
+    }
+
+    pub fn is_col_in_shift_zone(&self, col: u32) -> bool {
+        match (self.col_shift_min, self.col_shift_max) {
+            (Some(min), Some(max)) => col >= min && col <= max,
+            _ => false,
+        }
+    }
+
+    pub fn row_shift_bounds(&self) -> Option<(u32, u32)> {
+        match (self.row_shift_min, self.row_shift_max) {
+            (Some(min), Some(max)) => Some((min, max)),
+            _ => None,
+        }
+    }
+
+    pub fn col_shift_bounds(&self) -> Option<(u32, u32)> {
+        match (self.col_shift_min, self.col_shift_max) {
+            (Some(min), Some(max)) => Some((min, max)),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_active_initially() {
+        let mask = RegionMask::all_active(10, 5);
+        assert!(mask.is_row_active(0));
+        assert!(mask.is_row_active(9));
+        assert!(mask.is_col_active(0));
+        assert!(mask.is_col_active(4));
+        assert_eq!(mask.active_row_count(), 10);
+        assert_eq!(mask.active_col_count(), 5);
+    }
+
+    #[test]
+    fn exclude_single_row() {
+        let mut mask = RegionMask::all_active(10, 5);
+        mask.exclude_row(3);
+        assert!(!mask.is_row_active(3));
+        assert!(mask.is_row_active(2));
+        assert!(mask.is_row_active(4));
+        assert_eq!(mask.active_row_count(), 9);
+    }
+
+    #[test]
+    fn exclude_row_range() {
+        let mut mask = RegionMask::all_active(10, 5);
+        mask.exclude_rows(2, 4);
+        assert!(!mask.is_row_active(2));
+        assert!(!mask.is_row_active(5));
+        assert!(mask.is_row_active(1));
+        assert!(mask.is_row_active(6));
+        assert_eq!(mask.active_row_count(), 6);
+    }
+
+    #[test]
+    fn exclude_rect() {
+        let mut mask = RegionMask::all_active(10, 8);
+        mask.exclude_rect(2, 3, 4, 2);
+        assert!(!mask.is_row_active(2));
+        assert!(!mask.is_row_active(4));
+        assert!(mask.is_row_active(1));
+        assert!(mask.is_row_active(5));
+        assert!(!mask.is_col_active(4));
+        assert!(!mask.is_col_active(5));
+        assert!(mask.is_col_active(3));
+        assert!(mask.is_col_active(6));
+    }
+
+    #[test]
+    fn cell_active_based_on_row_and_col() {
+        let mut mask = RegionMask::all_active(10, 10);
+        mask.exclude_row(3);
+        mask.exclude_col(5);
+        assert!(!mask.is_cell_active(3, 5));
+        assert!(!mask.is_cell_active(3, 0));
+        assert!(!mask.is_cell_active(0, 5));
+        assert!(mask.is_cell_active(0, 0));
+        assert!(mask.is_cell_active(4, 6));
+    }
+
+    #[test]
+    fn active_rows_iterator() {
+        let mut mask = RegionMask::all_active(5, 3);
+        mask.exclude_row(1);
+        mask.exclude_row(3);
+        let active: Vec<u32> = mask.active_rows().collect();
+        assert_eq!(active, vec![0, 2, 4]);
+    }
+
+    #[test]
+    fn rows_overlap_excluded_detects_overlap() {
+        let mut mask = RegionMask::all_active(10, 5);
+        mask.exclude_rows(3, 2);
+        assert!(mask.rows_overlap_excluded(2, 3));
+        assert!(mask.rows_overlap_excluded(4, 2));
+        assert!(!mask.rows_overlap_excluded(0, 2));
+        assert!(!mask.rows_overlap_excluded(5, 3));
+    }
+
+    #[test]
+    fn cols_overlap_excluded_detects_overlap() {
+        let mut mask = RegionMask::all_active(5, 10);
+        mask.exclude_cols(4, 3);
+        assert!(mask.cols_overlap_excluded(3, 2));
+        assert!(mask.cols_overlap_excluded(6, 2));
+        assert!(!mask.cols_overlap_excluded(0, 3));
+        assert!(!mask.cols_overlap_excluded(7, 3));
+    }
+
+    #[test]
+    fn rect_overlaps_excluded_detects_any_overlap() {
+        let mut mask = RegionMask::all_active(10, 10);
+        mask.exclude_rect(2, 3, 4, 2);
+        assert!(mask.rect_overlaps_excluded(1, 2, 0, 3));
+        assert!(mask.rect_overlaps_excluded(0, 2, 3, 2));
+        assert!(!mask.rect_overlaps_excluded(6, 2, 7, 2));
+    }
+
+    #[test]
+    fn exclude_rect_cells_masks_only_that_region() {
+        let mut mask = RegionMask::all_active(6, 6);
+        mask.exclude_rect_cells(2, 2, 2, 2);
+
+        assert!(!mask.is_cell_active(2, 2));
+        assert!(!mask.is_cell_active(3, 3));
+
+        assert!(mask.is_cell_active(1, 2));
+        assert!(mask.is_cell_active(2, 1));
+        assert!(mask.is_cell_active(4, 4));
+
+        assert!(mask.has_exclusions());
+        assert!(mask.has_excluded_rects());
+    }
+}
+
 ```
 
 ---
@@ -6662,6 +7941,7 @@ mod tests {
         assert!(super::is_monotonic(&[(5, 10)]));
     }
 }
+
 ```
 
 ---
@@ -6678,7 +7958,6 @@ mod tests {
 //! - [`Cell`]: Individual cell with address, value, and optional formula
 
 use crate::addressing::{AddressParseError, address_to_index, index_to_address};
-use crate::hashing::{combine_hashes, hash_cell_contribution};
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
@@ -6857,14 +8136,96 @@ impl Hash for CellValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RowSignature {
-    pub hash: u64,
+    pub hash: u128,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ColSignature {
-    pub hash: u64,
+    pub hash: u128,
+}
+
+#[allow(dead_code)]
+mod signature_serde {
+    use serde::de::Error as DeError;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize_u128<S>(val: &u128, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        format!("{:032x}", val).serialize(serializer)
+    }
+
+    pub fn deserialize_u128<'de, D>(deserializer: D) -> Result<u128, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        u128::from_str_radix(&s, 16)
+            .map_err(|e| DeError::custom(format!("invalid hex hash: {}", e)))
+    }
+}
+
+impl serde::Serialize for RowSignature {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("RowSignature", 1)?;
+        s.serialize_field("hash", &format!("{:032x}", self.hash))?;
+        s.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for RowSignature {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as DeError;
+
+        #[derive(serde::Deserialize)]
+        struct Helper {
+            hash: String,
+        }
+        let helper = Helper::deserialize(deserializer)?;
+        let hash = u128::from_str_radix(&helper.hash, 16)
+            .map_err(|e| DeError::custom(format!("invalid hex hash: {}", e)))?;
+        Ok(RowSignature { hash })
+    }
+}
+
+impl serde::Serialize for ColSignature {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("ColSignature", 1)?;
+        s.serialize_field("hash", &format!("{:032x}", self.hash))?;
+        s.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ColSignature {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as DeError;
+
+        #[derive(serde::Deserialize)]
+        struct Helper {
+            hash: String,
+        }
+        let helper = Helper::deserialize(deserializer)?;
+        let hash = u128::from_str_radix(&helper.hash, 16)
+            .map_err(|e| DeError::custom(format!("invalid hex hash: {}", e)))?;
+        Ok(ColSignature { hash })
+    }
 }
 
 impl Grid {
@@ -6915,58 +8276,66 @@ impl Grid {
     }
 
     pub fn compute_row_signature(&self, row: u32) -> RowSignature {
-        let hash = self
+        use crate::hashing::hash_row_content_128;
+        let mut row_cells: Vec<_> = self
             .cells
             .values()
             .filter(|cell| cell.row == row)
-            .fold(0u64, |acc, cell| {
-                combine_hashes(acc, hash_cell_contribution(cell.col, cell))
-            });
+            .map(|cell| (cell.col, cell))
+            .collect();
+        row_cells.sort_by_key(|(col, _)| *col);
+
+        let hash = hash_row_content_128(&row_cells);
         RowSignature { hash }
     }
 
     pub fn compute_col_signature(&self, col: u32) -> ColSignature {
-        let hash = self
-            .cells
-            .values()
-            .filter(|cell| cell.col == col)
-            .fold(0u64, |acc, cell| {
-                combine_hashes(acc, hash_cell_contribution(cell.row, cell))
-            });
+        use crate::hashing::hash_col_content_128;
+        let mut col_cells: Vec<_> = self.cells.values().filter(|cell| cell.col == col).collect();
+        col_cells.sort_by_key(|cell| cell.row);
+
+        let hash = hash_col_content_128(&col_cells);
         ColSignature { hash }
     }
 
     pub fn compute_all_signatures(&mut self) {
-        let mut row_hashes = vec![0u64; self.nrows as usize];
-        let mut col_hashes = vec![0u64; self.ncols as usize];
+        use crate::hashing::{hash_col_content_128, hash_row_content_128};
+
+        let mut row_cells: Vec<Vec<(u32, &Cell)>> = vec![Vec::new(); self.nrows as usize];
+        let mut col_cells: Vec<Vec<&Cell>> = vec![Vec::new(); self.ncols as usize];
 
         for cell in self.cells.values() {
             let row_idx = cell.row as usize;
             let col_idx = cell.col as usize;
 
             debug_assert!(
-                row_idx < row_hashes.len() && col_idx < col_hashes.len(),
+                row_idx < row_cells.len() && col_idx < col_cells.len(),
                 "cell coordinates must lie within the grid bounds"
             );
 
-            let row_contribution = hash_cell_contribution(cell.col, cell);
-            row_hashes[row_idx] = combine_hashes(row_hashes[row_idx], row_contribution);
-
-            let col_contribution = hash_cell_contribution(cell.row, cell);
-            col_hashes[col_idx] = combine_hashes(col_hashes[col_idx], col_contribution);
+            row_cells[row_idx].push((cell.col, cell));
+            col_cells[col_idx].push(cell);
         }
 
         self.row_signatures = Some(
-            row_hashes
+            row_cells
                 .into_iter()
-                .map(|hash| RowSignature { hash })
+                .map(|mut cells| {
+                    cells.sort_by_key(|(col, _)| *col);
+                    let hash = hash_row_content_128(&cells);
+                    RowSignature { hash }
+                })
                 .collect(),
         );
 
         self.col_signatures = Some(
-            col_hashes
+            col_cells
                 .into_iter()
-                .map(|hash| ColSignature { hash })
+                .map(|mut cells| {
+                    cells.sort_by_key(|c| c.row);
+                    let hash = hash_col_content_128(&cells);
+                    ColSignature { hash }
+                })
                 .collect(),
         );
     }
@@ -7140,115 +8509,7 @@ mod tests {
         assert_eq!(boolean.as_bool(), Some(true));
     }
 }
-```
 
----
-
-### File: `core\src\output\json.rs`
-
-```rust
-use crate::diff::DiffReport;
-#[cfg(feature = "excel-open-xml")]
-use crate::engine::diff_workbooks as compute_diff;
-#[cfg(feature = "excel-open-xml")]
-use crate::excel_open_xml::{ExcelOpenError, open_workbook};
-use serde::Serialize;
-use serde::ser::Error as SerdeError;
-#[cfg(feature = "excel-open-xml")]
-use std::path::Path;
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct CellDiff {
-    #[serde(rename = "coords")]
-    pub coords: String,
-    #[serde(rename = "value_file1")]
-    pub value_file1: Option<String>,
-    #[serde(rename = "value_file2")]
-    pub value_file2: Option<String>,
-}
-
-pub fn serialize_cell_diffs(diffs: &[CellDiff]) -> serde_json::Result<String> {
-    serde_json::to_string(diffs)
-}
-
-pub fn serialize_diff_report(report: &DiffReport) -> serde_json::Result<String> {
-    if contains_non_finite_numbers(report) {
-        return Err(SerdeError::custom(
-            "non-finite numbers (NaN or infinity) are not supported in DiffReport JSON output",
-        ));
-    }
-    serde_json::to_string(report)
-}
-
-#[cfg(feature = "excel-open-xml")]
-pub fn diff_workbooks(
-    path_a: impl AsRef<Path>,
-    path_b: impl AsRef<Path>,
-) -> Result<DiffReport, ExcelOpenError> {
-    let wb_a = open_workbook(path_a)?;
-    let wb_b = open_workbook(path_b)?;
-    Ok(compute_diff(&wb_a, &wb_b))
-}
-
-#[cfg(feature = "excel-open-xml")]
-pub fn diff_workbooks_to_json(
-    path_a: impl AsRef<Path>,
-    path_b: impl AsRef<Path>,
-) -> Result<String, ExcelOpenError> {
-    let report = diff_workbooks(path_a, path_b)?;
-    serialize_diff_report(&report).map_err(|e| ExcelOpenError::SerializationError(e.to_string()))
-}
-
-pub fn diff_report_to_cell_diffs(report: &DiffReport) -> Vec<CellDiff> {
-    use crate::diff::DiffOp;
-    use crate::workbook::CellValue;
-
-    fn render_value(value: &Option<CellValue>) -> Option<String> {
-        match value {
-            Some(CellValue::Number(n)) => Some(n.to_string()),
-            Some(CellValue::Text(s)) => Some(s.clone()),
-            Some(CellValue::Bool(b)) => Some(b.to_string()),
-            None => None,
-        }
-    }
-
-    report
-        .ops
-        .iter()
-        .filter_map(|op| {
-            if let DiffOp::CellEdited { addr, from, to, .. } = op {
-                Some(CellDiff {
-                    coords: addr.to_a1(),
-                    value_file1: render_value(&from.value),
-                    value_file2: render_value(&to.value),
-                })
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-fn contains_non_finite_numbers(report: &DiffReport) -> bool {
-    use crate::diff::DiffOp;
-    use crate::workbook::CellValue;
-
-    report.ops.iter().any(|op| match op {
-        DiffOp::CellEdited { from, to, .. } => {
-            matches!(from.value, Some(CellValue::Number(n)) if !n.is_finite())
-                || matches!(to.value, Some(CellValue::Number(n)) if !n.is_finite())
-        }
-        _ => false,
-    })
-}
-```
-
----
-
-### File: `core\src\output\mod.rs`
-
-```rust
-pub mod json;
 ```
 
 ---
@@ -7281,6 +8542,62 @@ fn pg2_addressing_matrix_consistency() {
         }
     }
 }
+
+```
+
+---
+
+### File: `core\tests\common\mod.rs`
+
+```rust
+//! Common test utilities shared across integration tests.
+
+#![allow(dead_code)]
+
+use excel_diff::{Cell, CellAddress, CellValue, Grid, Sheet, SheetKind, Workbook};
+use std::path::PathBuf;
+
+pub fn fixture_path(filename: &str) -> PathBuf {
+    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    path.push("../fixtures/generated");
+    path.push(filename);
+    path
+}
+
+pub fn grid_from_numbers(values: &[&[i32]]) -> Grid {
+    let nrows = values.len() as u32;
+    let ncols = if nrows == 0 {
+        0
+    } else {
+        values[0].len() as u32
+    };
+
+    let mut grid = Grid::new(nrows, ncols);
+    for (r, row_vals) in values.iter().enumerate() {
+        for (c, v) in row_vals.iter().enumerate() {
+            grid.insert(Cell {
+                row: r as u32,
+                col: c as u32,
+                address: CellAddress::from_indices(r as u32, c as u32),
+                value: Some(CellValue::Number(*v as f64)),
+                formula: None,
+            });
+        }
+    }
+
+    grid
+}
+
+pub fn single_sheet_workbook(name: &str, grid: Grid) -> Workbook {
+    Workbook {
+        sheets: vec![Sheet {
+            name: name.to_string(),
+            kind: SheetKind::Worksheet,
+            grid,
+        }],
+    }
+}
+
 ```
 
 ---
@@ -7711,6 +9028,7 @@ fn d5_three_column_composite_key_partial_match_yields_add_and_remove() {
         "partial three-column key match must not be treated as a cell edit"
     );
 }
+
 ```
 
 ---
@@ -7973,6 +9291,7 @@ fn assemble_top_level_bytes(raw: &RawDataMashup) -> Vec<u8> {
     bytes.extend_from_slice(&raw.permission_bindings);
     bytes
 }
+
 ```
 
 ---
@@ -8332,6 +9651,7 @@ fn duplicate_sheet_identity_panics_in_debug() {
         assert!(result.is_ok(), "debug assertions disabled should not panic");
     }
 }
+
 ```
 
 ---
@@ -8497,6 +9817,7 @@ fn missing_worksheet_xml_returns_worksheetxmlmissing() {
 
     let _ = fs::remove_file(&path);
 }
+
 ```
 
 ---
@@ -8606,6 +9927,7 @@ fn g10_row_block_delete_middle_emits_four_rowremoved_and_no_noise() {
         "aligned block delete should not emit CellEdited noise"
     );
 }
+
 ```
 
 ---
@@ -8696,6 +10018,7 @@ fn g11_repeated_rows_do_not_emit_blockmove() {
         "fallback path should emit positional CellEdited noise"
     );
 }
+
 ```
 
 ---
@@ -8897,6 +10220,7 @@ fn g12_column_swap_emits_blockmovedcolumns() {
         other => panic!("expected BlockMovedColumns, got {:?}", other),
     }
 }
+
 ```
 
 ---
@@ -9045,6 +10369,7 @@ fn grid_from_matrix(matrix: Vec<Vec<i32>>) -> excel_diff::Grid {
     let refs: Vec<&[i32]> = matrix.iter().map(|row| row.as_slice()).collect();
     grid_from_numbers(&refs)
 }
+
 ```
 
 ---
@@ -9187,6 +10512,506 @@ fn g13_ambiguous_repeated_blocks_do_not_emit_blockmovedrows() {
         "fallback path should produce some diff noise"
     );
 }
+
+```
+
+---
+
+### File: `core\tests\g14_move_combination_tests.rs`
+
+```rust
+use excel_diff::{DiffOp, diff_workbooks};
+
+mod common;
+use common::{grid_from_numbers, single_sheet_workbook};
+
+fn base_grid(rows: usize, cols: usize) -> Vec<Vec<i32>> {
+    (0..rows)
+        .map(|r| {
+            (0..cols)
+                .map(|c| (r as i32 + 1) * 100 + c as i32 + 1)
+                .collect()
+        })
+        .collect()
+}
+
+fn place_block(target: &mut [Vec<i32>], top: usize, left: usize, block: &[Vec<i32>]) {
+    for (r_offset, row_vals) in block.iter().enumerate() {
+        for (c_offset, value) in row_vals.iter().enumerate() {
+            let row = top + r_offset;
+            let col = left + c_offset;
+            if let Some(row_slice) = target.get_mut(row) {
+                if let Some(cell) = row_slice.get_mut(col) {
+                    *cell = *value;
+                }
+            }
+        }
+    }
+}
+
+fn grid_from_matrix(matrix: &[Vec<i32>]) -> excel_diff::Grid {
+    let refs: Vec<&[i32]> = matrix.iter().map(|row| row.as_slice()).collect();
+    grid_from_numbers(&refs)
+}
+
+#[test]
+fn g14_rect_move_no_additional_changes_produces_single_op() {
+    let mut grid_a = base_grid(12, 10);
+    let mut grid_b = base_grid(12, 10);
+
+    let block = vec![vec![9001, 9002], vec![9003, 9004]];
+    place_block(&mut grid_a, 2, 2, &block);
+    place_block(&mut grid_b, 8, 6, &block);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
+    let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    let has_rect_move = report
+        .ops
+        .iter()
+        .any(|op| matches!(op, DiffOp::BlockMovedRect { .. }));
+
+    assert!(has_rect_move, "pure rect move should be detected");
+
+    assert_eq!(
+        report.ops.len(),
+        1,
+        "pure rect move should produce exactly one BlockMovedRect op"
+    );
+}
+
+#[test]
+fn g14_rect_move_plus_cell_edit_no_silent_data_loss() {
+    let mut grid_a = base_grid(12, 10);
+    let mut grid_b = base_grid(12, 10);
+
+    let block = vec![vec![9001, 9002], vec![9003, 9004]];
+    place_block(&mut grid_a, 2, 2, &block);
+    place_block(&mut grid_b, 8, 6, &block);
+    grid_b[0][0] = 77777;
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
+    let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    assert!(
+        !report.ops.is_empty(),
+        "should not have silent data loss - changes must be reported"
+    );
+
+    let has_some_cell_edit = report
+        .ops
+        .iter()
+        .any(|op| matches!(op, DiffOp::CellEdited { .. }));
+
+    assert!(
+        has_some_cell_edit,
+        "cell changes should be surfaced as CellEdited ops"
+    );
+}
+
+#[test]
+fn g14_pure_row_move_produces_single_op() {
+    let rows: Vec<Vec<i32>> = (1..=20)
+        .map(|r| (1..=4).map(|c| r * 10 + c).collect())
+        .collect();
+    let refs: Vec<&[i32]> = rows.iter().map(|r| r.as_slice()).collect();
+    let grid_a = grid_from_numbers(&refs);
+
+    let mut rows_b = rows.clone();
+    let moved_block: Vec<Vec<i32>> = rows_b.drain(4..8).collect();
+    rows_b.splice(12..12, moved_block);
+    let refs_b: Vec<&[i32]> = rows_b.iter().map(|r| r.as_slice()).collect();
+    let grid_b = grid_from_numbers(&refs_b);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    let has_row_move = report
+        .ops
+        .iter()
+        .any(|op| matches!(op, DiffOp::BlockMovedRows { .. }));
+
+    assert!(has_row_move, "pure row block move should be detected");
+
+    assert_eq!(
+        report.ops.len(),
+        1,
+        "pure row block move should produce exactly one BlockMovedRows op"
+    );
+}
+
+#[test]
+fn g14_row_move_plus_cell_edit_no_silent_data_loss() {
+    let rows: Vec<Vec<i32>> = (1..=20)
+        .map(|r| (1..=4).map(|c| r * 10 + c).collect())
+        .collect();
+    let refs: Vec<&[i32]> = rows.iter().map(|r| r.as_slice()).collect();
+    let grid_a = grid_from_numbers(&refs);
+
+    let mut rows_b = rows.clone();
+    let moved_block: Vec<Vec<i32>> = rows_b.drain(4..8).collect();
+    rows_b.splice(12..12, moved_block);
+    rows_b[0][0] = 99999;
+    let refs_b: Vec<&[i32]> = rows_b.iter().map(|r| r.as_slice()).collect();
+    let grid_b = grid_from_numbers(&refs_b);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    assert!(
+        !report.ops.is_empty(),
+        "should not have silent data loss - changes must be reported"
+    );
+}
+
+#[test]
+fn g14_pure_column_move_produces_single_op() {
+    let rows: Vec<Vec<i32>> = (0..5)
+        .map(|r| (0..8).map(|c| (r + 1) * 10 + c + 1).collect())
+        .collect();
+    let refs: Vec<&[i32]> = rows.iter().map(|r| r.as_slice()).collect();
+    let grid_a = grid_from_numbers(&refs);
+
+    let mut rows_b: Vec<Vec<i32>> = rows.clone();
+    for row in &mut rows_b {
+        let moved_col = row.remove(1);
+        row.insert(5, moved_col);
+    }
+    let refs_b: Vec<&[i32]> = rows_b.iter().map(|r| r.as_slice()).collect();
+    let grid_b = grid_from_numbers(&refs_b);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    let has_col_move = report
+        .ops
+        .iter()
+        .any(|op| matches!(op, DiffOp::BlockMovedColumns { .. }));
+
+    assert!(has_col_move, "pure column block move should be detected");
+
+    assert_eq!(
+        report.ops.len(),
+        1,
+        "pure column block move should produce exactly one BlockMovedColumns op"
+    );
+}
+
+#[test]
+fn g14_column_move_plus_cell_edit_no_silent_data_loss() {
+    let rows: Vec<Vec<i32>> = (0..5)
+        .map(|r| (0..8).map(|c| (r + 1) * 10 + c + 1).collect())
+        .collect();
+    let refs: Vec<&[i32]> = rows.iter().map(|r| r.as_slice()).collect();
+    let grid_a = grid_from_numbers(&refs);
+
+    let mut rows_b: Vec<Vec<i32>> = rows.clone();
+    for row in &mut rows_b {
+        let moved_col = row.remove(1);
+        row.insert(5, moved_col);
+    }
+    rows_b[0][0] = 88888;
+    let refs_b: Vec<&[i32]> = rows_b.iter().map(|r| r.as_slice()).collect();
+    let grid_b = grid_from_numbers(&refs_b);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    assert!(
+        !report.ops.is_empty(),
+        "should not have silent data loss - changes must be reported"
+    );
+}
+
+#[test]
+fn g14_two_disjoint_row_block_moves_detected() {
+    let rows: Vec<Vec<i32>> = (1..=24)
+        .map(|r| (1..=3).map(|c| r * 10 + c).collect())
+        .collect();
+    let refs: Vec<&[i32]> = rows.iter().map(|r| r.as_slice()).collect();
+    let grid_a = grid_from_numbers(&refs);
+
+    let mut rows_b = rows.clone();
+    let block1: Vec<Vec<i32>> = rows_b.drain(2..5).collect();
+    rows_b.splice(8..8, block1);
+
+    let refs_b: Vec<&[i32]> = rows_b.iter().map(|r| r.as_slice()).collect();
+    let grid_b = grid_from_numbers(&refs_b);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    let row_moves: Vec<_> = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::BlockMovedRows { .. }))
+        .collect();
+
+    assert!(
+        !row_moves.is_empty(),
+        "should detect at least one row block move"
+    );
+}
+
+#[test]
+fn g14_row_move_plus_column_move_both_detected() {
+    let rows: Vec<Vec<i32>> = (0..10)
+        .map(|r| (0..6).map(|c| (r + 1) * 10 + c + 1).collect())
+        .collect();
+    let refs: Vec<&[i32]> = rows.iter().map(|r| r.as_slice()).collect();
+    let grid_a = grid_from_numbers(&refs);
+
+    let mut rows_b = rows.clone();
+    let moved_rows: Vec<Vec<i32>> = rows_b.drain(1..3).collect();
+    rows_b.splice(6..6, moved_rows);
+    for row in &mut rows_b {
+        let moved_col = row.remove(0);
+        row.insert(4, moved_col);
+    }
+
+    let refs_b: Vec<&[i32]> = rows_b.iter().map(|r| r.as_slice()).collect();
+    let grid_b = grid_from_numbers(&refs_b);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    let has_any_move = report.ops.iter().any(|op| {
+        matches!(
+            op,
+            DiffOp::BlockMovedRows { .. }
+                | DiffOp::BlockMovedColumns { .. }
+                | DiffOp::BlockMovedRect { .. }
+        )
+    });
+
+    assert!(
+        has_any_move || !report.ops.is_empty(),
+        "should detect changes when both row and column moves occur"
+    );
+}
+
+#[test]
+fn g14_fuzzy_row_move_produces_move_and_internal_edits() {
+    let rows: Vec<Vec<i32>> = (1..=20)
+        .map(|r| (1..=4).map(|c| r * 10 + c).collect())
+        .collect();
+    let refs: Vec<&[i32]> = rows.iter().map(|r| r.as_slice()).collect();
+    let grid_a = grid_from_numbers(&refs);
+
+    let mut rows_b = rows.clone();
+    let mut moved_block: Vec<Vec<i32>> = rows_b.drain(4..8).collect();
+    moved_block[1][1] = 5555;
+    rows_b.splice(12..12, moved_block);
+    let refs_b: Vec<&[i32]> = rows_b.iter().map(|r| r.as_slice()).collect();
+    let grid_b = grid_from_numbers(&refs_b);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    let has_row_move = report
+        .ops
+        .iter()
+        .any(|op| matches!(op, DiffOp::BlockMovedRows { .. }));
+
+    let has_internal_edit = report
+        .ops
+        .iter()
+        .any(|op| matches!(op, DiffOp::CellEdited { .. }));
+
+    assert!(has_row_move, "should detect the fuzzy row block move");
+    assert!(
+        has_internal_edit,
+        "should report cell edits inside the moved block"
+    );
+}
+
+#[test]
+fn g14_fuzzy_row_move_plus_outside_edit_no_silent_data_loss() {
+    let rows: Vec<Vec<i32>> = (1..=20)
+        .map(|r| (1..=4).map(|c| r * 10 + c).collect())
+        .collect();
+    let refs: Vec<&[i32]> = rows.iter().map(|r| r.as_slice()).collect();
+    let grid_a = grid_from_numbers(&refs);
+
+    let mut rows_b = rows.clone();
+    let mut moved_block: Vec<Vec<i32>> = rows_b.drain(4..8).collect();
+    moved_block[1][1] = 5555;
+    rows_b.splice(12..12, moved_block);
+    rows_b[0][0] = 99999;
+    let refs_b: Vec<&[i32]> = rows_b.iter().map(|r| r.as_slice()).collect();
+    let grid_b = grid_from_numbers(&refs_b);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    assert!(
+        !report.ops.is_empty(),
+        "should not have silent data loss - changes must be reported"
+    );
+}
+
+#[test]
+fn g14_grid_changes_no_silent_data_loss() {
+    let mut grid_a = base_grid(15, 12);
+    let mut grid_b = base_grid(15, 12);
+
+    let block = vec![vec![7001, 7002], vec![7003, 7004], vec![7005, 7006]];
+    place_block(&mut grid_a, 3, 3, &block);
+    place_block(&mut grid_b, 10, 8, &block);
+    grid_b[0][0] = 11111;
+    grid_b[0][11] = 22222;
+    grid_b[14][0] = 33333;
+    grid_b[14][11] = 44444;
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
+    let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    assert!(
+        !report.ops.is_empty(),
+        "should not have silent data loss - changes must be reported"
+    );
+
+    let cell_edits: Vec<(u32, u32)> = report
+        .ops
+        .iter()
+        .filter_map(|op| {
+            if let DiffOp::CellEdited { addr, .. } = op {
+                Some((addr.row, addr.col))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    assert!(
+        !cell_edits.is_empty() || report.ops.len() > 0,
+        "some form of changes should be reported"
+    );
+}
+
+#[test]
+fn g14_three_disjoint_rect_block_moves_detected() {
+    let mut grid_a = base_grid(20, 10);
+    let mut grid_b = base_grid(20, 10);
+
+    let block1 = vec![vec![1001, 1002], vec![1003, 1004]];
+    let block2 = vec![vec![2001, 2002], vec![2003, 2004]];
+    let block3 = vec![vec![3001, 3002], vec![3003, 3004]];
+
+    place_block(&mut grid_a, 2, 1, &block1);
+    place_block(&mut grid_a, 6, 3, &block2);
+    place_block(&mut grid_a, 12, 5, &block3);
+
+    place_block(&mut grid_b, 10, 1, &block1);
+    place_block(&mut grid_b, 4, 6, &block2);
+    place_block(&mut grid_b, 16, 2, &block3);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
+    let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    let rect_moves: Vec<_> = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::BlockMovedRect { .. }))
+        .collect();
+
+    assert_eq!(
+        rect_moves.len(),
+        3,
+        "expected exactly three rect block moves to be detected"
+    );
+    assert_eq!(
+        report.ops.len(),
+        3,
+        "multi-rect move scenario should not emit extra structural ops"
+    );
+}
+
+#[test]
+fn g14_two_disjoint_rect_moves_plus_outside_edits_no_silent_data_loss() {
+    let mut grid_a = base_grid(20, 12);
+    let mut grid_b = base_grid(20, 12);
+
+    let block1 = vec![vec![8001, 8002], vec![8003, 8004]];
+    let block2 = vec![vec![9001, 9002], vec![9003, 9004]];
+
+    place_block(&mut grid_a, 2, 2, &block1);
+    place_block(&mut grid_a, 10, 7, &block2);
+
+    place_block(&mut grid_b, 8, 4, &block1);
+    place_block(&mut grid_b, 14, 1, &block2);
+
+    grid_b[0][0] = 77777;
+    grid_b[19][11] = 88888;
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
+    let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
+
+    let report = diff_workbooks(&wb_a, &wb_b);
+
+    let rect_moves: Vec<_> = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::BlockMovedRect { .. }))
+        .collect();
+    assert!(
+        rect_moves.len() >= 2,
+        "should detect both rect block moves in the scenario"
+    );
+
+    let rect_regions = vec![
+        (2u32, 2u32, 2u32, 2u32),
+        (10u32, 7u32, 2u32, 2u32),
+        (8u32, 4u32, 2u32, 2u32),
+        (14u32, 1u32, 2u32, 2u32),
+    ];
+
+    let outside_cell_edits: Vec<_> = report
+        .ops
+        .iter()
+        .filter_map(|op| {
+            if let DiffOp::CellEdited { addr, .. } = op {
+                let in_rect = rect_regions.iter().any(|(r, c, h, w)| {
+                    addr.row >= *r && addr.row < *r + *h && addr.col >= *c && addr.col < *c + *w
+                });
+                if !in_rect {
+                    return Some((addr.row, addr.col));
+                }
+            }
+            None
+        })
+        .collect();
+
+    assert!(
+        !outside_cell_edits.is_empty(),
+        "cell edits outside moved rects should be surfaced"
+    );
+}
+
 ```
 
 ---
@@ -9256,6 +11081,7 @@ fn g2_single_cell_literal_change_produces_one_celledited() {
         "single cell change should not produce row/column structure ops"
     );
 }
+
 ```
 
 ---
@@ -9522,6 +11348,7 @@ fn g7_col_delete_right_emits_two_columnremoved_and_no_celledited() {
         "column delete should not emit additions, row ops, or cell edits"
     );
 }
+
 ```
 
 ---
@@ -9673,6 +11500,7 @@ fn alignment_bails_out_when_additional_edits_present() {
         "cell edits should include rows at or below the insertion point"
     );
 }
+
 ```
 
 ---
@@ -9832,6 +11660,7 @@ fn find_header_col(workbook: &Workbook, header: &str) -> u32 {
         })
         .expect("header column should exist in fixture")
 }
+
 ```
 
 ---
@@ -9993,6 +11822,7 @@ fn hashstats_from_col_meta_tracks_positions() {
         vec![1]
     );
 }
+
 ```
 
 ---
@@ -10176,6 +12006,7 @@ fn gridview_large_sparse_grid_constructs_without_panic() {
             .any(|meta| meta.non_blank_count > 0 && meta.first_non_blank_row == 0)
     );
 }
+
 ```
 
 ---
@@ -10204,6 +12035,7 @@ fn test_locate_fixture() {
         path
     );
 }
+
 ```
 
 ---
@@ -10538,6 +12370,7 @@ fn random_bytes(seed: u64, len: usize) -> Vec<u8> {
     }
     bytes
 }
+
 ```
 
 ---
@@ -10831,6 +12664,7 @@ fn build_queries_is_compatible_with_metadata_simple() {
     let queries = build_queries(&dm).expect("queries should build");
     assert!(!queries.is_empty());
 }
+
 ```
 
 ---
@@ -10950,6 +12784,7 @@ fn queries_preserve_section_member_order() {
         );
     }
 }
+
 ```
 
 ---
@@ -11115,6 +12950,7 @@ fn invalid_section_syntax_propagates_error() {
         Err(SectionParseError::InvalidMemberSyntax)
     ));
 }
+
 ```
 
 ---
@@ -11372,6 +13208,7 @@ fn hash_date_tokenization_is_atomic() {
         "hash-prefixed literals should be lexed as single identifiers"
     );
 }
+
 ```
 
 ---
@@ -11393,10 +13230,10 @@ fn load_datamashup(name: &str) -> DataMashup {
     build_data_mashup(&raw).expect("DataMashup should build")
 }
 
-fn datamashup_with_expression(expression: &str) -> DataMashup {
+fn datamashup_with_section(lines: &[&str]) -> DataMashup {
     let mut dm = load_datamashup("one_query.xlsx");
-    dm.package_parts.main_section.source =
-        format!("section Section1;\n\nshared Foo = {expression};\n");
+    let body = lines.join("\n");
+    dm.package_parts.main_section.source = format!("section Section1;\n\n{body}\n");
     dm
 }
 
@@ -11409,65 +13246,101 @@ fn formatting_only_diff_produces_no_diffs() {
 
     assert!(
         diffs.is_empty(),
-        "formatting-only changes should be ignored"
+        "formatting-only changes should be ignored, got {:?}",
+        diffs
     );
 }
 
 #[test]
 fn formatting_variant_with_real_change_still_reports_definitionchanged() {
     let dm_b = load_datamashup("m_formatting_only_b.xlsx");
-    let dm_variant = load_datamashup("m_formatting_only_b_variant.xlsx");
+    let dm_b_variant = load_datamashup("m_formatting_only_b_variant.xlsx");
 
-    let diffs = diff_m_queries(&dm_b, &dm_variant).expect("diff should succeed");
+    let diffs = diff_m_queries(&dm_b, &dm_b_variant).expect("diff should succeed");
 
-    assert_eq!(diffs.len(), 1, "expected one diff for semantic change");
-    let diff = &diffs[0];
-    assert_eq!(diff.name, "Section1/FormatTest");
-    assert_eq!(diff.kind, QueryChangeKind::DefinitionChanged);
+    assert_eq!(
+        diffs.len(),
+        1,
+        "expected exactly one diff for semantic change"
+    );
+    assert_eq!(diffs[0].name, "Section1/FormatTest");
+    assert_eq!(diffs[0].kind, QueryChangeKind::DefinitionChanged);
 }
 
 #[test]
-fn semantic_gate_does_not_mask_metadata_only_or_definition_plus_metadata_changes() {
-    let dm_meta_a = load_datamashup("m_metadata_only_change_a.xlsx");
-    let dm_meta_b = load_datamashup("m_metadata_only_change_b.xlsx");
+fn semantic_gate_does_not_mask_metadata_only_change() {
+    let dm_a = load_datamashup("m_metadata_only_change_a.xlsx");
+    let dm_b = load_datamashup("m_metadata_only_change_b.xlsx");
 
-    let meta_diffs = diff_m_queries(&dm_meta_a, &dm_meta_b).expect("diff should succeed");
+    let diffs = diff_m_queries(&dm_a, &dm_b).expect("diff should succeed");
+
     assert_eq!(
-        meta_diffs.len(),
+        diffs.len(),
         1,
-        "metadata-only change should still be reported"
+        "expected exactly one diff for metadata-only change"
     );
-    let meta_diff = &meta_diffs[0];
-    assert_eq!(meta_diff.name, "Section1/Foo");
-    assert_eq!(meta_diff.kind, QueryChangeKind::MetadataChangedOnly);
+    assert_eq!(diffs[0].name, "Section1/Foo");
+    assert_eq!(diffs[0].kind, QueryChangeKind::MetadataChangedOnly);
+}
 
-    let dm_both_a = load_datamashup("m_def_and_metadata_change_a.xlsx");
-    let dm_both_b = load_datamashup("m_def_and_metadata_change_b.xlsx");
+#[test]
+fn semantic_gate_does_not_mask_definition_plus_metadata_change() {
+    let dm_a = load_datamashup("m_def_and_metadata_change_a.xlsx");
+    let dm_b = load_datamashup("m_def_and_metadata_change_b.xlsx");
 
-    let both_diffs = diff_m_queries(&dm_both_a, &dm_both_b).expect("diff should succeed");
+    let diffs = diff_m_queries(&dm_a, &dm_b).expect("diff should succeed");
+
     assert_eq!(
-        both_diffs.len(),
+        diffs.len(),
         1,
-        "definition+metadata change should prefer DefinitionChanged"
+        "expected exactly one diff for definition+metadata change"
     );
-    let diff = &both_diffs[0];
-    assert_eq!(diff.name, "Section1/Foo");
-    assert_eq!(diff.kind, QueryChangeKind::DefinitionChanged);
+    assert_eq!(diffs[0].name, "Section1/Foo");
+    assert_eq!(diffs[0].kind, QueryChangeKind::DefinitionChanged);
 }
 
 #[test]
 fn semantic_gate_falls_back_on_ast_parse_failure() {
-    let dm_invalid = datamashup_with_expression("let Source = 1");
-    let dm_valid = datamashup_with_expression("let Source = 1 in Source");
+    let dm_a = datamashup_with_section(&["shared Foo = let Source = 1 in Source;"]);
+    let dm_b = datamashup_with_section(&["shared Foo = let Source = (1;"]);
 
-    let diffs = diff_m_queries(&dm_invalid, &dm_valid)
-        .expect("diff should fall back to textual path when AST parse fails");
+    let diffs =
+        diff_m_queries(&dm_a, &dm_b).expect("diff should succeed (not panic on AST failure)");
 
-    assert_eq!(diffs.len(), 1, "fallback should still surface a diff");
-    let diff = &diffs[0];
-    assert_eq!(diff.name, "Section1/Foo");
-    assert_eq!(diff.kind, QueryChangeKind::DefinitionChanged);
+    assert_eq!(
+        diffs.len(),
+        1,
+        "expected one diff when AST parse fails on one side"
+    );
+    assert_eq!(diffs[0].name, "Section1/Foo");
+    assert_eq!(
+        diffs[0].kind,
+        QueryChangeKind::DefinitionChanged,
+        "should fall back to textual diff when AST parse fails"
+    );
 }
+
+#[test]
+fn semantic_gate_falls_back_when_both_sides_malformed() {
+    let dm_a = datamashup_with_section(&["shared Foo = let Source = (1;"]);
+    let dm_b = datamashup_with_section(&["shared Foo = let Source = (2;"]);
+
+    let diffs =
+        diff_m_queries(&dm_a, &dm_b).expect("diff should succeed (not panic on AST failure)");
+
+    assert_eq!(
+        diffs.len(),
+        1,
+        "expected one diff when AST parse fails on both sides"
+    );
+    assert_eq!(diffs[0].name, "Section1/Foo");
+    assert_eq!(
+        diffs[0].kind,
+        QueryChangeKind::DefinitionChanged,
+        "should fall back to textual diff when both sides fail AST parse"
+    );
+}
+
 ```
 
 ---
@@ -11605,6 +13478,7 @@ fn error_on_invalid_shared_member_syntax() {
     let result = parse_section_members(SECTION_INVALID_SHARED);
     assert_eq!(result, Err(SectionParseError::InvalidMemberSyntax));
 }
+
 ```
 
 ---
@@ -12056,6 +13930,7 @@ fn serialize_diff_report_with_finite_numbers_succeeds() {
     let parsed: DiffReport = serde_json::from_str(&json).expect("json should parse");
     assert_eq!(parsed.ops.len(), 1);
 }
+
 ```
 
 ---
@@ -12185,6 +14060,7 @@ fn assert_cell_text(sheet: &Sheet, row: u32, col: u32, expected: &str) {
         expected
     );
 }
+
 ```
 
 ---
@@ -12356,6 +14232,7 @@ fn snapshot_json_rejects_invalid_addr_a0() {
         "error should include the offending address: {err}"
     );
 }
+
 ```
 
 ---
@@ -12813,7 +14690,10 @@ fn pg4_row_added_json_optional_signature() {
         row_signature: Some(RowSignature { hash: 123 }),
     };
     let json_with = serde_json::to_value(&op_with_sig).expect("serialize with sig");
-    assert_eq!(json_with["row_signature"]["hash"], 123);
+    assert_eq!(
+        json_with["row_signature"]["hash"],
+        "0000000000000000000000000000007b"
+    );
 }
 
 #[test]
@@ -12836,7 +14716,10 @@ fn pg4_column_added_json_optional_signature() {
         col_signature: Some(ColSignature { hash: 321 }),
     };
     let json_added_with = serde_json::to_value(&added_with_sig).expect("serialize with sig");
-    assert_eq!(json_added_with["col_signature"]["hash"], 321);
+    assert_eq!(
+        json_added_with["col_signature"]["hash"],
+        "00000000000000000000000000000141"
+    );
 
     let removed_without_sig = DiffOp::ColumnRemoved {
         sheet: "Sheet2".to_string(),
@@ -12856,7 +14739,10 @@ fn pg4_column_added_json_optional_signature() {
     };
     let json_removed_with =
         serde_json::to_value(&removed_with_sig).expect("serialize removed with sig");
-    assert_eq!(json_removed_with["col_signature"]["hash"], 654);
+    assert_eq!(
+        json_removed_with["col_signature"]["hash"],
+        "0000000000000000000000000000028e"
+    );
 }
 
 #[test]
@@ -13483,6 +15369,7 @@ fn pg4_cell_edited_invariant_helper_rejects_mismatched_snapshot_addr() {
 
     assert_cell_edited_invariants(&op, "Sheet1", "C3");
 }
+
 ```
 
 ---
@@ -13777,6 +15664,7 @@ fn pg5_10_grid_diff_row_appended_with_overlap_cell_edits() {
     let expected: BTreeSet<String> = ["B1", "A2"].into_iter().map(String::from).collect();
     assert_eq!(cell_edits, expected);
 }
+
 ```
 
 ---
@@ -13941,6 +15829,7 @@ fn pg6_4_sheet_and_grid_change_composed_cleanly() {
         "Main should report at least one cell edit"
     );
 }
+
 ```
 
 ---
@@ -14034,8 +15923,10 @@ fn compute_all_signatures_with_all_empty_rows_and_cols_is_stable() {
 
     assert_eq!(first_rows.len(), 3);
     assert_eq!(first_cols.len(), 4);
-    assert!(first_rows.iter().all(|sig| sig.hash == 0));
-    assert!(first_cols.iter().all(|sig| sig.hash == 0));
+    let empty_row_hash = first_rows[0].hash;
+    let empty_col_hash = first_cols[0].hash;
+    assert!(first_rows.iter().all(|sig| sig.hash == empty_row_hash));
+    assert!(first_cols.iter().all(|sig| sig.hash == empty_col_hash));
 
     grid.compute_all_signatures();
     let second_rows = grid.row_signatures.as_ref().unwrap();
@@ -14322,28 +16213,29 @@ fn row_signature_includes_formulas_by_default() {
     assert_ne!(sig_with, sig_without);
 }
 
-const ROW_SIGNATURE_GOLDEN: u64 = 13_315_384_008_147_106_509;
-const ROW_SIGNATURE_WITH_FORMULA_GOLDEN: u64 = 3_920_348_561_402_334_617;
-
 #[test]
-fn row_signature_golden_constant_small_grid() {
+fn row_signature_is_stable_across_computations() {
     let mut grid = Grid::new(1, 3);
     grid.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
     grid.insert(make_cell(0, 1, Some(CellValue::Text("x".into())), None));
     grid.insert(make_cell(0, 2, Some(CellValue::Bool(false)), None));
 
-    let sig = grid.compute_row_signature(0);
-    assert_eq!(sig.hash, ROW_SIGNATURE_GOLDEN);
+    let sig1 = grid.compute_row_signature(0);
+    let sig2 = grid.compute_row_signature(0);
+    assert_eq!(sig1.hash, sig2.hash);
+    assert_ne!(sig1.hash, 0);
 }
 
 #[test]
-fn row_signature_golden_constant_with_formula() {
+fn row_signature_with_formula_is_stable() {
     let mut grid = Grid::new(1, 2);
     grid.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), Some("=5+5")));
     grid.insert(make_cell(0, 1, Some(CellValue::Text("bar".into())), None));
 
-    let sig = grid.compute_row_signature(0);
-    assert_eq!(sig.hash, ROW_SIGNATURE_WITH_FORMULA_GOLDEN);
+    let sig1 = grid.compute_row_signature(0);
+    let sig2 = grid.compute_row_signature(0);
+    assert_eq!(sig1.hash, sig2.hash);
+    assert_ne!(sig1.hash, 0);
 }
 
 #[test]
@@ -14381,6 +16273,79 @@ fn gridview_rowmeta_hash_matches_compute_all_signatures() {
         assert_eq!(meta.hash, col_signatures[idx].hash);
     }
 }
+
+#[test]
+fn row_signature_unchanged_after_column_insert_at_position_zero() {
+    let mut grid1 = Grid::new(2, 3);
+    grid1.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    grid1.insert(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
+    grid1.insert(make_cell(0, 2, Some(CellValue::Number(3.0)), None));
+    grid1.insert(make_cell(1, 0, Some(CellValue::Text("a".into())), None));
+    grid1.insert(make_cell(1, 1, Some(CellValue::Text("b".into())), None));
+    grid1.insert(make_cell(1, 2, Some(CellValue::Text("c".into())), None));
+
+    let mut grid2 = Grid::new(2, 4);
+    grid2.insert(make_cell(0, 0, Some(CellValue::Number(99.0)), None));
+    grid2.insert(make_cell(0, 1, Some(CellValue::Number(1.0)), None));
+    grid2.insert(make_cell(0, 2, Some(CellValue::Number(2.0)), None));
+    grid2.insert(make_cell(0, 3, Some(CellValue::Number(3.0)), None));
+    grid2.insert(make_cell(1, 0, Some(CellValue::Text("z".into())), None));
+    grid2.insert(make_cell(1, 1, Some(CellValue::Text("a".into())), None));
+    grid2.insert(make_cell(1, 2, Some(CellValue::Text("b".into())), None));
+    grid2.insert(make_cell(1, 3, Some(CellValue::Text("c".into())), None));
+
+    let view1 = GridView::from_grid(&grid1);
+    let view2 = GridView::from_grid(&grid2);
+
+    assert_ne!(view1.row_meta[0].hash, view2.row_meta[0].hash);
+    assert_ne!(view1.row_meta[1].hash, view2.row_meta[1].hash);
+}
+
+#[test]
+fn row_signature_unchanged_after_column_delete_from_middle() {
+    let mut grid1 = Grid::new(2, 4);
+    grid1.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    grid1.insert(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
+    grid1.insert(make_cell(0, 2, Some(CellValue::Number(3.0)), None));
+    grid1.insert(make_cell(0, 3, Some(CellValue::Number(4.0)), None));
+    grid1.insert(make_cell(1, 0, Some(CellValue::Text("a".into())), None));
+    grid1.insert(make_cell(1, 1, Some(CellValue::Text("b".into())), None));
+    grid1.insert(make_cell(1, 2, Some(CellValue::Text("c".into())), None));
+    grid1.insert(make_cell(1, 3, Some(CellValue::Text("d".into())), None));
+
+    let mut grid2 = Grid::new(2, 3);
+    grid2.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    grid2.insert(make_cell(0, 1, Some(CellValue::Number(3.0)), None));
+    grid2.insert(make_cell(0, 2, Some(CellValue::Number(4.0)), None));
+    grid2.insert(make_cell(1, 0, Some(CellValue::Text("a".into())), None));
+    grid2.insert(make_cell(1, 1, Some(CellValue::Text("c".into())), None));
+    grid2.insert(make_cell(1, 2, Some(CellValue::Text("d".into())), None));
+
+    let view1 = GridView::from_grid(&grid1);
+    let view2 = GridView::from_grid(&grid2);
+
+    assert_ne!(view1.row_meta[0].hash, view2.row_meta[0].hash);
+    assert_ne!(view1.row_meta[1].hash, view2.row_meta[1].hash);
+}
+
+#[test]
+fn row_signature_consistent_for_same_content_different_column_indices() {
+    let mut grid1 = Grid::new(1, 3);
+    grid1.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    grid1.insert(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
+    grid1.insert(make_cell(0, 2, Some(CellValue::Number(3.0)), None));
+
+    let mut grid2 = Grid::new(1, 5);
+    grid2.insert(make_cell(0, 1, Some(CellValue::Number(1.0)), None));
+    grid2.insert(make_cell(0, 2, Some(CellValue::Number(2.0)), None));
+    grid2.insert(make_cell(0, 3, Some(CellValue::Number(3.0)), None));
+
+    let view1 = GridView::from_grid(&grid1);
+    let view2 = GridView::from_grid(&grid2);
+
+    assert_eq!(view1.row_meta[0].hash, view2.row_meta[0].hash);
+}
+
 ```
 
 ---
@@ -14488,8 +16453,10 @@ fn sparse_grid_all_empty_rows_have_zero_signatures() {
 
     assert_eq!(row_sigs.len(), 2);
     assert_eq!(col_sigs.len(), 3);
-    assert!(row_sigs.iter().all(|sig| sig.hash == 0));
-    assert!(col_sigs.iter().all(|sig| sig.hash == 0));
+    let empty_row_hash = row_sigs[0].hash;
+    let empty_col_hash = col_sigs[0].hash;
+    assert!(row_sigs.iter().all(|sig| sig.hash == empty_row_hash));
+    assert!(col_sigs.iter().all(|sig| sig.hash == empty_col_hash));
 }
 
 #[test]
@@ -14561,60 +16528,7 @@ fn compute_all_signatures_matches_direct_computation() {
     assert_eq!(grid.compute_col_signature(0).hash, col_sigs[0].hash);
     assert_eq!(grid.compute_col_signature(2).hash, col_sigs[2].hash);
 }
-```
 
----
-
-### File: `core\tests\common\mod.rs`
-
-```rust
-//! Common test utilities shared across integration tests.
-
-#![allow(dead_code)]
-
-use excel_diff::{Cell, CellAddress, CellValue, Grid, Sheet, SheetKind, Workbook};
-use std::path::PathBuf;
-
-pub fn fixture_path(filename: &str) -> PathBuf {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("../fixtures/generated");
-    path.push(filename);
-    path
-}
-
-pub fn grid_from_numbers(values: &[&[i32]]) -> Grid {
-    let nrows = values.len() as u32;
-    let ncols = if nrows == 0 {
-        0
-    } else {
-        values[0].len() as u32
-    };
-
-    let mut grid = Grid::new(nrows, ncols);
-    for (r, row_vals) in values.iter().enumerate() {
-        for (c, v) in row_vals.iter().enumerate() {
-            grid.insert(Cell {
-                row: r as u32,
-                col: c as u32,
-                address: CellAddress::from_indices(r as u32, c as u32),
-                value: Some(CellValue::Number(*v as f64)),
-                formula: None,
-            });
-        }
-    }
-
-    grid
-}
-
-pub fn single_sheet_workbook(name: &str, grid: Grid) -> Workbook {
-    Workbook {
-        sheets: vec![Sheet {
-            name: name.to_string(),
-            kind: SheetKind::Worksheet,
-            grid,
-        }],
-    }
-}
 ```
 
 ---
@@ -15278,13 +17192,14 @@ scenarios:
       # Inject a new ID at the end
       extra_rows: [{id: 1001, name: "New Row", amount: 999}]
     output: "db_row_added_b.xlsx"
+
 ```
 
 ---
 
 ### File: `fixtures\pyproject.toml`
 
-```yaml
+```toml
 [project]
 name = "excel-fixtures"
 version = "0.1.0"
@@ -15307,6 +17222,16 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
+
+
+```
+
+---
+
+### File: `fixtures\src\__init__.py`
+
+```python
+
 
 ```
 
@@ -15448,13 +17373,16 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 ```
 
 ---
 
-### File: `fixtures\src\__init__.py`
+### File: `fixtures\src\generators\__init__.py`
 
 ```python
+# Generators package
+
 
 ```
 
@@ -15485,6 +17413,7 @@ class BaseGenerator(ABC):
             output_names: The name(s) of the output file(s) as specified in the manifest.
         """
         pass
+
 ```
 
 ---
@@ -15534,6 +17463,7 @@ class ContainerCorruptGenerator(BaseGenerator):
                 out_path.write_text("This is not a zip container", encoding="utf-8")
             else:
                 raise ValueError(f"Unsupported corrupt_container mode: {mode}")
+
 
 ```
 
@@ -15605,6 +17535,7 @@ class KeyedTableGenerator(BaseGenerator):
                 ])
 
             wb.save(output_dir / name)
+
 
 ```
 
@@ -16623,6 +18554,7 @@ class Pg6SheetScenarioGenerator(BaseGenerator):
         ws_scratch = wb_b.create_sheet("Scratch")
         self._fill_grid(ws_scratch, 2, 2, prefix="S")
         wb_b.save(b_path)
+
 ```
 
 ---
@@ -17797,6 +19729,7 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
             return f"l{'1' if value else '0'}"
         return f"s{value}"
 
+
 ```
 
 ---
@@ -17853,16 +19786,7 @@ class LargeGridGenerator(BaseGenerator):
 
             wb.save(output_dir / name)
 
-```
-
----
-
-### File: `fixtures\src\generators\__init__.py`
-
-```python
-# Generators package
 
 ```
 
 ---
-

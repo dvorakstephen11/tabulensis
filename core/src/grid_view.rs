@@ -1,18 +1,18 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use crate::hashing::{combine_hashes, hash_cell_contribution};
+use crate::hashing::{hash_col_content_128, hash_row_content_128};
 use crate::workbook::{Cell, CellValue, Grid};
 
-pub type RowHash = u64;
-pub type ColHash = u64;
+pub type RowHash = u128;
+pub type ColHash = u128;
 
 #[derive(Debug)]
 pub struct RowView<'a> {
     pub cells: Vec<(u32, &'a Cell)>, // sorted by column index
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RowMeta {
     pub row_idx: u32,
     pub hash: RowHash,
@@ -21,7 +21,7 @@ pub struct RowMeta {
     pub is_low_info: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ColMeta {
     pub col_idx: u32,
     pub hash: ColHash,
@@ -45,11 +45,10 @@ impl<'a> GridView<'a> {
         let mut rows: Vec<RowView<'a>> =
             (0..nrows).map(|_| RowView { cells: Vec::new() }).collect();
 
-        let mut row_hashes = vec![0u64; nrows];
         let mut row_counts = vec![0u32; nrows];
         let mut row_first_non_blank: Vec<Option<u32>> = vec![None; nrows];
 
-        let mut col_hashes = vec![0u64; ncols];
+        let mut col_cells: Vec<Vec<&'a Cell>> = vec![Vec::new(); ncols];
         let mut col_counts = vec![0u32; ncols];
         let mut col_first_non_blank: Vec<Option<u32>> = vec![None; ncols];
 
@@ -63,12 +62,7 @@ impl<'a> GridView<'a> {
             );
 
             rows[r].cells.push((*col, cell));
-
-            let row_contribution = hash_cell_contribution(*col, cell);
-            row_hashes[r] = combine_hashes(row_hashes[r], row_contribution);
-
-            let col_contribution = hash_cell_contribution(*row, cell);
-            col_hashes[c] = combine_hashes(col_hashes[c], col_contribution);
+            col_cells[c].push(cell);
 
             if is_non_blank(cell) {
                 row_counts[r] = row_counts[r].saturating_add(1);
@@ -97,9 +91,11 @@ impl<'a> GridView<'a> {
                     .unwrap_or(0);
                 let is_low_info = compute_is_low_info(non_blank_count, row_view);
 
+                let hash = hash_row_content_128(&row_view.cells);
+
                 RowMeta {
                     row_idx: idx as u32,
-                    hash: row_hashes.get(idx).copied().unwrap_or(0),
+                    hash,
                     non_blank_count,
                     first_non_blank_col,
                     is_low_info,
@@ -107,15 +103,22 @@ impl<'a> GridView<'a> {
             })
             .collect();
 
-        let col_meta = (0..ncols)
-            .map(|idx| ColMeta {
-                col_idx: idx as u32,
-                hash: col_hashes.get(idx).copied().unwrap_or(0),
-                non_blank_count: to_u16(col_counts.get(idx).copied().unwrap_or(0)),
-                first_non_blank_row: col_first_non_blank
-                    .get(idx)
-                    .and_then(|r| r.map(to_u16))
-                    .unwrap_or(0),
+        let col_meta = col_cells
+            .into_iter()
+            .enumerate()
+            .map(|(idx, mut cells)| {
+                cells.sort_by_key(|c| c.row);
+                let hash = hash_col_content_128(&cells);
+
+                ColMeta {
+                    col_idx: idx as u32,
+                    hash,
+                    non_blank_count: to_u16(col_counts.get(idx).copied().unwrap_or(0)),
+                    first_non_blank_row: col_first_non_blank
+                        .get(idx)
+                        .and_then(|r| r.map(to_u16))
+                        .unwrap_or(0),
+                }
             })
             .collect();
 

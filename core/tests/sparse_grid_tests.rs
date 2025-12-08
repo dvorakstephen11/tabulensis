@@ -98,8 +98,10 @@ fn sparse_grid_all_empty_rows_have_zero_signatures() {
 
     assert_eq!(row_sigs.len(), 2);
     assert_eq!(col_sigs.len(), 3);
-    assert!(row_sigs.iter().all(|sig| sig.hash == 0));
-    assert!(col_sigs.iter().all(|sig| sig.hash == 0));
+    let empty_row_hash = row_sigs[0].hash;
+    let empty_col_hash = col_sigs[0].hash;
+    assert!(row_sigs.iter().all(|sig| sig.hash == empty_row_hash));
+    assert!(col_sigs.iter().all(|sig| sig.hash == empty_col_hash));
 }
 
 #[test]

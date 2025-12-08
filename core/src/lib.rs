@@ -22,6 +22,7 @@
 
 pub mod addressing;
 pub(crate) mod column_alignment;
+pub mod config;
 pub mod container;
 pub(crate) mod database_alignment;
 pub mod datamashup;
@@ -39,10 +40,12 @@ pub mod m_diff;
 pub mod m_section;
 pub mod output;
 pub(crate) mod rect_block_move;
+pub(crate) mod region_mask;
 pub(crate) mod row_alignment;
 pub mod workbook;
 
 pub use addressing::{AddressParseError, address_to_index, index_to_address};
+pub use config::DiffConfig;
 pub use container::{ContainerError, OpcContainer};
 pub use datamashup::{
     DataMashup, Metadata, Permissions, Query, QueryMetadata, build_data_mashup, build_queries,

@@ -2,29 +2,117 @@
 //!
 //! Provides consistent hashing functions used for computing structural
 //! signatures that enable efficient alignment during diffing.
+//!
+//! # Position Independence
+//!
+//! Row signatures are computed by hashing cell content in column-sorted order
+//! *without* including column indices. This ensures that inserting or deleting
+//! columns does not invalidate row alignment.
+//!
+//! Column signatures similarly hash content in row-sorted order without row indices.
+//!
+//! # Collision Probability
+//!
+//! Using 128-bit xxHash3 signatures, the collision probability is ~10^-38 per pair.
+//! At 50K rows, the birthday-bound collision probability is ~10^-29, which is
+//! negligible for practical purposes.
 
 use std::hash::{Hash, Hasher};
+use xxhash_rust::xxh3::Xxh3;
 use xxhash_rust::xxh64::Xxh64;
 
-use crate::workbook::{Cell, ColSignature, RowSignature};
+use crate::workbook::{Cell, CellValue, ColSignature, RowSignature};
 
+#[allow(dead_code)]
 pub(crate) const XXH64_SEED: u64 = 0;
 const HASH_MIX_CONSTANT: u64 = 0x9e3779b97f4a7c15;
+const CANONICAL_NAN_BITS: u64 = 0x7FF8_0000_0000_0000;
 
-pub(crate) fn hash_cell_contribution(position: u32, cell: &Cell) -> u64 {
+pub(crate) fn normalize_float_for_hash(n: f64) -> u64 {
+    if n.is_nan() {
+        return CANONICAL_NAN_BITS;
+    }
+    if n == 0.0 {
+        return 0u64;
+    }
+    let magnitude = n.abs().log10().floor() as i32;
+    let scale = 10f64.powi(14 - magnitude);
+    let normalized = (n * scale).round() / scale;
+    normalized.to_bits()
+}
+
+pub(crate) fn hash_cell_value<H: Hasher>(value: &Option<CellValue>, state: &mut H) {
+    match value {
+        None => {
+            3u8.hash(state);
+        }
+        Some(CellValue::Number(n)) => {
+            0u8.hash(state);
+            normalize_float_for_hash(*n).hash(state);
+        }
+        Some(CellValue::Text(s)) => {
+            1u8.hash(state);
+            s.hash(state);
+        }
+        Some(CellValue::Bool(b)) => {
+            2u8.hash(state);
+            b.hash(state);
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn hash_cell_content(cell: &Cell) -> u64 {
     let mut hasher = Xxh64::new(XXH64_SEED);
-    position.hash(&mut hasher);
-    cell.value.hash(&mut hasher);
+    hash_cell_value(&cell.value, &mut hasher);
     cell.formula.hash(&mut hasher);
     hasher.finish()
 }
 
+#[allow(dead_code)]
+pub(crate) fn hash_cell_content_128(cell: &Cell) -> u128 {
+    let mut hasher = Xxh3::new();
+    hash_cell_value(&cell.value, &mut hasher);
+    cell.formula.hash(&mut hasher);
+    hasher.digest128()
+}
+
+pub(crate) fn hash_row_content_128(cells: &[(u32, &Cell)]) -> u128 {
+    let mut hasher = Xxh3::new();
+    for (_, cell) in cells.iter() {
+        hash_cell_value(&cell.value, &mut hasher);
+        cell.formula.hash(&mut hasher);
+    }
+    hasher.digest128()
+}
+
+pub(crate) fn hash_col_content_128(cells: &[&Cell]) -> u128 {
+    let mut hasher = Xxh3::new();
+    for cell in cells.iter() {
+        hash_cell_value(&cell.value, &mut hasher);
+        cell.formula.hash(&mut hasher);
+    }
+    hasher.digest128()
+}
+
+#[allow(dead_code)]
 pub(crate) fn mix_hash(hash: u64) -> u64 {
     hash.rotate_left(13) ^ HASH_MIX_CONSTANT
 }
 
+#[allow(dead_code)]
+pub(crate) fn mix_hash_128(hash: u128) -> u128 {
+    hash.rotate_left(47) ^ (HASH_MIX_CONSTANT as u128)
+}
+
+#[allow(dead_code)]
 pub(crate) fn combine_hashes(current: u64, contribution: u64) -> u64 {
     current.wrapping_add(mix_hash(contribution))
+}
+
+#[allow(dead_code)]
+pub(crate) fn combine_hashes_128(current: u128, contribution: u128) -> u128 {
+    current.wrapping_add(mix_hash_128(contribution))
 }
 
 #[allow(dead_code)]
@@ -32,11 +120,10 @@ pub(crate) fn compute_row_signature<'a>(
     cells: impl Iterator<Item = (u32, &'a Cell)>,
     row: u32,
 ) -> RowSignature {
-    let hash = cells
-        .filter(|(_, cell)| cell.row == row)
-        .fold(0u64, |acc, (col, cell)| {
-            combine_hashes(acc, hash_cell_contribution(col, cell))
-        });
+    let mut row_cells: Vec<_> = cells.filter(|(_, cell)| cell.row == row).collect();
+    row_cells.sort_by_key(|(col, _)| *col);
+
+    let hash = hash_row_content_128(&row_cells);
     RowSignature { hash }
 }
 
@@ -45,10 +132,66 @@ pub(crate) fn compute_col_signature<'a>(
     cells: impl Iterator<Item = (u32, &'a Cell)>,
     col: u32,
 ) -> ColSignature {
-    let hash = cells
+    let col_cells: Vec<_> = cells
         .filter(|(_, cell)| cell.col == col)
-        .fold(0u64, |acc, (row, cell)| {
-            combine_hashes(acc, hash_cell_contribution(row, cell))
-        });
+        .map(|(_, cell)| cell)
+        .collect();
+    let mut sorted_cells = col_cells;
+    sorted_cells.sort_by_key(|cell| cell.row);
+
+    let hash = hash_col_content_128(&sorted_cells);
     ColSignature { hash }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_zero_values() {
+        assert_eq!(
+            normalize_float_for_hash(0.0),
+            normalize_float_for_hash(-0.0)
+        );
+        assert_eq!(normalize_float_for_hash(0.0), 0u64);
+    }
+
+    #[test]
+    fn normalize_nan_values() {
+        let nan1 = f64::NAN;
+        let nan2 = f64::from_bits(0x7FF8_0000_0000_0001);
+        assert_eq!(
+            normalize_float_for_hash(nan1),
+            normalize_float_for_hash(nan2)
+        );
+        assert_eq!(normalize_float_for_hash(nan1), CANONICAL_NAN_BITS);
+    }
+
+    #[test]
+    fn normalize_ulp_drift() {
+        let a = 1.0;
+        let b = 1.0000000000000002;
+        assert_eq!(normalize_float_for_hash(a), normalize_float_for_hash(b));
+    }
+
+    #[test]
+    fn normalize_meaningful_difference() {
+        let a = 1.0;
+        let b = 1.0001;
+        assert_ne!(normalize_float_for_hash(a), normalize_float_for_hash(b));
+    }
+
+    #[test]
+    fn normalize_preserves_large_numbers() {
+        let a = 1e15;
+        let b = 1e15 + 1.0;
+        assert_eq!(normalize_float_for_hash(a), normalize_float_for_hash(b));
+    }
+
+    #[test]
+    fn normalize_distinguishes_different_magnitudes() {
+        let a = 1.0;
+        let b = 2.0;
+        assert_ne!(normalize_float_for_hash(a), normalize_float_for_hash(b));
+    }
 }
