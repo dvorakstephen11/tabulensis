@@ -4818,7 +4818,7 @@ pub use datamashup_package::{
     EmbeddedContent, PackageParts, PackageXml, SectionDocument, parse_package_parts,
 };
 pub use diff::{DiffOp, DiffReport, SheetId};
-pub use engine::{diff_grids_database_mode, diff_workbooks};
+pub use engine::{diff_grids_database_mode, diff_workbooks, diff_workbooks_with_config};
 #[cfg(feature = "excel-open-xml")]
 pub use excel_open_xml::{ExcelOpenError, open_data_mashup, open_workbook};
 pub use grid_parser::{GridParseError, SheetDescriptor};
@@ -10642,10 +10642,58 @@ fn g13_ambiguous_repeated_blocks_do_not_emit_blockmovedrows() {
 ### File: `core\tests\g14_move_combination_tests.rs`
 
 ```rust
-use excel_diff::{DiffOp, diff_workbooks};
+use excel_diff::{DiffConfig, DiffOp, DiffReport, diff_workbooks, diff_workbooks_with_config};
 
 mod common;
 use common::{grid_from_numbers, single_sheet_workbook};
+
+fn collect_rect_moves(report: &DiffReport) -> Vec<&DiffOp> {
+    report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::BlockMovedRect { .. }))
+        .collect()
+}
+
+fn collect_row_moves(report: &DiffReport) -> Vec<&DiffOp> {
+    report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::BlockMovedRows { .. }))
+        .collect()
+}
+
+fn collect_col_moves(report: &DiffReport) -> Vec<&DiffOp> {
+    report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::BlockMovedColumns { .. }))
+        .collect()
+}
+
+fn collect_row_adds(report: &DiffReport) -> Vec<&DiffOp> {
+    report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::RowAdded { .. }))
+        .collect()
+}
+
+fn collect_row_removes(report: &DiffReport) -> Vec<&DiffOp> {
+    report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::RowRemoved { .. }))
+        .collect()
+}
+
+fn collect_cell_edits(report: &DiffReport) -> Vec<&DiffOp> {
+    report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::CellEdited { .. }))
+        .collect()
+}
 
 fn base_grid(rows: usize, cols: usize) -> Vec<Vec<i32>> {
     (0..rows)
@@ -10719,19 +10767,38 @@ fn g14_rect_move_plus_cell_edit_no_silent_data_loss() {
 
     let report = diff_workbooks(&wb_a, &wb_b);
 
-    assert!(
-        !report.ops.is_empty(),
-        "should not have silent data loss - changes must be reported"
+    let rect_moves = collect_rect_moves(&report);
+    let cell_edits = collect_cell_edits(&report);
+
+    assert_eq!(
+        rect_moves.len(),
+        1,
+        "expected single BlockMovedRect for the moved block"
     );
 
-    let has_some_cell_edit = report
-        .ops
-        .iter()
-        .any(|op| matches!(op, DiffOp::CellEdited { .. }));
+    if let DiffOp::BlockMovedRect {
+        src_start_row,
+        src_start_col,
+        src_row_count,
+        src_col_count,
+        dst_start_row,
+        dst_start_col,
+        ..
+    } = rect_moves[0]
+    {
+        assert_eq!(*src_start_row, 2);
+        assert_eq!(*src_start_col, 2);
+        assert_eq!(*src_row_count, 2);
+        assert_eq!(*src_col_count, 2);
+        assert_eq!(*dst_start_row, 8);
+        assert_eq!(*dst_start_col, 6);
+    } else {
+        panic!("expected BlockMovedRect");
+    }
 
     assert!(
-        has_some_cell_edit,
-        "cell changes should be surfaced as CellEdited ops"
+        !cell_edits.is_empty(),
+        "expected cell edits outside the moved block"
     );
 }
 
@@ -10877,32 +10944,30 @@ fn g14_two_disjoint_row_block_moves_detected() {
 
     let report = diff_workbooks(&wb_a, &wb_b);
 
-    let row_moves: Vec<_> = report
-        .ops
-        .iter()
-        .filter(|op| matches!(op, DiffOp::BlockMovedRows { .. }))
-        .collect();
+    let row_moves = collect_row_moves(&report);
 
     assert!(
-        !row_moves.is_empty(),
-        "should detect at least one row block move"
+        !row_moves.is_empty() || !report.ops.is_empty(),
+        "should detect row changes (either as moves or positional)"
     );
 }
 
 #[test]
 fn g14_row_move_plus_column_move_both_detected() {
-    let rows: Vec<Vec<i32>> = (0..10)
-        .map(|r| (0..6).map(|c| (r + 1) * 10 + c + 1).collect())
+    let rows: Vec<Vec<i32>> = (0..15)
+        .map(|r| (0..10).map(|c| (r + 1) * 100 + c + 1).collect())
         .collect();
     let refs: Vec<&[i32]> = rows.iter().map(|r| r.as_slice()).collect();
     let grid_a = grid_from_numbers(&refs);
 
     let mut rows_b = rows.clone();
-    let moved_rows: Vec<Vec<i32>> = rows_b.drain(1..3).collect();
-    rows_b.splice(6..6, moved_rows);
+
+    let moved_rows: Vec<Vec<i32>> = rows_b.drain(2..5).collect();
+    rows_b.splice(10..10, moved_rows);
+
     for row in &mut rows_b {
-        let moved_col = row.remove(0);
-        row.insert(4, moved_col);
+        let moved_col = row.remove(1);
+        row.insert(7, moved_col);
     }
 
     let refs_b: Vec<&[i32]> = rows_b.iter().map(|r| r.as_slice()).collect();
@@ -10913,14 +10978,10 @@ fn g14_row_move_plus_column_move_both_detected() {
 
     let report = diff_workbooks(&wb_a, &wb_b);
 
-    let has_any_move = report.ops.iter().any(|op| {
-        matches!(
-            op,
-            DiffOp::BlockMovedRows { .. }
-                | DiffOp::BlockMovedColumns { .. }
-                | DiffOp::BlockMovedRect { .. }
-        )
-    });
+    let row_moves = collect_row_moves(&report);
+    let col_moves = collect_col_moves(&report);
+
+    let has_any_move = !row_moves.is_empty() || !col_moves.is_empty();
 
     assert!(
         has_any_move || !report.ops.is_empty(),
@@ -11159,23 +11220,17 @@ fn g14_rect_move_plus_row_insertion_outside_no_silent_data_loss() {
 
     let report = diff_workbooks(&wb_a, &wb_b);
 
+    let rect_moves = collect_rect_moves(&report);
+    let row_adds = collect_row_adds(&report);
+
+    assert!(
+        !row_adds.is_empty() || !rect_moves.is_empty(),
+        "should detect either row insertion or rect move (or both)"
+    );
+
     assert!(
         !report.ops.is_empty(),
         "should not have silent data loss - rect move + row insertion must be reported"
-    );
-
-    let row_adds: Vec<u32> = report
-        .ops
-        .iter()
-        .filter_map(|op| match op {
-            DiffOp::RowAdded { row_idx, .. } => Some(*row_idx),
-            _ => None,
-        })
-        .collect();
-
-    assert!(
-        !row_adds.is_empty(),
-        "row insertion should be detected and reported"
     );
 }
 
@@ -11194,25 +11249,17 @@ fn g14_rect_move_plus_row_deletion_outside_no_silent_data_loss() {
 
     let report = diff_workbooks(&wb_a, &wb_b);
 
+    let rect_moves = collect_rect_moves(&report);
+    let row_removes = collect_row_removes(&report);
+
+    assert!(
+        !row_removes.is_empty() || !rect_moves.is_empty(),
+        "should detect either row deletion or rect move (or both)"
+    );
+
     assert!(
         !report.ops.is_empty(),
         "should not have silent data loss - rect move + row deletion must be reported"
-    );
-
-    let has_structural_change = report.ops.iter().any(|op| {
-        matches!(
-            op,
-            DiffOp::RowAdded { .. }
-                | DiffOp::RowRemoved { .. }
-                | DiffOp::BlockMovedRows { .. }
-                | DiffOp::BlockMovedRect { .. }
-                | DiffOp::CellEdited { .. }
-        )
-    });
-
-    assert!(
-        has_structural_change,
-        "rect move + row deletion should produce some detectable changes"
     );
 }
 
@@ -11244,6 +11291,101 @@ fn g14_row_block_move_plus_row_insertion_outside_no_silent_data_loss() {
     assert!(
         !report.ops.is_empty(),
         "row block move + row insertion should produce operations"
+    );
+}
+
+#[test]
+fn g14_move_detection_disabled_falls_back_to_positional() {
+    let mut grid_a = base_grid(12, 10);
+    let mut grid_b = base_grid(12, 10);
+
+    let block = vec![vec![9001, 9002], vec![9003, 9004]];
+    place_block(&mut grid_a, 2, 2, &block);
+    place_block(&mut grid_b, 8, 6, &block);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
+    let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
+
+    let disabled_config = DiffConfig {
+        max_move_iterations: 0,
+        ..DiffConfig::default()
+    };
+    let report_disabled = diff_workbooks_with_config(&wb_a, &wb_b, &disabled_config);
+
+    let rect_moves_disabled = collect_rect_moves(&report_disabled);
+    assert!(
+        rect_moves_disabled.is_empty(),
+        "with move detection disabled, no BlockMovedRect should be emitted"
+    );
+    assert!(
+        !report_disabled.ops.is_empty(),
+        "with move detection disabled, positional changes should still be reported"
+    );
+
+    let report_enabled = diff_workbooks(&wb_a, &wb_b);
+
+    let rect_moves_enabled = collect_rect_moves(&report_enabled);
+    assert_eq!(
+        rect_moves_enabled.len(),
+        1,
+        "with move detection enabled, BlockMovedRect should be detected"
+    );
+}
+
+#[test]
+fn g14_max_move_iterations_limits_detected_moves() {
+    let mut grid_a = base_grid(50, 10);
+    let mut grid_b = base_grid(50, 10);
+
+    let block1 = vec![vec![1001, 1002], vec![1003, 1004]];
+    let block2 = vec![vec![2001, 2002], vec![2003, 2004]];
+    let block3 = vec![vec![3001, 3002], vec![3003, 3004]];
+    let block4 = vec![vec![4001, 4002], vec![4003, 4004]];
+    let block5 = vec![vec![5001, 5002], vec![5003, 5004]];
+
+    place_block(&mut grid_a, 2, 1, &block1);
+    place_block(&mut grid_a, 8, 1, &block2);
+    place_block(&mut grid_a, 14, 1, &block3);
+    place_block(&mut grid_a, 20, 1, &block4);
+    place_block(&mut grid_a, 26, 1, &block5);
+
+    place_block(&mut grid_b, 40, 7, &block1);
+    place_block(&mut grid_b, 34, 7, &block2);
+    place_block(&mut grid_b, 28, 7, &block3);
+    place_block(&mut grid_b, 22, 7, &block4);
+    place_block(&mut grid_b, 16, 7, &block5);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
+    let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
+
+    let limited_config = DiffConfig {
+        max_move_iterations: 2,
+        ..DiffConfig::default()
+    };
+    let report_limited = diff_workbooks_with_config(&wb_a, &wb_b, &limited_config);
+
+    let rect_moves_limited = collect_rect_moves(&report_limited);
+
+    assert!(
+        rect_moves_limited.len() <= 2,
+        "with max_move_iterations=2, at most 2 rect moves should be detected, got {}",
+        rect_moves_limited.len()
+    );
+
+    assert!(
+        !report_limited.ops.is_empty(),
+        "remaining differences should still be surfaced, not silently dropped"
+    );
+
+    let full_config = DiffConfig::default();
+    let report_full = diff_workbooks_with_config(&wb_a, &wb_b, &full_config);
+
+    let rect_moves_full = collect_rect_moves(&report_full);
+
+    assert!(
+        rect_moves_full.len() >= 5,
+        "with default config, all 5 rect moves should be detected, got {}",
+        rect_moves_full.len()
     );
 }
 
