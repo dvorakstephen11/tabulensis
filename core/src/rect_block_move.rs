@@ -1,3 +1,4 @@
+use crate::config::DiffConfig;
 use crate::grid_view::{ColHash, ColMeta, GridView, HashStats, RowHash};
 use crate::workbook::{Cell, Grid};
 
@@ -12,11 +13,15 @@ pub(crate) struct RectBlockMove {
     pub block_hash: Option<u64>,
 }
 
-const MAX_RECT_ROWS: u32 = 10_000;
-const MAX_RECT_COLS: u32 = 16_384;
-const MAX_HASH_REPEAT: u32 = 8;
-
 pub(crate) fn detect_exact_rect_block_move(old: &Grid, new: &Grid) -> Option<RectBlockMove> {
+    detect_exact_rect_block_move_with_config(old, new, &DiffConfig::default())
+}
+
+pub(crate) fn detect_exact_rect_block_move_with_config(
+    old: &Grid,
+    new: &Grid,
+    config: &DiffConfig,
+) -> Option<RectBlockMove> {
     if old.nrows != new.nrows || old.ncols != new.ncols {
         return None;
     }
@@ -25,12 +30,12 @@ pub(crate) fn detect_exact_rect_block_move(old: &Grid, new: &Grid) -> Option<Rec
         return None;
     }
 
-    if !is_within_size_bounds(old, new) {
+    if !is_within_size_bounds(old, new, config) {
         return None;
     }
 
-    let view_a = GridView::from_grid(old);
-    let view_b = GridView::from_grid(new);
+    let view_a = GridView::from_grid_with_config(old, config);
+    let view_b = GridView::from_grid_with_config(new, config);
 
     if low_info_dominated(&view_a) || low_info_dominated(&view_b) {
         return None;
@@ -43,7 +48,7 @@ pub(crate) fn detect_exact_rect_block_move(old: &Grid, new: &Grid) -> Option<Rec
     let row_stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
     let col_stats = HashStats::from_col_meta(&view_a.col_meta, &view_b.col_meta);
 
-    if has_heavy_repetition(&row_stats) || has_heavy_repetition(&col_stats) {
+    if has_heavy_repetition(&row_stats, config) || has_heavy_repetition(&col_stats, config) {
         return None;
     }
 
@@ -298,10 +303,10 @@ fn ranges_overlap(a: (u32, u32), b: (u32, u32)) -> bool {
     !(a.1 < b.0 || b.1 < a.0)
 }
 
-fn is_within_size_bounds(old: &Grid, new: &Grid) -> bool {
+fn is_within_size_bounds(old: &Grid, new: &Grid, config: &DiffConfig) -> bool {
     let rows = old.nrows.max(new.nrows);
     let cols = old.ncols.max(new.ncols);
-    rows <= MAX_RECT_ROWS && cols <= MAX_RECT_COLS
+    rows <= config.max_align_rows && cols <= config.max_align_cols
 }
 
 fn low_info_dominated(view: &GridView<'_>) -> bool {
@@ -331,7 +336,7 @@ fn blank_dominated(view: &GridView<'_>) -> bool {
     blank_cols * 2 > view.col_meta.len()
 }
 
-fn has_heavy_repetition<H>(stats: &HashStats<H>) -> bool
+fn has_heavy_repetition<H>(stats: &HashStats<H>, config: &DiffConfig) -> bool
 where
     H: Eq + std::hash::Hash + Copy,
 {
@@ -342,7 +347,7 @@ where
         .copied()
         .max()
         .unwrap_or(0)
-        > MAX_HASH_REPEAT
+        > config.max_hash_repeat
 }
 
 fn unique_in_a<H>(hash: H, stats: &HashStats<H>) -> bool
@@ -551,25 +556,29 @@ mod tests {
 
     #[test]
     fn detect_bails_on_oversized_row_count() {
-        let old = Grid::new(MAX_RECT_ROWS + 1, 10);
-        let new = Grid::new(MAX_RECT_ROWS + 1, 10);
+        let mut config = DiffConfig::default();
+        config.max_align_rows = 10;
+        let old = Grid::new(config.max_align_rows + 1, 10);
+        let new = Grid::new(config.max_align_rows + 1, 10);
 
-        let result = detect_exact_rect_block_move(&old, &new);
+        let result = detect_exact_rect_block_move_with_config(&old, &new, &config);
         assert!(
             result.is_none(),
-            "grids exceeding MAX_RECT_ROWS should bail"
+            "grids exceeding configured max_align_rows should bail"
         );
     }
 
     #[test]
     fn detect_bails_on_oversized_col_count() {
-        let old = Grid::new(10, MAX_RECT_COLS + 1);
-        let new = Grid::new(10, MAX_RECT_COLS + 1);
+        let mut config = DiffConfig::default();
+        config.max_align_cols = 8;
+        let old = Grid::new(10, config.max_align_cols + 1);
+        let new = Grid::new(10, config.max_align_cols + 1);
 
-        let result = detect_exact_rect_block_move(&old, &new);
+        let result = detect_exact_rect_block_move_with_config(&old, &new, &config);
         assert!(
             result.is_none(),
-            "grids exceeding MAX_RECT_COLS should bail"
+            "grids exceeding configured max_align_cols should bail"
         );
     }
 

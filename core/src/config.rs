@@ -31,14 +31,14 @@ impl Default for DiffConfig {
     fn default() -> Self {
         Self {
             max_move_iterations: 20,
-            max_align_rows: 10_000,
+            max_align_rows: 500_000,
             max_align_cols: 16_384,
             max_block_gap: 10_000,
             max_hash_repeat: 8,
             fuzzy_similarity_threshold: 0.80,
             max_fuzzy_block_rows: 32,
             rare_threshold: 5,
-            low_info_threshold: 1,
+            low_info_threshold: 2,
             small_gap_threshold: 50,
             recursive_align_threshold: 200,
             max_recursion_depth: 10,
@@ -71,5 +71,20 @@ impl DiffConfig {
             recursive_align_threshold: 400,
             ..Default::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_match_limit_spec() {
+        let cfg = DiffConfig::default();
+        assert_eq!(cfg.max_align_rows, 500_000);
+        assert_eq!(cfg.max_align_cols, 16_384);
+        assert_eq!(cfg.low_info_threshold, 2);
+        assert_eq!(cfg.max_move_iterations, 20);
+        assert_eq!(cfg.max_block_gap, 10_000);
     }
 }

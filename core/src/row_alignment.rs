@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use crate::config::DiffConfig;
 use crate::grid_view::{GridView, HashStats, RowHash, RowMeta};
 use crate::workbook::Grid;
 
@@ -17,16 +18,18 @@ pub(crate) struct RowBlockMove {
     pub row_count: u32,
 }
 
-const MAX_ALIGN_ROWS: u32 = 10_000;
-const MAX_ALIGN_COLS: u32 = 16_384;
-const MAX_HASH_REPEAT: u32 = 8;
-const MAX_BLOCK_GAP: u32 = 10_000;
-const MAX_FUZZY_BLOCK_ROWS: u32 = 32;
-const FUZZY_SIMILARITY_THRESHOLD: f64 = 0.80;
 const _HASH_COLLISION_NOTE: &str = "128-bit xxHash3 collision probability ~10^-29 at 50K rows (birthday bound); \
      secondary verification not required; see hashing.rs for detailed rationale.";
 
 pub(crate) fn detect_exact_row_block_move(old: &Grid, new: &Grid) -> Option<RowBlockMove> {
+    detect_exact_row_block_move_with_config(old, new, &DiffConfig::default())
+}
+
+pub(crate) fn detect_exact_row_block_move_with_config(
+    old: &Grid,
+    new: &Grid,
+    config: &DiffConfig,
+) -> Option<RowBlockMove> {
     if old.nrows != new.nrows || old.ncols != new.ncols {
         return None;
     }
@@ -35,19 +38,19 @@ pub(crate) fn detect_exact_row_block_move(old: &Grid, new: &Grid) -> Option<RowB
         return None;
     }
 
-    if !is_within_size_bounds(old, new) {
+    if !is_within_size_bounds(old, new, config) {
         return None;
     }
 
-    let view_a = GridView::from_grid(old);
-    let view_b = GridView::from_grid(new);
+    let view_a = GridView::from_grid_with_config(old, config);
+    let view_b = GridView::from_grid_with_config(new, config);
 
     if low_info_dominated(&view_a) || low_info_dominated(&view_b) {
         return None;
     }
 
     let stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
-    if has_heavy_repetition(&stats) {
+    if has_heavy_repetition(&stats, config) {
         return None;
     }
 
@@ -161,6 +164,14 @@ pub(crate) fn detect_exact_row_block_move(old: &Grid, new: &Grid) -> Option<RowB
 }
 
 pub(crate) fn detect_fuzzy_row_block_move(old: &Grid, new: &Grid) -> Option<RowBlockMove> {
+    detect_fuzzy_row_block_move_with_config(old, new, &DiffConfig::default())
+}
+
+pub(crate) fn detect_fuzzy_row_block_move_with_config(
+    old: &Grid,
+    new: &Grid,
+    config: &DiffConfig,
+) -> Option<RowBlockMove> {
     if old.nrows != new.nrows || old.ncols != new.ncols {
         return None;
     }
@@ -169,19 +180,19 @@ pub(crate) fn detect_fuzzy_row_block_move(old: &Grid, new: &Grid) -> Option<RowB
         return None;
     }
 
-    if !is_within_size_bounds(old, new) {
+    if !is_within_size_bounds(old, new, config) {
         return None;
     }
 
-    let view_a = GridView::from_grid(old);
-    let view_b = GridView::from_grid(new);
+    let view_a = GridView::from_grid_with_config(old, config);
+    let view_b = GridView::from_grid_with_config(new, config);
 
     if low_info_dominated(&view_a) || low_info_dominated(&view_b) {
         return None;
     }
 
     let stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
-    if has_heavy_repetition(&stats) {
+    if has_heavy_repetition(&stats, config) {
         return None;
     }
 
@@ -226,7 +237,9 @@ pub(crate) fn detect_fuzzy_row_block_move(old: &Grid, new: &Grid) -> Option<RowB
         return None;
     }
 
-    let max_block_len = mid_len.saturating_sub(1).min(MAX_FUZZY_BLOCK_ROWS as usize);
+    let max_block_len = mid_len
+        .saturating_sub(1)
+        .min(config.max_fuzzy_block_rows as usize);
     if max_block_len == 0 {
         return None;
     }
@@ -244,7 +257,7 @@ pub(crate) fn detect_fuzzy_row_block_move(old: &Grid, new: &Grid) -> Option<RowB
             let src_block = &meta_a[prefix + remaining..mismatch_end];
             let dst_block = &meta_b[prefix..prefix + block_len];
 
-            if block_similarity(src_block, dst_block) >= FUZZY_SIMILARITY_THRESHOLD {
+            if block_similarity(src_block, dst_block) >= config.fuzzy_similarity_threshold {
                 let mv = RowBlockMove {
                     src_start_row: src_block[0].row_idx,
                     dst_start_row: dst_block[0].row_idx,
@@ -267,7 +280,7 @@ pub(crate) fn detect_fuzzy_row_block_move(old: &Grid, new: &Grid) -> Option<RowB
             let src_block = &meta_a[prefix..prefix + block_len];
             let dst_block = &meta_b[prefix + remaining..mismatch_end];
 
-            if block_similarity(src_block, dst_block) >= FUZZY_SIMILARITY_THRESHOLD {
+            if block_similarity(src_block, dst_block) >= config.fuzzy_similarity_threshold {
                 let mv = RowBlockMove {
                     src_start_row: src_block[0].row_idx,
                     dst_start_row: dst_block[0].row_idx,
@@ -287,20 +300,41 @@ pub(crate) fn detect_fuzzy_row_block_move(old: &Grid, new: &Grid) -> Option<RowB
 }
 
 pub(crate) fn align_row_changes(old: &Grid, new: &Grid) -> Option<RowAlignment> {
+    align_row_changes_with_config(old, new, &DiffConfig::default())
+}
+
+pub(crate) fn align_row_changes_with_config(
+    old: &Grid,
+    new: &Grid,
+    config: &DiffConfig,
+) -> Option<RowAlignment> {
     let row_diff = new.nrows as i64 - old.nrows as i64;
     if row_diff.abs() == 1 {
-        return align_single_row_change(old, new);
+        return align_single_row_change_with_config(old, new, config);
     }
 
-    align_rows_internal(old, new, true)
+    align_rows_internal(old, new, true, config)
 }
 
 pub(crate) fn align_single_row_change(old: &Grid, new: &Grid) -> Option<RowAlignment> {
-    align_rows_internal(old, new, false)
+    align_single_row_change_with_config(old, new, &DiffConfig::default())
 }
 
-fn align_rows_internal(old: &Grid, new: &Grid, allow_blocks: bool) -> Option<RowAlignment> {
-    if !is_within_size_bounds(old, new) {
+pub(crate) fn align_single_row_change_with_config(
+    old: &Grid,
+    new: &Grid,
+    config: &DiffConfig,
+) -> Option<RowAlignment> {
+    align_rows_internal(old, new, false, config)
+}
+
+fn align_rows_internal(
+    old: &Grid,
+    new: &Grid,
+    allow_blocks: bool,
+    config: &DiffConfig,
+) -> Option<RowAlignment> {
+    if !is_within_size_bounds(old, new, config) {
         return None;
     }
 
@@ -319,19 +353,19 @@ fn align_rows_internal(old: &Grid, new: &Grid, allow_blocks: bool) -> Option<Row
         return None;
     }
 
-    if abs_diff != 1 && (!allow_blocks || abs_diff > MAX_BLOCK_GAP) {
+    if abs_diff != 1 && (!allow_blocks || abs_diff > config.max_block_gap) {
         return None;
     }
 
-    let view_a = GridView::from_grid(old);
-    let view_b = GridView::from_grid(new);
+    let view_a = GridView::from_grid_with_config(old, config);
+    let view_b = GridView::from_grid_with_config(new, config);
 
     if low_info_dominated(&view_a) || low_info_dominated(&view_b) {
         return None;
     }
 
     let stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
-    if has_heavy_repetition(&stats) {
+    if has_heavy_repetition(&stats, config) {
         return None;
     }
 
@@ -587,10 +621,10 @@ fn is_unique_to_a(hash: RowHash, stats: &HashStats<RowHash>) -> bool {
         && stats.freq_b.get(&hash).copied().unwrap_or(0) == 0
 }
 
-fn is_within_size_bounds(old: &Grid, new: &Grid) -> bool {
+fn is_within_size_bounds(old: &Grid, new: &Grid, config: &DiffConfig) -> bool {
     let rows = old.nrows.max(new.nrows);
     let cols = old.ncols.max(new.ncols);
-    rows <= MAX_ALIGN_ROWS && cols <= MAX_ALIGN_COLS
+    rows <= config.max_align_rows && cols <= config.max_align_cols
 }
 
 fn low_info_dominated(view: &GridView<'_>) -> bool {
@@ -602,7 +636,7 @@ fn low_info_dominated(view: &GridView<'_>) -> bool {
     low_info_count * 2 > view.row_meta.len()
 }
 
-fn has_heavy_repetition(stats: &HashStats<RowHash>) -> bool {
+fn has_heavy_repetition(stats: &HashStats<RowHash>, config: &DiffConfig) -> bool {
     stats
         .freq_a
         .values()
@@ -610,7 +644,7 @@ fn has_heavy_repetition(stats: &HashStats<RowHash>) -> bool {
         .copied()
         .max()
         .unwrap_or(0)
-        > MAX_HASH_REPEAT
+        > config.max_hash_repeat
 }
 
 fn hashes_match(slice_a: &[RowMeta], slice_b: &[RowMeta]) -> bool {
@@ -888,6 +922,7 @@ mod tests {
 
     #[test]
     fn fuzzy_move_at_max_block_rows_threshold() {
+        let config = DiffConfig::default();
         let base: Vec<Vec<i32>> = (1..=70)
             .map(|r| (1..=3).map(|c| r * 10 + c).collect())
             .collect();
@@ -906,14 +941,14 @@ mod tests {
             "internal edits should prevent exact move detection"
         );
 
-        let mv = detect_fuzzy_row_block_move(&grid_a, &grid_b)
-            .expect("expected fuzzy move at MAX_FUZZY_BLOCK_ROWS to be detected");
+        let mv = detect_fuzzy_row_block_move_with_config(&grid_a, &grid_b, &config)
+            .expect("expected fuzzy move at configured max_fuzzy_block_rows to be detected");
         assert_eq!(
             mv,
             RowBlockMove {
                 src_start_row: 4,
                 dst_start_row: 36,
-                row_count: 32
+                row_count: config.max_fuzzy_block_rows
             }
         );
     }
@@ -956,7 +991,7 @@ mod tests {
 
         assert!(
             detect_fuzzy_row_block_move(&grid_9a, &grid_9b).is_none(),
-            "9 repeated rows (> MAX_HASH_REPEAT) should trigger heavy repetition guard"
+            "repetition guard should trigger when repeat count exceeds max_hash_repeat"
         );
 
         let mut base_8_repeat: Vec<Vec<i32>> = (1..=18)
@@ -977,7 +1012,7 @@ mod tests {
 
         assert!(
             detect_fuzzy_row_block_move(&grid_8a, &grid_8b).is_some(),
-            "exactly 8 repeated rows (= MAX_HASH_REPEAT, not >) should NOT trigger heavy repetition guard"
+            "repeat count equal to max_hash_repeat should not trigger heavy repetition guard"
         );
     }
 

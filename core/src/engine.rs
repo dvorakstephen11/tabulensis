@@ -6,16 +6,18 @@
 use crate::alignment::{RowAlignment as AmrAlignment, align_rows_amr};
 use crate::alignment::move_extraction::moves_from_matched_pairs;
 use crate::column_alignment::{
-    ColumnAlignment, ColumnBlockMove, align_single_column_change, detect_exact_column_block_move,
+    ColumnAlignment, ColumnBlockMove, align_single_column_change_with_config,
+    detect_exact_column_block_move_with_config,
 };
 use crate::config::{DiffConfig, LimitBehavior};
 use crate::database_alignment::{KeyColumnSpec, diff_table_by_key};
 use crate::diff::{DiffOp, DiffReport, SheetId};
-use crate::rect_block_move::{RectBlockMove, detect_exact_rect_block_move};
+use crate::rect_block_move::{RectBlockMove, detect_exact_rect_block_move_with_config};
 use crate::region_mask::RegionMask;
 use crate::row_alignment::{
-    RowAlignment as LegacyRowAlignment, RowBlockMove as LegacyRowBlockMove, align_row_changes,
-    detect_exact_row_block_move, detect_fuzzy_row_block_move,
+    RowAlignment as LegacyRowAlignment, RowBlockMove as LegacyRowBlockMove,
+    align_row_changes_with_config, detect_exact_row_block_move_with_config,
+    detect_fuzzy_row_block_move_with_config,
 };
 #[cfg(feature = "perf-metrics")]
 use crate::perf::{DiffMetrics, Phase};
@@ -254,7 +256,9 @@ fn diff_grids_with_config(
 
             let mut found_move = false;
 
-            if let Some(mv) = detect_exact_rect_block_move_masked(old, new, &old_mask, &new_mask) {
+            if let Some(mv) =
+                detect_exact_rect_block_move_masked(old, new, &old_mask, &new_mask, config)
+            {
                 emit_rect_block_move(sheet_id, mv, ops);
                 #[cfg(feature = "perf-metrics")]
                 if let Some(m) = metrics.as_mut() {
@@ -289,7 +293,8 @@ fn diff_grids_with_config(
             }
 
             if !found_move
-                && let Some(mv) = detect_exact_row_block_move_masked(old, new, &old_mask, &new_mask)
+                && let Some(mv) =
+                    detect_exact_row_block_move_masked(old, new, &old_mask, &new_mask, config)
             {
                 emit_row_block_move(sheet_id, mv, ops);
                 #[cfg(feature = "perf-metrics")]
@@ -304,7 +309,7 @@ fn diff_grids_with_config(
 
             if !found_move
                 && let Some(mv) =
-                    detect_exact_column_block_move_masked(old, new, &old_mask, &new_mask)
+                    detect_exact_column_block_move_masked(old, new, &old_mask, &new_mask, config)
             {
                 emit_column_block_move(sheet_id, mv, ops);
                 #[cfg(feature = "perf-metrics")]
@@ -318,7 +323,8 @@ fn diff_grids_with_config(
             }
 
             if !found_move
-                && let Some(mv) = detect_fuzzy_row_block_move_masked(old, new, &old_mask, &new_mask)
+                && let Some(mv) =
+                    detect_fuzzy_row_block_move_masked(old, new, &old_mask, &new_mask, config)
             {
                 emit_row_block_move(sheet_id, mv, ops);
                 emit_moved_row_block_edits(sheet_id, old, new, mv, ops);
@@ -353,13 +359,25 @@ fn diff_grids_with_config(
     }
 
     if old_mask.has_exclusions() || new_mask.has_exclusions() {
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.start_phase(Phase::CellDiff);
+        }
         if old.nrows != new.nrows || old.ncols != new.ncols {
             if diff_aligned_with_masks(sheet_id, old, new, &old_mask, &new_mask, ops) {
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = metrics.as_mut() {
+                    m.end_phase(Phase::CellDiff);
+                }
                 return;
             }
             positional_diff_with_masks(sheet_id, old, new, &old_mask, &new_mask, ops);
         } else {
             positional_diff_masked_equal_size(sheet_id, old, new, &old_mask, &new_mask, ops);
+        }
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.end_phase(Phase::CellDiff);
         }
         return;
     }
@@ -369,63 +387,19 @@ fn diff_grids_with_config(
         m.start_phase(Phase::Alignment);
     }
 
-    let enable_amr = old.nrows.max(new.nrows) <= config.recursive_align_threshold;
-
-    if enable_amr {
-        if let Some(mut alignment) = align_rows_amr(old, new, config) {
-            inject_moves_from_insert_delete(old, new, &mut alignment);
-            let has_structural_rows =
-                !alignment.inserted.is_empty() || !alignment.deleted.is_empty();
-            if has_structural_rows && alignment.matched.is_empty() {
-                positional_diff(sheet_id, old, new, ops);
-                #[cfg(feature = "perf-metrics")]
-                if let Some(m) = metrics.as_mut() {
-                    m.end_phase(Phase::Alignment);
-                }
-                return;
-            }
-            let has_row_edits = alignment.matched.iter().any(|(a, b)| {
-                row_signature_at(old, *a) != row_signature_at(new, *b)
-            });
-            if has_structural_rows && has_row_edits {
-                positional_diff(sheet_id, old, new, ops);
-                #[cfg(feature = "perf-metrics")]
-                if let Some(m) = metrics.as_mut() {
-                    m.end_phase(Phase::Alignment);
-                }
-                return;
-            }
-            if alignment.moves.is_empty()
-                && alignment.inserted.is_empty()
-                && alignment.deleted.is_empty()
-                && old.ncols != new.ncols
-            {
-                if let Some(col_alignment) = align_single_column_change(old, new) {
-                    emit_column_aligned_diffs(sheet_id, old, new, &col_alignment, ops);
-                    #[cfg(feature = "perf-metrics")]
-                    if let Some(m) = metrics.as_mut() {
-                        m.end_phase(Phase::Alignment);
-                    }
-                    return;
-                }
-            }
-            if alignment.moves.is_empty() && row_signature_multiset_equal(old, new) {
-                positional_diff(sheet_id, old, new, ops);
-                #[cfg(feature = "perf-metrics")]
-                if let Some(m) = metrics.as_mut() {
-                    m.end_phase(Phase::Alignment);
-                }
-                return;
-            }
-            emit_amr_aligned_diffs(sheet_id, old, new, &alignment, ops);
+    if let Some(mut alignment) = align_rows_amr(old, new, config) {
+        inject_moves_from_insert_delete(old, new, &mut alignment);
+        let has_structural_rows =
+            !alignment.inserted.is_empty() || !alignment.deleted.is_empty();
+        if has_structural_rows && alignment.matched.is_empty() {
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
-                m.anchors_found = m
-                    .anchors_found
-                    .saturating_add(alignment.matched.len() as u32);
-                m.moves_detected = m
-                    .moves_detected
-                    .saturating_add(alignment.moves.len() as u32);
+                m.start_phase(Phase::CellDiff);
+            }
+            positional_diff(sheet_id, old, new, ops);
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = metrics.as_mut() {
+                m.end_phase(Phase::CellDiff);
             }
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
@@ -433,14 +407,118 @@ fn diff_grids_with_config(
             }
             return;
         }
+        let has_row_edits = alignment.matched.iter().any(|(a, b)| {
+            row_signature_at(old, *a) != row_signature_at(new, *b)
+        });
+        if has_structural_rows && has_row_edits {
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = metrics.as_mut() {
+                m.start_phase(Phase::CellDiff);
+            }
+            positional_diff(sheet_id, old, new, ops);
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = metrics.as_mut() {
+                m.end_phase(Phase::CellDiff);
+            }
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = metrics.as_mut() {
+                m.end_phase(Phase::Alignment);
+            }
+            return;
+        }
+        if alignment.moves.is_empty()
+            && alignment.inserted.is_empty()
+            && alignment.deleted.is_empty()
+            && old.ncols != new.ncols
+        {
+            if let Some(col_alignment) = align_single_column_change_with_config(old, new, config) {
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = metrics.as_mut() {
+                    m.start_phase(Phase::CellDiff);
+                }
+                emit_column_aligned_diffs(sheet_id, old, new, &col_alignment, ops);
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = metrics.as_mut() {
+                    m.end_phase(Phase::CellDiff);
+                }
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = metrics.as_mut() {
+                    m.end_phase(Phase::Alignment);
+                }
+                return;
+            }
+        }
+        if alignment.moves.is_empty() && row_signature_multiset_equal(old, new) {
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = metrics.as_mut() {
+                m.start_phase(Phase::CellDiff);
+            }
+            positional_diff(sheet_id, old, new, ops);
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = metrics.as_mut() {
+                m.end_phase(Phase::CellDiff);
+            }
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = metrics.as_mut() {
+                m.end_phase(Phase::Alignment);
+            }
+            return;
+        }
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.start_phase(Phase::CellDiff);
+        }
+        emit_amr_aligned_diffs(sheet_id, old, new, &alignment, ops);
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.anchors_found = m
+                .anchors_found
+                .saturating_add(alignment.matched.len() as u32);
+            m.moves_detected = m
+                .moves_detected
+                .saturating_add(alignment.moves.len() as u32);
+        }
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.end_phase(Phase::CellDiff);
+        }
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.end_phase(Phase::Alignment);
+        }
+        return;
     }
 
-    if let Some(alignment) = align_row_changes(old, new) {
+    if let Some(alignment) = align_row_changes_with_config(old, new, config) {
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.start_phase(Phase::CellDiff);
+        }
         emit_aligned_diffs(sheet_id, old, new, &alignment, ops);
-    } else if let Some(alignment) = align_single_column_change(old, new) {
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.end_phase(Phase::CellDiff);
+        }
+    } else if let Some(alignment) = align_single_column_change_with_config(old, new, config) {
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.start_phase(Phase::CellDiff);
+        }
         emit_column_aligned_diffs(sheet_id, old, new, &alignment, ops);
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.end_phase(Phase::CellDiff);
+        }
     } else {
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.start_phase(Phase::CellDiff);
+        }
         positional_diff(sheet_id, old, new, ops);
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.end_phase(Phase::CellDiff);
+        }
     }
 
     #[cfg(feature = "perf-metrics")]
@@ -793,6 +871,7 @@ fn detect_exact_row_block_move_masked(
     new: &Grid,
     old_mask: &RegionMask,
     new_mask: &RegionMask,
+    config: &DiffConfig,
 ) -> Option<LegacyRowBlockMove> {
     if !old_mask.has_active_cells() || !new_mask.has_active_cells() {
         return None;
@@ -805,7 +884,7 @@ fn detect_exact_row_block_move_masked(
         return None;
     }
 
-    let mv_local = detect_exact_row_block_move(&old_proj, &new_proj)?;
+    let mv_local = detect_exact_row_block_move_with_config(&old_proj, &new_proj, config)?;
     let src_start_row = *old_rows.get(mv_local.src_start_row as usize)?;
     let dst_start_row = *new_rows.get(mv_local.dst_start_row as usize)?;
 
@@ -821,6 +900,7 @@ fn detect_exact_column_block_move_masked(
     new: &Grid,
     old_mask: &RegionMask,
     new_mask: &RegionMask,
+    config: &DiffConfig,
 ) -> Option<ColumnBlockMove> {
     if !old_mask.has_active_cells() || !new_mask.has_active_cells() {
         return None;
@@ -833,7 +913,7 @@ fn detect_exact_column_block_move_masked(
         return None;
     }
 
-    let mv_local = detect_exact_column_block_move(&old_proj, &new_proj)?;
+    let mv_local = detect_exact_column_block_move_with_config(&old_proj, &new_proj, config)?;
     let src_start_col = *old_cols.get(mv_local.src_start_col as usize)?;
     let dst_start_col = *new_cols.get(mv_local.dst_start_col as usize)?;
 
@@ -849,6 +929,7 @@ fn detect_exact_rect_block_move_masked(
     new: &Grid,
     old_mask: &RegionMask,
     new_mask: &RegionMask,
+    config: &DiffConfig,
 ) -> Option<RectBlockMove> {
     if !old_mask.has_active_cells() || !new_mask.has_active_cells() {
         return None;
@@ -893,7 +974,7 @@ fn detect_exact_rect_block_move_masked(
         })
     };
 
-    if let Some(mv_local) = detect_exact_rect_block_move(&old_proj, &new_proj)
+    if let Some(mv_local) = detect_exact_rect_block_move_with_config(&old_proj, &new_proj, config)
         && let Some(mapped) = map_move(mv_local, &old_rows, &new_rows, &old_cols, &new_cols)
     {
         return Some(mapped);
@@ -998,7 +1079,9 @@ fn detect_exact_rect_block_move_masked(
                     continue;
                 }
 
-                if let Some(candidate) = detect_exact_rect_block_move(&old_scoped, &new_scoped) {
+                if let Some(candidate) =
+                    detect_exact_rect_block_move_with_config(&old_scoped, &new_scoped, config)
+                {
                     let scoped_row_map_old: Option<Vec<u32>> = scoped_old_rows
                         .iter()
                         .map(|idx| old_rows.get(*idx as usize).copied())
@@ -1082,6 +1165,7 @@ fn detect_fuzzy_row_block_move_masked(
     new: &Grid,
     old_mask: &RegionMask,
     new_mask: &RegionMask,
+    config: &DiffConfig,
 ) -> Option<LegacyRowBlockMove> {
     if !old_mask.has_active_cells() || !new_mask.has_active_cells() {
         return None;
@@ -1094,7 +1178,7 @@ fn detect_fuzzy_row_block_move_masked(
         return None;
     }
 
-    let mv_local = detect_fuzzy_row_block_move(&old_proj, &new_proj)?;
+    let mv_local = detect_fuzzy_row_block_move_with_config(&old_proj, &new_proj, config)?;
     let src_start_row = *old_rows.get(mv_local.src_start_row as usize)?;
     let dst_start_row = *new_rows.get(mv_local.dst_start_row as usize)?;
 

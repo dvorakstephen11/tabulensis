@@ -5,7 +5,7 @@ use crate::alignment::anchor_discovery::{Anchor, discover_anchors_from_meta};
 use crate::alignment::gap_strategy::{GapStrategy, select_gap_strategy};
 use crate::alignment::move_extraction::{find_block_move, moves_from_matched_pairs};
 use crate::alignment::row_metadata::RowMeta;
-use crate::alignment::runs::compress_to_runs;
+use crate::alignment::runs::{RowRun, compress_to_runs};
 use crate::config::{DiffConfig, LimitBehavior};
 use crate::grid_view::GridView;
 use crate::workbook::Grid;
@@ -77,6 +77,14 @@ pub fn align_rows_amr(old: &Grid, new: &Grid, config: &DiffConfig) -> Option<Row
             deleted,
             moves: Vec::new(),
         });
+    }
+
+    let compressed_a = runs_a.len() * 2 <= view_a.row_meta.len();
+    let compressed_b = runs_b.len() * 2 <= view_b.row_meta.len();
+    if (compressed_a || compressed_b) && !runs_a.is_empty() && !runs_b.is_empty() {
+        if let Some(alignment) = align_runs_stable(&runs_a, &runs_b) {
+            return Some(alignment);
+        }
     }
 
     let anchors = build_anchor_chain(discover_anchors_from_meta(&view_a.row_meta, &view_b.row_meta));
@@ -198,6 +206,67 @@ fn fill_gap(
     }
 }
 
+fn align_runs_stable(runs_a: &[RowRun], runs_b: &[RowRun]) -> Option<RowAlignment> {
+    let mut matched = Vec::new();
+    let mut inserted = Vec::new();
+    let mut deleted = Vec::new();
+
+    let mut idx_a = 0usize;
+    let mut idx_b = 0usize;
+
+    while idx_a < runs_a.len() && idx_b < runs_b.len() {
+        let run_a = &runs_a[idx_a];
+        let run_b = &runs_b[idx_b];
+
+        if run_a.signature != run_b.signature {
+            return None;
+        }
+
+        let shared = run_a.count.min(run_b.count);
+        for offset in 0..shared {
+            matched.push((run_a.start_row + offset, run_b.start_row + offset));
+        }
+
+        if run_a.count > shared {
+            for offset in shared..run_a.count {
+                deleted.push(run_a.start_row + offset);
+            }
+        }
+
+        if run_b.count > shared {
+            for offset in shared..run_b.count {
+                inserted.push(run_b.start_row + offset);
+            }
+        }
+
+        idx_a += 1;
+        idx_b += 1;
+    }
+
+    for run in runs_a.iter().skip(idx_a) {
+        for offset in 0..run.count {
+            deleted.push(run.start_row + offset);
+        }
+    }
+
+    for run in runs_b.iter().skip(idx_b) {
+        for offset in 0..run.count {
+            inserted.push(run.start_row + offset);
+        }
+    }
+
+    matched.sort_by_key(|(a, b)| (*a, *b));
+    inserted.sort_unstable();
+    deleted.sort_unstable();
+
+    Some(RowAlignment {
+        matched,
+        inserted,
+        deleted,
+        moves: Vec::new(),
+    })
+}
+
 fn slice_by_range<'a>(meta: &'a [RowMeta], range: &Range<u32>) -> &'a [RowMeta] {
     if meta.is_empty() || range.start >= range.end {
         return &[];
@@ -276,5 +345,56 @@ fn align_small_gap(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> GapAlignment
         inserted,
         deleted,
         moves: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workbook::{Cell, CellAddress, CellValue};
+
+    fn grid_from_run_lengths(pattern: &[(i32, u32)]) -> Grid {
+        let total_rows: u32 = pattern.iter().map(|(_, count)| *count).sum();
+        let mut grid = Grid::new(total_rows, 1);
+        let mut row_idx = 0u32;
+        for (val, count) in pattern {
+            for _ in 0..*count {
+                grid.insert(Cell {
+                    row: row_idx,
+                    col: 0,
+                    address: CellAddress::from_indices(row_idx, 0),
+                    value: Some(CellValue::Number(*val as f64)),
+                    formula: None,
+                });
+                row_idx = row_idx.saturating_add(1);
+            }
+        }
+        grid
+    }
+
+    #[test]
+    fn aligns_compressed_runs_with_insert_and_delete() {
+        let grid_a = grid_from_run_lengths(&[(1, 50), (2, 5), (1, 50)]);
+        let grid_b = grid_from_run_lengths(&[(1, 52), (2, 3), (1, 50)]);
+
+        let config = DiffConfig::default();
+        let alignment = align_rows_amr(&grid_a, &grid_b, &config)
+            .expect("alignment should succeed for repetitive runs");
+        assert!(alignment.moves.is_empty());
+        assert_eq!(alignment.inserted.len(), 2);
+        assert_eq!(alignment.deleted.len(), 2);
+        assert_eq!(alignment.matched.len(), 103);
+        assert_eq!(alignment.matched[0], (0, 0));
+    }
+
+    #[test]
+    fn run_alignment_falls_back_on_mismatch() {
+        let grid_a = grid_from_run_lengths(&[(1, 3), (2, 3), (1, 3)]);
+        let grid_b = grid_from_run_lengths(&[(1, 3), (3, 3), (1, 3)]);
+
+        let config = DiffConfig::default();
+        let alignment = align_rows_amr(&grid_a, &grid_b, &config)
+            .expect("alignment should still produce result via full AMR");
+        assert!(!alignment.matched.is_empty());
     }
 }

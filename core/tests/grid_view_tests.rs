@@ -1,4 +1,4 @@
-use excel_diff::{Cell, CellAddress, CellValue, Grid, GridView};
+use excel_diff::{Cell, CellAddress, CellValue, DiffConfig, Grid, GridView};
 
 mod common;
 use common::grid_from_numbers;
@@ -59,7 +59,7 @@ fn gridview_sparse_rows_low_info_classification() {
     let view = GridView::from_grid(&grid);
 
     assert_eq!(view.row_meta[0].non_blank_count, 1);
-    assert!(!view.row_meta[0].is_low_info);
+    assert!(view.row_meta[0].is_low_info);
     assert_eq!(view.row_meta[0].first_non_blank_col, 0);
 
     assert_eq!(view.row_meta[1].non_blank_count, 0);
@@ -67,7 +67,7 @@ fn gridview_sparse_rows_low_info_classification() {
     assert_eq!(view.row_meta[1].first_non_blank_col, 0);
 
     assert_eq!(view.row_meta[2].non_blank_count, 1);
-    assert!(!view.row_meta[2].is_low_info);
+    assert!(view.row_meta[2].is_low_info);
     assert_eq!(view.row_meta[2].first_non_blank_col, 2);
 
     assert_eq!(view.row_meta[3].non_blank_count, 1);
@@ -76,14 +76,19 @@ fn gridview_sparse_rows_low_info_classification() {
 }
 
 #[test]
-fn gridview_formula_only_row_is_not_low_info() {
+fn gridview_formula_only_row_respects_threshold() {
     let mut grid = Grid::new(2, 2);
     grid.insert(make_cell(0, 0, None, Some("=A1+1")));
 
-    let view = GridView::from_grid(&grid);
+    let view_default = GridView::from_grid(&grid);
+    assert_eq!(view_default.row_meta[0].non_blank_count, 1);
+    assert!(view_default.row_meta[0].is_low_info);
 
-    assert_eq!(view.row_meta[0].non_blank_count, 1);
-    assert!(!view.row_meta[0].is_low_info);
+    let mut config = DiffConfig::default();
+    config.low_info_threshold = 1;
+    let view_tuned = GridView::from_grid_with_config(&grid, &config);
+    assert_eq!(view_tuned.row_meta[0].non_blank_count, 1);
+    assert!(!view_tuned.row_meta[0].is_low_info);
 }
 
 #[test]

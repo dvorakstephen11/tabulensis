@@ -1,3 +1,4 @@
+use crate::config::DiffConfig;
 use crate::grid_view::{ColHash, ColMeta, GridView, HashStats};
 use crate::hashing::hash_col_content_unordered_128;
 use crate::workbook::Grid;
@@ -16,10 +17,6 @@ pub(crate) struct ColumnBlockMove {
     pub col_count: u32,
 }
 
-const MAX_ALIGN_ROWS: u32 = 10_000;
-const MAX_ALIGN_COLS: u32 = 16_384;
-const MAX_HASH_REPEAT: u32 = 8;
-
 fn unordered_col_hashes(grid: &Grid) -> Vec<ColHash> {
     let mut col_cells: Vec<Vec<&crate::workbook::Cell>> = vec![Vec::new(); grid.ncols as usize];
     for cell in grid.cells.values() {
@@ -36,6 +33,14 @@ fn unordered_col_hashes(grid: &Grid) -> Vec<ColHash> {
 }
 
 pub(crate) fn detect_exact_column_block_move(old: &Grid, new: &Grid) -> Option<ColumnBlockMove> {
+    detect_exact_column_block_move_with_config(old, new, &DiffConfig::default())
+}
+
+pub(crate) fn detect_exact_column_block_move_with_config(
+    old: &Grid,
+    new: &Grid,
+    config: &DiffConfig,
+) -> Option<ColumnBlockMove> {
     if old.ncols != new.ncols || old.nrows != new.nrows {
         return None;
     }
@@ -44,12 +49,12 @@ pub(crate) fn detect_exact_column_block_move(old: &Grid, new: &Grid) -> Option<C
         return None;
     }
 
-    if !is_within_size_bounds(old, new) {
+    if !is_within_size_bounds(old, new, config) {
         return None;
     }
 
-    let view_a = GridView::from_grid(old);
-    let view_b = GridView::from_grid(new);
+    let view_a = GridView::from_grid_with_config(old, config);
+    let view_b = GridView::from_grid_with_config(new, config);
 
     let unordered_a = unordered_col_hashes(old);
     let unordered_b = unordered_col_hashes(new);
@@ -78,7 +83,7 @@ pub(crate) fn detect_exact_column_block_move(old: &Grid, new: &Grid) -> Option<C
     }
 
     let stats = HashStats::from_col_meta(&col_meta_a, &col_meta_b);
-    if has_heavy_repetition(&stats) {
+    if has_heavy_repetition(&stats, config) {
         return None;
     }
 
@@ -192,7 +197,15 @@ pub(crate) fn detect_exact_column_block_move(old: &Grid, new: &Grid) -> Option<C
 }
 
 pub(crate) fn align_single_column_change(old: &Grid, new: &Grid) -> Option<ColumnAlignment> {
-    if !is_within_size_bounds(old, new) {
+    align_single_column_change_with_config(old, new, &DiffConfig::default())
+}
+
+pub(crate) fn align_single_column_change_with_config(
+    old: &Grid,
+    new: &Grid,
+    config: &DiffConfig,
+) -> Option<ColumnAlignment> {
+    if !is_within_size_bounds(old, new, config) {
         return None;
     }
 
@@ -205,11 +218,11 @@ pub(crate) fn align_single_column_change(old: &Grid, new: &Grid) -> Option<Colum
         return None;
     }
 
-    let view_a = GridView::from_grid(old);
-    let view_b = GridView::from_grid(new);
+    let view_a = GridView::from_grid_with_config(old, config);
+    let view_b = GridView::from_grid_with_config(new, config);
 
     let stats = HashStats::from_col_meta(&view_a.col_meta, &view_b.col_meta);
-    if has_heavy_repetition(&stats) {
+    if has_heavy_repetition(&stats, config) {
         return None;
     }
 
@@ -340,13 +353,13 @@ fn is_unique_to_a(hash: ColHash, stats: &HashStats<ColHash>) -> bool {
         && stats.freq_b.get(&hash).copied().unwrap_or(0) == 0
 }
 
-fn is_within_size_bounds(old: &Grid, new: &Grid) -> bool {
+fn is_within_size_bounds(old: &Grid, new: &Grid, config: &DiffConfig) -> bool {
     let rows = old.nrows.max(new.nrows);
     let cols = old.ncols.max(new.ncols);
-    rows <= MAX_ALIGN_ROWS && cols <= MAX_ALIGN_COLS
+    rows <= config.max_align_rows && cols <= config.max_align_cols
 }
 
-fn has_heavy_repetition(stats: &HashStats<ColHash>) -> bool {
+fn has_heavy_repetition(stats: &HashStats<ColHash>, config: &DiffConfig) -> bool {
     stats
         .freq_a
         .values()
@@ -354,7 +367,7 @@ fn has_heavy_repetition(stats: &HashStats<ColHash>) -> bool {
         .copied()
         .max()
         .unwrap_or(0)
-        > MAX_HASH_REPEAT
+        > config.max_hash_repeat
 }
 
 fn blank_dominated(view: &GridView<'_>) -> bool {
