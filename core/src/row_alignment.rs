@@ -17,10 +17,10 @@ pub(crate) struct RowBlockMove {
     pub row_count: u32,
 }
 
-const MAX_ALIGN_ROWS: u32 = 2_000;
-const MAX_ALIGN_COLS: u32 = 64;
+const MAX_ALIGN_ROWS: u32 = 10_000;
+const MAX_ALIGN_COLS: u32 = 16_384;
 const MAX_HASH_REPEAT: u32 = 8;
-const MAX_BLOCK_GAP: u32 = 32;
+const MAX_BLOCK_GAP: u32 = 10_000;
 const MAX_FUZZY_BLOCK_ROWS: u32 = 32;
 const FUZZY_SIMILARITY_THRESHOLD: f64 = 0.80;
 const _HASH_COLLISION_NOTE: &str = "128-bit xxHash3 collision probability ~10^-29 at 50K rows (birthday bound); \

@@ -21,6 +21,7 @@
 //! ```
 
 pub mod addressing;
+pub(crate) mod alignment;
 pub(crate) mod column_alignment;
 pub mod config;
 pub mod container;
@@ -32,6 +33,8 @@ pub mod diff;
 pub mod engine;
 #[cfg(feature = "excel-open-xml")]
 pub mod excel_open_xml;
+#[cfg(feature = "perf-metrics")]
+pub mod perf;
 pub mod grid_parser;
 pub mod grid_view;
 pub(crate) mod hashing;

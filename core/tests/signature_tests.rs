@@ -427,7 +427,7 @@ fn gridview_rowmeta_hash_matches_compute_all_signatures() {
     let view = GridView::from_grid(&grid);
 
     for (idx, meta) in view.row_meta.iter().enumerate() {
-        assert_eq!(meta.hash, row_signatures[idx].hash);
+        assert_eq!(meta.hash, row_signatures[idx]);
     }
 
     for (idx, meta) in view.col_meta.iter().enumerate() {

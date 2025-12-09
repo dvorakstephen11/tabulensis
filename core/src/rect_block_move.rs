@@ -12,8 +12,8 @@ pub(crate) struct RectBlockMove {
     pub block_hash: Option<u64>,
 }
 
-const MAX_RECT_ROWS: u32 = 2_000;
-const MAX_RECT_COLS: u32 = 128;
+const MAX_RECT_ROWS: u32 = 10_000;
+const MAX_RECT_COLS: u32 = 16_384;
 const MAX_HASH_REPEAT: u32 = 8;
 
 pub(crate) fn detect_exact_rect_block_move(old: &Grid, new: &Grid) -> Option<RectBlockMove> {

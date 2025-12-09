@@ -1,11 +1,14 @@
-use excel_diff::{ColHash, ColMeta, HashStats, RowHash, RowMeta};
+use excel_diff::grid_view::FrequencyClass;
+use excel_diff::{ColHash, ColMeta, HashStats, RowHash, RowMeta, RowSignature};
 
 fn row_meta(row_idx: u32, hash: RowHash) -> RowMeta {
     RowMeta {
         row_idx,
+        signature: hash,
         hash,
         non_blank_count: 0,
         first_non_blank_col: 0,
+        frequency_class: FrequencyClass::Common,
         is_low_info: false,
     }
 }
@@ -21,10 +24,10 @@ fn col_meta(col_idx: u32, hash: ColHash) -> ColMeta {
 
 #[test]
 fn hashstats_counts_and_positions_basic() {
-    let h1: RowHash = 1;
-    let h2: RowHash = 2;
-    let h3: RowHash = 3;
-    let h4: RowHash = 4;
+    let h1: RowHash = RowSignature { hash: 1 };
+    let h2: RowHash = RowSignature { hash: 2 };
+    let h3: RowHash = RowSignature { hash: 3 };
+    let h4: RowHash = RowSignature { hash: 4 };
 
     let rows_a = vec![
         row_meta(0, h1),
@@ -72,7 +75,7 @@ fn hashstats_counts_and_positions_basic() {
 
 #[test]
 fn hashstats_rare_but_not_common_boundary() {
-    let h: RowHash = 42;
+    let h: RowHash = RowSignature { hash: 42 };
     let rows_a = vec![row_meta(0, h), row_meta(1, h)];
     let rows_b = vec![row_meta(0, h)];
 
@@ -87,7 +90,7 @@ fn hashstats_rare_but_not_common_boundary() {
 
 #[test]
 fn hashstats_equal_to_threshold_behavior() {
-    let h: RowHash = 99;
+    let h: RowHash = RowSignature { hash: 99 };
     let rows_a = vec![row_meta(0, h), row_meta(1, h), row_meta(2, h)];
     let rows_b = vec![row_meta(0, h), row_meta(1, h), row_meta(2, h)];
 
@@ -103,7 +106,7 @@ fn hashstats_equal_to_threshold_behavior() {
 #[test]
 fn hashstats_empty_inputs() {
     let stats = HashStats::from_row_meta(&[], &[]);
-    let dummy_hash: RowHash = 123;
+    let dummy_hash: RowHash = RowSignature { hash: 123 };
 
     assert!(stats.freq_a.is_empty());
     assert!(stats.freq_b.is_empty());

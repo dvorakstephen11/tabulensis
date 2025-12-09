@@ -95,6 +95,30 @@ pub(crate) fn hash_col_content_128(cells: &[&Cell]) -> u128 {
     hasher.digest128()
 }
 
+pub(crate) fn hash_col_content_unordered_128(cells: &[&Cell]) -> u128 {
+    if cells.is_empty() {
+        return Xxh3::new().digest128();
+    }
+
+    let mut cell_hashes: Vec<u128> = cells
+        .iter()
+        .map(|cell| {
+            let mut h = Xxh3::new();
+            hash_cell_value(&cell.value, &mut h);
+            cell.formula.hash(&mut h);
+            h.digest128()
+        })
+        .collect();
+
+    cell_hashes.sort_unstable();
+
+    let mut combined = Xxh3::new();
+    for h in cell_hashes {
+        combined.update(&h.to_le_bytes());
+    }
+    combined.digest128()
+}
+
 #[allow(dead_code)]
 pub(crate) fn mix_hash(hash: u64) -> u64 {
     hash.rotate_left(13) ^ HASH_MIX_CONSTANT

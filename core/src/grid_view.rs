@@ -1,24 +1,19 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
+use crate::alignment::row_metadata::classify_row_frequencies;
+use crate::config::DiffConfig;
 use crate::hashing::{hash_col_content_128, hash_row_content_128};
-use crate::workbook::{Cell, CellValue, Grid};
+use crate::workbook::{Cell, CellValue, Grid, RowSignature};
 
-pub type RowHash = u128;
+pub use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
+
+pub type RowHash = RowSignature;
 pub type ColHash = u128;
 
 #[derive(Debug)]
 pub struct RowView<'a> {
     pub cells: Vec<(u32, &'a Cell)>, // sorted by column index
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct RowMeta {
-    pub row_idx: u32,
-    pub hash: RowHash,
-    pub non_blank_count: u16,
-    pub first_non_blank_col: u16,
-    pub is_low_info: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -39,6 +34,11 @@ pub struct GridView<'a> {
 
 impl<'a> GridView<'a> {
     pub fn from_grid(grid: &'a Grid) -> GridView<'a> {
+        let default_config = DiffConfig::default();
+        Self::from_grid_with_config(grid, &default_config)
+    }
+
+    pub fn from_grid_with_config(grid: &'a Grid, config: &DiffConfig) -> GridView<'a> {
         let nrows = grid.nrows as usize;
         let ncols = grid.ncols as usize;
 
@@ -79,7 +79,7 @@ impl<'a> GridView<'a> {
             row_view.cells.sort_by_key(|(col, _)| *col);
         }
 
-        let row_meta = rows
+        let mut row_meta: Vec<RowMeta> = rows
             .iter()
             .enumerate()
             .map(|(idx, row_view)| {
@@ -91,17 +91,29 @@ impl<'a> GridView<'a> {
                     .unwrap_or(0);
                 let is_low_info = compute_is_low_info(non_blank_count, row_view);
 
-                let hash = hash_row_content_128(&row_view.cells);
+                let signature = RowSignature {
+                    hash: hash_row_content_128(&row_view.cells),
+                };
+
+                let frequency_class = if is_low_info {
+                    FrequencyClass::LowInfo
+                } else {
+                    FrequencyClass::Common
+                };
 
                 RowMeta {
                     row_idx: idx as u32,
-                    hash,
+                    signature,
+                    hash: signature,
                     non_blank_count,
                     first_non_blank_col,
+                    frequency_class,
                     is_low_info,
                 }
             })
             .collect();
+
+        classify_row_frequencies(&mut row_meta, config);
 
         let col_meta = col_cells
             .into_iter()
@@ -143,14 +155,14 @@ impl HashStats<RowHash> {
         let mut stats = HashStats::default();
 
         for meta in rows_a {
-            *stats.freq_a.entry(meta.hash).or_insert(0) += 1;
+            *stats.freq_a.entry(meta.signature).or_insert(0) += 1;
         }
 
         for meta in rows_b {
-            *stats.freq_b.entry(meta.hash).or_insert(0) += 1;
+            *stats.freq_b.entry(meta.signature).or_insert(0) += 1;
             stats
                 .hash_to_positions_b
-                .entry(meta.hash)
+                .entry(meta.signature)
                 .or_insert_with(Vec::new)
                 .push(meta.row_idx);
         }

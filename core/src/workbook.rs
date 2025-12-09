@@ -201,7 +201,7 @@ impl Hash for CellValue {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct RowSignature {
     pub hash: u128,
 }

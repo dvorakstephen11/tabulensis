@@ -99,6 +99,9 @@ pub struct DiffReport {
     pub version: String,
     /// The list of diff operations.
     pub ops: Vec<DiffOp>,
+    #[cfg(feature = "perf-metrics")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<crate::perf::DiffMetrics>,
 }
 
 impl DiffReport {
@@ -108,6 +111,8 @@ impl DiffReport {
         DiffReport {
             version: Self::SCHEMA_VERSION.to_string(),
             ops,
+            #[cfg(feature = "perf-metrics")]
+            metrics: None,
         }
     }
 }

@@ -1,4 +1,5 @@
 use crate::grid_view::{ColHash, ColMeta, GridView, HashStats};
+use crate::hashing::hash_col_content_unordered_128;
 use crate::workbook::Grid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,9 +16,24 @@ pub(crate) struct ColumnBlockMove {
     pub col_count: u32,
 }
 
-const MAX_ALIGN_ROWS: u32 = 2_000;
-const MAX_ALIGN_COLS: u32 = 64;
+const MAX_ALIGN_ROWS: u32 = 10_000;
+const MAX_ALIGN_COLS: u32 = 16_384;
 const MAX_HASH_REPEAT: u32 = 8;
+
+fn unordered_col_hashes(grid: &Grid) -> Vec<ColHash> {
+    let mut col_cells: Vec<Vec<&crate::workbook::Cell>> = vec![Vec::new(); grid.ncols as usize];
+    for cell in grid.cells.values() {
+        let idx = cell.col as usize;
+        col_cells[idx].push(cell);
+    }
+    for cells in col_cells.iter_mut() {
+        cells.sort_by_key(|c| c.row);
+    }
+    col_cells
+        .into_iter()
+        .map(|cells| hash_col_content_unordered_128(&cells))
+        .collect()
+}
 
 pub(crate) fn detect_exact_column_block_move(old: &Grid, new: &Grid) -> Option<ColumnBlockMove> {
     if old.ncols != new.ncols || old.nrows != new.nrows {
@@ -35,17 +51,39 @@ pub(crate) fn detect_exact_column_block_move(old: &Grid, new: &Grid) -> Option<C
     let view_a = GridView::from_grid(old);
     let view_b = GridView::from_grid(new);
 
+    let unordered_a = unordered_col_hashes(old);
+    let unordered_b = unordered_col_hashes(new);
+
+    let col_meta_a: Vec<ColMeta> = view_a
+        .col_meta
+        .iter()
+        .enumerate()
+        .map(|(idx, meta)| ColMeta {
+            hash: *unordered_a.get(idx).unwrap_or(&meta.hash),
+            ..*meta
+        })
+        .collect();
+    let col_meta_b: Vec<ColMeta> = view_b
+        .col_meta
+        .iter()
+        .enumerate()
+        .map(|(idx, meta)| ColMeta {
+            hash: *unordered_b.get(idx).unwrap_or(&meta.hash),
+            ..*meta
+        })
+        .collect();
+
     if blank_dominated(&view_a) || blank_dominated(&view_b) {
         return None;
     }
 
-    let stats = HashStats::from_col_meta(&view_a.col_meta, &view_b.col_meta);
+    let stats = HashStats::from_col_meta(&col_meta_a, &col_meta_b);
     if has_heavy_repetition(&stats) {
         return None;
     }
 
-    let meta_a = &view_a.col_meta;
-    let meta_b = &view_b.col_meta;
+    let meta_a = &col_meta_a;
+    let meta_b = &col_meta_b;
     let n = meta_a.len();
 
     if meta_a
