@@ -288,9 +288,13 @@ fn g14_two_disjoint_row_block_moves_detected() {
     let refs: Vec<&[i32]> = rows.iter().map(|r| r.as_slice()).collect();
     let grid_a = grid_from_numbers(&refs);
 
-    let mut rows_b = rows.clone();
-    let block1: Vec<Vec<i32>> = rows_b.drain(2..5).collect();
-    rows_b.splice(8..8, block1);
+    let mut rows_b: Vec<Vec<i32>> = Vec::new();
+
+    rows_b.extend_from_slice(&rows[0..3]);
+    rows_b.extend_from_slice(&rows[7..10]);
+    rows_b.extend_from_slice(&rows[13..24]);
+    rows_b.extend_from_slice(&rows[3..7]);
+    rows_b.extend_from_slice(&rows[10..13]);
 
     let refs_b: Vec<&[i32]> = rows_b.iter().map(|r| r.as_slice()).collect();
     let grid_b = grid_from_numbers(&refs_b);
@@ -301,10 +305,36 @@ fn g14_two_disjoint_row_block_moves_detected() {
     let report = diff_workbooks(&wb_a, &wb_b);
 
     let row_moves = collect_row_moves(&report);
+    assert_eq!(
+        row_moves.len(),
+        2,
+        "expected exactly two BlockMovedRows ops for two disjoint moves"
+    );
 
-    assert!(
-        !row_moves.is_empty() || !report.ops.is_empty(),
-        "should detect row changes (either as moves or positional)"
+    let mut actual: Vec<(u32, u32, u32)> = row_moves
+        .iter()
+        .map(|op| {
+            if let DiffOp::BlockMovedRows {
+                src_start_row,
+                row_count,
+                dst_start_row,
+                ..
+            } = **op
+            {
+                (src_start_row, row_count, dst_start_row)
+            } else {
+                unreachable!()
+            }
+        })
+        .collect();
+    actual.sort();
+
+    let mut expected = vec![(3u32, 4u32, 17u32), (10u32, 3u32, 21u32)];
+    expected.sort();
+
+    assert_eq!(
+        actual, expected,
+        "row move ops should match the two expected disjoint moves"
     );
 }
 
@@ -337,12 +367,44 @@ fn g14_row_move_plus_column_move_both_detected() {
     let row_moves = collect_row_moves(&report);
     let col_moves = collect_col_moves(&report);
 
-    let has_any_move = !row_moves.is_empty() || !col_moves.is_empty();
-
-    assert!(
-        has_any_move || !report.ops.is_empty(),
-        "should detect changes when both row and column moves occur"
+    assert_eq!(
+        row_moves.len(),
+        1,
+        "expected a single BlockMovedRows op for the moved row block"
     );
+    assert_eq!(
+        col_moves.len(),
+        1,
+        "expected a single BlockMovedColumns op for the moved column"
+    );
+
+    if let DiffOp::BlockMovedRows {
+        src_start_row,
+        row_count,
+        dst_start_row,
+        ..
+    } = *row_moves[0]
+    {
+        assert_eq!(src_start_row, 2);
+        assert_eq!(row_count, 3);
+        assert_eq!(dst_start_row, 10);
+    } else {
+        panic!("expected BlockMovedRows op");
+    }
+
+    if let DiffOp::BlockMovedColumns {
+        src_start_col,
+        col_count,
+        dst_start_col,
+        ..
+    } = *col_moves[0]
+    {
+        assert_eq!(src_start_col, 1);
+        assert_eq!(col_count, 1);
+        assert_eq!(dst_start_col, 7);
+    } else {
+        panic!("expected BlockMovedColumns op");
+    }
 }
 
 #[test]
@@ -579,14 +641,14 @@ fn g14_rect_move_plus_row_insertion_outside_no_silent_data_loss() {
     let rect_moves = collect_rect_moves(&report);
     let row_adds = collect_row_adds(&report);
 
-    assert!(
-        !row_adds.is_empty() || !rect_moves.is_empty(),
-        "should detect either row insertion or rect move (or both)"
+    assert_eq!(
+        rect_moves.len(),
+        1,
+        "expected a single BlockMovedRect for the moved block"
     );
-
     assert!(
-        !report.ops.is_empty(),
-        "should not have silent data loss - rect move + row insertion must be reported"
+        !row_adds.is_empty(),
+        "expected at least one RowAdded for the inserted row"
     );
 }
 
@@ -608,14 +670,14 @@ fn g14_rect_move_plus_row_deletion_outside_no_silent_data_loss() {
     let rect_moves = collect_rect_moves(&report);
     let row_removes = collect_row_removes(&report);
 
-    assert!(
-        !row_removes.is_empty() || !rect_moves.is_empty(),
-        "should detect either row deletion or rect move (or both)"
+    assert_eq!(
+        rect_moves.len(),
+        1,
+        "expected a single BlockMovedRect for the moved block"
     );
-
     assert!(
-        !report.ops.is_empty(),
-        "should not have silent data loss - rect move + row deletion must be reported"
+        !row_removes.is_empty(),
+        "expected at least one RowRemoved for the deleted row"
     );
 }
 
