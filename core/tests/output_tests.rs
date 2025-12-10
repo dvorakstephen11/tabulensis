@@ -7,6 +7,8 @@ use excel_diff::{
     },
 };
 use serde_json::Value;
+#[cfg(feature = "perf-metrics")]
+use std::collections::BTreeSet;
 
 mod common;
 use common::fixture_path;
@@ -441,4 +443,125 @@ fn serialize_diff_report_with_finite_numbers_succeeds() {
     let json = serialize_diff_report(&report).expect("finite values should serialize");
     let parsed: DiffReport = serde_json::from_str(&json).expect("json should parse");
     assert_eq!(parsed.ops.len(), 1);
+}
+
+#[test]
+fn serialize_partial_diff_report_includes_complete_false_and_warnings() {
+    let addr = CellAddress::from_indices(0, 0);
+    let ops = vec![DiffOp::cell_edited(
+        "Sheet1".into(),
+        addr,
+        make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
+        make_cell_snapshot(addr, Some(CellValue::Number(2.0))),
+    )];
+    let report = DiffReport::with_partial_result(
+        ops,
+        "Sheet 'LargeSheet': alignment limits exceeded".to_string(),
+    );
+
+    let json = serialize_diff_report(&report).expect("partial report should serialize");
+    let value: Value = serde_json::from_str(&json).expect("json should parse");
+    let obj = value.as_object().expect("should be object");
+
+    assert_eq!(
+        obj.get("complete").and_then(Value::as_bool),
+        Some(false),
+        "partial result should have complete=false"
+    );
+
+    let warnings = obj
+        .get("warnings")
+        .and_then(Value::as_array)
+        .expect("warnings should be present");
+    assert!(!warnings.is_empty(), "warnings array should not be empty");
+    assert!(
+        warnings[0]
+            .as_str()
+            .unwrap_or("")
+            .contains("limits exceeded"),
+        "warning should mention limits exceeded"
+    );
+}
+
+#[test]
+#[cfg(feature = "perf-metrics")]
+fn serialize_diff_report_with_metrics_includes_metrics_object() {
+    use excel_diff::perf::DiffMetrics;
+
+    let addr = CellAddress::from_indices(0, 0);
+    let ops = vec![DiffOp::cell_edited(
+        "Sheet1".into(),
+        addr,
+        make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
+        make_cell_snapshot(addr, Some(CellValue::Number(2.0))),
+    )];
+
+    let mut report = DiffReport::new(ops);
+    let mut metrics = DiffMetrics::default();
+    metrics.move_detection_time_ms = 5;
+    metrics.alignment_time_ms = 10;
+    metrics.cell_diff_time_ms = 15;
+    metrics.total_time_ms = 30;
+    metrics.rows_processed = 500;
+    metrics.cells_compared = 2500;
+    metrics.anchors_found = 25;
+    metrics.moves_detected = 1;
+    report.metrics = Some(metrics);
+
+    let json = serialize_diff_report(&report).expect("report with metrics should serialize");
+    let value: Value = serde_json::from_str(&json).expect("json should parse");
+    let obj = value.as_object().expect("should be object");
+
+    let keys: BTreeSet<String> = obj.keys().cloned().collect();
+    assert!(
+        keys.contains("metrics"),
+        "serialized report should include metrics key"
+    );
+
+    let metrics_obj = obj
+        .get("metrics")
+        .and_then(Value::as_object)
+        .expect("metrics should be an object");
+
+    assert!(
+        metrics_obj.contains_key("move_detection_time_ms"),
+        "metrics should contain move_detection_time_ms"
+    );
+    assert!(
+        metrics_obj.contains_key("alignment_time_ms"),
+        "metrics should contain alignment_time_ms"
+    );
+    assert!(
+        metrics_obj.contains_key("cell_diff_time_ms"),
+        "metrics should contain cell_diff_time_ms"
+    );
+    assert!(
+        metrics_obj.contains_key("total_time_ms"),
+        "metrics should contain total_time_ms"
+    );
+    assert!(
+        metrics_obj.contains_key("rows_processed"),
+        "metrics should contain rows_processed"
+    );
+    assert!(
+        metrics_obj.contains_key("cells_compared"),
+        "metrics should contain cells_compared"
+    );
+    assert!(
+        metrics_obj.contains_key("anchors_found"),
+        "metrics should contain anchors_found"
+    );
+    assert!(
+        metrics_obj.contains_key("moves_detected"),
+        "metrics should contain moves_detected"
+    );
+
+    assert_eq!(
+        metrics_obj.get("rows_processed").and_then(Value::as_u64),
+        Some(500)
+    );
+    assert_eq!(
+        metrics_obj.get("cells_compared").and_then(Value::as_u64),
+        Some(2500)
+    );
 }

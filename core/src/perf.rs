@@ -10,7 +10,7 @@ pub enum Phase {
     CellDiff,
 }
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DiffMetrics {
     pub move_detection_time_ms: u64,
     pub alignment_time_ms: u64,

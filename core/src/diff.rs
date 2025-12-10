@@ -3,8 +3,23 @@
 //! This module defines the types used to represent differences between two workbooks:
 //! - [`DiffOp`]: Individual operations representing a single change (cell edit, row/column add/remove, etc.)
 //! - [`DiffReport`]: A versioned collection of diff operations
+//! - [`DiffError`]: Errors that can occur during the diff process
 
 use crate::workbook::{CellAddress, CellSnapshot, ColSignature, RowSignature};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum DiffError {
+    #[error("alignment limits exceeded for sheet '{sheet}': rows={rows}, cols={cols} (limits: rows={max_rows}, cols={max_cols})")]
+    LimitsExceeded {
+        sheet: String,
+        rows: u32,
+        cols: u32,
+        max_rows: u32,
+        max_cols: u32,
+    },
+}
 
 pub type SheetId = String;
 

@@ -1,0 +1,33 @@
+name: Performance Regression
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  perf-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        
+      - name: Build with perf metrics
+        run: cargo build --release --features perf-metrics
+        working-directory: core
+        
+      - name: Run perf test suite
+        run: cargo test --release --features perf-metrics perf_ -- --nocapture
+        working-directory: core
+        
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
+      - name: Check perf thresholds
+        run: python scripts/check_perf_thresholds.py
+

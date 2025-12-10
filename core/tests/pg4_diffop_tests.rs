@@ -1131,3 +1131,51 @@ fn pg4_cell_edited_invariant_helper_rejects_mismatched_snapshot_addr() {
 
     assert_cell_edited_invariants(&op, "Sheet1", "C3");
 }
+
+#[test]
+#[cfg(feature = "perf-metrics")]
+fn pg4_diff_report_json_shape_with_metrics() {
+    use excel_diff::perf::DiffMetrics;
+
+    let ops = vec![DiffOp::SheetAdded {
+        sheet: "NewSheet".to_string(),
+    }];
+    let mut report = DiffReport::new(ops);
+    let mut metrics = DiffMetrics::default();
+    metrics.move_detection_time_ms = 10;
+    metrics.alignment_time_ms = 20;
+    metrics.cell_diff_time_ms = 30;
+    metrics.total_time_ms = 60;
+    metrics.rows_processed = 1000;
+    metrics.cells_compared = 5000;
+    metrics.anchors_found = 50;
+    metrics.moves_detected = 2;
+    report.metrics = Some(metrics);
+
+    let json = serde_json::to_value(&report).expect("serialize to value");
+    let obj = json.as_object().expect("report json object");
+
+    let keys: BTreeSet<String> = obj.keys().cloned().collect();
+    let expected: BTreeSet<String> = ["complete", "ops", "version", "metrics"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    assert_eq!(keys, expected, "report should include metrics key");
+
+    let metrics_obj = obj.get("metrics").and_then(Value::as_object).expect("metrics object");
+    
+    assert!(metrics_obj.contains_key("move_detection_time_ms"));
+    assert!(metrics_obj.contains_key("alignment_time_ms"));
+    assert!(metrics_obj.contains_key("cell_diff_time_ms"));
+    assert!(metrics_obj.contains_key("total_time_ms"));
+    assert!(metrics_obj.contains_key("rows_processed"));
+    assert!(metrics_obj.contains_key("cells_compared"));
+    assert!(metrics_obj.contains_key("anchors_found"));
+    assert!(metrics_obj.contains_key("moves_detected"));
+    
+    assert!(!metrics_obj.contains_key("parse_time_ms"), "parse_time_ms is planned for future phase");
+    assert!(!metrics_obj.contains_key("peak_memory_bytes"), "peak_memory_bytes is planned for future phase");
+    
+    assert_eq!(metrics_obj.get("rows_processed").and_then(Value::as_u64), Some(1000));
+    assert_eq!(metrics_obj.get("cells_compared").and_then(Value::as_u64), Some(5000));
+}

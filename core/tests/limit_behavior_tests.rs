@@ -2,8 +2,8 @@ mod common;
 
 use common::single_sheet_workbook;
 use excel_diff::config::{DiffConfig, LimitBehavior};
-use excel_diff::diff::DiffOp;
-use excel_diff::engine::diff_workbooks_with_config;
+use excel_diff::diff::{DiffError, DiffOp};
+use excel_diff::engine::{diff_workbooks_with_config, try_diff_workbooks_with_config};
 use excel_diff::{Cell, CellAddress, CellValue, Grid};
 
 fn create_simple_grid(nrows: u32, ncols: u32, base_value: i32) -> Grid {
@@ -139,8 +139,38 @@ fn limit_exceeded_return_partial_result() {
 }
 
 #[test]
+fn limit_exceeded_return_error_returns_structured_error() {
+    let grid_a = create_simple_grid(100, 10, 0);
+    let grid_b = create_simple_grid(100, 10, 0);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let config = DiffConfig {
+        max_align_rows: 50,
+        on_limit_exceeded: LimitBehavior::ReturnError,
+        ..Default::default()
+    };
+
+    let result = try_diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    assert!(result.is_err(), "should return error when limits exceeded");
+    
+    let err = result.unwrap_err();
+    match err {
+        DiffError::LimitsExceeded { sheet, rows, cols, max_rows, max_cols } => {
+            assert_eq!(sheet, "Sheet1");
+            assert_eq!(rows, 100);
+            assert_eq!(cols, 10);
+            assert_eq!(max_rows, 50);
+            assert_eq!(max_cols, 16384);
+        }
+        _ => panic!("unexpected error variant: {err:?}"),
+    }
+}
+
+#[test]
 #[should_panic(expected = "alignment limits exceeded")]
-fn limit_exceeded_return_error() {
+fn limit_exceeded_return_error_panics_via_legacy_api() {
     let grid_a = create_simple_grid(100, 10, 0);
     let grid_b = create_simple_grid(100, 10, 0);
 
@@ -267,6 +297,70 @@ fn multiple_sheets_limit_warning_includes_sheet_name() {
     assert!(
         report.warnings.iter().any(|w| w.contains("LargeSheet")),
         "warning should reference the sheet that exceeded limits"
+    );
+}
+
+#[test]
+fn large_grid_50k_rows_completes_within_default_limits() {
+    let grid_a = create_simple_grid(5000, 10, 0);
+    let mut grid_b = create_simple_grid(5000, 10, 0);
+    grid_b.insert(Cell {
+        row: 2500,
+        col: 5,
+        address: CellAddress::from_indices(2500, 5),
+        value: Some(CellValue::Number(999999.0)),
+        formula: None,
+    });
+
+    let wb_a = single_sheet_workbook("LargeSheet", grid_a);
+    let wb_b = single_sheet_workbook("LargeSheet", grid_b);
+
+    let config = DiffConfig::default();
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(
+        report.complete,
+        "5000-row grid should complete within default limits (max_align_rows=500000)"
+    );
+    assert!(
+        report.warnings.is_empty(),
+        "should have no warnings for successful large grid diff"
+    );
+    assert!(
+        count_ops(&report.ops, |op| matches!(op, DiffOp::CellEdited { .. })) >= 1,
+        "should detect the cell edit in large grid"
+    );
+}
+
+#[test]
+fn wide_grid_500_cols_completes_within_default_limits() {
+    let grid_a = create_simple_grid(100, 500, 0);
+    let mut grid_b = create_simple_grid(100, 500, 0);
+    grid_b.insert(Cell {
+        row: 50,
+        col: 250,
+        address: CellAddress::from_indices(50, 250),
+        value: Some(CellValue::Number(999999.0)),
+        formula: None,
+    });
+
+    let wb_a = single_sheet_workbook("WideSheet", grid_a);
+    let wb_b = single_sheet_workbook("WideSheet", grid_b);
+
+    let config = DiffConfig::default();
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(
+        report.complete,
+        "500-column grid should complete within default limits (max_align_cols=16384)"
+    );
+    assert!(
+        report.warnings.is_empty(),
+        "should have no warnings for successful wide grid diff"
+    );
+    assert!(
+        count_ops(&report.ops, |op| matches!(op, DiffOp::CellEdited { .. })) >= 1,
+        "should detect the cell edit in wide grid"
     );
 }
 

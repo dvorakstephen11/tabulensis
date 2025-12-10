@@ -370,6 +370,21 @@ mod tests {
         grid
     }
 
+    fn grid_with_unique_rows(rows: &[i32]) -> Grid {
+        let nrows = rows.len() as u32;
+        let mut grid = Grid::new(nrows, 1);
+        for (r, &val) in rows.iter().enumerate() {
+            grid.insert(Cell {
+                row: r as u32,
+                col: 0,
+                address: CellAddress::from_indices(r as u32, 0),
+                value: Some(CellValue::Number(val as f64)),
+                formula: None,
+            });
+        }
+        grid
+    }
+
     #[test]
     fn aligns_compressed_runs_with_insert_and_delete() {
         let grid_a = grid_from_run_lengths(&[(1, 50), (2, 5), (1, 50)]);
@@ -394,5 +409,118 @@ mod tests {
         let alignment = align_rows_amr(&grid_a, &grid_b, &config)
             .expect("alignment should still produce result via full AMR");
         assert!(!alignment.matched.is_empty());
+    }
+
+    #[test]
+    fn amr_disjoint_gaps_with_insertions_and_deletions() {
+        let grid_a = grid_with_unique_rows(&[1, 2, 3, 100, 4, 5, 6, 200, 7, 8, 9]);
+        let grid_b = grid_with_unique_rows(&[1, 2, 10, 3, 4, 5, 6, 7, 20, 8, 9]);
+
+        let config = DiffConfig::default();
+        let alignment = align_rows_amr(&grid_a, &grid_b, &config)
+            .expect("alignment should succeed with disjoint gaps");
+
+        assert!(!alignment.matched.is_empty(), "should have matched pairs");
+        
+        let matched_is_monotonic = alignment.matched.windows(2).all(|w| {
+            w[0].0 <= w[1].0 && w[0].1 <= w[1].1
+        });
+        assert!(matched_is_monotonic, "matched pairs should be monotonically increasing");
+        
+        assert!(!alignment.inserted.is_empty() || !alignment.deleted.is_empty(), 
+            "should have insertions and/or deletions");
+    }
+
+    #[test]
+    fn amr_recursive_gap_alignment_returns_monotonic_alignment() {
+        let grid_a = grid_with_unique_rows(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+        let rows_b = vec![1, 2, 100, 3, 4, 5, 200, 6, 7, 8, 300, 9, 10, 11, 400, 12, 13, 14, 15];
+        let grid_b = grid_with_unique_rows(&rows_b);
+
+        let config = DiffConfig {
+            recursive_align_threshold: 5,
+            small_gap_threshold: 2,
+            ..Default::default()
+        };
+
+        let alignment = align_rows_amr(&grid_a, &grid_b, &config)
+            .expect("alignment should succeed with recursive gaps");
+
+        let matched_is_monotonic = alignment.matched.windows(2).all(|w| {
+            w[0].0 <= w[1].0 && w[0].1 <= w[1].1
+        });
+        assert!(matched_is_monotonic, 
+            "recursive alignment should produce monotonic matched pairs");
+        
+        for &inserted_row in &alignment.inserted {
+            assert!(!alignment.matched.iter().any(|(_, b)| *b == inserted_row),
+                "inserted rows should not appear in matched pairs");
+        }
+        
+        for &deleted_row in &alignment.deleted {
+            assert!(!alignment.matched.iter().any(|(a, _)| *a == deleted_row),
+                "deleted rows should not appear in matched pairs");
+        }
+    }
+
+    #[test]
+    fn amr_multi_gap_move_detection_produces_expected_row_block_move() {
+        let grid_a = grid_with_unique_rows(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        let grid_b = grid_with_unique_rows(&[1, 2, 6, 7, 8, 3, 4, 5, 9, 10]);
+
+        let config = DiffConfig::default();
+        let alignment = align_rows_amr(&grid_a, &grid_b, &config)
+            .expect("alignment should succeed with moved block");
+
+        assert!(!alignment.matched.is_empty(), "should have matched pairs even with moves");
+        
+        let old_rows: std::collections::HashSet<_> = alignment.matched.iter().map(|(a, _)| *a).collect();
+        let new_rows: std::collections::HashSet<_> = alignment.matched.iter().map(|(_, b)| *b).collect();
+        
+        assert!(old_rows.len() <= 10 && new_rows.len() <= 10, 
+            "matched rows should not exceed input size");
+    }
+
+    #[test]
+    fn amr_alignment_empty_grids() {
+        let grid_a = Grid::new(0, 0);
+        let grid_b = Grid::new(0, 0);
+
+        let config = DiffConfig::default();
+        let alignment = align_rows_amr(&grid_a, &grid_b, &config)
+            .expect("alignment should succeed for empty grids");
+
+        assert!(alignment.matched.is_empty());
+        assert!(alignment.inserted.is_empty());
+        assert!(alignment.deleted.is_empty());
+        assert!(alignment.moves.is_empty());
+    }
+
+    #[test]
+    fn amr_alignment_all_deleted() {
+        let grid_a = grid_with_unique_rows(&[1, 2, 3, 4, 5]);
+        let grid_b = Grid::new(0, 1);
+
+        let config = DiffConfig::default();
+        let alignment = align_rows_amr(&grid_a, &grid_b, &config)
+            .expect("alignment should succeed when all rows deleted");
+
+        assert!(alignment.matched.is_empty());
+        assert!(alignment.inserted.is_empty());
+        assert_eq!(alignment.deleted.len(), 5);
+    }
+
+    #[test]
+    fn amr_alignment_all_inserted() {
+        let grid_a = Grid::new(0, 1);
+        let grid_b = grid_with_unique_rows(&[1, 2, 3, 4, 5]);
+
+        let config = DiffConfig::default();
+        let alignment = align_rows_amr(&grid_a, &grid_b, &config)
+            .expect("alignment should succeed when all rows inserted");
+
+        assert!(alignment.matched.is_empty());
+        assert_eq!(alignment.inserted.len(), 5);
+        assert!(alignment.deleted.is_empty());
     }
 }

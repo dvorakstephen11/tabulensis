@@ -7,7 +7,7 @@ from .base import BaseGenerator
 class LargeGridGenerator(BaseGenerator):
     """
     Generates massive grids using WriteOnly mode to save memory.
-    Targeting P1/P2 milestones.
+    Targeting P1/P2/P3/P4/P5 milestones.
     """
     def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
         if isinstance(output_names, str):
@@ -17,31 +17,38 @@ class LargeGridGenerator(BaseGenerator):
         cols = self.args.get('cols', 10)
         mode = self.args.get('mode', 'dense')
         seed = self.args.get('seed', 0)
+        pattern_length = self.args.get('pattern_length', 100)
+        fill_percent = self.args.get('fill_percent', 100)
 
-        # Use deterministic seed if provided, otherwise system time
         rng = random.Random(seed)
 
         for name in output_names:
-            # WriteOnly mode is critical for 50k+ rows in Python
             wb = openpyxl.Workbook(write_only=True)
             ws = wb.create_sheet()
             ws.title = "Performance"
 
-            # 1. Header
             header = [f"Col_{c}" for c in range(1, cols + 1)]
             ws.append(header)
 
-            # 2. Data Stream
             for r in range(1, rows + 1):
                 row_data = []
                 if mode == 'dense':
-                    # Deterministic pattern: "R{r}C{c}"
-                    # Fast to generate, high compression ratio
                     row_data = [f"R{r}C{c}" for c in range(1, cols + 1)]
                 
                 elif mode == 'noise':
-                    # Random floats: Harder to align, harder to compress
                     row_data = [rng.random() for _ in range(cols)]
+                
+                elif mode == 'repetitive':
+                    pattern_idx = (r - 1) % pattern_length
+                    row_data = [f"P{pattern_idx}C{c}" for c in range(1, cols + 1)]
+                
+                elif mode == 'sparse':
+                    row_data = []
+                    for c in range(1, cols + 1):
+                        if rng.randint(1, 100) <= fill_percent:
+                            row_data.append(f"R{r}C{c}")
+                        else:
+                            row_data.append(None)
                 
                 ws.append(row_data)
 

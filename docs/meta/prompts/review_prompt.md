@@ -48,6 +48,7 @@
       workbook.rs
     tests/
       addressing_pg2_tests.rs
+      amr_multi_gap_tests.rs
       common/
         mod.rs
       d1_database_mode_tests.rs
@@ -68,6 +69,7 @@
       grid_view_hashstats_tests.rs
       grid_view_tests.rs
       integration_test.rs
+      limit_behavior_tests.rs
       m4_package_parts_tests.rs
       m4_permissions_metadata_tests.rs
       m5_query_domain_tests.rs
@@ -304,9 +306,24 @@ mod tests {
 ### File: `core\src\alignment\anchor_chain.rs`
 
 ```rust
+//! Anchor chain construction using Longest Increasing Subsequence (LIS).
+//!
+//! Implements anchor chain building as described in the unified grid diff
+//! specification Section 10. Given a set of discovered anchors, this module
+//! selects the maximal subset that preserves relative order in both grids.
+//!
+//! For example, if anchors show:
+//! - Row A: old=0, new=0
+//! - Row B: old=2, new=1  (B moved up)
+//! - Row C: old=1, new=2
+//!
+//! The LIS algorithm selects {A, C} because their old_row indices (0, 1) are
+//! increasing, making them a valid ordering chain. Row B is excluded because
+//! including it would create a crossing (B is at old=2 but new=1, while C is
+//! at old=1 but new=2).
+
 use crate::alignment::anchor_discovery::Anchor;
 
-/// Longest increasing subsequence by a provided key.
 pub fn build_anchor_chain(mut anchors: Vec<Anchor>) -> Vec<Anchor> {
     // Sort by new_row to preserve destination order before LIS on old_row.
     anchors.sort_by_key(|a| a.new_row);
@@ -396,6 +413,18 @@ mod tests {
 ### File: `core\src\alignment\anchor_discovery.rs`
 
 ```rust
+//! Anchor discovery for AMR alignment.
+//!
+//! Implements anchor discovery as described in the unified grid diff specification
+//! Section 10. Anchors are rows that:
+//!
+//! 1. Are unique (appear exactly once) in BOTH grids
+//! 2. Have matching signatures (content hash)
+//!
+//! These rows serve as fixed points around which the alignment is built.
+//! Rows that are unique in one grid but not the other cannot be anchors
+//! since their position cannot be reliably determined.
+
 use std::collections::HashMap;
 
 use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
@@ -441,6 +470,18 @@ pub fn discover_anchors_from_meta(old: &[RowMeta], new: &[RowMeta]) -> Vec<Ancho
 ### File: `core\src\alignment\assembly.rs`
 
 ```rust
+//! Final alignment assembly for AMR algorithm.
+//!
+//! Implements the final assembly phase as described in the unified grid diff
+//! specification Section 12. This module:
+//!
+//! 1. Orchestrates the full AMR pipeline (metadata → anchors → chain → gaps)
+//! 2. Assembles matched pairs, insertions, deletions, and moves into final alignment
+//! 3. Provides fast paths for special cases (RLE compression, single-run grids)
+//!
+//! The main entry point is `align_rows_amr` which returns an `Option<RowAlignment>`.
+//! Returns `None` when alignment cannot be determined (falls back to positional diff).
+
 use std::ops::Range;
 
 use crate::alignment::anchor_chain::build_anchor_chain;
@@ -449,7 +490,7 @@ use crate::alignment::gap_strategy::{GapStrategy, select_gap_strategy};
 use crate::alignment::move_extraction::{find_block_move, moves_from_matched_pairs};
 use crate::alignment::row_metadata::RowMeta;
 use crate::alignment::runs::{RowRun, compress_to_runs};
-use crate::config::{DiffConfig, LimitBehavior};
+use crate::config::DiffConfig;
 use crate::grid_view::GridView;
 use crate::workbook::Grid;
 
@@ -477,20 +518,6 @@ struct GapAlignmentResult {
 }
 
 pub fn align_rows_amr(old: &Grid, new: &Grid, config: &DiffConfig) -> Option<RowAlignment> {
-    if old.nrows.max(new.nrows) > config.max_align_rows
-        || old.ncols.max(new.ncols) > config.max_align_cols
-    {
-        return match config.on_limit_exceeded {
-            LimitBehavior::FallbackToPositional => None,
-            LimitBehavior::ReturnPartialResult => Some(RowAlignment::default()),
-            LimitBehavior::ReturnError => panic!(
-                "alignment limits exceeded (rows={}, cols={})",
-                old.nrows.max(new.nrows),
-                old.ncols.max(new.ncols)
-            ),
-        };
-    }
-
     let view_a = GridView::from_grid_with_config(old, config);
     let view_b = GridView::from_grid_with_config(new, config);
 
@@ -849,6 +876,19 @@ mod tests {
 ### File: `core\src\alignment\gap_strategy.rs`
 
 ```rust
+//! Gap strategy selection for AMR alignment.
+//!
+//! Implements gap strategy selection as described in the unified grid diff
+//! specification Sections 9.6 and 12. After anchors divide the grids into
+//! gaps, each gap is processed according to its characteristics:
+//!
+//! - **Empty**: Both sides empty, nothing to do
+//! - **InsertAll**: Old side empty, all new rows are insertions
+//! - **DeleteAll**: New side empty, all old rows are deletions
+//! - **SmallEdit**: Both sides small enough for O(n*m) LCS alignment
+//! - **MoveCandidate**: Gap contains matching unique signatures that may indicate moves
+//! - **RecursiveAlign**: Gap is large; recursively apply AMR with rare anchors
+
 use std::collections::HashSet;
 
 use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
@@ -920,6 +960,48 @@ fn has_matching_signatures(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> bool
 ### File: `core\src\alignment\mod.rs`
 
 ```rust
+//! Anchor-Move-Refine (AMR) row alignment algorithm.
+//!
+//! This module implements a simplified version of the AMR algorithm described in the
+//! unified grid diff specification. The implementation follows the general structure:
+//!
+//! 1. **Row Metadata Collection** (`row_metadata.rs`, Spec Section 9.11)
+//!    - Compute row signatures and classify by frequency (Unique/Rare/Common/LowInfo)
+//!
+//! 2. **Anchor Discovery** (`anchor_discovery.rs`, Spec Section 10)
+//!    - Find rows that are unique in both grids with matching signatures
+//!
+//! 3. **Anchor Chain Construction** (`anchor_chain.rs`, Spec Section 10)
+//!    - Build longest increasing subsequence (LIS) of anchors to preserve relative order
+//!
+//! 4. **Gap Strategy Selection** (`gap_strategy.rs`, Spec Sections 9.6, 12)
+//!    - For each gap between anchors, select appropriate strategy:
+//!      Empty, InsertAll, DeleteAll, SmallEdit, MoveCandidate, or RecursiveAlign
+//!
+//! 5. **Assembly** (`assembly.rs`, Spec Section 12)
+//!    - Assemble final alignment by processing gaps and anchors
+//!
+//! ## Intentional Spec Deviations
+//!
+//! The current implementation simplifies the full AMR spec in the following ways:
+//!
+//! - **No global move-candidate extraction phase**: The full spec (Sections 9.5-9.7, 11)
+//!   describes a global phase that extracts out-of-order matches before gap filling.
+//!   This implementation instead detects moves opportunistically within gaps via
+//!   `GapStrategy::MoveCandidate` and `find_block_move`. This is simpler but may miss
+//!   some complex multi-block move patterns that the full spec would detect.
+//!
+//! - **No explicit move validation phase**: The spec describes validating move candidates
+//!   (Section 11) to resolve conflicts. The current implementation accepts the first
+//!   valid move found within each gap.
+//!
+//! - **RLE fast path**: For highly repetitive grids (>50% compression), the implementation
+//!   uses a run-length encoded alignment path (`runs.rs`) that bypasses full AMR.
+//!
+//! These simplifications are acceptable for most real-world Excel workbooks and keep
+//! the implementation maintainable. Future work may implement the full global move
+//! extraction if complex reordering scenarios require it.
+
 pub(crate) mod anchor_chain;
 pub(crate) mod anchor_discovery;
 pub(crate) mod assembly;
@@ -937,6 +1019,29 @@ pub(crate) use assembly::{align_rows_amr, RowAlignment, RowBlockMove};
 ### File: `core\src\alignment\move_extraction.rs`
 
 ```rust
+//! Move extraction from alignment gaps.
+//!
+//! Implements localized move detection within gaps. This is a simplified approach
+//! compared to the full spec (Sections 9.5-9.7, 11) which describes global
+//! move-candidate extraction and validation phases.
+//!
+//! ## Current Implementation
+//!
+//! - `find_block_move`: Scans for contiguous blocks of matching signatures
+//!   between old and new slices within a gap. Returns the largest found.
+//!
+//! - `moves_from_matched_pairs`: Extracts block moves from matched row pairs
+//!   where consecutive pairs have the same offset (indicating they moved together).
+//!
+//! ## Future Work (TODO)
+//!
+//! To implement full spec compliance, this module would need:
+//!
+//! 1. Global unanchored match collection (all out-of-order signature matches)
+//! 2. Candidate move construction from unanchored matches
+//! 3. Move validation to resolve overlapping/conflicting candidates
+//! 4. Integration with gap filling to consume validated moves
+
 use std::collections::HashMap;
 
 use crate::alignment::row_metadata::RowMeta;
@@ -1040,6 +1145,16 @@ pub fn moves_from_matched_pairs(pairs: &[(u32, u32)]) -> Vec<RowBlockMove> {
 ### File: `core\src\alignment\row_metadata.rs`
 
 ```rust
+//! Row metadata and frequency classification for AMR alignment.
+//!
+//! Implements row frequency classification as described in the unified grid diff
+//! specification Section 9.11. Each row is classified into one of four frequency classes:
+//!
+//! - **Unique**: Appears exactly once in the grid (highest anchor quality)
+//! - **Rare**: Appears 2-N times where N is configurable (can serve as secondary anchors)
+//! - **Common**: Appears frequently (poor anchor quality)
+//! - **LowInfo**: Blank or near-blank rows (ignored for anchoring)
+
 use std::collections::HashMap;
 
 use crate::config::DiffConfig;
@@ -1146,6 +1261,18 @@ mod tests {
 ### File: `core\src\alignment\runs.rs`
 
 ```rust
+//! Run-length encoding for repetitive row patterns.
+//!
+//! Implements run-length compression as described in the unified grid diff
+//! specification Section 2.6 (optional optimization). For grids where >50%
+//! of rows share signatures with adjacent rows, this provides a fast path
+//! that avoids full AMR computation.
+//!
+//! This is particularly effective for:
+//! - Template-based workbooks with many identical rows
+//! - Data with long runs of blank or placeholder rows
+//! - Adversarial cases designed to stress the alignment algorithm
+
 use crate::alignment::row_metadata::RowMeta;
 use crate::workbook::RowSignature;
 
@@ -1242,6 +1369,7 @@ fn unordered_col_hashes(grid: &Grid) -> Vec<ColHash> {
         .collect()
 }
 
+#[allow(dead_code)]
 pub(crate) fn detect_exact_column_block_move(old: &Grid, new: &Grid) -> Option<ColumnBlockMove> {
     detect_exact_column_block_move_with_config(old, new, &DiffConfig::default())
 }
@@ -1406,6 +1534,7 @@ pub(crate) fn detect_exact_column_block_move_with_config(
     None
 }
 
+#[allow(dead_code)]
 pub(crate) fn align_single_column_change(old: &Grid, new: &Grid) -> Option<ColumnAlignment> {
     align_single_column_change_with_config(old, new, &DiffConfig::default())
 }
@@ -3533,9 +3662,21 @@ pub struct DiffReport {
     pub version: String,
     /// The list of diff operations.
     pub ops: Vec<DiffOp>,
+    /// Whether the diff result is complete. When `false`, some operations may be missing
+    /// due to resource limits being exceeded (e.g., row/column limits).
+    #[serde(default = "default_complete")]
+    pub complete: bool,
+    /// Warnings generated during the diff process. Non-empty when limits were exceeded
+    /// or other partial-result conditions occurred.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
     #[cfg(feature = "perf-metrics")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metrics: Option<crate::perf::DiffMetrics>,
+}
+
+fn default_complete() -> bool {
+    true
 }
 
 impl DiffReport {
@@ -3545,9 +3686,27 @@ impl DiffReport {
         DiffReport {
             version: Self::SCHEMA_VERSION.to_string(),
             ops,
+            complete: true,
+            warnings: Vec::new(),
             #[cfg(feature = "perf-metrics")]
             metrics: None,
         }
+    }
+
+    pub fn with_partial_result(ops: Vec<DiffOp>, warning: String) -> DiffReport {
+        DiffReport {
+            version: Self::SCHEMA_VERSION.to_string(),
+            ops,
+            complete: false,
+            warnings: vec![warning],
+            #[cfg(feature = "perf-metrics")]
+            metrics: None,
+        }
+    }
+
+    pub fn add_warning(&mut self, warning: String) {
+        self.warnings.push(warning);
+        self.complete = false;
     }
 }
 
@@ -3703,6 +3862,11 @@ use crate::workbook::{
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+#[derive(Debug, Default)]
+struct DiffContext {
+    warnings: Vec<String>,
+}
+
 const DATABASE_MODE_SHEET_ID: &str = "<database>";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -3737,6 +3901,7 @@ pub fn diff_workbooks_with_config(
     config: &DiffConfig,
 ) -> DiffReport {
     let mut ops = Vec::new();
+    let mut ctx = DiffContext::default();
     #[cfg(feature = "perf-metrics")]
     let mut metrics = {
         let mut m = DiffMetrics::default();
@@ -3797,6 +3962,7 @@ pub fn diff_workbooks_with_config(
                     &new_sheet.grid,
                     config,
                     &mut ops,
+                    &mut ctx,
                     #[cfg(feature = "perf-metrics")]
                     Some(&mut metrics),
                 );
@@ -3807,6 +3973,10 @@ pub fn diff_workbooks_with_config(
 
     #[allow(unused_mut)]
     let mut report = DiffReport::new(ops);
+    if !ctx.warnings.is_empty() {
+        report.complete = false;
+        report.warnings = ctx.warnings;
+    }
     #[cfg(feature = "perf-metrics")]
     {
         metrics.end_phase(Phase::Total);
@@ -3859,12 +4029,14 @@ pub fn diff_grids_database_mode(old: &Grid, new: &Grid, key_columns: &[u32]) -> 
 }
 
 fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>) {
+    let mut ctx = DiffContext::default();
     diff_grids_with_config(
         sheet_id,
         old,
         new,
         &DiffConfig::default(),
         ops,
+        &mut ctx,
         #[cfg(feature = "perf-metrics")]
         None,
     );
@@ -3876,6 +4048,7 @@ fn diff_grids_with_config(
     new: &Grid,
     config: &DiffConfig,
     ops: &mut Vec<DiffOp>,
+    ctx: &mut DiffContext,
     #[cfg(feature = "perf-metrics")] mut metrics: Option<&mut DiffMetrics>,
 ) {
     if old.nrows == 0 && new.nrows == 0 {
@@ -3898,11 +4071,30 @@ fn diff_grids_with_config(
         if let Some(m) = metrics.as_mut() {
             m.end_phase(Phase::MoveDetection);
         }
+        let warning = format!(
+            "Sheet '{}': alignment limits exceeded (rows={}, cols={}; limits: rows={}, cols={})",
+            sheet_id,
+            old.nrows.max(new.nrows),
+            old.ncols.max(new.ncols),
+            config.max_align_rows,
+            config.max_align_cols
+        );
         match config.on_limit_exceeded {
             LimitBehavior::FallbackToPositional => {
                 positional_diff(sheet_id, old, new, ops);
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = metrics.as_mut() {
+                    m.add_cells_compared(cells_in_overlap(old, new));
+                }
             }
-            LimitBehavior::ReturnPartialResult => {}
+            LimitBehavior::ReturnPartialResult => {
+                ctx.warnings.push(warning);
+                positional_diff(sheet_id, old, new, ops);
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = metrics.as_mut() {
+                    m.add_cells_compared(cells_in_overlap(old, new));
+                }
+            }
             LimitBehavior::ReturnError => {
                 panic!(
                     "alignment limits exceeded (rows={}, cols={})",
@@ -4076,6 +4268,7 @@ fn diff_grids_with_config(
             positional_diff(sheet_id, old, new, ops);
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
+                m.add_cells_compared(cells_in_overlap(old, new));
                 m.end_phase(Phase::CellDiff);
             }
             #[cfg(feature = "perf-metrics")]
@@ -4095,6 +4288,7 @@ fn diff_grids_with_config(
             positional_diff(sheet_id, old, new, ops);
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
+                m.add_cells_compared(cells_in_overlap(old, new));
                 m.end_phase(Phase::CellDiff);
             }
             #[cfg(feature = "perf-metrics")]
@@ -4116,6 +4310,8 @@ fn diff_grids_with_config(
                 emit_column_aligned_diffs(sheet_id, old, new, &col_alignment, ops);
                 #[cfg(feature = "perf-metrics")]
                 if let Some(m) = metrics.as_mut() {
+                    let overlap_rows = old.nrows.min(new.nrows) as u64;
+                    m.add_cells_compared(overlap_rows.saturating_mul(col_alignment.matched.len() as u64));
                     m.end_phase(Phase::CellDiff);
                 }
                 #[cfg(feature = "perf-metrics")]
@@ -4133,6 +4329,7 @@ fn diff_grids_with_config(
             positional_diff(sheet_id, old, new, ops);
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
+                m.add_cells_compared(cells_in_overlap(old, new));
                 m.end_phase(Phase::CellDiff);
             }
             #[cfg(feature = "perf-metrics")]
@@ -4148,6 +4345,8 @@ fn diff_grids_with_config(
         emit_amr_aligned_diffs(sheet_id, old, new, &alignment, ops);
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
+            let overlap_cols = old.ncols.min(new.ncols) as u64;
+            m.add_cells_compared((alignment.matched.len() as u64).saturating_mul(overlap_cols));
             m.anchors_found = m
                 .anchors_found
                 .saturating_add(alignment.matched.len() as u32);
@@ -4174,6 +4373,8 @@ fn diff_grids_with_config(
         emit_aligned_diffs(sheet_id, old, new, &alignment, ops);
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
+            let overlap_cols = old.ncols.min(new.ncols) as u64;
+            m.add_cells_compared((alignment.matched.len() as u64).saturating_mul(overlap_cols));
             m.end_phase(Phase::CellDiff);
         }
     } else if let Some(alignment) = align_single_column_change_with_config(old, new, config) {
@@ -4184,6 +4385,8 @@ fn diff_grids_with_config(
         emit_column_aligned_diffs(sheet_id, old, new, &alignment, ops);
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
+            let overlap_rows = old.nrows.min(new.nrows) as u64;
+            m.add_cells_compared(overlap_rows.saturating_mul(alignment.matched.len() as u64));
             m.end_phase(Phase::CellDiff);
         }
     } else {
@@ -4194,6 +4397,7 @@ fn diff_grids_with_config(
         positional_diff(sheet_id, old, new, ops);
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
+            m.add_cells_compared(cells_in_overlap(old, new));
             m.end_phase(Phase::CellDiff);
         }
     }
@@ -4864,6 +5068,13 @@ fn detect_fuzzy_row_block_move_masked(
         dst_start_row,
         row_count: mv_local.row_count,
     })
+}
+
+#[cfg(feature = "perf-metrics")]
+fn cells_in_overlap(old: &Grid, new: &Grid) -> u64 {
+    let overlap_rows = old.nrows.min(new.nrows) as u64;
+    let overlap_cols = old.ncols.min(new.ncols) as u64;
+    overlap_rows.saturating_mul(overlap_cols)
 }
 
 fn positional_diff(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>) {
@@ -7393,9 +7604,8 @@ pub enum Phase {
     CellDiff,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct DiffMetrics {
-    pub parse_time_ms: u64,
     pub move_detection_time_ms: u64,
     pub alignment_time_ms: u64,
     pub cell_diff_time_ms: u64,
@@ -7404,7 +7614,7 @@ pub struct DiffMetrics {
     pub cells_compared: u64,
     pub anchors_found: u32,
     pub moves_detected: u32,
-    pub peak_memory_bytes: usize,
+    #[serde(skip)]
     phase_start: HashMap<Phase, Instant>,
 }
 
@@ -7417,13 +7627,17 @@ impl DiffMetrics {
         if let Some(start) = self.phase_start.remove(&phase) {
             let elapsed = start.elapsed().as_millis() as u64;
             match phase {
-                Phase::Parse => self.parse_time_ms += elapsed,
+                Phase::Parse => {}
                 Phase::MoveDetection => self.move_detection_time_ms += elapsed,
                 Phase::Alignment => self.alignment_time_ms += elapsed,
                 Phase::CellDiff => self.cell_diff_time_ms += elapsed,
                 Phase::Total => self.total_time_ms += elapsed,
             }
         }
+    }
+
+    pub fn add_cells_compared(&mut self, count: u64) {
+        self.cells_compared = self.cells_compared.saturating_add(count);
     }
 }
 
@@ -7449,6 +7663,7 @@ pub(crate) struct RectBlockMove {
     pub block_hash: Option<u64>,
 }
 
+#[allow(dead_code)]
 pub(crate) fn detect_exact_rect_block_move(old: &Grid, new: &Grid) -> Option<RectBlockMove> {
     detect_exact_rect_block_move_with_config(old, new, &DiffConfig::default())
 }
@@ -8405,6 +8620,31 @@ mod tests {
 ### File: `core\src\row_alignment.rs`
 
 ```rust
+//! Legacy row alignment algorithms (pre-AMR).
+//!
+//! This module contains the original row alignment implementation that predates
+//! the Anchor-Move-Refine (AMR) algorithm in `alignment/`. These functions are
+//! retained for:
+//!
+//! 1. **Fallback scenarios**: The engine may use these when AMR cannot produce
+//!    a useful alignment (e.g., heavily repetitive data).
+//!
+//! 2. **Move detection helpers**: Some functions (`detect_exact_row_block_move_with_config`,
+//!    `detect_fuzzy_row_block_move_with_config`) are still used by the engine's
+//!    masked move detection logic.
+//!
+//! 3. **Test coverage**: Unit tests validate these algorithms work correctly.
+//!
+//! ## Migration Status
+//!
+//! The primary alignment path now uses `alignment::align_rows_amr`. The legacy
+//! functions are invoked only when:
+//! - AMR returns `None` (fallback to `align_row_changes_with_config`)
+//! - Explicit move detection in masked regions
+//!
+//! Functions marked `#[allow(dead_code)]` are retained for testing but not
+//! called from production code paths.
+
 use std::collections::HashSet;
 
 use crate::config::DiffConfig;
@@ -8428,6 +8668,7 @@ pub(crate) struct RowBlockMove {
 const _HASH_COLLISION_NOTE: &str = "128-bit xxHash3 collision probability ~10^-29 at 50K rows (birthday bound); \
      secondary verification not required; see hashing.rs for detailed rationale.";
 
+#[allow(dead_code)]
 pub(crate) fn detect_exact_row_block_move(old: &Grid, new: &Grid) -> Option<RowBlockMove> {
     detect_exact_row_block_move_with_config(old, new, &DiffConfig::default())
 }
@@ -8570,6 +8811,7 @@ pub(crate) fn detect_exact_row_block_move_with_config(
     None
 }
 
+#[allow(dead_code)]
 pub(crate) fn detect_fuzzy_row_block_move(old: &Grid, new: &Grid) -> Option<RowBlockMove> {
     detect_fuzzy_row_block_move_with_config(old, new, &DiffConfig::default())
 }
@@ -8706,6 +8948,7 @@ pub(crate) fn detect_fuzzy_row_block_move_with_config(
     candidate
 }
 
+#[allow(dead_code)]
 pub(crate) fn align_row_changes(old: &Grid, new: &Grid) -> Option<RowAlignment> {
     align_row_changes_with_config(old, new, &DiffConfig::default())
 }
@@ -8723,6 +8966,7 @@ pub(crate) fn align_row_changes_with_config(
     align_rows_internal(old, new, true, config)
 }
 
+#[allow(dead_code)]
 pub(crate) fn align_single_row_change(old: &Grid, new: &Grid) -> Option<RowAlignment> {
     align_single_row_change_with_config(old, new, &DiffConfig::default())
 }
@@ -10346,6 +10590,302 @@ fn pg2_addressing_matrix_consistency() {
         }
     }
 }
+
+```
+
+---
+
+### File: `core\tests\amr_multi_gap_tests.rs`
+
+```rust
+mod common;
+
+use common::{grid_from_numbers, single_sheet_workbook};
+use excel_diff::config::DiffConfig;
+use excel_diff::diff::DiffOp;
+use excel_diff::engine::diff_workbooks_with_config;
+
+fn count_ops(ops: &[DiffOp], predicate: impl Fn(&DiffOp) -> bool) -> usize {
+    ops.iter().filter(|op| predicate(op)).count()
+}
+
+fn count_row_added(ops: &[DiffOp]) -> usize {
+    count_ops(ops, |op| matches!(op, DiffOp::RowAdded { .. }))
+}
+
+fn count_row_removed(ops: &[DiffOp]) -> usize {
+    count_ops(ops, |op| matches!(op, DiffOp::RowRemoved { .. }))
+}
+
+fn count_block_moved_rows(ops: &[DiffOp]) -> usize {
+    count_ops(ops, |op| matches!(op, DiffOp::BlockMovedRows { .. }))
+}
+
+#[test]
+fn amr_two_disjoint_insertion_regions() {
+    let grid_a = grid_from_numbers(&[
+        &[10, 11, 12],
+        &[20, 21, 22],
+        &[30, 31, 32],
+        &[40, 41, 42],
+        &[50, 51, 52],
+    ]);
+
+    let grid_b = grid_from_numbers(&[
+        &[10, 11, 12],
+        &[100, 101, 102],
+        &[20, 21, 22],
+        &[30, 31, 32],
+        &[40, 41, 42],
+        &[200, 201, 202],
+        &[201, 202, 203],
+        &[50, 51, 52],
+    ]);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+    let config = DiffConfig::default();
+
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(
+        report.complete,
+        "diff should be complete without hitting limits"
+    );
+    assert_eq!(
+        count_row_added(&report.ops),
+        3,
+        "should detect 3 inserted rows across 2 disjoint regions"
+    );
+    assert_eq!(
+        count_row_removed(&report.ops),
+        0,
+        "should not detect any removed rows"
+    );
+}
+
+#[test]
+fn amr_insertion_and_deletion_in_different_regions() {
+    let grid_a = grid_from_numbers(&[
+        &[10, 11, 12],
+        &[20, 21, 22],
+        &[90, 91, 92],
+        &[30, 31, 32],
+        &[40, 41, 42],
+        &[50, 51, 52],
+    ]);
+
+    let grid_b = grid_from_numbers(&[
+        &[10, 11, 12],
+        &[20, 21, 22],
+        &[30, 31, 32],
+        &[40, 41, 42],
+        &[100, 101, 102],
+        &[50, 51, 52],
+    ]);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+    let config = DiffConfig::default();
+
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(
+        report.complete,
+        "diff should be complete without hitting limits"
+    );
+    assert_eq!(
+        count_row_added(&report.ops),
+        1,
+        "should detect 1 inserted row near the tail"
+    );
+    assert_eq!(
+        count_row_removed(&report.ops),
+        1,
+        "should detect 1 deleted row in the middle"
+    );
+}
+
+#[test]
+fn amr_gap_contains_moved_block_scenario() {
+    let grid_a = grid_from_numbers(&[
+        &[10, 11, 12],
+        &[20, 21, 22],
+        &[30, 31, 32],
+        &[40, 41, 42],
+        &[50, 51, 52],
+        &[60, 61, 62],
+        &[70, 71, 72],
+        &[80, 81, 82],
+    ]);
+
+    let grid_b = grid_from_numbers(&[
+        &[10, 11, 12],
+        &[60, 61, 62],
+        &[70, 71, 72],
+        &[20, 21, 22],
+        &[30, 31, 32],
+        &[40, 41, 42],
+        &[50, 51, 52],
+        &[80, 81, 82],
+    ]);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+    let config = DiffConfig::default();
+
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(
+        report.complete,
+        "diff should be complete without hitting limits"
+    );
+    let moves = count_block_moved_rows(&report.ops);
+    assert!(
+        moves >= 1,
+        "should detect at least one block move (rows 60-70 moved up)"
+    );
+    assert_eq!(
+        count_row_added(&report.ops),
+        0,
+        "should not report spurious insertions when move is detected"
+    );
+    assert_eq!(
+        count_row_removed(&report.ops),
+        0,
+        "should not report spurious deletions when move is detected"
+    );
+}
+
+#[test]
+fn amr_multiple_anchors_with_gaps() {
+    let grid_a = grid_from_numbers(&[
+        &[1, 2, 3],
+        &[10, 11, 12],
+        &[20, 21, 22],
+        &[30, 31, 32],
+        &[40, 41, 42],
+        &[50, 51, 52],
+        &[60, 61, 62],
+        &[70, 71, 72],
+    ]);
+
+    let grid_b = grid_from_numbers(&[
+        &[1, 2, 3],
+        &[10, 11, 12],
+        &[100, 101, 102],
+        &[20, 21, 22],
+        &[30, 31, 32],
+        &[40, 41, 42],
+        &[200, 201, 202],
+        &[50, 51, 52],
+        &[60, 61, 62],
+        &[70, 71, 72],
+    ]);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+    let config = DiffConfig::default();
+
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(
+        report.complete,
+        "diff should be complete without hitting limits"
+    );
+    assert_eq!(
+        count_row_added(&report.ops),
+        2,
+        "should detect both inserted rows in separate gaps between anchors"
+    );
+}
+
+#[test]
+fn amr_recursive_gap_alignment() {
+    let values_a: Vec<&[i32]> = (1..=50i32)
+        .map(|i| {
+            let row: &[i32] = match i {
+                1 => &[10, 11, 12],
+                2 => &[20, 21, 22],
+                3 => &[30, 31, 32],
+                4 => &[40, 41, 42],
+                5 => &[50, 51, 52],
+                6 => &[60, 61, 62],
+                7 => &[70, 71, 72],
+                8 => &[80, 81, 82],
+                9 => &[90, 91, 92],
+                10 => &[100, 101, 102],
+                11 => &[110, 111, 112],
+                12 => &[120, 121, 122],
+                13 => &[130, 131, 132],
+                14 => &[140, 141, 142],
+                15 => &[150, 151, 152],
+                16 => &[160, 161, 162],
+                17 => &[170, 171, 172],
+                18 => &[180, 181, 182],
+                19 => &[190, 191, 192],
+                20 => &[200, 201, 202],
+                21 => &[210, 211, 212],
+                22 => &[220, 221, 222],
+                23 => &[230, 231, 232],
+                24 => &[240, 241, 242],
+                25 => &[250, 251, 252],
+                26 => &[260, 261, 262],
+                27 => &[270, 271, 272],
+                28 => &[280, 281, 282],
+                29 => &[290, 291, 292],
+                30 => &[300, 301, 302],
+                31 => &[310, 311, 312],
+                32 => &[320, 321, 322],
+                33 => &[330, 331, 332],
+                34 => &[340, 341, 342],
+                35 => &[350, 351, 352],
+                36 => &[360, 361, 362],
+                37 => &[370, 371, 372],
+                38 => &[380, 381, 382],
+                39 => &[390, 391, 392],
+                40 => &[400, 401, 402],
+                41 => &[410, 411, 412],
+                42 => &[420, 421, 422],
+                43 => &[430, 431, 432],
+                44 => &[440, 441, 442],
+                45 => &[450, 451, 452],
+                46 => &[460, 461, 462],
+                47 => &[470, 471, 472],
+                48 => &[480, 481, 482],
+                49 => &[490, 491, 492],
+                50 => &[500, 501, 502],
+                _ => &[0, 0, 0],
+            };
+            row
+        })
+        .collect();
+    let grid_a = grid_from_numbers(&values_a);
+
+    let mut values_b: Vec<&[i32]> = values_a.clone();
+    values_b.insert(10, &[1000, 1001, 1002]);
+    values_b.insert(25, &[2000, 2001, 2002]);
+    values_b.insert(40, &[3000, 3001, 3002]);
+
+    let grid_b = grid_from_numbers(&values_b);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+    let config = DiffConfig::default();
+
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(
+        report.complete,
+        "diff should be complete without hitting limits"
+    );
+    assert_eq!(
+        count_row_added(&report.ops),
+        3,
+        "should detect all 3 inserted rows distributed across the grid"
+    );
+}
+
 
 ```
 
@@ -14731,6 +15271,286 @@ fn test_locate_fixture() {
 
 ---
 
+### File: `core\tests\limit_behavior_tests.rs`
+
+```rust
+mod common;
+
+use common::single_sheet_workbook;
+use excel_diff::config::{DiffConfig, LimitBehavior};
+use excel_diff::diff::DiffOp;
+use excel_diff::engine::diff_workbooks_with_config;
+use excel_diff::{Cell, CellAddress, CellValue, Grid};
+
+fn create_simple_grid(nrows: u32, ncols: u32, base_value: i32) -> Grid {
+    let mut grid = Grid::new(nrows, ncols);
+    for row in 0..nrows {
+        for col in 0..ncols {
+            grid.insert(Cell {
+                row,
+                col,
+                address: CellAddress::from_indices(row, col),
+                value: Some(CellValue::Number(
+                    (base_value as i64 + row as i64 * 1000 + col as i64) as f64,
+                )),
+                formula: None,
+            });
+        }
+    }
+    grid
+}
+
+fn count_ops(ops: &[DiffOp], predicate: impl Fn(&DiffOp) -> bool) -> usize {
+    ops.iter().filter(|op| predicate(op)).count()
+}
+
+#[test]
+fn large_grid_completes_within_default_limits() {
+    let grid_a = create_simple_grid(1000, 10, 0);
+    let mut grid_b = create_simple_grid(1000, 10, 0);
+    grid_b.insert(Cell {
+        row: 500,
+        col: 5,
+        address: CellAddress::from_indices(500, 5),
+        value: Some(CellValue::Number(999999.0)),
+        formula: None,
+    });
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let config = DiffConfig::default();
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(
+        report.complete,
+        "1000-row grid should complete within default limits"
+    );
+    assert!(
+        report.warnings.is_empty(),
+        "should have no warnings for successful diff"
+    );
+    assert!(
+        count_ops(&report.ops, |op| matches!(op, DiffOp::CellEdited { .. })) >= 1,
+        "should detect the cell edit"
+    );
+}
+
+#[test]
+fn limit_exceeded_fallback_to_positional() {
+    let grid_a = create_simple_grid(100, 10, 0);
+    let mut grid_b = create_simple_grid(100, 10, 0);
+    grid_b.insert(Cell {
+        row: 50,
+        col: 5,
+        address: CellAddress::from_indices(50, 5),
+        value: Some(CellValue::Number(999999.0)),
+        formula: None,
+    });
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let config = DiffConfig {
+        max_align_rows: 50,
+        on_limit_exceeded: LimitBehavior::FallbackToPositional,
+        ..Default::default()
+    };
+
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(
+        report.complete,
+        "FallbackToPositional should still produce a complete result"
+    );
+    assert!(
+        report.warnings.is_empty(),
+        "FallbackToPositional should not add warnings"
+    );
+    assert!(
+        count_ops(&report.ops, |op| matches!(op, DiffOp::CellEdited { .. })) >= 1,
+        "should detect the cell edit via positional diff"
+    );
+}
+
+#[test]
+fn limit_exceeded_return_partial_result() {
+    let grid_a = create_simple_grid(100, 10, 0);
+    let mut grid_b = create_simple_grid(100, 10, 0);
+    grid_b.insert(Cell {
+        row: 50,
+        col: 5,
+        address: CellAddress::from_indices(50, 5),
+        value: Some(CellValue::Number(999999.0)),
+        formula: None,
+    });
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let config = DiffConfig {
+        max_align_rows: 50,
+        on_limit_exceeded: LimitBehavior::ReturnPartialResult,
+        ..Default::default()
+    };
+
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(
+        !report.complete,
+        "ReturnPartialResult should mark report as incomplete"
+    );
+    assert!(
+        !report.warnings.is_empty(),
+        "ReturnPartialResult should add a warning about limits exceeded"
+    );
+    assert!(
+        report.warnings[0].contains("limits exceeded"),
+        "warning should mention limits exceeded"
+    );
+    assert!(
+        !report.ops.is_empty(),
+        "ReturnPartialResult should still produce ops via positional diff"
+    );
+}
+
+#[test]
+#[should_panic(expected = "alignment limits exceeded")]
+fn limit_exceeded_return_error() {
+    let grid_a = create_simple_grid(100, 10, 0);
+    let grid_b = create_simple_grid(100, 10, 0);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let config = DiffConfig {
+        max_align_rows: 50,
+        on_limit_exceeded: LimitBehavior::ReturnError,
+        ..Default::default()
+    };
+
+    let _ = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+}
+
+#[test]
+fn column_limit_exceeded() {
+    let grid_a = create_simple_grid(10, 100, 0);
+    let mut grid_b = create_simple_grid(10, 100, 0);
+    grid_b.insert(Cell {
+        row: 5,
+        col: 50,
+        address: CellAddress::from_indices(5, 50),
+        value: Some(CellValue::Number(999999.0)),
+        formula: None,
+    });
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let config = DiffConfig {
+        max_align_cols: 50,
+        on_limit_exceeded: LimitBehavior::ReturnPartialResult,
+        ..Default::default()
+    };
+
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(
+        !report.complete,
+        "should be marked incomplete when column limit exceeded"
+    );
+    assert!(
+        !report.warnings.is_empty(),
+        "should have warning about column limit"
+    );
+}
+
+#[test]
+fn within_limits_no_warning() {
+    let grid_a = create_simple_grid(45, 10, 0);
+    let mut grid_b = create_simple_grid(45, 10, 0);
+    grid_b.insert(Cell {
+        row: 20,
+        col: 5,
+        address: CellAddress::from_indices(20, 5),
+        value: Some(CellValue::Number(999999.0)),
+        formula: None,
+    });
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let config = DiffConfig {
+        max_align_rows: 50,
+        on_limit_exceeded: LimitBehavior::ReturnPartialResult,
+        ..Default::default()
+    };
+
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(report.complete, "should be complete when within limits");
+    assert!(
+        report.warnings.is_empty(),
+        "should have no warnings when within limits"
+    );
+}
+
+#[test]
+fn multiple_sheets_limit_warning_includes_sheet_name() {
+    let grid_small = create_simple_grid(10, 5, 0);
+    let grid_large_a = create_simple_grid(100, 10, 1000);
+    let grid_large_b = create_simple_grid(100, 10, 2000);
+
+    let wb_a = excel_diff::Workbook {
+        sheets: vec![
+            excel_diff::Sheet {
+                name: "SmallSheet".to_string(),
+                kind: excel_diff::SheetKind::Worksheet,
+                grid: grid_small.clone(),
+            },
+            excel_diff::Sheet {
+                name: "LargeSheet".to_string(),
+                kind: excel_diff::SheetKind::Worksheet,
+                grid: grid_large_a,
+            },
+        ],
+    };
+
+    let wb_b = excel_diff::Workbook {
+        sheets: vec![
+            excel_diff::Sheet {
+                name: "SmallSheet".to_string(),
+                kind: excel_diff::SheetKind::Worksheet,
+                grid: grid_small,
+            },
+            excel_diff::Sheet {
+                name: "LargeSheet".to_string(),
+                kind: excel_diff::SheetKind::Worksheet,
+                grid: grid_large_b,
+            },
+        ],
+    };
+
+    let config = DiffConfig {
+        max_align_rows: 50,
+        on_limit_exceeded: LimitBehavior::ReturnPartialResult,
+        ..Default::default()
+    };
+
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(!report.complete, "should be incomplete due to large sheet");
+    assert!(
+        report.warnings.iter().any(|w| w.contains("LargeSheet")),
+        "warning should reference the sheet that exceeded limits"
+    );
+}
+
+
+```
+
+---
+
 ### File: `core\tests\m4_package_parts_tests.rs`
 
 ```rust
@@ -17975,9 +18795,13 @@ fn pg4_diff_report_json_shape() {
 
     let obj = json.as_object().expect("report json object");
     let keys: BTreeSet<String> = obj.keys().cloned().collect();
-    let expected: BTreeSet<String> = ["ops", "version"].into_iter().map(String::from).collect();
+    let expected: BTreeSet<String> = ["complete", "ops", "version"]
+        .into_iter()
+        .map(String::from)
+        .collect();
     assert_eq!(keys, expected);
     assert_eq!(obj.get("version").and_then(Value::as_str), Some("1"));
+    assert_eq!(obj.get("complete").and_then(Value::as_bool), Some(true));
 
     let ops_json = obj
         .get("ops")

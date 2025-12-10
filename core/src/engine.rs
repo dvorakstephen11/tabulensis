@@ -11,7 +11,7 @@ use crate::column_alignment::{
 };
 use crate::config::{DiffConfig, LimitBehavior};
 use crate::database_alignment::{KeyColumnSpec, diff_table_by_key};
-use crate::diff::{DiffOp, DiffReport, SheetId};
+use crate::diff::{DiffError, DiffOp, DiffReport, SheetId};
 use crate::rect_block_move::{RectBlockMove, detect_exact_rect_block_move_with_config};
 use crate::region_mask::RegionMask;
 use crate::row_alignment::{
@@ -59,11 +59,11 @@ pub fn diff_workbooks(old: &Workbook, new: &Workbook) -> DiffReport {
     diff_workbooks_with_config(old, new, &DiffConfig::default())
 }
 
-pub fn diff_workbooks_with_config(
+pub fn try_diff_workbooks_with_config(
     old: &Workbook,
     new: &Workbook,
     config: &DiffConfig,
-) -> DiffReport {
+) -> Result<DiffReport, DiffError> {
     let mut ops = Vec::new();
     let mut ctx = DiffContext::default();
     #[cfg(feature = "perf-metrics")]
@@ -120,7 +120,7 @@ pub fn diff_workbooks_with_config(
             }
             (Some(old_sheet), Some(new_sheet)) => {
                 let sheet_id: SheetId = old_sheet.name.clone();
-                diff_grids_with_config(
+                try_diff_grids_with_config(
                     &sheet_id,
                     &old_sheet.grid,
                     &new_sheet.grid,
@@ -129,7 +129,7 @@ pub fn diff_workbooks_with_config(
                     &mut ctx,
                     #[cfg(feature = "perf-metrics")]
                     Some(&mut metrics),
-                );
+                )?;
             }
             (None, None) => unreachable!(),
         }
@@ -146,7 +146,18 @@ pub fn diff_workbooks_with_config(
         metrics.end_phase(Phase::Total);
         report.metrics = Some(metrics);
     }
-    report
+    Ok(report)
+}
+
+pub fn diff_workbooks_with_config(
+    old: &Workbook,
+    new: &Workbook,
+    config: &DiffConfig,
+) -> DiffReport {
+    match try_diff_workbooks_with_config(old, new, config) {
+        Ok(report) => report,
+        Err(e) => panic!("{}", e),
+    }
 }
 
 pub fn diff_grids_database_mode(old: &Grid, new: &Grid, key_columns: &[u32]) -> DiffReport {
@@ -194,7 +205,7 @@ pub fn diff_grids_database_mode(old: &Grid, new: &Grid, key_columns: &[u32]) -> 
 
 fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>) {
     let mut ctx = DiffContext::default();
-    diff_grids_with_config(
+    let _ = try_diff_grids_with_config(
         sheet_id,
         old,
         new,
@@ -206,7 +217,7 @@ fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>)
     );
 }
 
-fn diff_grids_with_config(
+fn try_diff_grids_with_config(
     sheet_id: &SheetId,
     old: &Grid,
     new: &Grid,
@@ -214,9 +225,9 @@ fn diff_grids_with_config(
     ops: &mut Vec<DiffOp>,
     ctx: &mut DiffContext,
     #[cfg(feature = "perf-metrics")] mut metrics: Option<&mut DiffMetrics>,
-) {
+) -> Result<(), DiffError> {
     if old.nrows == 0 && new.nrows == 0 {
-        return;
+        return Ok(());
     }
 
     #[cfg(feature = "perf-metrics")]
@@ -260,16 +271,40 @@ fn diff_grids_with_config(
                 }
             }
             LimitBehavior::ReturnError => {
-                panic!(
-                    "alignment limits exceeded (rows={}, cols={})",
-                    old.nrows.max(new.nrows),
-                    old.ncols.max(new.ncols)
-                );
+                return Err(DiffError::LimitsExceeded {
+                    sheet: sheet_id.clone(),
+                    rows: old.nrows.max(new.nrows),
+                    cols: old.ncols.max(new.ncols),
+                    max_rows: config.max_align_rows,
+                    max_cols: config.max_align_cols,
+                });
             }
         }
-        return;
+        return Ok(());
     }
 
+    diff_grids_core(
+        sheet_id,
+        old,
+        new,
+        config,
+        ops,
+        ctx,
+        #[cfg(feature = "perf-metrics")]
+        metrics,
+    );
+    Ok(())
+}
+
+fn diff_grids_core(
+    sheet_id: &SheetId,
+    old: &Grid,
+    new: &Grid,
+    config: &DiffConfig,
+    ops: &mut Vec<DiffOp>,
+    _ctx: &mut DiffContext,
+    #[cfg(feature = "perf-metrics")] mut metrics: Option<&mut DiffMetrics>,
+) {
     let mut old_mask = RegionMask::all_active(old.nrows, old.ncols);
     let mut new_mask = RegionMask::all_active(new.nrows, new.ncols);
     let move_detection_enabled =
@@ -1674,3 +1709,4 @@ mod tests {
         );
     }
 }
+

@@ -507,16 +507,26 @@ This is an optimization for adversarial cases (99% blank rows, template rows). I
 ```rust
 #[cfg(feature = "perf-metrics")]
 pub struct DiffMetrics {
-    pub parse_time_ms: u64,
     pub alignment_time_ms: u64,
     pub move_detection_time_ms: u64,
     pub cell_diff_time_ms: u64,
     pub total_time_ms: u64,
-    pub peak_memory_bytes: usize,
     pub rows_processed: u64,
     pub cells_compared: u64,
     pub anchors_found: u32,
     pub moves_detected: u32,
+}
+```
+
+**Note:** `parse_time_ms` and `peak_memory_bytes` are planned for a future phase.
+Parse timing requires wrapping the parser in metric collection, and memory tracking
+requires integration with a memory allocator (e.g., `tikv-jemallocator`). These
+are deferred to avoid scope creep in the current branch.
+
+```rust
+// Future phase: add these fields when parser and memory infra are ready
+// pub parse_time_ms: u64,
+// pub peak_memory_bytes: usize,
 }
 
 #[cfg(feature = "perf-metrics")]

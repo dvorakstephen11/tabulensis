@@ -654,3 +654,34 @@ scenarios:
       # Inject a new ID at the end
       extra_rows: [{id: 1001, name: "New Row", amount: 999}]
     output: "db_row_added_b.xlsx"
+
+  # --- P3: Adversarial Repetitive Grid (RLE stress test) ---
+  - id: "p3_adversarial_repetitive"
+    generator: "perf_large"
+    args: 
+      rows: 50000 
+      cols: 50
+      mode: "repetitive"
+      pattern_length: 100
+      seed: 99999
+    output: "grid_adversarial_repetitive.xlsx"
+
+  # --- P4: 99% Blank Grid (Sparse stress test) ---
+  - id: "p4_99_percent_blank"
+    generator: "perf_large"
+    args: 
+      rows: 50000 
+      cols: 100
+      mode: "sparse"
+      fill_percent: 1
+      seed: 77777
+    output: "grid_99_percent_blank.xlsx"
+
+  # --- P5: Identical Grids (Fast-path baseline) ---
+  - id: "p5_identical"
+    generator: "perf_large"
+    args: 
+      rows: 50000 
+      cols: 100
+      mode: "dense"
+    output: "grid_identical.xlsx"
