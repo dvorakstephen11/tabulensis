@@ -26,6 +26,11 @@ use crate::workbook::{
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+#[derive(Debug, Default)]
+struct DiffContext {
+    warnings: Vec<String>,
+}
+
 const DATABASE_MODE_SHEET_ID: &str = "<database>";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -60,6 +65,7 @@ pub fn diff_workbooks_with_config(
     config: &DiffConfig,
 ) -> DiffReport {
     let mut ops = Vec::new();
+    let mut ctx = DiffContext::default();
     #[cfg(feature = "perf-metrics")]
     let mut metrics = {
         let mut m = DiffMetrics::default();
@@ -120,6 +126,7 @@ pub fn diff_workbooks_with_config(
                     &new_sheet.grid,
                     config,
                     &mut ops,
+                    &mut ctx,
                     #[cfg(feature = "perf-metrics")]
                     Some(&mut metrics),
                 );
@@ -130,6 +137,10 @@ pub fn diff_workbooks_with_config(
 
     #[allow(unused_mut)]
     let mut report = DiffReport::new(ops);
+    if !ctx.warnings.is_empty() {
+        report.complete = false;
+        report.warnings = ctx.warnings;
+    }
     #[cfg(feature = "perf-metrics")]
     {
         metrics.end_phase(Phase::Total);
@@ -182,12 +193,14 @@ pub fn diff_grids_database_mode(old: &Grid, new: &Grid, key_columns: &[u32]) -> 
 }
 
 fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>) {
+    let mut ctx = DiffContext::default();
     diff_grids_with_config(
         sheet_id,
         old,
         new,
         &DiffConfig::default(),
         ops,
+        &mut ctx,
         #[cfg(feature = "perf-metrics")]
         None,
     );
@@ -199,6 +212,7 @@ fn diff_grids_with_config(
     new: &Grid,
     config: &DiffConfig,
     ops: &mut Vec<DiffOp>,
+    ctx: &mut DiffContext,
     #[cfg(feature = "perf-metrics")] mut metrics: Option<&mut DiffMetrics>,
 ) {
     if old.nrows == 0 && new.nrows == 0 {
@@ -221,11 +235,30 @@ fn diff_grids_with_config(
         if let Some(m) = metrics.as_mut() {
             m.end_phase(Phase::MoveDetection);
         }
+        let warning = format!(
+            "Sheet '{}': alignment limits exceeded (rows={}, cols={}; limits: rows={}, cols={})",
+            sheet_id,
+            old.nrows.max(new.nrows),
+            old.ncols.max(new.ncols),
+            config.max_align_rows,
+            config.max_align_cols
+        );
         match config.on_limit_exceeded {
             LimitBehavior::FallbackToPositional => {
                 positional_diff(sheet_id, old, new, ops);
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = metrics.as_mut() {
+                    m.add_cells_compared(cells_in_overlap(old, new));
+                }
             }
-            LimitBehavior::ReturnPartialResult => {}
+            LimitBehavior::ReturnPartialResult => {
+                ctx.warnings.push(warning);
+                positional_diff(sheet_id, old, new, ops);
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = metrics.as_mut() {
+                    m.add_cells_compared(cells_in_overlap(old, new));
+                }
+            }
             LimitBehavior::ReturnError => {
                 panic!(
                     "alignment limits exceeded (rows={}, cols={})",
@@ -399,6 +432,7 @@ fn diff_grids_with_config(
             positional_diff(sheet_id, old, new, ops);
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
+                m.add_cells_compared(cells_in_overlap(old, new));
                 m.end_phase(Phase::CellDiff);
             }
             #[cfg(feature = "perf-metrics")]
@@ -418,6 +452,7 @@ fn diff_grids_with_config(
             positional_diff(sheet_id, old, new, ops);
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
+                m.add_cells_compared(cells_in_overlap(old, new));
                 m.end_phase(Phase::CellDiff);
             }
             #[cfg(feature = "perf-metrics")]
@@ -439,6 +474,8 @@ fn diff_grids_with_config(
                 emit_column_aligned_diffs(sheet_id, old, new, &col_alignment, ops);
                 #[cfg(feature = "perf-metrics")]
                 if let Some(m) = metrics.as_mut() {
+                    let overlap_rows = old.nrows.min(new.nrows) as u64;
+                    m.add_cells_compared(overlap_rows.saturating_mul(col_alignment.matched.len() as u64));
                     m.end_phase(Phase::CellDiff);
                 }
                 #[cfg(feature = "perf-metrics")]
@@ -456,6 +493,7 @@ fn diff_grids_with_config(
             positional_diff(sheet_id, old, new, ops);
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
+                m.add_cells_compared(cells_in_overlap(old, new));
                 m.end_phase(Phase::CellDiff);
             }
             #[cfg(feature = "perf-metrics")]
@@ -471,6 +509,8 @@ fn diff_grids_with_config(
         emit_amr_aligned_diffs(sheet_id, old, new, &alignment, ops);
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
+            let overlap_cols = old.ncols.min(new.ncols) as u64;
+            m.add_cells_compared((alignment.matched.len() as u64).saturating_mul(overlap_cols));
             m.anchors_found = m
                 .anchors_found
                 .saturating_add(alignment.matched.len() as u32);
@@ -497,6 +537,8 @@ fn diff_grids_with_config(
         emit_aligned_diffs(sheet_id, old, new, &alignment, ops);
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
+            let overlap_cols = old.ncols.min(new.ncols) as u64;
+            m.add_cells_compared((alignment.matched.len() as u64).saturating_mul(overlap_cols));
             m.end_phase(Phase::CellDiff);
         }
     } else if let Some(alignment) = align_single_column_change_with_config(old, new, config) {
@@ -507,6 +549,8 @@ fn diff_grids_with_config(
         emit_column_aligned_diffs(sheet_id, old, new, &alignment, ops);
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
+            let overlap_rows = old.nrows.min(new.nrows) as u64;
+            m.add_cells_compared(overlap_rows.saturating_mul(alignment.matched.len() as u64));
             m.end_phase(Phase::CellDiff);
         }
     } else {
@@ -517,6 +561,7 @@ fn diff_grids_with_config(
         positional_diff(sheet_id, old, new, ops);
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
+            m.add_cells_compared(cells_in_overlap(old, new));
             m.end_phase(Phase::CellDiff);
         }
     }
@@ -1187,6 +1232,13 @@ fn detect_fuzzy_row_block_move_masked(
         dst_start_row,
         row_count: mv_local.row_count,
     })
+}
+
+#[cfg(feature = "perf-metrics")]
+fn cells_in_overlap(old: &Grid, new: &Grid) -> u64 {
+    let overlap_rows = old.nrows.min(new.nrows) as u64;
+    let overlap_cols = old.ncols.min(new.ncols) as u64;
+    overlap_rows.saturating_mul(overlap_cols)
 }
 
 fn positional_diff(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>) {

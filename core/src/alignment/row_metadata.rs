@@ -1,3 +1,13 @@
+//! Row metadata and frequency classification for AMR alignment.
+//!
+//! Implements row frequency classification as described in the unified grid diff
+//! specification Section 9.11. Each row is classified into one of four frequency classes:
+//!
+//! - **Unique**: Appears exactly once in the grid (highest anchor quality)
+//! - **Rare**: Appears 2-N times where N is configurable (can serve as secondary anchors)
+//! - **Common**: Appears frequently (poor anchor quality)
+//! - **LowInfo**: Blank or near-blank rows (ignored for anchoring)
+
 use std::collections::HashMap;
 
 use crate::config::DiffConfig;

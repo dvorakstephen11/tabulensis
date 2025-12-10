@@ -1,3 +1,15 @@
+//! Final alignment assembly for AMR algorithm.
+//!
+//! Implements the final assembly phase as described in the unified grid diff
+//! specification Section 12. This module:
+//!
+//! 1. Orchestrates the full AMR pipeline (metadata → anchors → chain → gaps)
+//! 2. Assembles matched pairs, insertions, deletions, and moves into final alignment
+//! 3. Provides fast paths for special cases (RLE compression, single-run grids)
+//!
+//! The main entry point is `align_rows_amr` which returns an `Option<RowAlignment>`.
+//! Returns `None` when alignment cannot be determined (falls back to positional diff).
+
 use std::ops::Range;
 
 use crate::alignment::anchor_chain::build_anchor_chain;
@@ -6,7 +18,7 @@ use crate::alignment::gap_strategy::{GapStrategy, select_gap_strategy};
 use crate::alignment::move_extraction::{find_block_move, moves_from_matched_pairs};
 use crate::alignment::row_metadata::RowMeta;
 use crate::alignment::runs::{RowRun, compress_to_runs};
-use crate::config::{DiffConfig, LimitBehavior};
+use crate::config::DiffConfig;
 use crate::grid_view::GridView;
 use crate::workbook::Grid;
 
@@ -34,20 +46,6 @@ struct GapAlignmentResult {
 }
 
 pub fn align_rows_amr(old: &Grid, new: &Grid, config: &DiffConfig) -> Option<RowAlignment> {
-    if old.nrows.max(new.nrows) > config.max_align_rows
-        || old.ncols.max(new.ncols) > config.max_align_cols
-    {
-        return match config.on_limit_exceeded {
-            LimitBehavior::FallbackToPositional => None,
-            LimitBehavior::ReturnPartialResult => Some(RowAlignment::default()),
-            LimitBehavior::ReturnError => panic!(
-                "alignment limits exceeded (rows={}, cols={})",
-                old.nrows.max(new.nrows),
-                old.ncols.max(new.ncols)
-            ),
-        };
-    }
-
     let view_a = GridView::from_grid_with_config(old, config);
     let view_b = GridView::from_grid_with_config(new, config);
 

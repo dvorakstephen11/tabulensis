@@ -1,6 +1,21 @@
+//! Anchor chain construction using Longest Increasing Subsequence (LIS).
+//!
+//! Implements anchor chain building as described in the unified grid diff
+//! specification Section 10. Given a set of discovered anchors, this module
+//! selects the maximal subset that preserves relative order in both grids.
+//!
+//! For example, if anchors show:
+//! - Row A: old=0, new=0
+//! - Row B: old=2, new=1  (B moved up)
+//! - Row C: old=1, new=2
+//!
+//! The LIS algorithm selects {A, C} because their old_row indices (0, 1) are
+//! increasing, making them a valid ordering chain. Row B is excluded because
+//! including it would create a crossing (B is at old=2 but new=1, while C is
+//! at old=1 but new=2).
+
 use crate::alignment::anchor_discovery::Anchor;
 
-/// Longest increasing subsequence by a provided key.
 pub fn build_anchor_chain(mut anchors: Vec<Anchor>) -> Vec<Anchor> {
     // Sort by new_row to preserve destination order before LIS on old_row.
     anchors.sort_by_key(|a| a.new_row);

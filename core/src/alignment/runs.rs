@@ -1,3 +1,15 @@
+//! Run-length encoding for repetitive row patterns.
+//!
+//! Implements run-length compression as described in the unified grid diff
+//! specification Section 2.6 (optional optimization). For grids where >50%
+//! of rows share signatures with adjacent rows, this provides a fast path
+//! that avoids full AMR computation.
+//!
+//! This is particularly effective for:
+//! - Template-based workbooks with many identical rows
+//! - Data with long runs of blank or placeholder rows
+//! - Adversarial cases designed to stress the alignment algorithm
+
 use crate::alignment::row_metadata::RowMeta;
 use crate::workbook::RowSignature;
 

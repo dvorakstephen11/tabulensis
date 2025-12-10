@@ -1042,9 +1042,13 @@ fn pg4_diff_report_json_shape() {
 
     let obj = json.as_object().expect("report json object");
     let keys: BTreeSet<String> = obj.keys().cloned().collect();
-    let expected: BTreeSet<String> = ["ops", "version"].into_iter().map(String::from).collect();
+    let expected: BTreeSet<String> = ["complete", "ops", "version"]
+        .into_iter()
+        .map(String::from)
+        .collect();
     assert_eq!(keys, expected);
     assert_eq!(obj.get("version").and_then(Value::as_str), Some("1"));
+    assert_eq!(obj.get("complete").and_then(Value::as_bool), Some(true));
 
     let ops_json = obj
         .get("ops")

@@ -13,6 +13,7 @@ pub(crate) struct RectBlockMove {
     pub block_hash: Option<u64>,
 }
 
+#[allow(dead_code)]
 pub(crate) fn detect_exact_rect_block_move(old: &Grid, new: &Grid) -> Option<RectBlockMove> {
     detect_exact_rect_block_move_with_config(old, new, &DiffConfig::default())
 }

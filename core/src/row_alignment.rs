@@ -1,3 +1,28 @@
+//! Legacy row alignment algorithms (pre-AMR).
+//!
+//! This module contains the original row alignment implementation that predates
+//! the Anchor-Move-Refine (AMR) algorithm in `alignment/`. These functions are
+//! retained for:
+//!
+//! 1. **Fallback scenarios**: The engine may use these when AMR cannot produce
+//!    a useful alignment (e.g., heavily repetitive data).
+//!
+//! 2. **Move detection helpers**: Some functions (`detect_exact_row_block_move_with_config`,
+//!    `detect_fuzzy_row_block_move_with_config`) are still used by the engine's
+//!    masked move detection logic.
+//!
+//! 3. **Test coverage**: Unit tests validate these algorithms work correctly.
+//!
+//! ## Migration Status
+//!
+//! The primary alignment path now uses `alignment::align_rows_amr`. The legacy
+//! functions are invoked only when:
+//! - AMR returns `None` (fallback to `align_row_changes_with_config`)
+//! - Explicit move detection in masked regions
+//!
+//! Functions marked `#[allow(dead_code)]` are retained for testing but not
+//! called from production code paths.
+
 use std::collections::HashSet;
 
 use crate::config::DiffConfig;
@@ -21,6 +46,7 @@ pub(crate) struct RowBlockMove {
 const _HASH_COLLISION_NOTE: &str = "128-bit xxHash3 collision probability ~10^-29 at 50K rows (birthday bound); \
      secondary verification not required; see hashing.rs for detailed rationale.";
 
+#[allow(dead_code)]
 pub(crate) fn detect_exact_row_block_move(old: &Grid, new: &Grid) -> Option<RowBlockMove> {
     detect_exact_row_block_move_with_config(old, new, &DiffConfig::default())
 }
@@ -163,6 +189,7 @@ pub(crate) fn detect_exact_row_block_move_with_config(
     None
 }
 
+#[allow(dead_code)]
 pub(crate) fn detect_fuzzy_row_block_move(old: &Grid, new: &Grid) -> Option<RowBlockMove> {
     detect_fuzzy_row_block_move_with_config(old, new, &DiffConfig::default())
 }
@@ -299,6 +326,7 @@ pub(crate) fn detect_fuzzy_row_block_move_with_config(
     candidate
 }
 
+#[allow(dead_code)]
 pub(crate) fn align_row_changes(old: &Grid, new: &Grid) -> Option<RowAlignment> {
     align_row_changes_with_config(old, new, &DiffConfig::default())
 }
@@ -316,6 +344,7 @@ pub(crate) fn align_row_changes_with_config(
     align_rows_internal(old, new, true, config)
 }
 
+#[allow(dead_code)]
 pub(crate) fn align_single_row_change(old: &Grid, new: &Grid) -> Option<RowAlignment> {
     align_single_row_change_with_config(old, new, &DiffConfig::default())
 }

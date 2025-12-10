@@ -1,3 +1,26 @@
+//! Move extraction from alignment gaps.
+//!
+//! Implements localized move detection within gaps. This is a simplified approach
+//! compared to the full spec (Sections 9.5-9.7, 11) which describes global
+//! move-candidate extraction and validation phases.
+//!
+//! ## Current Implementation
+//!
+//! - `find_block_move`: Scans for contiguous blocks of matching signatures
+//!   between old and new slices within a gap. Returns the largest found.
+//!
+//! - `moves_from_matched_pairs`: Extracts block moves from matched row pairs
+//!   where consecutive pairs have the same offset (indicating they moved together).
+//!
+//! ## Future Work (TODO)
+//!
+//! To implement full spec compliance, this module would need:
+//!
+//! 1. Global unanchored match collection (all out-of-order signature matches)
+//! 2. Candidate move construction from unanchored matches
+//! 3. Move validation to resolve overlapping/conflicting candidates
+//! 4. Integration with gap filling to consume validated moves
+
 use std::collections::HashMap;
 
 use crate::alignment::row_metadata::RowMeta;

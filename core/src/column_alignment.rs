@@ -32,6 +32,7 @@ fn unordered_col_hashes(grid: &Grid) -> Vec<ColHash> {
         .collect()
 }
 
+#[allow(dead_code)]
 pub(crate) fn detect_exact_column_block_move(old: &Grid, new: &Grid) -> Option<ColumnBlockMove> {
     detect_exact_column_block_move_with_config(old, new, &DiffConfig::default())
 }
@@ -196,6 +197,7 @@ pub(crate) fn detect_exact_column_block_move_with_config(
     None
 }
 
+#[allow(dead_code)]
 pub(crate) fn align_single_column_change(old: &Grid, new: &Grid) -> Option<ColumnAlignment> {
     align_single_column_change_with_config(old, new, &DiffConfig::default())
 }

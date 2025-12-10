@@ -10,9 +10,8 @@ pub enum Phase {
     CellDiff,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct DiffMetrics {
-    pub parse_time_ms: u64,
     pub move_detection_time_ms: u64,
     pub alignment_time_ms: u64,
     pub cell_diff_time_ms: u64,
@@ -21,7 +20,7 @@ pub struct DiffMetrics {
     pub cells_compared: u64,
     pub anchors_found: u32,
     pub moves_detected: u32,
-    pub peak_memory_bytes: usize,
+    #[serde(skip)]
     phase_start: HashMap<Phase, Instant>,
 }
 
@@ -34,12 +33,16 @@ impl DiffMetrics {
         if let Some(start) = self.phase_start.remove(&phase) {
             let elapsed = start.elapsed().as_millis() as u64;
             match phase {
-                Phase::Parse => self.parse_time_ms += elapsed,
+                Phase::Parse => {}
                 Phase::MoveDetection => self.move_detection_time_ms += elapsed,
                 Phase::Alignment => self.alignment_time_ms += elapsed,
                 Phase::CellDiff => self.cell_diff_time_ms += elapsed,
                 Phase::Total => self.total_time_ms += elapsed,
             }
         }
+    }
+
+    pub fn add_cells_compared(&mut self, count: u64) {
+        self.cells_compared = self.cells_compared.saturating_add(count);
     }
 }

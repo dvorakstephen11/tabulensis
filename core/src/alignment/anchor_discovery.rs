@@ -1,3 +1,15 @@
+//! Anchor discovery for AMR alignment.
+//!
+//! Implements anchor discovery as described in the unified grid diff specification
+//! Section 10. Anchors are rows that:
+//!
+//! 1. Are unique (appear exactly once) in BOTH grids
+//! 2. Have matching signatures (content hash)
+//!
+//! These rows serve as fixed points around which the alignment is built.
+//! Rows that are unique in one grid but not the other cannot be anchors
+//! since their position cannot be reliably determined.
+
 use std::collections::HashMap;
 
 use crate::alignment::row_metadata::{FrequencyClass, RowMeta};

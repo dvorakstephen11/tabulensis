@@ -1,3 +1,16 @@
+//! Gap strategy selection for AMR alignment.
+//!
+//! Implements gap strategy selection as described in the unified grid diff
+//! specification Sections 9.6 and 12. After anchors divide the grids into
+//! gaps, each gap is processed according to its characteristics:
+//!
+//! - **Empty**: Both sides empty, nothing to do
+//! - **InsertAll**: Old side empty, all new rows are insertions
+//! - **DeleteAll**: New side empty, all old rows are deletions
+//! - **SmallEdit**: Both sides small enough for O(n*m) LCS alignment
+//! - **MoveCandidate**: Gap contains matching unique signatures that may indicate moves
+//! - **RecursiveAlign**: Gap is large; recursively apply AMR with rare anchors
+
 use std::collections::HashSet;
 
 use crate::alignment::row_metadata::{FrequencyClass, RowMeta};

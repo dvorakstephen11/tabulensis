@@ -12,6 +12,15 @@
     Cargo.toml
     src/
       addressing.rs
+      alignment/
+        anchor_chain.rs
+        anchor_discovery.rs
+        assembly.rs
+        gap_strategy.rs
+        mod.rs
+        move_extraction.rs
+        row_metadata.rs
+        runs.rs
       column_alignment.rs
       config.rs
       container.rs
@@ -32,6 +41,7 @@
       output/
         json.rs
         mod.rs
+      perf.rs
       rect_block_move.rs
       region_mask.rs
       row_alignment.rs
@@ -152,6 +162,7 @@ path = "src/lib.rs"
 [features]
 default = ["excel-open-xml"]
 excel-open-xml = []
+perf-metrics = []
 
 [dependencies]
 quick-xml = "0.32"
@@ -290,10 +301,916 @@ mod tests {
 
 ---
 
+### File: `core\src\alignment\anchor_chain.rs`
+
+```rust
+use crate::alignment::anchor_discovery::Anchor;
+
+/// Longest increasing subsequence by a provided key.
+pub fn build_anchor_chain(mut anchors: Vec<Anchor>) -> Vec<Anchor> {
+    // Sort by new_row to preserve destination order before LIS on old_row.
+    anchors.sort_by_key(|a| a.new_row);
+    let indices = lis_indices(&anchors, |a| a.old_row);
+    indices.into_iter().map(|idx| anchors[idx]).collect()
+}
+
+fn lis_indices<T, F>(items: &[T], key: F) -> Vec<usize>
+where
+    F: Fn(&T) -> u32,
+{
+    let mut piles: Vec<usize> = Vec::new();
+    let mut predecessors: Vec<Option<usize>> = vec![None; items.len()];
+
+    for (idx, item) in items.iter().enumerate() {
+        let k = key(item);
+        let pos = piles
+            .binary_search_by_key(&k, |&pile_idx| key(&items[pile_idx]))
+            .unwrap_or_else(|insert_pos| insert_pos);
+
+        if pos > 0 {
+            predecessors[idx] = Some(piles[pos - 1]);
+        }
+
+        if pos == piles.len() {
+            piles.push(idx);
+        } else {
+            piles[pos] = idx;
+        }
+    }
+
+    if piles.is_empty() {
+        return Vec::new();
+    }
+
+    let mut result: Vec<usize> = Vec::new();
+    let mut current = *piles.last().unwrap();
+    loop {
+        result.push(current);
+        if let Some(prev) = predecessors[current] {
+            current = prev;
+        } else {
+            break;
+        }
+    }
+    result.reverse();
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::alignment::anchor_discovery::Anchor;
+    use crate::workbook::RowSignature;
+
+    #[test]
+    fn builds_increasing_chain() {
+        let anchors = vec![
+            Anchor {
+                old_row: 0,
+                new_row: 0,
+                signature: RowSignature { hash: 1 },
+            },
+            Anchor {
+                old_row: 2,
+                new_row: 1,
+                signature: RowSignature { hash: 2 },
+            },
+            Anchor {
+                old_row: 1,
+                new_row: 2,
+                signature: RowSignature { hash: 3 },
+            },
+        ];
+
+        let chain = build_anchor_chain(anchors);
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[0].old_row, 0);
+        assert_eq!(chain[1].old_row, 1);
+    }
+}
+
+```
+
+---
+
+### File: `core\src\alignment\anchor_discovery.rs`
+
+```rust
+use std::collections::HashMap;
+
+use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
+use crate::grid_view::GridView;
+use crate::workbook::RowSignature;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Anchor {
+    pub old_row: u32,
+    pub new_row: u32,
+    pub signature: RowSignature,
+}
+
+#[allow(dead_code)]
+pub fn discover_anchors(old: &GridView<'_>, new: &GridView<'_>) -> Vec<Anchor> {
+    discover_anchors_from_meta(&old.row_meta, &new.row_meta)
+}
+
+pub fn discover_anchors_from_meta(old: &[RowMeta], new: &[RowMeta]) -> Vec<Anchor> {
+    let mut old_unique: HashMap<RowSignature, u32> = HashMap::new();
+    for meta in old.iter() {
+        if meta.frequency_class == FrequencyClass::Unique {
+            old_unique.insert(meta.signature, meta.row_idx);
+        }
+    }
+
+    new.iter()
+        .filter(|meta| meta.frequency_class == FrequencyClass::Unique)
+        .filter_map(|meta| {
+            old_unique.get(&meta.signature).map(|old_idx| Anchor {
+                old_row: *old_idx,
+                new_row: meta.row_idx,
+                signature: meta.signature,
+            })
+        })
+        .collect()
+}
+
+```
+
+---
+
+### File: `core\src\alignment\assembly.rs`
+
+```rust
+use std::ops::Range;
+
+use crate::alignment::anchor_chain::build_anchor_chain;
+use crate::alignment::anchor_discovery::{Anchor, discover_anchors_from_meta};
+use crate::alignment::gap_strategy::{GapStrategy, select_gap_strategy};
+use crate::alignment::move_extraction::{find_block_move, moves_from_matched_pairs};
+use crate::alignment::row_metadata::RowMeta;
+use crate::alignment::runs::{RowRun, compress_to_runs};
+use crate::config::{DiffConfig, LimitBehavior};
+use crate::grid_view::GridView;
+use crate::workbook::Grid;
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RowAlignment {
+    pub matched: Vec<(u32, u32)>,
+    pub inserted: Vec<u32>,
+    pub deleted: Vec<u32>,
+    pub moves: Vec<RowBlockMove>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RowBlockMove {
+    pub src_start_row: u32,
+    pub dst_start_row: u32,
+    pub row_count: u32,
+}
+
+#[derive(Default)]
+struct GapAlignmentResult {
+    matched: Vec<(u32, u32)>,
+    inserted: Vec<u32>,
+    deleted: Vec<u32>,
+    moves: Vec<RowBlockMove>,
+}
+
+pub fn align_rows_amr(old: &Grid, new: &Grid, config: &DiffConfig) -> Option<RowAlignment> {
+    if old.nrows.max(new.nrows) > config.max_align_rows
+        || old.ncols.max(new.ncols) > config.max_align_cols
+    {
+        return match config.on_limit_exceeded {
+            LimitBehavior::FallbackToPositional => None,
+            LimitBehavior::ReturnPartialResult => Some(RowAlignment::default()),
+            LimitBehavior::ReturnError => panic!(
+                "alignment limits exceeded (rows={}, cols={})",
+                old.nrows.max(new.nrows),
+                old.ncols.max(new.ncols)
+            ),
+        };
+    }
+
+    let view_a = GridView::from_grid_with_config(old, config);
+    let view_b = GridView::from_grid_with_config(new, config);
+
+    let runs_a = compress_to_runs(&view_a.row_meta);
+    let runs_b = compress_to_runs(&view_b.row_meta);
+    if runs_a.len() == 1 && runs_b.len() == 1 && runs_a[0].signature == runs_b[0].signature {
+        let shared = runs_a[0].count.min(runs_b[0].count);
+        let mut matched = Vec::new();
+        for offset in 0..shared {
+            matched.push((runs_a[0].start_row + offset, runs_b[0].start_row + offset));
+        }
+        let mut inserted = Vec::new();
+        if runs_b[0].count > shared {
+            inserted.extend(
+                (runs_b[0].start_row + shared)..(runs_b[0].start_row + runs_b[0].count),
+            );
+        }
+        let mut deleted = Vec::new();
+        if runs_a[0].count > shared {
+            deleted.extend(
+                (runs_a[0].start_row + shared)..(runs_a[0].start_row + runs_a[0].count),
+            );
+        }
+        return Some(RowAlignment {
+            matched,
+            inserted,
+            deleted,
+            moves: Vec::new(),
+        });
+    }
+
+    let compressed_a = runs_a.len() * 2 <= view_a.row_meta.len();
+    let compressed_b = runs_b.len() * 2 <= view_b.row_meta.len();
+    if (compressed_a || compressed_b) && !runs_a.is_empty() && !runs_b.is_empty() {
+        if let Some(alignment) = align_runs_stable(&runs_a, &runs_b) {
+            return Some(alignment);
+        }
+    }
+
+    let anchors = build_anchor_chain(discover_anchors_from_meta(&view_a.row_meta, &view_b.row_meta));
+    Some(assemble_from_meta(
+        &view_a.row_meta,
+        &view_b.row_meta,
+        anchors,
+        config,
+        0,
+    ))
+}
+
+fn assemble_from_meta(
+    old_meta: &[RowMeta],
+    new_meta: &[RowMeta],
+    anchors: Vec<Anchor>,
+    config: &DiffConfig,
+    depth: u32,
+) -> RowAlignment {
+    if old_meta.is_empty() && new_meta.is_empty() {
+        return RowAlignment::default();
+    }
+
+    let mut matched = Vec::new();
+    let mut inserted = Vec::new();
+    let mut deleted = Vec::new();
+    let mut moves = Vec::new();
+
+    let mut prev_old = old_meta.first().map(|m| m.row_idx).unwrap_or(0);
+    let mut prev_new = new_meta.first().map(|m| m.row_idx).unwrap_or(0);
+
+    for anchor in anchors.iter() {
+        let gap_old = prev_old..anchor.old_row;
+        let gap_new = prev_new..anchor.new_row;
+        let gap_result = fill_gap(gap_old, gap_new, old_meta, new_meta, config, depth);
+        matched.extend(gap_result.matched);
+        inserted.extend(gap_result.inserted);
+        deleted.extend(gap_result.deleted);
+        moves.extend(gap_result.moves);
+
+        matched.push((anchor.old_row, anchor.new_row));
+        prev_old = anchor.old_row + 1;
+        prev_new = anchor.new_row + 1;
+    }
+
+    let old_end = old_meta.last().map(|m| m.row_idx + 1).unwrap_or(prev_old);
+    let new_end = new_meta.last().map(|m| m.row_idx + 1).unwrap_or(prev_new);
+    let tail_result = fill_gap(prev_old..old_end, prev_new..new_end, old_meta, new_meta, config, depth);
+    matched.extend(tail_result.matched);
+    inserted.extend(tail_result.inserted);
+    deleted.extend(tail_result.deleted);
+    moves.extend(tail_result.moves);
+
+    matched.sort_by_key(|(a, b)| (*a, *b));
+    inserted.sort_unstable();
+    deleted.sort_unstable();
+    moves.sort_by_key(|m| (m.src_start_row, m.dst_start_row, m.row_count));
+
+    RowAlignment {
+        matched,
+        inserted,
+        deleted,
+        moves,
+    }
+}
+
+fn fill_gap(
+    old_gap: Range<u32>,
+    new_gap: Range<u32>,
+    old_meta: &[RowMeta],
+    new_meta: &[RowMeta],
+    config: &DiffConfig,
+    depth: u32,
+) -> GapAlignmentResult {
+    let old_slice = slice_by_range(old_meta, &old_gap);
+    let new_slice = slice_by_range(new_meta, &new_gap);
+    let has_recursed = depth >= config.max_recursion_depth;
+    let strategy = select_gap_strategy(old_slice, new_slice, config, has_recursed);
+
+    match strategy {
+        GapStrategy::Empty => GapAlignmentResult::default(),
+        GapStrategy::InsertAll => GapAlignmentResult {
+            matched: Vec::new(),
+            inserted: (new_gap.start..new_gap.end).collect(),
+            deleted: Vec::new(),
+            moves: Vec::new(),
+        },
+        GapStrategy::DeleteAll => GapAlignmentResult {
+            matched: Vec::new(),
+            inserted: Vec::new(),
+            deleted: (old_gap.start..old_gap.end).collect(),
+            moves: Vec::new(),
+        },
+        GapStrategy::SmallEdit => align_small_gap(old_slice, new_slice),
+        GapStrategy::MoveCandidate => {
+            let mut result = align_small_gap(old_slice, new_slice);
+            let mut detected_moves = moves_from_matched_pairs(&result.matched);
+            if detected_moves.is_empty() {
+                if let Some(mv) = find_block_move(old_slice, new_slice, 1) {
+                    detected_moves.push(mv);
+                }
+            }
+            result.moves.extend(detected_moves);
+            result
+        }
+        GapStrategy::RecursiveAlign => {
+            if depth >= config.max_recursion_depth {
+                return align_small_gap(old_slice, new_slice);
+            }
+            let anchors = build_anchor_chain(discover_anchors_from_meta(old_slice, new_slice));
+            let alignment = assemble_from_meta(old_slice, new_slice, anchors, config, depth + 1);
+            GapAlignmentResult {
+                matched: alignment.matched,
+                inserted: alignment.inserted,
+                deleted: alignment.deleted,
+                moves: alignment.moves,
+            }
+        }
+    }
+}
+
+fn align_runs_stable(runs_a: &[RowRun], runs_b: &[RowRun]) -> Option<RowAlignment> {
+    let mut matched = Vec::new();
+    let mut inserted = Vec::new();
+    let mut deleted = Vec::new();
+
+    let mut idx_a = 0usize;
+    let mut idx_b = 0usize;
+
+    while idx_a < runs_a.len() && idx_b < runs_b.len() {
+        let run_a = &runs_a[idx_a];
+        let run_b = &runs_b[idx_b];
+
+        if run_a.signature != run_b.signature {
+            return None;
+        }
+
+        let shared = run_a.count.min(run_b.count);
+        for offset in 0..shared {
+            matched.push((run_a.start_row + offset, run_b.start_row + offset));
+        }
+
+        if run_a.count > shared {
+            for offset in shared..run_a.count {
+                deleted.push(run_a.start_row + offset);
+            }
+        }
+
+        if run_b.count > shared {
+            for offset in shared..run_b.count {
+                inserted.push(run_b.start_row + offset);
+            }
+        }
+
+        idx_a += 1;
+        idx_b += 1;
+    }
+
+    for run in runs_a.iter().skip(idx_a) {
+        for offset in 0..run.count {
+            deleted.push(run.start_row + offset);
+        }
+    }
+
+    for run in runs_b.iter().skip(idx_b) {
+        for offset in 0..run.count {
+            inserted.push(run.start_row + offset);
+        }
+    }
+
+    matched.sort_by_key(|(a, b)| (*a, *b));
+    inserted.sort_unstable();
+    deleted.sort_unstable();
+
+    Some(RowAlignment {
+        matched,
+        inserted,
+        deleted,
+        moves: Vec::new(),
+    })
+}
+
+fn slice_by_range<'a>(meta: &'a [RowMeta], range: &Range<u32>) -> &'a [RowMeta] {
+    if meta.is_empty() || range.start >= range.end {
+        return &[];
+    }
+    let base = meta.first().map(|m| m.row_idx).unwrap_or(0);
+    if range.start < base {
+        return &[];
+    }
+    let start = (range.start - base) as usize;
+    if start >= meta.len() {
+        return &[];
+    }
+    let end = (start + (range.end - range.start) as usize).min(meta.len());
+    &meta[start..end]
+}
+
+fn align_small_gap(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> GapAlignmentResult {
+    let m = old_slice.len();
+    let n = new_slice.len();
+    if m == 0 && n == 0 {
+        return GapAlignmentResult::default();
+    }
+
+    let mut dp = vec![vec![0u32; n + 1]; m + 1];
+    for i in (0..m).rev() {
+        for j in (0..n).rev() {
+            if old_slice[i].signature == new_slice[j].signature {
+                dp[i][j] = dp[i + 1][j + 1] + 1;
+            } else {
+                dp[i][j] = dp[i + 1][j].max(dp[i][j + 1]);
+            }
+        }
+    }
+
+    let mut matched = Vec::new();
+    let mut inserted = Vec::new();
+    let mut deleted = Vec::new();
+
+    let mut i = 0usize;
+    let mut j = 0usize;
+    while i < m && j < n {
+        if old_slice[i].signature == new_slice[j].signature {
+            matched.push((old_slice[i].row_idx, new_slice[j].row_idx));
+            i += 1;
+            j += 1;
+        } else if dp[i + 1][j] >= dp[i][j + 1] {
+            deleted.push(old_slice[i].row_idx);
+            i += 1;
+        } else {
+            inserted.push(new_slice[j].row_idx);
+            j += 1;
+        }
+    }
+
+    while i < m {
+        deleted.push(old_slice[i].row_idx);
+        i += 1;
+    }
+    while j < n {
+        inserted.push(new_slice[j].row_idx);
+        j += 1;
+    }
+
+    if matched.is_empty() && m == n {
+        matched = old_slice
+            .iter()
+            .zip(new_slice.iter())
+            .map(|(a, b)| (a.row_idx, b.row_idx))
+            .collect();
+        inserted.clear();
+        deleted.clear();
+    }
+
+    GapAlignmentResult {
+        matched,
+        inserted,
+        deleted,
+        moves: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workbook::{Cell, CellAddress, CellValue};
+
+    fn grid_from_run_lengths(pattern: &[(i32, u32)]) -> Grid {
+        let total_rows: u32 = pattern.iter().map(|(_, count)| *count).sum();
+        let mut grid = Grid::new(total_rows, 1);
+        let mut row_idx = 0u32;
+        for (val, count) in pattern {
+            for _ in 0..*count {
+                grid.insert(Cell {
+                    row: row_idx,
+                    col: 0,
+                    address: CellAddress::from_indices(row_idx, 0),
+                    value: Some(CellValue::Number(*val as f64)),
+                    formula: None,
+                });
+                row_idx = row_idx.saturating_add(1);
+            }
+        }
+        grid
+    }
+
+    #[test]
+    fn aligns_compressed_runs_with_insert_and_delete() {
+        let grid_a = grid_from_run_lengths(&[(1, 50), (2, 5), (1, 50)]);
+        let grid_b = grid_from_run_lengths(&[(1, 52), (2, 3), (1, 50)]);
+
+        let config = DiffConfig::default();
+        let alignment = align_rows_amr(&grid_a, &grid_b, &config)
+            .expect("alignment should succeed for repetitive runs");
+        assert!(alignment.moves.is_empty());
+        assert_eq!(alignment.inserted.len(), 2);
+        assert_eq!(alignment.deleted.len(), 2);
+        assert_eq!(alignment.matched.len(), 103);
+        assert_eq!(alignment.matched[0], (0, 0));
+    }
+
+    #[test]
+    fn run_alignment_falls_back_on_mismatch() {
+        let grid_a = grid_from_run_lengths(&[(1, 3), (2, 3), (1, 3)]);
+        let grid_b = grid_from_run_lengths(&[(1, 3), (3, 3), (1, 3)]);
+
+        let config = DiffConfig::default();
+        let alignment = align_rows_amr(&grid_a, &grid_b, &config)
+            .expect("alignment should still produce result via full AMR");
+        assert!(!alignment.matched.is_empty());
+    }
+}
+
+```
+
+---
+
+### File: `core\src\alignment\gap_strategy.rs`
+
+```rust
+use std::collections::HashSet;
+
+use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
+use crate::config::DiffConfig;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GapStrategy {
+    Empty,
+    InsertAll,
+    DeleteAll,
+    SmallEdit,
+    MoveCandidate,
+    RecursiveAlign,
+}
+
+pub fn select_gap_strategy(
+    old_slice: &[RowMeta],
+    new_slice: &[RowMeta],
+    config: &DiffConfig,
+    has_recursed: bool,
+) -> GapStrategy {
+    let old_len = old_slice.len() as u32;
+    let new_len = new_slice.len() as u32;
+
+    if old_len == 0 && new_len == 0 {
+        return GapStrategy::Empty;
+    }
+    if old_len == 0 {
+        return GapStrategy::InsertAll;
+    }
+    if new_len == 0 {
+        return GapStrategy::DeleteAll;
+    }
+
+    if has_matching_signatures(old_slice, new_slice) {
+        return GapStrategy::MoveCandidate;
+    }
+
+    if old_len <= config.small_gap_threshold && new_len <= config.small_gap_threshold {
+        return GapStrategy::SmallEdit;
+    }
+
+    if (old_len > config.recursive_align_threshold || new_len > config.recursive_align_threshold)
+        && !has_recursed
+    {
+        return GapStrategy::RecursiveAlign;
+    }
+
+    GapStrategy::SmallEdit
+}
+
+fn has_matching_signatures(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> bool {
+    let set: HashSet<_> = old_slice
+        .iter()
+        .filter(|m| m.frequency_class == FrequencyClass::Unique)
+        .map(|m| m.signature)
+        .collect();
+
+    new_slice
+        .iter()
+        .filter(|m| m.frequency_class == FrequencyClass::Unique)
+        .any(|m| set.contains(&m.signature))
+}
+
+```
+
+---
+
+### File: `core\src\alignment\mod.rs`
+
+```rust
+pub(crate) mod anchor_chain;
+pub(crate) mod anchor_discovery;
+pub(crate) mod assembly;
+pub(crate) mod gap_strategy;
+pub(crate) mod move_extraction;
+pub(crate) mod row_metadata;
+pub(crate) mod runs;
+
+pub(crate) use assembly::{align_rows_amr, RowAlignment, RowBlockMove};
+
+```
+
+---
+
+### File: `core\src\alignment\move_extraction.rs`
+
+```rust
+use std::collections::HashMap;
+
+use crate::alignment::row_metadata::RowMeta;
+use crate::alignment::RowBlockMove;
+use crate::workbook::RowSignature;
+
+pub fn find_block_move(
+    old_slice: &[RowMeta],
+    new_slice: &[RowMeta],
+    min_len: u32,
+) -> Option<RowBlockMove> {
+    let mut positions: HashMap<RowSignature, Vec<usize>> = HashMap::new();
+    for (idx, meta) in old_slice.iter().enumerate() {
+        positions.entry(meta.signature).or_default().push(idx);
+    }
+
+    let mut best: Option<RowBlockMove> = None;
+
+    for (new_idx, meta) in new_slice.iter().enumerate() {
+        if let Some(candidates) = positions.get(&meta.signature) {
+            for &old_idx in candidates {
+                let mut len = 0usize;
+                while old_idx + len < old_slice.len()
+                    && new_idx + len < new_slice.len()
+                    && old_slice[old_idx + len].signature == new_slice[new_idx + len].signature
+                {
+                    len += 1;
+                }
+
+                if len as u32 >= min_len {
+                    let mv = RowBlockMove {
+                        src_start_row: old_slice[old_idx].row_idx,
+                        dst_start_row: new_slice[new_idx].row_idx,
+                        row_count: len as u32,
+                    };
+                    let take = best
+                        .as_ref()
+                        .map_or(true, |b| mv.row_count > b.row_count);
+                    if take {
+                        best = Some(mv);
+                    }
+                }
+            }
+        }
+    }
+
+    best
+}
+
+pub fn moves_from_matched_pairs(pairs: &[(u32, u32)]) -> Vec<RowBlockMove> {
+    if pairs.is_empty() {
+        return Vec::new();
+    }
+
+    let mut sorted = pairs.to_vec();
+    sorted.sort_by_key(|(a, b)| (*a, *b));
+
+    let mut moves = Vec::new();
+    let mut start = sorted[0];
+    let mut prev = sorted[0];
+    let mut run_len = 1u32;
+    let mut current_offset: i64 = prev.1 as i64 - prev.0 as i64;
+
+    for &(a, b) in sorted.iter().skip(1) {
+        let offset = b as i64 - a as i64;
+        if offset == current_offset && a == prev.0 + 1 && b == prev.1 + 1 {
+            run_len += 1;
+            prev = (a, b);
+            continue;
+        }
+
+        if run_len > 1 && current_offset != 0 {
+            moves.push(RowBlockMove {
+                src_start_row: start.0,
+                dst_start_row: start.1,
+                row_count: run_len,
+            });
+        }
+
+        start = (a, b);
+        prev = (a, b);
+        current_offset = offset;
+        run_len = 1;
+    }
+
+    if run_len > 1 && current_offset != 0 {
+        moves.push(RowBlockMove {
+            src_start_row: start.0,
+            dst_start_row: start.1,
+            row_count: run_len,
+        });
+    }
+
+    moves
+}
+
+```
+
+---
+
+### File: `core\src\alignment\row_metadata.rs`
+
+```rust
+use std::collections::HashMap;
+
+use crate::config::DiffConfig;
+use crate::workbook::RowSignature;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FrequencyClass {
+    Unique,
+    Rare,
+    Common,
+    LowInfo,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RowMeta {
+    pub row_idx: u32,
+    pub signature: RowSignature,
+    pub hash: RowSignature,
+    pub non_blank_count: u16,
+    pub first_non_blank_col: u16,
+    pub frequency_class: FrequencyClass,
+    pub is_low_info: bool,
+}
+
+impl RowMeta {
+    pub fn is_low_info(&self) -> bool {
+        self.is_low_info || matches!(self.frequency_class, FrequencyClass::LowInfo)
+    }
+}
+
+pub fn frequency_map(row_meta: &[RowMeta]) -> HashMap<RowSignature, u32> {
+    let mut map = HashMap::new();
+    for meta in row_meta {
+        *map.entry(meta.signature).or_insert(0) += 1;
+    }
+    map
+}
+
+pub fn classify_row_frequencies(row_meta: &mut [RowMeta], config: &DiffConfig) {
+    let freq_map = frequency_map(row_meta);
+    for meta in row_meta.iter_mut() {
+        if meta.frequency_class == FrequencyClass::LowInfo {
+            continue;
+        }
+
+        let count = freq_map.get(&meta.signature).copied().unwrap_or(0);
+        let mut class = match count {
+            1 => FrequencyClass::Unique,
+            c if c == 0 => FrequencyClass::Common,
+            c if c <= config.rare_threshold => FrequencyClass::Rare,
+            _ => FrequencyClass::Common,
+        };
+
+        if (meta.non_blank_count as u32) < config.low_info_threshold || meta.is_low_info {
+            class = FrequencyClass::LowInfo;
+            meta.is_low_info = true;
+        }
+
+        meta.frequency_class = class;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_meta(row_idx: u32, hash: u128, non_blank: u16) -> RowMeta {
+        let sig = RowSignature { hash };
+        RowMeta {
+            row_idx,
+            signature: sig,
+            hash: sig,
+            non_blank_count: non_blank,
+            first_non_blank_col: 0,
+            frequency_class: FrequencyClass::Common,
+            is_low_info: false,
+        }
+    }
+
+    #[test]
+    fn classifies_unique_and_rare_and_low_info() {
+        let mut meta = vec![
+            make_meta(0, 1, 3),
+            make_meta(1, 1, 3),
+            make_meta(2, 2, 1),
+        ];
+
+        let mut config = DiffConfig::default();
+        config.rare_threshold = 2;
+        config.low_info_threshold = 2;
+
+        classify_row_frequencies(&mut meta, &config);
+
+        assert_eq!(meta[0].frequency_class, FrequencyClass::Rare);
+        assert_eq!(meta[1].frequency_class, FrequencyClass::Rare);
+        assert_eq!(meta[2].frequency_class, FrequencyClass::LowInfo);
+    }
+}
+
+```
+
+---
+
+### File: `core\src\alignment\runs.rs`
+
+```rust
+use crate::alignment::row_metadata::RowMeta;
+use crate::workbook::RowSignature;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RowRun {
+    pub signature: RowSignature,
+    pub start_row: u32,
+    pub count: u32,
+}
+
+pub fn compress_to_runs(meta: &[RowMeta]) -> Vec<RowRun> {
+    let mut runs = Vec::new();
+    let mut i = 0usize;
+    while i < meta.len() {
+        let sig = meta[i].signature;
+        let start = i;
+        while i < meta.len() && meta[i].signature == sig {
+            i += 1;
+        }
+        runs.push(RowRun {
+            signature: sig,
+            start_row: start as u32,
+            count: (i - start) as u32,
+        });
+    }
+    runs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_meta(idx: u32, hash: u128) -> RowMeta {
+        let sig = RowSignature { hash };
+        RowMeta {
+            row_idx: idx,
+            signature: sig,
+            hash: sig,
+            non_blank_count: 1,
+            first_non_blank_col: 0,
+            frequency_class: crate::alignment::row_metadata::FrequencyClass::Common,
+            is_low_info: false,
+        }
+    }
+
+    #[test]
+    fn compresses_identical_rows() {
+        let meta = vec![make_meta(0, 1), make_meta(1, 1), make_meta(2, 2)];
+        let runs = compress_to_runs(&meta);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].count, 2);
+        assert_eq!(runs[1].count, 1);
+    }
+}
+
+```
+
+---
+
 ### File: `core\src\column_alignment.rs`
 
 ```rust
+use crate::config::DiffConfig;
 use crate::grid_view::{ColHash, ColMeta, GridView, HashStats};
+use crate::hashing::hash_col_content_unordered_128;
 use crate::workbook::Grid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -310,11 +1227,30 @@ pub(crate) struct ColumnBlockMove {
     pub col_count: u32,
 }
 
-const MAX_ALIGN_ROWS: u32 = 2_000;
-const MAX_ALIGN_COLS: u32 = 64;
-const MAX_HASH_REPEAT: u32 = 8;
+fn unordered_col_hashes(grid: &Grid) -> Vec<ColHash> {
+    let mut col_cells: Vec<Vec<&crate::workbook::Cell>> = vec![Vec::new(); grid.ncols as usize];
+    for cell in grid.cells.values() {
+        let idx = cell.col as usize;
+        col_cells[idx].push(cell);
+    }
+    for cells in col_cells.iter_mut() {
+        cells.sort_by_key(|c| c.row);
+    }
+    col_cells
+        .into_iter()
+        .map(|cells| hash_col_content_unordered_128(&cells))
+        .collect()
+}
 
 pub(crate) fn detect_exact_column_block_move(old: &Grid, new: &Grid) -> Option<ColumnBlockMove> {
+    detect_exact_column_block_move_with_config(old, new, &DiffConfig::default())
+}
+
+pub(crate) fn detect_exact_column_block_move_with_config(
+    old: &Grid,
+    new: &Grid,
+    config: &DiffConfig,
+) -> Option<ColumnBlockMove> {
     if old.ncols != new.ncols || old.nrows != new.nrows {
         return None;
     }
@@ -323,24 +1259,46 @@ pub(crate) fn detect_exact_column_block_move(old: &Grid, new: &Grid) -> Option<C
         return None;
     }
 
-    if !is_within_size_bounds(old, new) {
+    if !is_within_size_bounds(old, new, config) {
         return None;
     }
 
-    let view_a = GridView::from_grid(old);
-    let view_b = GridView::from_grid(new);
+    let view_a = GridView::from_grid_with_config(old, config);
+    let view_b = GridView::from_grid_with_config(new, config);
+
+    let unordered_a = unordered_col_hashes(old);
+    let unordered_b = unordered_col_hashes(new);
+
+    let col_meta_a: Vec<ColMeta> = view_a
+        .col_meta
+        .iter()
+        .enumerate()
+        .map(|(idx, meta)| ColMeta {
+            hash: *unordered_a.get(idx).unwrap_or(&meta.hash),
+            ..*meta
+        })
+        .collect();
+    let col_meta_b: Vec<ColMeta> = view_b
+        .col_meta
+        .iter()
+        .enumerate()
+        .map(|(idx, meta)| ColMeta {
+            hash: *unordered_b.get(idx).unwrap_or(&meta.hash),
+            ..*meta
+        })
+        .collect();
 
     if blank_dominated(&view_a) || blank_dominated(&view_b) {
         return None;
     }
 
-    let stats = HashStats::from_col_meta(&view_a.col_meta, &view_b.col_meta);
-    if has_heavy_repetition(&stats) {
+    let stats = HashStats::from_col_meta(&col_meta_a, &col_meta_b);
+    if has_heavy_repetition(&stats, config) {
         return None;
     }
 
-    let meta_a = &view_a.col_meta;
-    let meta_b = &view_b.col_meta;
+    let meta_a = &col_meta_a;
+    let meta_b = &col_meta_b;
     let n = meta_a.len();
 
     if meta_a
@@ -449,7 +1407,15 @@ pub(crate) fn detect_exact_column_block_move(old: &Grid, new: &Grid) -> Option<C
 }
 
 pub(crate) fn align_single_column_change(old: &Grid, new: &Grid) -> Option<ColumnAlignment> {
-    if !is_within_size_bounds(old, new) {
+    align_single_column_change_with_config(old, new, &DiffConfig::default())
+}
+
+pub(crate) fn align_single_column_change_with_config(
+    old: &Grid,
+    new: &Grid,
+    config: &DiffConfig,
+) -> Option<ColumnAlignment> {
+    if !is_within_size_bounds(old, new, config) {
         return None;
     }
 
@@ -462,11 +1428,11 @@ pub(crate) fn align_single_column_change(old: &Grid, new: &Grid) -> Option<Colum
         return None;
     }
 
-    let view_a = GridView::from_grid(old);
-    let view_b = GridView::from_grid(new);
+    let view_a = GridView::from_grid_with_config(old, config);
+    let view_b = GridView::from_grid_with_config(new, config);
 
     let stats = HashStats::from_col_meta(&view_a.col_meta, &view_b.col_meta);
-    if has_heavy_repetition(&stats) {
+    if has_heavy_repetition(&stats, config) {
         return None;
     }
 
@@ -597,13 +1563,13 @@ fn is_unique_to_a(hash: ColHash, stats: &HashStats<ColHash>) -> bool {
         && stats.freq_b.get(&hash).copied().unwrap_or(0) == 0
 }
 
-fn is_within_size_bounds(old: &Grid, new: &Grid) -> bool {
+fn is_within_size_bounds(old: &Grid, new: &Grid, config: &DiffConfig) -> bool {
     let rows = old.nrows.max(new.nrows);
     let cols = old.ncols.max(new.ncols);
-    rows <= MAX_ALIGN_ROWS && cols <= MAX_ALIGN_COLS
+    rows <= config.max_align_rows && cols <= config.max_align_cols
 }
 
-fn has_heavy_repetition(stats: &HashStats<ColHash>) -> bool {
+fn has_heavy_repetition(stats: &HashStats<ColHash>, config: &DiffConfig) -> bool {
     stats
         .freq_a
         .values()
@@ -611,7 +1577,7 @@ fn has_heavy_repetition(stats: &HashStats<ColHash>) -> bool {
         .copied()
         .max()
         .unwrap_or(0)
-        > MAX_HASH_REPEAT
+        > config.max_hash_repeat
 }
 
 fn blank_dominated(view: &GridView<'_>) -> bool {
@@ -826,6 +1792,13 @@ mod tests {
 //! `DiffConfig` centralizes all algorithm thresholds and behavioral knobs
 //! to avoid hardcoded constants scattered throughout the codebase.
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LimitBehavior {
+    FallbackToPositional,
+    ReturnPartialResult,
+    ReturnError,
+}
+
 #[derive(Debug, Clone)]
 pub struct DiffConfig {
     pub max_move_iterations: u32,
@@ -835,18 +1808,30 @@ pub struct DiffConfig {
     pub max_hash_repeat: u32,
     pub fuzzy_similarity_threshold: f64,
     pub max_fuzzy_block_rows: u32,
+    pub rare_threshold: u32,
+    pub low_info_threshold: u32,
+    pub small_gap_threshold: u32,
+    pub recursive_align_threshold: u32,
+    pub max_recursion_depth: u32,
+    pub on_limit_exceeded: LimitBehavior,
 }
 
 impl Default for DiffConfig {
     fn default() -> Self {
         Self {
-            max_move_iterations: 10,
-            max_align_rows: 2_000,
-            max_align_cols: 64,
-            max_block_gap: 32,
+            max_move_iterations: 20,
+            max_align_rows: 500_000,
+            max_align_cols: 16_384,
+            max_block_gap: 10_000,
             max_hash_repeat: 8,
             fuzzy_similarity_threshold: 0.80,
             max_fuzzy_block_rows: 32,
+            rare_threshold: 5,
+            low_info_threshold: 2,
+            small_gap_threshold: 50,
+            recursive_align_threshold: 200,
+            max_recursion_depth: 10,
+            on_limit_exceeded: LimitBehavior::FallbackToPositional,
         }
     }
 }
@@ -854,8 +1839,10 @@ impl Default for DiffConfig {
 impl DiffConfig {
     pub fn fastest() -> Self {
         Self {
-            max_move_iterations: 3,
-            max_block_gap: 16,
+            max_move_iterations: 5,
+            max_block_gap: 1_000,
+            small_gap_threshold: 20,
+            recursive_align_threshold: 80,
             ..Default::default()
         }
     }
@@ -866,11 +1853,28 @@ impl DiffConfig {
 
     pub fn most_precise() -> Self {
         Self {
-            max_move_iterations: 20,
-            max_block_gap: 64,
+            max_move_iterations: 30,
+            max_block_gap: 20_000,
             fuzzy_similarity_threshold: 0.90,
+            small_gap_threshold: 80,
+            recursive_align_threshold: 400,
             ..Default::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_match_limit_spec() {
+        let cfg = DiffConfig::default();
+        assert_eq!(cfg.max_align_rows, 500_000);
+        assert_eq!(cfg.max_align_cols, 16_384);
+        assert_eq!(cfg.low_info_threshold, 2);
+        assert_eq!(cfg.max_move_iterations, 20);
+        assert_eq!(cfg.max_block_gap, 10_000);
     }
 }
 
@@ -2529,6 +3533,9 @@ pub struct DiffReport {
     pub version: String,
     /// The list of diff operations.
     pub ops: Vec<DiffOp>,
+    #[cfg(feature = "perf-metrics")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<crate::perf::DiffMetrics>,
 }
 
 impl DiffReport {
@@ -2538,6 +3545,8 @@ impl DiffReport {
         DiffReport {
             version: Self::SCHEMA_VERSION.to_string(),
             ops,
+            #[cfg(feature = "perf-metrics")]
+            metrics: None,
         }
     }
 }
@@ -2671,20 +3680,28 @@ impl DiffOp {
 //! Provides the main entry point [`diff_workbooks`] for comparing two workbooks
 //! and generating a [`DiffReport`] of all changes.
 
+use crate::alignment::{RowAlignment as AmrAlignment, align_rows_amr};
+use crate::alignment::move_extraction::moves_from_matched_pairs;
 use crate::column_alignment::{
-    ColumnAlignment, ColumnBlockMove, align_single_column_change, detect_exact_column_block_move,
+    ColumnAlignment, ColumnBlockMove, align_single_column_change_with_config,
+    detect_exact_column_block_move_with_config,
 };
-use crate::config::DiffConfig;
+use crate::config::{DiffConfig, LimitBehavior};
 use crate::database_alignment::{KeyColumnSpec, diff_table_by_key};
 use crate::diff::{DiffOp, DiffReport, SheetId};
-use crate::rect_block_move::{RectBlockMove, detect_exact_rect_block_move};
+use crate::rect_block_move::{RectBlockMove, detect_exact_rect_block_move_with_config};
 use crate::region_mask::RegionMask;
 use crate::row_alignment::{
-    RowAlignment, RowBlockMove, align_row_changes, detect_exact_row_block_move,
-    detect_fuzzy_row_block_move,
+    RowAlignment as LegacyRowAlignment, RowBlockMove as LegacyRowBlockMove,
+    align_row_changes_with_config, detect_exact_row_block_move_with_config,
+    detect_fuzzy_row_block_move_with_config,
 };
-use crate::workbook::{Cell, CellAddress, CellSnapshot, Grid, Sheet, SheetKind, Workbook};
-use std::collections::{BTreeMap, HashMap};
+#[cfg(feature = "perf-metrics")]
+use crate::perf::{DiffMetrics, Phase};
+use crate::workbook::{
+    Cell, CellAddress, CellSnapshot, ColSignature, Grid, RowSignature, Sheet, SheetKind, Workbook,
+};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 const DATABASE_MODE_SHEET_ID: &str = "<database>";
 
@@ -2720,6 +3737,12 @@ pub fn diff_workbooks_with_config(
     config: &DiffConfig,
 ) -> DiffReport {
     let mut ops = Vec::new();
+    #[cfg(feature = "perf-metrics")]
+    let mut metrics = {
+        let mut m = DiffMetrics::default();
+        m.start_phase(Phase::Total);
+        m
+    };
 
     let mut old_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
     for sheet in &old.sheets {
@@ -2774,13 +3797,22 @@ pub fn diff_workbooks_with_config(
                     &new_sheet.grid,
                     config,
                     &mut ops,
+                    #[cfg(feature = "perf-metrics")]
+                    Some(&mut metrics),
                 );
             }
             (None, None) => unreachable!(),
         }
     }
 
-    DiffReport::new(ops)
+    #[allow(unused_mut)]
+    let mut report = DiffReport::new(ops);
+    #[cfg(feature = "perf-metrics")]
+    {
+        metrics.end_phase(Phase::Total);
+        report.metrics = Some(metrics);
+    }
+    report
 }
 
 pub fn diff_grids_database_mode(old: &Grid, new: &Grid, key_columns: &[u32]) -> DiffReport {
@@ -2827,7 +3859,15 @@ pub fn diff_grids_database_mode(old: &Grid, new: &Grid, key_columns: &[u32]) -> 
 }
 
 fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>) {
-    diff_grids_with_config(sheet_id, old, new, &DiffConfig::default(), ops);
+    diff_grids_with_config(
+        sheet_id,
+        old,
+        new,
+        &DiffConfig::default(),
+        ops,
+        #[cfg(feature = "perf-metrics")]
+        None,
+    );
 }
 
 fn diff_grids_with_config(
@@ -2836,107 +3876,331 @@ fn diff_grids_with_config(
     new: &Grid,
     config: &DiffConfig,
     ops: &mut Vec<DiffOp>,
+    #[cfg(feature = "perf-metrics")] mut metrics: Option<&mut DiffMetrics>,
 ) {
     if old.nrows == 0 && new.nrows == 0 {
         return;
     }
 
-    let mut old_mask = RegionMask::all_active(old.nrows, old.ncols);
-    let mut new_mask = RegionMask::all_active(new.nrows, new.ncols);
-    let mut iteration = 0;
-
-    loop {
-        if iteration >= config.max_move_iterations {
-            break;
-        }
-
-        if !old_mask.has_active_cells() || !new_mask.has_active_cells() {
-            break;
-        }
-
-        let mut found_move = false;
-
-        if let Some(mv) = detect_exact_rect_block_move_masked(old, new, &old_mask, &new_mask) {
-            emit_rect_block_move(sheet_id, mv, ops);
-            old_mask.exclude_rect_cells(
-                mv.src_start_row,
-                mv.src_row_count,
-                mv.src_start_col,
-                mv.src_col_count,
-            );
-            new_mask.exclude_rect_cells(
-                mv.dst_start_row,
-                mv.src_row_count,
-                mv.dst_start_col,
-                mv.src_col_count,
-            );
-            old_mask.exclude_rect_cells(
-                mv.dst_start_row,
-                mv.src_row_count,
-                mv.dst_start_col,
-                mv.src_col_count,
-            );
-            new_mask.exclude_rect_cells(
-                mv.src_start_row,
-                mv.src_row_count,
-                mv.src_start_col,
-                mv.src_col_count,
-            );
-            iteration += 1;
-            found_move = true;
-        }
-
-        if !found_move
-            && let Some(mv) = detect_exact_row_block_move_masked(old, new, &old_mask, &new_mask)
-        {
-            emit_row_block_move(sheet_id, mv, ops);
-            old_mask.exclude_rows(mv.src_start_row, mv.row_count);
-            new_mask.exclude_rows(mv.dst_start_row, mv.row_count);
-            iteration += 1;
-            found_move = true;
-        }
-
-        if !found_move
-            && let Some(mv) = detect_exact_column_block_move_masked(old, new, &old_mask, &new_mask)
-        {
-            emit_column_block_move(sheet_id, mv, ops);
-            old_mask.exclude_cols(mv.src_start_col, mv.col_count);
-            new_mask.exclude_cols(mv.dst_start_col, mv.col_count);
-            iteration += 1;
-            found_move = true;
-        }
-
-        if !found_move
-            && let Some(mv) = detect_fuzzy_row_block_move_masked(old, new, &old_mask, &new_mask)
-        {
-            emit_row_block_move(sheet_id, mv, ops);
-            emit_moved_row_block_edits(sheet_id, old, new, mv, ops);
-            old_mask.exclude_rows(mv.src_start_row, mv.row_count);
-            new_mask.exclude_rows(mv.dst_start_row, mv.row_count);
-            iteration += 1;
-            found_move = true;
-        }
-
-        if !found_move {
-            break;
-        }
+    #[cfg(feature = "perf-metrics")]
+    if let Some(m) = metrics.as_mut() {
+        m.rows_processed = m
+            .rows_processed
+            .saturating_add(old.nrows as u64)
+            .saturating_add(new.nrows as u64);
+        m.start_phase(Phase::MoveDetection);
     }
 
-    if old_mask.has_exclusions() || new_mask.has_exclusions() {
-        if old.nrows != new.nrows || old.ncols != new.ncols {
-            positional_diff_with_masks(sheet_id, old, new, &old_mask, &new_mask, ops);
-        } else {
-            positional_diff_masked_equal_size(sheet_id, old, new, &old_mask, &new_mask, ops);
+    let exceeds_limits = old.nrows.max(new.nrows) > config.max_align_rows
+        || old.ncols.max(new.ncols) > config.max_align_cols;
+    if exceeds_limits {
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.end_phase(Phase::MoveDetection);
+        }
+        match config.on_limit_exceeded {
+            LimitBehavior::FallbackToPositional => {
+                positional_diff(sheet_id, old, new, ops);
+            }
+            LimitBehavior::ReturnPartialResult => {}
+            LimitBehavior::ReturnError => {
+                panic!(
+                    "alignment limits exceeded (rows={}, cols={})",
+                    old.nrows.max(new.nrows),
+                    old.ncols.max(new.ncols)
+                );
+            }
         }
         return;
     }
 
-    if let Some(alignment) = align_row_changes(old, new) {
-        emit_aligned_diffs(sheet_id, old, new, &alignment, ops);
-    } else if let Some(alignment) = align_single_column_change(old, new) {
-        emit_column_aligned_diffs(sheet_id, old, new, &alignment, ops);
+    let mut old_mask = RegionMask::all_active(old.nrows, old.ncols);
+    let mut new_mask = RegionMask::all_active(new.nrows, new.ncols);
+    let move_detection_enabled =
+        old.nrows.max(new.nrows) <= config.recursive_align_threshold
+            && old.ncols.max(new.ncols) <= 256;
+    let mut iteration = 0;
+
+    if move_detection_enabled {
+        loop {
+            if iteration >= config.max_move_iterations {
+                break;
+            }
+
+            if !old_mask.has_active_cells() || !new_mask.has_active_cells() {
+                break;
+            }
+
+            let mut found_move = false;
+
+            if let Some(mv) =
+                detect_exact_rect_block_move_masked(old, new, &old_mask, &new_mask, config)
+            {
+                emit_rect_block_move(sheet_id, mv, ops);
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = metrics.as_mut() {
+                    m.moves_detected = m.moves_detected.saturating_add(1);
+                }
+                old_mask.exclude_rect_cells(
+                    mv.src_start_row,
+                    mv.src_row_count,
+                    mv.src_start_col,
+                    mv.src_col_count,
+                );
+                new_mask.exclude_rect_cells(
+                    mv.dst_start_row,
+                    mv.src_row_count,
+                    mv.dst_start_col,
+                    mv.src_col_count,
+                );
+                old_mask.exclude_rect_cells(
+                    mv.dst_start_row,
+                    mv.src_row_count,
+                    mv.dst_start_col,
+                    mv.src_col_count,
+                );
+                new_mask.exclude_rect_cells(
+                    mv.src_start_row,
+                    mv.src_row_count,
+                    mv.src_start_col,
+                    mv.src_col_count,
+                );
+                iteration += 1;
+                found_move = true;
+            }
+
+            if !found_move
+                && let Some(mv) =
+                    detect_exact_row_block_move_masked(old, new, &old_mask, &new_mask, config)
+            {
+                emit_row_block_move(sheet_id, mv, ops);
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = metrics.as_mut() {
+                    m.moves_detected = m.moves_detected.saturating_add(1);
+                }
+                old_mask.exclude_rows(mv.src_start_row, mv.row_count);
+                new_mask.exclude_rows(mv.dst_start_row, mv.row_count);
+                iteration += 1;
+                found_move = true;
+            }
+
+            if !found_move
+                && let Some(mv) =
+                    detect_exact_column_block_move_masked(old, new, &old_mask, &new_mask, config)
+            {
+                emit_column_block_move(sheet_id, mv, ops);
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = metrics.as_mut() {
+                    m.moves_detected = m.moves_detected.saturating_add(1);
+                }
+                old_mask.exclude_cols(mv.src_start_col, mv.col_count);
+                new_mask.exclude_cols(mv.dst_start_col, mv.col_count);
+                iteration += 1;
+                found_move = true;
+            }
+
+            if !found_move
+                && let Some(mv) =
+                    detect_fuzzy_row_block_move_masked(old, new, &old_mask, &new_mask, config)
+            {
+                emit_row_block_move(sheet_id, mv, ops);
+                emit_moved_row_block_edits(sheet_id, old, new, mv, ops);
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = metrics.as_mut() {
+                    m.moves_detected = m.moves_detected.saturating_add(1);
+                }
+                old_mask.exclude_rows(mv.src_start_row, mv.row_count);
+                new_mask.exclude_rows(mv.dst_start_row, mv.row_count);
+                iteration += 1;
+                found_move = true;
+            }
+
+            if !found_move {
+                break;
+            }
+
+            if old.nrows != new.nrows || old.ncols != new.ncols {
+                break;
+            }
+        }
+
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.end_phase(Phase::MoveDetection);
+        }
     } else {
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.end_phase(Phase::MoveDetection);
+        }
+    }
+
+    if old_mask.has_exclusions() || new_mask.has_exclusions() {
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.start_phase(Phase::CellDiff);
+        }
+        if old.nrows != new.nrows || old.ncols != new.ncols {
+            if diff_aligned_with_masks(sheet_id, old, new, &old_mask, &new_mask, ops) {
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = metrics.as_mut() {
+                    m.end_phase(Phase::CellDiff);
+                }
+                return;
+            }
+            positional_diff_with_masks(sheet_id, old, new, &old_mask, &new_mask, ops);
+        } else {
+            positional_diff_masked_equal_size(sheet_id, old, new, &old_mask, &new_mask, ops);
+        }
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.end_phase(Phase::CellDiff);
+        }
+        return;
+    }
+
+    #[cfg(feature = "perf-metrics")]
+    if let Some(m) = metrics.as_mut() {
+        m.start_phase(Phase::Alignment);
+    }
+
+    if let Some(mut alignment) = align_rows_amr(old, new, config) {
+        inject_moves_from_insert_delete(old, new, &mut alignment);
+        let has_structural_rows =
+            !alignment.inserted.is_empty() || !alignment.deleted.is_empty();
+        if has_structural_rows && alignment.matched.is_empty() {
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = metrics.as_mut() {
+                m.start_phase(Phase::CellDiff);
+            }
+            positional_diff(sheet_id, old, new, ops);
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = metrics.as_mut() {
+                m.end_phase(Phase::CellDiff);
+            }
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = metrics.as_mut() {
+                m.end_phase(Phase::Alignment);
+            }
+            return;
+        }
+        let has_row_edits = alignment.matched.iter().any(|(a, b)| {
+            row_signature_at(old, *a) != row_signature_at(new, *b)
+        });
+        if has_structural_rows && has_row_edits {
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = metrics.as_mut() {
+                m.start_phase(Phase::CellDiff);
+            }
+            positional_diff(sheet_id, old, new, ops);
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = metrics.as_mut() {
+                m.end_phase(Phase::CellDiff);
+            }
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = metrics.as_mut() {
+                m.end_phase(Phase::Alignment);
+            }
+            return;
+        }
+        if alignment.moves.is_empty()
+            && alignment.inserted.is_empty()
+            && alignment.deleted.is_empty()
+            && old.ncols != new.ncols
+        {
+            if let Some(col_alignment) = align_single_column_change_with_config(old, new, config) {
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = metrics.as_mut() {
+                    m.start_phase(Phase::CellDiff);
+                }
+                emit_column_aligned_diffs(sheet_id, old, new, &col_alignment, ops);
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = metrics.as_mut() {
+                    m.end_phase(Phase::CellDiff);
+                }
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = metrics.as_mut() {
+                    m.end_phase(Phase::Alignment);
+                }
+                return;
+            }
+        }
+        if alignment.moves.is_empty() && row_signature_multiset_equal(old, new) {
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = metrics.as_mut() {
+                m.start_phase(Phase::CellDiff);
+            }
+            positional_diff(sheet_id, old, new, ops);
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = metrics.as_mut() {
+                m.end_phase(Phase::CellDiff);
+            }
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = metrics.as_mut() {
+                m.end_phase(Phase::Alignment);
+            }
+            return;
+        }
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.start_phase(Phase::CellDiff);
+        }
+        emit_amr_aligned_diffs(sheet_id, old, new, &alignment, ops);
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.anchors_found = m
+                .anchors_found
+                .saturating_add(alignment.matched.len() as u32);
+            m.moves_detected = m
+                .moves_detected
+                .saturating_add(alignment.moves.len() as u32);
+        }
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.end_phase(Phase::CellDiff);
+        }
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.end_phase(Phase::Alignment);
+        }
+        return;
+    }
+
+    if let Some(alignment) = align_row_changes_with_config(old, new, config) {
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.start_phase(Phase::CellDiff);
+        }
+        emit_aligned_diffs(sheet_id, old, new, &alignment, ops);
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.end_phase(Phase::CellDiff);
+        }
+    } else if let Some(alignment) = align_single_column_change_with_config(old, new, config) {
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.start_phase(Phase::CellDiff);
+        }
+        emit_column_aligned_diffs(sheet_id, old, new, &alignment, ops);
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.end_phase(Phase::CellDiff);
+        }
+    } else {
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.start_phase(Phase::CellDiff);
+        }
         positional_diff(sheet_id, old, new, ops);
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.end_phase(Phase::CellDiff);
+        }
+    }
+
+    #[cfg(feature = "perf-metrics")]
+    if let Some(m) = metrics.as_mut() {
+        m.end_phase(Phase::Alignment);
     }
 }
 
@@ -3037,6 +4301,206 @@ fn group_rows_by_column_patterns(diffs: &[(u32, u32)]) -> Vec<(u32, u32)> {
     groups
 }
 
+fn row_signature_at(grid: &Grid, row: u32) -> Option<RowSignature> {
+    if let Some(sig) = grid
+        .row_signatures
+        .as_ref()
+        .and_then(|rows| rows.get(row as usize))
+    {
+        return Some(*sig);
+    }
+    Some(grid.compute_row_signature(row))
+}
+
+fn row_signature_counts(grid: &Grid) -> HashMap<RowSignature, u32> {
+    let mut counts = HashMap::new();
+    for row in 0..grid.nrows {
+        if let Some(sig) = row_signature_at(grid, row) {
+            *counts.entry(sig).or_insert(0) += 1;
+        }
+    }
+    counts
+}
+
+fn row_signature_multiset_equal(a: &Grid, b: &Grid) -> bool {
+    if a.nrows != b.nrows {
+        return false;
+    }
+    row_signature_counts(a) == row_signature_counts(b)
+}
+
+fn col_signature_at(grid: &Grid, col: u32) -> Option<ColSignature> {
+    if let Some(sig) = grid
+        .col_signatures
+        .as_ref()
+        .and_then(|cols| cols.get(col as usize))
+    {
+        return Some(*sig);
+    }
+    Some(grid.compute_col_signature(col))
+}
+
+fn align_indices_by_signature<T: Copy + Eq>(
+    idx_a: &[u32],
+    idx_b: &[u32],
+    sig_a: impl Fn(u32) -> Option<T>,
+    sig_b: impl Fn(u32) -> Option<T>,
+) -> Option<(Vec<u32>, Vec<u32>)> {
+    if idx_a.is_empty() || idx_b.is_empty() {
+        return None;
+    }
+
+    if idx_a.len() == idx_b.len() {
+        return Some((idx_a.to_vec(), idx_b.to_vec()));
+    }
+
+    let (short, long, short_is_a) = if idx_a.len() <= idx_b.len() {
+        (idx_a, idx_b, true)
+    } else {
+        (idx_b, idx_a, false)
+    };
+
+    let diff = long.len() - short.len();
+    let mut best_offset = 0usize;
+    let mut best_matches = 0usize;
+
+    for offset in 0..=diff {
+        let mut matches = 0usize;
+        for (i, &short_idx) in short.iter().enumerate() {
+            let long_idx = long[offset + i];
+            let (sig_short, sig_long) = if short_is_a {
+                (sig_a(short_idx), sig_b(long_idx))
+            } else {
+                (sig_b(short_idx), sig_a(long_idx))
+            };
+            if let (Some(sa), Some(sb)) = (sig_short, sig_long) {
+                if sa == sb {
+                    matches += 1;
+                }
+            }
+        }
+        if matches > best_matches {
+            best_matches = matches;
+            best_offset = offset;
+        }
+    }
+
+    if short_is_a {
+        let aligned_b = long[best_offset..best_offset + short.len()].to_vec();
+        Some((idx_a.to_vec(), aligned_b))
+    } else {
+        let aligned_a = long[best_offset..best_offset + short.len()].to_vec();
+        Some((aligned_a, idx_b.to_vec()))
+    }
+}
+
+fn inject_moves_from_insert_delete(
+    old: &Grid,
+    new: &Grid,
+    alignment: &mut AmrAlignment,
+) {
+    if alignment.inserted.is_empty() || alignment.deleted.is_empty() {
+        return;
+    }
+
+    let mut deleted_by_sig: HashMap<RowSignature, Vec<u32>> = HashMap::new();
+    for row in &alignment.deleted {
+        if let Some(sig) = row_signature_at(old, *row) {
+            deleted_by_sig.entry(sig).or_default().push(*row);
+        }
+    }
+
+    let mut inserted_by_sig: HashMap<RowSignature, Vec<u32>> = HashMap::new();
+    for row in &alignment.inserted {
+        if let Some(sig) = row_signature_at(new, *row) {
+            inserted_by_sig.entry(sig).or_default().push(*row);
+        }
+    }
+
+    let mut matched_pairs = Vec::new();
+    for (sig, deleted_rows) in deleted_by_sig.iter() {
+        if deleted_rows.len() != 1 {
+            continue;
+        }
+        if let Some(insert_rows) = inserted_by_sig.get(sig) {
+            if insert_rows.len() != 1 {
+                continue;
+            }
+            matched_pairs.push((deleted_rows[0], insert_rows[0]));
+        }
+    }
+
+    if matched_pairs.is_empty() {
+        return;
+    }
+
+    let new_moves = moves_from_matched_pairs(&matched_pairs);
+    if new_moves.is_empty() {
+        return;
+    }
+
+    let mut moved_src = HashSet::new();
+    let mut moved_dst = HashSet::new();
+    for mv in &new_moves {
+        for r in mv.src_start_row..mv.src_start_row.saturating_add(mv.row_count) {
+            moved_src.insert(r);
+        }
+        for r in mv.dst_start_row..mv.dst_start_row.saturating_add(mv.row_count) {
+            moved_dst.insert(r);
+        }
+    }
+
+    alignment.deleted.retain(|r| !moved_src.contains(r));
+    alignment.inserted.retain(|r| !moved_dst.contains(r));
+    alignment.moves.extend(new_moves);
+    alignment
+        .moves
+        .sort_by_key(|m| (m.src_start_row, m.dst_start_row, m.row_count));
+}
+
+fn build_projected_grid_from_maps(
+    source: &Grid,
+    mask: &RegionMask,
+    row_map: &[u32],
+    col_map: &[u32],
+) -> (Grid, Vec<u32>, Vec<u32>) {
+    let nrows = row_map.len() as u32;
+    let ncols = col_map.len() as u32;
+
+    let mut row_lookup: Vec<Option<u32>> = vec![None; source.nrows as usize];
+    for (new_idx, old_row) in row_map.iter().enumerate() {
+        row_lookup[*old_row as usize] = Some(new_idx as u32);
+    }
+
+    let mut col_lookup: Vec<Option<u32>> = vec![None; source.ncols as usize];
+    for (new_idx, old_col) in col_map.iter().enumerate() {
+        col_lookup[*old_col as usize] = Some(new_idx as u32);
+    }
+
+    let mut projected = Grid::new(nrows, ncols);
+
+    for cell in source.cells.values() {
+        if !mask.is_cell_active(cell.row, cell.col) {
+            continue;
+        }
+        let Some(new_row) = row_lookup.get(cell.row as usize).and_then(|v| *v) else {
+            continue;
+        };
+        let Some(new_col) = col_lookup.get(cell.col as usize).and_then(|v| *v) else {
+            continue;
+        };
+
+        let mut new_cell = cell.clone();
+        new_cell.row = new_row;
+        new_cell.col = new_col;
+        new_cell.address = CellAddress::from_indices(new_row, new_col);
+
+        projected.cells.insert((new_row, new_col), new_cell);
+    }
+
+    (projected, row_map.to_vec(), col_map.to_vec())
+}
+
 fn build_masked_grid(source: &Grid, mask: &RegionMask) -> (Grid, Vec<u32>, Vec<u32>) {
     let row_map: Vec<u32> = mask.active_rows().collect();
     let col_map: Vec<u32> = mask.active_cols().collect();
@@ -3084,7 +4548,8 @@ fn detect_exact_row_block_move_masked(
     new: &Grid,
     old_mask: &RegionMask,
     new_mask: &RegionMask,
-) -> Option<RowBlockMove> {
+    config: &DiffConfig,
+) -> Option<LegacyRowBlockMove> {
     if !old_mask.has_active_cells() || !new_mask.has_active_cells() {
         return None;
     }
@@ -3096,11 +4561,11 @@ fn detect_exact_row_block_move_masked(
         return None;
     }
 
-    let mv_local = detect_exact_row_block_move(&old_proj, &new_proj)?;
+    let mv_local = detect_exact_row_block_move_with_config(&old_proj, &new_proj, config)?;
     let src_start_row = *old_rows.get(mv_local.src_start_row as usize)?;
     let dst_start_row = *new_rows.get(mv_local.dst_start_row as usize)?;
 
-    Some(RowBlockMove {
+    Some(LegacyRowBlockMove {
         src_start_row,
         dst_start_row,
         row_count: mv_local.row_count,
@@ -3112,6 +4577,7 @@ fn detect_exact_column_block_move_masked(
     new: &Grid,
     old_mask: &RegionMask,
     new_mask: &RegionMask,
+    config: &DiffConfig,
 ) -> Option<ColumnBlockMove> {
     if !old_mask.has_active_cells() || !new_mask.has_active_cells() {
         return None;
@@ -3124,7 +4590,7 @@ fn detect_exact_column_block_move_masked(
         return None;
     }
 
-    let mv_local = detect_exact_column_block_move(&old_proj, &new_proj)?;
+    let mv_local = detect_exact_column_block_move_with_config(&old_proj, &new_proj, config)?;
     let src_start_col = *old_cols.get(mv_local.src_start_col as usize)?;
     let dst_start_col = *new_cols.get(mv_local.dst_start_col as usize)?;
 
@@ -3140,17 +4606,28 @@ fn detect_exact_rect_block_move_masked(
     new: &Grid,
     old_mask: &RegionMask,
     new_mask: &RegionMask,
+    config: &DiffConfig,
 ) -> Option<RectBlockMove> {
     if !old_mask.has_active_cells() || !new_mask.has_active_cells() {
         return None;
     }
 
-    let (old_proj, old_rows, old_cols) = build_masked_grid(old, old_mask);
-    let (new_proj, new_rows, new_cols) = build_masked_grid(new, new_mask);
-
-    if old_proj.nrows != new_proj.nrows || old_proj.ncols != new_proj.ncols {
-        return None;
-    }
+    let aligned_rows = align_indices_by_signature(
+        &old_mask.active_rows().collect::<Vec<_>>(),
+        &new_mask.active_rows().collect::<Vec<_>>(),
+        |r| row_signature_at(old, r),
+        |r| row_signature_at(new, r),
+    )?;
+    let aligned_cols = align_indices_by_signature(
+        &old_mask.active_cols().collect::<Vec<_>>(),
+        &new_mask.active_cols().collect::<Vec<_>>(),
+        |c| col_signature_at(old, c),
+        |c| col_signature_at(new, c),
+    )?;
+    let (old_proj, old_rows, old_cols) =
+        build_projected_grid_from_maps(old, old_mask, &aligned_rows.0, &aligned_cols.0);
+    let (new_proj, new_rows, new_cols) =
+        build_projected_grid_from_maps(new, new_mask, &aligned_rows.1, &aligned_cols.1);
 
     let map_move = |mv_local: RectBlockMove,
                     row_map_old: &[u32],
@@ -3174,7 +4651,7 @@ fn detect_exact_rect_block_move_masked(
         })
     };
 
-    if let Some(mv_local) = detect_exact_rect_block_move(&old_proj, &new_proj)
+    if let Some(mv_local) = detect_exact_rect_block_move_with_config(&old_proj, &new_proj, config)
         && let Some(mapped) = map_move(mv_local, &old_rows, &new_rows, &old_cols, &new_cols)
     {
         return Some(mapped);
@@ -3279,7 +4756,9 @@ fn detect_exact_rect_block_move_masked(
                     continue;
                 }
 
-                if let Some(candidate) = detect_exact_rect_block_move(&old_scoped, &new_scoped) {
+                if let Some(candidate) =
+                    detect_exact_rect_block_move_with_config(&old_scoped, &new_scoped, config)
+                {
                     let scoped_row_map_old: Option<Vec<u32>> = scoped_old_rows
                         .iter()
                         .map(|idx| old_rows.get(*idx as usize).copied())
@@ -3363,7 +4842,8 @@ fn detect_fuzzy_row_block_move_masked(
     new: &Grid,
     old_mask: &RegionMask,
     new_mask: &RegionMask,
-) -> Option<RowBlockMove> {
+    config: &DiffConfig,
+) -> Option<LegacyRowBlockMove> {
     if !old_mask.has_active_cells() || !new_mask.has_active_cells() {
         return None;
     }
@@ -3375,11 +4855,11 @@ fn detect_fuzzy_row_block_move_masked(
         return None;
     }
 
-    let mv_local = detect_fuzzy_row_block_move(&old_proj, &new_proj)?;
+    let mv_local = detect_fuzzy_row_block_move_with_config(&old_proj, &new_proj, config)?;
     let src_start_row = *old_rows.get(mv_local.src_start_row as usize)?;
     let dst_start_row = *new_rows.get(mv_local.dst_start_row as usize)?;
 
-    Some(RowBlockMove {
+    Some(LegacyRowBlockMove {
         src_start_row,
         dst_start_row,
         row_count: mv_local.row_count,
@@ -3413,6 +4893,93 @@ fn positional_diff(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<Dif
             ops.push(DiffOp::column_removed(sheet_id.clone(), col_idx, None));
         }
     }
+}
+
+fn diff_aligned_with_masks(
+    sheet_id: &SheetId,
+    old: &Grid,
+    new: &Grid,
+    old_mask: &RegionMask,
+    new_mask: &RegionMask,
+    ops: &mut Vec<DiffOp>,
+) -> bool {
+    let old_rows: Vec<u32> = old_mask.active_rows().collect();
+    let new_rows: Vec<u32> = new_mask.active_rows().collect();
+    let old_cols: Vec<u32> = old_mask.active_cols().collect();
+    let new_cols: Vec<u32> = new_mask.active_cols().collect();
+
+    let Some((rows_a, rows_b)) = align_indices_by_signature(
+        &old_rows,
+        &new_rows,
+        |r| row_signature_at(old, r),
+        |r| row_signature_at(new, r),
+    ) else {
+        return false;
+    };
+
+    let (cols_a, cols_b) = align_indices_by_signature(
+        &old_cols,
+        &new_cols,
+        |c| col_signature_at(old, c),
+        |c| col_signature_at(new, c),
+    )
+    .unwrap_or((old_cols.clone(), new_cols.clone()));
+
+    if rows_a.len() != rows_b.len() || cols_a.len() != cols_b.len() {
+        return false;
+    }
+
+    for (row_a, row_b) in rows_a.iter().zip(rows_b.iter()) {
+        for (col_a, col_b) in cols_a.iter().zip(cols_b.iter()) {
+            if !old_mask.is_cell_active(*row_a, *col_a)
+                || !new_mask.is_cell_active(*row_b, *col_b)
+            {
+                continue;
+            }
+            let addr = CellAddress::from_indices(*row_b, *col_b);
+            let old_cell = old.get(*row_a, *col_a);
+            let new_cell = new.get(*row_b, *col_b);
+
+            let from = snapshot_with_addr(old_cell, addr);
+            let to = snapshot_with_addr(new_cell, addr);
+
+            if from != to {
+                ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
+            }
+        }
+    }
+
+    let rows_a_set: HashSet<u32> = rows_a.iter().copied().collect();
+    let rows_b_set: HashSet<u32> = rows_b.iter().copied().collect();
+
+    for row_idx in new_rows.iter().filter(|r| !rows_b_set.contains(r)) {
+        if new_mask.is_row_active(*row_idx) {
+            ops.push(DiffOp::row_added(sheet_id.clone(), *row_idx, None));
+        }
+    }
+
+    for row_idx in old_rows.iter().filter(|r| !rows_a_set.contains(r)) {
+        if old_mask.is_row_active(*row_idx) {
+            ops.push(DiffOp::row_removed(sheet_id.clone(), *row_idx, None));
+        }
+    }
+
+    let cols_a_set: HashSet<u32> = cols_a.iter().copied().collect();
+    let cols_b_set: HashSet<u32> = cols_b.iter().copied().collect();
+
+    for col_idx in new_cols.iter().filter(|c| !cols_b_set.contains(c)) {
+        if new_mask.is_col_active(*col_idx) {
+            ops.push(DiffOp::column_added(sheet_id.clone(), *col_idx, None));
+        }
+    }
+
+    for col_idx in old_cols.iter().filter(|c| !cols_a_set.contains(c)) {
+        if old_mask.is_col_active(*col_idx) {
+            ops.push(DiffOp::column_removed(sheet_id.clone(), *col_idx, None));
+        }
+    }
+
+    true
 }
 
 fn positional_diff_with_masks(
@@ -3527,7 +5094,7 @@ fn is_in_zone(idx: u32, zone: &Option<(u32, u32)>) -> bool {
     }
 }
 
-fn emit_row_block_move(sheet_id: &SheetId, mv: RowBlockMove, ops: &mut Vec<DiffOp>) {
+fn emit_row_block_move(sheet_id: &SheetId, mv: LegacyRowBlockMove, ops: &mut Vec<DiffOp>) {
     ops.push(DiffOp::BlockMovedRows {
         sheet: sheet_id.clone(),
         src_start_row: mv.src_start_row,
@@ -3564,7 +5131,7 @@ fn emit_moved_row_block_edits(
     sheet_id: &SheetId,
     old: &Grid,
     new: &Grid,
-    mv: RowBlockMove,
+    mv: LegacyRowBlockMove,
     ops: &mut Vec<DiffOp>,
 ) {
     let overlap_cols = old.ncols.min(new.ncols);
@@ -3585,7 +5152,7 @@ fn emit_aligned_diffs(
     sheet_id: &SheetId,
     old: &Grid,
     new: &Grid,
-    alignment: &RowAlignment,
+    alignment: &LegacyRowAlignment,
     ops: &mut Vec<DiffOp>,
 ) {
     let overlap_cols = old.ncols.min(new.ncols);
@@ -3600,6 +5167,48 @@ fn emit_aligned_diffs(
 
     for row_idx in &alignment.deleted {
         ops.push(DiffOp::row_removed(sheet_id.clone(), *row_idx, None));
+    }
+}
+
+fn emit_amr_aligned_diffs(
+    sheet_id: &SheetId,
+    old: &Grid,
+    new: &Grid,
+    alignment: &AmrAlignment,
+    ops: &mut Vec<DiffOp>,
+) {
+    let overlap_cols = old.ncols.min(new.ncols);
+
+    for (row_a, row_b) in &alignment.matched {
+        diff_row_pair(sheet_id, old, new, *row_a, *row_b, overlap_cols, ops);
+    }
+
+    for row_idx in &alignment.inserted {
+        ops.push(DiffOp::row_added(sheet_id.clone(), *row_idx, None));
+    }
+
+    for row_idx in &alignment.deleted {
+        ops.push(DiffOp::row_removed(sheet_id.clone(), *row_idx, None));
+    }
+
+    for mv in &alignment.moves {
+        ops.push(DiffOp::BlockMovedRows {
+            sheet: sheet_id.clone(),
+            src_start_row: mv.src_start_row,
+            row_count: mv.row_count,
+            dst_start_row: mv.dst_start_row,
+            block_hash: None,
+        });
+    }
+
+    if new.ncols > old.ncols {
+        for col_idx in old.ncols..new.ncols {
+            ops.push(DiffOp::column_added(sheet_id.clone(), col_idx, None));
+        }
+    } else if old.ncols > new.ncols {
+        for col_idx in new.ncols..old.ncols {
+            ops.push(DiffOp::column_removed(sheet_id.clone(), col_idx, None));
+        }
     }
 }
 
@@ -4299,24 +5908,19 @@ mod tests {
 use std::collections::HashMap;
 use std::hash::Hash;
 
+use crate::alignment::row_metadata::classify_row_frequencies;
+use crate::config::DiffConfig;
 use crate::hashing::{hash_col_content_128, hash_row_content_128};
-use crate::workbook::{Cell, CellValue, Grid};
+use crate::workbook::{Cell, CellValue, Grid, RowSignature};
 
-pub type RowHash = u128;
+pub use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
+
+pub type RowHash = RowSignature;
 pub type ColHash = u128;
 
 #[derive(Debug)]
 pub struct RowView<'a> {
     pub cells: Vec<(u32, &'a Cell)>, // sorted by column index
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct RowMeta {
-    pub row_idx: u32,
-    pub hash: RowHash,
-    pub non_blank_count: u16,
-    pub first_non_blank_col: u16,
-    pub is_low_info: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -4337,6 +5941,11 @@ pub struct GridView<'a> {
 
 impl<'a> GridView<'a> {
     pub fn from_grid(grid: &'a Grid) -> GridView<'a> {
+        let default_config = DiffConfig::default();
+        Self::from_grid_with_config(grid, &default_config)
+    }
+
+    pub fn from_grid_with_config(grid: &'a Grid, config: &DiffConfig) -> GridView<'a> {
         let nrows = grid.nrows as usize;
         let ncols = grid.ncols as usize;
 
@@ -4377,7 +5986,7 @@ impl<'a> GridView<'a> {
             row_view.cells.sort_by_key(|(col, _)| *col);
         }
 
-        let row_meta = rows
+        let mut row_meta: Vec<RowMeta> = rows
             .iter()
             .enumerate()
             .map(|(idx, row_view)| {
@@ -4389,17 +5998,29 @@ impl<'a> GridView<'a> {
                     .unwrap_or(0);
                 let is_low_info = compute_is_low_info(non_blank_count, row_view);
 
-                let hash = hash_row_content_128(&row_view.cells);
+                let signature = RowSignature {
+                    hash: hash_row_content_128(&row_view.cells),
+                };
+
+                let frequency_class = if is_low_info {
+                    FrequencyClass::LowInfo
+                } else {
+                    FrequencyClass::Common
+                };
 
                 RowMeta {
                     row_idx: idx as u32,
-                    hash,
+                    signature,
+                    hash: signature,
                     non_blank_count,
                     first_non_blank_col,
+                    frequency_class,
                     is_low_info,
                 }
             })
             .collect();
+
+        classify_row_frequencies(&mut row_meta, config);
 
         let col_meta = col_cells
             .into_iter()
@@ -4441,14 +6062,14 @@ impl HashStats<RowHash> {
         let mut stats = HashStats::default();
 
         for meta in rows_a {
-            *stats.freq_a.entry(meta.hash).or_insert(0) += 1;
+            *stats.freq_a.entry(meta.signature).or_insert(0) += 1;
         }
 
         for meta in rows_b {
-            *stats.freq_b.entry(meta.hash).or_insert(0) += 1;
+            *stats.freq_b.entry(meta.signature).or_insert(0) += 1;
             stats
                 .hash_to_positions_b
-                .entry(meta.hash)
+                .entry(meta.signature)
                 .or_insert_with(Vec::new)
                 .push(meta.row_idx);
         }
@@ -4653,6 +6274,30 @@ pub(crate) fn hash_col_content_128(cells: &[&Cell]) -> u128 {
     hasher.digest128()
 }
 
+pub(crate) fn hash_col_content_unordered_128(cells: &[&Cell]) -> u128 {
+    if cells.is_empty() {
+        return Xxh3::new().digest128();
+    }
+
+    let mut cell_hashes: Vec<u128> = cells
+        .iter()
+        .map(|cell| {
+            let mut h = Xxh3::new();
+            hash_cell_value(&cell.value, &mut h);
+            cell.formula.hash(&mut h);
+            h.digest128()
+        })
+        .collect();
+
+    cell_hashes.sort_unstable();
+
+    let mut combined = Xxh3::new();
+    for h in cell_hashes {
+        combined.update(&h.to_le_bytes());
+    }
+    combined.digest128()
+}
+
 #[allow(dead_code)]
 pub(crate) fn mix_hash(hash: u64) -> u64 {
     hash.rotate_left(13) ^ HASH_MIX_CONSTANT
@@ -4784,6 +6429,7 @@ mod tests {
 //! ```
 
 pub mod addressing;
+pub(crate) mod alignment;
 pub(crate) mod column_alignment;
 pub mod config;
 pub mod container;
@@ -4795,6 +6441,8 @@ pub mod diff;
 pub mod engine;
 #[cfg(feature = "excel-open-xml")]
 pub mod excel_open_xml;
+#[cfg(feature = "perf-metrics")]
+pub mod perf;
 pub mod grid_parser;
 pub mod grid_view;
 pub(crate) mod hashing;
@@ -5730,9 +7378,63 @@ pub mod json;
 
 ---
 
+### File: `core\src\perf.rs`
+
+```rust
+use std::collections::HashMap;
+use std::time::Instant;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Phase {
+    Total,
+    Parse,
+    MoveDetection,
+    Alignment,
+    CellDiff,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DiffMetrics {
+    pub parse_time_ms: u64,
+    pub move_detection_time_ms: u64,
+    pub alignment_time_ms: u64,
+    pub cell_diff_time_ms: u64,
+    pub total_time_ms: u64,
+    pub rows_processed: u64,
+    pub cells_compared: u64,
+    pub anchors_found: u32,
+    pub moves_detected: u32,
+    pub peak_memory_bytes: usize,
+    phase_start: HashMap<Phase, Instant>,
+}
+
+impl DiffMetrics {
+    pub fn start_phase(&mut self, phase: Phase) {
+        self.phase_start.insert(phase, Instant::now());
+    }
+
+    pub fn end_phase(&mut self, phase: Phase) {
+        if let Some(start) = self.phase_start.remove(&phase) {
+            let elapsed = start.elapsed().as_millis() as u64;
+            match phase {
+                Phase::Parse => self.parse_time_ms += elapsed,
+                Phase::MoveDetection => self.move_detection_time_ms += elapsed,
+                Phase::Alignment => self.alignment_time_ms += elapsed,
+                Phase::CellDiff => self.cell_diff_time_ms += elapsed,
+                Phase::Total => self.total_time_ms += elapsed,
+            }
+        }
+    }
+}
+
+```
+
+---
+
 ### File: `core\src\rect_block_move.rs`
 
 ```rust
+use crate::config::DiffConfig;
 use crate::grid_view::{ColHash, ColMeta, GridView, HashStats, RowHash};
 use crate::workbook::{Cell, Grid};
 
@@ -5747,11 +7449,15 @@ pub(crate) struct RectBlockMove {
     pub block_hash: Option<u64>,
 }
 
-const MAX_RECT_ROWS: u32 = 2_000;
-const MAX_RECT_COLS: u32 = 128;
-const MAX_HASH_REPEAT: u32 = 8;
-
 pub(crate) fn detect_exact_rect_block_move(old: &Grid, new: &Grid) -> Option<RectBlockMove> {
+    detect_exact_rect_block_move_with_config(old, new, &DiffConfig::default())
+}
+
+pub(crate) fn detect_exact_rect_block_move_with_config(
+    old: &Grid,
+    new: &Grid,
+    config: &DiffConfig,
+) -> Option<RectBlockMove> {
     if old.nrows != new.nrows || old.ncols != new.ncols {
         return None;
     }
@@ -5760,12 +7466,12 @@ pub(crate) fn detect_exact_rect_block_move(old: &Grid, new: &Grid) -> Option<Rec
         return None;
     }
 
-    if !is_within_size_bounds(old, new) {
+    if !is_within_size_bounds(old, new, config) {
         return None;
     }
 
-    let view_a = GridView::from_grid(old);
-    let view_b = GridView::from_grid(new);
+    let view_a = GridView::from_grid_with_config(old, config);
+    let view_b = GridView::from_grid_with_config(new, config);
 
     if low_info_dominated(&view_a) || low_info_dominated(&view_b) {
         return None;
@@ -5778,7 +7484,7 @@ pub(crate) fn detect_exact_rect_block_move(old: &Grid, new: &Grid) -> Option<Rec
     let row_stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
     let col_stats = HashStats::from_col_meta(&view_a.col_meta, &view_b.col_meta);
 
-    if has_heavy_repetition(&row_stats) || has_heavy_repetition(&col_stats) {
+    if has_heavy_repetition(&row_stats, config) || has_heavy_repetition(&col_stats, config) {
         return None;
     }
 
@@ -6033,10 +7739,10 @@ fn ranges_overlap(a: (u32, u32), b: (u32, u32)) -> bool {
     !(a.1 < b.0 || b.1 < a.0)
 }
 
-fn is_within_size_bounds(old: &Grid, new: &Grid) -> bool {
+fn is_within_size_bounds(old: &Grid, new: &Grid, config: &DiffConfig) -> bool {
     let rows = old.nrows.max(new.nrows);
     let cols = old.ncols.max(new.ncols);
-    rows <= MAX_RECT_ROWS && cols <= MAX_RECT_COLS
+    rows <= config.max_align_rows && cols <= config.max_align_cols
 }
 
 fn low_info_dominated(view: &GridView<'_>) -> bool {
@@ -6066,7 +7772,7 @@ fn blank_dominated(view: &GridView<'_>) -> bool {
     blank_cols * 2 > view.col_meta.len()
 }
 
-fn has_heavy_repetition<H>(stats: &HashStats<H>) -> bool
+fn has_heavy_repetition<H>(stats: &HashStats<H>, config: &DiffConfig) -> bool
 where
     H: Eq + std::hash::Hash + Copy,
 {
@@ -6077,7 +7783,7 @@ where
         .copied()
         .max()
         .unwrap_or(0)
-        > MAX_HASH_REPEAT
+        > config.max_hash_repeat
 }
 
 fn unique_in_a<H>(hash: H, stats: &HashStats<H>) -> bool
@@ -6286,25 +7992,29 @@ mod tests {
 
     #[test]
     fn detect_bails_on_oversized_row_count() {
-        let old = Grid::new(MAX_RECT_ROWS + 1, 10);
-        let new = Grid::new(MAX_RECT_ROWS + 1, 10);
+        let mut config = DiffConfig::default();
+        config.max_align_rows = 10;
+        let old = Grid::new(config.max_align_rows + 1, 10);
+        let new = Grid::new(config.max_align_rows + 1, 10);
 
-        let result = detect_exact_rect_block_move(&old, &new);
+        let result = detect_exact_rect_block_move_with_config(&old, &new, &config);
         assert!(
             result.is_none(),
-            "grids exceeding MAX_RECT_ROWS should bail"
+            "grids exceeding configured max_align_rows should bail"
         );
     }
 
     #[test]
     fn detect_bails_on_oversized_col_count() {
-        let old = Grid::new(10, MAX_RECT_COLS + 1);
-        let new = Grid::new(10, MAX_RECT_COLS + 1);
+        let mut config = DiffConfig::default();
+        config.max_align_cols = 8;
+        let old = Grid::new(10, config.max_align_cols + 1);
+        let new = Grid::new(10, config.max_align_cols + 1);
 
-        let result = detect_exact_rect_block_move(&old, &new);
+        let result = detect_exact_rect_block_move_with_config(&old, &new, &config);
         assert!(
             result.is_none(),
-            "grids exceeding MAX_RECT_COLS should bail"
+            "grids exceeding configured max_align_cols should bail"
         );
     }
 
@@ -6697,6 +8407,7 @@ mod tests {
 ```rust
 use std::collections::HashSet;
 
+use crate::config::DiffConfig;
 use crate::grid_view::{GridView, HashStats, RowHash, RowMeta};
 use crate::workbook::Grid;
 
@@ -6714,16 +8425,18 @@ pub(crate) struct RowBlockMove {
     pub row_count: u32,
 }
 
-const MAX_ALIGN_ROWS: u32 = 2_000;
-const MAX_ALIGN_COLS: u32 = 64;
-const MAX_HASH_REPEAT: u32 = 8;
-const MAX_BLOCK_GAP: u32 = 32;
-const MAX_FUZZY_BLOCK_ROWS: u32 = 32;
-const FUZZY_SIMILARITY_THRESHOLD: f64 = 0.80;
 const _HASH_COLLISION_NOTE: &str = "128-bit xxHash3 collision probability ~10^-29 at 50K rows (birthday bound); \
      secondary verification not required; see hashing.rs for detailed rationale.";
 
 pub(crate) fn detect_exact_row_block_move(old: &Grid, new: &Grid) -> Option<RowBlockMove> {
+    detect_exact_row_block_move_with_config(old, new, &DiffConfig::default())
+}
+
+pub(crate) fn detect_exact_row_block_move_with_config(
+    old: &Grid,
+    new: &Grid,
+    config: &DiffConfig,
+) -> Option<RowBlockMove> {
     if old.nrows != new.nrows || old.ncols != new.ncols {
         return None;
     }
@@ -6732,19 +8445,19 @@ pub(crate) fn detect_exact_row_block_move(old: &Grid, new: &Grid) -> Option<RowB
         return None;
     }
 
-    if !is_within_size_bounds(old, new) {
+    if !is_within_size_bounds(old, new, config) {
         return None;
     }
 
-    let view_a = GridView::from_grid(old);
-    let view_b = GridView::from_grid(new);
+    let view_a = GridView::from_grid_with_config(old, config);
+    let view_b = GridView::from_grid_with_config(new, config);
 
     if low_info_dominated(&view_a) || low_info_dominated(&view_b) {
         return None;
     }
 
     let stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
-    if has_heavy_repetition(&stats) {
+    if has_heavy_repetition(&stats, config) {
         return None;
     }
 
@@ -6858,6 +8571,14 @@ pub(crate) fn detect_exact_row_block_move(old: &Grid, new: &Grid) -> Option<RowB
 }
 
 pub(crate) fn detect_fuzzy_row_block_move(old: &Grid, new: &Grid) -> Option<RowBlockMove> {
+    detect_fuzzy_row_block_move_with_config(old, new, &DiffConfig::default())
+}
+
+pub(crate) fn detect_fuzzy_row_block_move_with_config(
+    old: &Grid,
+    new: &Grid,
+    config: &DiffConfig,
+) -> Option<RowBlockMove> {
     if old.nrows != new.nrows || old.ncols != new.ncols {
         return None;
     }
@@ -6866,19 +8587,19 @@ pub(crate) fn detect_fuzzy_row_block_move(old: &Grid, new: &Grid) -> Option<RowB
         return None;
     }
 
-    if !is_within_size_bounds(old, new) {
+    if !is_within_size_bounds(old, new, config) {
         return None;
     }
 
-    let view_a = GridView::from_grid(old);
-    let view_b = GridView::from_grid(new);
+    let view_a = GridView::from_grid_with_config(old, config);
+    let view_b = GridView::from_grid_with_config(new, config);
 
     if low_info_dominated(&view_a) || low_info_dominated(&view_b) {
         return None;
     }
 
     let stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
-    if has_heavy_repetition(&stats) {
+    if has_heavy_repetition(&stats, config) {
         return None;
     }
 
@@ -6923,7 +8644,9 @@ pub(crate) fn detect_fuzzy_row_block_move(old: &Grid, new: &Grid) -> Option<RowB
         return None;
     }
 
-    let max_block_len = mid_len.saturating_sub(1).min(MAX_FUZZY_BLOCK_ROWS as usize);
+    let max_block_len = mid_len
+        .saturating_sub(1)
+        .min(config.max_fuzzy_block_rows as usize);
     if max_block_len == 0 {
         return None;
     }
@@ -6941,7 +8664,7 @@ pub(crate) fn detect_fuzzy_row_block_move(old: &Grid, new: &Grid) -> Option<RowB
             let src_block = &meta_a[prefix + remaining..mismatch_end];
             let dst_block = &meta_b[prefix..prefix + block_len];
 
-            if block_similarity(src_block, dst_block) >= FUZZY_SIMILARITY_THRESHOLD {
+            if block_similarity(src_block, dst_block) >= config.fuzzy_similarity_threshold {
                 let mv = RowBlockMove {
                     src_start_row: src_block[0].row_idx,
                     dst_start_row: dst_block[0].row_idx,
@@ -6964,7 +8687,7 @@ pub(crate) fn detect_fuzzy_row_block_move(old: &Grid, new: &Grid) -> Option<RowB
             let src_block = &meta_a[prefix..prefix + block_len];
             let dst_block = &meta_b[prefix + remaining..mismatch_end];
 
-            if block_similarity(src_block, dst_block) >= FUZZY_SIMILARITY_THRESHOLD {
+            if block_similarity(src_block, dst_block) >= config.fuzzy_similarity_threshold {
                 let mv = RowBlockMove {
                     src_start_row: src_block[0].row_idx,
                     dst_start_row: dst_block[0].row_idx,
@@ -6984,20 +8707,41 @@ pub(crate) fn detect_fuzzy_row_block_move(old: &Grid, new: &Grid) -> Option<RowB
 }
 
 pub(crate) fn align_row_changes(old: &Grid, new: &Grid) -> Option<RowAlignment> {
+    align_row_changes_with_config(old, new, &DiffConfig::default())
+}
+
+pub(crate) fn align_row_changes_with_config(
+    old: &Grid,
+    new: &Grid,
+    config: &DiffConfig,
+) -> Option<RowAlignment> {
     let row_diff = new.nrows as i64 - old.nrows as i64;
     if row_diff.abs() == 1 {
-        return align_single_row_change(old, new);
+        return align_single_row_change_with_config(old, new, config);
     }
 
-    align_rows_internal(old, new, true)
+    align_rows_internal(old, new, true, config)
 }
 
 pub(crate) fn align_single_row_change(old: &Grid, new: &Grid) -> Option<RowAlignment> {
-    align_rows_internal(old, new, false)
+    align_single_row_change_with_config(old, new, &DiffConfig::default())
 }
 
-fn align_rows_internal(old: &Grid, new: &Grid, allow_blocks: bool) -> Option<RowAlignment> {
-    if !is_within_size_bounds(old, new) {
+pub(crate) fn align_single_row_change_with_config(
+    old: &Grid,
+    new: &Grid,
+    config: &DiffConfig,
+) -> Option<RowAlignment> {
+    align_rows_internal(old, new, false, config)
+}
+
+fn align_rows_internal(
+    old: &Grid,
+    new: &Grid,
+    allow_blocks: bool,
+    config: &DiffConfig,
+) -> Option<RowAlignment> {
+    if !is_within_size_bounds(old, new, config) {
         return None;
     }
 
@@ -7016,19 +8760,19 @@ fn align_rows_internal(old: &Grid, new: &Grid, allow_blocks: bool) -> Option<Row
         return None;
     }
 
-    if abs_diff != 1 && (!allow_blocks || abs_diff > MAX_BLOCK_GAP) {
+    if abs_diff != 1 && (!allow_blocks || abs_diff > config.max_block_gap) {
         return None;
     }
 
-    let view_a = GridView::from_grid(old);
-    let view_b = GridView::from_grid(new);
+    let view_a = GridView::from_grid_with_config(old, config);
+    let view_b = GridView::from_grid_with_config(new, config);
 
     if low_info_dominated(&view_a) || low_info_dominated(&view_b) {
         return None;
     }
 
     let stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
-    if has_heavy_repetition(&stats) {
+    if has_heavy_repetition(&stats, config) {
         return None;
     }
 
@@ -7284,10 +9028,10 @@ fn is_unique_to_a(hash: RowHash, stats: &HashStats<RowHash>) -> bool {
         && stats.freq_b.get(&hash).copied().unwrap_or(0) == 0
 }
 
-fn is_within_size_bounds(old: &Grid, new: &Grid) -> bool {
+fn is_within_size_bounds(old: &Grid, new: &Grid, config: &DiffConfig) -> bool {
     let rows = old.nrows.max(new.nrows);
     let cols = old.ncols.max(new.ncols);
-    rows <= MAX_ALIGN_ROWS && cols <= MAX_ALIGN_COLS
+    rows <= config.max_align_rows && cols <= config.max_align_cols
 }
 
 fn low_info_dominated(view: &GridView<'_>) -> bool {
@@ -7299,7 +9043,7 @@ fn low_info_dominated(view: &GridView<'_>) -> bool {
     low_info_count * 2 > view.row_meta.len()
 }
 
-fn has_heavy_repetition(stats: &HashStats<RowHash>) -> bool {
+fn has_heavy_repetition(stats: &HashStats<RowHash>, config: &DiffConfig) -> bool {
     stats
         .freq_a
         .values()
@@ -7307,7 +9051,7 @@ fn has_heavy_repetition(stats: &HashStats<RowHash>) -> bool {
         .copied()
         .max()
         .unwrap_or(0)
-        > MAX_HASH_REPEAT
+        > config.max_hash_repeat
 }
 
 fn hashes_match(slice_a: &[RowMeta], slice_b: &[RowMeta]) -> bool {
@@ -7585,6 +9329,7 @@ mod tests {
 
     #[test]
     fn fuzzy_move_at_max_block_rows_threshold() {
+        let config = DiffConfig::default();
         let base: Vec<Vec<i32>> = (1..=70)
             .map(|r| (1..=3).map(|c| r * 10 + c).collect())
             .collect();
@@ -7603,14 +9348,14 @@ mod tests {
             "internal edits should prevent exact move detection"
         );
 
-        let mv = detect_fuzzy_row_block_move(&grid_a, &grid_b)
-            .expect("expected fuzzy move at MAX_FUZZY_BLOCK_ROWS to be detected");
+        let mv = detect_fuzzy_row_block_move_with_config(&grid_a, &grid_b, &config)
+            .expect("expected fuzzy move at configured max_fuzzy_block_rows to be detected");
         assert_eq!(
             mv,
             RowBlockMove {
                 src_start_row: 4,
                 dst_start_row: 36,
-                row_count: 32
+                row_count: config.max_fuzzy_block_rows
             }
         );
     }
@@ -7653,7 +9398,7 @@ mod tests {
 
         assert!(
             detect_fuzzy_row_block_move(&grid_9a, &grid_9b).is_none(),
-            "9 repeated rows (> MAX_HASH_REPEAT) should trigger heavy repetition guard"
+            "repetition guard should trigger when repeat count exceeds max_hash_repeat"
         );
 
         let mut base_8_repeat: Vec<Vec<i32>> = (1..=18)
@@ -7674,7 +9419,7 @@ mod tests {
 
         assert!(
             detect_fuzzy_row_block_move(&grid_8a, &grid_8b).is_some(),
-            "exactly 8 repeated rows (= MAX_HASH_REPEAT, not >) should NOT trigger heavy repetition guard"
+            "repeat count equal to max_hash_repeat should not trigger heavy repetition guard"
         );
     }
 
@@ -8166,7 +9911,7 @@ impl Hash for CellValue {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct RowSignature {
     pub hash: u128,
 }
@@ -10932,9 +12677,13 @@ fn g14_two_disjoint_row_block_moves_detected() {
     let refs: Vec<&[i32]> = rows.iter().map(|r| r.as_slice()).collect();
     let grid_a = grid_from_numbers(&refs);
 
-    let mut rows_b = rows.clone();
-    let block1: Vec<Vec<i32>> = rows_b.drain(2..5).collect();
-    rows_b.splice(8..8, block1);
+    let mut rows_b: Vec<Vec<i32>> = Vec::new();
+
+    rows_b.extend_from_slice(&rows[0..3]);
+    rows_b.extend_from_slice(&rows[7..10]);
+    rows_b.extend_from_slice(&rows[13..24]);
+    rows_b.extend_from_slice(&rows[3..7]);
+    rows_b.extend_from_slice(&rows[10..13]);
 
     let refs_b: Vec<&[i32]> = rows_b.iter().map(|r| r.as_slice()).collect();
     let grid_b = grid_from_numbers(&refs_b);
@@ -10945,10 +12694,36 @@ fn g14_two_disjoint_row_block_moves_detected() {
     let report = diff_workbooks(&wb_a, &wb_b);
 
     let row_moves = collect_row_moves(&report);
+    assert_eq!(
+        row_moves.len(),
+        2,
+        "expected exactly two BlockMovedRows ops for two disjoint moves"
+    );
 
-    assert!(
-        !row_moves.is_empty() || !report.ops.is_empty(),
-        "should detect row changes (either as moves or positional)"
+    let mut actual: Vec<(u32, u32, u32)> = row_moves
+        .iter()
+        .map(|op| {
+            if let DiffOp::BlockMovedRows {
+                src_start_row,
+                row_count,
+                dst_start_row,
+                ..
+            } = **op
+            {
+                (src_start_row, row_count, dst_start_row)
+            } else {
+                unreachable!()
+            }
+        })
+        .collect();
+    actual.sort();
+
+    let mut expected = vec![(3u32, 4u32, 17u32), (10u32, 3u32, 21u32)];
+    expected.sort();
+
+    assert_eq!(
+        actual, expected,
+        "row move ops should match the two expected disjoint moves"
     );
 }
 
@@ -10981,12 +12756,44 @@ fn g14_row_move_plus_column_move_both_detected() {
     let row_moves = collect_row_moves(&report);
     let col_moves = collect_col_moves(&report);
 
-    let has_any_move = !row_moves.is_empty() || !col_moves.is_empty();
-
-    assert!(
-        has_any_move || !report.ops.is_empty(),
-        "should detect changes when both row and column moves occur"
+    assert_eq!(
+        row_moves.len(),
+        1,
+        "expected a single BlockMovedRows op for the moved row block"
     );
+    assert_eq!(
+        col_moves.len(),
+        1,
+        "expected a single BlockMovedColumns op for the moved column"
+    );
+
+    if let DiffOp::BlockMovedRows {
+        src_start_row,
+        row_count,
+        dst_start_row,
+        ..
+    } = *row_moves[0]
+    {
+        assert_eq!(src_start_row, 2);
+        assert_eq!(row_count, 3);
+        assert_eq!(dst_start_row, 10);
+    } else {
+        panic!("expected BlockMovedRows op");
+    }
+
+    if let DiffOp::BlockMovedColumns {
+        src_start_col,
+        col_count,
+        dst_start_col,
+        ..
+    } = *col_moves[0]
+    {
+        assert_eq!(src_start_col, 1);
+        assert_eq!(col_count, 1);
+        assert_eq!(dst_start_col, 7);
+    } else {
+        panic!("expected BlockMovedColumns op");
+    }
 }
 
 #[test]
@@ -11223,14 +13030,14 @@ fn g14_rect_move_plus_row_insertion_outside_no_silent_data_loss() {
     let rect_moves = collect_rect_moves(&report);
     let row_adds = collect_row_adds(&report);
 
-    assert!(
-        !row_adds.is_empty() || !rect_moves.is_empty(),
-        "should detect either row insertion or rect move (or both)"
+    assert_eq!(
+        rect_moves.len(),
+        1,
+        "expected a single BlockMovedRect for the moved block"
     );
-
     assert!(
-        !report.ops.is_empty(),
-        "should not have silent data loss - rect move + row insertion must be reported"
+        !row_adds.is_empty(),
+        "expected at least one RowAdded for the inserted row"
     );
 }
 
@@ -11252,14 +13059,14 @@ fn g14_rect_move_plus_row_deletion_outside_no_silent_data_loss() {
     let rect_moves = collect_rect_moves(&report);
     let row_removes = collect_row_removes(&report);
 
-    assert!(
-        !row_removes.is_empty() || !rect_moves.is_empty(),
-        "should detect either row deletion or rect move (or both)"
+    assert_eq!(
+        rect_moves.len(),
+        1,
+        "expected a single BlockMovedRect for the moved block"
     );
-
     assert!(
-        !report.ops.is_empty(),
-        "should not have silent data loss - rect move + row deletion must be reported"
+        !row_removes.is_empty(),
+        "expected at least one RowRemoved for the deleted row"
     );
 }
 
@@ -12522,14 +14329,17 @@ fn find_header_col(workbook: &Workbook, header: &str) -> u32 {
 ### File: `core\tests\grid_view_hashstats_tests.rs`
 
 ```rust
-use excel_diff::{ColHash, ColMeta, HashStats, RowHash, RowMeta};
+use excel_diff::grid_view::FrequencyClass;
+use excel_diff::{ColHash, ColMeta, HashStats, RowHash, RowMeta, RowSignature};
 
 fn row_meta(row_idx: u32, hash: RowHash) -> RowMeta {
     RowMeta {
         row_idx,
+        signature: hash,
         hash,
         non_blank_count: 0,
         first_non_blank_col: 0,
+        frequency_class: FrequencyClass::Common,
         is_low_info: false,
     }
 }
@@ -12545,10 +14355,10 @@ fn col_meta(col_idx: u32, hash: ColHash) -> ColMeta {
 
 #[test]
 fn hashstats_counts_and_positions_basic() {
-    let h1: RowHash = 1;
-    let h2: RowHash = 2;
-    let h3: RowHash = 3;
-    let h4: RowHash = 4;
+    let h1: RowHash = RowSignature { hash: 1 };
+    let h2: RowHash = RowSignature { hash: 2 };
+    let h3: RowHash = RowSignature { hash: 3 };
+    let h4: RowHash = RowSignature { hash: 4 };
 
     let rows_a = vec![
         row_meta(0, h1),
@@ -12596,7 +14406,7 @@ fn hashstats_counts_and_positions_basic() {
 
 #[test]
 fn hashstats_rare_but_not_common_boundary() {
-    let h: RowHash = 42;
+    let h: RowHash = RowSignature { hash: 42 };
     let rows_a = vec![row_meta(0, h), row_meta(1, h)];
     let rows_b = vec![row_meta(0, h)];
 
@@ -12611,7 +14421,7 @@ fn hashstats_rare_but_not_common_boundary() {
 
 #[test]
 fn hashstats_equal_to_threshold_behavior() {
-    let h: RowHash = 99;
+    let h: RowHash = RowSignature { hash: 99 };
     let rows_a = vec![row_meta(0, h), row_meta(1, h), row_meta(2, h)];
     let rows_b = vec![row_meta(0, h), row_meta(1, h), row_meta(2, h)];
 
@@ -12627,7 +14437,7 @@ fn hashstats_equal_to_threshold_behavior() {
 #[test]
 fn hashstats_empty_inputs() {
     let stats = HashStats::from_row_meta(&[], &[]);
-    let dummy_hash: RowHash = 123;
+    let dummy_hash: RowHash = RowSignature { hash: 123 };
 
     assert!(stats.freq_a.is_empty());
     assert!(stats.freq_b.is_empty());
@@ -12684,7 +14494,7 @@ fn hashstats_from_col_meta_tracks_positions() {
 ### File: `core\tests\grid_view_tests.rs`
 
 ```rust
-use excel_diff::{Cell, CellAddress, CellValue, Grid, GridView};
+use excel_diff::{Cell, CellAddress, CellValue, DiffConfig, Grid, GridView};
 
 mod common;
 use common::grid_from_numbers;
@@ -12745,7 +14555,7 @@ fn gridview_sparse_rows_low_info_classification() {
     let view = GridView::from_grid(&grid);
 
     assert_eq!(view.row_meta[0].non_blank_count, 1);
-    assert!(!view.row_meta[0].is_low_info);
+    assert!(view.row_meta[0].is_low_info);
     assert_eq!(view.row_meta[0].first_non_blank_col, 0);
 
     assert_eq!(view.row_meta[1].non_blank_count, 0);
@@ -12753,7 +14563,7 @@ fn gridview_sparse_rows_low_info_classification() {
     assert_eq!(view.row_meta[1].first_non_blank_col, 0);
 
     assert_eq!(view.row_meta[2].non_blank_count, 1);
-    assert!(!view.row_meta[2].is_low_info);
+    assert!(view.row_meta[2].is_low_info);
     assert_eq!(view.row_meta[2].first_non_blank_col, 2);
 
     assert_eq!(view.row_meta[3].non_blank_count, 1);
@@ -12762,14 +14572,19 @@ fn gridview_sparse_rows_low_info_classification() {
 }
 
 #[test]
-fn gridview_formula_only_row_is_not_low_info() {
+fn gridview_formula_only_row_respects_threshold() {
     let mut grid = Grid::new(2, 2);
     grid.insert(make_cell(0, 0, None, Some("=A1+1")));
 
-    let view = GridView::from_grid(&grid);
+    let view_default = GridView::from_grid(&grid);
+    assert_eq!(view_default.row_meta[0].non_blank_count, 1);
+    assert!(view_default.row_meta[0].is_low_info);
 
-    assert_eq!(view.row_meta[0].non_blank_count, 1);
-    assert!(!view.row_meta[0].is_low_info);
+    let mut config = DiffConfig::default();
+    config.low_info_threshold = 1;
+    let view_tuned = GridView::from_grid_with_config(&grid, &config);
+    assert_eq!(view_tuned.row_meta[0].non_blank_count, 1);
+    assert!(!view_tuned.row_meta[0].is_low_info);
 }
 
 #[test]
@@ -12805,7 +14620,7 @@ fn gridview_column_metadata_matches_signatures() {
     }
 
     for (idx, meta) in view.row_meta.iter().enumerate() {
-        assert_eq!(meta.hash, row_signatures[idx].hash);
+        assert_eq!(meta.hash, row_signatures[idx]);
     }
 
     assert_eq!(view.col_meta[0].non_blank_count, 2);
@@ -17142,7 +18957,7 @@ fn gridview_rowmeta_hash_matches_compute_all_signatures() {
     let view = GridView::from_grid(&grid);
 
     for (idx, meta) in view.row_meta.iter().enumerate() {
-        assert_eq!(meta.hash, row_signatures[idx].hash);
+        assert_eq!(meta.hash, row_signatures[idx]);
     }
 
     for (idx, meta) in view.col_meta.iter().enumerate() {

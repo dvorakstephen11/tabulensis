@@ -99,9 +99,21 @@ pub struct DiffReport {
     pub version: String,
     /// The list of diff operations.
     pub ops: Vec<DiffOp>,
+    /// Whether the diff result is complete. When `false`, some operations may be missing
+    /// due to resource limits being exceeded (e.g., row/column limits).
+    #[serde(default = "default_complete")]
+    pub complete: bool,
+    /// Warnings generated during the diff process. Non-empty when limits were exceeded
+    /// or other partial-result conditions occurred.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
     #[cfg(feature = "perf-metrics")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metrics: Option<crate::perf::DiffMetrics>,
+}
+
+fn default_complete() -> bool {
+    true
 }
 
 impl DiffReport {
@@ -111,9 +123,27 @@ impl DiffReport {
         DiffReport {
             version: Self::SCHEMA_VERSION.to_string(),
             ops,
+            complete: true,
+            warnings: Vec::new(),
             #[cfg(feature = "perf-metrics")]
             metrics: None,
         }
+    }
+
+    pub fn with_partial_result(ops: Vec<DiffOp>, warning: String) -> DiffReport {
+        DiffReport {
+            version: Self::SCHEMA_VERSION.to_string(),
+            ops,
+            complete: false,
+            warnings: vec![warning],
+            #[cfg(feature = "perf-metrics")]
+            metrics: None,
+        }
+    }
+
+    pub fn add_warning(&mut self, warning: String) {
+        self.warnings.push(warning);
+        self.complete = false;
     }
 }
 
