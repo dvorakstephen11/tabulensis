@@ -1,3 +1,12 @@
+//! Rectangular block move detection.
+//!
+//! This module implements detection of rectangular regions that have moved
+//! between two grids. A rect block move is when a 2D region (rows × cols)
+//! moves from one position to another without internal edits.
+//!
+//! This is used by the engine's masked move detection loop to identify
+//! structural changes that preserve content but change position.
+
 use crate::config::DiffConfig;
 use crate::grid_view::{ColHash, ColMeta, GridView, HashStats, RowHash};
 use crate::workbook::{Cell, Grid};

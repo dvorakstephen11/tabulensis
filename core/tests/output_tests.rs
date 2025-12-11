@@ -446,6 +446,35 @@ fn serialize_diff_report_with_finite_numbers_succeeds() {
 }
 
 #[test]
+fn serialize_full_diff_report_has_complete_true_and_no_warnings() {
+    let addr = CellAddress::from_indices(0, 0);
+    let report = DiffReport::new(vec![DiffOp::cell_edited(
+        "Sheet1".into(),
+        addr,
+        make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
+        make_cell_snapshot(addr, Some(CellValue::Number(2.0))),
+    )]);
+
+    let json = serialize_diff_report(&report).expect("full report should serialize");
+    let value: Value = serde_json::from_str(&json).expect("json should parse");
+    let obj = value.as_object().expect("should be object");
+
+    assert_eq!(
+        obj.get("complete").and_then(Value::as_bool),
+        Some(true),
+        "full result should have complete=true"
+    );
+
+    let has_warnings = obj.get("warnings").map(|v| {
+        v.as_array().map(|arr| !arr.is_empty()).unwrap_or(false)
+    }).unwrap_or(false);
+    assert!(
+        !has_warnings,
+        "full result should have no warnings or empty warnings array"
+    );
+}
+
+#[test]
 fn serialize_partial_diff_report_includes_complete_false_and_warnings() {
     let addr = CellAddress::from_indices(0, 0);
     let ops = vec![DiffOp::cell_edited(

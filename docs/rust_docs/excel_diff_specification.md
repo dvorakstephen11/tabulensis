@@ -847,7 +847,72 @@ Binwalk helps you *find* and *sanity-check* embedded containers; Kaitai helps yo
 
 ---
 
-Last updated: 2025-11-30
+## 17. Performance Metrics and Limit Handling
+
+### 17.1 DiffMetrics Structure
+
+When the `perf-metrics` feature is enabled, the diff engine collects timing and count metrics:
+
+```rust
+pub struct DiffMetrics {
+    pub alignment_time_ms: u64,       // Time spent in row/column alignment
+    pub move_detection_time_ms: u64,  // Time spent detecting block moves
+    pub cell_diff_time_ms: u64,       // Time spent comparing cells
+    pub total_time_ms: u64,           // Total diff operation time
+    pub rows_processed: u64,          // Number of rows examined
+    pub cells_compared: u64,          // Number of cell pairs compared
+    pub anchors_found: u32,           // Anchor count from AMR alignment
+    pub moves_detected: u32,          // Block moves detected
+}
+```
+
+**Deferred metrics**: `parse_time_ms` and `peak_memory_bytes` are planned for future phases
+when parser instrumentation and memory allocator integration are ready.
+
+### 17.2 Limit Handling
+
+The engine enforces configurable limits to prevent runaway computation on pathological inputs:
+
+```rust
+pub struct DiffConfig {
+    pub max_align_rows: u32,      // Default: 500,000
+    pub max_align_cols: u32,      // Default: 16,384
+    pub max_recursion_depth: u32, // Default: 10
+    pub on_limit_exceeded: LimitBehavior,
+}
+
+pub enum LimitBehavior {
+    FallbackToPositional,  // Use simple positional diff (default)
+    ReturnPartialResult,   // Return partial result with warnings
+    ReturnError,           // Return structured DiffError
+}
+```
+
+When limits are exceeded:
+
+- **FallbackToPositional**: Completes the diff using simple cell-by-cell comparison.
+  Report is marked `complete = true` with no warnings.
+- **ReturnPartialResult**: Completes the diff using positional comparison.
+  Report is marked `complete = false` with a warning message including the sheet name.
+- **ReturnError**: Returns `DiffError::LimitsExceeded` with sheet name and limit details.
+  Legacy API (`diff_workbooks_with_config`) panics; new API (`try_diff_workbooks_with_config`)
+  returns the error.
+
+### 17.3 Performance Regression Testing
+
+The project includes CI infrastructure for performance regression:
+
+- **Fixtures P1-P5**: Standard test grids ranging from dense data to repetitive/sparse patterns
+- **Perf tests**: `cargo test --features perf-metrics perf_` runs scaled-down versions for CI
+- **Threshold script**: `scripts/check_perf_thresholds.py` validates timing against targets
+- **CI workflow**: `.github/workflows/perf.yml` runs perf suite on every push/PR
+
+See `docs/meta/logs/2025-12-09-sprint-branch-2/activity_log.md` for implementation details
+and intentional spec deviations.
+
+---
+
+Last updated: 2025-12-10
 
 [1]: https://bengribaudo.com/blog/2020/04/22/5198/data-mashup-binary-stream "The Data Mashup Binary Stream: How Power Queries Are Stored | Ben Gribaudo"
 [2]: https://community.powerbi.com/t5/Desktop/DataMashup-file-no-longer-exists/td-p/1145141?utm_source=chatgpt.com "DataMashup file no longer exists"

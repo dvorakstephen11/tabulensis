@@ -582,6 +582,8 @@ perf-regression:
 - [ ] Adversarial repetitive case (p3) completes without timeout
 - [ ] All existing tests pass
 
+**Activity Log**: See `docs/meta/activity_logs/2025-12-09-sprint-branch-2.md` for implementation notes and intentional spec deviations.
+
 ---
 
 ## Branch 3: Configuration Infrastructure

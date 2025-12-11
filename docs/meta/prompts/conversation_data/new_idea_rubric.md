@@ -24,7 +24,7 @@ Use these constraints and preferences as hard filters:
   - Low operational overhead (few or no employees),
   - No physically demanding responsibilities.
 - I like:
-  - Deep technical work (parsers, diffing, knowledge graphs, data tooling),
+  - Deep technical work (knowledge graphs, data tooling, parsers, diffing, static analysis, scheduling/optimization, simulation, complex automation; but don't limit suggestions just to this list),
   - High‑stakes, “serious” workflows (finance, legal, compliance, safety),
   - Tools that empower normal people or professionals, not zero‑sum attention hacks.
 
@@ -74,7 +74,7 @@ E. AI / Automation Resilience
   - Ongoing accumulation of proprietary test suites or domain datasets.
 
 F. Solo‑Dev Feasibility
-- A skilled solo developer could build a credible v1 in 6–18 months of focused effort.
+- A skilled solo developer armed with SOTA LLMs and coding agents could build a credible v1 in 1-6 months of focused effort.
 - v1 should not require:
   - Large sales teams,
   - Huge moderation burdens,
@@ -114,12 +114,12 @@ Do *not* require me to specify ecosystems up front.
 Instead:
 
 1. Automatically select at least 5–8 promising ecosystems / domains to scan, such as:
-   - Productivity & office suites (spreadsheets, BI, accounting, modelling).
-   - Scientific/engineering tools (CAD, simulation, EDA, GIS, lab software).
+   - Productivity & office suites
+   - Scientific/engineering tools
    - Data platforms & ETL / integration tools.
    - Legal, compliance, and audit tooling.
    - Healthcare / pharma / clinical workflows (within safe and legal bounds).
-   - Creative & media production (audio, video, design), where file formats are complex.
+   - Creative & media production (audio, video, design).
    - Niche professional software: architecture, construction, logistics, energy, etc.
 
 2. For each chosen ecosystem, look for:

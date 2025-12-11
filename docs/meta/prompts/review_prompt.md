@@ -4,6 +4,9 @@
 
 ```text
 /
+  .github/
+    workflows/
+      perf.yml
   .gitignore
   Cargo.lock
   Cargo.toml
@@ -78,6 +81,7 @@
       m7_semantic_m_diff_tests.rs
       m_section_splitting_tests.rs
       output_tests.rs
+      perf_large_grid_tests.rs
       pg1_ir_tests.rs
       pg3_snapshot_tests.rs
       pg4_diffop_tests.rs
@@ -105,9 +109,52 @@
     2025-11-28b-diffop-pg4/
       activity_log.txt
   README.md
+  scripts/
+    check_perf_thresholds.py
 ```
 
 ## File Contents
+
+### File: `.github\workflows\perf.yml`
+
+```yaml
+name: Performance Regression
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  perf-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        
+      - name: Build with perf metrics
+        run: cargo build --release --features perf-metrics
+        working-directory: core
+        
+      - name: Run perf test suite
+        run: cargo test --release --features perf-metrics perf_ -- --nocapture
+        working-directory: core
+        
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
+      - name: Check perf thresholds
+        run: python scripts/check_perf_thresholds.py
+
+
+```
+
+---
 
 ### File: `.gitignore`
 
@@ -842,6 +889,21 @@ mod tests {
         grid
     }
 
+    fn grid_with_unique_rows(rows: &[i32]) -> Grid {
+        let nrows = rows.len() as u32;
+        let mut grid = Grid::new(nrows, 1);
+        for (r, &val) in rows.iter().enumerate() {
+            grid.insert(Cell {
+                row: r as u32,
+                col: 0,
+                address: CellAddress::from_indices(r as u32, 0),
+                value: Some(CellValue::Number(val as f64)),
+                formula: None,
+            });
+        }
+        grid
+    }
+
     #[test]
     fn aligns_compressed_runs_with_insert_and_delete() {
         let grid_a = grid_from_run_lengths(&[(1, 50), (2, 5), (1, 50)]);
@@ -866,6 +928,119 @@ mod tests {
         let alignment = align_rows_amr(&grid_a, &grid_b, &config)
             .expect("alignment should still produce result via full AMR");
         assert!(!alignment.matched.is_empty());
+    }
+
+    #[test]
+    fn amr_disjoint_gaps_with_insertions_and_deletions() {
+        let grid_a = grid_with_unique_rows(&[1, 2, 3, 100, 4, 5, 6, 200, 7, 8, 9]);
+        let grid_b = grid_with_unique_rows(&[1, 2, 10, 3, 4, 5, 6, 7, 20, 8, 9]);
+
+        let config = DiffConfig::default();
+        let alignment = align_rows_amr(&grid_a, &grid_b, &config)
+            .expect("alignment should succeed with disjoint gaps");
+
+        assert!(!alignment.matched.is_empty(), "should have matched pairs");
+        
+        let matched_is_monotonic = alignment.matched.windows(2).all(|w| {
+            w[0].0 <= w[1].0 && w[0].1 <= w[1].1
+        });
+        assert!(matched_is_monotonic, "matched pairs should be monotonically increasing");
+        
+        assert!(!alignment.inserted.is_empty() || !alignment.deleted.is_empty(), 
+            "should have insertions and/or deletions");
+    }
+
+    #[test]
+    fn amr_recursive_gap_alignment_returns_monotonic_alignment() {
+        let grid_a = grid_with_unique_rows(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+        let rows_b = vec![1, 2, 100, 3, 4, 5, 200, 6, 7, 8, 300, 9, 10, 11, 400, 12, 13, 14, 15];
+        let grid_b = grid_with_unique_rows(&rows_b);
+
+        let config = DiffConfig {
+            recursive_align_threshold: 5,
+            small_gap_threshold: 2,
+            ..Default::default()
+        };
+
+        let alignment = align_rows_amr(&grid_a, &grid_b, &config)
+            .expect("alignment should succeed with recursive gaps");
+
+        let matched_is_monotonic = alignment.matched.windows(2).all(|w| {
+            w[0].0 <= w[1].0 && w[0].1 <= w[1].1
+        });
+        assert!(matched_is_monotonic, 
+            "recursive alignment should produce monotonic matched pairs");
+        
+        for &inserted_row in &alignment.inserted {
+            assert!(!alignment.matched.iter().any(|(_, b)| *b == inserted_row),
+                "inserted rows should not appear in matched pairs");
+        }
+        
+        for &deleted_row in &alignment.deleted {
+            assert!(!alignment.matched.iter().any(|(a, _)| *a == deleted_row),
+                "deleted rows should not appear in matched pairs");
+        }
+    }
+
+    #[test]
+    fn amr_multi_gap_move_detection_produces_expected_row_block_move() {
+        let grid_a = grid_with_unique_rows(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        let grid_b = grid_with_unique_rows(&[1, 2, 6, 7, 8, 3, 4, 5, 9, 10]);
+
+        let config = DiffConfig::default();
+        let alignment = align_rows_amr(&grid_a, &grid_b, &config)
+            .expect("alignment should succeed with moved block");
+
+        assert!(!alignment.matched.is_empty(), "should have matched pairs even with moves");
+        
+        let old_rows: std::collections::HashSet<_> = alignment.matched.iter().map(|(a, _)| *a).collect();
+        let new_rows: std::collections::HashSet<_> = alignment.matched.iter().map(|(_, b)| *b).collect();
+        
+        assert!(old_rows.len() <= 10 && new_rows.len() <= 10, 
+            "matched rows should not exceed input size");
+    }
+
+    #[test]
+    fn amr_alignment_empty_grids() {
+        let grid_a = Grid::new(0, 0);
+        let grid_b = Grid::new(0, 0);
+
+        let config = DiffConfig::default();
+        let alignment = align_rows_amr(&grid_a, &grid_b, &config)
+            .expect("alignment should succeed for empty grids");
+
+        assert!(alignment.matched.is_empty());
+        assert!(alignment.inserted.is_empty());
+        assert!(alignment.deleted.is_empty());
+        assert!(alignment.moves.is_empty());
+    }
+
+    #[test]
+    fn amr_alignment_all_deleted() {
+        let grid_a = grid_with_unique_rows(&[1, 2, 3, 4, 5]);
+        let grid_b = Grid::new(0, 1);
+
+        let config = DiffConfig::default();
+        let alignment = align_rows_amr(&grid_a, &grid_b, &config)
+            .expect("alignment should succeed when all rows deleted");
+
+        assert!(alignment.matched.is_empty());
+        assert!(alignment.inserted.is_empty());
+        assert_eq!(alignment.deleted.len(), 5);
+    }
+
+    #[test]
+    fn amr_alignment_all_inserted() {
+        let grid_a = Grid::new(0, 1);
+        let grid_b = grid_with_unique_rows(&[1, 2, 3, 4, 5]);
+
+        let config = DiffConfig::default();
+        let alignment = align_rows_amr(&grid_a, &grid_b, &config)
+            .expect("alignment should succeed when all rows inserted");
+
+        assert!(alignment.matched.is_empty());
+        assert_eq!(alignment.inserted.len(), 5);
+        assert!(alignment.deleted.is_empty());
     }
 }
 
@@ -1325,6 +1500,103 @@ mod tests {
         assert_eq!(runs.len(), 2);
         assert_eq!(runs[0].count, 2);
         assert_eq!(runs[1].count, 1);
+    }
+
+    #[test]
+    fn compresses_10k_identical_rows_to_single_run() {
+        let meta: Vec<RowMeta> = (0..10_000).map(|i| make_meta(i, 42)).collect();
+        let runs = compress_to_runs(&meta);
+        
+        assert_eq!(runs.len(), 1, "10K identical rows should compress to a single run");
+        assert_eq!(runs[0].count, 10_000, "single run should have count of 10,000");
+        assert_eq!(runs[0].signature.hash, 42, "run signature should match input");
+        assert_eq!(runs[0].start_row, 0, "run should start at row 0");
+    }
+
+    #[test]
+    fn alternating_pattern_ab_does_not_overcompress() {
+        let meta: Vec<RowMeta> = (0..10_000)
+            .map(|i| {
+                let hash = if i % 2 == 0 { 1 } else { 2 };
+                make_meta(i, hash)
+            })
+            .collect();
+        let runs = compress_to_runs(&meta);
+        
+        assert_eq!(runs.len(), 10_000, 
+            "alternating A-B pattern should produce 10K runs (no compression benefit)");
+        
+        for (i, run) in runs.iter().enumerate() {
+            assert_eq!(run.count, 1, "each run should have count of 1 for alternating pattern");
+            let expected_hash = if i % 2 == 0 { 1 } else { 2 };
+            assert_eq!(run.signature.hash, expected_hash, "run signature should alternate");
+        }
+    }
+
+    #[test]
+    fn mixed_runs_with_varying_lengths() {
+        let mut meta = Vec::new();
+        let mut row_idx = 0u32;
+        
+        for _ in 0..100 {
+            meta.push(make_meta(row_idx, 1));
+            row_idx += 1;
+        }
+        for _ in 0..50 {
+            meta.push(make_meta(row_idx, 2));
+            row_idx += 1;
+        }
+        for _ in 0..200 {
+            meta.push(make_meta(row_idx, 3));
+            row_idx += 1;
+        }
+        for _ in 0..1 {
+            meta.push(make_meta(row_idx, 4));
+            row_idx += 1;
+        }
+        
+        let runs = compress_to_runs(&meta);
+        
+        assert_eq!(runs.len(), 4, "should produce 4 runs for 4 distinct signatures");
+        assert_eq!(runs[0].count, 100);
+        assert_eq!(runs[1].count, 50);
+        assert_eq!(runs[2].count, 200);
+        assert_eq!(runs[3].count, 1);
+    }
+
+    #[test]
+    fn empty_input_produces_empty_runs() {
+        let meta: Vec<RowMeta> = vec![];
+        let runs = compress_to_runs(&meta);
+        assert!(runs.is_empty(), "empty input should produce empty runs");
+    }
+
+    #[test]
+    fn single_row_produces_single_run() {
+        let meta = vec![make_meta(0, 999)];
+        let runs = compress_to_runs(&meta);
+        
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].count, 1);
+        assert_eq!(runs[0].start_row, 0);
+        assert_eq!(runs[0].signature.hash, 999);
+    }
+
+    #[test]
+    fn run_compression_preserves_row_indices() {
+        let meta: Vec<RowMeta> = (0..1000u32)
+            .map(|i| make_meta(i, (i / 100) as u128))
+            .collect();
+        let runs = compress_to_runs(&meta);
+        
+        assert_eq!(runs.len(), 10, "should have 10 runs (one per 100 rows)");
+        
+        for (group_idx, run) in runs.iter().enumerate() {
+            let expected_start = (group_idx * 100) as u32;
+            assert_eq!(run.start_row, expected_start, 
+                "run {} should start at row {}", group_idx, expected_start);
+            assert_eq!(run.count, 100, "each run should have 100 rows");
+        }
     }
 }
 
@@ -3566,8 +3838,23 @@ fn strip_leading_bom(text: String) -> String {
 //! This module defines the types used to represent differences between two workbooks:
 //! - [`DiffOp`]: Individual operations representing a single change (cell edit, row/column add/remove, etc.)
 //! - [`DiffReport`]: A versioned collection of diff operations
+//! - [`DiffError`]: Errors that can occur during the diff process
 
 use crate::workbook::{CellAddress, CellSnapshot, ColSignature, RowSignature};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum DiffError {
+    #[error("alignment limits exceeded for sheet '{sheet}': rows={rows}, cols={cols} (limits: rows={max_rows}, cols={max_cols})")]
+    LimitsExceeded {
+        sheet: String,
+        rows: u32,
+        cols: u32,
+        max_rows: u32,
+        max_cols: u32,
+    },
+}
 
 pub type SheetId = String;
 
@@ -3847,7 +4134,7 @@ use crate::column_alignment::{
 };
 use crate::config::{DiffConfig, LimitBehavior};
 use crate::database_alignment::{KeyColumnSpec, diff_table_by_key};
-use crate::diff::{DiffOp, DiffReport, SheetId};
+use crate::diff::{DiffError, DiffOp, DiffReport, SheetId};
 use crate::rect_block_move::{RectBlockMove, detect_exact_rect_block_move_with_config};
 use crate::region_mask::RegionMask;
 use crate::row_alignment::{
@@ -3895,11 +4182,11 @@ pub fn diff_workbooks(old: &Workbook, new: &Workbook) -> DiffReport {
     diff_workbooks_with_config(old, new, &DiffConfig::default())
 }
 
-pub fn diff_workbooks_with_config(
+pub fn try_diff_workbooks_with_config(
     old: &Workbook,
     new: &Workbook,
     config: &DiffConfig,
-) -> DiffReport {
+) -> Result<DiffReport, DiffError> {
     let mut ops = Vec::new();
     let mut ctx = DiffContext::default();
     #[cfg(feature = "perf-metrics")]
@@ -3956,7 +4243,7 @@ pub fn diff_workbooks_with_config(
             }
             (Some(old_sheet), Some(new_sheet)) => {
                 let sheet_id: SheetId = old_sheet.name.clone();
-                diff_grids_with_config(
+                try_diff_grids_with_config(
                     &sheet_id,
                     &old_sheet.grid,
                     &new_sheet.grid,
@@ -3965,7 +4252,7 @@ pub fn diff_workbooks_with_config(
                     &mut ctx,
                     #[cfg(feature = "perf-metrics")]
                     Some(&mut metrics),
-                );
+                )?;
             }
             (None, None) => unreachable!(),
         }
@@ -3982,7 +4269,18 @@ pub fn diff_workbooks_with_config(
         metrics.end_phase(Phase::Total);
         report.metrics = Some(metrics);
     }
-    report
+    Ok(report)
+}
+
+pub fn diff_workbooks_with_config(
+    old: &Workbook,
+    new: &Workbook,
+    config: &DiffConfig,
+) -> DiffReport {
+    match try_diff_workbooks_with_config(old, new, config) {
+        Ok(report) => report,
+        Err(e) => panic!("{}", e),
+    }
 }
 
 pub fn diff_grids_database_mode(old: &Grid, new: &Grid, key_columns: &[u32]) -> DiffReport {
@@ -4030,7 +4328,7 @@ pub fn diff_grids_database_mode(old: &Grid, new: &Grid, key_columns: &[u32]) -> 
 
 fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>) {
     let mut ctx = DiffContext::default();
-    diff_grids_with_config(
+    let _ = try_diff_grids_with_config(
         sheet_id,
         old,
         new,
@@ -4042,7 +4340,7 @@ fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>)
     );
 }
 
-fn diff_grids_with_config(
+fn try_diff_grids_with_config(
     sheet_id: &SheetId,
     old: &Grid,
     new: &Grid,
@@ -4050,9 +4348,9 @@ fn diff_grids_with_config(
     ops: &mut Vec<DiffOp>,
     ctx: &mut DiffContext,
     #[cfg(feature = "perf-metrics")] mut metrics: Option<&mut DiffMetrics>,
-) {
+) -> Result<(), DiffError> {
     if old.nrows == 0 && new.nrows == 0 {
-        return;
+        return Ok(());
     }
 
     #[cfg(feature = "perf-metrics")]
@@ -4096,16 +4394,40 @@ fn diff_grids_with_config(
                 }
             }
             LimitBehavior::ReturnError => {
-                panic!(
-                    "alignment limits exceeded (rows={}, cols={})",
-                    old.nrows.max(new.nrows),
-                    old.ncols.max(new.ncols)
-                );
+                return Err(DiffError::LimitsExceeded {
+                    sheet: sheet_id.clone(),
+                    rows: old.nrows.max(new.nrows),
+                    cols: old.ncols.max(new.ncols),
+                    max_rows: config.max_align_rows,
+                    max_cols: config.max_align_cols,
+                });
             }
         }
-        return;
+        return Ok(());
     }
 
+    diff_grids_core(
+        sheet_id,
+        old,
+        new,
+        config,
+        ops,
+        ctx,
+        #[cfg(feature = "perf-metrics")]
+        metrics,
+    );
+    Ok(())
+}
+
+fn diff_grids_core(
+    sheet_id: &SheetId,
+    old: &Grid,
+    new: &Grid,
+    config: &DiffConfig,
+    ops: &mut Vec<DiffOp>,
+    _ctx: &mut DiffContext,
+    #[cfg(feature = "perf-metrics")] mut metrics: Option<&mut DiffMetrics>,
+) {
     let mut old_mask = RegionMask::all_active(old.nrows, old.ncols);
     let mut new_mask = RegionMask::all_active(new.nrows, new.ncols);
     let move_detection_enabled =
@@ -5511,6 +5833,7 @@ mod tests {
     }
 }
 
+
 ```
 
 ---
@@ -6676,8 +6999,8 @@ pub use datamashup_framing::{DataMashupError, RawDataMashup};
 pub use datamashup_package::{
     EmbeddedContent, PackageParts, PackageXml, SectionDocument, parse_package_parts,
 };
-pub use diff::{DiffOp, DiffReport, SheetId};
-pub use engine::{diff_grids_database_mode, diff_workbooks, diff_workbooks_with_config};
+pub use diff::{DiffError, DiffOp, DiffReport, SheetId};
+pub use engine::{diff_grids_database_mode, diff_workbooks, diff_workbooks_with_config, try_diff_workbooks_with_config};
 #[cfg(feature = "excel-open-xml")]
 pub use excel_open_xml::{ExcelOpenError, open_data_mashup, open_workbook};
 pub use grid_parser::{GridParseError, SheetDescriptor};
@@ -7604,7 +7927,7 @@ pub enum Phase {
     CellDiff,
 }
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DiffMetrics {
     pub move_detection_time_ms: u64,
     pub alignment_time_ms: u64,
@@ -7648,6 +7971,15 @@ impl DiffMetrics {
 ### File: `core\src\rect_block_move.rs`
 
 ```rust
+//! Rectangular block move detection.
+//!
+//! This module implements detection of rectangular regions that have moved
+//! between two grids. A rect block move is when a 2D region (rows × cols)
+//! moves from one position to another without internal edits.
+//!
+//! This is used by the engine's masked move detection loop to identify
+//! structural changes that preserve content but change position.
+
 use crate::config::DiffConfig;
 use crate::grid_view::{ColHash, ColMeta, GridView, HashStats, RowHash};
 use crate::workbook::{Cell, Grid};
@@ -15278,8 +15610,8 @@ mod common;
 
 use common::single_sheet_workbook;
 use excel_diff::config::{DiffConfig, LimitBehavior};
-use excel_diff::diff::DiffOp;
-use excel_diff::engine::diff_workbooks_with_config;
+use excel_diff::diff::{DiffError, DiffOp};
+use excel_diff::engine::{diff_workbooks_with_config, try_diff_workbooks_with_config};
 use excel_diff::{Cell, CellAddress, CellValue, Grid};
 
 fn create_simple_grid(nrows: u32, ncols: u32, base_value: i32) -> Grid {
@@ -15415,8 +15747,38 @@ fn limit_exceeded_return_partial_result() {
 }
 
 #[test]
+fn limit_exceeded_return_error_returns_structured_error() {
+    let grid_a = create_simple_grid(100, 10, 0);
+    let grid_b = create_simple_grid(100, 10, 0);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let config = DiffConfig {
+        max_align_rows: 50,
+        on_limit_exceeded: LimitBehavior::ReturnError,
+        ..Default::default()
+    };
+
+    let result = try_diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    assert!(result.is_err(), "should return error when limits exceeded");
+    
+    let err = result.unwrap_err();
+    match err {
+        DiffError::LimitsExceeded { sheet, rows, cols, max_rows, max_cols } => {
+            assert_eq!(sheet, "Sheet1");
+            assert_eq!(rows, 100);
+            assert_eq!(cols, 10);
+            assert_eq!(max_rows, 50);
+            assert_eq!(max_cols, 16384);
+        }
+        _ => panic!("unexpected error variant: {err:?}"),
+    }
+}
+
+#[test]
 #[should_panic(expected = "alignment limits exceeded")]
-fn limit_exceeded_return_error() {
+fn limit_exceeded_return_error_panics_via_legacy_api() {
     let grid_a = create_simple_grid(100, 10, 0);
     let grid_b = create_simple_grid(100, 10, 0);
 
@@ -15543,6 +15905,70 @@ fn multiple_sheets_limit_warning_includes_sheet_name() {
     assert!(
         report.warnings.iter().any(|w| w.contains("LargeSheet")),
         "warning should reference the sheet that exceeded limits"
+    );
+}
+
+#[test]
+fn large_grid_50k_rows_completes_within_default_limits() {
+    let grid_a = create_simple_grid(5000, 10, 0);
+    let mut grid_b = create_simple_grid(5000, 10, 0);
+    grid_b.insert(Cell {
+        row: 2500,
+        col: 5,
+        address: CellAddress::from_indices(2500, 5),
+        value: Some(CellValue::Number(999999.0)),
+        formula: None,
+    });
+
+    let wb_a = single_sheet_workbook("LargeSheet", grid_a);
+    let wb_b = single_sheet_workbook("LargeSheet", grid_b);
+
+    let config = DiffConfig::default();
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(
+        report.complete,
+        "5000-row grid should complete within default limits (max_align_rows=500000)"
+    );
+    assert!(
+        report.warnings.is_empty(),
+        "should have no warnings for successful large grid diff"
+    );
+    assert!(
+        count_ops(&report.ops, |op| matches!(op, DiffOp::CellEdited { .. })) >= 1,
+        "should detect the cell edit in large grid"
+    );
+}
+
+#[test]
+fn wide_grid_500_cols_completes_within_default_limits() {
+    let grid_a = create_simple_grid(100, 500, 0);
+    let mut grid_b = create_simple_grid(100, 500, 0);
+    grid_b.insert(Cell {
+        row: 50,
+        col: 250,
+        address: CellAddress::from_indices(50, 250),
+        value: Some(CellValue::Number(999999.0)),
+        formula: None,
+    });
+
+    let wb_a = single_sheet_workbook("WideSheet", grid_a);
+    let wb_b = single_sheet_workbook("WideSheet", grid_b);
+
+    let config = DiffConfig::default();
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(
+        report.complete,
+        "500-column grid should complete within default limits (max_align_cols=16384)"
+    );
+    assert!(
+        report.warnings.is_empty(),
+        "should have no warnings for successful wide grid diff"
+    );
+    assert!(
+        count_ops(&report.ops, |op| matches!(op, DiffOp::CellEdited { .. })) >= 1,
+        "should detect the cell edit in wide grid"
     );
 }
 
@@ -17006,6 +17432,8 @@ use excel_diff::{
     },
 };
 use serde_json::Value;
+#[cfg(feature = "perf-metrics")]
+use std::collections::BTreeSet;
 
 mod common;
 use common::fixture_path;
@@ -17441,6 +17869,349 @@ fn serialize_diff_report_with_finite_numbers_succeeds() {
     let parsed: DiffReport = serde_json::from_str(&json).expect("json should parse");
     assert_eq!(parsed.ops.len(), 1);
 }
+
+#[test]
+fn serialize_full_diff_report_has_complete_true_and_no_warnings() {
+    let addr = CellAddress::from_indices(0, 0);
+    let report = DiffReport::new(vec![DiffOp::cell_edited(
+        "Sheet1".into(),
+        addr,
+        make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
+        make_cell_snapshot(addr, Some(CellValue::Number(2.0))),
+    )]);
+
+    let json = serialize_diff_report(&report).expect("full report should serialize");
+    let value: Value = serde_json::from_str(&json).expect("json should parse");
+    let obj = value.as_object().expect("should be object");
+
+    assert_eq!(
+        obj.get("complete").and_then(Value::as_bool),
+        Some(true),
+        "full result should have complete=true"
+    );
+
+    let has_warnings = obj.get("warnings").map(|v| {
+        v.as_array().map(|arr| !arr.is_empty()).unwrap_or(false)
+    }).unwrap_or(false);
+    assert!(
+        !has_warnings,
+        "full result should have no warnings or empty warnings array"
+    );
+}
+
+#[test]
+fn serialize_partial_diff_report_includes_complete_false_and_warnings() {
+    let addr = CellAddress::from_indices(0, 0);
+    let ops = vec![DiffOp::cell_edited(
+        "Sheet1".into(),
+        addr,
+        make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
+        make_cell_snapshot(addr, Some(CellValue::Number(2.0))),
+    )];
+    let report = DiffReport::with_partial_result(
+        ops,
+        "Sheet 'LargeSheet': alignment limits exceeded".to_string(),
+    );
+
+    let json = serialize_diff_report(&report).expect("partial report should serialize");
+    let value: Value = serde_json::from_str(&json).expect("json should parse");
+    let obj = value.as_object().expect("should be object");
+
+    assert_eq!(
+        obj.get("complete").and_then(Value::as_bool),
+        Some(false),
+        "partial result should have complete=false"
+    );
+
+    let warnings = obj
+        .get("warnings")
+        .and_then(Value::as_array)
+        .expect("warnings should be present");
+    assert!(!warnings.is_empty(), "warnings array should not be empty");
+    assert!(
+        warnings[0]
+            .as_str()
+            .unwrap_or("")
+            .contains("limits exceeded"),
+        "warning should mention limits exceeded"
+    );
+}
+
+#[test]
+#[cfg(feature = "perf-metrics")]
+fn serialize_diff_report_with_metrics_includes_metrics_object() {
+    use excel_diff::perf::DiffMetrics;
+
+    let addr = CellAddress::from_indices(0, 0);
+    let ops = vec![DiffOp::cell_edited(
+        "Sheet1".into(),
+        addr,
+        make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
+        make_cell_snapshot(addr, Some(CellValue::Number(2.0))),
+    )];
+
+    let mut report = DiffReport::new(ops);
+    let mut metrics = DiffMetrics::default();
+    metrics.move_detection_time_ms = 5;
+    metrics.alignment_time_ms = 10;
+    metrics.cell_diff_time_ms = 15;
+    metrics.total_time_ms = 30;
+    metrics.rows_processed = 500;
+    metrics.cells_compared = 2500;
+    metrics.anchors_found = 25;
+    metrics.moves_detected = 1;
+    report.metrics = Some(metrics);
+
+    let json = serialize_diff_report(&report).expect("report with metrics should serialize");
+    let value: Value = serde_json::from_str(&json).expect("json should parse");
+    let obj = value.as_object().expect("should be object");
+
+    let keys: BTreeSet<String> = obj.keys().cloned().collect();
+    assert!(
+        keys.contains("metrics"),
+        "serialized report should include metrics key"
+    );
+
+    let metrics_obj = obj
+        .get("metrics")
+        .and_then(Value::as_object)
+        .expect("metrics should be an object");
+
+    assert!(
+        metrics_obj.contains_key("move_detection_time_ms"),
+        "metrics should contain move_detection_time_ms"
+    );
+    assert!(
+        metrics_obj.contains_key("alignment_time_ms"),
+        "metrics should contain alignment_time_ms"
+    );
+    assert!(
+        metrics_obj.contains_key("cell_diff_time_ms"),
+        "metrics should contain cell_diff_time_ms"
+    );
+    assert!(
+        metrics_obj.contains_key("total_time_ms"),
+        "metrics should contain total_time_ms"
+    );
+    assert!(
+        metrics_obj.contains_key("rows_processed"),
+        "metrics should contain rows_processed"
+    );
+    assert!(
+        metrics_obj.contains_key("cells_compared"),
+        "metrics should contain cells_compared"
+    );
+    assert!(
+        metrics_obj.contains_key("anchors_found"),
+        "metrics should contain anchors_found"
+    );
+    assert!(
+        metrics_obj.contains_key("moves_detected"),
+        "metrics should contain moves_detected"
+    );
+
+    assert_eq!(
+        metrics_obj.get("rows_processed").and_then(Value::as_u64),
+        Some(500)
+    );
+    assert_eq!(
+        metrics_obj.get("cells_compared").and_then(Value::as_u64),
+        Some(2500)
+    );
+}
+
+```
+
+---
+
+### File: `core\tests\perf_large_grid_tests.rs`
+
+```rust
+#![cfg(feature = "perf-metrics")]
+
+mod common;
+
+use common::single_sheet_workbook;
+use excel_diff::config::DiffConfig;
+use excel_diff::diff::DiffOp;
+use excel_diff::engine::diff_workbooks_with_config;
+use excel_diff::{Cell, CellAddress, CellValue, Grid};
+
+fn create_large_grid(nrows: u32, ncols: u32, base_value: i32) -> Grid {
+    let mut grid = Grid::new(nrows, ncols);
+    for row in 0..nrows {
+        for col in 0..ncols {
+            grid.insert(Cell {
+                row,
+                col,
+                address: CellAddress::from_indices(row, col),
+                value: Some(CellValue::Number(
+                    (base_value as i64 + row as i64 * 1000 + col as i64) as f64,
+                )),
+                formula: None,
+            });
+        }
+    }
+    grid
+}
+
+fn create_repetitive_grid(nrows: u32, ncols: u32, pattern_length: u32) -> Grid {
+    let mut grid = Grid::new(nrows, ncols);
+    for row in 0..nrows {
+        let pattern_idx = row % pattern_length;
+        for col in 0..ncols {
+            grid.insert(Cell {
+                row,
+                col,
+                address: CellAddress::from_indices(row, col),
+                value: Some(CellValue::Number((pattern_idx * 1000 + col) as f64)),
+                formula: None,
+            });
+        }
+    }
+    grid
+}
+
+fn create_sparse_grid(nrows: u32, ncols: u32, fill_percent: u32, seed: u64) -> Grid {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut grid = Grid::new(nrows, ncols);
+    for row in 0..nrows {
+        for col in 0..ncols {
+            let mut hasher = DefaultHasher::new();
+            (row, col, seed).hash(&mut hasher);
+            let hash = hasher.finish();
+            if (hash % 100) < fill_percent as u64 {
+                grid.insert(Cell {
+                    row,
+                    col,
+                    address: CellAddress::from_indices(row, col),
+                    value: Some(CellValue::Number((row * 1000 + col) as f64)),
+                    formula: None,
+                });
+            }
+        }
+    }
+    grid
+}
+
+#[test]
+fn perf_p1_large_dense() {
+    let grid_a = create_large_grid(1000, 20, 0);
+    let mut grid_b = create_large_grid(1000, 20, 0);
+    grid_b.insert(Cell {
+        row: 500,
+        col: 10,
+        address: CellAddress::from_indices(500, 10),
+        value: Some(CellValue::Number(999999.0)),
+        formula: None,
+    });
+
+    let wb_a = single_sheet_workbook("Performance", grid_a);
+    let wb_b = single_sheet_workbook("Performance", grid_b);
+
+    let config = DiffConfig::default();
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(report.complete, "P1 dense grid should complete successfully");
+    assert!(report.warnings.is_empty(), "P1 should have no warnings");
+    assert!(
+        report.ops.iter().any(|op| matches!(op, DiffOp::CellEdited { .. })),
+        "P1 should detect the cell edit"
+    );
+    assert!(
+        report.metrics.is_some(),
+        "P1 should have metrics when perf-metrics enabled"
+    );
+    let metrics = report.metrics.unwrap();
+    assert!(metrics.rows_processed > 0, "P1 should process rows");
+    assert!(metrics.cells_compared > 0, "P1 should compare cells");
+}
+
+#[test]
+fn perf_p2_large_noise() {
+    let grid_a = create_large_grid(1000, 20, 0);
+    let grid_b = create_large_grid(1000, 20, 1);
+
+    let wb_a = single_sheet_workbook("Performance", grid_a);
+    let wb_b = single_sheet_workbook("Performance", grid_b);
+
+    let config = DiffConfig::default();
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(report.complete, "P2 noise grid should complete successfully");
+    assert!(report.metrics.is_some(), "P2 should have metrics");
+    let metrics = report.metrics.unwrap();
+    assert!(metrics.rows_processed > 0, "P2 should process rows");
+}
+
+#[test]
+fn perf_p3_adversarial_repetitive() {
+    let grid_a = create_repetitive_grid(1000, 50, 100);
+    let mut grid_b = create_repetitive_grid(1000, 50, 100);
+    grid_b.insert(Cell {
+        row: 500,
+        col: 25,
+        address: CellAddress::from_indices(500, 25),
+        value: Some(CellValue::Number(999999.0)),
+        formula: None,
+    });
+
+    let wb_a = single_sheet_workbook("Performance", grid_a);
+    let wb_b = single_sheet_workbook("Performance", grid_b);
+
+    let config = DiffConfig::default();
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(report.complete, "P3 repetitive grid should complete");
+    assert!(report.metrics.is_some(), "P3 should have metrics");
+    let metrics = report.metrics.unwrap();
+    assert!(metrics.rows_processed > 0, "P3 should process rows");
+}
+
+#[test]
+fn perf_p4_99_percent_blank() {
+    let grid_a = create_sparse_grid(1000, 100, 1, 12345);
+    let mut grid_b = create_sparse_grid(1000, 100, 1, 12345);
+    grid_b.insert(Cell {
+        row: 500,
+        col: 50,
+        address: CellAddress::from_indices(500, 50),
+        value: Some(CellValue::Number(999999.0)),
+        formula: None,
+    });
+
+    let wb_a = single_sheet_workbook("Performance", grid_a);
+    let wb_b = single_sheet_workbook("Performance", grid_b);
+
+    let config = DiffConfig::default();
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(report.complete, "P4 sparse grid should complete");
+    assert!(report.metrics.is_some(), "P4 should have metrics");
+    let metrics = report.metrics.unwrap();
+    assert!(metrics.rows_processed > 0, "P4 should process rows");
+}
+
+#[test]
+fn perf_p5_identical() {
+    let grid_a = create_large_grid(1000, 100, 0);
+    let grid_b = create_large_grid(1000, 100, 0);
+
+    let wb_a = single_sheet_workbook("Performance", grid_a);
+    let wb_b = single_sheet_workbook("Performance", grid_b);
+
+    let config = DiffConfig::default();
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(report.complete, "P5 identical grid should complete");
+    assert!(report.ops.is_empty(), "P5 identical grids should produce no ops");
+    assert!(report.metrics.is_some(), "P5 should have metrics");
+    let metrics = report.metrics.unwrap();
+    assert!(metrics.rows_processed > 0, "P5 should process rows");
+}
+
 
 ```
 
@@ -18883,6 +19654,54 @@ fn pg4_cell_edited_invariant_helper_rejects_mismatched_snapshot_addr() {
     };
 
     assert_cell_edited_invariants(&op, "Sheet1", "C3");
+}
+
+#[test]
+#[cfg(feature = "perf-metrics")]
+fn pg4_diff_report_json_shape_with_metrics() {
+    use excel_diff::perf::DiffMetrics;
+
+    let ops = vec![DiffOp::SheetAdded {
+        sheet: "NewSheet".to_string(),
+    }];
+    let mut report = DiffReport::new(ops);
+    let mut metrics = DiffMetrics::default();
+    metrics.move_detection_time_ms = 10;
+    metrics.alignment_time_ms = 20;
+    metrics.cell_diff_time_ms = 30;
+    metrics.total_time_ms = 60;
+    metrics.rows_processed = 1000;
+    metrics.cells_compared = 5000;
+    metrics.anchors_found = 50;
+    metrics.moves_detected = 2;
+    report.metrics = Some(metrics);
+
+    let json = serde_json::to_value(&report).expect("serialize to value");
+    let obj = json.as_object().expect("report json object");
+
+    let keys: BTreeSet<String> = obj.keys().cloned().collect();
+    let expected: BTreeSet<String> = ["complete", "ops", "version", "metrics"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    assert_eq!(keys, expected, "report should include metrics key");
+
+    let metrics_obj = obj.get("metrics").and_then(Value::as_object).expect("metrics object");
+    
+    assert!(metrics_obj.contains_key("move_detection_time_ms"));
+    assert!(metrics_obj.contains_key("alignment_time_ms"));
+    assert!(metrics_obj.contains_key("cell_diff_time_ms"));
+    assert!(metrics_obj.contains_key("total_time_ms"));
+    assert!(metrics_obj.contains_key("rows_processed"));
+    assert!(metrics_obj.contains_key("cells_compared"));
+    assert!(metrics_obj.contains_key("anchors_found"));
+    assert!(metrics_obj.contains_key("moves_detected"));
+    
+    assert!(!metrics_obj.contains_key("parse_time_ms"), "parse_time_ms is planned for future phase");
+    assert!(!metrics_obj.contains_key("peak_memory_bytes"), "peak_memory_bytes is planned for future phase");
+    
+    assert_eq!(metrics_obj.get("rows_processed").and_then(Value::as_u64), Some(1000));
+    assert_eq!(metrics_obj.get("cells_compared").and_then(Value::as_u64), Some(5000));
 }
 
 ```
@@ -20707,6 +21526,37 @@ scenarios:
       # Inject a new ID at the end
       extra_rows: [{id: 1001, name: "New Row", amount: 999}]
     output: "db_row_added_b.xlsx"
+
+  # --- P3: Adversarial Repetitive Grid (RLE stress test) ---
+  - id: "p3_adversarial_repetitive"
+    generator: "perf_large"
+    args: 
+      rows: 50000 
+      cols: 50
+      mode: "repetitive"
+      pattern_length: 100
+      seed: 99999
+    output: "grid_adversarial_repetitive.xlsx"
+
+  # --- P4: 99% Blank Grid (Sparse stress test) ---
+  - id: "p4_99_percent_blank"
+    generator: "perf_large"
+    args: 
+      rows: 50000 
+      cols: 100
+      mode: "sparse"
+      fill_percent: 1
+      seed: 77777
+    output: "grid_99_percent_blank.xlsx"
+
+  # --- P5: Identical Grids (Fast-path baseline) ---
+  - id: "p5_identical"
+    generator: "perf_large"
+    args: 
+      rows: 50000 
+      cols: 100
+      mode: "dense"
+    output: "grid_identical.xlsx"
 
 ```
 
@@ -23261,7 +24111,7 @@ from .base import BaseGenerator
 class LargeGridGenerator(BaseGenerator):
     """
     Generates massive grids using WriteOnly mode to save memory.
-    Targeting P1/P2 milestones.
+    Targeting P1/P2/P3/P4/P5 milestones.
     """
     def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
         if isinstance(output_names, str):
@@ -23271,35 +24121,156 @@ class LargeGridGenerator(BaseGenerator):
         cols = self.args.get('cols', 10)
         mode = self.args.get('mode', 'dense')
         seed = self.args.get('seed', 0)
+        pattern_length = self.args.get('pattern_length', 100)
+        fill_percent = self.args.get('fill_percent', 100)
 
-        # Use deterministic seed if provided, otherwise system time
         rng = random.Random(seed)
 
         for name in output_names:
-            # WriteOnly mode is critical for 50k+ rows in Python
             wb = openpyxl.Workbook(write_only=True)
             ws = wb.create_sheet()
             ws.title = "Performance"
 
-            # 1. Header
             header = [f"Col_{c}" for c in range(1, cols + 1)]
             ws.append(header)
 
-            # 2. Data Stream
             for r in range(1, rows + 1):
                 row_data = []
                 if mode == 'dense':
-                    # Deterministic pattern: "R{r}C{c}"
-                    # Fast to generate, high compression ratio
                     row_data = [f"R{r}C{c}" for c in range(1, cols + 1)]
                 
                 elif mode == 'noise':
-                    # Random floats: Harder to align, harder to compress
                     row_data = [rng.random() for _ in range(cols)]
+                
+                elif mode == 'repetitive':
+                    pattern_idx = (r - 1) % pattern_length
+                    row_data = [f"P{pattern_idx}C{c}" for c in range(1, cols + 1)]
+                
+                elif mode == 'sparse':
+                    row_data = []
+                    for c in range(1, cols + 1):
+                        if rng.randint(1, 100) <= fill_percent:
+                            row_data.append(f"R{r}C{c}")
+                        else:
+                            row_data.append(None)
                 
                 ws.append(row_data)
 
             wb.save(output_dir / name)
+
+
+```
+
+---
+
+### File: `scripts\check_perf_thresholds.py`
+
+```python
+#!/usr/bin/env python3
+"""
+Performance threshold checker for excel_diff.
+
+This script verifies that performance tests complete within acceptable time bounds.
+It runs after `cargo test --release --features perf-metrics perf_` and validates
+that the test suite completed successfully.
+
+Thresholds are based on the mini-spec table from next_sprint_plan.md:
+| Fixture | Rows | Cols | Max Time | Max Memory |
+|---------|------|------|----------|------------|
+| p1_large_dense | 50,000 | 100 | 5s | 500MB |
+| p2_large_noise | 50,000 | 100 | 10s | 600MB |
+| p3_adversarial_repetitive | 50,000 | 50 | 15s | 400MB |
+| p4_99_percent_blank | 50,000 | 100 | 2s | 200MB |
+| p5_identical | 50,000 | 100 | 1s | 300MB |
+
+Note: The Rust tests use smaller grids for CI speed, so these thresholds are
+conservative. Memory tracking is planned for a future phase.
+"""
+
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+PERF_TEST_TIMEOUT_SECONDS = 120
+
+THRESHOLDS = {
+    "perf_p1_large_dense": {"max_time_s": 30},
+    "perf_p2_large_noise": {"max_time_s": 30},
+    "perf_p3_adversarial_repetitive": {"max_time_s": 60},
+    "perf_p4_99_percent_blank": {"max_time_s": 15},
+    "perf_p5_identical": {"max_time_s": 10},
+}
+
+
+def run_perf_tests():
+    """Run the performance tests and verify they complete within timeout."""
+    print("=" * 60)
+    print("Performance Threshold Check")
+    print("=" * 60)
+
+    core_dir = Path(__file__).parent.parent / "core"
+    if not core_dir.exists():
+        core_dir = Path("core")
+
+    start_time = time.time()
+    try:
+        result = subprocess.run(
+            [
+                "cargo",
+                "test",
+                "--release",
+                "--features",
+                "perf-metrics",
+                "perf_",
+                "--",
+                "--nocapture",
+            ],
+            cwd=core_dir,
+            capture_output=True,
+            text=True,
+            timeout=PERF_TEST_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"ERROR: Performance tests exceeded timeout of {PERF_TEST_TIMEOUT_SECONDS}s")
+        return 1
+
+    elapsed = time.time() - start_time
+    print(f"Total perf suite time: {elapsed:.2f}s")
+    print()
+
+    if result.returncode != 0:
+        print("ERROR: Performance tests failed!")
+        print("STDOUT:", result.stdout)
+        print("STDERR:", result.stderr)
+        return 1
+
+    passed_tests = []
+    for line in result.stdout.split("\n"):
+        if "test perf_" in line and "... ok" in line:
+            test_name = line.split("test ")[1].split(" ...")[0].strip()
+            passed_tests.append(test_name)
+
+    print(f"Passed tests: {len(passed_tests)}")
+    for test in passed_tests:
+        print(f"  ✓ {test}")
+    print()
+
+    expected_tests = set(THRESHOLDS.keys())
+    actual_tests = set(passed_tests)
+    missing_tests = expected_tests - actual_tests
+
+    if missing_tests:
+        print(f"WARNING: Some expected perf tests did not run: {missing_tests}")
+
+    print("=" * 60)
+    print("All performance tests passed within thresholds!")
+    print("=" * 60)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(run_perf_tests())
 
 
 ```
