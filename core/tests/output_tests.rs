@@ -465,9 +465,10 @@ fn serialize_full_diff_report_has_complete_true_and_no_warnings() {
         "full result should have complete=true"
     );
 
-    let has_warnings = obj.get("warnings").map(|v| {
-        v.as_array().map(|arr| !arr.is_empty()).unwrap_or(false)
-    }).unwrap_or(false);
+    let has_warnings = obj
+        .get("warnings")
+        .map(|v| v.as_array().map(|arr| !arr.is_empty()).unwrap_or(false))
+        .unwrap_or(false);
     assert!(
         !has_warnings,
         "full result should have no warnings or empty warnings array"

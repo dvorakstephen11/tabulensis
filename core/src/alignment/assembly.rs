@@ -51,6 +51,25 @@ pub fn align_rows_amr(old: &Grid, new: &Grid, config: &DiffConfig) -> Option<Row
     let view_a = GridView::from_grid_with_config(old, config);
     let view_b = GridView::from_grid_with_config(new, config);
 
+    if view_a.row_meta.len() == view_b.row_meta.len()
+        && view_a
+            .row_meta
+            .iter()
+            .zip(view_b.row_meta.iter())
+            .all(|(a, b)| a.signature == b.signature)
+    {
+        let mut matched = Vec::with_capacity(view_a.row_meta.len());
+        for (a, b) in view_a.row_meta.iter().zip(view_b.row_meta.iter()) {
+            matched.push((a.row_idx, b.row_idx));
+        }
+        return Some(RowAlignment {
+            matched,
+            inserted: Vec::new(),
+            deleted: Vec::new(),
+            moves: Vec::new(),
+        });
+    }
+
     let runs_a = compress_to_runs(&view_a.row_meta);
     let runs_b = compress_to_runs(&view_b.row_meta);
     if runs_a.len() == 1 && runs_b.len() == 1 && runs_a[0].signature == runs_b[0].signature {
@@ -61,15 +80,12 @@ pub fn align_rows_amr(old: &Grid, new: &Grid, config: &DiffConfig) -> Option<Row
         }
         let mut inserted = Vec::new();
         if runs_b[0].count > shared {
-            inserted.extend(
-                (runs_b[0].start_row + shared)..(runs_b[0].start_row + runs_b[0].count),
-            );
+            inserted
+                .extend((runs_b[0].start_row + shared)..(runs_b[0].start_row + runs_b[0].count));
         }
         let mut deleted = Vec::new();
         if runs_a[0].count > shared {
-            deleted.extend(
-                (runs_a[0].start_row + shared)..(runs_a[0].start_row + runs_a[0].count),
-            );
+            deleted.extend((runs_a[0].start_row + shared)..(runs_a[0].start_row + runs_a[0].count));
         }
         return Some(RowAlignment {
             matched,
@@ -81,13 +97,18 @@ pub fn align_rows_amr(old: &Grid, new: &Grid, config: &DiffConfig) -> Option<Row
 
     let compressed_a = runs_a.len() * 2 <= view_a.row_meta.len();
     let compressed_b = runs_b.len() * 2 <= view_b.row_meta.len();
-    if (compressed_a || compressed_b) && !runs_a.is_empty() && !runs_b.is_empty() {
-        if let Some(alignment) = align_runs_stable(&runs_a, &runs_b) {
-            return Some(alignment);
-        }
+    if (compressed_a || compressed_b)
+        && !runs_a.is_empty()
+        && !runs_b.is_empty()
+        && let Some(alignment) = align_runs_stable(&runs_a, &runs_b)
+    {
+        return Some(alignment);
     }
 
-    let anchors = build_anchor_chain(discover_anchors_from_meta(&view_a.row_meta, &view_b.row_meta));
+    let anchors = build_anchor_chain(discover_anchors_from_meta(
+        &view_a.row_meta,
+        &view_b.row_meta,
+    ));
     Some(assemble_from_meta(
         &view_a.row_meta,
         &view_b.row_meta,
@@ -132,7 +153,14 @@ fn assemble_from_meta(
 
     let old_end = old_meta.last().map(|m| m.row_idx + 1).unwrap_or(prev_old);
     let new_end = new_meta.last().map(|m| m.row_idx + 1).unwrap_or(prev_new);
-    let tail_result = fill_gap(prev_old..old_end, prev_new..new_end, old_meta, new_meta, config, depth);
+    let tail_result = fill_gap(
+        prev_old..old_end,
+        prev_new..new_end,
+        old_meta,
+        new_meta,
+        config,
+        depth,
+    );
     matched.extend(tail_result.matched);
     inserted.extend(tail_result.inserted);
     deleted.extend(tail_result.deleted);
@@ -185,12 +213,15 @@ fn fill_gap(
 
         GapStrategy::HashFallback => {
             let mut result = align_gap_via_hash(old_slice, new_slice);
-            result.moves.extend(moves_from_matched_pairs(&result.matched));
+            result
+                .moves
+                .extend(moves_from_matched_pairs(&result.matched));
             result
         }
 
         GapStrategy::MoveCandidate => {
-            let mut result = if old_slice.len() as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
+            let mut result = if old_slice.len() as u32
+                > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
                 || new_slice.len() as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
             {
                 align_gap_via_hash(old_slice, new_slice)
@@ -206,10 +237,8 @@ fn fill_gap(
                     .iter()
                     .any(|(a, b)| (*b as i64 - *a as i64) != 0);
 
-                if has_nonzero_offset {
-                    if let Some(mv) = find_block_move(old_slice, new_slice, 1) {
-                        detected_moves.push(mv);
-                    }
+                if has_nonzero_offset && let Some(mv) = find_block_move(old_slice, new_slice, 1) {
+                    detected_moves.push(mv);
                 }
             }
 
@@ -489,14 +518,11 @@ fn myers_edit_script(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> Vec<Edit> 
         let mut v_next = v.clone();
         for k in (-(d as isize)..=d as isize).step_by(2) {
             let idx = (k + offset) as usize;
-            let x_start;
-            if k == -(d as isize) {
-                x_start = v[idx + 1];
-            } else if k != d as isize && v[idx - 1] < v[idx + 1] {
-                x_start = v[idx + 1];
+            let x_start = if k == -(d as isize) || (k != d as isize && v[idx - 1] < v[idx + 1]) {
+                v[idx + 1]
             } else {
-                x_start = v[idx - 1] + 1;
-            }
+                v[idx - 1] + 1
+            };
 
             let mut x = x_start;
             let mut y = x - k;
@@ -541,8 +567,8 @@ fn reconstruct_myers(
             prev_y = 0;
             from_down = false;
         } else {
-            let use_down = k == -(d_rev as isize)
-                || (k != d_rev as isize && v[idx - 1] < v[idx + 1]);
+            let use_down =
+                k == -(d_rev as isize) || (k != d_rev as isize && v[idx - 1] < v[idx + 1]);
             let prev_k = if use_down { k + 1 } else { k - 1 };
             let prev_idx = (prev_k + offset) as usize;
             let prev_v = &trace[d_rev - 1];
@@ -586,15 +612,18 @@ fn align_gap_via_hash(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> GapAlignm
 
     let mut sig_to_new: HashMap<crate::workbook::RowSignature, VecDeque<u32>> = HashMap::new();
     for (j, meta) in new_slice.iter().enumerate() {
-        sig_to_new.entry(meta.signature).or_default().push_back(j as u32);
+        sig_to_new
+            .entry(meta.signature)
+            .or_default()
+            .push_back(j as u32);
     }
 
     let mut candidate_pairs: Vec<(u32, u32)> = Vec::new();
     for (i, meta) in old_slice.iter().enumerate() {
-        if let Some(q) = sig_to_new.get_mut(&meta.signature) {
-            if let Some(j) = q.pop_front() {
-                candidate_pairs.push((i as u32, j));
-            }
+        if let Some(q) = sig_to_new.get_mut(&meta.signature)
+            && let Some(j) = q.pop_front()
+        {
+            candidate_pairs.push((i as u32, j));
         }
     }
 
@@ -628,7 +657,10 @@ fn align_gap_via_hash(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> GapAlignm
         if keep[k] {
             used_old[old_i as usize] = true;
             used_new[new_j as usize] = true;
-            matched.push((old_slice[old_i as usize].row_idx, new_slice[new_j as usize].row_idx));
+            matched.push((
+                old_slice[old_i as usize].row_idx,
+                new_slice[new_j as usize].row_idx,
+            ));
         }
     }
 
@@ -796,20 +828,28 @@ mod tests {
             .expect("alignment should succeed with disjoint gaps");
 
         assert!(!alignment.matched.is_empty(), "should have matched pairs");
-        
-        let matched_is_monotonic = alignment.matched.windows(2).all(|w| {
-            w[0].0 <= w[1].0 && w[0].1 <= w[1].1
-        });
-        assert!(matched_is_monotonic, "matched pairs should be monotonically increasing");
-        
-        assert!(!alignment.inserted.is_empty() || !alignment.deleted.is_empty(), 
-            "should have insertions and/or deletions");
+
+        let matched_is_monotonic = alignment
+            .matched
+            .windows(2)
+            .all(|w| w[0].0 <= w[1].0 && w[0].1 <= w[1].1);
+        assert!(
+            matched_is_monotonic,
+            "matched pairs should be monotonically increasing"
+        );
+
+        assert!(
+            !alignment.inserted.is_empty() || !alignment.deleted.is_empty(),
+            "should have insertions and/or deletions"
+        );
     }
 
     #[test]
     fn amr_recursive_gap_alignment_returns_monotonic_alignment() {
         let grid_a = grid_with_unique_rows(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
-        let rows_b = vec![1, 2, 100, 3, 4, 5, 200, 6, 7, 8, 300, 9, 10, 11, 400, 12, 13, 14, 15];
+        let rows_b = vec![
+            1, 2, 100, 3, 4, 5, 200, 6, 7, 8, 300, 9, 10, 11, 400, 12, 13, 14, 15,
+        ];
         let grid_b = grid_with_unique_rows(&rows_b);
 
         let config = DiffConfig {
@@ -821,20 +861,27 @@ mod tests {
         let alignment = align_rows_amr(&grid_a, &grid_b, &config)
             .expect("alignment should succeed with recursive gaps");
 
-        let matched_is_monotonic = alignment.matched.windows(2).all(|w| {
-            w[0].0 <= w[1].0 && w[0].1 <= w[1].1
-        });
-        assert!(matched_is_monotonic, 
-            "recursive alignment should produce monotonic matched pairs");
-        
+        let matched_is_monotonic = alignment
+            .matched
+            .windows(2)
+            .all(|w| w[0].0 <= w[1].0 && w[0].1 <= w[1].1);
+        assert!(
+            matched_is_monotonic,
+            "recursive alignment should produce monotonic matched pairs"
+        );
+
         for &inserted_row in &alignment.inserted {
-            assert!(!alignment.matched.iter().any(|(_, b)| *b == inserted_row),
-                "inserted rows should not appear in matched pairs");
+            assert!(
+                !alignment.matched.iter().any(|(_, b)| *b == inserted_row),
+                "inserted rows should not appear in matched pairs"
+            );
         }
-        
+
         for &deleted_row in &alignment.deleted {
-            assert!(!alignment.matched.iter().any(|(a, _)| *a == deleted_row),
-                "deleted rows should not appear in matched pairs");
+            assert!(
+                !alignment.matched.iter().any(|(a, _)| *a == deleted_row),
+                "deleted rows should not appear in matched pairs"
+            );
         }
     }
 
@@ -847,13 +894,20 @@ mod tests {
         let alignment = align_rows_amr(&grid_a, &grid_b, &config)
             .expect("alignment should succeed with moved block");
 
-        assert!(!alignment.matched.is_empty(), "should have matched pairs even with moves");
-        
-        let old_rows: std::collections::HashSet<_> = alignment.matched.iter().map(|(a, _)| *a).collect();
-        let new_rows: std::collections::HashSet<_> = alignment.matched.iter().map(|(_, b)| *b).collect();
-        
-        assert!(old_rows.len() <= 10 && new_rows.len() <= 10, 
-            "matched rows should not exceed input size");
+        assert!(
+            !alignment.matched.is_empty(),
+            "should have matched pairs even with moves"
+        );
+
+        let old_rows: std::collections::HashSet<_> =
+            alignment.matched.iter().map(|(a, _)| *a).collect();
+        let new_rows: std::collections::HashSet<_> =
+            alignment.matched.iter().map(|(_, b)| *b).collect();
+
+        assert!(
+            old_rows.len() <= 10 && new_rows.len() <= 10,
+            "matched rows should not exceed input size"
+        );
     }
 
     #[test]
@@ -913,7 +967,10 @@ mod tests {
         assert!(result.inserted.is_empty());
         assert!(result.deleted.is_empty());
         assert_eq!(result.matched.first(), Some(&(10, 20)));
-        assert_eq!(result.matched.last(), Some(&(10 + large as u32 - 1, 20 + large as u32 - 1)));
+        assert_eq!(
+            result.matched.last(),
+            Some(&(10 + large as u32 - 1, 20 + large as u32 - 1))
+        );
     }
 
     #[test]
@@ -948,6 +1005,9 @@ mod tests {
         assert!(result.deleted.is_empty());
         assert_eq!(result.matched.len(), count);
         assert_eq!(result.matched.first(), Some(&(0, 0)));
-        assert_eq!(result.matched.last(), Some(&(count as u32 - 1, (count + 1) as u32 - 1)));
+        assert_eq!(
+            result.matched.last(),
+            Some(&(count as u32 - 1, (count + 1) as u32 - 1))
+        );
     }
 }

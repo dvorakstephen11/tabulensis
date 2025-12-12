@@ -68,10 +68,20 @@ mod tests {
     fn compresses_10k_identical_rows_to_single_run() {
         let meta: Vec<RowMeta> = (0..10_000).map(|i| make_meta(i, 42)).collect();
         let runs = compress_to_runs(&meta);
-        
-        assert_eq!(runs.len(), 1, "10K identical rows should compress to a single run");
-        assert_eq!(runs[0].count, 10_000, "single run should have count of 10,000");
-        assert_eq!(runs[0].signature.hash, 42, "run signature should match input");
+
+        assert_eq!(
+            runs.len(),
+            1,
+            "10K identical rows should compress to a single run"
+        );
+        assert_eq!(
+            runs[0].count, 10_000,
+            "single run should have count of 10,000"
+        );
+        assert_eq!(
+            runs[0].signature.hash, 42,
+            "run signature should match input"
+        );
         assert_eq!(runs[0].start_row, 0, "run should start at row 0");
     }
 
@@ -84,14 +94,23 @@ mod tests {
             })
             .collect();
         let runs = compress_to_runs(&meta);
-        
-        assert_eq!(runs.len(), 10_000, 
-            "alternating A-B pattern should produce 10K runs (no compression benefit)");
-        
+
+        assert_eq!(
+            runs.len(),
+            10_000,
+            "alternating A-B pattern should produce 10K runs (no compression benefit)"
+        );
+
         for (i, run) in runs.iter().enumerate() {
-            assert_eq!(run.count, 1, "each run should have count of 1 for alternating pattern");
+            assert_eq!(
+                run.count, 1,
+                "each run should have count of 1 for alternating pattern"
+            );
             let expected_hash = if i % 2 == 0 { 1 } else { 2 };
-            assert_eq!(run.signature.hash, expected_hash, "run signature should alternate");
+            assert_eq!(
+                run.signature.hash, expected_hash,
+                "run signature should alternate"
+            );
         }
     }
 
@@ -99,7 +118,7 @@ mod tests {
     fn mixed_runs_with_varying_lengths() {
         let mut meta = Vec::new();
         let mut row_idx = 0u32;
-        
+
         for _ in 0..100 {
             meta.push(make_meta(row_idx, 1));
             row_idx += 1;
@@ -116,10 +135,14 @@ mod tests {
             meta.push(make_meta(row_idx, 4));
             row_idx += 1;
         }
-        
+
         let runs = compress_to_runs(&meta);
-        
-        assert_eq!(runs.len(), 4, "should produce 4 runs for 4 distinct signatures");
+
+        assert_eq!(
+            runs.len(),
+            4,
+            "should produce 4 runs for 4 distinct signatures"
+        );
         assert_eq!(runs[0].count, 100);
         assert_eq!(runs[1].count, 50);
         assert_eq!(runs[2].count, 200);
@@ -137,7 +160,7 @@ mod tests {
     fn single_row_produces_single_run() {
         let meta = vec![make_meta(0, 999)];
         let runs = compress_to_runs(&meta);
-        
+
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].count, 1);
         assert_eq!(runs[0].start_row, 0);
@@ -150,13 +173,16 @@ mod tests {
             .map(|i| make_meta(i, (i / 100) as u128))
             .collect();
         let runs = compress_to_runs(&meta);
-        
+
         assert_eq!(runs.len(), 10, "should have 10 runs (one per 100 rows)");
-        
+
         for (group_idx, run) in runs.iter().enumerate() {
             let expected_start = (group_idx * 100) as u32;
-            assert_eq!(run.start_row, expected_start, 
-                "run {} should start at row {}", group_idx, expected_start);
+            assert_eq!(
+                run.start_row, expected_start,
+                "run {} should start at row {}",
+                group_idx, expected_start
+            );
             assert_eq!(run.count, 100, "each run should have 100 rows");
         }
     }

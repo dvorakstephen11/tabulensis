@@ -1162,8 +1162,11 @@ fn pg4_diff_report_json_shape_with_metrics() {
         .collect();
     assert_eq!(keys, expected, "report should include metrics key");
 
-    let metrics_obj = obj.get("metrics").and_then(Value::as_object).expect("metrics object");
-    
+    let metrics_obj = obj
+        .get("metrics")
+        .and_then(Value::as_object)
+        .expect("metrics object");
+
     assert!(metrics_obj.contains_key("move_detection_time_ms"));
     assert!(metrics_obj.contains_key("alignment_time_ms"));
     assert!(metrics_obj.contains_key("cell_diff_time_ms"));
@@ -1172,10 +1175,22 @@ fn pg4_diff_report_json_shape_with_metrics() {
     assert!(metrics_obj.contains_key("cells_compared"));
     assert!(metrics_obj.contains_key("anchors_found"));
     assert!(metrics_obj.contains_key("moves_detected"));
-    
-    assert!(!metrics_obj.contains_key("parse_time_ms"), "parse_time_ms is planned for future phase");
-    assert!(!metrics_obj.contains_key("peak_memory_bytes"), "peak_memory_bytes is planned for future phase");
-    
-    assert_eq!(metrics_obj.get("rows_processed").and_then(Value::as_u64), Some(1000));
-    assert_eq!(metrics_obj.get("cells_compared").and_then(Value::as_u64), Some(5000));
+
+    assert!(
+        !metrics_obj.contains_key("parse_time_ms"),
+        "parse_time_ms is planned for future phase"
+    );
+    assert!(
+        !metrics_obj.contains_key("peak_memory_bytes"),
+        "peak_memory_bytes is planned for future phase"
+    );
+
+    assert_eq!(
+        metrics_obj.get("rows_processed").and_then(Value::as_u64),
+        Some(1000)
+    );
+    assert_eq!(
+        metrics_obj.get("cells_compared").and_then(Value::as_u64),
+        Some(5000)
+    );
 }

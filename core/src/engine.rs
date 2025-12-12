@@ -3,8 +3,8 @@
 //! Provides the main entry point [`diff_workbooks`] for comparing two workbooks
 //! and generating a [`DiffReport`] of all changes.
 
-use crate::alignment::{RowAlignment as AmrAlignment, align_rows_amr};
 use crate::alignment::move_extraction::moves_from_matched_pairs;
+use crate::alignment::{RowAlignment as AmrAlignment, align_rows_amr};
 use crate::column_alignment::{
     ColumnAlignment, ColumnBlockMove, align_single_column_change_with_config,
     detect_exact_column_block_move_with_config,
@@ -12,6 +12,8 @@ use crate::column_alignment::{
 use crate::config::{DiffConfig, LimitBehavior};
 use crate::database_alignment::{KeyColumnSpec, diff_table_by_key};
 use crate::diff::{DiffError, DiffOp, DiffReport, SheetId};
+#[cfg(feature = "perf-metrics")]
+use crate::perf::{DiffMetrics, Phase};
 use crate::rect_block_move::{RectBlockMove, detect_exact_rect_block_move_with_config};
 use crate::region_mask::RegionMask;
 use crate::row_alignment::{
@@ -19,8 +21,6 @@ use crate::row_alignment::{
     align_row_changes_with_config, detect_exact_row_block_move_with_config,
     detect_fuzzy_row_block_move_with_config,
 };
-#[cfg(feature = "perf-metrics")]
-use crate::perf::{DiffMetrics, Phase};
 use crate::workbook::{
     Cell, CellAddress, CellSnapshot, ColSignature, Grid, RowSignature, Sheet, SheetKind, Workbook,
 };
@@ -307,9 +307,8 @@ fn diff_grids_core(
 ) {
     let mut old_mask = RegionMask::all_active(old.nrows, old.ncols);
     let mut new_mask = RegionMask::all_active(new.nrows, new.ncols);
-    let move_detection_enabled =
-        old.nrows.max(new.nrows) <= config.recursive_align_threshold
-            && old.ncols.max(new.ncols) <= 256;
+    let move_detection_enabled = old.nrows.max(new.nrows) <= config.recursive_align_threshold
+        && old.ncols.max(new.ncols) <= 256;
     let mut iteration = 0;
 
     if move_detection_enabled {
@@ -457,8 +456,7 @@ fn diff_grids_core(
 
     if let Some(mut alignment) = align_rows_amr(old, new, config) {
         inject_moves_from_insert_delete(old, new, &mut alignment);
-        let has_structural_rows =
-            !alignment.inserted.is_empty() || !alignment.deleted.is_empty();
+        let has_structural_rows = !alignment.inserted.is_empty() || !alignment.deleted.is_empty();
         if has_structural_rows && alignment.matched.is_empty() {
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
@@ -476,9 +474,10 @@ fn diff_grids_core(
             }
             return;
         }
-        let has_row_edits = alignment.matched.iter().any(|(a, b)| {
-            row_signature_at(old, *a) != row_signature_at(new, *b)
-        });
+        let has_row_edits = alignment
+            .matched
+            .iter()
+            .any(|(a, b)| row_signature_at(old, *a) != row_signature_at(new, *b));
         if has_structural_rows && has_row_edits {
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
@@ -500,25 +499,26 @@ fn diff_grids_core(
             && alignment.inserted.is_empty()
             && alignment.deleted.is_empty()
             && old.ncols != new.ncols
+            && let Some(col_alignment) = align_single_column_change_with_config(old, new, config)
         {
-            if let Some(col_alignment) = align_single_column_change_with_config(old, new, config) {
-                #[cfg(feature = "perf-metrics")]
-                if let Some(m) = metrics.as_mut() {
-                    m.start_phase(Phase::CellDiff);
-                }
-                emit_column_aligned_diffs(sheet_id, old, new, &col_alignment, ops);
-                #[cfg(feature = "perf-metrics")]
-                if let Some(m) = metrics.as_mut() {
-                    let overlap_rows = old.nrows.min(new.nrows) as u64;
-                    m.add_cells_compared(overlap_rows.saturating_mul(col_alignment.matched.len() as u64));
-                    m.end_phase(Phase::CellDiff);
-                }
-                #[cfg(feature = "perf-metrics")]
-                if let Some(m) = metrics.as_mut() {
-                    m.end_phase(Phase::Alignment);
-                }
-                return;
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = metrics.as_mut() {
+                m.start_phase(Phase::CellDiff);
             }
+            emit_column_aligned_diffs(sheet_id, old, new, &col_alignment, ops);
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = metrics.as_mut() {
+                let overlap_rows = old.nrows.min(new.nrows) as u64;
+                m.add_cells_compared(
+                    overlap_rows.saturating_mul(col_alignment.matched.len() as u64),
+                );
+                m.end_phase(Phase::CellDiff);
+            }
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = metrics.as_mut() {
+                m.end_phase(Phase::Alignment);
+            }
+            return;
         }
         if alignment.moves.is_empty() && row_signature_multiset_equal(old, new) {
             #[cfg(feature = "perf-metrics")]
@@ -776,10 +776,10 @@ fn align_indices_by_signature<T: Copy + Eq>(
             } else {
                 (sig_b(short_idx), sig_a(long_idx))
             };
-            if let (Some(sa), Some(sb)) = (sig_short, sig_long) {
-                if sa == sb {
-                    matches += 1;
-                }
+            if let (Some(sa), Some(sb)) = (sig_short, sig_long)
+                && sa == sb
+            {
+                matches += 1;
             }
         }
         if matches > best_matches {
@@ -797,11 +797,7 @@ fn align_indices_by_signature<T: Copy + Eq>(
     }
 }
 
-fn inject_moves_from_insert_delete(
-    old: &Grid,
-    new: &Grid,
-    alignment: &mut AmrAlignment,
-) {
+fn inject_moves_from_insert_delete(old: &Grid, new: &Grid, alignment: &mut AmrAlignment) {
     if alignment.inserted.is_empty() || alignment.deleted.is_empty() {
         return;
     }
@@ -1341,8 +1337,7 @@ fn diff_aligned_with_masks(
 
     for (row_a, row_b) in rows_a.iter().zip(rows_b.iter()) {
         for (col_a, col_b) in cols_a.iter().zip(cols_b.iter()) {
-            if !old_mask.is_cell_active(*row_a, *col_a)
-                || !new_mask.is_cell_active(*row_b, *col_b)
+            if !old_mask.is_cell_active(*row_a, *col_a) || !new_mask.is_cell_active(*row_b, *col_b)
             {
                 continue;
             }
@@ -1709,4 +1704,3 @@ mod tests {
         );
     }
 }
-

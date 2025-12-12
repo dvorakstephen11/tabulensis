@@ -213,3 +213,11 @@ Based on review feedback (`docs/meta/reviews/2025-12-09-sprint-branch-2/remediat
 3. Add `peak_memory_bytes` with allocator integration (e.g., `tikv-jemallocator`)
 4. Performance profiling on 50K-row grids from the full fixture set
 
+
+## Remediation Round F (2025-12-11)
+
+- Findings addressed: (A) Missing identical-grid fast path in `align_rows_amr`; (B) Unbounded `find_block_move` candidate scan risking quadratic/cubic behavior.
+- Files modified: `core/src/alignment/assembly.rs`, `core/src/alignment/move_extraction.rs`, `core/src/alignment/row_metadata.rs`, `core/src/engine.rs`.
+- Changes: Added O(N) identical-grid early exit before run compression; bounded block-move detection with slice/candidate caps and low-info filtering; cleaned clippy warnings in touched areas.
+- Verification: `cargo fmt`, `cargo clippy`, `cargo test`.
+- Complications: None.

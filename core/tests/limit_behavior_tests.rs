@@ -154,10 +154,16 @@ fn limit_exceeded_return_error_returns_structured_error() {
 
     let result = try_diff_workbooks_with_config(&wb_a, &wb_b, &config);
     assert!(result.is_err(), "should return error when limits exceeded");
-    
+
     let err = result.unwrap_err();
     match err {
-        DiffError::LimitsExceeded { sheet, rows, cols, max_rows, max_cols } => {
+        DiffError::LimitsExceeded {
+            sheet,
+            rows,
+            cols,
+            max_rows,
+            max_cols,
+        } => {
             assert_eq!(sheet, "Sheet1");
             assert_eq!(rows, 100);
             assert_eq!(cols, 10);
@@ -363,4 +369,3 @@ fn wide_grid_500_cols_completes_within_default_limits() {
         "should detect the cell edit in wide grid"
     );
 }
-

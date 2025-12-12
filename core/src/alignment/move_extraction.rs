@@ -23,8 +23,8 @@
 
 use std::collections::HashMap;
 
-use crate::alignment::row_metadata::RowMeta;
 use crate::alignment::RowBlockMove;
+use crate::alignment::row_metadata::RowMeta;
 use crate::workbook::RowSignature;
 
 pub fn find_block_move(
@@ -32,37 +32,53 @@ pub fn find_block_move(
     new_slice: &[RowMeta],
     min_len: u32,
 ) -> Option<RowBlockMove> {
+    const MAX_SLICE_LEN: usize = 10_000;
+    const MAX_CANDIDATES_PER_SIG: usize = 16;
+
+    if old_slice.len() > MAX_SLICE_LEN || new_slice.len() > MAX_SLICE_LEN {
+        return None;
+    }
+
     let mut positions: HashMap<RowSignature, Vec<usize>> = HashMap::new();
     for (idx, meta) in old_slice.iter().enumerate() {
+        if meta.is_low_info() {
+            continue;
+        }
         positions.entry(meta.signature).or_default().push(idx);
     }
 
     let mut best: Option<RowBlockMove> = None;
+    let mut best_len: usize = 0;
 
     for (new_idx, meta) in new_slice.iter().enumerate() {
-        if let Some(candidates) = positions.get(&meta.signature) {
-            for &old_idx in candidates {
-                let mut len = 0usize;
-                while old_idx + len < old_slice.len()
-                    && new_idx + len < new_slice.len()
-                    && old_slice[old_idx + len].signature == new_slice[new_idx + len].signature
-                {
-                    len += 1;
-                }
+        if meta.is_low_info() {
+            continue;
+        }
 
-                if len as u32 >= min_len {
-                    let mv = RowBlockMove {
-                        src_start_row: old_slice[old_idx].row_idx,
-                        dst_start_row: new_slice[new_idx].row_idx,
-                        row_count: len as u32,
-                    };
-                    let take = best
-                        .as_ref()
-                        .map_or(true, |b| mv.row_count > b.row_count);
-                    if take {
-                        best = Some(mv);
-                    }
-                }
+        let Some(candidates) = positions.get(&meta.signature) else {
+            continue;
+        };
+
+        for &old_idx in candidates.iter().take(MAX_CANDIDATES_PER_SIG) {
+            let max_possible = (old_slice.len() - old_idx).min(new_slice.len() - new_idx);
+            if max_possible <= best_len {
+                continue;
+            }
+
+            let mut len = 0usize;
+            while len < max_possible
+                && old_slice[old_idx + len].signature == new_slice[new_idx + len].signature
+            {
+                len += 1;
+            }
+
+            if len >= min_len as usize && len > best_len {
+                best_len = len;
+                best = Some(RowBlockMove {
+                    src_start_row: old_slice[old_idx].row_idx,
+                    dst_start_row: new_slice[new_idx].row_idx,
+                    row_count: len as u32,
+                });
             }
         }
     }

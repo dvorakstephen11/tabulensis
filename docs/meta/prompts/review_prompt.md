@@ -80,6 +80,7 @@
       m7_ast_canonicalization_tests.rs
       m7_semantic_m_diff_tests.rs
       m_section_splitting_tests.rs
+      metrics_unit_tests.rs
       output_tests.rs
       perf_large_grid_tests.rs
       pg1_ir_tests.rs
@@ -108,7 +109,9 @@
   logs/
     2025-11-28b-diffop-pg4/
       activity_log.txt
+  plan_review.md
   README.md
+  related_files.txt.md
   scripts/
     check_perf_thresholds.py
 ```
@@ -510,6 +513,145 @@ pub fn discover_anchors_from_meta(old: &[RowMeta], new: &[RowMeta]) -> Vec<Ancho
         .collect()
 }
 
+pub fn discover_context_anchors(old: &[RowMeta], new: &[RowMeta], k: usize) -> Vec<Anchor> {
+    if k == 0 || old.len() < k || new.len() < k {
+        return Vec::new();
+    }
+
+    fn window_signature(window: &[RowMeta]) -> Option<RowSignature> {
+        if window.iter().any(|m| m.is_low_info()) {
+            return None;
+        }
+        let mut acc: u128 = 0x9e37_79b1_85eb_ca87;
+        for (idx, meta) in window.iter().enumerate() {
+            let mul = 0x1000_0000_01b3u128;
+            acc = acc
+                .wrapping_mul(mul)
+                .wrapping_add(meta.signature.hash ^ ((idx as u128) << 1) ^ 0x517c_c1b7_2722_0a95);
+            acc ^= acc >> 33;
+            acc = acc.rotate_left(7);
+        }
+        Some(RowSignature { hash: acc })
+    }
+
+    let mut count_old: HashMap<RowSignature, u32> = HashMap::new();
+    let mut pos_old: HashMap<RowSignature, u32> = HashMap::new();
+    for i in 0..=old.len() - k {
+        if let Some(sig) = window_signature(&old[i..i + k]) {
+            *count_old.entry(sig).or_insert(0) += 1;
+            pos_old.entry(sig).or_insert(old[i].row_idx);
+        }
+    }
+
+    let mut count_new: HashMap<RowSignature, u32> = HashMap::new();
+    let mut pos_new: HashMap<RowSignature, u32> = HashMap::new();
+    for i in 0..=new.len() - k {
+        if let Some(sig) = window_signature(&new[i..i + k]) {
+            *count_new.entry(sig).or_insert(0) += 1;
+            pos_new.entry(sig).or_insert(new[i].row_idx);
+        }
+    }
+
+    let mut anchors = Vec::new();
+    for (sig, &new_row) in pos_new.iter() {
+        if count_new.get(sig).copied().unwrap_or(0) != 1 {
+            continue;
+        }
+        if count_old.get(sig).copied().unwrap_or(0) != 1 {
+            continue;
+        }
+        if let Some(old_row) = pos_old.get(sig) {
+            anchors.push(Anchor {
+                old_row: *old_row,
+                new_row,
+                signature: *sig,
+            });
+        }
+    }
+
+    anchors
+}
+
+pub fn discover_local_anchors(old: &[RowMeta], new: &[RowMeta]) -> Vec<Anchor> {
+    let mut count_old: HashMap<RowSignature, u32> = HashMap::new();
+    for m in old.iter() {
+        if !m.is_low_info() {
+            *count_old.entry(m.signature).or_insert(0) += 1;
+        }
+    }
+
+    let mut count_new: HashMap<RowSignature, u32> = HashMap::new();
+    for m in new.iter() {
+        if !m.is_low_info() {
+            *count_new.entry(m.signature).or_insert(0) += 1;
+        }
+    }
+
+    let mut pos_old: HashMap<RowSignature, u32> = HashMap::new();
+    for m in old.iter() {
+        if !m.is_low_info() && count_old.get(&m.signature).copied().unwrap_or(0) == 1 {
+            pos_old.insert(m.signature, m.row_idx);
+        }
+    }
+
+    let mut out = Vec::new();
+    for m in new.iter() {
+        if m.is_low_info() {
+            continue;
+        }
+        if count_new.get(&m.signature).copied().unwrap_or(0) != 1 {
+            continue;
+        }
+        if let Some(old_row) = pos_old.get(&m.signature) {
+            out.push(Anchor {
+                old_row: *old_row,
+                new_row: m.row_idx,
+                signature: m.signature,
+            });
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
+
+    fn meta_from_hashes(hashes: &[u128]) -> Vec<RowMeta> {
+        hashes
+            .iter()
+            .enumerate()
+            .map(|(idx, &hash)| {
+                let sig = RowSignature { hash };
+                RowMeta {
+                    row_idx: idx as u32,
+                    signature: sig,
+                    hash: sig,
+                    non_blank_count: 1,
+                    first_non_blank_col: 0,
+                    frequency_class: FrequencyClass::Common,
+                    is_low_info: false,
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn discovers_context_anchors_when_no_uniques() {
+        let old = meta_from_hashes(&[1, 2, 3, 4, 5, 6, 1, 2]);
+        let new = meta_from_hashes(&[7, 1, 2, 3, 4, 5, 6, 8]);
+
+        let anchors = discover_context_anchors(&old, &new, 4);
+        assert!(!anchors.is_empty(), "should find context anchors");
+        let mut rows: Vec<(u32, u32)> = anchors.iter().map(|a| (a.old_row, a.new_row)).collect();
+        rows.sort();
+        assert!(rows.contains(&(0, 1)));
+        assert!(rows.contains(&(1, 2)));
+        assert!(rows.contains(&(2, 3)));
+    }
+}
+
 ```
 
 ---
@@ -532,7 +674,9 @@ pub fn discover_anchors_from_meta(old: &[RowMeta], new: &[RowMeta]) -> Vec<Ancho
 use std::ops::Range;
 
 use crate::alignment::anchor_chain::build_anchor_chain;
-use crate::alignment::anchor_discovery::{Anchor, discover_anchors_from_meta};
+use crate::alignment::anchor_discovery::{
+    Anchor, discover_anchors_from_meta, discover_context_anchors, discover_local_anchors,
+};
 use crate::alignment::gap_strategy::{GapStrategy, select_gap_strategy};
 use crate::alignment::move_extraction::{find_block_move, moves_from_matched_pairs};
 use crate::alignment::row_metadata::RowMeta;
@@ -683,35 +827,96 @@ fn fill_gap(
 
     match strategy {
         GapStrategy::Empty => GapAlignmentResult::default(),
+
         GapStrategy::InsertAll => GapAlignmentResult {
             matched: Vec::new(),
             inserted: (new_gap.start..new_gap.end).collect(),
             deleted: Vec::new(),
             moves: Vec::new(),
         },
+
         GapStrategy::DeleteAll => GapAlignmentResult {
             matched: Vec::new(),
             inserted: Vec::new(),
             deleted: (old_gap.start..old_gap.end).collect(),
             moves: Vec::new(),
         },
+
         GapStrategy::SmallEdit => align_small_gap(old_slice, new_slice),
+
+        GapStrategy::HashFallback => {
+            let mut result = align_gap_via_hash(old_slice, new_slice);
+            result.moves.extend(moves_from_matched_pairs(&result.matched));
+            result
+        }
+
         GapStrategy::MoveCandidate => {
-            let mut result = align_small_gap(old_slice, new_slice);
+            let mut result = if old_slice.len() as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
+                || new_slice.len() as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
+            {
+                align_gap_via_hash(old_slice, new_slice)
+            } else {
+                align_small_gap(old_slice, new_slice)
+            };
+
             let mut detected_moves = moves_from_matched_pairs(&result.matched);
+
             if detected_moves.is_empty() {
-                if let Some(mv) = find_block_move(old_slice, new_slice, 1) {
-                    detected_moves.push(mv);
+                let has_nonzero_offset = result
+                    .matched
+                    .iter()
+                    .any(|(a, b)| (*b as i64 - *a as i64) != 0);
+
+                if has_nonzero_offset {
+                    if let Some(mv) = find_block_move(old_slice, new_slice, 1) {
+                        detected_moves.push(mv);
+                    }
                 }
             }
+
             result.moves.extend(detected_moves);
             result
         }
+
         GapStrategy::RecursiveAlign => {
-            if depth >= config.max_recursion_depth {
+            let at_limit = depth >= config.max_recursion_depth;
+            if at_limit {
+                if old_slice.len() as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
+                    || new_slice.len() as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
+                {
+                    return align_gap_via_hash(old_slice, new_slice);
+                }
                 return align_small_gap(old_slice, new_slice);
             }
-            let anchors = build_anchor_chain(discover_anchors_from_meta(old_slice, new_slice));
+
+            let anchor_candidates = if depth == 0 {
+                discover_anchors_from_meta(old_slice, new_slice)
+            } else {
+                let mut anchors = discover_local_anchors(old_slice, new_slice);
+                if anchors.is_empty() {
+                    anchors = discover_context_anchors(old_slice, new_slice, 4);
+                    if anchors.is_empty() {
+                        anchors = discover_context_anchors(old_slice, new_slice, 8);
+                    }
+                } else {
+                    let mut ctx_anchors = discover_context_anchors(old_slice, new_slice, 4);
+                    if anchors.len() < 4 {
+                        anchors.append(&mut ctx_anchors);
+                    }
+                }
+                anchors
+            };
+
+            let anchors = build_anchor_chain(anchor_candidates);
+            if anchors.is_empty() {
+                if old_slice.len() as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
+                    || new_slice.len() as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
+                {
+                    return align_gap_via_hash(old_slice, new_slice);
+                }
+                return align_small_gap(old_slice, new_slice);
+            }
+
             let alignment = assemble_from_meta(old_slice, new_slice, anchors, config, depth + 1);
             GapAlignmentResult {
                 matched: alignment.matched,
@@ -807,6 +1012,17 @@ fn align_small_gap(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> GapAlignment
         return GapAlignmentResult::default();
     }
 
+    if m as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
+        || n as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
+    {
+        return align_gap_via_hash(old_slice, new_slice);
+    }
+
+    const LCS_DP_WORK_LIMIT: usize = 20_000;
+    if m.saturating_mul(n) > LCS_DP_WORK_LIMIT {
+        return align_gap_via_myers(old_slice, new_slice);
+    }
+
     let mut dp = vec![vec![0u32; n + 1]; m + 1];
     for i in (0..m).rev() {
         for j in (0..n).rev() {
@@ -865,9 +1081,291 @@ fn align_small_gap(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> GapAlignment
     }
 }
 
+fn align_gap_via_myers(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> GapAlignmentResult {
+    let m = old_slice.len();
+    let n = new_slice.len();
+    if m == 0 && n == 0 {
+        return GapAlignmentResult::default();
+    }
+
+    let edits = myers_edit_script(old_slice, new_slice);
+
+    let mut matched = Vec::new();
+    let mut inserted = Vec::new();
+    let mut deleted = Vec::new();
+
+    for edit in edits {
+        match edit {
+            Edit::Match(i, j) => matched.push((old_slice[i].row_idx, new_slice[j].row_idx)),
+            Edit::Insert(j) => inserted.push(new_slice[j].row_idx),
+            Edit::Delete(i) => deleted.push(old_slice[i].row_idx),
+        }
+    }
+
+    if matched.is_empty() && m == n {
+        matched = old_slice
+            .iter()
+            .zip(new_slice.iter())
+            .map(|(a, b)| (a.row_idx, b.row_idx))
+            .collect();
+        inserted.clear();
+        deleted.clear();
+    }
+
+    matched.sort_by_key(|(a, b)| (*a, *b));
+    inserted.sort_unstable();
+    deleted.sort_unstable();
+
+    GapAlignmentResult {
+        matched,
+        inserted,
+        deleted,
+        moves: Vec::new(),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Edit {
+    Match(usize, usize),
+    Insert(usize),
+    Delete(usize),
+}
+
+fn myers_edit_script(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> Vec<Edit> {
+    let n = old_slice.len() as isize;
+    let m = new_slice.len() as isize;
+    if n == 0 {
+        return (0..m as usize).map(Edit::Insert).collect();
+    }
+    if m == 0 {
+        return (0..n as usize).map(Edit::Delete).collect();
+    }
+
+    let max = (n + m) as usize;
+    let offset = max as isize;
+    let mut v = vec![0isize; 2 * max + 1];
+    let mut trace: Vec<Vec<isize>> = Vec::new();
+
+    for d in 0..=max {
+        let mut v_next = v.clone();
+        for k in (-(d as isize)..=d as isize).step_by(2) {
+            let idx = (k + offset) as usize;
+            let x_start;
+            if k == -(d as isize) {
+                x_start = v[idx + 1];
+            } else if k != d as isize && v[idx - 1] < v[idx + 1] {
+                x_start = v[idx + 1];
+            } else {
+                x_start = v[idx - 1] + 1;
+            }
+
+            let mut x = x_start;
+            let mut y = x - k;
+            while x < n
+                && y < m
+                && old_slice[x as usize].signature == new_slice[y as usize].signature
+            {
+                x += 1;
+                y += 1;
+            }
+            v_next[idx] = x;
+            if x >= n && y >= m {
+                trace.push(v_next);
+                return reconstruct_myers(trace, old_slice.len(), new_slice.len(), offset);
+            }
+        }
+        trace.push(v_next.clone());
+        v = v_next;
+    }
+
+    Vec::new()
+}
+
+fn reconstruct_myers(
+    trace: Vec<Vec<isize>>,
+    old_len: usize,
+    new_len: usize,
+    offset: isize,
+) -> Vec<Edit> {
+    let mut edits = Vec::new();
+    let mut x = old_len as isize;
+    let mut y = new_len as isize;
+
+    for d_rev in (0..trace.len()).rev() {
+        let v = &trace[d_rev];
+        let k = x - y;
+        let idx = (k + offset) as usize;
+
+        let (prev_x, prev_y, from_down);
+        if d_rev == 0 {
+            prev_x = 0;
+            prev_y = 0;
+            from_down = false;
+        } else {
+            let use_down = k == -(d_rev as isize)
+                || (k != d_rev as isize && v[idx - 1] < v[idx + 1]);
+            let prev_k = if use_down { k + 1 } else { k - 1 };
+            let prev_idx = (prev_k + offset) as usize;
+            let prev_v = &trace[d_rev - 1];
+            prev_x = prev_v[prev_idx].max(0);
+            prev_y = (prev_x - prev_k).max(0);
+            from_down = use_down;
+        }
+
+        let mut cur_x = x;
+        let mut cur_y = y;
+        while cur_x > prev_x && cur_y > prev_y {
+            cur_x -= 1;
+            cur_y -= 1;
+            edits.push(Edit::Match(cur_x as usize, cur_y as usize));
+        }
+
+        if d_rev > 0 {
+            if from_down {
+                edits.push(Edit::Insert(prev_y as usize));
+            } else {
+                edits.push(Edit::Delete(prev_x as usize));
+            }
+        }
+
+        x = prev_x;
+        y = prev_y;
+    }
+
+    edits.reverse();
+    edits
+}
+
+fn align_gap_via_hash(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> GapAlignmentResult {
+    use std::collections::{HashMap, VecDeque};
+
+    let m = old_slice.len();
+    let n = new_slice.len();
+    if m == 0 && n == 0 {
+        return GapAlignmentResult::default();
+    }
+
+    let mut sig_to_new: HashMap<crate::workbook::RowSignature, VecDeque<u32>> = HashMap::new();
+    for (j, meta) in new_slice.iter().enumerate() {
+        sig_to_new.entry(meta.signature).or_default().push_back(j as u32);
+    }
+
+    let mut candidate_pairs: Vec<(u32, u32)> = Vec::new();
+    for (i, meta) in old_slice.iter().enumerate() {
+        if let Some(q) = sig_to_new.get_mut(&meta.signature) {
+            if let Some(j) = q.pop_front() {
+                candidate_pairs.push((i as u32, j));
+            }
+        }
+    }
+
+    if candidate_pairs.is_empty() && m == n {
+        let matched = old_slice
+            .iter()
+            .zip(new_slice.iter())
+            .map(|(a, b)| (a.row_idx, b.row_idx))
+            .collect();
+
+        return GapAlignmentResult {
+            matched,
+            inserted: Vec::new(),
+            deleted: Vec::new(),
+            moves: Vec::new(),
+        };
+    }
+
+    let lis = lis_indices_u32(&candidate_pairs, |&(_, new_j)| new_j);
+
+    let mut keep = vec![false; candidate_pairs.len()];
+    for idx in lis {
+        keep[idx] = true;
+    }
+
+    let mut used_old = vec![false; m];
+    let mut used_new = vec![false; n];
+    let mut matched: Vec<(u32, u32)> = Vec::new();
+
+    for (k, (old_i, new_j)) in candidate_pairs.iter().copied().enumerate() {
+        if keep[k] {
+            used_old[old_i as usize] = true;
+            used_new[new_j as usize] = true;
+            matched.push((old_slice[old_i as usize].row_idx, new_slice[new_j as usize].row_idx));
+        }
+    }
+
+    let mut deleted: Vec<u32> = Vec::new();
+    for i in 0..m {
+        if !used_old[i] {
+            deleted.push(old_slice[i].row_idx);
+        }
+    }
+
+    let mut inserted: Vec<u32> = Vec::new();
+    for j in 0..n {
+        if !used_new[j] {
+            inserted.push(new_slice[j].row_idx);
+        }
+    }
+
+    matched.sort_by_key(|(a, b)| (*a, *b));
+    inserted.sort_unstable();
+    deleted.sort_unstable();
+
+    GapAlignmentResult {
+        matched,
+        inserted,
+        deleted,
+        moves: Vec::new(),
+    }
+}
+
+fn lis_indices_u32<T, F>(items: &[T], key: F) -> Vec<usize>
+where
+    F: Fn(&T) -> u32,
+{
+    let mut piles: Vec<usize> = Vec::new();
+    let mut predecessors: Vec<Option<usize>> = vec![None; items.len()];
+
+    for (idx, item) in items.iter().enumerate() {
+        let k = key(item);
+        let pos = piles
+            .binary_search_by_key(&k, |&pile_idx| key(&items[pile_idx]))
+            .unwrap_or_else(|insert_pos| insert_pos);
+
+        if pos > 0 {
+            predecessors[idx] = Some(piles[pos - 1]);
+        }
+
+        if pos == piles.len() {
+            piles.push(idx);
+        } else {
+            piles[pos] = idx;
+        }
+    }
+
+    if piles.is_empty() {
+        return Vec::new();
+    }
+
+    let mut result: Vec<usize> = Vec::new();
+    let mut current = *piles.last().unwrap();
+    loop {
+        result.push(current);
+        if let Some(prev) = predecessors[current] {
+            current = prev;
+        } else {
+            break;
+        }
+    }
+    result.reverse();
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE;
+    use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
     use crate::workbook::{Cell, CellAddress, CellValue};
 
     fn grid_from_run_lengths(pattern: &[(i32, u32)]) -> Grid {
@@ -902,6 +1400,25 @@ mod tests {
             });
         }
         grid
+    }
+
+    fn row_meta_from_hashes(start_row: u32, hashes: &[u128]) -> Vec<RowMeta> {
+        hashes
+            .iter()
+            .enumerate()
+            .map(|(idx, &hash)| {
+                let signature = crate::workbook::RowSignature { hash };
+                RowMeta {
+                    row_idx: start_row + idx as u32,
+                    signature,
+                    hash: signature,
+                    non_blank_count: 1,
+                    first_non_blank_col: 0,
+                    frequency_class: FrequencyClass::Common,
+                    is_low_info: false,
+                }
+            })
+            .collect()
     }
 
     #[test]
@@ -1042,6 +1559,58 @@ mod tests {
         assert_eq!(alignment.inserted.len(), 5);
         assert!(alignment.deleted.is_empty());
     }
+
+    #[test]
+    fn align_small_gap_enforces_cap_with_hash_fallback() {
+        let large = (MAX_LCS_GAP_SIZE + 1) as usize;
+        let old_hashes: Vec<u128> = (0..large as u32).map(|i| i as u128).collect();
+        let new_hashes: Vec<u128> = (0..large as u32).map(|i| (10_000 + i) as u128).collect();
+
+        let old_meta = row_meta_from_hashes(10, &old_hashes);
+        let new_meta = row_meta_from_hashes(20, &new_hashes);
+
+        let result = align_small_gap(&old_meta, &new_meta);
+        assert_eq!(result.matched.len(), large);
+        assert!(result.inserted.is_empty());
+        assert!(result.deleted.is_empty());
+        assert_eq!(result.matched.first(), Some(&(10, 20)));
+        assert_eq!(result.matched.last(), Some(&(10 + large as u32 - 1, 20 + large as u32 - 1)));
+    }
+
+    #[test]
+    fn hash_fallback_produces_monotone_pairs() {
+        let old_meta = row_meta_from_hashes(0, &[1, 2, 3, 4]);
+        let new_meta = row_meta_from_hashes(0, &[2, 1, 3, 4]);
+
+        let result = align_gap_via_hash(&old_meta, &new_meta);
+        assert_eq!(result.matched, vec![(1, 0), (2, 2), (3, 3)]);
+
+        let is_monotone = result
+            .matched
+            .windows(2)
+            .all(|w| w[0].0 <= w[1].0 && w[0].1 <= w[1].1);
+        assert!(is_monotone, "hash fallback must preserve monotone ordering");
+        assert_eq!(result.inserted, vec![1]);
+        assert_eq!(result.deleted, vec![0]);
+    }
+
+    #[test]
+    fn myers_handles_medium_gap_with_single_insertion() {
+        let count = 300usize;
+        let old_hashes: Vec<u128> = (0..count as u128).collect();
+        let mut new_hashes: Vec<u128> = old_hashes.clone();
+        new_hashes.insert(150, 9_999);
+
+        let old_meta = row_meta_from_hashes(0, &old_hashes);
+        let new_meta = row_meta_from_hashes(0, &new_hashes);
+
+        let result = align_small_gap(&old_meta, &new_meta);
+        assert_eq!(result.inserted, vec![150]);
+        assert!(result.deleted.is_empty());
+        assert_eq!(result.matched.len(), count);
+        assert_eq!(result.matched.first(), Some(&(0, 0)));
+        assert_eq!(result.matched.last(), Some(&(count as u32 - 1, (count + 1) as u32 - 1)));
+    }
 }
 
 ```
@@ -1063,11 +1632,14 @@ mod tests {
 //! - **SmallEdit**: Both sides small enough for O(n*m) LCS alignment
 //! - **MoveCandidate**: Gap contains matching unique signatures that may indicate moves
 //! - **RecursiveAlign**: Gap is large; recursively apply AMR with rare anchors
+//! - **HashFallback**: Monotone hash/LIS fallback for large gaps
 
 use std::collections::HashSet;
 
 use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
 use crate::config::DiffConfig;
+
+pub const MAX_LCS_GAP_SIZE: u32 = 1500;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GapStrategy {
@@ -1077,6 +1649,7 @@ pub enum GapStrategy {
     SmallEdit,
     MoveCandidate,
     RecursiveAlign,
+    HashFallback,
 }
 
 pub fn select_gap_strategy(
@@ -1098,18 +1671,29 @@ pub fn select_gap_strategy(
         return GapStrategy::DeleteAll;
     }
 
-    if has_matching_signatures(old_slice, new_slice) {
-        return GapStrategy::MoveCandidate;
-    }
+    let is_move_candidate = has_matching_signatures(old_slice, new_slice);
 
-    if old_len <= config.small_gap_threshold && new_len <= config.small_gap_threshold {
-        return GapStrategy::SmallEdit;
+    let small_threshold = config.small_gap_threshold.min(MAX_LCS_GAP_SIZE);
+    if old_len <= small_threshold && new_len <= small_threshold {
+        return if is_move_candidate {
+            GapStrategy::MoveCandidate
+        } else {
+            GapStrategy::SmallEdit
+        };
     }
 
     if (old_len > config.recursive_align_threshold || new_len > config.recursive_align_threshold)
         && !has_recursed
     {
         return GapStrategy::RecursiveAlign;
+    }
+
+    if is_move_candidate {
+        return GapStrategy::MoveCandidate;
+    }
+
+    if old_len > MAX_LCS_GAP_SIZE || new_len > MAX_LCS_GAP_SIZE {
+        return GapStrategy::HashFallback;
     }
 
     GapStrategy::SmallEdit
@@ -1469,7 +2053,7 @@ pub fn compress_to_runs(meta: &[RowMeta]) -> Vec<RowRun> {
         }
         runs.push(RowRun {
             signature: sig,
-            start_row: start as u32,
+            start_row: meta[start].row_idx,
             count: (i - start) as u32,
         });
     }
@@ -15909,7 +16493,7 @@ fn multiple_sheets_limit_warning_includes_sheet_name() {
 }
 
 #[test]
-fn large_grid_50k_rows_completes_within_default_limits() {
+fn large_grid_5k_rows_completes_within_default_limits() {
     let grid_a = create_simple_grid(5000, 10, 0);
     let mut grid_b = create_simple_grid(5000, 10, 0);
     grid_b.insert(Cell {
@@ -17420,6 +18004,174 @@ fn error_on_invalid_shared_member_syntax() {
 
 ---
 
+### File: `core\tests\metrics_unit_tests.rs`
+
+```rust
+#![cfg(feature = "perf-metrics")]
+
+use excel_diff::perf::{DiffMetrics, Phase};
+
+#[test]
+fn metrics_starts_with_zero_counts() {
+    let metrics = DiffMetrics::default();
+    assert_eq!(metrics.rows_processed, 0);
+    assert_eq!(metrics.cells_compared, 0);
+    assert_eq!(metrics.anchors_found, 0);
+    assert_eq!(metrics.moves_detected, 0);
+    assert_eq!(metrics.alignment_time_ms, 0);
+    assert_eq!(metrics.move_detection_time_ms, 0);
+    assert_eq!(metrics.cell_diff_time_ms, 0);
+    assert_eq!(metrics.total_time_ms, 0);
+}
+
+#[test]
+fn metrics_add_cells_compared_accumulates() {
+    let mut metrics = DiffMetrics::default();
+    metrics.add_cells_compared(100);
+    assert_eq!(metrics.cells_compared, 100);
+    metrics.add_cells_compared(50);
+    assert_eq!(metrics.cells_compared, 150);
+    metrics.add_cells_compared(1000);
+    assert_eq!(metrics.cells_compared, 1150);
+}
+
+#[test]
+fn metrics_add_cells_compared_saturates() {
+    let mut metrics = DiffMetrics::default();
+    metrics.cells_compared = u64::MAX - 10;
+    metrics.add_cells_compared(100);
+    assert_eq!(metrics.cells_compared, u64::MAX);
+}
+
+#[test]
+fn metrics_phase_timing_accumulates() {
+    let mut metrics = DiffMetrics::default();
+
+    metrics.start_phase(Phase::Alignment);
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    metrics.end_phase(Phase::Alignment);
+
+    assert!(
+        metrics.alignment_time_ms > 0,
+        "alignment_time_ms should be non-zero after timed phase"
+    );
+
+    let first_alignment = metrics.alignment_time_ms;
+
+    metrics.start_phase(Phase::Alignment);
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    metrics.end_phase(Phase::Alignment);
+
+    assert!(
+        metrics.alignment_time_ms > first_alignment,
+        "alignment_time_ms should accumulate across multiple phases"
+    );
+}
+
+#[test]
+fn metrics_different_phases_tracked_separately() {
+    let mut metrics = DiffMetrics::default();
+
+    metrics.start_phase(Phase::Alignment);
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    metrics.end_phase(Phase::Alignment);
+
+    metrics.start_phase(Phase::MoveDetection);
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    metrics.end_phase(Phase::MoveDetection);
+
+    metrics.start_phase(Phase::CellDiff);
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    metrics.end_phase(Phase::CellDiff);
+
+    assert!(metrics.alignment_time_ms > 0, "alignment should be tracked");
+    assert!(
+        metrics.move_detection_time_ms > 0,
+        "move detection should be tracked"
+    );
+    assert!(metrics.cell_diff_time_ms > 0, "cell diff should be tracked");
+}
+
+#[test]
+fn metrics_total_phase_separate_from_components() {
+    let mut metrics = DiffMetrics::default();
+
+    metrics.start_phase(Phase::Total);
+    metrics.start_phase(Phase::Alignment);
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    metrics.end_phase(Phase::Alignment);
+    metrics.end_phase(Phase::Total);
+
+    assert!(metrics.alignment_time_ms > 0);
+    assert!(metrics.total_time_ms > 0);
+    assert!(
+        metrics.total_time_ms >= metrics.alignment_time_ms,
+        "total should be >= alignment since it wraps alignment"
+    );
+}
+
+#[test]
+fn metrics_end_phase_without_start_is_safe() {
+    let mut metrics = DiffMetrics::default();
+    metrics.end_phase(Phase::Alignment);
+    assert_eq!(metrics.alignment_time_ms, 0);
+}
+
+#[test]
+fn metrics_parse_phase_is_no_op() {
+    let mut metrics = DiffMetrics::default();
+    metrics.start_phase(Phase::Parse);
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    metrics.end_phase(Phase::Parse);
+    assert_eq!(metrics.alignment_time_ms, 0);
+    assert_eq!(metrics.move_detection_time_ms, 0);
+    assert_eq!(metrics.cell_diff_time_ms, 0);
+    assert_eq!(metrics.total_time_ms, 0);
+}
+
+#[test]
+fn metrics_rows_processed_can_be_set_directly() {
+    let mut metrics = DiffMetrics::default();
+    metrics.rows_processed = 5000;
+    assert_eq!(metrics.rows_processed, 5000);
+    metrics.rows_processed = metrics.rows_processed.saturating_add(3000);
+    assert_eq!(metrics.rows_processed, 8000);
+}
+
+#[test]
+fn metrics_anchors_and_moves_can_be_set() {
+    let mut metrics = DiffMetrics::default();
+    metrics.anchors_found = 150;
+    metrics.moves_detected = 3;
+    assert_eq!(metrics.anchors_found, 150);
+    assert_eq!(metrics.moves_detected, 3);
+}
+
+#[test]
+fn metrics_clone_creates_independent_copy() {
+    let mut metrics = DiffMetrics::default();
+    metrics.rows_processed = 1000;
+    metrics.cells_compared = 500;
+
+    let cloned = metrics.clone();
+    metrics.rows_processed = 2000;
+
+    assert_eq!(cloned.rows_processed, 1000);
+    assert_eq!(metrics.rows_processed, 2000);
+}
+
+#[test]
+fn metrics_default_equality() {
+    let m1 = DiffMetrics::default();
+    let m2 = DiffMetrics::default();
+    assert_eq!(m1, m2);
+}
+
+
+```
+
+---
+
 ### File: `core\tests\output_tests.rs`
 
 ```rust
@@ -18127,6 +18879,10 @@ fn perf_p1_large_dense() {
     let metrics = report.metrics.unwrap();
     assert!(metrics.rows_processed > 0, "P1 should process rows");
     assert!(metrics.cells_compared > 0, "P1 should compare cells");
+    println!(
+        "PERF_METRIC perf_p1_large_dense total_time_ms={} rows_processed={} cells_compared={}",
+        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
+    );
 }
 
 #[test]
@@ -18144,6 +18900,10 @@ fn perf_p2_large_noise() {
     assert!(report.metrics.is_some(), "P2 should have metrics");
     let metrics = report.metrics.unwrap();
     assert!(metrics.rows_processed > 0, "P2 should process rows");
+    println!(
+        "PERF_METRIC perf_p2_large_noise total_time_ms={} rows_processed={} cells_compared={}",
+        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
+    );
 }
 
 #[test]
@@ -18168,6 +18928,10 @@ fn perf_p3_adversarial_repetitive() {
     assert!(report.metrics.is_some(), "P3 should have metrics");
     let metrics = report.metrics.unwrap();
     assert!(metrics.rows_processed > 0, "P3 should process rows");
+    println!(
+        "PERF_METRIC perf_p3_adversarial_repetitive total_time_ms={} rows_processed={} cells_compared={}",
+        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
+    );
 }
 
 #[test]
@@ -18192,6 +18956,10 @@ fn perf_p4_99_percent_blank() {
     assert!(report.metrics.is_some(), "P4 should have metrics");
     let metrics = report.metrics.unwrap();
     assert!(metrics.rows_processed > 0, "P4 should process rows");
+    println!(
+        "PERF_METRIC perf_p4_99_percent_blank total_time_ms={} rows_processed={} cells_compared={}",
+        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
+    );
 }
 
 #[test]
@@ -18210,6 +18978,162 @@ fn perf_p5_identical() {
     assert!(report.metrics.is_some(), "P5 should have metrics");
     let metrics = report.metrics.unwrap();
     assert!(metrics.rows_processed > 0, "P5 should process rows");
+    println!(
+        "PERF_METRIC perf_p5_identical total_time_ms={} rows_processed={} cells_compared={}",
+        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
+    );
+}
+
+#[test]
+#[ignore = "Long-running test: run with `cargo test --features perf-metrics -- --ignored` to execute"]
+fn perf_50k_dense_single_edit() {
+    let grid_a = create_large_grid(50000, 100, 0);
+    let mut grid_b = create_large_grid(50000, 100, 0);
+    grid_b.insert(Cell {
+        row: 25000,
+        col: 50,
+        address: CellAddress::from_indices(25000, 50),
+        value: Some(CellValue::Number(999999.0)),
+        formula: None,
+    });
+
+    let wb_a = single_sheet_workbook("Performance", grid_a);
+    let wb_b = single_sheet_workbook("Performance", grid_b);
+
+    let config = DiffConfig::default();
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(report.complete, "50k dense grid should complete successfully");
+    assert!(report.warnings.is_empty(), "50k dense should have no warnings");
+    assert!(
+        report.ops.iter().any(|op| matches!(op, DiffOp::CellEdited { .. })),
+        "50k dense should detect the cell edit"
+    );
+    let metrics = report.metrics.expect("should have metrics");
+    println!(
+        "PERF_METRIC perf_50k_dense_single_edit total_time_ms={} rows_processed={} cells_compared={} (target: <5s)",
+        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
+    );
+    assert!(
+        metrics.total_time_ms < 30000,
+        "50k dense grid should complete in <30s, took {}ms",
+        metrics.total_time_ms
+    );
+}
+
+#[test]
+#[ignore = "Long-running test: run with `cargo test --features perf-metrics -- --ignored` to execute"]
+fn perf_50k_completely_different() {
+    let grid_a = create_large_grid(50000, 100, 0);
+    let grid_b = create_large_grid(50000, 100, 1);
+
+    let wb_a = single_sheet_workbook("Performance", grid_a);
+    let wb_b = single_sheet_workbook("Performance", grid_b);
+
+    let config = DiffConfig::default();
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(report.complete, "50k different grids should complete");
+    let metrics = report.metrics.expect("should have metrics");
+    println!(
+        "PERF_METRIC perf_50k_completely_different total_time_ms={} rows_processed={} cells_compared={} (target: <10s)",
+        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
+    );
+    assert!(
+        metrics.total_time_ms < 60000,
+        "50k completely different should complete in <60s, took {}ms",
+        metrics.total_time_ms
+    );
+}
+
+#[test]
+#[ignore = "Long-running test: run with `cargo test --features perf-metrics -- --ignored` to execute"]
+fn perf_50k_adversarial_repetitive() {
+    let grid_a = create_repetitive_grid(50000, 50, 100);
+    let mut grid_b = create_repetitive_grid(50000, 50, 100);
+    grid_b.insert(Cell {
+        row: 25000,
+        col: 25,
+        address: CellAddress::from_indices(25000, 25),
+        value: Some(CellValue::Number(999999.0)),
+        formula: None,
+    });
+
+    let wb_a = single_sheet_workbook("Performance", grid_a);
+    let wb_b = single_sheet_workbook("Performance", grid_b);
+
+    let config = DiffConfig::default();
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(report.complete, "50k repetitive should complete");
+    let metrics = report.metrics.expect("should have metrics");
+    println!(
+        "PERF_METRIC perf_50k_adversarial_repetitive total_time_ms={} rows_processed={} cells_compared={} (target: <15s)",
+        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
+    );
+    assert!(
+        metrics.total_time_ms < 120000,
+        "50k adversarial repetitive should complete in <120s, took {}ms",
+        metrics.total_time_ms
+    );
+}
+
+#[test]
+#[ignore = "Long-running test: run with `cargo test --features perf-metrics -- --ignored` to execute"]
+fn perf_50k_99_percent_blank() {
+    let grid_a = create_sparse_grid(50000, 100, 1, 12345);
+    let mut grid_b = create_sparse_grid(50000, 100, 1, 12345);
+    grid_b.insert(Cell {
+        row: 25000,
+        col: 50,
+        address: CellAddress::from_indices(25000, 50),
+        value: Some(CellValue::Number(999999.0)),
+        formula: None,
+    });
+
+    let wb_a = single_sheet_workbook("Performance", grid_a);
+    let wb_b = single_sheet_workbook("Performance", grid_b);
+
+    let config = DiffConfig::default();
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(report.complete, "50k sparse should complete");
+    let metrics = report.metrics.expect("should have metrics");
+    println!(
+        "PERF_METRIC perf_50k_99_percent_blank total_time_ms={} rows_processed={} cells_compared={} (target: <2s)",
+        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
+    );
+    assert!(
+        metrics.total_time_ms < 30000,
+        "50k 99% blank should complete in <30s, took {}ms",
+        metrics.total_time_ms
+    );
+}
+
+#[test]
+#[ignore = "Long-running test: run with `cargo test --features perf-metrics -- --ignored` to execute"]
+fn perf_50k_identical() {
+    let grid_a = create_large_grid(50000, 100, 0);
+    let grid_b = create_large_grid(50000, 100, 0);
+
+    let wb_a = single_sheet_workbook("Performance", grid_a);
+    let wb_b = single_sheet_workbook("Performance", grid_b);
+
+    let config = DiffConfig::default();
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(report.complete, "50k identical should complete");
+    assert!(report.ops.is_empty(), "50k identical grids should have no ops");
+    let metrics = report.metrics.expect("should have metrics");
+    println!(
+        "PERF_METRIC perf_50k_identical total_time_ms={} rows_processed={} cells_compared={} (target: <1s)",
+        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
+    );
+    assert!(
+        metrics.total_time_ms < 15000,
+        "50k identical should complete in <15s, took {}ms",
+        metrics.total_time_ms
+    );
 }
 
 
@@ -24171,8 +25095,8 @@ class LargeGridGenerator(BaseGenerator):
 Performance threshold checker for excel_diff.
 
 This script verifies that performance tests complete within acceptable time bounds.
-It runs after `cargo test --release --features perf-metrics perf_` and validates
-that the test suite completed successfully.
+It runs `cargo test --release --features perf-metrics perf_` and validates that
+each test completes within its configured threshold.
 
 Thresholds are based on the mini-spec table from next_sprint_plan.md:
 | Fixture | Rows | Cols | Max Time | Max Memory |
@@ -24185,8 +25109,18 @@ Thresholds are based on the mini-spec table from next_sprint_plan.md:
 
 Note: The Rust tests use smaller grids for CI speed, so these thresholds are
 conservative. Memory tracking is planned for a future phase.
+
+Environment variables for threshold configuration:
+  EXCEL_DIFF_PERF_P1_MAX_TIME_S - Override max time for perf_p1_large_dense
+  EXCEL_DIFF_PERF_P2_MAX_TIME_S - Override max time for perf_p2_large_noise
+  EXCEL_DIFF_PERF_P3_MAX_TIME_S - Override max time for perf_p3_adversarial_repetitive
+  EXCEL_DIFF_PERF_P4_MAX_TIME_S - Override max time for perf_p4_99_percent_blank
+  EXCEL_DIFF_PERF_P5_MAX_TIME_S - Override max time for perf_p5_identical
+  EXCEL_DIFF_PERF_SLACK_FACTOR - Multiply all thresholds by this factor (default: 1.0)
 """
 
+import os
+import re
 import subprocess
 import sys
 import time
@@ -24202,12 +25136,68 @@ THRESHOLDS = {
     "perf_p5_identical": {"max_time_s": 10},
 }
 
+ENV_VAR_MAP = {
+    "perf_p1_large_dense": "EXCEL_DIFF_PERF_P1_MAX_TIME_S",
+    "perf_p2_large_noise": "EXCEL_DIFF_PERF_P2_MAX_TIME_S",
+    "perf_p3_adversarial_repetitive": "EXCEL_DIFF_PERF_P3_MAX_TIME_S",
+    "perf_p4_99_percent_blank": "EXCEL_DIFF_PERF_P4_MAX_TIME_S",
+    "perf_p5_identical": "EXCEL_DIFF_PERF_P5_MAX_TIME_S",
+}
+
+
+def get_effective_thresholds():
+    """Get thresholds with environment variable overrides applied."""
+    effective = {}
+    slack_factor = float(os.environ.get("EXCEL_DIFF_PERF_SLACK_FACTOR", "1.0"))
+
+    for test_name, config in THRESHOLDS.items():
+        max_time_s = config["max_time_s"]
+
+        env_var = ENV_VAR_MAP.get(test_name)
+        if env_var and env_var in os.environ:
+            try:
+                max_time_s = float(os.environ[env_var])
+                print(f"  Override: {test_name} max_time_s={max_time_s} (from {env_var})")
+            except ValueError:
+                print(f"  WARNING: Invalid value for {env_var}, using default")
+
+        effective[test_name] = {"max_time_s": max_time_s * slack_factor}
+
+    if slack_factor != 1.0:
+        print(f"  Slack factor: {slack_factor}x applied to all thresholds")
+
+    return effective
+
+
+def parse_perf_metrics(stdout: str) -> dict:
+    """Parse PERF_METRIC lines from test output.
+
+    Expected format: PERF_METRIC <test_name> total_time_ms=<value> [other_metrics...]
+
+    Returns dict mapping test_name -> {"total_time_ms": int, ...}
+    """
+    metrics = {}
+    pattern = re.compile(r"PERF_METRIC\s+(\S+)\s+total_time_ms=(\d+)")
+
+    for line in stdout.split("\n"):
+        match = pattern.search(line)
+        if match:
+            test_name = match.group(1)
+            total_time_ms = int(match.group(2))
+            metrics[test_name] = {"total_time_ms": total_time_ms}
+
+    return metrics
+
 
 def run_perf_tests():
-    """Run the performance tests and verify they complete within timeout."""
+    """Run the performance tests and verify they complete within thresholds."""
     print("=" * 60)
     print("Performance Threshold Check")
     print("=" * 60)
+
+    print("\nLoading thresholds...")
+    effective_thresholds = get_effective_thresholds()
+    print()
 
     core_dir = Path(__file__).parent.parent / "core"
     if not core_dir.exists():
@@ -24261,7 +25251,45 @@ def run_perf_tests():
     missing_tests = expected_tests - actual_tests
 
     if missing_tests:
-        print(f"WARNING: Some expected perf tests did not run: {missing_tests}")
+        print(f"ERROR: Some expected perf tests did not run: {missing_tests}")
+        return 1
+
+    metrics = parse_perf_metrics(result.stdout)
+    print(f"Parsed metrics for {len(metrics)} tests:")
+    for test_name, data in metrics.items():
+        total_time_s = data["total_time_ms"] / 1000.0
+        print(f"  {test_name}: {total_time_s:.3f}s")
+    print()
+
+    missing_metrics = expected_tests - set(metrics.keys())
+    if missing_metrics:
+        print(f"ERROR: Missing PERF_METRIC output for tests: {missing_metrics}")
+        return 1
+
+    failures = []
+    print("Threshold checks:")
+    for test_name, threshold in effective_thresholds.items():
+        max_time_s = threshold["max_time_s"]
+        actual_time_ms = metrics[test_name]["total_time_ms"]
+        actual_time_s = actual_time_ms / 1000.0
+
+        if actual_time_s > max_time_s:
+            status = "FAIL"
+            failures.append((test_name, actual_time_s, max_time_s))
+        else:
+            status = "PASS"
+
+        print(f"  {test_name}: {actual_time_s:.3f}s / {max_time_s:.1f}s [{status}]")
+
+    print()
+
+    if failures:
+        print("=" * 60)
+        print("THRESHOLD VIOLATIONS:")
+        for test_name, actual, max_time in failures:
+            print(f"  {test_name}: {actual:.3f}s exceeded max of {max_time:.1f}s")
+        print("=" * 60)
+        return 1
 
     print("=" * 60)
     print("All performance tests passed within thresholds!")
@@ -24271,7 +25299,6 @@ def run_perf_tests():
 
 if __name__ == "__main__":
     sys.exit(run_perf_tests())
-
 
 ```
 

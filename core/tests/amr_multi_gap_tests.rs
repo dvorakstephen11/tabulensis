@@ -285,4 +285,3 @@ fn amr_recursive_gap_alignment() {
         "should detect all 3 inserted rows distributed across the grid"
     );
 }
-

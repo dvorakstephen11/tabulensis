@@ -56,7 +56,7 @@ pub fn classify_row_frequencies(row_meta: &mut [RowMeta], config: &DiffConfig) {
         let count = freq_map.get(&meta.signature).copied().unwrap_or(0);
         let mut class = match count {
             1 => FrequencyClass::Unique,
-            c if c == 0 => FrequencyClass::Common,
+            0 => FrequencyClass::Common,
             c if c <= config.rare_threshold => FrequencyClass::Rare,
             _ => FrequencyClass::Common,
         };
@@ -89,11 +89,7 @@ mod tests {
 
     #[test]
     fn classifies_unique_and_rare_and_low_info() {
-        let mut meta = vec![
-            make_meta(0, 1, 3),
-            make_meta(1, 1, 3),
-            make_meta(2, 2, 1),
-        ];
+        let mut meta = vec![make_meta(0, 1, 3), make_meta(1, 1, 3), make_meta(2, 2, 1)];
 
         let mut config = DiffConfig::default();
         config.rare_threshold = 2;

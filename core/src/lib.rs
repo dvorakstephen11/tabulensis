@@ -33,8 +33,6 @@ pub mod diff;
 pub mod engine;
 #[cfg(feature = "excel-open-xml")]
 pub mod excel_open_xml;
-#[cfg(feature = "perf-metrics")]
-pub mod perf;
 pub mod grid_parser;
 pub mod grid_view;
 pub(crate) mod hashing;
@@ -42,6 +40,8 @@ pub mod m_ast;
 pub mod m_diff;
 pub mod m_section;
 pub mod output;
+#[cfg(feature = "perf-metrics")]
+pub mod perf;
 pub(crate) mod rect_block_move;
 pub(crate) mod region_mask;
 pub(crate) mod row_alignment;
@@ -58,7 +58,10 @@ pub use datamashup_package::{
     EmbeddedContent, PackageParts, PackageXml, SectionDocument, parse_package_parts,
 };
 pub use diff::{DiffError, DiffOp, DiffReport, SheetId};
-pub use engine::{diff_grids_database_mode, diff_workbooks, diff_workbooks_with_config, try_diff_workbooks_with_config};
+pub use engine::{
+    diff_grids_database_mode, diff_workbooks, diff_workbooks_with_config,
+    try_diff_workbooks_with_config,
+};
 #[cfg(feature = "excel-open-xml")]
 pub use excel_open_xml::{ExcelOpenError, open_data_mashup, open_workbook};
 pub use grid_parser::{GridParseError, SheetDescriptor};

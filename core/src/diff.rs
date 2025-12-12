@@ -11,7 +11,9 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum DiffError {
-    #[error("alignment limits exceeded for sheet '{sheet}': rows={rows}, cols={cols} (limits: rows={max_rows}, cols={max_cols})")]
+    #[error(
+        "alignment limits exceeded for sheet '{sheet}': rows={rows}, cols={cols} (limits: rows={max_rows}, cols={max_cols})"
+    )]
     LimitsExceeded {
         sheet: String,
         rows: u32,

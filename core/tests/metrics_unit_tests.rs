@@ -157,4 +157,3 @@ fn metrics_default_equality() {
     let m2 = DiffMetrics::default();
     assert_eq!(m1, m2);
 }
-

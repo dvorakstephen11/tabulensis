@@ -85,10 +85,16 @@ fn perf_p1_large_dense() {
     let config = DiffConfig::default();
     let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
 
-    assert!(report.complete, "P1 dense grid should complete successfully");
+    assert!(
+        report.complete,
+        "P1 dense grid should complete successfully"
+    );
     assert!(report.warnings.is_empty(), "P1 should have no warnings");
     assert!(
-        report.ops.iter().any(|op| matches!(op, DiffOp::CellEdited { .. })),
+        report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::CellEdited { .. })),
         "P1 should detect the cell edit"
     );
     assert!(
@@ -115,7 +121,10 @@ fn perf_p2_large_noise() {
     let config = DiffConfig::default();
     let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
 
-    assert!(report.complete, "P2 noise grid should complete successfully");
+    assert!(
+        report.complete,
+        "P2 noise grid should complete successfully"
+    );
     assert!(report.metrics.is_some(), "P2 should have metrics");
     let metrics = report.metrics.unwrap();
     assert!(metrics.rows_processed > 0, "P2 should process rows");
@@ -193,7 +202,10 @@ fn perf_p5_identical() {
     let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
 
     assert!(report.complete, "P5 identical grid should complete");
-    assert!(report.ops.is_empty(), "P5 identical grids should produce no ops");
+    assert!(
+        report.ops.is_empty(),
+        "P5 identical grids should produce no ops"
+    );
     assert!(report.metrics.is_some(), "P5 should have metrics");
     let metrics = report.metrics.unwrap();
     assert!(metrics.rows_processed > 0, "P5 should process rows");
@@ -222,10 +234,19 @@ fn perf_50k_dense_single_edit() {
     let config = DiffConfig::default();
     let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
 
-    assert!(report.complete, "50k dense grid should complete successfully");
-    assert!(report.warnings.is_empty(), "50k dense should have no warnings");
     assert!(
-        report.ops.iter().any(|op| matches!(op, DiffOp::CellEdited { .. })),
+        report.complete,
+        "50k dense grid should complete successfully"
+    );
+    assert!(
+        report.warnings.is_empty(),
+        "50k dense should have no warnings"
+    );
+    assert!(
+        report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::CellEdited { .. })),
         "50k dense should detect the cell edit"
     );
     let metrics = report.metrics.expect("should have metrics");
@@ -342,7 +363,10 @@ fn perf_50k_identical() {
     let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
 
     assert!(report.complete, "50k identical should complete");
-    assert!(report.ops.is_empty(), "50k identical grids should have no ops");
+    assert!(
+        report.ops.is_empty(),
+        "50k identical grids should have no ops"
+    );
     let metrics = report.metrics.expect("should have metrics");
     println!(
         "PERF_METRIC perf_50k_identical total_time_ms={} rows_processed={} cells_compared={} (target: <1s)",
@@ -354,4 +378,3 @@ fn perf_50k_identical() {
         metrics.total_time_ms
     );
 }
-
