@@ -14,6 +14,8 @@
       .gitkeep
       2025-12-12_163759.json
       2025-12-12_175341.json
+      2025-12-12_203400.json
+      2025-12-12_203454.json
   Cargo.lock
   Cargo.toml
   core/
@@ -978,7 +980,7 @@ use crate::alignment::row_metadata::RowMeta;
 use crate::alignment::runs::{RowRun, compress_to_runs};
 use crate::config::DiffConfig;
 use crate::grid_view::GridView;
-use crate::workbook::Grid;
+use crate::workbook::{Grid, RowSignature};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RowAlignment {
@@ -1003,19 +1005,51 @@ struct GapAlignmentResult {
     moves: Vec<RowBlockMove>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowAlignmentWithSignatures {
+    pub alignment: RowAlignment,
+    pub row_signatures_a: Vec<RowSignature>,
+    pub row_signatures_b: Vec<RowSignature>,
+}
+
+#[allow(dead_code)]
 pub fn align_rows_amr(old: &Grid, new: &Grid, config: &DiffConfig) -> Option<RowAlignment> {
+    align_rows_amr_with_signatures(old, new, config).map(|result| result.alignment)
+}
+
+pub fn align_rows_amr_with_signatures(
+    old: &Grid,
+    new: &Grid,
+    config: &DiffConfig,
+) -> Option<RowAlignmentWithSignatures> {
     let view_a = GridView::from_grid_with_config(old, config);
     let view_b = GridView::from_grid_with_config(new, config);
+    let alignment = align_rows_from_meta(&view_a.row_meta, &view_b.row_meta, config)?;
+    let row_signatures_a: Vec<RowSignature> =
+        view_a.row_meta.iter().map(|meta| meta.signature).collect();
+    let row_signatures_b: Vec<RowSignature> =
+        view_b.row_meta.iter().map(|meta| meta.signature).collect();
 
-    if view_a.row_meta.len() == view_b.row_meta.len()
-        && view_a
-            .row_meta
+    Some(RowAlignmentWithSignatures {
+        alignment,
+        row_signatures_a,
+        row_signatures_b,
+    })
+}
+
+fn align_rows_from_meta(
+    rows_a: &[RowMeta],
+    rows_b: &[RowMeta],
+    config: &DiffConfig,
+) -> Option<RowAlignment> {
+    if rows_a.len() == rows_b.len()
+        && rows_a
             .iter()
-            .zip(view_b.row_meta.iter())
+            .zip(rows_b.iter())
             .all(|(a, b)| a.signature == b.signature)
     {
-        let mut matched = Vec::with_capacity(view_a.row_meta.len());
-        for (a, b) in view_a.row_meta.iter().zip(view_b.row_meta.iter()) {
+        let mut matched = Vec::with_capacity(rows_a.len());
+        for (a, b) in rows_a.iter().zip(rows_b.iter()) {
             matched.push((a.row_idx, b.row_idx));
         }
         return Some(RowAlignment {
@@ -1026,8 +1060,8 @@ pub fn align_rows_amr(old: &Grid, new: &Grid, config: &DiffConfig) -> Option<Row
         });
     }
 
-    let runs_a = compress_to_runs(&view_a.row_meta);
-    let runs_b = compress_to_runs(&view_b.row_meta);
+    let runs_a = compress_to_runs(rows_a);
+    let runs_b = compress_to_runs(rows_b);
     if runs_a.len() == 1 && runs_b.len() == 1 && runs_a[0].signature == runs_b[0].signature {
         let shared = runs_a[0].count.min(runs_b[0].count);
         let mut matched = Vec::new();
@@ -1051,8 +1085,8 @@ pub fn align_rows_amr(old: &Grid, new: &Grid, config: &DiffConfig) -> Option<Row
         });
     }
 
-    let compressed_a = runs_a.len() * 2 <= view_a.row_meta.len();
-    let compressed_b = runs_b.len() * 2 <= view_b.row_meta.len();
+    let compressed_a = runs_a.len() * 2 <= rows_a.len();
+    let compressed_b = runs_b.len() * 2 <= rows_b.len();
     if (compressed_a || compressed_b)
         && !runs_a.is_empty()
         && !runs_b.is_empty()
@@ -1061,17 +1095,8 @@ pub fn align_rows_amr(old: &Grid, new: &Grid, config: &DiffConfig) -> Option<Row
         return Some(alignment);
     }
 
-    let anchors = build_anchor_chain(discover_anchors_from_meta(
-        &view_a.row_meta,
-        &view_b.row_meta,
-    ));
-    Some(assemble_from_meta(
-        &view_a.row_meta,
-        &view_b.row_meta,
-        anchors,
-        config,
-        0,
-    ))
+    let anchors = build_anchor_chain(discover_anchors_from_meta(rows_a, rows_b));
+    Some(assemble_from_meta(rows_a, rows_b, anchors, config, 0))
 }
 
 fn assemble_from_meta(
@@ -1882,6 +1907,37 @@ mod tests {
     }
 
     #[test]
+    fn align_rows_amr_with_signatures_exposes_row_hashes() {
+        let grid_a = grid_with_unique_rows(&[1, 2, 3, 4]);
+        let grid_b = grid_with_unique_rows(&[1, 2, 3, 4]);
+
+        let config = DiffConfig::default();
+        let result =
+            align_rows_amr_with_signatures(&grid_a, &grid_b, &config).expect("should align");
+
+        assert_eq!(result.row_signatures_a.len(), grid_a.nrows as usize);
+        assert_eq!(result.row_signatures_b.len(), grid_b.nrows as usize);
+        assert_eq!(result.alignment.matched.len(), grid_a.nrows as usize);
+
+        for row in 0..grid_a.nrows {
+            let expected_a = grid_a.compute_row_signature(row);
+            let expected_b = grid_b.compute_row_signature(row);
+            assert_eq!(
+                Some(expected_a),
+                result.row_signatures_a.get(row as usize).copied(),
+                "row {} signature for grid A should match compute_row_signature",
+                row
+            );
+            assert_eq!(
+                Some(expected_b),
+                result.row_signatures_b.get(row as usize).copied(),
+                "row {} signature for grid B should match compute_row_signature",
+                row
+            );
+        }
+    }
+
+    #[test]
     fn amr_alignment_all_deleted() {
         let grid_a = grid_with_unique_rows(&[1, 2, 3, 4, 5]);
         let grid_b = Grid::new(0, 1);
@@ -2124,7 +2180,11 @@ pub(crate) mod move_extraction;
 pub(crate) mod row_metadata;
 pub(crate) mod runs;
 
-pub(crate) use assembly::{RowAlignment, RowBlockMove, align_rows_amr};
+#[allow(unused_imports)]
+pub(crate) use assembly::{
+    RowAlignment, RowAlignmentWithSignatures, RowBlockMove, align_rows_amr,
+    align_rows_amr_with_signatures,
+};
 
 ```
 
@@ -5107,7 +5167,7 @@ impl DiffOp {
 //! and generating a [`DiffReport`] of all changes.
 
 use crate::alignment::move_extraction::moves_from_matched_pairs;
-use crate::alignment::{RowAlignment as AmrAlignment, align_rows_amr};
+use crate::alignment::{RowAlignment as AmrAlignment, align_rows_amr_with_signatures};
 use crate::column_alignment::{
     ColumnAlignment, ColumnBlockMove, align_single_column_change_with_config,
     detect_exact_column_block_move_with_config,
@@ -5562,8 +5622,17 @@ fn diff_grids_core(
         m.start_phase(Phase::Alignment);
     }
 
-    if let Some(mut alignment) = align_rows_amr(old, new, config) {
-        inject_moves_from_insert_delete(old, new, &mut alignment);
+    if let Some(amr_result) = align_rows_amr_with_signatures(old, new, config) {
+        let mut alignment = amr_result.alignment;
+        let row_signatures_old = amr_result.row_signatures_a;
+        let row_signatures_new = amr_result.row_signatures_b;
+        inject_moves_from_insert_delete(
+            old,
+            new,
+            &mut alignment,
+            &row_signatures_old,
+            &row_signatures_new,
+        );
         let has_structural_rows = !alignment.inserted.is_empty() || !alignment.deleted.is_empty();
         if has_structural_rows && alignment.matched.is_empty() {
             #[cfg(feature = "perf-metrics")]
@@ -5582,26 +5651,27 @@ fn diff_grids_core(
             }
             return;
         }
-        let has_row_edits = alignment
-            .matched
-            .iter()
-            .any(|(a, b)| row_signature_at(old, *a) != row_signature_at(new, *b));
-        if has_structural_rows && has_row_edits {
-            #[cfg(feature = "perf-metrics")]
-            if let Some(m) = metrics.as_mut() {
-                m.start_phase(Phase::CellDiff);
+        if has_structural_rows {
+            let has_row_edits = alignment.matched.iter().any(|(a, b)| {
+                row_signatures_old.get(*a as usize) != row_signatures_new.get(*b as usize)
+            });
+            if has_row_edits {
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = metrics.as_mut() {
+                    m.start_phase(Phase::CellDiff);
+                }
+                positional_diff(sheet_id, old, new, ops);
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = metrics.as_mut() {
+                    m.add_cells_compared(cells_in_overlap(old, new));
+                    m.end_phase(Phase::CellDiff);
+                }
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = metrics.as_mut() {
+                    m.end_phase(Phase::Alignment);
+                }
+                return;
             }
-            positional_diff(sheet_id, old, new, ops);
-            #[cfg(feature = "perf-metrics")]
-            if let Some(m) = metrics.as_mut() {
-                m.add_cells_compared(cells_in_overlap(old, new));
-                m.end_phase(Phase::CellDiff);
-            }
-            #[cfg(feature = "perf-metrics")]
-            if let Some(m) = metrics.as_mut() {
-                m.end_phase(Phase::Alignment);
-            }
-            return;
         }
         if alignment.moves.is_empty()
             && alignment.inserted.is_empty()
@@ -5934,21 +6004,35 @@ fn align_indices_by_signature<T: Copy + Eq>(
     }
 }
 
-fn inject_moves_from_insert_delete(old: &Grid, new: &Grid, alignment: &mut AmrAlignment) {
+fn inject_moves_from_insert_delete(
+    old: &Grid,
+    new: &Grid,
+    alignment: &mut AmrAlignment,
+    row_signatures_old: &[RowSignature],
+    row_signatures_new: &[RowSignature],
+) {
     if alignment.inserted.is_empty() || alignment.deleted.is_empty() {
         return;
     }
 
     let mut deleted_by_sig: HashMap<RowSignature, Vec<u32>> = HashMap::new();
     for row in &alignment.deleted {
-        if let Some(sig) = row_signature_at(old, *row) {
+        let sig = row_signatures_old
+            .get(*row as usize)
+            .copied()
+            .or_else(|| row_signature_at(old, *row));
+        if let Some(sig) = sig {
             deleted_by_sig.entry(sig).or_default().push(*row);
         }
     }
 
     let mut inserted_by_sig: HashMap<RowSignature, Vec<u32>> = HashMap::new();
     for row in &alignment.inserted {
-        if let Some(sig) = row_signature_at(new, *row) {
+        let sig = row_signatures_new
+            .get(*row as usize)
+            .copied()
+            .or_else(|| row_signature_at(new, *row));
+        if let Some(sig) = sig {
             inserted_by_sig.entry(sig).or_default().push(*row);
         }
     }
@@ -19232,6 +19316,7 @@ use common::single_sheet_workbook;
 use excel_diff::config::DiffConfig;
 use excel_diff::diff::DiffOp;
 use excel_diff::engine::diff_workbooks_with_config;
+use excel_diff::perf::DiffMetrics;
 use excel_diff::{Cell, CellAddress, CellValue, Grid};
 
 fn create_large_grid(nrows: u32, ncols: u32, base_value: i32) -> Grid {
@@ -19293,6 +19378,21 @@ fn create_sparse_grid(nrows: u32, ncols: u32, fill_percent: u32, seed: u64) -> G
     grid
 }
 
+fn log_perf_metric(name: &str, metrics: &DiffMetrics, tail: &str) {
+    println!(
+        "PERF_METRIC {name} total_time_ms={} move_detection_time_ms={} alignment_time_ms={} cell_diff_time_ms={} rows_processed={} cells_compared={} anchors_found={} moves_detected={}{}",
+        metrics.total_time_ms,
+        metrics.move_detection_time_ms,
+        metrics.alignment_time_ms,
+        metrics.cell_diff_time_ms,
+        metrics.rows_processed,
+        metrics.cells_compared,
+        metrics.anchors_found,
+        metrics.moves_detected,
+        tail
+    );
+}
+
 #[test]
 fn perf_p1_large_dense() {
     let grid_a = create_large_grid(1000, 20, 0);
@@ -19330,10 +19430,7 @@ fn perf_p1_large_dense() {
     let metrics = report.metrics.unwrap();
     assert!(metrics.rows_processed > 0, "P1 should process rows");
     assert!(metrics.cells_compared > 0, "P1 should compare cells");
-    println!(
-        "PERF_METRIC perf_p1_large_dense total_time_ms={} rows_processed={} cells_compared={}",
-        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
-    );
+    log_perf_metric("perf_p1_large_dense", &metrics, "");
 }
 
 #[test]
@@ -19354,10 +19451,7 @@ fn perf_p2_large_noise() {
     assert!(report.metrics.is_some(), "P2 should have metrics");
     let metrics = report.metrics.unwrap();
     assert!(metrics.rows_processed > 0, "P2 should process rows");
-    println!(
-        "PERF_METRIC perf_p2_large_noise total_time_ms={} rows_processed={} cells_compared={}",
-        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
-    );
+    log_perf_metric("perf_p2_large_noise", &metrics, "");
 }
 
 #[test]
@@ -19382,10 +19476,7 @@ fn perf_p3_adversarial_repetitive() {
     assert!(report.metrics.is_some(), "P3 should have metrics");
     let metrics = report.metrics.unwrap();
     assert!(metrics.rows_processed > 0, "P3 should process rows");
-    println!(
-        "PERF_METRIC perf_p3_adversarial_repetitive total_time_ms={} rows_processed={} cells_compared={}",
-        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
-    );
+    log_perf_metric("perf_p3_adversarial_repetitive", &metrics, "");
 }
 
 #[test]
@@ -19410,10 +19501,7 @@ fn perf_p4_99_percent_blank() {
     assert!(report.metrics.is_some(), "P4 should have metrics");
     let metrics = report.metrics.unwrap();
     assert!(metrics.rows_processed > 0, "P4 should process rows");
-    println!(
-        "PERF_METRIC perf_p4_99_percent_blank total_time_ms={} rows_processed={} cells_compared={}",
-        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
-    );
+    log_perf_metric("perf_p4_99_percent_blank", &metrics, "");
 }
 
 #[test]
@@ -19435,10 +19523,7 @@ fn perf_p5_identical() {
     assert!(report.metrics.is_some(), "P5 should have metrics");
     let metrics = report.metrics.unwrap();
     assert!(metrics.rows_processed > 0, "P5 should process rows");
-    println!(
-        "PERF_METRIC perf_p5_identical total_time_ms={} rows_processed={} cells_compared={}",
-        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
-    );
+    log_perf_metric("perf_p5_identical", &metrics, "");
 }
 
 #[test]
@@ -19476,10 +19561,7 @@ fn perf_50k_dense_single_edit() {
         "50k dense should detect the cell edit"
     );
     let metrics = report.metrics.expect("should have metrics");
-    println!(
-        "PERF_METRIC perf_50k_dense_single_edit total_time_ms={} rows_processed={} cells_compared={} (target: <5s)",
-        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
-    );
+    log_perf_metric("perf_50k_dense_single_edit", &metrics, " (target: <5s)");
     assert!(
         metrics.total_time_ms < 30000,
         "50k dense grid should complete in <30s, took {}ms",
@@ -19501,10 +19583,7 @@ fn perf_50k_completely_different() {
 
     assert!(report.complete, "50k different grids should complete");
     let metrics = report.metrics.expect("should have metrics");
-    println!(
-        "PERF_METRIC perf_50k_completely_different total_time_ms={} rows_processed={} cells_compared={} (target: <10s)",
-        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
-    );
+    log_perf_metric("perf_50k_completely_different", &metrics, " (target: <10s)");
     assert!(
         metrics.total_time_ms < 60000,
         "50k completely different should complete in <60s, took {}ms",
@@ -19533,9 +19612,10 @@ fn perf_50k_adversarial_repetitive() {
 
     assert!(report.complete, "50k repetitive should complete");
     let metrics = report.metrics.expect("should have metrics");
-    println!(
-        "PERF_METRIC perf_50k_adversarial_repetitive total_time_ms={} rows_processed={} cells_compared={} (target: <15s)",
-        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
+    log_perf_metric(
+        "perf_50k_adversarial_repetitive",
+        &metrics,
+        " (target: <15s)",
     );
     assert!(
         metrics.total_time_ms < 120000,
@@ -19565,10 +19645,7 @@ fn perf_50k_99_percent_blank() {
 
     assert!(report.complete, "50k sparse should complete");
     let metrics = report.metrics.expect("should have metrics");
-    println!(
-        "PERF_METRIC perf_50k_99_percent_blank total_time_ms={} rows_processed={} cells_compared={} (target: <2s)",
-        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
-    );
+    log_perf_metric("perf_50k_99_percent_blank", &metrics, " (target: <2s)");
     assert!(
         metrics.total_time_ms < 30000,
         "50k 99% blank should complete in <30s, took {}ms",
@@ -19594,10 +19671,7 @@ fn perf_50k_identical() {
         "50k identical grids should have no ops"
     );
     let metrics = report.metrics.expect("should have metrics");
-    println!(
-        "PERF_METRIC perf_50k_identical total_time_ms={} rows_processed={} cells_compared={} (target: <1s)",
-        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
-    );
+    log_perf_metric("perf_50k_identical", &metrics, " (target: <1s)");
     assert!(
         metrics.total_time_ms < 15000,
         "50k identical should complete in <15s, took {}ms",
@@ -25660,14 +25734,18 @@ def parse_perf_metrics(stdout: str) -> dict:
     Returns dict mapping test_name -> {"total_time_ms": int, ...}
     """
     metrics = {}
-    pattern = re.compile(r"PERF_METRIC\s+(\S+)\s+total_time_ms=(\d+)")
+    pattern = re.compile(r"PERF_METRIC\s+(\S+)\s+(.*)")
 
     for line in stdout.split("\n"):
         match = pattern.search(line)
-        if match:
-            test_name = match.group(1)
-            total_time_ms = int(match.group(2))
-            metrics[test_name] = {"total_time_ms": total_time_ms}
+        if not match:
+            continue
+
+        test_name = match.group(1)
+        rest = match.group(2)
+        data = {key: int(val) for key, val in re.findall(r"(\w+)=([0-9]+)", rest)}
+        data.setdefault("total_time_ms", 0)
+        metrics[test_name] = data
 
     return metrics
 
@@ -26014,17 +26092,23 @@ def get_git_branch():
 def parse_perf_metrics(stdout: str) -> dict:
     """Parse PERF_METRIC lines from test output."""
     metrics = {}
-    pattern = r"PERF_METRIC (\S+) total_time_ms=(\d+) rows_processed=(\d+) cells_compared=(\d+)"
+    pattern = re.compile(r"PERF_METRIC\s+(\S+)\s+(.*)")
 
     for line in stdout.split("\n"):
-        match = re.search(pattern, line)
-        if match:
-            test_name = match.group(1)
-            metrics[test_name] = {
-                "total_time_ms": int(match.group(2)),
-                "rows_processed": int(match.group(3)),
-                "cells_compared": int(match.group(4)),
-            }
+        match = pattern.search(line)
+        if not match:
+            continue
+
+        test_name = match.group(1)
+        rest = match.group(2)
+        data = {key: int(val) for key, val in re.findall(r"(\w+)=([0-9]+)", rest)}
+
+        # Ensure required keys exist even if the output is partially missing.
+        data.setdefault("total_time_ms", 0)
+        data.setdefault("rows_processed", 0)
+        data.setdefault("cells_compared", 0)
+
+        metrics[test_name] = data
 
     return metrics
 
@@ -26111,19 +26195,29 @@ def print_summary(metrics: dict):
     print("\n" + "=" * 70)
     print("Performance Metrics Summary")
     print("=" * 70)
-    print(f"{'Test':<40} {'Time (ms)':>10} {'Rows':>10} {'Cells':>12}")
+    print(
+        f"{'Test':<40} {'Total':>10} {'Move':>10} {'Align':>10} {'Cell':>10} {'Rows':>10} {'Cells':>12}"
+    )
     print("-" * 70)
 
     for test_name, data in sorted(metrics.items()):
+        move = data.get("move_detection_time_ms", 0)
+        align = data.get("alignment_time_ms", 0)
+        cell = data.get("cell_diff_time_ms", 0)
         print(
-            f"{test_name:<40} {data['total_time_ms']:>10,} {data['rows_processed']:>10,} {data['cells_compared']:>12,}"
+            f"{test_name:<40} {data['total_time_ms']:>10,} {move:>10,} {align:>10,} {cell:>10,} {data.get('rows_processed', 0):>10,} {data.get('cells_compared', 0):>12,}"
         )
 
     print("-" * 70)
     total_time = sum(m["total_time_ms"] for m in metrics.values())
+    total_move = sum(m.get("move_detection_time_ms", 0) for m in metrics.values())
+    total_align = sum(m.get("alignment_time_ms", 0) for m in metrics.values())
+    total_cell = sum(m.get("cell_diff_time_ms", 0) for m in metrics.values())
     total_rows = sum(m["rows_processed"] for m in metrics.values())
     total_cells = sum(m["cells_compared"] for m in metrics.values())
-    print(f"{'TOTAL':<40} {total_time:>10,} {total_rows:>10,} {total_cells:>12,}")
+    print(
+        f"{'TOTAL':<40} {total_time:>10,} {total_move:>10,} {total_align:>10,} {total_cell:>10,} {total_rows:>10,} {total_cells:>12,}"
+    )
     print("=" * 70)
 
 

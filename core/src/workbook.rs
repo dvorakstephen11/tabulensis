@@ -342,24 +342,60 @@ impl Grid {
 
     pub fn compute_row_signature(&self, row: u32) -> RowSignature {
         use crate::hashing::hash_row_content_128;
-        let mut row_cells: Vec<_> = self
-            .cells
-            .values()
-            .filter(|cell| cell.row == row)
-            .map(|cell| (cell.col, cell))
-            .collect();
-        row_cells.sort_by_key(|(col, _)| *col);
 
-        let hash = hash_row_content_128(&row_cells);
+        let nrows = self.nrows as usize;
+        let ncols = self.ncols as usize;
+        let total_cells = self.cells.len();
+
+        let avg_cells_per_row = if nrows == 0 { 0 } else { total_cells / nrows };
+        let scan_cols = ncols <= 256 || avg_cells_per_row.saturating_mul(4) >= ncols;
+
+        let hash = if scan_cols {
+            let mut row_cells: Vec<(u32, &Cell)> = Vec::with_capacity(avg_cells_per_row.min(ncols));
+            for col in 0..self.ncols {
+                if let Some(cell) = self.get(row, col) {
+                    row_cells.push((col, cell));
+                }
+            }
+            hash_row_content_128(&row_cells)
+        } else {
+            let mut row_cells: Vec<_> = self
+                .cells
+                .values()
+                .filter(|cell| cell.row == row)
+                .map(|cell| (cell.col, cell))
+                .collect();
+            row_cells.sort_unstable_by_key(|(col, _)| *col);
+            hash_row_content_128(&row_cells)
+        };
+
         RowSignature { hash }
     }
 
     pub fn compute_col_signature(&self, col: u32) -> ColSignature {
         use crate::hashing::hash_col_content_128;
-        let mut col_cells: Vec<_> = self.cells.values().filter(|cell| cell.col == col).collect();
-        col_cells.sort_by_key(|cell| cell.row);
+        let nrows = self.nrows as usize;
+        let ncols = self.ncols as usize;
+        let total_cells = self.cells.len();
 
-        let hash = hash_col_content_128(&col_cells);
+        let avg_cells_per_col = if ncols == 0 { 0 } else { total_cells / ncols };
+        let scan_rows = nrows <= 1024 || avg_cells_per_col.saturating_mul(4) >= nrows;
+
+        let hash = if scan_rows {
+            let mut col_cells: Vec<&Cell> = Vec::with_capacity(avg_cells_per_col.min(nrows));
+            for row in 0..self.nrows {
+                if let Some(cell) = self.get(row, col) {
+                    col_cells.push(cell);
+                }
+            }
+            hash_col_content_128(&col_cells)
+        } else {
+            let mut col_cells: Vec<_> =
+                self.cells.values().filter(|cell| cell.col == col).collect();
+            col_cells.sort_unstable_by_key(|c| c.row);
+            hash_col_content_128(&col_cells)
+        };
+
         ColSignature { hash }
     }
 
@@ -386,7 +422,7 @@ impl Grid {
             row_cells
                 .into_iter()
                 .map(|mut cells| {
-                    cells.sort_by_key(|(col, _)| *col);
+                    cells.sort_unstable_by_key(|(col, _)| *col);
                     let hash = hash_row_content_128(&cells);
                     RowSignature { hash }
                 })
@@ -397,7 +433,7 @@ impl Grid {
             col_cells
                 .into_iter()
                 .map(|mut cells| {
-                    cells.sort_by_key(|c| c.row);
+                    cells.sort_unstable_by_key(|c| c.row);
                     let hash = hash_col_content_128(&cells);
                     ColSignature { hash }
                 })

@@ -237,3 +237,10 @@ Based on review feedback (`docs/meta/reviews/2025-12-09-sprint-branch-2/remediat
 - Changes: added AMR helper to return row signatures and reused them for move injection and row-edit detection; gated `has_row_edits` behind structural-row presence to avoid needless scans; added a unit test to validate signature exposure; PERF_METRIC lines now print move/alignment/cell timings and parsing scripts collect the extra fields with aligned summary output.
 - Complications: clippy flagged unused legacy wrappers after introducing the new helper; resolved with explicit `#[allow]` on the compatibility entry point.
 - Verification: `cargo fmt`, `cargo clippy --all-targets --all-features`, `cargo test`, `python scripts/export_perf_metrics.py` (quick suite, P5 identical ~310ms).
+
+## Remediation Round I (2025-12-12)
+
+- Findings addressed: (1) Added whole-grid equality helper and identical-grid fast path ahead of move detection; (2) `row_signature_counts` now hashes each row once (no O(R*cells) scan) and `has_row_edits` only runs when structural rows exist; (3) row/col signature computation now uses heuristic scanning with unstable sorts; (4) GridView construction switches to unstable sorts to avoid extra allocations.
+- Files modified: `core/src/engine.rs`, `core/src/workbook.rs`, `core/src/grid_view.rs`.
+- Verification: `cargo fmt`, `cargo clippy`, `cargo test`, `python scripts/export_perf_metrics.py` (results: `benchmarks/results/2025-12-12_223643.json`).
+- Complications: None; fixes followed the remediation plan directly.

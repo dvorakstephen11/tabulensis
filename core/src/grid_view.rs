@@ -76,7 +76,7 @@ impl<'a> GridView<'a> {
         }
 
         for row_view in rows.iter_mut() {
-            row_view.cells.sort_by_key(|(col, _)| *col);
+            row_view.cells.sort_unstable_by_key(|(col, _)| *col);
         }
 
         let mut row_meta: Vec<RowMeta> = rows
@@ -119,7 +119,7 @@ impl<'a> GridView<'a> {
             .into_iter()
             .enumerate()
             .map(|(idx, mut cells)| {
-                cells.sort_by_key(|c| c.row);
+                cells.sort_unstable_by_key(|c| c.row);
                 let hash = hash_col_content_128(&cells);
 
                 ColMeta {
