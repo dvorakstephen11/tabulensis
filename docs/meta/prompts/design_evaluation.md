@@ -23,6 +23,8 @@ Begin by deeply absorbing these foundational documents in `docs/rust_docs/`:
 5. **`unified_grid_diff_algorithm_specification.md`** — The definitive algorithmic specification for the 2D grid diff engine, detailing alignment strategies, complexity guarantees, and the mathematical foundations underpinning spreadsheet and database mode comparisons.
 
 Then examine the implementation in `core/src/` with fresh eyes, informed by but not enslaved to the documentation.
+
+6. **`benchmark_results.txt`** and **`benchmark_results.json`** — Current performance metrics from the diff engine benchmarks. These provide concrete data points for evaluating the Performance Awareness dimension.
 ---
 
 ## Evaluation Dimensions
@@ -89,6 +91,10 @@ The specification demands "instant diff on 100MB files." Does the architecture p
 - **Allocation consciousness**: Is memory allocated deliberately, or liberally? Are there opportunities for arena allocation, zero-copy parsing, or streaming?
 - **Algorithmic choices**: Do the implemented algorithms match the complexity claims in the specification? Are there O(n²) lurking where O(n log n) was promised?
 - **Streaming potential**: Could the current design evolve toward streaming, or would streaming require a rewrite?
+- **Benchmark evidence**: Review `benchmark_results.txt` for concrete performance data. The benchmarks test various scenarios (identical grids, single edits, adversarial repetitive data, sparse grids). Look for:
+  - Scaling behavior: Does time grow linearly or worse with input size?
+  - Anomalies: Are some scenarios disproportionately slow?
+  - Target gaps: How far are current metrics from the spec's targets (e.g., <5s for 50K dense rows)?
 
 Consider: *Performance-conscious design is not premature optimization—it is ensuring the architecture doesn't preclude future performance work.*
 

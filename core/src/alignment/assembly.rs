@@ -22,7 +22,7 @@ use crate::alignment::row_metadata::RowMeta;
 use crate::alignment::runs::{RowRun, compress_to_runs};
 use crate::config::DiffConfig;
 use crate::grid_view::GridView;
-use crate::workbook::Grid;
+use crate::workbook::{Grid, RowSignature};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RowAlignment {
@@ -47,19 +47,51 @@ struct GapAlignmentResult {
     moves: Vec<RowBlockMove>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowAlignmentWithSignatures {
+    pub alignment: RowAlignment,
+    pub row_signatures_a: Vec<RowSignature>,
+    pub row_signatures_b: Vec<RowSignature>,
+}
+
+#[allow(dead_code)]
 pub fn align_rows_amr(old: &Grid, new: &Grid, config: &DiffConfig) -> Option<RowAlignment> {
+    align_rows_amr_with_signatures(old, new, config).map(|result| result.alignment)
+}
+
+pub fn align_rows_amr_with_signatures(
+    old: &Grid,
+    new: &Grid,
+    config: &DiffConfig,
+) -> Option<RowAlignmentWithSignatures> {
     let view_a = GridView::from_grid_with_config(old, config);
     let view_b = GridView::from_grid_with_config(new, config);
+    let alignment = align_rows_from_meta(&view_a.row_meta, &view_b.row_meta, config)?;
+    let row_signatures_a: Vec<RowSignature> =
+        view_a.row_meta.iter().map(|meta| meta.signature).collect();
+    let row_signatures_b: Vec<RowSignature> =
+        view_b.row_meta.iter().map(|meta| meta.signature).collect();
 
-    if view_a.row_meta.len() == view_b.row_meta.len()
-        && view_a
-            .row_meta
+    Some(RowAlignmentWithSignatures {
+        alignment,
+        row_signatures_a,
+        row_signatures_b,
+    })
+}
+
+fn align_rows_from_meta(
+    rows_a: &[RowMeta],
+    rows_b: &[RowMeta],
+    config: &DiffConfig,
+) -> Option<RowAlignment> {
+    if rows_a.len() == rows_b.len()
+        && rows_a
             .iter()
-            .zip(view_b.row_meta.iter())
+            .zip(rows_b.iter())
             .all(|(a, b)| a.signature == b.signature)
     {
-        let mut matched = Vec::with_capacity(view_a.row_meta.len());
-        for (a, b) in view_a.row_meta.iter().zip(view_b.row_meta.iter()) {
+        let mut matched = Vec::with_capacity(rows_a.len());
+        for (a, b) in rows_a.iter().zip(rows_b.iter()) {
             matched.push((a.row_idx, b.row_idx));
         }
         return Some(RowAlignment {
@@ -70,8 +102,8 @@ pub fn align_rows_amr(old: &Grid, new: &Grid, config: &DiffConfig) -> Option<Row
         });
     }
 
-    let runs_a = compress_to_runs(&view_a.row_meta);
-    let runs_b = compress_to_runs(&view_b.row_meta);
+    let runs_a = compress_to_runs(rows_a);
+    let runs_b = compress_to_runs(rows_b);
     if runs_a.len() == 1 && runs_b.len() == 1 && runs_a[0].signature == runs_b[0].signature {
         let shared = runs_a[0].count.min(runs_b[0].count);
         let mut matched = Vec::new();
@@ -95,8 +127,8 @@ pub fn align_rows_amr(old: &Grid, new: &Grid, config: &DiffConfig) -> Option<Row
         });
     }
 
-    let compressed_a = runs_a.len() * 2 <= view_a.row_meta.len();
-    let compressed_b = runs_b.len() * 2 <= view_b.row_meta.len();
+    let compressed_a = runs_a.len() * 2 <= rows_a.len();
+    let compressed_b = runs_b.len() * 2 <= rows_b.len();
     if (compressed_a || compressed_b)
         && !runs_a.is_empty()
         && !runs_b.is_empty()
@@ -105,17 +137,8 @@ pub fn align_rows_amr(old: &Grid, new: &Grid, config: &DiffConfig) -> Option<Row
         return Some(alignment);
     }
 
-    let anchors = build_anchor_chain(discover_anchors_from_meta(
-        &view_a.row_meta,
-        &view_b.row_meta,
-    ));
-    Some(assemble_from_meta(
-        &view_a.row_meta,
-        &view_b.row_meta,
-        anchors,
-        config,
-        0,
-    ))
+    let anchors = build_anchor_chain(discover_anchors_from_meta(rows_a, rows_b));
+    Some(assemble_from_meta(rows_a, rows_b, anchors, config, 0))
 }
 
 fn assemble_from_meta(
@@ -923,6 +946,37 @@ mod tests {
         assert!(alignment.inserted.is_empty());
         assert!(alignment.deleted.is_empty());
         assert!(alignment.moves.is_empty());
+    }
+
+    #[test]
+    fn align_rows_amr_with_signatures_exposes_row_hashes() {
+        let grid_a = grid_with_unique_rows(&[1, 2, 3, 4]);
+        let grid_b = grid_with_unique_rows(&[1, 2, 3, 4]);
+
+        let config = DiffConfig::default();
+        let result =
+            align_rows_amr_with_signatures(&grid_a, &grid_b, &config).expect("should align");
+
+        assert_eq!(result.row_signatures_a.len(), grid_a.nrows as usize);
+        assert_eq!(result.row_signatures_b.len(), grid_b.nrows as usize);
+        assert_eq!(result.alignment.matched.len(), grid_a.nrows as usize);
+
+        for row in 0..grid_a.nrows {
+            let expected_a = grid_a.compute_row_signature(row);
+            let expected_b = grid_b.compute_row_signature(row);
+            assert_eq!(
+                Some(expected_a),
+                result.row_signatures_a.get(row as usize).copied(),
+                "row {} signature for grid A should match compute_row_signature",
+                row
+            );
+            assert_eq!(
+                Some(expected_b),
+                result.row_signatures_b.get(row as usize).copied(),
+                "row {} signature for grid B should match compute_row_signature",
+                row
+            );
+        }
     }
 
     #[test]

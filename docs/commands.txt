@@ -76,3 +76,17 @@ Save test output to results file (uses current branch name, works from any subdi
   Bash/Unix:
     cargo test 2>&1 | tee "$(git rev-parse --show-toplevel)/docs/meta/results/$(git rev-parse --abbrev-ref HEAD).txt"
 
+
+
+
+# Run Criterion benchmarks with HTML reports
+cd core && cargo bench
+
+# Export quick metrics to JSON
+python scripts/export_perf_metrics.py
+
+# Export full-scale (50K) metrics
+python scripts/export_perf_metrics.py --full-scale
+
+# Compare two result files
+python scripts/compare_perf_results.py --latest

@@ -6,8 +6,9 @@ You have been provided with:
 1. **Codebase Snapshot**: `codebase_context.md` contains the current directory structure and the contents of all relevant source code and configuration files, reflecting the state AFTER implementation.
 2. **Documentation**: The `excel_diff_*.md` files contain the technical blueprints (specification, testing plan, difficulty analysis, etc.).
 3. **Cycle Plan**: `cycle_plan.md` contains the decision record and mini-spec produced by the Planner Agent for this cycle, combined into a single readable document.
-4. **Cycle Summary**: `cycle_summary.txt` contains the activity log (implementer's changes), test results, and a manifest of all provided files.
-5. **Prior Remediation Plans** (if present): `combined_remediations.md` contains all previous remediation plans generated during this cycle, concatenated in chronological order. Review these to understand what issues were previously identified and whether they have been addressed.
+4. **Cycle Summary**: `cycle_summary.txt` contains the activity log (implementer's changes), test results, benchmark metrics, and a manifest of all provided files.
+5. **Performance Benchmarks**: `benchmark_results.json` contains the latest performance metrics from the diff engine benchmarks. The cycle summary also includes a rendered view of these metrics. Use this to assess whether performance targets are being met and identify any regressions.
+6. **Prior Remediation Plans** (if present): `combined_remediations.md` contains all previous remediation plans generated during this cycle, concatenated in chronological order. Review these to understand what issues were previously identified and whether they have been addressed.
 
 ## Understanding the Document Hierarchy
 

@@ -613,6 +613,7 @@ fn g14_two_disjoint_rect_moves_plus_outside_edits_no_silent_data_loss() {
     );
 }
 
+#[allow(clippy::needless_range_loop)]
 #[test]
 fn g14_rect_move_plus_row_insertion_outside_no_silent_data_loss() {
     let mut grid_a = base_grid(12, 10);

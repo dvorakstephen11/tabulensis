@@ -28,6 +28,9 @@ You will have access to some or all of the following:
 - `reviews/[branch-name]/remediation.md` — Remediation plan (if issues found); subsequent iterations use `-1.md`, `-2.md`, etc.
 - `retrospectives/` — Post-cycle learnings and process improvements.
 
+**Performance Benchmarks** (in `benchmarks/`)
+- `results/*.json` — Timestamped performance metrics from diff engine benchmarks. The `benchmark_results.txt` file contains a rendered view of the latest metrics, and `benchmark_results.json` contains the raw data. Use these to assess performance maturity and identify areas needing optimization.
+
 **Business Context** (in `docs/`)
 - `projections/` — Revenue projections and market analysis.
 - `competitor_profiles/` — Analysis of competing products (Synkronizer, xlCompare, etc.).
@@ -168,10 +171,22 @@ Beyond those three, propose and compute **other useful measures of “percent co
      - Logging, observability, error handling.
      - Configuration, documentation, packaging, build/release pipelines.
    - Distinguish between:
-     - “Prototype complete” vs “production-ready.”
-   - Give a percentage that reflects how close we are to **shipping something robust to external users**, not just “it runs on my machine.”
+     - "Prototype complete" vs "production-ready."
+   - Give a percentage that reflects how close we are to **shipping something robust to external users**, not just "it runs on my machine."
 
-5. **Risk-adjusted completion percentage**
+5. **Percent of performance targets met**
+   - Review `benchmark_results.txt` and `benchmark_results.json` for current performance metrics.
+   - The specification targets "instant diff on 100MB files" (~50K rows).
+   - Evaluate each benchmark scenario:
+     - P1 (large dense): Target <5s for 50K rows
+     - P2 (large noise): Target <10s for 50K rows  
+     - P3 (adversarial repetitive): Target <15s for 50K rows
+     - P4 (99% blank): Target <2s for 50K rows
+     - P5 (identical): Target <1s for 50K rows
+   - Note: Quick tests use 1K rows; extrapolate performance for 50K based on algorithmic complexity.
+   - Estimate what percentage of performance work is complete vs remaining.
+
+6. **Risk-adjusted completion percentage**
    - Identify key **remaining risks**:
      - Hard unsolved tech problems.
      - Third-party or platform dependencies.

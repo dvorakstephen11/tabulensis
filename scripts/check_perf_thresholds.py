@@ -85,14 +85,18 @@ def parse_perf_metrics(stdout: str) -> dict:
     Returns dict mapping test_name -> {"total_time_ms": int, ...}
     """
     metrics = {}
-    pattern = re.compile(r"PERF_METRIC\s+(\S+)\s+total_time_ms=(\d+)")
+    pattern = re.compile(r"PERF_METRIC\s+(\S+)\s+(.*)")
 
     for line in stdout.split("\n"):
         match = pattern.search(line)
-        if match:
-            test_name = match.group(1)
-            total_time_ms = int(match.group(2))
-            metrics[test_name] = {"total_time_ms": total_time_ms}
+        if not match:
+            continue
+
+        test_name = match.group(1)
+        rest = match.group(2)
+        data = {key: int(val) for key, val in re.findall(r"(\w+)=([0-9]+)", rest)}
+        data.setdefault("total_time_ms", 0)
+        metrics[test_name] = data
 
     return metrics
 

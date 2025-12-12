@@ -1,0 +1,39 @@
+{
+  "timestamp": "2025-12-12T16:37:59.561238+00:00",
+  "git_commit": "2305ff2dde9e",
+  "git_branch": "2025-12-09-sprint-branch-2",
+  "full_scale": false,
+  "tests": {
+    "perf_p4_99_percent_blank": {
+      "total_time_ms": 24,
+      "rows_processed": 2000,
+      "cells_compared": 99900
+    },
+    "perf_p1_large_dense": {
+      "total_time_ms": 359,
+      "rows_processed": 2000,
+      "cells_compared": 20000
+    },
+    "perf_p2_large_noise": {
+      "total_time_ms": 372,
+      "rows_processed": 2000,
+      "cells_compared": 20000
+    },
+    "perf_p3_adversarial_repetitive": {
+      "total_time_ms": 1236,
+      "rows_processed": 2000,
+      "cells_compared": 49950
+    },
+    "perf_p5_identical": {
+      "total_time_ms": 4318,
+      "rows_processed": 2000,
+      "cells_compared": 100000
+    }
+  },
+  "summary": {
+    "total_tests": 5,
+    "total_time_ms": 6309,
+    "total_rows_processed": 10000,
+    "total_cells_compared": 289850
+  }
+}

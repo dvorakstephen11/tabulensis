@@ -1,4 +1,5 @@
 import argparse
+import json
 import platform
 import shutil
 import subprocess
@@ -484,6 +485,67 @@ def collect_test_results(ctx: ProjectContext) -> list[tuple[str, str]]:
     return results
 
 
+def get_latest_benchmark_result(ctx: ProjectContext) -> Path | None:
+    benchmarks_dir = ctx.root / "benchmarks" / "results"
+    if not benchmarks_dir.exists():
+        return None
+    json_files = sorted(benchmarks_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return json_files[0] if json_files else None
+
+
+def render_benchmark_results(benchmark_path: Path | None) -> str:
+    lines = [
+        "=" * 60,
+        "PERFORMANCE BENCHMARK RESULTS",
+        "=" * 60,
+        "",
+    ]
+    if not benchmark_path or not benchmark_path.exists():
+        lines.append("(No benchmark results found in benchmarks/results/)")
+        return "\n".join(lines) + "\n"
+
+    try:
+        data = json.loads(benchmark_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        lines.append(f"(Error reading benchmark file: {e})")
+        return "\n".join(lines) + "\n"
+
+    lines.extend([
+        f"Source: {benchmark_path.name}",
+        f"Timestamp: {data.get('timestamp', 'unknown')}",
+        f"Git Commit: {data.get('git_commit', 'unknown')}",
+        f"Git Branch: {data.get('git_branch', 'unknown')}",
+        f"Full Scale: {data.get('full_scale', False)}",
+        "",
+        "-" * 60,
+        f"{'Test':<40} {'Time (ms)':>10} {'Rows':>10} {'Cells':>12}",
+        "-" * 60,
+    ])
+
+    tests = data.get("tests", {})
+    for test_name, metrics in sorted(tests.items()):
+        time_ms = metrics.get("total_time_ms", 0)
+        rows = metrics.get("rows_processed", 0)
+        cells = metrics.get("cells_compared", 0)
+        lines.append(f"{test_name:<40} {time_ms:>10,} {rows:>10,} {cells:>12,}")
+
+    summary = data.get("summary", {})
+    lines.extend([
+        "-" * 60,
+        f"{'TOTAL':<40} {summary.get('total_time_ms', 0):>10,} "
+        f"{summary.get('total_rows_processed', 0):>10,} {summary.get('total_cells_compared', 0):>12,}",
+        "=" * 60,
+        "",
+        "Performance Notes:",
+        "- Times are in milliseconds for release builds",
+        "- 'Full Scale' indicates 50K row tests vs 1K row quick tests",
+        "- See benchmarks/README.md for threshold targets",
+        "",
+    ])
+
+    return "\n".join(lines)
+
+
 def render_activity_logs(branch_logs: Sequence[tuple[str, str]]) -> str:
     lines = [
         "=" * 60,
@@ -657,7 +719,9 @@ def render_cycle_plan(branch_name: str, spec_file: Path | None, decision_file: P
     return "\n".join(lines)
 
 
-def render_cycle_summary(branch_name: str, files: Sequence[tuple[Path, Path]], cycle_plan: Path) -> str:
+def render_cycle_summary(
+    branch_name: str, files: Sequence[tuple[Path, Path]], cycle_plan: Path, benchmark_path: Path | None = None
+) -> str:
     lines = [
         "=" * 60,
         "POST-IMPLEMENTATION REVIEW CONTEXT",
@@ -673,6 +737,8 @@ def render_cycle_summary(branch_name: str, files: Sequence[tuple[Path, Path]], c
             lines.append(f"  - {dst.name} (from {src})")
     if cycle_plan.exists():
         lines.append("  - cycle_plan.md (combined decision + spec)")
+    if benchmark_path and benchmark_path.exists():
+        lines.append(f"  - benchmark_results.json (from {benchmark_path.name})")
     lines.extend(["", "=" * 60, "ACTIVITY LOG", "=" * 60, ""])
     return "\n".join(lines)
 
@@ -733,7 +799,8 @@ def collate_post_implementation_review(
 
     activity_log = ctx.root / "docs" / "meta" / "logs" / branch / "activity_log.txt"
     test_results = ctx.root / "docs" / "meta" / "results" / f"{branch}.txt"
-    summary_lines = render_cycle_summary(branch, files_to_copy, cycle_plan_path).splitlines()
+    benchmark_path = get_latest_benchmark_result(ctx)
+    summary_lines = render_cycle_summary(branch, files_to_copy, cycle_plan_path, benchmark_path).splitlines()
     summary_lines.extend(
         [
             "",
@@ -748,9 +815,13 @@ def collate_post_implementation_review(
             "=" * 60,
             "",
             read_text(test_results) if test_results.exists() else "(Test results not found)",
+            "",
+            render_benchmark_results(benchmark_path),
         ]
     )
     builder.add_content("cycle_summary.txt", "\n".join(summary_lines) + "\n")
+    if benchmark_path and benchmark_path.exists():
+        builder.add_file(benchmark_path, dest_name="benchmark_results.json")
 
     reviews_branch_dir = ctx.root / "docs" / "meta" / "reviews" / branch
     remediation_files = sorted(
@@ -791,6 +862,11 @@ def collate_percent_completion(ctx: ProjectContext, downloads_dir: Path | None =
     builder.add_content("combined_activity_logs.txt", render_activity_logs(branch_logs))
     builder.add_content("combined_test_results.txt", render_test_results(collect_test_results(ctx)))
 
+    benchmark_path = get_latest_benchmark_result(ctx)
+    builder.add_content("benchmark_results.txt", render_benchmark_results(benchmark_path))
+    if benchmark_path and benchmark_path.exists():
+        builder.add_file(benchmark_path, dest_name="benchmark_results.json")
+
     builder.inject_prompt(PROMPT_FILES["percent"])
     builder.write_manifest()
     print(f"Collation complete: {builder.out_dir}")
@@ -812,6 +888,11 @@ def collate_planner(ctx: ProjectContext, downloads_dir: Path | None = None) -> P
     if results:
         latest_result = results[-1]
     builder.add_content("development_history.txt", render_development_history(branch_logs, latest_result))
+
+    benchmark_path = get_latest_benchmark_result(ctx)
+    builder.add_content("benchmark_results.txt", render_benchmark_results(benchmark_path))
+    if benchmark_path and benchmark_path.exists():
+        builder.add_file(benchmark_path, dest_name="benchmark_results.json")
 
     builder.inject_prompt(PROMPT_FILES["planner"])
     builder.write_manifest()
@@ -945,6 +1026,11 @@ def collate_design_evaluation(ctx: ProjectContext, downloads_dir: Path | None = 
         content = render_code_bundle(ctx, config["title"], config["patterns"])
         destination = builder.add_content(filename, content)
         token_report.append((destination.name, estimate_tokens(content)))
+
+    benchmark_path = get_latest_benchmark_result(ctx)
+    builder.add_content("benchmark_results.txt", render_benchmark_results(benchmark_path))
+    if benchmark_path and benchmark_path.exists():
+        builder.add_file(benchmark_path, dest_name="benchmark_results.json")
 
     token_report.sort(key=lambda item: item[1], reverse=True)
     report_lines = ["Token estimates per bundle:", ""]

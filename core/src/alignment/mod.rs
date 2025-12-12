@@ -48,4 +48,8 @@ pub(crate) mod move_extraction;
 pub(crate) mod row_metadata;
 pub(crate) mod runs;
 
-pub(crate) use assembly::{RowAlignment, RowBlockMove, align_rows_amr};
+#[allow(unused_imports)]
+pub(crate) use assembly::{
+    RowAlignment, RowAlignmentWithSignatures, RowBlockMove, align_rows_amr,
+    align_rows_amr_with_signatures,
+};

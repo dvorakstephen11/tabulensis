@@ -75,6 +75,7 @@ fn gridview_sparse_rows_low_info_classification() {
     assert_eq!(view.row_meta[3].first_non_blank_col, 1);
 }
 
+#[allow(clippy::field_reassign_with_default)]
 #[test]
 fn gridview_formula_only_row_respects_threshold() {
     let mut grid = Grid::new(2, 2);

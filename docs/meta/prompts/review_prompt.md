@@ -8,9 +8,17 @@
     workflows/
       perf.yml
   .gitignore
+  benchmarks/
+    README.md
+    results/
+      .gitkeep
+      2025-12-12_163759.json
+      2025-12-12_175341.json
   Cargo.lock
   Cargo.toml
   core/
+    benches/
+      diff_benchmarks.rs
     Cargo.lock
     Cargo.toml
     src/
@@ -114,6 +122,8 @@
   related_files.txt.md
   scripts/
     check_perf_thresholds.py
+    compare_perf_results.py
+    export_perf_metrics.py
 ```
 
 ## File Contents
@@ -199,6 +209,286 @@ resolver = "2"
 
 ---
 
+### File: `core\benches\diff_benchmarks.rs`
+
+```rust
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use excel_diff::config::DiffConfig;
+use excel_diff::engine::diff_workbooks_with_config;
+use excel_diff::{Cell, CellAddress, CellValue, Grid, Sheet, SheetKind, Workbook};
+use std::time::Duration;
+
+const MAX_BENCH_TIME_SECS: u64 = 30;
+const WARMUP_SECS: u64 = 3;
+const SAMPLE_SIZE: usize = 10;
+
+fn create_large_grid(nrows: u32, ncols: u32, base_value: i32) -> Grid {
+    let mut grid = Grid::new(nrows, ncols);
+    for row in 0..nrows {
+        for col in 0..ncols {
+            grid.insert(Cell {
+                row,
+                col,
+                address: CellAddress::from_indices(row, col),
+                value: Some(CellValue::Number(
+                    (base_value as i64 + row as i64 * 1000 + col as i64) as f64,
+                )),
+                formula: None,
+            });
+        }
+    }
+    grid
+}
+
+fn create_repetitive_grid(nrows: u32, ncols: u32, pattern_length: u32) -> Grid {
+    let mut grid = Grid::new(nrows, ncols);
+    for row in 0..nrows {
+        let pattern_idx = row % pattern_length;
+        for col in 0..ncols {
+            grid.insert(Cell {
+                row,
+                col,
+                address: CellAddress::from_indices(row, col),
+                value: Some(CellValue::Number((pattern_idx * 1000 + col) as f64)),
+                formula: None,
+            });
+        }
+    }
+    grid
+}
+
+fn create_sparse_grid(nrows: u32, ncols: u32, fill_percent: u32, seed: u64) -> Grid {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut grid = Grid::new(nrows, ncols);
+    for row in 0..nrows {
+        for col in 0..ncols {
+            let mut hasher = DefaultHasher::new();
+            (row, col, seed).hash(&mut hasher);
+            let hash = hasher.finish();
+            if (hash % 100) < fill_percent as u64 {
+                grid.insert(Cell {
+                    row,
+                    col,
+                    address: CellAddress::from_indices(row, col),
+                    value: Some(CellValue::Number((row * 1000 + col) as f64)),
+                    formula: None,
+                });
+            }
+        }
+    }
+    grid
+}
+
+fn single_sheet_workbook(name: &str, grid: Grid) -> Workbook {
+    Workbook {
+        sheets: vec![Sheet {
+            name: name.to_string(),
+            kind: SheetKind::Worksheet,
+            grid,
+        }],
+    }
+}
+
+fn bench_identical_grids(c: &mut Criterion) {
+    let mut group = c.benchmark_group("identical_grids");
+    group.measurement_time(Duration::from_secs(MAX_BENCH_TIME_SECS));
+    group.warm_up_time(Duration::from_secs(WARMUP_SECS));
+    group.sample_size(SAMPLE_SIZE);
+
+    for size in [500u32, 1000, 2000, 5000].iter() {
+        let grid_a = create_large_grid(*size, 50, 0);
+        let grid_b = create_large_grid(*size, 50, 0);
+        let wb_a = single_sheet_workbook("Bench", grid_a);
+        let wb_b = single_sheet_workbook("Bench", grid_b);
+        let config = DiffConfig::default();
+
+        group.throughput(Throughput::Elements(*size as u64 * 50));
+        group.bench_with_input(BenchmarkId::new("rows", size), size, |b, _| {
+            b.iter(|| diff_workbooks_with_config(&wb_a, &wb_b, &config));
+        });
+    }
+    group.finish();
+}
+
+fn bench_single_cell_edit(c: &mut Criterion) {
+    let mut group = c.benchmark_group("single_cell_edit");
+    group.measurement_time(Duration::from_secs(MAX_BENCH_TIME_SECS));
+    group.warm_up_time(Duration::from_secs(WARMUP_SECS));
+    group.sample_size(SAMPLE_SIZE);
+
+    for size in [500u32, 1000, 2000, 5000].iter() {
+        let grid_a = create_large_grid(*size, 50, 0);
+        let mut grid_b = create_large_grid(*size, 50, 0);
+        grid_b.insert(Cell {
+            row: size / 2,
+            col: 25,
+            address: CellAddress::from_indices(size / 2, 25),
+            value: Some(CellValue::Number(999999.0)),
+            formula: None,
+        });
+        let wb_a = single_sheet_workbook("Bench", grid_a);
+        let wb_b = single_sheet_workbook("Bench", grid_b);
+        let config = DiffConfig::default();
+
+        group.throughput(Throughput::Elements(*size as u64 * 50));
+        group.bench_with_input(BenchmarkId::new("rows", size), size, |b, _| {
+            b.iter(|| diff_workbooks_with_config(&wb_a, &wb_b, &config));
+        });
+    }
+    group.finish();
+}
+
+fn bench_all_rows_different(c: &mut Criterion) {
+    let mut group = c.benchmark_group("all_rows_different");
+    group.measurement_time(Duration::from_secs(MAX_BENCH_TIME_SECS));
+    group.warm_up_time(Duration::from_secs(WARMUP_SECS));
+    group.sample_size(SAMPLE_SIZE);
+
+    for size in [500u32, 1000, 2000].iter() {
+        let grid_a = create_large_grid(*size, 50, 0);
+        let grid_b = create_large_grid(*size, 50, 1);
+        let wb_a = single_sheet_workbook("Bench", grid_a);
+        let wb_b = single_sheet_workbook("Bench", grid_b);
+        let config = DiffConfig::default();
+
+        group.throughput(Throughput::Elements(*size as u64 * 50));
+        group.bench_with_input(BenchmarkId::new("rows", size), size, |b, _| {
+            b.iter(|| diff_workbooks_with_config(&wb_a, &wb_b, &config));
+        });
+    }
+    group.finish();
+}
+
+fn bench_adversarial_repetitive(c: &mut Criterion) {
+    let mut group = c.benchmark_group("adversarial_repetitive");
+    group.measurement_time(Duration::from_secs(MAX_BENCH_TIME_SECS));
+    group.warm_up_time(Duration::from_secs(WARMUP_SECS));
+    group.sample_size(SAMPLE_SIZE);
+
+    for size in [500u32, 1000, 2000].iter() {
+        let grid_a = create_repetitive_grid(*size, 50, 100);
+        let mut grid_b = create_repetitive_grid(*size, 50, 100);
+        grid_b.insert(Cell {
+            row: size / 2,
+            col: 25,
+            address: CellAddress::from_indices(size / 2, 25),
+            value: Some(CellValue::Number(999999.0)),
+            formula: None,
+        });
+        let wb_a = single_sheet_workbook("Bench", grid_a);
+        let wb_b = single_sheet_workbook("Bench", grid_b);
+        let config = DiffConfig::default();
+
+        group.throughput(Throughput::Elements(*size as u64 * 50));
+        group.bench_with_input(BenchmarkId::new("rows", size), size, |b, _| {
+            b.iter(|| diff_workbooks_with_config(&wb_a, &wb_b, &config));
+        });
+    }
+    group.finish();
+}
+
+fn bench_sparse_grid(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sparse_grid_1pct");
+    group.measurement_time(Duration::from_secs(MAX_BENCH_TIME_SECS));
+    group.warm_up_time(Duration::from_secs(WARMUP_SECS));
+    group.sample_size(SAMPLE_SIZE);
+
+    for size in [500u32, 1000, 2000, 5000].iter() {
+        let grid_a = create_sparse_grid(*size, 100, 1, 12345);
+        let mut grid_b = create_sparse_grid(*size, 100, 1, 12345);
+        grid_b.insert(Cell {
+            row: size / 2,
+            col: 50,
+            address: CellAddress::from_indices(size / 2, 50),
+            value: Some(CellValue::Number(999999.0)),
+            formula: None,
+        });
+        let wb_a = single_sheet_workbook("Bench", grid_a);
+        let wb_b = single_sheet_workbook("Bench", grid_b);
+        let config = DiffConfig::default();
+
+        group.throughput(Throughput::Elements(*size as u64 * 100));
+        group.bench_with_input(BenchmarkId::new("rows", size), size, |b, _| {
+            b.iter(|| diff_workbooks_with_config(&wb_a, &wb_b, &config));
+        });
+    }
+    group.finish();
+}
+
+fn bench_row_insertion(c: &mut Criterion) {
+    let mut group = c.benchmark_group("row_insertion");
+    group.measurement_time(Duration::from_secs(MAX_BENCH_TIME_SECS));
+    group.warm_up_time(Duration::from_secs(WARMUP_SECS));
+    group.sample_size(SAMPLE_SIZE);
+
+    for size in [500u32, 1000, 2000].iter() {
+        let grid_a = create_large_grid(*size, 50, 0);
+        let mut grid_b = Grid::new(size + 100, 50);
+        for row in 0..(size / 2) {
+            for col in 0..50 {
+                grid_b.insert(Cell {
+                    row,
+                    col,
+                    address: CellAddress::from_indices(row, col),
+                    value: Some(CellValue::Number((row as i64 * 1000 + col as i64) as f64)),
+                    formula: None,
+                });
+            }
+        }
+        for col in 0..50 {
+            for i in 0..100 {
+                let row = size / 2 + i;
+                grid_b.insert(Cell {
+                    row,
+                    col,
+                    address: CellAddress::from_indices(row, col),
+                    value: Some(CellValue::Text(format!("NEW_ROW_{}", i))),
+                    formula: None,
+                });
+            }
+        }
+        for row in (size / 2)..*size {
+            for col in 0..50 {
+                let new_row = row + 100;
+                grid_b.insert(Cell {
+                    row: new_row,
+                    col,
+                    address: CellAddress::from_indices(new_row, col),
+                    value: Some(CellValue::Number((row as i64 * 1000 + col as i64) as f64)),
+                    formula: None,
+                });
+            }
+        }
+        let wb_a = single_sheet_workbook("Bench", grid_a);
+        let wb_b = single_sheet_workbook("Bench", grid_b);
+        let config = DiffConfig::default();
+
+        group.throughput(Throughput::Elements(*size as u64 * 50));
+        group.bench_with_input(BenchmarkId::new("rows", size), size, |b, _| {
+            b.iter(|| diff_workbooks_with_config(&wb_a, &wb_b, &config));
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_identical_grids,
+    bench_single_cell_edit,
+    bench_all_rows_different,
+    bench_adversarial_repetitive,
+    bench_sparse_grid,
+    bench_row_insertion,
+);
+
+criterion_main!(benches);
+
+```
+
+---
+
 ### File: `core\Cargo.toml`
 
 ```toml
@@ -228,6 +518,11 @@ xxhash-rust = { version = "0.8", features = ["xxh64", "xxh3"] }
 [dev-dependencies]
 pretty_assertions = "1.4"
 tempfile = "3.10"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "diff_benchmarks"
+harness = false
 
 ```
 
@@ -712,6 +1007,25 @@ pub fn align_rows_amr(old: &Grid, new: &Grid, config: &DiffConfig) -> Option<Row
     let view_a = GridView::from_grid_with_config(old, config);
     let view_b = GridView::from_grid_with_config(new, config);
 
+    if view_a.row_meta.len() == view_b.row_meta.len()
+        && view_a
+            .row_meta
+            .iter()
+            .zip(view_b.row_meta.iter())
+            .all(|(a, b)| a.signature == b.signature)
+    {
+        let mut matched = Vec::with_capacity(view_a.row_meta.len());
+        for (a, b) in view_a.row_meta.iter().zip(view_b.row_meta.iter()) {
+            matched.push((a.row_idx, b.row_idx));
+        }
+        return Some(RowAlignment {
+            matched,
+            inserted: Vec::new(),
+            deleted: Vec::new(),
+            moves: Vec::new(),
+        });
+    }
+
     let runs_a = compress_to_runs(&view_a.row_meta);
     let runs_b = compress_to_runs(&view_b.row_meta);
     if runs_a.len() == 1 && runs_b.len() == 1 && runs_a[0].signature == runs_b[0].signature {
@@ -722,15 +1036,12 @@ pub fn align_rows_amr(old: &Grid, new: &Grid, config: &DiffConfig) -> Option<Row
         }
         let mut inserted = Vec::new();
         if runs_b[0].count > shared {
-            inserted.extend(
-                (runs_b[0].start_row + shared)..(runs_b[0].start_row + runs_b[0].count),
-            );
+            inserted
+                .extend((runs_b[0].start_row + shared)..(runs_b[0].start_row + runs_b[0].count));
         }
         let mut deleted = Vec::new();
         if runs_a[0].count > shared {
-            deleted.extend(
-                (runs_a[0].start_row + shared)..(runs_a[0].start_row + runs_a[0].count),
-            );
+            deleted.extend((runs_a[0].start_row + shared)..(runs_a[0].start_row + runs_a[0].count));
         }
         return Some(RowAlignment {
             matched,
@@ -742,13 +1053,18 @@ pub fn align_rows_amr(old: &Grid, new: &Grid, config: &DiffConfig) -> Option<Row
 
     let compressed_a = runs_a.len() * 2 <= view_a.row_meta.len();
     let compressed_b = runs_b.len() * 2 <= view_b.row_meta.len();
-    if (compressed_a || compressed_b) && !runs_a.is_empty() && !runs_b.is_empty() {
-        if let Some(alignment) = align_runs_stable(&runs_a, &runs_b) {
-            return Some(alignment);
-        }
+    if (compressed_a || compressed_b)
+        && !runs_a.is_empty()
+        && !runs_b.is_empty()
+        && let Some(alignment) = align_runs_stable(&runs_a, &runs_b)
+    {
+        return Some(alignment);
     }
 
-    let anchors = build_anchor_chain(discover_anchors_from_meta(&view_a.row_meta, &view_b.row_meta));
+    let anchors = build_anchor_chain(discover_anchors_from_meta(
+        &view_a.row_meta,
+        &view_b.row_meta,
+    ));
     Some(assemble_from_meta(
         &view_a.row_meta,
         &view_b.row_meta,
@@ -793,7 +1109,14 @@ fn assemble_from_meta(
 
     let old_end = old_meta.last().map(|m| m.row_idx + 1).unwrap_or(prev_old);
     let new_end = new_meta.last().map(|m| m.row_idx + 1).unwrap_or(prev_new);
-    let tail_result = fill_gap(prev_old..old_end, prev_new..new_end, old_meta, new_meta, config, depth);
+    let tail_result = fill_gap(
+        prev_old..old_end,
+        prev_new..new_end,
+        old_meta,
+        new_meta,
+        config,
+        depth,
+    );
     matched.extend(tail_result.matched);
     inserted.extend(tail_result.inserted);
     deleted.extend(tail_result.deleted);
@@ -846,12 +1169,15 @@ fn fill_gap(
 
         GapStrategy::HashFallback => {
             let mut result = align_gap_via_hash(old_slice, new_slice);
-            result.moves.extend(moves_from_matched_pairs(&result.matched));
+            result
+                .moves
+                .extend(moves_from_matched_pairs(&result.matched));
             result
         }
 
         GapStrategy::MoveCandidate => {
-            let mut result = if old_slice.len() as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
+            let mut result = if old_slice.len() as u32
+                > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
                 || new_slice.len() as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
             {
                 align_gap_via_hash(old_slice, new_slice)
@@ -867,10 +1193,8 @@ fn fill_gap(
                     .iter()
                     .any(|(a, b)| (*b as i64 - *a as i64) != 0);
 
-                if has_nonzero_offset {
-                    if let Some(mv) = find_block_move(old_slice, new_slice, 1) {
-                        detected_moves.push(mv);
-                    }
+                if has_nonzero_offset && let Some(mv) = find_block_move(old_slice, new_slice, 1) {
+                    detected_moves.push(mv);
                 }
             }
 
@@ -1150,14 +1474,11 @@ fn myers_edit_script(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> Vec<Edit> 
         let mut v_next = v.clone();
         for k in (-(d as isize)..=d as isize).step_by(2) {
             let idx = (k + offset) as usize;
-            let x_start;
-            if k == -(d as isize) {
-                x_start = v[idx + 1];
-            } else if k != d as isize && v[idx - 1] < v[idx + 1] {
-                x_start = v[idx + 1];
+            let x_start = if k == -(d as isize) || (k != d as isize && v[idx - 1] < v[idx + 1]) {
+                v[idx + 1]
             } else {
-                x_start = v[idx - 1] + 1;
-            }
+                v[idx - 1] + 1
+            };
 
             let mut x = x_start;
             let mut y = x - k;
@@ -1202,8 +1523,8 @@ fn reconstruct_myers(
             prev_y = 0;
             from_down = false;
         } else {
-            let use_down = k == -(d_rev as isize)
-                || (k != d_rev as isize && v[idx - 1] < v[idx + 1]);
+            let use_down =
+                k == -(d_rev as isize) || (k != d_rev as isize && v[idx - 1] < v[idx + 1]);
             let prev_k = if use_down { k + 1 } else { k - 1 };
             let prev_idx = (prev_k + offset) as usize;
             let prev_v = &trace[d_rev - 1];
@@ -1247,15 +1568,18 @@ fn align_gap_via_hash(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> GapAlignm
 
     let mut sig_to_new: HashMap<crate::workbook::RowSignature, VecDeque<u32>> = HashMap::new();
     for (j, meta) in new_slice.iter().enumerate() {
-        sig_to_new.entry(meta.signature).or_default().push_back(j as u32);
+        sig_to_new
+            .entry(meta.signature)
+            .or_default()
+            .push_back(j as u32);
     }
 
     let mut candidate_pairs: Vec<(u32, u32)> = Vec::new();
     for (i, meta) in old_slice.iter().enumerate() {
-        if let Some(q) = sig_to_new.get_mut(&meta.signature) {
-            if let Some(j) = q.pop_front() {
-                candidate_pairs.push((i as u32, j));
-            }
+        if let Some(q) = sig_to_new.get_mut(&meta.signature)
+            && let Some(j) = q.pop_front()
+        {
+            candidate_pairs.push((i as u32, j));
         }
     }
 
@@ -1289,7 +1613,10 @@ fn align_gap_via_hash(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> GapAlignm
         if keep[k] {
             used_old[old_i as usize] = true;
             used_new[new_j as usize] = true;
-            matched.push((old_slice[old_i as usize].row_idx, new_slice[new_j as usize].row_idx));
+            matched.push((
+                old_slice[old_i as usize].row_idx,
+                new_slice[new_j as usize].row_idx,
+            ));
         }
     }
 
@@ -1457,20 +1784,28 @@ mod tests {
             .expect("alignment should succeed with disjoint gaps");
 
         assert!(!alignment.matched.is_empty(), "should have matched pairs");
-        
-        let matched_is_monotonic = alignment.matched.windows(2).all(|w| {
-            w[0].0 <= w[1].0 && w[0].1 <= w[1].1
-        });
-        assert!(matched_is_monotonic, "matched pairs should be monotonically increasing");
-        
-        assert!(!alignment.inserted.is_empty() || !alignment.deleted.is_empty(), 
-            "should have insertions and/or deletions");
+
+        let matched_is_monotonic = alignment
+            .matched
+            .windows(2)
+            .all(|w| w[0].0 <= w[1].0 && w[0].1 <= w[1].1);
+        assert!(
+            matched_is_monotonic,
+            "matched pairs should be monotonically increasing"
+        );
+
+        assert!(
+            !alignment.inserted.is_empty() || !alignment.deleted.is_empty(),
+            "should have insertions and/or deletions"
+        );
     }
 
     #[test]
     fn amr_recursive_gap_alignment_returns_monotonic_alignment() {
         let grid_a = grid_with_unique_rows(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
-        let rows_b = vec![1, 2, 100, 3, 4, 5, 200, 6, 7, 8, 300, 9, 10, 11, 400, 12, 13, 14, 15];
+        let rows_b = vec![
+            1, 2, 100, 3, 4, 5, 200, 6, 7, 8, 300, 9, 10, 11, 400, 12, 13, 14, 15,
+        ];
         let grid_b = grid_with_unique_rows(&rows_b);
 
         let config = DiffConfig {
@@ -1482,20 +1817,27 @@ mod tests {
         let alignment = align_rows_amr(&grid_a, &grid_b, &config)
             .expect("alignment should succeed with recursive gaps");
 
-        let matched_is_monotonic = alignment.matched.windows(2).all(|w| {
-            w[0].0 <= w[1].0 && w[0].1 <= w[1].1
-        });
-        assert!(matched_is_monotonic, 
-            "recursive alignment should produce monotonic matched pairs");
-        
+        let matched_is_monotonic = alignment
+            .matched
+            .windows(2)
+            .all(|w| w[0].0 <= w[1].0 && w[0].1 <= w[1].1);
+        assert!(
+            matched_is_monotonic,
+            "recursive alignment should produce monotonic matched pairs"
+        );
+
         for &inserted_row in &alignment.inserted {
-            assert!(!alignment.matched.iter().any(|(_, b)| *b == inserted_row),
-                "inserted rows should not appear in matched pairs");
+            assert!(
+                !alignment.matched.iter().any(|(_, b)| *b == inserted_row),
+                "inserted rows should not appear in matched pairs"
+            );
         }
-        
+
         for &deleted_row in &alignment.deleted {
-            assert!(!alignment.matched.iter().any(|(a, _)| *a == deleted_row),
-                "deleted rows should not appear in matched pairs");
+            assert!(
+                !alignment.matched.iter().any(|(a, _)| *a == deleted_row),
+                "deleted rows should not appear in matched pairs"
+            );
         }
     }
 
@@ -1508,13 +1850,20 @@ mod tests {
         let alignment = align_rows_amr(&grid_a, &grid_b, &config)
             .expect("alignment should succeed with moved block");
 
-        assert!(!alignment.matched.is_empty(), "should have matched pairs even with moves");
-        
-        let old_rows: std::collections::HashSet<_> = alignment.matched.iter().map(|(a, _)| *a).collect();
-        let new_rows: std::collections::HashSet<_> = alignment.matched.iter().map(|(_, b)| *b).collect();
-        
-        assert!(old_rows.len() <= 10 && new_rows.len() <= 10, 
-            "matched rows should not exceed input size");
+        assert!(
+            !alignment.matched.is_empty(),
+            "should have matched pairs even with moves"
+        );
+
+        let old_rows: std::collections::HashSet<_> =
+            alignment.matched.iter().map(|(a, _)| *a).collect();
+        let new_rows: std::collections::HashSet<_> =
+            alignment.matched.iter().map(|(_, b)| *b).collect();
+
+        assert!(
+            old_rows.len() <= 10 && new_rows.len() <= 10,
+            "matched rows should not exceed input size"
+        );
     }
 
     #[test]
@@ -1574,7 +1923,10 @@ mod tests {
         assert!(result.inserted.is_empty());
         assert!(result.deleted.is_empty());
         assert_eq!(result.matched.first(), Some(&(10, 20)));
-        assert_eq!(result.matched.last(), Some(&(10 + large as u32 - 1, 20 + large as u32 - 1)));
+        assert_eq!(
+            result.matched.last(),
+            Some(&(10 + large as u32 - 1, 20 + large as u32 - 1))
+        );
     }
 
     #[test]
@@ -1609,7 +1961,10 @@ mod tests {
         assert!(result.deleted.is_empty());
         assert_eq!(result.matched.len(), count);
         assert_eq!(result.matched.first(), Some(&(0, 0)));
-        assert_eq!(result.matched.last(), Some(&(count as u32 - 1, (count + 1) as u32 - 1)));
+        assert_eq!(
+            result.matched.last(),
+            Some(&(count as u32 - 1, (count + 1) as u32 - 1))
+        );
     }
 }
 
@@ -1769,7 +2124,7 @@ pub(crate) mod move_extraction;
 pub(crate) mod row_metadata;
 pub(crate) mod runs;
 
-pub(crate) use assembly::{align_rows_amr, RowAlignment, RowBlockMove};
+pub(crate) use assembly::{RowAlignment, RowBlockMove, align_rows_amr};
 
 ```
 
@@ -1803,8 +2158,8 @@ pub(crate) use assembly::{align_rows_amr, RowAlignment, RowBlockMove};
 
 use std::collections::HashMap;
 
-use crate::alignment::row_metadata::RowMeta;
 use crate::alignment::RowBlockMove;
+use crate::alignment::row_metadata::RowMeta;
 use crate::workbook::RowSignature;
 
 pub fn find_block_move(
@@ -1812,37 +2167,53 @@ pub fn find_block_move(
     new_slice: &[RowMeta],
     min_len: u32,
 ) -> Option<RowBlockMove> {
+    const MAX_SLICE_LEN: usize = 10_000;
+    const MAX_CANDIDATES_PER_SIG: usize = 16;
+
+    if old_slice.len() > MAX_SLICE_LEN || new_slice.len() > MAX_SLICE_LEN {
+        return None;
+    }
+
     let mut positions: HashMap<RowSignature, Vec<usize>> = HashMap::new();
     for (idx, meta) in old_slice.iter().enumerate() {
+        if meta.is_low_info() {
+            continue;
+        }
         positions.entry(meta.signature).or_default().push(idx);
     }
 
     let mut best: Option<RowBlockMove> = None;
+    let mut best_len: usize = 0;
 
     for (new_idx, meta) in new_slice.iter().enumerate() {
-        if let Some(candidates) = positions.get(&meta.signature) {
-            for &old_idx in candidates {
-                let mut len = 0usize;
-                while old_idx + len < old_slice.len()
-                    && new_idx + len < new_slice.len()
-                    && old_slice[old_idx + len].signature == new_slice[new_idx + len].signature
-                {
-                    len += 1;
-                }
+        if meta.is_low_info() {
+            continue;
+        }
 
-                if len as u32 >= min_len {
-                    let mv = RowBlockMove {
-                        src_start_row: old_slice[old_idx].row_idx,
-                        dst_start_row: new_slice[new_idx].row_idx,
-                        row_count: len as u32,
-                    };
-                    let take = best
-                        .as_ref()
-                        .map_or(true, |b| mv.row_count > b.row_count);
-                    if take {
-                        best = Some(mv);
-                    }
-                }
+        let Some(candidates) = positions.get(&meta.signature) else {
+            continue;
+        };
+
+        for &old_idx in candidates.iter().take(MAX_CANDIDATES_PER_SIG) {
+            let max_possible = (old_slice.len() - old_idx).min(new_slice.len() - new_idx);
+            if max_possible <= best_len {
+                continue;
+            }
+
+            let mut len = 0usize;
+            while len < max_possible
+                && old_slice[old_idx + len].signature == new_slice[new_idx + len].signature
+            {
+                len += 1;
+            }
+
+            if len >= min_len as usize && len > best_len {
+                best_len = len;
+                best = Some(RowBlockMove {
+                    src_start_row: old_slice[old_idx].row_idx,
+                    dst_start_row: new_slice[new_idx].row_idx,
+                    row_count: len as u32,
+                });
             }
         }
     }
@@ -1962,7 +2333,7 @@ pub fn classify_row_frequencies(row_meta: &mut [RowMeta], config: &DiffConfig) {
         let count = freq_map.get(&meta.signature).copied().unwrap_or(0);
         let mut class = match count {
             1 => FrequencyClass::Unique,
-            c if c == 0 => FrequencyClass::Common,
+            0 => FrequencyClass::Common,
             c if c <= config.rare_threshold => FrequencyClass::Rare,
             _ => FrequencyClass::Common,
         };
@@ -1977,6 +2348,7 @@ pub fn classify_row_frequencies(row_meta: &mut [RowMeta], config: &DiffConfig) {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
 
@@ -1995,11 +2367,7 @@ mod tests {
 
     #[test]
     fn classifies_unique_and_rare_and_low_info() {
-        let mut meta = vec![
-            make_meta(0, 1, 3),
-            make_meta(1, 1, 3),
-            make_meta(2, 2, 1),
-        ];
+        let mut meta = vec![make_meta(0, 1, 3), make_meta(1, 1, 3), make_meta(2, 2, 1)];
 
         let mut config = DiffConfig::default();
         config.rare_threshold = 2;
@@ -2090,10 +2458,20 @@ mod tests {
     fn compresses_10k_identical_rows_to_single_run() {
         let meta: Vec<RowMeta> = (0..10_000).map(|i| make_meta(i, 42)).collect();
         let runs = compress_to_runs(&meta);
-        
-        assert_eq!(runs.len(), 1, "10K identical rows should compress to a single run");
-        assert_eq!(runs[0].count, 10_000, "single run should have count of 10,000");
-        assert_eq!(runs[0].signature.hash, 42, "run signature should match input");
+
+        assert_eq!(
+            runs.len(),
+            1,
+            "10K identical rows should compress to a single run"
+        );
+        assert_eq!(
+            runs[0].count, 10_000,
+            "single run should have count of 10,000"
+        );
+        assert_eq!(
+            runs[0].signature.hash, 42,
+            "run signature should match input"
+        );
         assert_eq!(runs[0].start_row, 0, "run should start at row 0");
     }
 
@@ -2106,14 +2484,23 @@ mod tests {
             })
             .collect();
         let runs = compress_to_runs(&meta);
-        
-        assert_eq!(runs.len(), 10_000, 
-            "alternating A-B pattern should produce 10K runs (no compression benefit)");
-        
+
+        assert_eq!(
+            runs.len(),
+            10_000,
+            "alternating A-B pattern should produce 10K runs (no compression benefit)"
+        );
+
         for (i, run) in runs.iter().enumerate() {
-            assert_eq!(run.count, 1, "each run should have count of 1 for alternating pattern");
+            assert_eq!(
+                run.count, 1,
+                "each run should have count of 1 for alternating pattern"
+            );
             let expected_hash = if i % 2 == 0 { 1 } else { 2 };
-            assert_eq!(run.signature.hash, expected_hash, "run signature should alternate");
+            assert_eq!(
+                run.signature.hash, expected_hash,
+                "run signature should alternate"
+            );
         }
     }
 
@@ -2121,7 +2508,7 @@ mod tests {
     fn mixed_runs_with_varying_lengths() {
         let mut meta = Vec::new();
         let mut row_idx = 0u32;
-        
+
         for _ in 0..100 {
             meta.push(make_meta(row_idx, 1));
             row_idx += 1;
@@ -2138,10 +2525,14 @@ mod tests {
             meta.push(make_meta(row_idx, 4));
             row_idx += 1;
         }
-        
+
         let runs = compress_to_runs(&meta);
-        
-        assert_eq!(runs.len(), 4, "should produce 4 runs for 4 distinct signatures");
+
+        assert_eq!(
+            runs.len(),
+            4,
+            "should produce 4 runs for 4 distinct signatures"
+        );
         assert_eq!(runs[0].count, 100);
         assert_eq!(runs[1].count, 50);
         assert_eq!(runs[2].count, 200);
@@ -2159,7 +2550,7 @@ mod tests {
     fn single_row_produces_single_run() {
         let meta = vec![make_meta(0, 999)];
         let runs = compress_to_runs(&meta);
-        
+
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].count, 1);
         assert_eq!(runs[0].start_row, 0);
@@ -2172,13 +2563,16 @@ mod tests {
             .map(|i| make_meta(i, (i / 100) as u128))
             .collect();
         let runs = compress_to_runs(&meta);
-        
+
         assert_eq!(runs.len(), 10, "should have 10 runs (one per 100 rows)");
-        
+
         for (group_idx, run) in runs.iter().enumerate() {
             let expected_start = (group_idx * 100) as u32;
-            assert_eq!(run.start_row, expected_start, 
-                "run {} should start at row {}", group_idx, expected_start);
+            assert_eq!(
+                run.start_row, expected_start,
+                "run {} should start at row {}",
+                group_idx, expected_start
+            );
             assert_eq!(run.count, 100, "each run should have 100 rows");
         }
     }
@@ -4430,7 +4824,9 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum DiffError {
-    #[error("alignment limits exceeded for sheet '{sheet}': rows={rows}, cols={cols} (limits: rows={max_rows}, cols={max_cols})")]
+    #[error(
+        "alignment limits exceeded for sheet '{sheet}': rows={rows}, cols={cols} (limits: rows={max_rows}, cols={max_cols})"
+    )]
     LimitsExceeded {
         sheet: String,
         rows: u32,
@@ -4710,8 +5106,8 @@ impl DiffOp {
 //! Provides the main entry point [`diff_workbooks`] for comparing two workbooks
 //! and generating a [`DiffReport`] of all changes.
 
-use crate::alignment::{RowAlignment as AmrAlignment, align_rows_amr};
 use crate::alignment::move_extraction::moves_from_matched_pairs;
+use crate::alignment::{RowAlignment as AmrAlignment, align_rows_amr};
 use crate::column_alignment::{
     ColumnAlignment, ColumnBlockMove, align_single_column_change_with_config,
     detect_exact_column_block_move_with_config,
@@ -4719,6 +5115,8 @@ use crate::column_alignment::{
 use crate::config::{DiffConfig, LimitBehavior};
 use crate::database_alignment::{KeyColumnSpec, diff_table_by_key};
 use crate::diff::{DiffError, DiffOp, DiffReport, SheetId};
+#[cfg(feature = "perf-metrics")]
+use crate::perf::{DiffMetrics, Phase};
 use crate::rect_block_move::{RectBlockMove, detect_exact_rect_block_move_with_config};
 use crate::region_mask::RegionMask;
 use crate::row_alignment::{
@@ -4726,8 +5124,6 @@ use crate::row_alignment::{
     align_row_changes_with_config, detect_exact_row_block_move_with_config,
     detect_fuzzy_row_block_move_with_config,
 };
-#[cfg(feature = "perf-metrics")]
-use crate::perf::{DiffMetrics, Phase};
 use crate::workbook::{
     Cell, CellAddress, CellSnapshot, ColSignature, Grid, RowSignature, Sheet, SheetKind, Workbook,
 };
@@ -4897,13 +5293,18 @@ pub fn diff_grids_database_mode(old: &Grid, new: &Grid, key_columns: &[u32]) -> 
                 continue;
             }
 
-            let addr = CellAddress::from_indices(*row_b, col);
-            let from = snapshot_with_addr(old.get(*row_a, col), addr);
-            let to = snapshot_with_addr(new.get(*row_b, col), addr);
+            let old_cell = old.get(*row_a, col);
+            let new_cell = new.get(*row_b, col);
 
-            if from != to {
-                ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
+            if cells_content_equal(old_cell, new_cell) {
+                continue;
             }
+
+            let addr = CellAddress::from_indices(*row_b, col);
+            let from = snapshot_with_addr(old_cell, addr);
+            let to = snapshot_with_addr(new_cell, addr);
+
+            ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
         }
     }
 
@@ -5014,9 +5415,8 @@ fn diff_grids_core(
 ) {
     let mut old_mask = RegionMask::all_active(old.nrows, old.ncols);
     let mut new_mask = RegionMask::all_active(new.nrows, new.ncols);
-    let move_detection_enabled =
-        old.nrows.max(new.nrows) <= config.recursive_align_threshold
-            && old.ncols.max(new.ncols) <= 256;
+    let move_detection_enabled = old.nrows.max(new.nrows) <= config.recursive_align_threshold
+        && old.ncols.max(new.ncols) <= 256;
     let mut iteration = 0;
 
     if move_detection_enabled {
@@ -5164,8 +5564,7 @@ fn diff_grids_core(
 
     if let Some(mut alignment) = align_rows_amr(old, new, config) {
         inject_moves_from_insert_delete(old, new, &mut alignment);
-        let has_structural_rows =
-            !alignment.inserted.is_empty() || !alignment.deleted.is_empty();
+        let has_structural_rows = !alignment.inserted.is_empty() || !alignment.deleted.is_empty();
         if has_structural_rows && alignment.matched.is_empty() {
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
@@ -5183,9 +5582,10 @@ fn diff_grids_core(
             }
             return;
         }
-        let has_row_edits = alignment.matched.iter().any(|(a, b)| {
-            row_signature_at(old, *a) != row_signature_at(new, *b)
-        });
+        let has_row_edits = alignment
+            .matched
+            .iter()
+            .any(|(a, b)| row_signature_at(old, *a) != row_signature_at(new, *b));
         if has_structural_rows && has_row_edits {
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
@@ -5207,27 +5607,38 @@ fn diff_grids_core(
             && alignment.inserted.is_empty()
             && alignment.deleted.is_empty()
             && old.ncols != new.ncols
+            && let Some(col_alignment) = align_single_column_change_with_config(old, new, config)
         {
-            if let Some(col_alignment) = align_single_column_change_with_config(old, new, config) {
-                #[cfg(feature = "perf-metrics")]
-                if let Some(m) = metrics.as_mut() {
-                    m.start_phase(Phase::CellDiff);
-                }
-                emit_column_aligned_diffs(sheet_id, old, new, &col_alignment, ops);
-                #[cfg(feature = "perf-metrics")]
-                if let Some(m) = metrics.as_mut() {
-                    let overlap_rows = old.nrows.min(new.nrows) as u64;
-                    m.add_cells_compared(overlap_rows.saturating_mul(col_alignment.matched.len() as u64));
-                    m.end_phase(Phase::CellDiff);
-                }
-                #[cfg(feature = "perf-metrics")]
-                if let Some(m) = metrics.as_mut() {
-                    m.end_phase(Phase::Alignment);
-                }
-                return;
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = metrics.as_mut() {
+                m.start_phase(Phase::CellDiff);
             }
+            emit_column_aligned_diffs(sheet_id, old, new, &col_alignment, ops);
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = metrics.as_mut() {
+                let overlap_rows = old.nrows.min(new.nrows) as u64;
+                m.add_cells_compared(
+                    overlap_rows.saturating_mul(col_alignment.matched.len() as u64),
+                );
+                m.end_phase(Phase::CellDiff);
+            }
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = metrics.as_mut() {
+                m.end_phase(Phase::Alignment);
+            }
+            return;
         }
-        if alignment.moves.is_empty() && row_signature_multiset_equal(old, new) {
+        let alignment_is_trivial_identity = alignment.moves.is_empty()
+            && alignment.inserted.is_empty()
+            && alignment.deleted.is_empty()
+            && old.nrows == new.nrows
+            && alignment.matched.len() as u32 == old.nrows
+            && alignment.matched.iter().all(|(a, b)| a == b);
+
+        if !alignment_is_trivial_identity
+            && alignment.moves.is_empty()
+            && row_signature_multiset_equal(old, new)
+        {
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
                 m.start_phase(Phase::CellDiff);
@@ -5423,12 +5834,31 @@ fn row_signature_at(grid: &Grid, row: u32) -> Option<RowSignature> {
 }
 
 fn row_signature_counts(grid: &Grid) -> HashMap<RowSignature, u32> {
-    let mut counts = HashMap::new();
-    for row in 0..grid.nrows {
-        if let Some(sig) = row_signature_at(grid, row) {
+    if let Some(rows) = grid.row_signatures.as_ref() {
+        let mut counts: HashMap<RowSignature, u32> = HashMap::with_capacity(rows.len());
+        for &sig in rows {
             *counts.entry(sig).or_insert(0) += 1;
         }
+        return counts;
     }
+
+    use crate::hashing::hash_row_content_128;
+
+    let nrows = grid.nrows as usize;
+    let mut rows: Vec<Vec<(u32, &Cell)>> = vec![Vec::new(); nrows];
+
+    for cell in grid.cells.values() {
+        rows[cell.row as usize].push((cell.col, cell));
+    }
+
+    let mut counts: HashMap<RowSignature, u32> = HashMap::with_capacity(nrows);
+    for mut row_cells in rows {
+        row_cells.sort_by_key(|(col, _)| *col);
+        let hash = hash_row_content_128(&row_cells);
+        let sig = RowSignature { hash };
+        *counts.entry(sig).or_insert(0) += 1;
+    }
+
     counts
 }
 
@@ -5483,10 +5913,10 @@ fn align_indices_by_signature<T: Copy + Eq>(
             } else {
                 (sig_b(short_idx), sig_a(long_idx))
             };
-            if let (Some(sa), Some(sb)) = (sig_short, sig_long) {
-                if sa == sb {
-                    matches += 1;
-                }
+            if let (Some(sa), Some(sb)) = (sig_short, sig_long)
+                && sa == sb
+            {
+                matches += 1;
             }
         }
         if matches > best_matches {
@@ -5504,11 +5934,7 @@ fn align_indices_by_signature<T: Copy + Eq>(
     }
 }
 
-fn inject_moves_from_insert_delete(
-    old: &Grid,
-    new: &Grid,
-    alignment: &mut AmrAlignment,
-) {
+fn inject_moves_from_insert_delete(old: &Grid, new: &Grid, alignment: &mut AmrAlignment) {
     if alignment.inserted.is_empty() || alignment.deleted.is_empty() {
         return;
     }
@@ -6048,21 +6474,22 @@ fn diff_aligned_with_masks(
 
     for (row_a, row_b) in rows_a.iter().zip(rows_b.iter()) {
         for (col_a, col_b) in cols_a.iter().zip(cols_b.iter()) {
-            if !old_mask.is_cell_active(*row_a, *col_a)
-                || !new_mask.is_cell_active(*row_b, *col_b)
+            if !old_mask.is_cell_active(*row_a, *col_a) || !new_mask.is_cell_active(*row_b, *col_b)
             {
                 continue;
             }
-            let addr = CellAddress::from_indices(*row_b, *col_b);
             let old_cell = old.get(*row_a, *col_a);
             let new_cell = new.get(*row_b, *col_b);
 
+            if cells_content_equal(old_cell, new_cell) {
+                continue;
+            }
+
+            let addr = CellAddress::from_indices(*row_b, *col_b);
             let from = snapshot_with_addr(old_cell, addr);
             let to = snapshot_with_addr(new_cell, addr);
 
-            if from != to {
-                ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
-            }
+            ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
         }
     }
 
@@ -6115,16 +6542,18 @@ fn positional_diff_with_masks(
             if !old_mask.is_cell_active(row, col) || !new_mask.is_cell_active(row, col) {
                 continue;
             }
-            let addr = CellAddress::from_indices(row, col);
             let old_cell = old.get(row, col);
             let new_cell = new.get(row, col);
 
+            if cells_content_equal(old_cell, new_cell) {
+                continue;
+            }
+
+            let addr = CellAddress::from_indices(row, col);
             let from = snapshot_with_addr(old_cell, addr);
             let to = snapshot_with_addr(new_cell, addr);
 
-            if from != to {
-                ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
-            }
+            ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
         }
     }
 
@@ -6182,16 +6611,18 @@ fn positional_diff_masked_equal_size(
             if !old_mask.is_cell_active(row, col) || !new_mask.is_cell_active(row, col) {
                 continue;
             }
-            let addr = CellAddress::from_indices(row, col);
             let old_cell = old.get(row, col);
             let new_cell = new.get(row, col);
 
+            if cells_content_equal(old_cell, new_cell) {
+                continue;
+            }
+
+            let addr = CellAddress::from_indices(row, col);
             let from = snapshot_with_addr(old_cell, addr);
             let to = snapshot_with_addr(new_cell, addr);
 
-            if from != to {
-                ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
-            }
+            ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
         }
     }
 }
@@ -6339,16 +6770,18 @@ fn diff_row_pair(
     ops: &mut Vec<DiffOp>,
 ) {
     for col in 0..overlap_cols {
-        let addr = CellAddress::from_indices(row_b, col);
         let old_cell = old.get(row_a, col);
         let new_cell = new.get(row_b, col);
 
+        if cells_content_equal(old_cell, new_cell) {
+            continue;
+        }
+
+        let addr = CellAddress::from_indices(row_b, col);
         let from = snapshot_with_addr(old_cell, addr);
         let to = snapshot_with_addr(new_cell, addr);
 
-        if from != to {
-            ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
-        }
+        ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
     }
 }
 
@@ -6363,16 +6796,18 @@ fn emit_column_aligned_diffs(
 
     for row in 0..overlap_rows {
         for (col_a, col_b) in &alignment.matched {
-            let addr = CellAddress::from_indices(row, *col_b);
             let old_cell = old.get(row, *col_a);
             let new_cell = new.get(row, *col_b);
 
+            if cells_content_equal(old_cell, new_cell) {
+                continue;
+            }
+
+            let addr = CellAddress::from_indices(row, *col_b);
             let from = snapshot_with_addr(old_cell, addr);
             let to = snapshot_with_addr(new_cell, addr);
 
-            if from != to {
-                ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
-            }
+            ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
         }
     }
 
@@ -6416,7 +6851,6 @@ mod tests {
         );
     }
 }
-
 
 ```
 
@@ -7559,8 +7993,6 @@ pub mod diff;
 pub mod engine;
 #[cfg(feature = "excel-open-xml")]
 pub mod excel_open_xml;
-#[cfg(feature = "perf-metrics")]
-pub mod perf;
 pub mod grid_parser;
 pub mod grid_view;
 pub(crate) mod hashing;
@@ -7568,6 +8000,8 @@ pub mod m_ast;
 pub mod m_diff;
 pub mod m_section;
 pub mod output;
+#[cfg(feature = "perf-metrics")]
+pub mod perf;
 pub(crate) mod rect_block_move;
 pub(crate) mod region_mask;
 pub(crate) mod row_alignment;
@@ -7584,7 +8018,10 @@ pub use datamashup_package::{
     EmbeddedContent, PackageParts, PackageXml, SectionDocument, parse_package_parts,
 };
 pub use diff::{DiffError, DiffOp, DiffReport, SheetId};
-pub use engine::{diff_grids_database_mode, diff_workbooks, diff_workbooks_with_config, try_diff_workbooks_with_config};
+pub use engine::{
+    diff_grids_database_mode, diff_workbooks, diff_workbooks_with_config,
+    try_diff_workbooks_with_config,
+};
 #[cfg(feature = "excel-open-xml")]
 pub use excel_open_xml::{ExcelOpenError, open_data_mashup, open_workbook};
 pub use grid_parser::{GridParseError, SheetDescriptor};
@@ -9121,6 +9558,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::field_reassign_with_default)]
     #[test]
     fn detect_bails_on_oversized_row_count() {
         let mut config = DiffConfig::default();
@@ -9135,6 +9573,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::field_reassign_with_default)]
     #[test]
     fn detect_bails_on_oversized_col_count() {
         let mut config = DiffConfig::default();
@@ -11802,7 +12241,6 @@ fn amr_recursive_gap_alignment() {
     );
 }
 
-
 ```
 
 ---
@@ -14458,6 +14896,7 @@ fn g14_two_disjoint_rect_moves_plus_outside_edits_no_silent_data_loss() {
     );
 }
 
+#[allow(clippy::needless_range_loop)]
 #[test]
 fn g14_rect_move_plus_row_insertion_outside_no_silent_data_loss() {
     let mut grid_a = base_grid(12, 10);
@@ -16027,6 +16466,7 @@ fn gridview_sparse_rows_low_info_classification() {
     assert_eq!(view.row_meta[3].first_non_blank_col, 1);
 }
 
+#[allow(clippy::field_reassign_with_default)]
 #[test]
 fn gridview_formula_only_row_respects_threshold() {
     let mut grid = Grid::new(2, 2);
@@ -16346,10 +16786,16 @@ fn limit_exceeded_return_error_returns_structured_error() {
 
     let result = try_diff_workbooks_with_config(&wb_a, &wb_b, &config);
     assert!(result.is_err(), "should return error when limits exceeded");
-    
+
     let err = result.unwrap_err();
     match err {
-        DiffError::LimitsExceeded { sheet, rows, cols, max_rows, max_cols } => {
+        DiffError::LimitsExceeded {
+            sheet,
+            rows,
+            cols,
+            max_rows,
+            max_cols,
+        } => {
             assert_eq!(sheet, "Sheet1");
             assert_eq!(rows, 100);
             assert_eq!(cols, 10);
@@ -16555,7 +17001,6 @@ fn wide_grid_500_cols_completes_within_default_limits() {
         "should detect the cell edit in wide grid"
     );
 }
-
 
 ```
 
@@ -18167,7 +18612,6 @@ fn metrics_default_equality() {
     assert_eq!(m1, m2);
 }
 
-
 ```
 
 ---
@@ -18642,9 +19086,10 @@ fn serialize_full_diff_report_has_complete_true_and_no_warnings() {
         "full result should have complete=true"
     );
 
-    let has_warnings = obj.get("warnings").map(|v| {
-        v.as_array().map(|arr| !arr.is_empty()).unwrap_or(false)
-    }).unwrap_or(false);
+    let has_warnings = obj
+        .get("warnings")
+        .map(|v| v.as_array().map(|arr| !arr.is_empty()).unwrap_or(false))
+        .unwrap_or(false);
     assert!(
         !has_warnings,
         "full result should have no warnings or empty warnings array"
@@ -18866,10 +19311,16 @@ fn perf_p1_large_dense() {
     let config = DiffConfig::default();
     let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
 
-    assert!(report.complete, "P1 dense grid should complete successfully");
+    assert!(
+        report.complete,
+        "P1 dense grid should complete successfully"
+    );
     assert!(report.warnings.is_empty(), "P1 should have no warnings");
     assert!(
-        report.ops.iter().any(|op| matches!(op, DiffOp::CellEdited { .. })),
+        report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::CellEdited { .. })),
         "P1 should detect the cell edit"
     );
     assert!(
@@ -18896,7 +19347,10 @@ fn perf_p2_large_noise() {
     let config = DiffConfig::default();
     let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
 
-    assert!(report.complete, "P2 noise grid should complete successfully");
+    assert!(
+        report.complete,
+        "P2 noise grid should complete successfully"
+    );
     assert!(report.metrics.is_some(), "P2 should have metrics");
     let metrics = report.metrics.unwrap();
     assert!(metrics.rows_processed > 0, "P2 should process rows");
@@ -18974,7 +19428,10 @@ fn perf_p5_identical() {
     let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
 
     assert!(report.complete, "P5 identical grid should complete");
-    assert!(report.ops.is_empty(), "P5 identical grids should produce no ops");
+    assert!(
+        report.ops.is_empty(),
+        "P5 identical grids should produce no ops"
+    );
     assert!(report.metrics.is_some(), "P5 should have metrics");
     let metrics = report.metrics.unwrap();
     assert!(metrics.rows_processed > 0, "P5 should process rows");
@@ -19003,10 +19460,19 @@ fn perf_50k_dense_single_edit() {
     let config = DiffConfig::default();
     let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
 
-    assert!(report.complete, "50k dense grid should complete successfully");
-    assert!(report.warnings.is_empty(), "50k dense should have no warnings");
     assert!(
-        report.ops.iter().any(|op| matches!(op, DiffOp::CellEdited { .. })),
+        report.complete,
+        "50k dense grid should complete successfully"
+    );
+    assert!(
+        report.warnings.is_empty(),
+        "50k dense should have no warnings"
+    );
+    assert!(
+        report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::CellEdited { .. })),
         "50k dense should detect the cell edit"
     );
     let metrics = report.metrics.expect("should have metrics");
@@ -19123,7 +19589,10 @@ fn perf_50k_identical() {
     let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
 
     assert!(report.complete, "50k identical should complete");
-    assert!(report.ops.is_empty(), "50k identical grids should have no ops");
+    assert!(
+        report.ops.is_empty(),
+        "50k identical grids should have no ops"
+    );
     let metrics = report.metrics.expect("should have metrics");
     println!(
         "PERF_METRIC perf_50k_identical total_time_ms={} rows_processed={} cells_compared={} (target: <1s)",
@@ -19135,7 +19604,6 @@ fn perf_50k_identical() {
         metrics.total_time_ms
     );
 }
-
 
 ```
 
@@ -20610,8 +21078,11 @@ fn pg4_diff_report_json_shape_with_metrics() {
         .collect();
     assert_eq!(keys, expected, "report should include metrics key");
 
-    let metrics_obj = obj.get("metrics").and_then(Value::as_object).expect("metrics object");
-    
+    let metrics_obj = obj
+        .get("metrics")
+        .and_then(Value::as_object)
+        .expect("metrics object");
+
     assert!(metrics_obj.contains_key("move_detection_time_ms"));
     assert!(metrics_obj.contains_key("alignment_time_ms"));
     assert!(metrics_obj.contains_key("cell_diff_time_ms"));
@@ -20620,12 +21091,24 @@ fn pg4_diff_report_json_shape_with_metrics() {
     assert!(metrics_obj.contains_key("cells_compared"));
     assert!(metrics_obj.contains_key("anchors_found"));
     assert!(metrics_obj.contains_key("moves_detected"));
-    
-    assert!(!metrics_obj.contains_key("parse_time_ms"), "parse_time_ms is planned for future phase");
-    assert!(!metrics_obj.contains_key("peak_memory_bytes"), "peak_memory_bytes is planned for future phase");
-    
-    assert_eq!(metrics_obj.get("rows_processed").and_then(Value::as_u64), Some(1000));
-    assert_eq!(metrics_obj.get("cells_compared").and_then(Value::as_u64), Some(5000));
+
+    assert!(
+        !metrics_obj.contains_key("parse_time_ms"),
+        "parse_time_ms is planned for future phase"
+    );
+    assert!(
+        !metrics_obj.contains_key("peak_memory_bytes"),
+        "peak_memory_bytes is planned for future phase"
+    );
+
+    assert_eq!(
+        metrics_obj.get("rows_processed").and_then(Value::as_u64),
+        Some(1000)
+    );
+    assert_eq!(
+        metrics_obj.get("cells_compared").and_then(Value::as_u64),
+        Some(5000)
+    );
 }
 
 ```
@@ -25299,6 +25782,396 @@ def run_perf_tests():
 
 if __name__ == "__main__":
     sys.exit(run_perf_tests())
+
+```
+
+---
+
+### File: `scripts\compare_perf_results.py`
+
+```python
+#!/usr/bin/env python3
+"""
+Compare performance results between two benchmark runs.
+
+Usage:
+    python scripts/compare_perf_results.py [baseline.json] [current.json]
+    python scripts/compare_perf_results.py --latest  # Compare two most recent results
+
+If no arguments provided, compares the two most recent results in benchmarks/results/.
+"""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+
+def load_result(path: Path) -> dict:
+    """Load a benchmark result JSON file."""
+    with open(path) as f:
+        return json.load(f)
+
+
+def get_latest_results(results_dir: Path, n: int = 2) -> list[Path]:
+    """Get the N most recent result files."""
+    files = sorted(results_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return files[:n]
+
+
+def format_delta(baseline: float, current: float) -> str:
+    """Format a percentage delta with color indicator."""
+    if baseline == 0:
+        return "N/A"
+    delta = ((current - baseline) / baseline) * 100
+    if abs(delta) < 1:
+        return f"  {delta:+.1f}%"
+    elif delta < 0:
+        return f"  {delta:+.1f}% (faster)"
+    else:
+        return f"  {delta:+.1f}% (SLOWER)"
+
+
+def compare_results(baseline: dict, current: dict):
+    """Compare two benchmark results and print a comparison table."""
+    print("=" * 90)
+    print("Performance Comparison")
+    print("=" * 90)
+    print(f"Baseline: {baseline.get('git_commit', 'unknown')} ({baseline.get('timestamp', 'unknown')[:19]})")
+    print(f"Current:  {current.get('git_commit', 'unknown')} ({current.get('timestamp', 'unknown')[:19]})")
+    print()
+
+    baseline_tests = baseline.get("tests", {})
+    current_tests = current.get("tests", {})
+
+    all_tests = sorted(set(baseline_tests.keys()) | set(current_tests.keys()))
+
+    if not all_tests:
+        print("No tests found in either result file.")
+        return
+
+    print(f"{'Test':<35} {'Baseline':>10} {'Current':>10} {'Delta':>20}")
+    print("-" * 90)
+
+    regressions = []
+    improvements = []
+
+    for test_name in all_tests:
+        base_data = baseline_tests.get(test_name, {})
+        curr_data = current_tests.get(test_name, {})
+
+        base_time = base_data.get("total_time_ms", 0)
+        curr_time = curr_data.get("total_time_ms", 0)
+
+        if base_time == 0:
+            delta_str = "NEW"
+        elif curr_time == 0:
+            delta_str = "REMOVED"
+        else:
+            delta_pct = ((curr_time - base_time) / base_time) * 100
+            delta_str = format_delta(base_time, curr_time)
+
+            if delta_pct > 10:
+                regressions.append((test_name, delta_pct))
+            elif delta_pct < -10:
+                improvements.append((test_name, delta_pct))
+
+        base_str = f"{base_time:,}ms" if base_time else "—"
+        curr_str = f"{curr_time:,}ms" if curr_time else "—"
+
+        print(f"{test_name:<35} {base_str:>10} {curr_str:>10} {delta_str:>20}")
+
+    print("-" * 90)
+
+    base_total = baseline.get("summary", {}).get("total_time_ms", 0)
+    curr_total = current.get("summary", {}).get("total_time_ms", 0)
+    print(f"{'TOTAL':<35} {base_total:>10,}ms {curr_total:>10,}ms {format_delta(base_total, curr_total):>20}")
+    print("=" * 90)
+
+    if regressions:
+        print("\n⚠️  REGRESSIONS (>10% slower):")
+        for name, delta in sorted(regressions, key=lambda x: -x[1]):
+            print(f"   {name}: +{delta:.1f}%")
+
+    if improvements:
+        print("\n✅ IMPROVEMENTS (>10% faster):")
+        for name, delta in sorted(improvements, key=lambda x: x[1]):
+            print(f"   {name}: {delta:.1f}%")
+
+    if not regressions and not improvements:
+        print("\n✓ No significant changes detected (within ±10%)")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Compare performance benchmark results")
+    parser.add_argument("baseline", nargs="?", type=Path, help="Baseline result JSON file")
+    parser.add_argument("current", nargs="?", type=Path, help="Current result JSON file")
+    parser.add_argument("--latest", action="store_true", help="Compare two most recent results")
+    parser.add_argument(
+        "--results-dir",
+        type=Path,
+        default=Path(__file__).parent.parent / "benchmarks" / "results",
+        help="Results directory",
+    )
+    args = parser.parse_args()
+
+    if args.latest or (args.baseline is None and args.current is None):
+        files = get_latest_results(args.results_dir, 2)
+        if len(files) < 2:
+            print(f"ERROR: Need at least 2 result files in {args.results_dir}")
+            print(f"Found: {len(files)} files")
+            return 1
+        baseline_path = files[1]
+        current_path = files[0]
+    else:
+        if not args.baseline or not args.current:
+            parser.error("Must provide both baseline and current files, or use --latest")
+        baseline_path = args.baseline
+        current_path = args.current
+
+    if not baseline_path.exists():
+        print(f"ERROR: Baseline file not found: {baseline_path}")
+        return 1
+    if not current_path.exists():
+        print(f"ERROR: Current file not found: {current_path}")
+        return 1
+
+    baseline = load_result(baseline_path)
+    current = load_result(current_path)
+
+    compare_results(baseline, current)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+
+
+```
+
+---
+
+### File: `scripts\export_perf_metrics.py`
+
+```python
+#!/usr/bin/env python3
+"""
+Export performance metrics from excel_diff tests to JSON.
+
+This script runs the performance test suite and captures the PERF_METRIC output,
+saving timestamped results to benchmarks/results/ for historical tracking.
+
+Usage:
+    python scripts/export_perf_metrics.py [--full-scale] [--output-dir DIR]
+
+Options:
+    --full-scale    Run the 50K row tests (slower but comprehensive)
+    --output-dir    Override the output directory (default: benchmarks/results)
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def get_git_commit():
+    """Get the current git commit hash."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()[:12]
+    except Exception:
+        pass
+    return "unknown"
+
+
+def get_git_branch():
+    """Get the current git branch name."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return "unknown"
+
+
+def parse_perf_metrics(stdout: str) -> dict:
+    """Parse PERF_METRIC lines from test output."""
+    metrics = {}
+    pattern = r"PERF_METRIC (\S+) total_time_ms=(\d+) rows_processed=(\d+) cells_compared=(\d+)"
+
+    for line in stdout.split("\n"):
+        match = re.search(pattern, line)
+        if match:
+            test_name = match.group(1)
+            metrics[test_name] = {
+                "total_time_ms": int(match.group(2)),
+                "rows_processed": int(match.group(3)),
+                "cells_compared": int(match.group(4)),
+            }
+
+    return metrics
+
+
+def run_perf_tests(full_scale: bool = False) -> tuple[dict, bool]:
+    """Run performance tests and return parsed metrics."""
+    core_dir = Path(__file__).parent.parent / "core"
+    if not core_dir.exists():
+        core_dir = Path("core")
+
+    cmd = [
+        "cargo",
+        "test",
+        "--release",
+        "--features",
+        "perf-metrics",
+    ]
+
+    if full_scale:
+        cmd.extend(["--", "--ignored", "--nocapture"])
+    else:
+        cmd.extend(["perf_", "--", "--nocapture"])
+
+    print(f"Running: {' '.join(cmd)}")
+    print(f"Working directory: {core_dir}")
+    print()
+
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=core_dir,
+            capture_output=True,
+            text=True,
+            timeout=600 if full_scale else 120,
+        )
+    except subprocess.TimeoutExpired:
+        print("ERROR: Tests timed out")
+        return {}, False
+
+    print(result.stdout)
+    if result.stderr:
+        print("STDERR:", result.stderr, file=sys.stderr)
+
+    success = result.returncode == 0
+    metrics = parse_perf_metrics(result.stdout)
+
+    return metrics, success
+
+
+def save_results(metrics: dict, output_dir: Path, full_scale: bool):
+    """Save metrics to a timestamped JSON file."""
+    timestamp = datetime.now(timezone.utc)
+    filename = timestamp.strftime("%Y-%m-%d_%H%M%S")
+    if full_scale:
+        filename += "_fullscale"
+    filename += ".json"
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / filename
+
+    result = {
+        "timestamp": timestamp.isoformat(),
+        "git_commit": get_git_commit(),
+        "git_branch": get_git_branch(),
+        "full_scale": full_scale,
+        "tests": metrics,
+        "summary": {
+            "total_tests": len(metrics),
+            "total_time_ms": sum(m["total_time_ms"] for m in metrics.values()),
+            "total_rows_processed": sum(m["rows_processed"] for m in metrics.values()),
+            "total_cells_compared": sum(m["cells_compared"] for m in metrics.values()),
+        },
+    }
+
+    with open(output_path, "w") as f:
+        json.dump(result, f, indent=2)
+
+    print(f"\nResults saved to: {output_path}")
+    return output_path
+
+
+def print_summary(metrics: dict):
+    """Print a summary table of metrics."""
+    print("\n" + "=" * 70)
+    print("Performance Metrics Summary")
+    print("=" * 70)
+    print(f"{'Test':<40} {'Time (ms)':>10} {'Rows':>10} {'Cells':>12}")
+    print("-" * 70)
+
+    for test_name, data in sorted(metrics.items()):
+        print(
+            f"{test_name:<40} {data['total_time_ms']:>10,} {data['rows_processed']:>10,} {data['cells_compared']:>12,}"
+        )
+
+    print("-" * 70)
+    total_time = sum(m["total_time_ms"] for m in metrics.values())
+    total_rows = sum(m["rows_processed"] for m in metrics.values())
+    total_cells = sum(m["cells_compared"] for m in metrics.values())
+    print(f"{'TOTAL':<40} {total_time:>10,} {total_rows:>10,} {total_cells:>12,}")
+    print("=" * 70)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Export performance metrics from excel_diff tests"
+    )
+    parser.add_argument(
+        "--full-scale",
+        action="store_true",
+        help="Run the 50K row tests (slower but comprehensive)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path(__file__).parent.parent / "benchmarks" / "results",
+        help="Output directory for JSON results",
+    )
+    args = parser.parse_args()
+
+    print("=" * 70)
+    print("Excel Diff Performance Metrics Export")
+    print("=" * 70)
+    print(f"Mode: {'Full-scale (50K rows)' if args.full_scale else 'Quick (1K rows)'}")
+    print(f"Output: {args.output_dir}")
+    print(f"Git commit: {get_git_commit()}")
+    print(f"Git branch: {get_git_branch()}")
+    print()
+
+    metrics, success = run_perf_tests(args.full_scale)
+
+    if not metrics:
+        print("ERROR: No metrics captured from test output")
+        return 1
+
+    print_summary(metrics)
+    save_results(metrics, args.output_dir, args.full_scale)
+
+    if not success:
+        print("\nWARNING: Some tests may have failed")
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+
 
 ```
 

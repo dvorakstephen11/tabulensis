@@ -6,6 +6,7 @@ use common::single_sheet_workbook;
 use excel_diff::config::DiffConfig;
 use excel_diff::diff::DiffOp;
 use excel_diff::engine::diff_workbooks_with_config;
+use excel_diff::perf::DiffMetrics;
 use excel_diff::{Cell, CellAddress, CellValue, Grid};
 
 fn create_large_grid(nrows: u32, ncols: u32, base_value: i32) -> Grid {
@@ -67,6 +68,21 @@ fn create_sparse_grid(nrows: u32, ncols: u32, fill_percent: u32, seed: u64) -> G
     grid
 }
 
+fn log_perf_metric(name: &str, metrics: &DiffMetrics, tail: &str) {
+    println!(
+        "PERF_METRIC {name} total_time_ms={} move_detection_time_ms={} alignment_time_ms={} cell_diff_time_ms={} rows_processed={} cells_compared={} anchors_found={} moves_detected={}{}",
+        metrics.total_time_ms,
+        metrics.move_detection_time_ms,
+        metrics.alignment_time_ms,
+        metrics.cell_diff_time_ms,
+        metrics.rows_processed,
+        metrics.cells_compared,
+        metrics.anchors_found,
+        metrics.moves_detected,
+        tail
+    );
+}
+
 #[test]
 fn perf_p1_large_dense() {
     let grid_a = create_large_grid(1000, 20, 0);
@@ -104,10 +120,7 @@ fn perf_p1_large_dense() {
     let metrics = report.metrics.unwrap();
     assert!(metrics.rows_processed > 0, "P1 should process rows");
     assert!(metrics.cells_compared > 0, "P1 should compare cells");
-    println!(
-        "PERF_METRIC perf_p1_large_dense total_time_ms={} rows_processed={} cells_compared={}",
-        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
-    );
+    log_perf_metric("perf_p1_large_dense", &metrics, "");
 }
 
 #[test]
@@ -128,10 +141,7 @@ fn perf_p2_large_noise() {
     assert!(report.metrics.is_some(), "P2 should have metrics");
     let metrics = report.metrics.unwrap();
     assert!(metrics.rows_processed > 0, "P2 should process rows");
-    println!(
-        "PERF_METRIC perf_p2_large_noise total_time_ms={} rows_processed={} cells_compared={}",
-        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
-    );
+    log_perf_metric("perf_p2_large_noise", &metrics, "");
 }
 
 #[test]
@@ -156,10 +166,7 @@ fn perf_p3_adversarial_repetitive() {
     assert!(report.metrics.is_some(), "P3 should have metrics");
     let metrics = report.metrics.unwrap();
     assert!(metrics.rows_processed > 0, "P3 should process rows");
-    println!(
-        "PERF_METRIC perf_p3_adversarial_repetitive total_time_ms={} rows_processed={} cells_compared={}",
-        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
-    );
+    log_perf_metric("perf_p3_adversarial_repetitive", &metrics, "");
 }
 
 #[test]
@@ -184,10 +191,7 @@ fn perf_p4_99_percent_blank() {
     assert!(report.metrics.is_some(), "P4 should have metrics");
     let metrics = report.metrics.unwrap();
     assert!(metrics.rows_processed > 0, "P4 should process rows");
-    println!(
-        "PERF_METRIC perf_p4_99_percent_blank total_time_ms={} rows_processed={} cells_compared={}",
-        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
-    );
+    log_perf_metric("perf_p4_99_percent_blank", &metrics, "");
 }
 
 #[test]
@@ -209,10 +213,7 @@ fn perf_p5_identical() {
     assert!(report.metrics.is_some(), "P5 should have metrics");
     let metrics = report.metrics.unwrap();
     assert!(metrics.rows_processed > 0, "P5 should process rows");
-    println!(
-        "PERF_METRIC perf_p5_identical total_time_ms={} rows_processed={} cells_compared={}",
-        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
-    );
+    log_perf_metric("perf_p5_identical", &metrics, "");
 }
 
 #[test]
@@ -250,10 +251,7 @@ fn perf_50k_dense_single_edit() {
         "50k dense should detect the cell edit"
     );
     let metrics = report.metrics.expect("should have metrics");
-    println!(
-        "PERF_METRIC perf_50k_dense_single_edit total_time_ms={} rows_processed={} cells_compared={} (target: <5s)",
-        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
-    );
+    log_perf_metric("perf_50k_dense_single_edit", &metrics, " (target: <5s)");
     assert!(
         metrics.total_time_ms < 30000,
         "50k dense grid should complete in <30s, took {}ms",
@@ -275,10 +273,7 @@ fn perf_50k_completely_different() {
 
     assert!(report.complete, "50k different grids should complete");
     let metrics = report.metrics.expect("should have metrics");
-    println!(
-        "PERF_METRIC perf_50k_completely_different total_time_ms={} rows_processed={} cells_compared={} (target: <10s)",
-        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
-    );
+    log_perf_metric("perf_50k_completely_different", &metrics, " (target: <10s)");
     assert!(
         metrics.total_time_ms < 60000,
         "50k completely different should complete in <60s, took {}ms",
@@ -307,9 +302,10 @@ fn perf_50k_adversarial_repetitive() {
 
     assert!(report.complete, "50k repetitive should complete");
     let metrics = report.metrics.expect("should have metrics");
-    println!(
-        "PERF_METRIC perf_50k_adversarial_repetitive total_time_ms={} rows_processed={} cells_compared={} (target: <15s)",
-        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
+    log_perf_metric(
+        "perf_50k_adversarial_repetitive",
+        &metrics,
+        " (target: <15s)",
     );
     assert!(
         metrics.total_time_ms < 120000,
@@ -339,10 +335,7 @@ fn perf_50k_99_percent_blank() {
 
     assert!(report.complete, "50k sparse should complete");
     let metrics = report.metrics.expect("should have metrics");
-    println!(
-        "PERF_METRIC perf_50k_99_percent_blank total_time_ms={} rows_processed={} cells_compared={} (target: <2s)",
-        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
-    );
+    log_perf_metric("perf_50k_99_percent_blank", &metrics, " (target: <2s)");
     assert!(
         metrics.total_time_ms < 30000,
         "50k 99% blank should complete in <30s, took {}ms",
@@ -368,10 +361,7 @@ fn perf_50k_identical() {
         "50k identical grids should have no ops"
     );
     let metrics = report.metrics.expect("should have metrics");
-    println!(
-        "PERF_METRIC perf_50k_identical total_time_ms={} rows_processed={} cells_compared={} (target: <1s)",
-        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
-    );
+    log_perf_metric("perf_50k_identical", &metrics, " (target: <1s)");
     assert!(
         metrics.total_time_ms < 15000,
         "50k identical should complete in <15s, took {}ms",

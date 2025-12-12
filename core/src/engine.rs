@@ -4,7 +4,7 @@
 //! and generating a [`DiffReport`] of all changes.
 
 use crate::alignment::move_extraction::moves_from_matched_pairs;
-use crate::alignment::{RowAlignment as AmrAlignment, align_rows_amr};
+use crate::alignment::{RowAlignment as AmrAlignment, align_rows_amr_with_signatures};
 use crate::column_alignment::{
     ColumnAlignment, ColumnBlockMove, align_single_column_change_with_config,
     detect_exact_column_block_move_with_config,
@@ -190,13 +190,18 @@ pub fn diff_grids_database_mode(old: &Grid, new: &Grid, key_columns: &[u32]) -> 
                 continue;
             }
 
-            let addr = CellAddress::from_indices(*row_b, col);
-            let from = snapshot_with_addr(old.get(*row_a, col), addr);
-            let to = snapshot_with_addr(new.get(*row_b, col), addr);
+            let old_cell = old.get(*row_a, col);
+            let new_cell = new.get(*row_b, col);
 
-            if from != to {
-                ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
+            if cells_content_equal(old_cell, new_cell) {
+                continue;
             }
+
+            let addr = CellAddress::from_indices(*row_b, col);
+            let from = snapshot_with_addr(old_cell, addr);
+            let to = snapshot_with_addr(new_cell, addr);
+
+            ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
         }
     }
 
@@ -454,8 +459,17 @@ fn diff_grids_core(
         m.start_phase(Phase::Alignment);
     }
 
-    if let Some(mut alignment) = align_rows_amr(old, new, config) {
-        inject_moves_from_insert_delete(old, new, &mut alignment);
+    if let Some(amr_result) = align_rows_amr_with_signatures(old, new, config) {
+        let mut alignment = amr_result.alignment;
+        let row_signatures_old = amr_result.row_signatures_a;
+        let row_signatures_new = amr_result.row_signatures_b;
+        inject_moves_from_insert_delete(
+            old,
+            new,
+            &mut alignment,
+            &row_signatures_old,
+            &row_signatures_new,
+        );
         let has_structural_rows = !alignment.inserted.is_empty() || !alignment.deleted.is_empty();
         if has_structural_rows && alignment.matched.is_empty() {
             #[cfg(feature = "perf-metrics")]
@@ -474,26 +488,27 @@ fn diff_grids_core(
             }
             return;
         }
-        let has_row_edits = alignment
-            .matched
-            .iter()
-            .any(|(a, b)| row_signature_at(old, *a) != row_signature_at(new, *b));
-        if has_structural_rows && has_row_edits {
-            #[cfg(feature = "perf-metrics")]
-            if let Some(m) = metrics.as_mut() {
-                m.start_phase(Phase::CellDiff);
+        if has_structural_rows {
+            let has_row_edits = alignment.matched.iter().any(|(a, b)| {
+                row_signatures_old.get(*a as usize) != row_signatures_new.get(*b as usize)
+            });
+            if has_row_edits {
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = metrics.as_mut() {
+                    m.start_phase(Phase::CellDiff);
+                }
+                positional_diff(sheet_id, old, new, ops);
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = metrics.as_mut() {
+                    m.add_cells_compared(cells_in_overlap(old, new));
+                    m.end_phase(Phase::CellDiff);
+                }
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = metrics.as_mut() {
+                    m.end_phase(Phase::Alignment);
+                }
+                return;
             }
-            positional_diff(sheet_id, old, new, ops);
-            #[cfg(feature = "perf-metrics")]
-            if let Some(m) = metrics.as_mut() {
-                m.add_cells_compared(cells_in_overlap(old, new));
-                m.end_phase(Phase::CellDiff);
-            }
-            #[cfg(feature = "perf-metrics")]
-            if let Some(m) = metrics.as_mut() {
-                m.end_phase(Phase::Alignment);
-            }
-            return;
         }
         if alignment.moves.is_empty()
             && alignment.inserted.is_empty()
@@ -520,7 +535,17 @@ fn diff_grids_core(
             }
             return;
         }
-        if alignment.moves.is_empty() && row_signature_multiset_equal(old, new) {
+        let alignment_is_trivial_identity = alignment.moves.is_empty()
+            && alignment.inserted.is_empty()
+            && alignment.deleted.is_empty()
+            && old.nrows == new.nrows
+            && alignment.matched.len() as u32 == old.nrows
+            && alignment.matched.iter().all(|(a, b)| a == b);
+
+        if !alignment_is_trivial_identity
+            && alignment.moves.is_empty()
+            && row_signature_multiset_equal(old, new)
+        {
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
                 m.start_phase(Phase::CellDiff);
@@ -716,12 +741,31 @@ fn row_signature_at(grid: &Grid, row: u32) -> Option<RowSignature> {
 }
 
 fn row_signature_counts(grid: &Grid) -> HashMap<RowSignature, u32> {
-    let mut counts = HashMap::new();
-    for row in 0..grid.nrows {
-        if let Some(sig) = row_signature_at(grid, row) {
+    if let Some(rows) = grid.row_signatures.as_ref() {
+        let mut counts: HashMap<RowSignature, u32> = HashMap::with_capacity(rows.len());
+        for &sig in rows {
             *counts.entry(sig).or_insert(0) += 1;
         }
+        return counts;
     }
+
+    use crate::hashing::hash_row_content_128;
+
+    let nrows = grid.nrows as usize;
+    let mut rows: Vec<Vec<(u32, &Cell)>> = vec![Vec::new(); nrows];
+
+    for cell in grid.cells.values() {
+        rows[cell.row as usize].push((cell.col, cell));
+    }
+
+    let mut counts: HashMap<RowSignature, u32> = HashMap::with_capacity(nrows);
+    for mut row_cells in rows {
+        row_cells.sort_by_key(|(col, _)| *col);
+        let hash = hash_row_content_128(&row_cells);
+        let sig = RowSignature { hash };
+        *counts.entry(sig).or_insert(0) += 1;
+    }
+
     counts
 }
 
@@ -797,21 +841,35 @@ fn align_indices_by_signature<T: Copy + Eq>(
     }
 }
 
-fn inject_moves_from_insert_delete(old: &Grid, new: &Grid, alignment: &mut AmrAlignment) {
+fn inject_moves_from_insert_delete(
+    old: &Grid,
+    new: &Grid,
+    alignment: &mut AmrAlignment,
+    row_signatures_old: &[RowSignature],
+    row_signatures_new: &[RowSignature],
+) {
     if alignment.inserted.is_empty() || alignment.deleted.is_empty() {
         return;
     }
 
     let mut deleted_by_sig: HashMap<RowSignature, Vec<u32>> = HashMap::new();
     for row in &alignment.deleted {
-        if let Some(sig) = row_signature_at(old, *row) {
+        let sig = row_signatures_old
+            .get(*row as usize)
+            .copied()
+            .or_else(|| row_signature_at(old, *row));
+        if let Some(sig) = sig {
             deleted_by_sig.entry(sig).or_default().push(*row);
         }
     }
 
     let mut inserted_by_sig: HashMap<RowSignature, Vec<u32>> = HashMap::new();
     for row in &alignment.inserted {
-        if let Some(sig) = row_signature_at(new, *row) {
+        let sig = row_signatures_new
+            .get(*row as usize)
+            .copied()
+            .or_else(|| row_signature_at(new, *row));
+        if let Some(sig) = sig {
             inserted_by_sig.entry(sig).or_default().push(*row);
         }
     }
@@ -1341,16 +1399,18 @@ fn diff_aligned_with_masks(
             {
                 continue;
             }
-            let addr = CellAddress::from_indices(*row_b, *col_b);
             let old_cell = old.get(*row_a, *col_a);
             let new_cell = new.get(*row_b, *col_b);
 
+            if cells_content_equal(old_cell, new_cell) {
+                continue;
+            }
+
+            let addr = CellAddress::from_indices(*row_b, *col_b);
             let from = snapshot_with_addr(old_cell, addr);
             let to = snapshot_with_addr(new_cell, addr);
 
-            if from != to {
-                ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
-            }
+            ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
         }
     }
 
@@ -1403,16 +1463,18 @@ fn positional_diff_with_masks(
             if !old_mask.is_cell_active(row, col) || !new_mask.is_cell_active(row, col) {
                 continue;
             }
-            let addr = CellAddress::from_indices(row, col);
             let old_cell = old.get(row, col);
             let new_cell = new.get(row, col);
 
+            if cells_content_equal(old_cell, new_cell) {
+                continue;
+            }
+
+            let addr = CellAddress::from_indices(row, col);
             let from = snapshot_with_addr(old_cell, addr);
             let to = snapshot_with_addr(new_cell, addr);
 
-            if from != to {
-                ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
-            }
+            ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
         }
     }
 
@@ -1470,16 +1532,18 @@ fn positional_diff_masked_equal_size(
             if !old_mask.is_cell_active(row, col) || !new_mask.is_cell_active(row, col) {
                 continue;
             }
-            let addr = CellAddress::from_indices(row, col);
             let old_cell = old.get(row, col);
             let new_cell = new.get(row, col);
 
+            if cells_content_equal(old_cell, new_cell) {
+                continue;
+            }
+
+            let addr = CellAddress::from_indices(row, col);
             let from = snapshot_with_addr(old_cell, addr);
             let to = snapshot_with_addr(new_cell, addr);
 
-            if from != to {
-                ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
-            }
+            ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
         }
     }
 }
@@ -1627,16 +1691,18 @@ fn diff_row_pair(
     ops: &mut Vec<DiffOp>,
 ) {
     for col in 0..overlap_cols {
-        let addr = CellAddress::from_indices(row_b, col);
         let old_cell = old.get(row_a, col);
         let new_cell = new.get(row_b, col);
 
+        if cells_content_equal(old_cell, new_cell) {
+            continue;
+        }
+
+        let addr = CellAddress::from_indices(row_b, col);
         let from = snapshot_with_addr(old_cell, addr);
         let to = snapshot_with_addr(new_cell, addr);
 
-        if from != to {
-            ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
-        }
+        ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
     }
 }
 
@@ -1651,16 +1717,18 @@ fn emit_column_aligned_diffs(
 
     for row in 0..overlap_rows {
         for (col_a, col_b) in &alignment.matched {
-            let addr = CellAddress::from_indices(row, *col_b);
             let old_cell = old.get(row, *col_a);
             let new_cell = new.get(row, *col_b);
 
+            if cells_content_equal(old_cell, new_cell) {
+                continue;
+            }
+
+            let addr = CellAddress::from_indices(row, *col_b);
             let from = snapshot_with_addr(old_cell, addr);
             let to = snapshot_with_addr(new_cell, addr);
 
-            if from != to {
-                ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
-            }
+            ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
         }
     }
 

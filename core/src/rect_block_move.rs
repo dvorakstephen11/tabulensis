@@ -564,6 +564,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::field_reassign_with_default)]
     #[test]
     fn detect_bails_on_oversized_row_count() {
         let mut config = DiffConfig::default();
@@ -578,6 +579,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::field_reassign_with_default)]
     #[test]
     fn detect_bails_on_oversized_col_count() {
         let mut config = DiffConfig::default();

@@ -20,6 +20,8 @@ You have been provided with:
 
 4. **Current Backlog**: `todo.md` contains the current task list.
 
+5. **Performance Benchmarks**: `benchmark_results.txt` and `benchmark_results.json` contain the latest performance metrics from the diff engine. Use these to identify performance bottlenecks that may warrant prioritization in the next cycle.
+
 ## Your Goal
 
 Decide what work should be done in the next development cycle and produce:

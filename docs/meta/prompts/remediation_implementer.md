@@ -71,6 +71,11 @@ Execute the fixes specified in the remediation plan. Each "Fix Required" section
 1. **Run all tests** (existing and new) and ensure they pass.
 2. **Verify each finding is addressed**: Cross-reference your changes against the remediation plan.
 3. **Confirm no regressions**: Existing tests must continue to pass.
+4. **Run performance benchmarks** to capture post-remediation metrics:
+   ```bash
+   python scripts/export_perf_metrics.py
+   ```
+   This saves timestamped results to `benchmarks/results/`. Compare against prior results to detect any performance regressions introduced by remediation changes.
 
 ## Activity Logging
 
@@ -107,6 +112,7 @@ When complete, the following must be true:
 5. `cargo fmt --check` passes.
 6. `cargo clippy` passes (or warnings are documented).
 7. Activity log is updated with remediation summary.
+8. Performance metrics exported to `benchmarks/results/` via `python scripts/export_perf_metrics.py`.
 
 ## Getting Started
 
@@ -118,3 +124,4 @@ To begin remediation for the current cycle:
 4. After each fix, run `cargo test` to verify the new test passes and existing tests don't regress.
 5. Continue until all fixes are complete.
 6. Update the activity log with a remediation summary.
+7. Run `python scripts/export_perf_metrics.py` to capture post-remediation performance baseline.
