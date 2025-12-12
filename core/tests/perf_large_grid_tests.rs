@@ -98,6 +98,10 @@ fn perf_p1_large_dense() {
     let metrics = report.metrics.unwrap();
     assert!(metrics.rows_processed > 0, "P1 should process rows");
     assert!(metrics.cells_compared > 0, "P1 should compare cells");
+    println!(
+        "PERF_METRIC perf_p1_large_dense total_time_ms={} rows_processed={} cells_compared={}",
+        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
+    );
 }
 
 #[test]
@@ -115,6 +119,10 @@ fn perf_p2_large_noise() {
     assert!(report.metrics.is_some(), "P2 should have metrics");
     let metrics = report.metrics.unwrap();
     assert!(metrics.rows_processed > 0, "P2 should process rows");
+    println!(
+        "PERF_METRIC perf_p2_large_noise total_time_ms={} rows_processed={} cells_compared={}",
+        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
+    );
 }
 
 #[test]
@@ -139,6 +147,10 @@ fn perf_p3_adversarial_repetitive() {
     assert!(report.metrics.is_some(), "P3 should have metrics");
     let metrics = report.metrics.unwrap();
     assert!(metrics.rows_processed > 0, "P3 should process rows");
+    println!(
+        "PERF_METRIC perf_p3_adversarial_repetitive total_time_ms={} rows_processed={} cells_compared={}",
+        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
+    );
 }
 
 #[test]
@@ -163,6 +175,10 @@ fn perf_p4_99_percent_blank() {
     assert!(report.metrics.is_some(), "P4 should have metrics");
     let metrics = report.metrics.unwrap();
     assert!(metrics.rows_processed > 0, "P4 should process rows");
+    println!(
+        "PERF_METRIC perf_p4_99_percent_blank total_time_ms={} rows_processed={} cells_compared={}",
+        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
+    );
 }
 
 #[test]
@@ -181,5 +197,161 @@ fn perf_p5_identical() {
     assert!(report.metrics.is_some(), "P5 should have metrics");
     let metrics = report.metrics.unwrap();
     assert!(metrics.rows_processed > 0, "P5 should process rows");
+    println!(
+        "PERF_METRIC perf_p5_identical total_time_ms={} rows_processed={} cells_compared={}",
+        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
+    );
+}
+
+#[test]
+#[ignore = "Long-running test: run with `cargo test --features perf-metrics -- --ignored` to execute"]
+fn perf_50k_dense_single_edit() {
+    let grid_a = create_large_grid(50000, 100, 0);
+    let mut grid_b = create_large_grid(50000, 100, 0);
+    grid_b.insert(Cell {
+        row: 25000,
+        col: 50,
+        address: CellAddress::from_indices(25000, 50),
+        value: Some(CellValue::Number(999999.0)),
+        formula: None,
+    });
+
+    let wb_a = single_sheet_workbook("Performance", grid_a);
+    let wb_b = single_sheet_workbook("Performance", grid_b);
+
+    let config = DiffConfig::default();
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(report.complete, "50k dense grid should complete successfully");
+    assert!(report.warnings.is_empty(), "50k dense should have no warnings");
+    assert!(
+        report.ops.iter().any(|op| matches!(op, DiffOp::CellEdited { .. })),
+        "50k dense should detect the cell edit"
+    );
+    let metrics = report.metrics.expect("should have metrics");
+    println!(
+        "PERF_METRIC perf_50k_dense_single_edit total_time_ms={} rows_processed={} cells_compared={} (target: <5s)",
+        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
+    );
+    assert!(
+        metrics.total_time_ms < 30000,
+        "50k dense grid should complete in <30s, took {}ms",
+        metrics.total_time_ms
+    );
+}
+
+#[test]
+#[ignore = "Long-running test: run with `cargo test --features perf-metrics -- --ignored` to execute"]
+fn perf_50k_completely_different() {
+    let grid_a = create_large_grid(50000, 100, 0);
+    let grid_b = create_large_grid(50000, 100, 1);
+
+    let wb_a = single_sheet_workbook("Performance", grid_a);
+    let wb_b = single_sheet_workbook("Performance", grid_b);
+
+    let config = DiffConfig::default();
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(report.complete, "50k different grids should complete");
+    let metrics = report.metrics.expect("should have metrics");
+    println!(
+        "PERF_METRIC perf_50k_completely_different total_time_ms={} rows_processed={} cells_compared={} (target: <10s)",
+        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
+    );
+    assert!(
+        metrics.total_time_ms < 60000,
+        "50k completely different should complete in <60s, took {}ms",
+        metrics.total_time_ms
+    );
+}
+
+#[test]
+#[ignore = "Long-running test: run with `cargo test --features perf-metrics -- --ignored` to execute"]
+fn perf_50k_adversarial_repetitive() {
+    let grid_a = create_repetitive_grid(50000, 50, 100);
+    let mut grid_b = create_repetitive_grid(50000, 50, 100);
+    grid_b.insert(Cell {
+        row: 25000,
+        col: 25,
+        address: CellAddress::from_indices(25000, 25),
+        value: Some(CellValue::Number(999999.0)),
+        formula: None,
+    });
+
+    let wb_a = single_sheet_workbook("Performance", grid_a);
+    let wb_b = single_sheet_workbook("Performance", grid_b);
+
+    let config = DiffConfig::default();
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(report.complete, "50k repetitive should complete");
+    let metrics = report.metrics.expect("should have metrics");
+    println!(
+        "PERF_METRIC perf_50k_adversarial_repetitive total_time_ms={} rows_processed={} cells_compared={} (target: <15s)",
+        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
+    );
+    assert!(
+        metrics.total_time_ms < 120000,
+        "50k adversarial repetitive should complete in <120s, took {}ms",
+        metrics.total_time_ms
+    );
+}
+
+#[test]
+#[ignore = "Long-running test: run with `cargo test --features perf-metrics -- --ignored` to execute"]
+fn perf_50k_99_percent_blank() {
+    let grid_a = create_sparse_grid(50000, 100, 1, 12345);
+    let mut grid_b = create_sparse_grid(50000, 100, 1, 12345);
+    grid_b.insert(Cell {
+        row: 25000,
+        col: 50,
+        address: CellAddress::from_indices(25000, 50),
+        value: Some(CellValue::Number(999999.0)),
+        formula: None,
+    });
+
+    let wb_a = single_sheet_workbook("Performance", grid_a);
+    let wb_b = single_sheet_workbook("Performance", grid_b);
+
+    let config = DiffConfig::default();
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(report.complete, "50k sparse should complete");
+    let metrics = report.metrics.expect("should have metrics");
+    println!(
+        "PERF_METRIC perf_50k_99_percent_blank total_time_ms={} rows_processed={} cells_compared={} (target: <2s)",
+        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
+    );
+    assert!(
+        metrics.total_time_ms < 30000,
+        "50k 99% blank should complete in <30s, took {}ms",
+        metrics.total_time_ms
+    );
+}
+
+#[test]
+#[ignore = "Long-running test: run with `cargo test --features perf-metrics -- --ignored` to execute"]
+fn perf_50k_identical() {
+    let grid_a = create_large_grid(50000, 100, 0);
+    let grid_b = create_large_grid(50000, 100, 0);
+
+    let wb_a = single_sheet_workbook("Performance", grid_a);
+    let wb_b = single_sheet_workbook("Performance", grid_b);
+
+    let config = DiffConfig::default();
+    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+
+    assert!(report.complete, "50k identical should complete");
+    assert!(report.ops.is_empty(), "50k identical grids should have no ops");
+    let metrics = report.metrics.expect("should have metrics");
+    println!(
+        "PERF_METRIC perf_50k_identical total_time_ms={} rows_processed={} cells_compared={} (target: <1s)",
+        metrics.total_time_ms, metrics.rows_processed, metrics.cells_compared
+    );
+    assert!(
+        metrics.total_time_ms < 15000,
+        "50k identical should complete in <15s, took {}ms",
+        metrics.total_time_ms
+    );
 }
 

@@ -31,7 +31,7 @@ pub fn compress_to_runs(meta: &[RowMeta]) -> Vec<RowRun> {
         }
         runs.push(RowRun {
             signature: sig,
-            start_row: start as u32,
+            start_row: meta[start].row_idx,
             count: (i - start) as u32,
         });
     }

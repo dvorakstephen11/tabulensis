@@ -10,11 +10,14 @@
 //! - **SmallEdit**: Both sides small enough for O(n*m) LCS alignment
 //! - **MoveCandidate**: Gap contains matching unique signatures that may indicate moves
 //! - **RecursiveAlign**: Gap is large; recursively apply AMR with rare anchors
+//! - **HashFallback**: Monotone hash/LIS fallback for large gaps
 
 use std::collections::HashSet;
 
 use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
 use crate::config::DiffConfig;
+
+pub const MAX_LCS_GAP_SIZE: u32 = 1500;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GapStrategy {
@@ -24,6 +27,7 @@ pub enum GapStrategy {
     SmallEdit,
     MoveCandidate,
     RecursiveAlign,
+    HashFallback,
 }
 
 pub fn select_gap_strategy(
@@ -45,18 +49,29 @@ pub fn select_gap_strategy(
         return GapStrategy::DeleteAll;
     }
 
-    if has_matching_signatures(old_slice, new_slice) {
-        return GapStrategy::MoveCandidate;
-    }
+    let is_move_candidate = has_matching_signatures(old_slice, new_slice);
 
-    if old_len <= config.small_gap_threshold && new_len <= config.small_gap_threshold {
-        return GapStrategy::SmallEdit;
+    let small_threshold = config.small_gap_threshold.min(MAX_LCS_GAP_SIZE);
+    if old_len <= small_threshold && new_len <= small_threshold {
+        return if is_move_candidate {
+            GapStrategy::MoveCandidate
+        } else {
+            GapStrategy::SmallEdit
+        };
     }
 
     if (old_len > config.recursive_align_threshold || new_len > config.recursive_align_threshold)
         && !has_recursed
     {
         return GapStrategy::RecursiveAlign;
+    }
+
+    if is_move_candidate {
+        return GapStrategy::MoveCandidate;
+    }
+
+    if old_len > MAX_LCS_GAP_SIZE || new_len > MAX_LCS_GAP_SIZE {
+        return GapStrategy::HashFallback;
     }
 
     GapStrategy::SmallEdit

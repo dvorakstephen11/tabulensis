@@ -162,6 +162,50 @@ All tests pass:
 - AMR multi-gap tests
 - Move detection tests (g10-g14)
 
+## Remediation (2025-12-11)
+
+Based on review feedback (`docs/meta/reviews/2025-12-09-sprint-branch-2/remediationD.md`), the following gaps were addressed:
+
+### 1. Perf Threshold Enforcement (Complete)
+
+**Gap**: `check_perf_thresholds.py` only ran tests and verified completion, without enforcing per-test timing budgets.
+
+**Fix**: 
+- Perf tests now print `PERF_METRIC <test_name> total_time_ms=<value>` lines
+- Threshold script parses these lines and compares against configured thresholds
+- Script exits non-zero if any test exceeds its threshold
+- Thresholds configurable via environment variables:
+  - `EXCEL_DIFF_PERF_P1_MAX_TIME_S` through `EXCEL_DIFF_PERF_P5_MAX_TIME_S`
+  - `EXCEL_DIFF_PERF_SLACK_FACTOR` to scale all thresholds
+
+### 2. DiffMetrics Unit Tests (Complete)
+
+**Gap**: Metrics behavior only tested indirectly through integration tests.
+
+**Fix**: Added `core/tests/metrics_unit_tests.rs` with 12 focused tests:
+- `metrics_starts_with_zero_counts` - Initial state validation
+- `metrics_add_cells_compared_accumulates` - Count accumulation
+- `metrics_add_cells_compared_saturates` - Saturating arithmetic
+- `metrics_phase_timing_accumulates` - Phase timing works
+- `metrics_different_phases_tracked_separately` - Phase isolation
+- `metrics_total_phase_separate_from_components` - Total vs component times
+- `metrics_end_phase_without_start_is_safe` - Graceful handling of unstarted phases
+- `metrics_parse_phase_is_no_op` - Parse phase correctly ignored
+- Plus tests for direct field access, cloning, and equality
+
+### 3. Test Naming Fix (Complete)
+
+**Gap**: `large_grid_50k_rows_completes_within_default_limits` used 5000 rows, not 50,000.
+
+**Fix**: Renamed to `large_grid_5k_rows_completes_within_default_limits` to accurately reflect the test.
+
+### Files Modified
+
+- `core/tests/perf_large_grid_tests.rs` - Added PERF_METRIC println statements
+- `scripts/check_perf_thresholds.py` - Full rewrite with metric parsing and threshold enforcement
+- `core/tests/metrics_unit_tests.rs` - New file with 12 unit tests
+- `core/tests/limit_behavior_tests.rs` - Renamed misleading test function
+
 ## Follow-Up Items
 
 1. Consider implementing global move extraction if complex reordering scenarios are reported

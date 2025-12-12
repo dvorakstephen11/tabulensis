@@ -301,7 +301,7 @@ fn multiple_sheets_limit_warning_includes_sheet_name() {
 }
 
 #[test]
-fn large_grid_50k_rows_completes_within_default_limits() {
+fn large_grid_5k_rows_completes_within_default_limits() {
     let grid_a = create_simple_grid(5000, 10, 0);
     let mut grid_b = create_simple_grid(5000, 10, 0);
     grid_b.insert(Cell {

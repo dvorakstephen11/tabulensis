@@ -13,7 +13,9 @@
 use std::ops::Range;
 
 use crate::alignment::anchor_chain::build_anchor_chain;
-use crate::alignment::anchor_discovery::{Anchor, discover_anchors_from_meta};
+use crate::alignment::anchor_discovery::{
+    Anchor, discover_anchors_from_meta, discover_context_anchors, discover_local_anchors,
+};
 use crate::alignment::gap_strategy::{GapStrategy, select_gap_strategy};
 use crate::alignment::move_extraction::{find_block_move, moves_from_matched_pairs};
 use crate::alignment::row_metadata::RowMeta;
@@ -164,35 +166,96 @@ fn fill_gap(
 
     match strategy {
         GapStrategy::Empty => GapAlignmentResult::default(),
+
         GapStrategy::InsertAll => GapAlignmentResult {
             matched: Vec::new(),
             inserted: (new_gap.start..new_gap.end).collect(),
             deleted: Vec::new(),
             moves: Vec::new(),
         },
+
         GapStrategy::DeleteAll => GapAlignmentResult {
             matched: Vec::new(),
             inserted: Vec::new(),
             deleted: (old_gap.start..old_gap.end).collect(),
             moves: Vec::new(),
         },
+
         GapStrategy::SmallEdit => align_small_gap(old_slice, new_slice),
+
+        GapStrategy::HashFallback => {
+            let mut result = align_gap_via_hash(old_slice, new_slice);
+            result.moves.extend(moves_from_matched_pairs(&result.matched));
+            result
+        }
+
         GapStrategy::MoveCandidate => {
-            let mut result = align_small_gap(old_slice, new_slice);
+            let mut result = if old_slice.len() as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
+                || new_slice.len() as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
+            {
+                align_gap_via_hash(old_slice, new_slice)
+            } else {
+                align_small_gap(old_slice, new_slice)
+            };
+
             let mut detected_moves = moves_from_matched_pairs(&result.matched);
+
             if detected_moves.is_empty() {
-                if let Some(mv) = find_block_move(old_slice, new_slice, 1) {
-                    detected_moves.push(mv);
+                let has_nonzero_offset = result
+                    .matched
+                    .iter()
+                    .any(|(a, b)| (*b as i64 - *a as i64) != 0);
+
+                if has_nonzero_offset {
+                    if let Some(mv) = find_block_move(old_slice, new_slice, 1) {
+                        detected_moves.push(mv);
+                    }
                 }
             }
+
             result.moves.extend(detected_moves);
             result
         }
+
         GapStrategy::RecursiveAlign => {
-            if depth >= config.max_recursion_depth {
+            let at_limit = depth >= config.max_recursion_depth;
+            if at_limit {
+                if old_slice.len() as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
+                    || new_slice.len() as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
+                {
+                    return align_gap_via_hash(old_slice, new_slice);
+                }
                 return align_small_gap(old_slice, new_slice);
             }
-            let anchors = build_anchor_chain(discover_anchors_from_meta(old_slice, new_slice));
+
+            let anchor_candidates = if depth == 0 {
+                discover_anchors_from_meta(old_slice, new_slice)
+            } else {
+                let mut anchors = discover_local_anchors(old_slice, new_slice);
+                if anchors.is_empty() {
+                    anchors = discover_context_anchors(old_slice, new_slice, 4);
+                    if anchors.is_empty() {
+                        anchors = discover_context_anchors(old_slice, new_slice, 8);
+                    }
+                } else {
+                    let mut ctx_anchors = discover_context_anchors(old_slice, new_slice, 4);
+                    if anchors.len() < 4 {
+                        anchors.append(&mut ctx_anchors);
+                    }
+                }
+                anchors
+            };
+
+            let anchors = build_anchor_chain(anchor_candidates);
+            if anchors.is_empty() {
+                if old_slice.len() as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
+                    || new_slice.len() as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
+                {
+                    return align_gap_via_hash(old_slice, new_slice);
+                }
+                return align_small_gap(old_slice, new_slice);
+            }
+
             let alignment = assemble_from_meta(old_slice, new_slice, anchors, config, depth + 1);
             GapAlignmentResult {
                 matched: alignment.matched,
@@ -288,6 +351,17 @@ fn align_small_gap(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> GapAlignment
         return GapAlignmentResult::default();
     }
 
+    if m as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
+        || n as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
+    {
+        return align_gap_via_hash(old_slice, new_slice);
+    }
+
+    const LCS_DP_WORK_LIMIT: usize = 20_000;
+    if m.saturating_mul(n) > LCS_DP_WORK_LIMIT {
+        return align_gap_via_myers(old_slice, new_slice);
+    }
+
     let mut dp = vec![vec![0u32; n + 1]; m + 1];
     for i in (0..m).rev() {
         for j in (0..n).rev() {
@@ -346,9 +420,291 @@ fn align_small_gap(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> GapAlignment
     }
 }
 
+fn align_gap_via_myers(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> GapAlignmentResult {
+    let m = old_slice.len();
+    let n = new_slice.len();
+    if m == 0 && n == 0 {
+        return GapAlignmentResult::default();
+    }
+
+    let edits = myers_edit_script(old_slice, new_slice);
+
+    let mut matched = Vec::new();
+    let mut inserted = Vec::new();
+    let mut deleted = Vec::new();
+
+    for edit in edits {
+        match edit {
+            Edit::Match(i, j) => matched.push((old_slice[i].row_idx, new_slice[j].row_idx)),
+            Edit::Insert(j) => inserted.push(new_slice[j].row_idx),
+            Edit::Delete(i) => deleted.push(old_slice[i].row_idx),
+        }
+    }
+
+    if matched.is_empty() && m == n {
+        matched = old_slice
+            .iter()
+            .zip(new_slice.iter())
+            .map(|(a, b)| (a.row_idx, b.row_idx))
+            .collect();
+        inserted.clear();
+        deleted.clear();
+    }
+
+    matched.sort_by_key(|(a, b)| (*a, *b));
+    inserted.sort_unstable();
+    deleted.sort_unstable();
+
+    GapAlignmentResult {
+        matched,
+        inserted,
+        deleted,
+        moves: Vec::new(),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Edit {
+    Match(usize, usize),
+    Insert(usize),
+    Delete(usize),
+}
+
+fn myers_edit_script(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> Vec<Edit> {
+    let n = old_slice.len() as isize;
+    let m = new_slice.len() as isize;
+    if n == 0 {
+        return (0..m as usize).map(Edit::Insert).collect();
+    }
+    if m == 0 {
+        return (0..n as usize).map(Edit::Delete).collect();
+    }
+
+    let max = (n + m) as usize;
+    let offset = max as isize;
+    let mut v = vec![0isize; 2 * max + 1];
+    let mut trace: Vec<Vec<isize>> = Vec::new();
+
+    for d in 0..=max {
+        let mut v_next = v.clone();
+        for k in (-(d as isize)..=d as isize).step_by(2) {
+            let idx = (k + offset) as usize;
+            let x_start;
+            if k == -(d as isize) {
+                x_start = v[idx + 1];
+            } else if k != d as isize && v[idx - 1] < v[idx + 1] {
+                x_start = v[idx + 1];
+            } else {
+                x_start = v[idx - 1] + 1;
+            }
+
+            let mut x = x_start;
+            let mut y = x - k;
+            while x < n
+                && y < m
+                && old_slice[x as usize].signature == new_slice[y as usize].signature
+            {
+                x += 1;
+                y += 1;
+            }
+            v_next[idx] = x;
+            if x >= n && y >= m {
+                trace.push(v_next);
+                return reconstruct_myers(trace, old_slice.len(), new_slice.len(), offset);
+            }
+        }
+        trace.push(v_next.clone());
+        v = v_next;
+    }
+
+    Vec::new()
+}
+
+fn reconstruct_myers(
+    trace: Vec<Vec<isize>>,
+    old_len: usize,
+    new_len: usize,
+    offset: isize,
+) -> Vec<Edit> {
+    let mut edits = Vec::new();
+    let mut x = old_len as isize;
+    let mut y = new_len as isize;
+
+    for d_rev in (0..trace.len()).rev() {
+        let v = &trace[d_rev];
+        let k = x - y;
+        let idx = (k + offset) as usize;
+
+        let (prev_x, prev_y, from_down);
+        if d_rev == 0 {
+            prev_x = 0;
+            prev_y = 0;
+            from_down = false;
+        } else {
+            let use_down = k == -(d_rev as isize)
+                || (k != d_rev as isize && v[idx - 1] < v[idx + 1]);
+            let prev_k = if use_down { k + 1 } else { k - 1 };
+            let prev_idx = (prev_k + offset) as usize;
+            let prev_v = &trace[d_rev - 1];
+            prev_x = prev_v[prev_idx].max(0);
+            prev_y = (prev_x - prev_k).max(0);
+            from_down = use_down;
+        }
+
+        let mut cur_x = x;
+        let mut cur_y = y;
+        while cur_x > prev_x && cur_y > prev_y {
+            cur_x -= 1;
+            cur_y -= 1;
+            edits.push(Edit::Match(cur_x as usize, cur_y as usize));
+        }
+
+        if d_rev > 0 {
+            if from_down {
+                edits.push(Edit::Insert(prev_y as usize));
+            } else {
+                edits.push(Edit::Delete(prev_x as usize));
+            }
+        }
+
+        x = prev_x;
+        y = prev_y;
+    }
+
+    edits.reverse();
+    edits
+}
+
+fn align_gap_via_hash(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> GapAlignmentResult {
+    use std::collections::{HashMap, VecDeque};
+
+    let m = old_slice.len();
+    let n = new_slice.len();
+    if m == 0 && n == 0 {
+        return GapAlignmentResult::default();
+    }
+
+    let mut sig_to_new: HashMap<crate::workbook::RowSignature, VecDeque<u32>> = HashMap::new();
+    for (j, meta) in new_slice.iter().enumerate() {
+        sig_to_new.entry(meta.signature).or_default().push_back(j as u32);
+    }
+
+    let mut candidate_pairs: Vec<(u32, u32)> = Vec::new();
+    for (i, meta) in old_slice.iter().enumerate() {
+        if let Some(q) = sig_to_new.get_mut(&meta.signature) {
+            if let Some(j) = q.pop_front() {
+                candidate_pairs.push((i as u32, j));
+            }
+        }
+    }
+
+    if candidate_pairs.is_empty() && m == n {
+        let matched = old_slice
+            .iter()
+            .zip(new_slice.iter())
+            .map(|(a, b)| (a.row_idx, b.row_idx))
+            .collect();
+
+        return GapAlignmentResult {
+            matched,
+            inserted: Vec::new(),
+            deleted: Vec::new(),
+            moves: Vec::new(),
+        };
+    }
+
+    let lis = lis_indices_u32(&candidate_pairs, |&(_, new_j)| new_j);
+
+    let mut keep = vec![false; candidate_pairs.len()];
+    for idx in lis {
+        keep[idx] = true;
+    }
+
+    let mut used_old = vec![false; m];
+    let mut used_new = vec![false; n];
+    let mut matched: Vec<(u32, u32)> = Vec::new();
+
+    for (k, (old_i, new_j)) in candidate_pairs.iter().copied().enumerate() {
+        if keep[k] {
+            used_old[old_i as usize] = true;
+            used_new[new_j as usize] = true;
+            matched.push((old_slice[old_i as usize].row_idx, new_slice[new_j as usize].row_idx));
+        }
+    }
+
+    let mut deleted: Vec<u32> = Vec::new();
+    for i in 0..m {
+        if !used_old[i] {
+            deleted.push(old_slice[i].row_idx);
+        }
+    }
+
+    let mut inserted: Vec<u32> = Vec::new();
+    for j in 0..n {
+        if !used_new[j] {
+            inserted.push(new_slice[j].row_idx);
+        }
+    }
+
+    matched.sort_by_key(|(a, b)| (*a, *b));
+    inserted.sort_unstable();
+    deleted.sort_unstable();
+
+    GapAlignmentResult {
+        matched,
+        inserted,
+        deleted,
+        moves: Vec::new(),
+    }
+}
+
+fn lis_indices_u32<T, F>(items: &[T], key: F) -> Vec<usize>
+where
+    F: Fn(&T) -> u32,
+{
+    let mut piles: Vec<usize> = Vec::new();
+    let mut predecessors: Vec<Option<usize>> = vec![None; items.len()];
+
+    for (idx, item) in items.iter().enumerate() {
+        let k = key(item);
+        let pos = piles
+            .binary_search_by_key(&k, |&pile_idx| key(&items[pile_idx]))
+            .unwrap_or_else(|insert_pos| insert_pos);
+
+        if pos > 0 {
+            predecessors[idx] = Some(piles[pos - 1]);
+        }
+
+        if pos == piles.len() {
+            piles.push(idx);
+        } else {
+            piles[pos] = idx;
+        }
+    }
+
+    if piles.is_empty() {
+        return Vec::new();
+    }
+
+    let mut result: Vec<usize> = Vec::new();
+    let mut current = *piles.last().unwrap();
+    loop {
+        result.push(current);
+        if let Some(prev) = predecessors[current] {
+            current = prev;
+        } else {
+            break;
+        }
+    }
+    result.reverse();
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE;
+    use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
     use crate::workbook::{Cell, CellAddress, CellValue};
 
     fn grid_from_run_lengths(pattern: &[(i32, u32)]) -> Grid {
@@ -383,6 +739,25 @@ mod tests {
             });
         }
         grid
+    }
+
+    fn row_meta_from_hashes(start_row: u32, hashes: &[u128]) -> Vec<RowMeta> {
+        hashes
+            .iter()
+            .enumerate()
+            .map(|(idx, &hash)| {
+                let signature = crate::workbook::RowSignature { hash };
+                RowMeta {
+                    row_idx: start_row + idx as u32,
+                    signature,
+                    hash: signature,
+                    non_blank_count: 1,
+                    first_non_blank_col: 0,
+                    frequency_class: FrequencyClass::Common,
+                    is_low_info: false,
+                }
+            })
+            .collect()
     }
 
     #[test]
@@ -522,5 +897,57 @@ mod tests {
         assert!(alignment.matched.is_empty());
         assert_eq!(alignment.inserted.len(), 5);
         assert!(alignment.deleted.is_empty());
+    }
+
+    #[test]
+    fn align_small_gap_enforces_cap_with_hash_fallback() {
+        let large = (MAX_LCS_GAP_SIZE + 1) as usize;
+        let old_hashes: Vec<u128> = (0..large as u32).map(|i| i as u128).collect();
+        let new_hashes: Vec<u128> = (0..large as u32).map(|i| (10_000 + i) as u128).collect();
+
+        let old_meta = row_meta_from_hashes(10, &old_hashes);
+        let new_meta = row_meta_from_hashes(20, &new_hashes);
+
+        let result = align_small_gap(&old_meta, &new_meta);
+        assert_eq!(result.matched.len(), large);
+        assert!(result.inserted.is_empty());
+        assert!(result.deleted.is_empty());
+        assert_eq!(result.matched.first(), Some(&(10, 20)));
+        assert_eq!(result.matched.last(), Some(&(10 + large as u32 - 1, 20 + large as u32 - 1)));
+    }
+
+    #[test]
+    fn hash_fallback_produces_monotone_pairs() {
+        let old_meta = row_meta_from_hashes(0, &[1, 2, 3, 4]);
+        let new_meta = row_meta_from_hashes(0, &[2, 1, 3, 4]);
+
+        let result = align_gap_via_hash(&old_meta, &new_meta);
+        assert_eq!(result.matched, vec![(1, 0), (2, 2), (3, 3)]);
+
+        let is_monotone = result
+            .matched
+            .windows(2)
+            .all(|w| w[0].0 <= w[1].0 && w[0].1 <= w[1].1);
+        assert!(is_monotone, "hash fallback must preserve monotone ordering");
+        assert_eq!(result.inserted, vec![1]);
+        assert_eq!(result.deleted, vec![0]);
+    }
+
+    #[test]
+    fn myers_handles_medium_gap_with_single_insertion() {
+        let count = 300usize;
+        let old_hashes: Vec<u128> = (0..count as u128).collect();
+        let mut new_hashes: Vec<u128> = old_hashes.clone();
+        new_hashes.insert(150, 9_999);
+
+        let old_meta = row_meta_from_hashes(0, &old_hashes);
+        let new_meta = row_meta_from_hashes(0, &new_hashes);
+
+        let result = align_small_gap(&old_meta, &new_meta);
+        assert_eq!(result.inserted, vec![150]);
+        assert!(result.deleted.is_empty());
+        assert_eq!(result.matched.len(), count);
+        assert_eq!(result.matched.first(), Some(&(0, 0)));
+        assert_eq!(result.matched.last(), Some(&(count as u32 - 1, (count + 1) as u32 - 1)));
     }
 }
