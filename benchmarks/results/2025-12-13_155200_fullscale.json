@@ -1,0 +1,64 @@
+{
+  "timestamp": "2025-12-13T15:52:00.299392+00:00",
+  "git_commit": "8bec00c35df1",
+  "git_branch": "2025-12-09-sprint-branch-2",
+  "full_scale": true,
+  "tests": {
+    "perf_50k_99_percent_blank": {
+      "total_time_ms": 451,
+      "move_detection_time_ms": 0,
+      "alignment_time_ms": 451,
+      "cell_diff_time_ms": 365,
+      "rows_processed": 100000,
+      "cells_compared": 5000000,
+      "anchors_found": 50000,
+      "moves_detected": 0
+    },
+    "perf_50k_identical": {
+      "total_time_ms": 2076,
+      "move_detection_time_ms": 0,
+      "alignment_time_ms": 0,
+      "cell_diff_time_ms": 0,
+      "rows_processed": 100000,
+      "cells_compared": 5000000,
+      "anchors_found": 0,
+      "moves_detected": 0
+    },
+    "perf_50k_adversarial_repetitive": {
+      "total_time_ms": 7016,
+      "move_detection_time_ms": 398,
+      "alignment_time_ms": 6617,
+      "cell_diff_time_ms": 869,
+      "rows_processed": 100000,
+      "cells_compared": 2487500,
+      "anchors_found": 49750,
+      "moves_detected": 0
+    },
+    "perf_50k_completely_different": {
+      "total_time_ms": 7744,
+      "move_detection_time_ms": 0,
+      "alignment_time_ms": 7744,
+      "cell_diff_time_ms": 3099,
+      "rows_processed": 100000,
+      "cells_compared": 5000000,
+      "anchors_found": 50000,
+      "moves_detected": 0
+    },
+    "perf_50k_dense_single_edit": {
+      "total_time_ms": 8070,
+      "move_detection_time_ms": 1596,
+      "alignment_time_ms": 6473,
+      "cell_diff_time_ms": 2153,
+      "rows_processed": 100000,
+      "cells_compared": 5000000,
+      "anchors_found": 50000,
+      "moves_detected": 0
+    }
+  },
+  "summary": {
+    "total_tests": 5,
+    "total_time_ms": 25357,
+    "total_rows_processed": 500000,
+    "total_cells_compared": 22487500
+  }
+}
