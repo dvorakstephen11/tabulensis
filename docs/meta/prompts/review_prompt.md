@@ -16,6 +16,7 @@
       2025-12-12_175341.json
       2025-12-12_203400.json
       2025-12-12_203454.json
+      2025-12-12_223643.json
   Cargo.lock
   Cargo.toml
   core/
@@ -116,6 +117,7 @@
         grid.py
         mashup.py
         perf.py
+  ideas.md
   logs/
     2025-11-28b-diffop-pg4/
       activity_log.txt
@@ -5473,6 +5475,15 @@ fn diff_grids_core(
     _ctx: &mut DiffContext,
     #[cfg(feature = "perf-metrics")] mut metrics: Option<&mut DiffMetrics>,
 ) {
+    if grids_content_equal(old, new) {
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.add_cells_compared(cells_in_overlap(old, new));
+            m.end_phase(Phase::MoveDetection);
+        }
+        return;
+    }
+
     let mut old_mask = RegionMask::all_active(old.nrows, old.ncols);
     let mut new_mask = RegionMask::all_active(new.nrows, new.ncols);
     let move_detection_enabled = old.nrows.max(new.nrows) <= config.recursive_align_threshold
@@ -5652,9 +5663,10 @@ fn diff_grids_core(
             return;
         }
         if has_structural_rows {
-            let has_row_edits = alignment.matched.iter().any(|(a, b)| {
-                row_signatures_old.get(*a as usize) != row_signatures_new.get(*b as usize)
-            });
+            let has_row_edits = alignment
+                .matched
+                .iter()
+                .any(|(a, b)| row_signature_at(old, *a) != row_signature_at(new, *b));
             if has_row_edits {
                 #[cfg(feature = "perf-metrics")]
                 if let Some(m) = metrics.as_mut() {
@@ -5798,12 +5810,35 @@ fn diff_grids_core(
 fn cells_content_equal(a: Option<&Cell>, b: Option<&Cell>) -> bool {
     match (a, b) {
         (None, None) => true,
+        (Some(cell_a), None) | (None, Some(cell_a)) => {
+            cell_a.value.is_none() && cell_a.formula.is_none()
+        }
         (Some(cell_a), Some(cell_b)) => {
             cell_a.value == cell_b.value && cell_a.formula == cell_b.formula
         }
-        (Some(cell_a), None) => cell_a.value.is_none() && cell_a.formula.is_none(),
-        (None, Some(cell_b)) => cell_b.value.is_none() && cell_b.formula.is_none(),
     }
+}
+
+fn grids_content_equal(old: &Grid, new: &Grid) -> bool {
+    if old.nrows != new.nrows || old.ncols != new.ncols {
+        return false;
+    }
+
+    for ((row, col), cell_old) in &old.cells {
+        let cell_new = new.get(*row, *col);
+        if !cells_content_equal(Some(cell_old), cell_new) {
+            return false;
+        }
+    }
+
+    for ((row, col), cell_new) in &new.cells {
+        let cell_old = old.get(*row, *col);
+        if !cells_content_equal(cell_old, Some(cell_new)) {
+            return false;
+        }
+    }
+
+    true
 }
 
 fn collect_differences_in_grid(old: &Grid, new: &Grid) -> Vec<(u32, u32)> {
@@ -5905,7 +5940,7 @@ fn row_signature_at(grid: &Grid, row: u32) -> Option<RowSignature> {
 
 fn row_signature_counts(grid: &Grid) -> HashMap<RowSignature, u32> {
     if let Some(rows) = grid.row_signatures.as_ref() {
-        let mut counts: HashMap<RowSignature, u32> = HashMap::with_capacity(rows.len());
+        let mut counts = HashMap::new();
         for &sig in rows {
             *counts.entry(sig).or_insert(0) += 1;
         }
@@ -5917,15 +5952,16 @@ fn row_signature_counts(grid: &Grid) -> HashMap<RowSignature, u32> {
     let nrows = grid.nrows as usize;
     let mut rows: Vec<Vec<(u32, &Cell)>> = vec![Vec::new(); nrows];
 
-    for cell in grid.cells.values() {
-        rows[cell.row as usize].push((cell.col, cell));
+    for ((row, col), cell) in &grid.cells {
+        rows[*row as usize].push((*col, cell));
     }
 
-    let mut counts: HashMap<RowSignature, u32> = HashMap::with_capacity(nrows);
+    let mut counts = HashMap::new();
     for mut row_cells in rows {
-        row_cells.sort_by_key(|(col, _)| *col);
-        let hash = hash_row_content_128(&row_cells);
-        let sig = RowSignature { hash };
+        row_cells.sort_unstable_by_key(|(col, _)| *col);
+        let sig = RowSignature {
+            hash: hash_row_content_128(&row_cells),
+        };
         *counts.entry(sig).or_insert(0) += 1;
     }
 
@@ -7619,7 +7655,7 @@ impl<'a> GridView<'a> {
         }
 
         for row_view in rows.iter_mut() {
-            row_view.cells.sort_by_key(|(col, _)| *col);
+            row_view.cells.sort_unstable_by_key(|(col, _)| *col);
         }
 
         let mut row_meta: Vec<RowMeta> = rows
@@ -7662,7 +7698,7 @@ impl<'a> GridView<'a> {
             .into_iter()
             .enumerate()
             .map(|(idx, mut cells)| {
-                cells.sort_by_key(|c| c.row);
+                cells.sort_unstable_by_key(|c| c.row);
                 let hash = hash_col_content_128(&cells);
 
                 ColMeta {
@@ -11735,24 +11771,60 @@ impl Grid {
 
     pub fn compute_row_signature(&self, row: u32) -> RowSignature {
         use crate::hashing::hash_row_content_128;
-        let mut row_cells: Vec<_> = self
-            .cells
-            .values()
-            .filter(|cell| cell.row == row)
-            .map(|cell| (cell.col, cell))
-            .collect();
-        row_cells.sort_by_key(|(col, _)| *col);
 
-        let hash = hash_row_content_128(&row_cells);
+        let nrows = self.nrows as usize;
+        let ncols = self.ncols as usize;
+        let total_cells = self.cells.len();
+
+        let avg_cells_per_row = if nrows == 0 { 0 } else { total_cells / nrows };
+        let scan_cols = ncols <= 256 || avg_cells_per_row.saturating_mul(4) >= ncols;
+
+        let hash = if scan_cols {
+            let mut row_cells: Vec<(u32, &Cell)> = Vec::with_capacity(avg_cells_per_row.min(ncols));
+            for col in 0..self.ncols {
+                if let Some(cell) = self.get(row, col) {
+                    row_cells.push((col, cell));
+                }
+            }
+            hash_row_content_128(&row_cells)
+        } else {
+            let mut row_cells: Vec<_> = self
+                .cells
+                .values()
+                .filter(|cell| cell.row == row)
+                .map(|cell| (cell.col, cell))
+                .collect();
+            row_cells.sort_unstable_by_key(|(col, _)| *col);
+            hash_row_content_128(&row_cells)
+        };
+
         RowSignature { hash }
     }
 
     pub fn compute_col_signature(&self, col: u32) -> ColSignature {
         use crate::hashing::hash_col_content_128;
-        let mut col_cells: Vec<_> = self.cells.values().filter(|cell| cell.col == col).collect();
-        col_cells.sort_by_key(|cell| cell.row);
+        let nrows = self.nrows as usize;
+        let ncols = self.ncols as usize;
+        let total_cells = self.cells.len();
 
-        let hash = hash_col_content_128(&col_cells);
+        let avg_cells_per_col = if ncols == 0 { 0 } else { total_cells / ncols };
+        let scan_rows = nrows <= 1024 || avg_cells_per_col.saturating_mul(4) >= nrows;
+
+        let hash = if scan_rows {
+            let mut col_cells: Vec<&Cell> = Vec::with_capacity(avg_cells_per_col.min(nrows));
+            for row in 0..self.nrows {
+                if let Some(cell) = self.get(row, col) {
+                    col_cells.push(cell);
+                }
+            }
+            hash_col_content_128(&col_cells)
+        } else {
+            let mut col_cells: Vec<_> =
+                self.cells.values().filter(|cell| cell.col == col).collect();
+            col_cells.sort_unstable_by_key(|c| c.row);
+            hash_col_content_128(&col_cells)
+        };
+
         ColSignature { hash }
     }
 
@@ -11779,7 +11851,7 @@ impl Grid {
             row_cells
                 .into_iter()
                 .map(|mut cells| {
-                    cells.sort_by_key(|(col, _)| *col);
+                    cells.sort_unstable_by_key(|(col, _)| *col);
                     let hash = hash_row_content_128(&cells);
                     RowSignature { hash }
                 })
@@ -11790,7 +11862,7 @@ impl Grid {
             col_cells
                 .into_iter()
                 .map(|mut cells| {
-                    cells.sort_by_key(|c| c.row);
+                    cells.sort_unstable_by_key(|c| c.row);
                     let hash = hash_col_content_128(&cells);
                     ColSignature { hash }
                 })

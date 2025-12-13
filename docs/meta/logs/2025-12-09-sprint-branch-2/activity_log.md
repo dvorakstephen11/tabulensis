@@ -244,3 +244,11 @@ Based on review feedback (`docs/meta/reviews/2025-12-09-sprint-branch-2/remediat
 - Files modified: `core/src/engine.rs`, `core/src/workbook.rs`, `core/src/grid_view.rs`.
 - Verification: `cargo fmt`, `cargo clippy`, `cargo test`, `python scripts/export_perf_metrics.py` (results: `benchmarks/results/2025-12-12_223643.json`).
 - Complications: None; fixes followed the remediation plan directly.
+
+## Remediation Round J (2025-12-12)
+
+- Findings addressed: (1) Grid mutation paths (`get_mut`, `insert`) now invalidate cached row/col signatures; (2) row/col signature computation uses axis-bounded xxhash scanning with blank-cell skips; (3) row signature multiset equality uses sorted signature vectors instead of HashMap counting; (4) identical-grid fast path now relies on `grids_non_blank_cells_equal` to skip move detection/alignment.
+- Files modified: `core/src/workbook.rs`, `core/src/engine.rs`.
+- Tests/verification: `cargo fmt`, `cargo test -- --test-threads=1` (default harness hit BrokenPipe), `cargo clippy --all-targets`, `python -u scripts/export_perf_metrics.py` (results: `benchmarks/results/2025-12-13_000410.json`).
+- Complications: Needed to rerun `cargo test` single-threaded to avoid Windows pipe closure during harness enumeration.
+- Notes: Added unit tests covering signature cache invalidation, dense/sparse signature paths, and `grids_non_blank_cells_equal` behavior to guard the new fast path.

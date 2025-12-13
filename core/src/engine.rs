@@ -310,11 +310,10 @@ fn diff_grids_core(
     _ctx: &mut DiffContext,
     #[cfg(feature = "perf-metrics")] mut metrics: Option<&mut DiffMetrics>,
 ) {
-    if grids_content_equal(old, new) {
+    if old.nrows == new.nrows && old.ncols == new.ncols && grids_non_blank_cells_equal(old, new) {
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
             m.add_cells_compared(cells_in_overlap(old, new));
-            m.end_phase(Phase::MoveDetection);
         }
         return;
     }
@@ -654,21 +653,16 @@ fn cells_content_equal(a: Option<&Cell>, b: Option<&Cell>) -> bool {
     }
 }
 
-fn grids_content_equal(old: &Grid, new: &Grid) -> bool {
-    if old.nrows != new.nrows || old.ncols != new.ncols {
+fn grids_non_blank_cells_equal(old: &Grid, new: &Grid) -> bool {
+    if old.cells.len() != new.cells.len() {
         return false;
     }
 
-    for ((row, col), cell_old) in &old.cells {
-        let cell_new = new.get(*row, *col);
-        if !cells_content_equal(Some(cell_old), cell_new) {
+    for (coord, cell_a) in old.cells.iter() {
+        let Some(cell_b) = new.cells.get(coord) else {
             return false;
-        }
-    }
-
-    for ((row, col), cell_new) in &new.cells {
-        let cell_old = old.get(*row, *col);
-        if !cells_content_equal(cell_old, Some(cell_new)) {
+        };
+        if cell_a.value != cell_b.value || cell_a.formula != cell_b.formula {
             return false;
         }
     }
@@ -773,41 +767,22 @@ fn row_signature_at(grid: &Grid, row: u32) -> Option<RowSignature> {
     Some(grid.compute_row_signature(row))
 }
 
-fn row_signature_counts(grid: &Grid) -> HashMap<RowSignature, u32> {
-    if let Some(rows) = grid.row_signatures.as_ref() {
-        let mut counts = HashMap::new();
-        for &sig in rows {
-            *counts.entry(sig).or_insert(0) += 1;
-        }
-        return counts;
-    }
-
-    use crate::hashing::hash_row_content_128;
-
-    let nrows = grid.nrows as usize;
-    let mut rows: Vec<Vec<(u32, &Cell)>> = vec![Vec::new(); nrows];
-
-    for ((row, col), cell) in &grid.cells {
-        rows[*row as usize].push((*col, cell));
-    }
-
-    let mut counts = HashMap::new();
-    for mut row_cells in rows {
-        row_cells.sort_unstable_by_key(|(col, _)| *col);
-        let sig = RowSignature {
-            hash: hash_row_content_128(&row_cells),
-        };
-        *counts.entry(sig).or_insert(0) += 1;
-    }
-
-    counts
-}
-
 fn row_signature_multiset_equal(a: &Grid, b: &Grid) -> bool {
     if a.nrows != b.nrows {
         return false;
     }
-    row_signature_counts(a) == row_signature_counts(b)
+
+    let mut a_sigs: Vec<RowSignature> = (0..a.nrows)
+        .filter_map(|row| row_signature_at(a, row))
+        .collect();
+    let mut b_sigs: Vec<RowSignature> = (0..b.nrows)
+        .filter_map(|row| row_signature_at(b, row))
+        .collect();
+
+    a_sigs.sort_unstable_by_key(|s| s.hash);
+    b_sigs.sort_unstable_by_key(|s| s.hash);
+
+    a_sigs == b_sigs
 }
 
 fn col_signature_at(grid: &Grid, col: u32) -> Option<ColSignature> {
@@ -1789,6 +1764,7 @@ fn snapshot_with_addr(cell: Option<&Cell>, addr: CellAddress) -> CellSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workbook::CellValue;
 
     #[test]
     fn sheet_kind_order_ranking_includes_macro_and_other() {
@@ -1804,5 +1780,41 @@ mod tests {
             sheet_kind_order(&SheetKind::Macro) < sheet_kind_order(&SheetKind::Other),
             "Macro should rank before Other"
         );
+    }
+
+    #[test]
+    fn grids_non_blank_cells_equal_requires_matching_entries() {
+        let base_cell = Cell {
+            row: 0,
+            col: 0,
+            address: CellAddress::from_indices(0, 0),
+            value: Some(CellValue::Number(1.0)),
+            formula: None,
+        };
+
+        let mut grid_a = Grid::new(2, 2);
+        let mut grid_b = Grid::new(2, 2);
+        grid_a.insert(base_cell.clone());
+        grid_b.insert(base_cell.clone());
+
+        assert!(grids_non_blank_cells_equal(&grid_a, &grid_b));
+
+        let mut grid_b_changed = grid_b.clone();
+        let mut changed_cell = base_cell.clone();
+        changed_cell.value = Some(CellValue::Number(2.0));
+        grid_b_changed.insert(changed_cell);
+
+        assert!(!grids_non_blank_cells_equal(&grid_a, &grid_b_changed));
+
+        let blank = Cell {
+            row: 1,
+            col: 1,
+            address: CellAddress::from_indices(1, 1),
+            value: None,
+            formula: None,
+        };
+        grid_a.insert(blank);
+
+        assert!(!grids_non_blank_cells_equal(&grid_a, &grid_b));
     }
 }

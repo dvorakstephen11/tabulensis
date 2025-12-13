@@ -309,6 +309,8 @@ impl Grid {
     }
 
     pub fn get_mut(&mut self, row: u32, col: u32) -> Option<&mut Cell> {
+        self.row_signatures = None;
+        self.col_signatures = None;
         self.cells.get_mut(&(row, col))
     }
 
@@ -317,6 +319,8 @@ impl Grid {
             cell.row < self.nrows && cell.col < self.ncols,
             "cell coordinates must lie within the grid bounds"
         );
+        self.row_signatures = None;
+        self.col_signatures = None;
         self.cells.insert((cell.row, cell.col), cell);
     }
 
@@ -341,62 +345,71 @@ impl Grid {
     }
 
     pub fn compute_row_signature(&self, row: u32) -> RowSignature {
-        use crate::hashing::hash_row_content_128;
+        use crate::hashing::hash_cell_value;
+        use std::hash::Hash;
+        use xxhash_rust::xxh3::Xxh3;
 
-        let nrows = self.nrows as usize;
-        let ncols = self.ncols as usize;
-        let total_cells = self.cells.len();
+        let mut hasher = Xxh3::new();
 
-        let avg_cells_per_row = if nrows == 0 { 0 } else { total_cells / nrows };
-        let scan_cols = ncols <= 256 || avg_cells_per_row.saturating_mul(4) >= ncols;
-
-        let hash = if scan_cols {
-            let mut row_cells: Vec<(u32, &Cell)> = Vec::with_capacity(avg_cells_per_row.min(ncols));
+        if (self.ncols as usize) <= self.cells.len() {
             for col in 0..self.ncols {
-                if let Some(cell) = self.get(row, col) {
-                    row_cells.push((col, cell));
+                if let Some(cell) = self.cells.get(&(row, col)) {
+                    if cell.value.is_none() && cell.formula.is_none() {
+                        continue;
+                    }
+                    hash_cell_value(&cell.value, &mut hasher);
+                    cell.formula.hash(&mut hasher);
                 }
             }
-            hash_row_content_128(&row_cells)
         } else {
-            let mut row_cells: Vec<_> = self
-                .cells
-                .values()
-                .filter(|cell| cell.row == row)
-                .map(|cell| (cell.col, cell))
-                .collect();
-            row_cells.sort_unstable_by_key(|(col, _)| *col);
-            hash_row_content_128(&row_cells)
-        };
+            let mut row_cells: Vec<&Cell> = self.cells.values().filter(|c| c.row == row).collect();
+            row_cells.sort_by_key(|c| c.col);
+            for cell in row_cells {
+                if cell.value.is_none() && cell.formula.is_none() {
+                    continue;
+                }
+                hash_cell_value(&cell.value, &mut hasher);
+                cell.formula.hash(&mut hasher);
+            }
+        }
 
-        RowSignature { hash }
+        RowSignature {
+            hash: hasher.digest128(),
+        }
     }
 
     pub fn compute_col_signature(&self, col: u32) -> ColSignature {
-        use crate::hashing::hash_col_content_128;
-        let nrows = self.nrows as usize;
-        let ncols = self.ncols as usize;
-        let total_cells = self.cells.len();
+        use crate::hashing::hash_cell_value;
+        use std::hash::Hash;
+        use xxhash_rust::xxh3::Xxh3;
 
-        let avg_cells_per_col = if ncols == 0 { 0 } else { total_cells / ncols };
-        let scan_rows = nrows <= 1024 || avg_cells_per_col.saturating_mul(4) >= nrows;
+        let mut hasher = Xxh3::new();
 
-        let hash = if scan_rows {
-            let mut col_cells: Vec<&Cell> = Vec::with_capacity(avg_cells_per_col.min(nrows));
+        if (self.nrows as usize) <= self.cells.len() {
             for row in 0..self.nrows {
-                if let Some(cell) = self.get(row, col) {
-                    col_cells.push(cell);
+                if let Some(cell) = self.cells.get(&(row, col)) {
+                    if cell.value.is_none() && cell.formula.is_none() {
+                        continue;
+                    }
+                    hash_cell_value(&cell.value, &mut hasher);
+                    cell.formula.hash(&mut hasher);
                 }
             }
-            hash_col_content_128(&col_cells)
         } else {
-            let mut col_cells: Vec<_> =
-                self.cells.values().filter(|cell| cell.col == col).collect();
-            col_cells.sort_unstable_by_key(|c| c.row);
-            hash_col_content_128(&col_cells)
-        };
+            let mut col_cells: Vec<&Cell> = self.cells.values().filter(|c| c.col == col).collect();
+            col_cells.sort_by_key(|c| c.row);
+            for cell in col_cells {
+                if cell.value.is_none() && cell.formula.is_none() {
+                    continue;
+                }
+                hash_cell_value(&cell.value, &mut hasher);
+                cell.formula.hash(&mut hasher);
+            }
+        }
 
-        ColSignature { hash }
+        ColSignature {
+            hash: hasher.digest128(),
+        }
     }
 
     pub fn compute_all_signatures(&mut self) {
@@ -637,5 +650,72 @@ mod tests {
         let h_a = hash_cell_value(&CellValue::Number(1.0));
         let h_b = hash_cell_value(&CellValue::Number(1.0001));
         assert_ne!(h_a, h_b, "meaningful numeric changes must alter the hash");
+    }
+
+    #[test]
+    fn get_mut_clears_cached_signatures() {
+        let mut grid = Grid::new(2, 2);
+        grid.insert(make_cell("A1", Some(CellValue::Number(1.0)), None));
+        grid.insert(make_cell("B2", Some(CellValue::Number(2.0)), None));
+
+        grid.compute_all_signatures();
+        assert!(grid.row_signatures.is_some());
+        assert!(grid.col_signatures.is_some());
+
+        let _ = grid.get_mut(0, 0);
+
+        assert!(grid.row_signatures.is_none());
+        assert!(grid.col_signatures.is_none());
+    }
+
+    #[test]
+    fn insert_clears_cached_signatures() {
+        let mut grid = Grid::new(3, 3);
+        grid.insert(make_cell("A1", Some(CellValue::Number(1.0)), None));
+
+        grid.compute_all_signatures();
+        assert!(grid.row_signatures.is_some());
+        assert!(grid.col_signatures.is_some());
+
+        grid.insert(make_cell("B2", Some(CellValue::Text("x".into())), None));
+
+        assert!(grid.row_signatures.is_none());
+        assert!(grid.col_signatures.is_none());
+    }
+
+    #[test]
+    fn compute_row_signature_matches_cached_for_dense_and_sparse_paths() {
+        let mut dense = Grid::new(1, 3);
+        dense.insert(make_cell("A1", Some(CellValue::Number(1.0)), None));
+        dense.insert(make_cell("B1", Some(CellValue::Number(2.0)), None));
+        dense.insert(make_cell("C1", Some(CellValue::Number(3.0)), None));
+        dense.compute_all_signatures();
+        let cached_dense = dense.row_signatures.as_ref().unwrap()[0];
+        assert_eq!(dense.compute_row_signature(0), cached_dense);
+
+        let mut sparse = Grid::new(1, 10);
+        sparse.insert(make_cell("A1", Some(CellValue::Number(1.0)), None));
+        sparse.insert(make_cell("J1", Some(CellValue::Number(10.0)), None));
+        sparse.compute_all_signatures();
+        let cached_sparse = sparse.row_signatures.as_ref().unwrap()[0];
+        assert_eq!(sparse.compute_row_signature(0), cached_sparse);
+    }
+
+    #[test]
+    fn compute_col_signature_matches_cached_for_dense_and_sparse_paths() {
+        let mut dense = Grid::new(3, 1);
+        dense.insert(make_cell("A1", Some(CellValue::Number(1.0)), None));
+        dense.insert(make_cell("A2", Some(CellValue::Number(2.0)), None));
+        dense.insert(make_cell("A3", Some(CellValue::Number(3.0)), None));
+        dense.compute_all_signatures();
+        let cached_dense = dense.col_signatures.as_ref().unwrap()[0];
+        assert_eq!(dense.compute_col_signature(0), cached_dense);
+
+        let mut sparse = Grid::new(10, 2);
+        sparse.insert(make_cell("B1", Some(CellValue::Number(1.0)), None));
+        sparse.insert(make_cell("B3", Some(CellValue::Number(3.0)), None));
+        sparse.compute_all_signatures();
+        let cached_sparse = sparse.col_signatures.as_ref().unwrap()[1];
+        assert_eq!(sparse.compute_col_signature(1), cached_sparse);
     }
 }
