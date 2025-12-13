@@ -1,0 +1,692 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running unittests src\lib.rs (target\debug\deps\excel_diff-c3f4b38cf0245b48.exe)
+
+running 141 tests
+test addressing::tests::invalid_addresses_rejected ... ok
+test addressing::tests::index_to_address_examples ... ok
+test addressing::tests::round_trip_addresses ... ok
+test alignment::anchor_chain::tests::builds_increasing_chain ... ok
+test alignment::anchor_discovery::tests::discovers_context_anchors_when_no_uniques ... ok
+test alignment::assembly::tests::amr_alignment_all_deleted ... ok
+test alignment::assembly::tests::amr_alignment_all_inserted ... ok
+test alignment::assembly::tests::align_rows_amr_with_signatures_exposes_row_hashes ... ok
+test alignment::row_metadata::tests::classifies_unique_and_rare_and_low_info ... ok
+test alignment::assembly::tests::amr_alignment_empty_grids ... ok
+test alignment::assembly::tests::hash_fallback_produces_monotone_pairs ... ok
+test alignment::assembly::tests::amr_disjoint_gaps_with_insertions_and_deletions ... ok
+test alignment::assembly::tests::amr_multi_gap_move_detection_produces_expected_row_block_move ... ok
+test alignment::gap_strategy::tests::respects_configured_max_lcs_gap_size ... ok
+test alignment::assembly::tests::run_alignment_falls_back_on_mismatch ... ok
+test alignment::assembly::tests::amr_recursive_gap_alignment_returns_monotonic_alignment ... ok
+test alignment::runs::tests::compresses_identical_rows ... ok
+test alignment::assembly::tests::myers_handles_medium_gap_with_single_insertion ... ok
+test alignment::runs::tests::empty_input_produces_empty_runs ... ok
+test alignment::runs::tests::mixed_runs_with_varying_lengths ... ok
+test alignment::runs::tests::run_compression_preserves_row_indices ... ok
+test alignment::runs::tests::single_row_produces_single_run ... ok
+test alignment::assembly::tests::aligns_compressed_runs_with_insert_and_delete ... ok
+test alignment::runs::tests::compresses_10k_identical_rows_to_single_run ... ok
+test column_alignment::tests::detect_exact_column_block_move_rejects_repetition ... ok
+test column_alignment::tests::detect_exact_column_block_move_rejects_internal_edits ... ok
+test column_alignment::tests::detect_exact_column_block_move_multi_column_block ... ok
+test column_alignment::tests::detect_exact_column_block_move_simple_case ... ok
+test column_alignment::tests::detect_exact_column_block_move_rejects_two_independent_moves ... ok
+test column_alignment::tests::detect_exact_column_block_move_swap_as_single_move ... ok
+test config::tests::defaults_match_limit_spec ... ok
+test config::tests::builder_rejects_invalid_similarity_threshold ... ok
+test column_alignment::tests::multiple_unique_columns_causes_bailout ... ok
+test column_alignment::tests::heavy_repetition_causes_bailout ... ok
+test config::tests::presets_differ_in_expected_directions ... ok
+test column_alignment::tests::single_insert_aligns_all_columns ... ok
+test alignment::runs::tests::alternating_pattern_ab_does_not_overcompress ... ok
+test config::tests::serde_aliases_populate_fields ... ok
+test config::tests::serde_roundtrip_preserves_defaults ... ok
+test database_alignment::tests::composite_key_alignment_matches_rows_correctly ... ok
+test database_alignment::tests::duplicate_keys_error_or_unsupported ... ok
+test database_alignment::tests::is_key_column_contiguous_columns ... ok
+test database_alignment::tests::is_key_column_non_contiguous_columns ... ok
+test database_alignment::tests::is_key_column_non_contiguous_three_columns ... ok
+test database_alignment::tests::is_key_column_single_column ... ok
+test database_alignment::tests::is_key_column_three_columns ... ok
+test database_alignment::tests::non_contiguous_key_columns_alignment ... ok
+test database_alignment::tests::unique_keys_insert_delete_classified ... ok
+test database_alignment::tests::three_column_composite_key_alignment ... ok
+test database_alignment::tests::unique_keys_reorder_no_changes ... ok
+test datamashup_framing::tests::decode_datamashup_base64_rejects_invalid ... ok
+test datamashup_framing::tests::duplicate_sibling_datamashup_elements_error ... ok
+test datamashup_framing::tests::elements_with_datamashup_suffix_are_ignored ... ok
+test alignment::assembly::tests::align_small_gap_enforces_cap_with_hash_fallback ... ok
+test datamashup_framing::tests::fuzz_style_never_panics ... ok
+test datamashup_framing::tests::parse_basic_non_zero_lengths ... ok
+test datamashup_framing::tests::parse_zero_length_stream_succeeds ... ok
+test datamashup_framing::tests::too_short_stream_is_framing_invalid ... ok
+test datamashup_framing::tests::trailing_bytes_are_invalid ... ok
+test datamashup_framing::tests::truncated_stream_errors ... ok
+test datamashup_framing::tests::unsupported_version_is_rejected ... ok
+test datamashup_framing::tests::utf16_datamashup_xml_decodes_correctly ... ok
+test engine::tests::grids_non_blank_cells_equal_requires_matching_entries ... ok
+test engine::tests::sheet_kind_order_ranking_includes_macro_and_other ... ok
+test datamashup_framing::tests::utf16_without_bom_with_declared_encoding_parses ... ok
+test grid_parser::tests::convert_value_bool_0_1_and_other ... ok
+test grid_parser::tests::convert_value_error_cell_as_text ... ok
+test grid_parser::tests::convert_value_shared_string_index_out_of_bounds_errors ... ok
+test grid_parser::tests::parse_shared_strings_rich_text_flattens_runs ... ok
+test grid_parser::tests::read_inline_string_preserves_xml_space_preserve ... ok
+test hashing::tests::normalize_distinguishes_different_magnitudes ... ok
+test hashing::tests::normalize_meaningful_difference ... ok
+test hashing::tests::normalize_nan_values ... ok
+test hashing::tests::normalize_preserves_large_numbers ... ok
+test hashing::tests::normalize_ulp_drift ... ok
+test hashing::tests::normalize_zero_values ... ok
+test rect_block_move::tests::detect_bails_on_different_grid_dimensions ... ok
+test rect_block_move::tests::detect_bails_on_empty_grid ... ok
+test rect_block_move::tests::detect_bails_on_identical_grids ... ok
+test rect_block_move::tests::detect_bails_on_oversized_col_count ... ok
+test rect_block_move::tests::detect_bails_on_ambiguous_block_swap ... ok
+test rect_block_move::tests::detect_bails_on_oversized_row_count ... ok
+test rect_block_move::tests::detect_bails_on_pure_row_move_pattern ... ok
+test rect_block_move::tests::detect_bails_on_single_cell_edit ... ok
+test rect_block_move::tests::detect_bails_on_non_contiguous_differences ... ok
+test region_mask::tests::active_rows_iterator ... ok
+test region_mask::tests::all_active_initially ... ok
+test region_mask::tests::cell_active_based_on_row_and_col ... ok
+test region_mask::tests::cols_overlap_excluded_detects_overlap ... ok
+test rect_block_move::tests::detect_bails_on_internal_cell_edit ... ok
+test region_mask::tests::exclude_rect ... ok
+test region_mask::tests::exclude_rect_cells_masks_only_that_region ... ok
+test region_mask::tests::exclude_row_range ... ok
+test region_mask::tests::exclude_single_row ... ok
+test region_mask::tests::rect_overlaps_excluded_detects_any_overlap ... ok
+test region_mask::tests::rows_overlap_excluded_detects_overlap ... ok
+test rect_block_move::tests::detect_rect_block_move_with_shared_columns ... ok
+test row_alignment::tests::align_row_changes_rejects_column_delete_mismatch ... ok
+test row_alignment::tests::align_row_changes_rejects_column_insert_mismatch ... ok
+test rect_block_move::tests::detect_simple_rect_block_move_success ... ok
+test row_alignment::tests::aligns_delete_at_last_row ... ok
+test row_alignment::tests::aligns_contiguous_block_delete_middle ... ok
+test row_alignment::tests::aligns_delete_at_row_zero ... ok
+test row_alignment::tests::aligns_contiguous_block_insert_middle ... ok
+test row_alignment::tests::aligns_insert_at_row_zero ... ok
+test row_alignment::tests::aligns_insert_at_last_row ... ok
+test row_alignment::tests::aligns_single_row_to_two_rows_via_insert ... ok
+test row_alignment::tests::aligns_two_rows_to_single_row_via_delete ... ok
+test row_alignment::tests::aligns_single_insert_with_unique_row ... ok
+test row_alignment::tests::block_alignment_bails_on_noncontiguous_changes ... ok
+test row_alignment::tests::block_move_detection_rejects_internal_edits ... ok
+test row_alignment::tests::fuzzy_move_bails_on_heavy_repetition_or_ambiguous_candidates ... ok
+test row_alignment::tests::detects_exact_row_block_move ... ok
+test row_alignment::tests::detects_fuzzy_row_block_move_with_single_internal_edit ... ok
+test row_alignment::tests::detects_fuzzy_row_block_move_upward_with_single_internal_edit ... ok
+test row_alignment::tests::monotonicity_helper_accepts_valid_sequence ... ok
+test row_alignment::tests::monotonicity_helper_rejects_non_increasing_a ... ok
+test row_alignment::tests::fuzzy_move_noop_when_grids_identical ... ok
+test row_alignment::tests::monotonicity_helper_rejects_non_increasing_b ... ok
+test row_alignment::tests::monotonicity_helper_accepts_empty_and_single ... ok
+test workbook::tests::cellvalue_as_text_number_bool_match_variants ... ok
+test row_alignment::tests::rejects_non_monotonic_alignment_with_extra_mismatch ... ok
+test workbook::tests::cellvalue_number_hashes_meaningful_difference ... ok
+test workbook::tests::cellvalue_number_hashes_ignore_ulp_drift ... ok
+test row_alignment::tests::fuzzy_move_rejects_low_similarity_block ... ok
+test workbook::tests::cellvalue_number_hashes_normalize_zero_sign ... ok
+test row_alignment::tests::fuzzy_move_bails_on_ambiguous_candidates_below_repetition_threshold ... ok
+test row_alignment::tests::fuzzy_move_at_max_hash_repeat_boundary ... ok
+test workbook::tests::compute_col_signature_matches_cached_for_dense_and_sparse_paths ... ok
+test workbook::tests::compute_row_signature_matches_cached_for_dense_and_sparse_paths ... ok
+test workbook::tests::get_mut_clears_cached_signatures ... ok
+test workbook::tests::insert_clears_cached_signatures ... ok
+test workbook::tests::snapshot_equality_ignores_address ... ok
+test workbook::tests::snapshot_equality_same_value_and_formula ... ok
+test workbook::tests::snapshot_from_bool_cell ... ok
+test workbook::tests::snapshot_from_empty_cell ... ok
+test workbook::tests::snapshot_from_number_cell ... ok
+test workbook::tests::snapshot_from_text_cell ... ok
+test workbook::tests::snapshot_inequality_different_value_same_formula ... ok
+test workbook::tests::snapshot_inequality_value_vs_formula ... ok
+test row_alignment::tests::fuzzy_move_at_max_block_rows_threshold ... ok
+
+test result: ok. 141 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\addressing_pg2_tests.rs (target\debug\deps\addressing_pg2_tests-c91a4fa800ea0f82.exe)
+
+running 1 test
+test pg2_addressing_matrix_consistency ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\amr_multi_gap_tests.rs (target\debug\deps\amr_multi_gap_tests-5463c5cfc5a710b8.exe)
+
+running 5 tests
+test amr_two_disjoint_insertion_regions ... ok
+test amr_multiple_anchors_with_gaps ... ok
+test amr_insertion_and_deletion_in_different_regions ... ok
+test amr_gap_contains_moved_block_scenario ... ok
+test amr_recursive_gap_alignment ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\d1_database_mode_tests.rs (target\debug\deps\d1_database_mode_tests-a122136f35f898e0.exe)
+
+running 19 tests
+test d1_database_mode_row_removed ... ok
+test d1_database_mode_cell_edited ... ok
+test d1_database_mode_treats_small_float_key_noise_as_equal ... ok
+test d1_database_mode_cell_edited_with_reorder ... ok
+test d1_database_mode_detects_meaningful_float_key_change ... ok
+test d1_database_mode_row_added ... ok
+test d5_composite_key_partial_key_mismatch_yields_add_and_remove ... ok
+test d1_duplicate_keys_fallback_to_spreadsheet_mode ... ok
+test d5_composite_key_row_added_and_cell_edited ... ok
+test d5_non_contiguous_key_columns_detects_edits_in_skipped_column ... ok
+test d5_non_contiguous_key_columns_equal_reordered_empty_diff ... ok
+test d5_composite_key_equal_reordered_database_mode_empty_diff ... ok
+test d5_composite_key_duplicate_keys_fallback_to_spreadsheet_mode ... ok
+test d5_three_column_composite_key_equal_reordered_empty_diff ... ok
+test d5_non_contiguous_key_columns_row_added_and_cell_edited ... ok
+test d5_three_column_composite_key_partial_match_yields_add_and_remove ... ok
+test d1_equal_ordered_database_mode_empty_diff ... ok
+test d1_equal_reordered_database_mode_empty_diff ... ok
+test d1_spreadsheet_mode_sees_reorder_as_changes ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests\data_mashup_tests.rs (target\debug\deps\data_mashup_tests-fccbf44b18a2c7c5.exe)
+
+running 13 tests
+test nonexistent_file_returns_io ... ok
+test non_zip_file_returns_not_zip_error ... ok
+test non_excel_container_returns_not_excel_error ... ok
+test missing_content_types_is_not_excel_error ... ok
+test workbook_without_datamashup_returns_none ... ok
+test duplicate_datamashup_elements_are_rejected ... ok
+test corrupt_base64_returns_error ... ok
+test datamashup_with_base64_whitespace_parses ... ok
+test build_data_mashup_smoke_from_fixture ... ok
+test utf16_be_datamashup_parses ... ok
+test utf16_le_datamashup_parses ... ok
+test duplicate_datamashup_parts_are_rejected ... ok
+test workbook_with_valid_datamashup_parses ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\engine_tests.rs (target\debug\deps\engine_tests-f596c4a4aacca018.exe)
+
+running 12 tests
+test sheet_identity_includes_kind ... ok
+test cell_edited_detected ... ok
+test deterministic_sheet_op_ordering ... ok
+test sheet_added_detected ... ok
+test diff_report_json_round_trips ... ok
+test sheet_identity_includes_kind_for_macro_and_other ... ok
+test duplicate_sheet_identity_panics_in_debug ... ok
+test sheet_name_case_insensitive_no_changes ... ok
+test sheet_name_case_insensitive_cell_edit ... ok
+test sheet_removed_detected ... ok
+test identical_workbooks_produce_empty_report ... ok
+test move_detection_respects_column_gate ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests\excel_open_xml_tests.rs (target\debug\deps\excel_open_xml_tests-f65e82d9305e0a2b.exe)
+
+running 7 tests
+test open_nonexistent_file_returns_io_error ... ok
+test random_zip_is_not_excel ... ok
+test no_content_types_is_not_excel ... ok
+test open_minimal_workbook_succeeds ... ok
+test not_zip_container_returns_error ... ok
+test missing_workbook_xml_returns_workbookxmlmissing ... ok
+test missing_worksheet_xml_returns_worksheetxmlmissing ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\g10_row_block_alignment_grid_workbook_tests.rs (target\debug\deps\g10_row_block_alignment_grid_workbook_tests-7a858542fc58b182.exe)
+
+running 2 tests
+test g10_row_block_delete_middle_emits_four_rowremoved_and_no_noise ... ok
+test g10_row_block_insert_middle_emits_four_rowadded_and_no_noise ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\g11_row_block_move_grid_workbook_tests.rs (target\debug\deps\g11_row_block_move_grid_workbook_tests-2dbc31e1af980c0d.exe)
+
+running 2 tests
+test g11_repeated_rows_do_not_emit_blockmove ... ok
+test g11_row_block_move_emits_single_blockmovedrows ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\g12_column_block_move_grid_workbook_tests.rs (target\debug\deps\g12_column_block_move_grid_workbook_tests-bfcb84d0d5cd770f.exe)
+
+running 5 tests
+test g12_two_independent_column_moves_do_not_emit_blockmovedcolumns ... ok
+test g12_column_swap_emits_blockmovedcolumns ... ok
+test g12_repeated_columns_do_not_emit_blockmovedcolumns ... ok
+test g12_multi_column_block_move_emits_blockmovedcolumns ... ok
+test g12_column_move_emits_single_blockmovedcolumns ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\g12_rect_block_move_grid_workbook_tests.rs (target\debug\deps\g12_rect_block_move_grid_workbook_tests-14ae4eb75e123bae.exe)
+
+running 3 tests
+test g12_rect_block_move_ambiguous_swap_does_not_emit_blockmovedrect ... ok
+test g12_rect_block_move_with_internal_edit_falls_back ... ok
+test g12_rect_block_move_emits_single_blockmovedrect ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\g13_fuzzy_row_move_grid_workbook_tests.rs (target\debug\deps\g13_fuzzy_row_move_grid_workbook_tests-93054d87fcb640fd.exe)
+
+running 4 tests
+test g13_in_place_edits_do_not_emit_blockmovedrows ... ok
+test g13_ambiguous_repeated_blocks_do_not_emit_blockmovedrows ... ok
+test g13_fuzzy_row_move_can_be_disabled ... ok
+test g13_fuzzy_row_move_emits_blockmovedrows_and_celledited ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\g14_move_combination_tests.rs (target\debug\deps\g14_move_combination_tests-2deee2f3a43e9058.exe)
+
+running 18 tests
+test g14_column_move_plus_cell_edit_no_silent_data_loss ... ok
+test g14_rect_move_plus_row_insertion_outside_no_silent_data_loss ... ok
+test g14_row_block_move_plus_row_insertion_outside_no_silent_data_loss ... ok
+test g14_rect_move_plus_row_deletion_outside_no_silent_data_loss ... ok
+test g14_pure_column_move_produces_single_op ... ok
+test g14_fuzzy_row_move_plus_outside_edit_no_silent_data_loss ... ok
+test g14_row_move_plus_cell_edit_no_silent_data_loss ... ok
+test g14_pure_row_move_produces_single_op ... ok
+test g14_rect_move_no_additional_changes_produces_single_op ... ok
+test g14_move_detection_disabled_falls_back_to_positional ... ok
+test g14_rect_move_plus_cell_edit_no_silent_data_loss ... ok
+test g14_fuzzy_row_move_produces_move_and_internal_edits ... ok
+test g14_two_disjoint_row_block_moves_detected ... ok
+test g14_row_move_plus_column_move_both_detected ... ok
+test g14_grid_changes_no_silent_data_loss ... ok
+test g14_three_disjoint_rect_block_moves_detected ... ok
+test g14_two_disjoint_rect_moves_plus_outside_edits_no_silent_data_loss ... ok
+test g14_max_move_iterations_limits_detected_moves ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests\g15_column_structure_row_alignment_tests.rs (target\debug\deps\g15_column_structure_row_alignment_tests-bca2a69d1a4d3a91.exe)
+
+running 7 tests
+test g15_all_blank_column_insert_no_content_change_minimal_diff ... ok
+test g15_blank_column_insert_at_position_zero_preserves_row_alignment ... ok
+test g15_blank_column_insert_middle_preserves_row_alignment ... ok
+test g15_single_row_grid_column_insert_no_spurious_row_ops ... ok
+test g15_row_insert_with_column_structure_change_both_detected ... ok
+test g15_column_delete_preserves_row_alignment_when_content_order_maintained ... ok
+test g15_large_grid_column_insert_row_alignment_preserved ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\g1_g2_grid_workbook_tests.rs (target\debug\deps\g1_g2_grid_workbook_tests-44015662c1cdc02a.exe)
+
+running 5 tests
+test g2_float_ulp_noise_is_ignored_in_diff ... ok
+test g2_nan_values_are_treated_as_equal ... ok
+test g2_meaningful_float_change_emits_cell_edit ... ok
+test g1_equal_sheet_produces_empty_diff ... ok
+test g2_single_cell_literal_change_produces_one_celledited ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\g5_g7_grid_workbook_tests.rs (target\debug\deps\g5_g7_grid_workbook_tests-428b2e060195053d.exe)
+
+running 5 tests
+test g7_col_append_right_emits_two_columnadded_and_no_celledited ... ok
+test g7_col_delete_right_emits_two_columnremoved_and_no_celledited ... ok
+test g6_row_delete_bottom_emits_two_rowremoved_and_no_celledited ... ok
+test g6_row_append_bottom_emits_two_rowadded_and_no_celledited ... ok
+test g5_multi_cell_edits_produces_only_celledited_ops ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests\g8_row_alignment_grid_workbook_tests.rs (target\debug\deps\g8_row_alignment_grid_workbook_tests-48f0795693a22895.exe)
+
+running 3 tests
+test alignment_bails_out_when_additional_edits_present ... ok
+test single_row_insert_middle_produces_one_row_added ... ok
+test single_row_delete_middle_produces_one_row_removed ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\g9_column_alignment_grid_workbook_tests.rs (target\debug\deps\g9_column_alignment_grid_workbook_tests-57c97a994a5cb3ae.exe)
+
+running 3 tests
+test g9_col_delete_middle_emits_one_columnremoved_and_no_noise ... ok
+test g9_col_insert_middle_emits_one_columnadded_and_no_noise ... ok
+test g9_alignment_bails_out_when_additional_edits_present ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\grid_view_hashstats_tests.rs (target\debug\deps\grid_view_hashstats_tests-3ce49c74f4483a81.exe)
+
+running 5 tests
+test hashstats_from_col_meta_tracks_positions ... ok
+test hashstats_counts_and_positions_basic ... ok
+test hashstats_equal_to_threshold_behavior ... ok
+test hashstats_empty_inputs ... ok
+test hashstats_rare_but_not_common_boundary ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\grid_view_tests.rs (target\debug\deps\grid_view_tests-fb1e79f9cea4e7d1.exe)
+
+running 7 tests
+test gridview_dense_3x3_layout_and_metadata ... ok
+test gridview_empty_grid_is_stable ... ok
+test gridview_row_hashes_ignore_small_float_drift ... ok
+test gridview_formula_only_row_respects_threshold ... ok
+test gridview_sparse_rows_low_info_classification ... ok
+test gridview_column_metadata_matches_signatures ... ok
+test gridview_large_sparse_grid_constructs_without_panic ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\integration_test.rs (target\debug\deps\integration_test-0ecb0069b922e246.exe)
+
+running 1 test
+test test_locate_fixture ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\limit_behavior_tests.rs (target\debug\deps\limit_behavior_tests-981c94fdcd2552d9.exe)
+
+running 10 tests
+test limit_exceeded_return_error_returns_structured_error ... ok
+test limit_exceeded_return_error_panics_via_legacy_api - should panic ... ok
+test column_limit_exceeded ... ok
+test limit_exceeded_return_partial_result ... ok
+test limit_exceeded_fallback_to_positional ... ok
+test multiple_sheets_limit_warning_includes_sheet_name ... ok
+test within_limits_no_warning ... ok
+test large_grid_completes_within_default_limits ... ok
+test wide_grid_500_cols_completes_within_default_limits ... ok
+test large_grid_5k_rows_completes_within_default_limits ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+     Running tests\m4_package_parts_tests.rs (target\debug\deps\m4_package_parts_tests-4101fc6a6c8026af.exe)
+
+running 17 tests
+test embedded_content_partial_failure_retains_valid_entries ... ok
+test missing_config_package_xml_errors ... ok
+test embedded_content_section1_with_bom_parses_via_parse_section_members ... ok
+test embedded_content_invalid_zip_is_skipped ... ok
+test invalid_utf8_in_package_xml_errors ... ok
+test empty_content_directory_is_ignored ... ok
+test embedded_content_invalid_utf8_is_skipped ... ok
+test invalid_utf8_in_section1_errors ... ok
+test embedded_content_missing_section1_is_skipped ... ok
+test missing_section1_errors ... ok
+test package_parts_section1_with_bom_parses_via_parse_section_members ... ok
+test parse_package_parts_rejects_non_zip ... ok
+test embedded_content_name_is_canonicalized ... ok
+test leading_slash_paths_are_accepted ... ok
+test parse_package_parts_never_panics_on_random_bytes ... ok
+test package_parts_contains_expected_entries ... ok
+test embedded_content_detection ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\m4_permissions_metadata_tests.rs (target\debug\deps\m4_permissions_metadata_tests-849e07f40c48e7ca.exe)
+
+running 17 tests
+test metadata_invalid_length_prefix_errors ... ok
+test metadata_invalid_utf8_errors ... ok
+test metadata_invalid_header_too_short_errors ... ok
+test metadata_itempath_decodes_space_and_slash ... ok
+test metadata_empty_bytes_returns_empty_struct ... ok
+test metadata_itempath_decodes_percent_encoded_utf8 ... ok
+test metadata_malformed_xml_errors ... ok
+test permission_bindings_present_flag ... ok
+test metadata_hidden_queries_connection_only ... ok
+test permission_bindings_missing_ok ... ok
+test build_queries_is_compatible_with_metadata_simple ... ok
+test metadata_load_destinations_simple ... ok
+test metadata_groups_basic_hierarchy ... ok
+test metadata_formulas_match_section_members ... ok
+test permissions_invalid_entities_yield_defaults ... ok
+test permissions_missing_or_malformed_yields_defaults ... ok
+test permissions_parsed_flags_default_vs_firewall_off ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\m5_query_domain_tests.rs (target\debug\deps\m5_query_domain_tests-e61841abde267cc5.exe)
+
+running 6 tests
+test member_without_metadata_is_preserved ... ok
+test query_names_unique ... ok
+test metadata_join_simple ... ok
+test metadata_orphan_entries ... ok
+test metadata_join_url_encoding ... ok
+test queries_preserve_section_member_order ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\m6_textual_m_diff_tests.rs (target\debug\deps\m6_textual_m_diff_tests-a7253b94cabf0606.exe)
+
+running 9 tests
+test invalid_section_syntax_propagates_error ... ok
+test identical_workbooks_produce_no_diffs ... ok
+test literal_change_produces_definitionchanged ... ok
+test basic_add_query_diff ... ok
+test metadata_change_produces_metadataonly ... ok
+test rename_reports_add_and_remove ... ok
+test basic_remove_query_diff ... ok
+test definition_and_metadata_change_prefers_definitionchanged ... ok
+test multiple_diffs_are_sorted_by_name ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\m7_ast_canonicalization_tests.rs (target\debug\deps\m7_ast_canonicalization_tests-d0055dbaf2d9a332.exe)
+
+running 13 tests
+test empty_expression_is_error ... ok
+test malformed_query_yields_parse_error ... ok
+test hash_date_tokenization_is_atomic ... ok
+test nested_let_formatting_only_equal ... ok
+test nested_let_in_binding_parses_successfully ... ok
+test unbalanced_delimiter_yields_error ... ok
+test unterminated_string_yields_error ... ok
+test unterminated_block_comment_yields_error ... ok
+test canonicalization_is_idempotent ... ok
+test basic_let_query_ast_is_let ... ok
+test parse_basic_let_query_succeeds ... ok
+test formatting_only_queries_semantically_equal ... ok
+test formatting_only_variant_detects_semantic_change ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\m7_semantic_m_diff_tests.rs (target\debug\deps\m7_semantic_m_diff_tests-666a62a15230e6c9.exe)
+
+running 7 tests
+test semantic_gate_does_not_mask_definition_plus_metadata_change ... ok
+test formatting_only_diff_produces_no_diffs ... ok
+test semantic_gate_can_be_disabled ... ok
+test formatting_variant_with_real_change_still_reports_definitionchanged ... ok
+test semantic_gate_falls_back_when_both_sides_malformed ... ok
+test semantic_gate_does_not_mask_metadata_only_change ... ok
+test semantic_gate_falls_back_on_ast_parse_failure ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\m_section_splitting_tests.rs (target\debug\deps\m_section_splitting_tests-cbf67a1669b12eb6.exe)
+
+running 7 tests
+test error_on_invalid_shared_member_syntax ... ok
+test parse_multiple_members ... ok
+test parse_single_member_section ... ok
+test parse_quoted_identifier_member ... ok
+test error_on_missing_section_header ... ok
+test tolerate_whitespace_comments ... ok
+test section_parsing_tolerates_utf8_bom ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\metrics_unit_tests.rs (target\debug\deps\metrics_unit_tests-f4190947c714d2b3.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\output_tests.rs (target\debug\deps\output_tests-90ee76a83c53642d.exe)
+
+running 19 tests
+test diff_report_to_cell_diffs_ignores_block_moved_rect ... ok
+test serialize_diff_report_nan_maps_to_serialization_error ... ok
+test serialize_diff_report_infinity_maps_to_serialization_error ... ok
+test diff_report_to_cell_diffs_maps_values_correctly ... ok
+test diff_report_to_cell_diffs_filters_non_cell_ops ... ok
+test serialize_diff_report_neg_infinity_maps_to_serialization_error ... ok
+test serialize_partial_diff_report_includes_complete_false_and_warnings ... ok
+test serialize_diff_report_with_finite_numbers_succeeds ... ok
+test test_diff_workbooks_to_json_reports_invalid_zip ... ok
+test serialize_full_diff_report_has_complete_true_and_no_warnings ... ok
+test test_json_format ... ok
+test json_diff_case_only_sheet_name_no_changes ... ok
+test test_json_case_only_sheet_name_no_changes ... ok
+test test_json_case_only_sheet_name_cell_edit_via_helper ... ok
+test json_diff_case_only_sheet_name_cell_edit ... ok
+test test_json_diff_value_to_empty ... ok
+test test_json_non_empty_diff_bool ... ok
+test test_json_non_empty_diff ... ok
+test test_json_empty_diff ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\perf_large_grid_tests.rs (target\debug\deps\perf_large_grid_tests-c76ecd8f3045fcbb.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\pg1_ir_tests.rs (target\debug\deps\pg1_ir_tests-7edae173527285c7.exe)
+
+running 3 tests
+test pg1_sparse_used_range_extents ... ok
+test pg1_basic_two_sheets_structure ... ok
+test pg1_empty_and_mixed_sheets ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\pg3_snapshot_tests.rs (target\debug\deps\pg3_snapshot_tests-11cc1467ca2b74b9.exe)
+
+running 5 tests
+test snapshot_json_rejects_invalid_addr_a0 ... ok
+test snapshot_json_rejects_invalid_addr_1a ... ok
+test snapshot_json_roundtrip_detects_tampered_addr ... ok
+test pg3_value_and_formula_cells_snapshot_from_excel ... ok
+test snapshot_json_roundtrip ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\pg4_diffop_tests.rs (target\debug\deps\pg4_diffop_tests-68d38d6aa93b6d1b.exe)
+
+running 21 tests
+test pg4_construct_cell_edited_diffop ... ok
+test pg4_block_moved_rows_json_optional_hash ... ok
+test pg4_cell_edited_invariant_helper_rejects_mismatched_snapshot_addr - should panic ... ok
+test pg4_cell_edited_json_shape ... ok
+test pg4_construct_block_move_diffops ... ok
+test pg4_cell_edited_roundtrip_preserves_snapshot_addrs ... ok
+test pg4_construct_block_rect_diffops ... ok
+test pg4_block_move_json_shape_keysets ... ok
+test pg4_block_moved_columns_json_optional_hash ... ok
+test pg4_diff_report_rejects_invalid_nested_addr ... ok
+test pg4_block_rect_json_shape_and_roundtrip ... ok
+test pg4_column_added_json_optional_signature ... ok
+test pg4_diff_report_json_shape ... ok
+test pg4_construct_row_and_column_diffops ... ok
+test pg4_diff_report_roundtrip_preserves_order ... ok
+test pg4_diffop_cell_edited_rejects_invalid_top_level_addr ... ok
+test pg4_diffop_cell_edited_rejects_invalid_snapshot_addrs ... ok
+test pg4_row_added_json_optional_signature ... ok
+test pg4_sheet_added_and_removed_json_shape ... ok
+test pg4_row_and_column_json_shape_keysets ... ok
+test pg4_diffop_roundtrip_each_variant ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\pg5_grid_diff_tests.rs (target\debug\deps\pg5_grid_diff_tests-f2c0331213277f4a.exe)
+
+running 10 tests
+test pg5_1_grid_diff_1x1_identical_empty_diff ... ok
+test pg5_6_grid_diff_degenerate_grids ... ok
+test pg5_3_grid_diff_row_appended_row_added_only ... ok
+test pg5_4_grid_diff_column_appended_column_added_only ... ok
+test pg5_7_grid_diff_row_truncated_row_removed_only ... ok
+test pg5_2_grid_diff_1x1_value_change_single_cell_edited ... ok
+test pg5_9_grid_diff_row_and_column_truncated_structure_only ... ok
+test pg5_10_grid_diff_row_appended_with_overlap_cell_edits ... ok
+test pg5_8_grid_diff_column_truncated_column_removed_only ... ok
+test pg5_5_grid_diff_same_shape_scattered_cell_edits ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\pg6_object_vs_grid_tests.rs (target\debug\deps\pg6_object_vs_grid_tests-f8b97d8bc1eb968d.exe)
+
+running 4 tests
+test pg6_3_rename_as_remove_plus_add_no_grid_ops ... ok
+test pg6_1_sheet_added_no_grid_ops_on_main ... ok
+test pg6_2_sheet_removed_no_grid_ops_on_main ... ok
+test pg6_4_sheet_and_grid_change_composed_cleanly ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\signature_tests.rs (target\debug\deps\signature_tests-7bfca2299fdcd239.exe)
+
+running 24 tests
+test col_signature_includes_formulas_by_default ... ok
+test compute_all_signatures_populates_fields ... ok
+test col_signature_ignores_empty_trailing_rows ... ok
+test col_signature_distinguishes_numeric_text_bool ... ok
+test different_rows_have_different_signatures ... ok
+test col_signature_independent_of_insertion_order ... ok
+test identical_rows_have_same_signature ... ok
+test compute_all_signatures_recomputes_after_mutation ... ok
+test col_signatures_distinguish_row_positions ... ok
+test gridview_rowmeta_hash_matches_compute_all_signatures ... ok
+test compute_all_signatures_on_empty_grid_produces_empty_vectors ... ok
+test row_signature_distinguishes_numeric_text_bool ... ok
+test row_signature_consistent_for_same_content_different_column_indices ... ok
+test compute_all_signatures_with_all_empty_rows_and_cols_is_stable ... ok
+test col_signature_includes_formulas_sparse ... ok
+test row_and_col_signatures_match_bulk_computation ... ok
+test row_signature_ignores_empty_trailing_cells ... ok
+test row_signature_includes_formulas_by_default ... ok
+test row_signature_is_stable_across_computations ... ok
+test row_signature_unchanged_after_column_delete_from_middle ... ok
+test row_signature_independent_of_insertion_order ... ok
+test row_signature_with_formula_is_stable ... ok
+test row_signature_unchanged_after_column_insert_at_position_zero ... ok
+test row_signatures_distinguish_column_positions ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\sparse_grid_tests.rs (target\debug\deps\sparse_grid_tests-13ec3002ae31da48.exe)
+
+running 10 tests
+test cols_iter_covers_all_cols ... ok
+test rows_iter_and_get_are_consistent ... ok
+test rows_iter_covers_all_rows ... ok
+test compute_signatures_on_sparse_grid_produces_hashes ... ok
+test compute_all_signatures_matches_direct_computation ... ok
+test sparse_grid_empty_has_zero_cells ... ok
+test sparse_grid_all_empty_rows_have_zero_signatures ... ok
+test sparse_grid_insert_and_retrieve ... ok
+test sparse_grid_iter_cells_only_populated ... ok
+test sparse_grid_memory_efficiency ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests excel_diff
+
+running 1 test
+test core\src\lib.rs - (line 11) ... ignored
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

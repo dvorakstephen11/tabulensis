@@ -32,12 +32,7 @@ fn unordered_col_hashes(grid: &Grid) -> Vec<ColHash> {
         .collect()
 }
 
-#[allow(dead_code)]
-pub(crate) fn detect_exact_column_block_move(old: &Grid, new: &Grid) -> Option<ColumnBlockMove> {
-    detect_exact_column_block_move_with_config(old, new, &DiffConfig::default())
-}
-
-pub(crate) fn detect_exact_column_block_move_with_config(
+pub(crate) fn detect_exact_column_block_move(
     old: &Grid,
     new: &Grid,
     config: &DiffConfig,
@@ -197,12 +192,7 @@ pub(crate) fn detect_exact_column_block_move_with_config(
     None
 }
 
-#[allow(dead_code)]
-pub(crate) fn align_single_column_change(old: &Grid, new: &Grid) -> Option<ColumnAlignment> {
-    align_single_column_change_with_config(old, new, &DiffConfig::default())
-}
-
-pub(crate) fn align_single_column_change_with_config(
+pub(crate) fn align_single_column_change(
     old: &Grid,
     new: &Grid,
     config: &DiffConfig,
@@ -430,8 +420,8 @@ mod tests {
         let inserted_refs: Vec<&[i32]> = inserted_rows.iter().map(|r| r.as_slice()).collect();
         let grid_b = grid_from_numbers(&inserted_refs);
 
-        let alignment =
-            align_single_column_change(&grid_a, &grid_b).expect("alignment should succeed");
+        let alignment = align_single_column_change(&grid_a, &grid_b, &DiffConfig::default())
+            .expect("alignment should succeed");
 
         assert_eq!(alignment.inserted, vec![2]);
         assert!(alignment.deleted.is_empty());
@@ -463,7 +453,7 @@ mod tests {
         let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|r| r.as_slice()).collect();
         let grid_b = grid_from_numbers(&rows_b_refs);
 
-        assert!(align_single_column_change(&grid_a, &grid_b).is_none());
+        assert!(align_single_column_change(&grid_a, &grid_b, &DiffConfig::default()).is_none());
     }
 
     #[test]
@@ -485,7 +475,7 @@ mod tests {
         let refs_b: Vec<&[i32]> = values_b.iter().map(|r| r.as_slice()).collect();
         let grid_b = grid_from_numbers(&refs_b);
 
-        assert!(align_single_column_change(&grid_a, &grid_b).is_none());
+        assert!(align_single_column_change(&grid_a, &grid_b, &DiffConfig::default()).is_none());
     }
 
     #[test]
@@ -494,8 +484,8 @@ mod tests {
 
         let grid_b = grid_from_numbers(&[&[10, 30, 40, 20], &[11, 31, 41, 21]]);
 
-        let mv =
-            detect_exact_column_block_move(&grid_a, &grid_b).expect("expected column move found");
+        let mv = detect_exact_column_block_move(&grid_a, &grid_b, &DiffConfig::default())
+            .expect("expected column move found");
         assert_eq!(mv.src_start_col, 1);
         assert_eq!(mv.col_count, 1);
         assert_eq!(mv.dst_start_col, 3);
@@ -511,7 +501,7 @@ mod tests {
             &[9, 11, 12, 999], // edit inside moved column
         ]);
 
-        assert!(detect_exact_column_block_move(&grid_a, &grid_b).is_none());
+        assert!(detect_exact_column_block_move(&grid_a, &grid_b, &DiffConfig::default()).is_none());
     }
 
     #[test]
@@ -519,7 +509,7 @@ mod tests {
         let grid_a = grid_from_numbers(&[&[1, 1, 2, 2], &[10, 10, 20, 20]]);
         let grid_b = grid_from_numbers(&[&[2, 2, 1, 1], &[20, 20, 10, 10]]);
 
-        assert!(detect_exact_column_block_move(&grid_a, &grid_b).is_none());
+        assert!(detect_exact_column_block_move(&grid_a, &grid_b, &DiffConfig::default()).is_none());
     }
 
     #[test]
@@ -536,8 +526,8 @@ mod tests {
             &[12, 42, 52, 22, 32, 62],
         ]);
 
-        let mv =
-            detect_exact_column_block_move(&grid_a, &grid_b).expect("expected multi-column move");
+        let mv = detect_exact_column_block_move(&grid_a, &grid_b, &DiffConfig::default())
+            .expect("expected multi-column move");
         assert_eq!(mv.src_start_col, 3);
         assert_eq!(mv.col_count, 2);
         assert_eq!(mv.dst_start_col, 1);
@@ -550,7 +540,7 @@ mod tests {
         let grid_b = grid_from_numbers(&[&[20, 10, 30, 40, 60, 50], &[21, 11, 31, 41, 61, 51]]);
 
         assert!(
-            detect_exact_column_block_move(&grid_a, &grid_b).is_none(),
+            detect_exact_column_block_move(&grid_a, &grid_b, &DiffConfig::default()).is_none(),
             "two independent column swaps must not be detected as a single block move"
         );
     }
@@ -561,7 +551,7 @@ mod tests {
 
         let grid_b = grid_from_numbers(&[&[20, 10, 30, 40], &[21, 11, 31, 41]]);
 
-        let mv = detect_exact_column_block_move(&grid_a, &grid_b)
+        let mv = detect_exact_column_block_move(&grid_a, &grid_b, &DiffConfig::default())
             .expect("swap of adjacent columns should be detected as single-column move");
         assert_eq!(mv.col_count, 1);
         assert!(

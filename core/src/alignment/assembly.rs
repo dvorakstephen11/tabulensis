@@ -232,7 +232,7 @@ fn fill_gap(
             moves: Vec::new(),
         },
 
-        GapStrategy::SmallEdit => align_small_gap(old_slice, new_slice),
+        GapStrategy::SmallEdit => align_small_gap(old_slice, new_slice, config),
 
         GapStrategy::HashFallback => {
             let mut result = align_gap_via_hash(old_slice, new_slice);
@@ -243,13 +243,12 @@ fn fill_gap(
         }
 
         GapStrategy::MoveCandidate => {
-            let mut result = if old_slice.len() as u32
-                > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
-                || new_slice.len() as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
+            let mut result = if old_slice.len() as u32 > config.max_lcs_gap_size
+                || new_slice.len() as u32 > config.max_lcs_gap_size
             {
                 align_gap_via_hash(old_slice, new_slice)
             } else {
-                align_small_gap(old_slice, new_slice)
+                align_small_gap(old_slice, new_slice, config)
             };
 
             let mut detected_moves = moves_from_matched_pairs(&result.matched);
@@ -260,7 +259,14 @@ fn fill_gap(
                     .iter()
                     .any(|(a, b)| (*b as i64 - *a as i64) != 0);
 
-                if has_nonzero_offset && let Some(mv) = find_block_move(old_slice, new_slice, 1) {
+                if has_nonzero_offset
+                    && let Some(mv) = find_block_move(
+                        old_slice,
+                        new_slice,
+                        config.min_block_size_for_move,
+                        config,
+                    )
+                {
                     detected_moves.push(mv);
                 }
             }
@@ -272,26 +278,28 @@ fn fill_gap(
         GapStrategy::RecursiveAlign => {
             let at_limit = depth >= config.max_recursion_depth;
             if at_limit {
-                if old_slice.len() as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
-                    || new_slice.len() as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
+                if old_slice.len() as u32 > config.max_lcs_gap_size
+                    || new_slice.len() as u32 > config.max_lcs_gap_size
                 {
                     return align_gap_via_hash(old_slice, new_slice);
                 }
-                return align_small_gap(old_slice, new_slice);
+                return align_small_gap(old_slice, new_slice, config);
             }
 
             let anchor_candidates = if depth == 0 {
                 discover_anchors_from_meta(old_slice, new_slice)
             } else {
+                let ctx_k1 = config.context_anchor_k1 as usize;
+                let ctx_k2 = config.context_anchor_k2 as usize;
                 let mut anchors = discover_local_anchors(old_slice, new_slice);
                 if anchors.is_empty() {
-                    anchors = discover_context_anchors(old_slice, new_slice, 4);
+                    anchors = discover_context_anchors(old_slice, new_slice, ctx_k1);
                     if anchors.is_empty() {
-                        anchors = discover_context_anchors(old_slice, new_slice, 8);
+                        anchors = discover_context_anchors(old_slice, new_slice, ctx_k2);
                     }
                 } else {
-                    let mut ctx_anchors = discover_context_anchors(old_slice, new_slice, 4);
-                    if anchors.len() < 4 {
+                    let mut ctx_anchors = discover_context_anchors(old_slice, new_slice, ctx_k1);
+                    if anchors.len() < ctx_k1 {
                         anchors.append(&mut ctx_anchors);
                     }
                 }
@@ -300,12 +308,12 @@ fn fill_gap(
 
             let anchors = build_anchor_chain(anchor_candidates);
             if anchors.is_empty() {
-                if old_slice.len() as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
-                    || new_slice.len() as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
+                if old_slice.len() as u32 > config.max_lcs_gap_size
+                    || new_slice.len() as u32 > config.max_lcs_gap_size
                 {
                     return align_gap_via_hash(old_slice, new_slice);
                 }
-                return align_small_gap(old_slice, new_slice);
+                return align_small_gap(old_slice, new_slice, config);
             }
 
             let alignment = assemble_from_meta(old_slice, new_slice, anchors, config, depth + 1);
@@ -396,21 +404,22 @@ fn slice_by_range<'a>(meta: &'a [RowMeta], range: &Range<u32>) -> &'a [RowMeta] 
     &meta[start..end]
 }
 
-fn align_small_gap(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> GapAlignmentResult {
+fn align_small_gap(
+    old_slice: &[RowMeta],
+    new_slice: &[RowMeta],
+    config: &DiffConfig,
+) -> GapAlignmentResult {
     let m = old_slice.len();
     let n = new_slice.len();
     if m == 0 && n == 0 {
         return GapAlignmentResult::default();
     }
 
-    if m as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
-        || n as u32 > crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE
-    {
+    if m as u32 > config.max_lcs_gap_size || n as u32 > config.max_lcs_gap_size {
         return align_gap_via_hash(old_slice, new_slice);
     }
 
-    const LCS_DP_WORK_LIMIT: usize = 20_000;
-    if m.saturating_mul(n) > LCS_DP_WORK_LIMIT {
+    if m.saturating_mul(n) > config.lcs_dp_work_limit {
         return align_gap_via_myers(old_slice, new_slice);
     }
 
@@ -758,7 +767,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::alignment::gap_strategy::MAX_LCS_GAP_SIZE;
     use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
     use crate::workbook::{Cell, CellAddress, CellValue};
 
@@ -1009,14 +1017,15 @@ mod tests {
 
     #[test]
     fn align_small_gap_enforces_cap_with_hash_fallback() {
-        let large = (MAX_LCS_GAP_SIZE + 1) as usize;
+        let config = DiffConfig::default();
+        let large = (config.max_lcs_gap_size + 1) as usize;
         let old_hashes: Vec<u128> = (0..large as u32).map(|i| i as u128).collect();
         let new_hashes: Vec<u128> = (0..large as u32).map(|i| (10_000 + i) as u128).collect();
 
         let old_meta = row_meta_from_hashes(10, &old_hashes);
         let new_meta = row_meta_from_hashes(20, &new_hashes);
 
-        let result = align_small_gap(&old_meta, &new_meta);
+        let result = align_small_gap(&old_meta, &new_meta, &config);
         assert_eq!(result.matched.len(), large);
         assert!(result.inserted.is_empty());
         assert!(result.deleted.is_empty());
@@ -1054,7 +1063,7 @@ mod tests {
         let old_meta = row_meta_from_hashes(0, &old_hashes);
         let new_meta = row_meta_from_hashes(0, &new_hashes);
 
-        let result = align_small_gap(&old_meta, &new_meta);
+        let result = align_small_gap(&old_meta, &new_meta, &DiffConfig::default());
         assert_eq!(result.inserted, vec![150]);
         assert!(result.deleted.is_empty());
         assert_eq!(result.matched.len(), count);

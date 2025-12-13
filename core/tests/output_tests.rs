@@ -199,8 +199,8 @@ fn test_json_format() {
 #[test]
 fn test_json_empty_diff() {
     let fixture = fixture_path("pg1_basic_two_sheets.xlsx");
-    let json =
-        diff_workbooks_to_json(&fixture, &fixture).expect("diffing identical files should succeed");
+    let json = diff_workbooks_to_json(&fixture, &fixture, &excel_diff::DiffConfig::default())
+        .expect("diffing identical files should succeed");
     let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
     assert!(
         report.ops.is_empty(),
@@ -213,7 +213,8 @@ fn test_json_non_empty_diff() {
     let a = fixture_path("json_diff_single_cell_a.xlsx");
     let b = fixture_path("json_diff_single_cell_b.xlsx");
 
-    let json = diff_workbooks_to_json(&a, &b).expect("diffing different files should succeed");
+    let json = diff_workbooks_to_json(&a, &b, &excel_diff::DiffConfig::default())
+        .expect("diffing different files should succeed");
     let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
     assert_eq!(report.ops.len(), 1, "expected a single diff op");
     match &report.ops[0] {
@@ -231,7 +232,8 @@ fn test_json_non_empty_diff_bool() {
     let a = fixture_path("json_diff_bool_a.xlsx");
     let b = fixture_path("json_diff_bool_b.xlsx");
 
-    let json = diff_workbooks_to_json(&a, &b).expect("diffing different files should succeed");
+    let json = diff_workbooks_to_json(&a, &b, &excel_diff::DiffConfig::default())
+        .expect("diffing different files should succeed");
     let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
     assert_eq!(report.ops.len(), 1, "expected a single diff op");
     match &report.ops[0] {
@@ -249,7 +251,8 @@ fn test_json_diff_value_to_empty() {
     let a = fixture_path("json_diff_value_to_empty_a.xlsx");
     let b = fixture_path("json_diff_value_to_empty_b.xlsx");
 
-    let json = diff_workbooks_to_json(&a, &b).expect("diffing different files should succeed");
+    let json = diff_workbooks_to_json(&a, &b, &excel_diff::DiffConfig::default())
+        .expect("diffing different files should succeed");
     let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
     assert_eq!(report.ops.len(), 1, "expected a single diff op");
     match &report.ops[0] {
@@ -270,7 +273,7 @@ fn json_diff_case_only_sheet_name_no_changes() {
     let old = open_workbook(&a).expect("fixture A should open");
     let new = open_workbook(&b).expect("fixture B should open");
 
-    let report = diff_workbooks(&old, &new);
+    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
     assert!(
         report.ops.is_empty(),
         "case-only sheet rename with identical content should produce no diff ops"
@@ -285,7 +288,7 @@ fn json_diff_case_only_sheet_name_cell_edit() {
     let old = open_workbook(&a).expect("fixture A should open");
     let new = open_workbook(&b).expect("fixture B should open");
 
-    let report = diff_workbooks(&old, &new);
+    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
     assert_eq!(report.ops.len(), 1, "expected a single cell edit");
     match &report.ops[0] {
         DiffOp::CellEdited {
@@ -309,8 +312,8 @@ fn test_json_case_only_sheet_name_no_changes() {
     let a = fixture_path("sheet_case_only_rename_a.xlsx");
     let b = fixture_path("sheet_case_only_rename_b.xlsx");
 
-    let json =
-        diff_workbooks_to_json(&a, &b).expect("diffing case-only sheet rename should succeed");
+    let json = diff_workbooks_to_json(&a, &b, &excel_diff::DiffConfig::default())
+        .expect("diffing case-only sheet rename should succeed");
     let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
     assert!(
         report.ops.is_empty(),
@@ -323,7 +326,7 @@ fn test_json_case_only_sheet_name_cell_edit_via_helper() {
     let a = fixture_path("sheet_case_only_rename_edit_a.xlsx");
     let b = fixture_path("sheet_case_only_rename_edit_b.xlsx");
 
-    let json = diff_workbooks_to_json(&a, &b)
+    let json = diff_workbooks_to_json(&a, &b, &excel_diff::DiffConfig::default())
         .expect("diffing case-only sheet rename with cell edit should succeed");
     let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
     assert_eq!(report.ops.len(), 1, "expected a single cell edit");
@@ -348,7 +351,7 @@ fn test_json_case_only_sheet_name_cell_edit_via_helper() {
 #[test]
 fn test_diff_workbooks_to_json_reports_invalid_zip() {
     let path = fixture_path("not_a_zip.txt");
-    let err = diff_workbooks_to_json(&path, &path)
+    let err = diff_workbooks_to_json(&path, &path, &excel_diff::DiffConfig::default())
         .expect_err("diffing invalid containers should return an error");
 
     assert!(

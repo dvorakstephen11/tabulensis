@@ -61,7 +61,7 @@ fn make_sheet_with_kind(name: &str, kind: SheetKind, cells: Vec<(u32, u32, f64)>
 #[test]
 fn identical_workbooks_produce_empty_report() {
     let wb = make_workbook(vec![("Sheet1", vec![(0, 0, 1.0)])]);
-    let report = diff_workbooks(&wb, &wb);
+    let report = diff_workbooks(&wb, &wb, &excel_diff::DiffConfig::default());
     assert!(report.ops.is_empty());
 }
 
@@ -72,7 +72,7 @@ fn sheet_added_detected() {
         ("Sheet1", vec![(0, 0, 1.0)]),
         ("Sheet2", vec![(0, 0, 2.0)]),
     ]);
-    let report = diff_workbooks(&old, &new);
+    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
     assert!(
         report
             .ops
@@ -88,7 +88,7 @@ fn sheet_removed_detected() {
         ("Sheet2", vec![(0, 0, 2.0)]),
     ]);
     let new = make_workbook(vec![("Sheet1", vec![(0, 0, 1.0)])]);
-    let report = diff_workbooks(&old, &new);
+    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
     assert!(
         report
             .ops
@@ -101,7 +101,7 @@ fn sheet_removed_detected() {
 fn cell_edited_detected() {
     let old = make_workbook(vec![("Sheet1", vec![(0, 0, 1.0)])]);
     let new = make_workbook(vec![("Sheet1", vec![(0, 0, 2.0)])]);
-    let report = diff_workbooks(&old, &new);
+    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
     assert_eq!(report.ops.len(), 1);
     match &report.ops[0] {
         DiffOp::CellEdited {
@@ -123,7 +123,7 @@ fn cell_edited_detected() {
 fn diff_report_json_round_trips() {
     let old = make_workbook(vec![("Sheet1", vec![(0, 0, 1.0)])]);
     let new = make_workbook(vec![("Sheet1", vec![(0, 0, 2.0)])]);
-    let report = diff_workbooks(&old, &new);
+    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
     let json = serde_json::to_string(&report).expect("serialize");
     let parsed: DiffReport = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(report, parsed);
@@ -134,7 +134,7 @@ fn sheet_name_case_insensitive_no_changes() {
     let old = make_workbook(vec![("Sheet1", vec![(0, 0, 1.0)])]);
     let new = make_workbook(vec![("sheet1", vec![(0, 0, 1.0)])]);
 
-    let report = diff_workbooks(&old, &new);
+    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
     assert!(report.ops.is_empty());
 }
 
@@ -143,7 +143,7 @@ fn sheet_name_case_insensitive_cell_edit() {
     let old = make_workbook(vec![("Sheet1", vec![(0, 0, 1.0)])]);
     let new = make_workbook(vec![("sheet1", vec![(0, 0, 2.0)])]);
 
-    let report = diff_workbooks(&old, &new);
+    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
     assert_eq!(report.ops.len(), 1);
 
     match &report.ops[0] {
@@ -192,7 +192,7 @@ fn sheet_identity_includes_kind() {
         sheets: vec![chart],
     };
 
-    let report = diff_workbooks(&old, &new);
+    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
 
     let mut added = 0;
     let mut removed = 0;
@@ -254,7 +254,7 @@ fn deterministic_sheet_op_ordering() {
         },
     ];
 
-    let report = diff_workbooks(&old, &new);
+    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
     assert_eq!(
         report.ops, expected,
         "ops should be ordered by lowercase name then sheet kind"
@@ -291,7 +291,7 @@ fn sheet_identity_includes_kind_for_macro_and_other() {
         sheets: vec![other_sheet],
     };
 
-    let report = diff_workbooks(&old, &new);
+    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
 
     let mut added = 0;
     let mut removed = 0;
@@ -319,7 +319,7 @@ fn duplicate_sheet_identity_last_writer_wins_release() {
     };
     let new = Workbook { sheets: Vec::new() };
 
-    let report = diff_workbooks(&old, &new);
+    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
     assert_eq!(report.ops.len(), 1, "expected last writer to win");
 
     match &report.ops[0] {
@@ -332,6 +332,101 @@ fn duplicate_sheet_identity_last_writer_wins_release() {
 }
 
 #[test]
+fn move_detection_respects_column_gate() {
+    let nrows: u32 = 4;
+    let ncols: u32 = 300;
+    let src_rows = 1..3;
+    let src_cols = 2..7;
+    let dst_start_col: u32 = 200;
+    let dst_end_col = dst_start_col + (src_cols.end - src_cols.start);
+
+    let mut grid_a = Grid::new(nrows, ncols);
+    let mut grid_b = Grid::new(nrows, ncols);
+
+    for r in 0..nrows {
+        for c in 0..ncols {
+            let base_value = Some(CellValue::Number((r * 1_000 + c) as f64));
+            let addr = CellAddress::from_indices(r, c);
+
+            grid_a.insert(Cell {
+                row: r,
+                col: c,
+                address: addr,
+                value: base_value.clone(),
+                formula: None,
+            });
+
+            let in_src = src_rows.contains(&r) && src_cols.contains(&c);
+            let in_dst = src_rows.contains(&r) && c >= dst_start_col && c < dst_end_col;
+
+            if in_dst {
+                let offset = c - dst_start_col;
+                let src_c = src_cols.start + offset;
+                let moved_value = Some(CellValue::Number((r * 1_000 + src_c) as f64));
+                grid_b.insert(Cell {
+                    row: r,
+                    col: c,
+                    address: addr,
+                    value: moved_value,
+                    formula: None,
+                });
+            } else if !in_src {
+                grid_b.insert(Cell {
+                    row: r,
+                    col: c,
+                    address: addr,
+                    value: base_value,
+                    formula: None,
+                });
+            }
+        }
+    }
+
+    let wb_a = Workbook {
+        sheets: vec![Sheet {
+            name: "Sheet1".to_string(),
+            kind: SheetKind::Worksheet,
+            grid: grid_a,
+        }],
+    };
+    let wb_b = Workbook {
+        sheets: vec![Sheet {
+            name: "Sheet1".to_string(),
+            kind: SheetKind::Worksheet,
+            grid: grid_b,
+        }],
+    };
+
+    let default_report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    assert!(
+        !default_report.ops.is_empty(),
+        "changes should be detected even when move detection is gated off"
+    );
+    assert!(
+        !default_report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::BlockMovedRect { .. })),
+        "default gate should skip block move detection on wide sheets"
+    );
+
+    let mut wide_gate = excel_diff::DiffConfig::default();
+    wide_gate.max_move_detection_cols = 512;
+    let wide_report = diff_workbooks(&wb_a, &wb_b, &wide_gate);
+    assert!(
+        !wide_report.ops.is_empty(),
+        "expected diffs when move detection is enabled"
+    );
+    assert!(
+        wide_report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::BlockMovedRect { .. })),
+        "wider gate should allow block move detection on wide sheets"
+    );
+}
+
+#[test]
 fn duplicate_sheet_identity_panics_in_debug() {
     let duplicate_a = make_sheet_with_kind("Sheet1", SheetKind::Worksheet, vec![(0, 0, 1.0)]);
     let duplicate_b = make_sheet_with_kind("sheet1", SheetKind::Worksheet, vec![(0, 1, 2.0)]);
@@ -340,7 +435,8 @@ fn duplicate_sheet_identity_panics_in_debug() {
     };
     let new = Workbook { sheets: Vec::new() };
 
-    let result = std::panic::catch_unwind(|| diff_workbooks(&old, &new));
+    let result =
+        std::panic::catch_unwind(|| diff_workbooks(&old, &new, &excel_diff::DiffConfig::default()));
     if cfg!(debug_assertions) {
         assert!(
             result.is_err(),

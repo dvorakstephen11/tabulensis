@@ -13,7 +13,7 @@
 //!
 //! let wb_a = open_workbook("file_a.xlsx")?;
 //! let wb_b = open_workbook("file_b.xlsx")?;
-//! let report = diff_workbooks(&wb_a, &wb_b);
+//! let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 //!
 //! for op in &report.ops {
 //!     println!("{:?}", op);
@@ -58,10 +58,7 @@ pub use datamashup_package::{
     EmbeddedContent, PackageParts, PackageXml, SectionDocument, parse_package_parts,
 };
 pub use diff::{DiffError, DiffOp, DiffReport, SheetId};
-pub use engine::{
-    diff_grids_database_mode, diff_workbooks, diff_workbooks_with_config,
-    try_diff_workbooks_with_config,
-};
+pub use engine::{diff_grids_database_mode, diff_workbooks, try_diff_workbooks};
 #[cfg(feature = "excel-open-xml")]
 pub use excel_open_xml::{ExcelOpenError, open_data_mashup, open_workbook};
 pub use grid_parser::{GridParseError, SheetDescriptor};

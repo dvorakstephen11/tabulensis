@@ -25,17 +25,17 @@ use std::collections::HashMap;
 
 use crate::alignment::RowBlockMove;
 use crate::alignment::row_metadata::RowMeta;
+use crate::config::DiffConfig;
 use crate::workbook::RowSignature;
 
 pub fn find_block_move(
     old_slice: &[RowMeta],
     new_slice: &[RowMeta],
     min_len: u32,
+    config: &DiffConfig,
 ) -> Option<RowBlockMove> {
-    const MAX_SLICE_LEN: usize = 10_000;
-    const MAX_CANDIDATES_PER_SIG: usize = 16;
-
-    if old_slice.len() > MAX_SLICE_LEN || new_slice.len() > MAX_SLICE_LEN {
+    let max_slice_len = config.move_extraction_max_slice_len as usize;
+    if old_slice.len() > max_slice_len || new_slice.len() > max_slice_len {
         return None;
     }
 
@@ -59,7 +59,8 @@ pub fn find_block_move(
             continue;
         };
 
-        for &old_idx in candidates.iter().take(MAX_CANDIDATES_PER_SIG) {
+        let max_candidates = config.move_extraction_max_candidates_per_sig as usize;
+        for &old_idx in candidates.iter().take(max_candidates) {
             let max_possible = (old_slice.len() - old_idx).min(new_slice.len() - new_idx);
             if max_possible <= best_len {
                 continue;

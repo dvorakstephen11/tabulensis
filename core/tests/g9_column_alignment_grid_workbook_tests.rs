@@ -10,7 +10,7 @@ fn g9_col_insert_middle_emits_one_columnadded_and_no_noise() {
     let wb_b = open_workbook(fixture_path("col_insert_middle_b.xlsx"))
         .expect("failed to open fixture: col_insert_middle_b.xlsx");
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     let cols_added: Vec<u32> = report
         .ops
@@ -59,7 +59,7 @@ fn g9_col_delete_middle_emits_one_columnremoved_and_no_noise() {
     let wb_b = open_workbook(fixture_path("col_delete_middle_b.xlsx"))
         .expect("failed to open fixture: col_delete_middle_b.xlsx");
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     let cols_removed: Vec<u32> = report
         .ops
@@ -108,7 +108,7 @@ fn g9_alignment_bails_out_when_additional_edits_present() {
     let wb_b = open_workbook(fixture_path("col_insert_with_edit_b.xlsx"))
         .expect("failed to open fixture: col_insert_with_edit_b.xlsx");
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
     let inserted_idx = find_header_col(&wb_b, "Inserted");
 
     let has_middle_column_add = report.ops.iter().any(|op| match op {

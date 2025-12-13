@@ -3,7 +3,7 @@ mod common;
 use common::single_sheet_workbook;
 use excel_diff::config::{DiffConfig, LimitBehavior};
 use excel_diff::diff::{DiffError, DiffOp};
-use excel_diff::engine::{diff_workbooks_with_config, try_diff_workbooks_with_config};
+use excel_diff::engine::{diff_workbooks, try_diff_workbooks};
 use excel_diff::{Cell, CellAddress, CellValue, Grid};
 
 fn create_simple_grid(nrows: u32, ncols: u32, base_value: i32) -> Grid {
@@ -44,7 +44,7 @@ fn large_grid_completes_within_default_limits() {
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
     let config = DiffConfig::default();
-    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
     assert!(
         report.complete,
@@ -81,7 +81,7 @@ fn limit_exceeded_fallback_to_positional() {
         ..Default::default()
     };
 
-    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
     assert!(
         report.complete,
@@ -118,7 +118,7 @@ fn limit_exceeded_return_partial_result() {
         ..Default::default()
     };
 
-    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
     assert!(
         !report.complete,
@@ -152,7 +152,7 @@ fn limit_exceeded_return_error_returns_structured_error() {
         ..Default::default()
     };
 
-    let result = try_diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    let result = try_diff_workbooks(&wb_a, &wb_b, &config);
     assert!(result.is_err(), "should return error when limits exceeded");
 
     let err = result.unwrap_err();
@@ -189,7 +189,7 @@ fn limit_exceeded_return_error_panics_via_legacy_api() {
         ..Default::default()
     };
 
-    let _ = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    let _ = diff_workbooks(&wb_a, &wb_b, &config);
 }
 
 #[test]
@@ -213,7 +213,7 @@ fn column_limit_exceeded() {
         ..Default::default()
     };
 
-    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
     assert!(
         !report.complete,
@@ -246,7 +246,7 @@ fn within_limits_no_warning() {
         ..Default::default()
     };
 
-    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
     assert!(report.complete, "should be complete when within limits");
     assert!(
@@ -297,7 +297,7 @@ fn multiple_sheets_limit_warning_includes_sheet_name() {
         ..Default::default()
     };
 
-    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
     assert!(!report.complete, "should be incomplete due to large sheet");
     assert!(
@@ -322,7 +322,7 @@ fn large_grid_5k_rows_completes_within_default_limits() {
     let wb_b = single_sheet_workbook("LargeSheet", grid_b);
 
     let config = DiffConfig::default();
-    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
     assert!(
         report.complete,
@@ -354,7 +354,7 @@ fn wide_grid_500_cols_completes_within_default_limits() {
     let wb_b = single_sheet_workbook("WideSheet", grid_b);
 
     let config = DiffConfig::default();
-    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
     assert!(
         report.complete,

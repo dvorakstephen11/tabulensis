@@ -10,7 +10,7 @@ fn g13_fuzzy_row_move_emits_blockmovedrows_and_celledited() {
     let wb_b = open_workbook(fixture_path("grid_move_and_edit_b.xlsx"))
         .expect("failed to open fixture: grid_move_and_edit_b.xlsx");
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     let block_moves: Vec<(u32, u32, u32, Option<u64>)> = report
         .ops
@@ -66,6 +66,72 @@ fn g13_fuzzy_row_move_emits_blockmovedrows_and_celledited() {
 }
 
 #[test]
+fn g13_fuzzy_row_move_can_be_disabled() {
+    let base: Vec<Vec<i32>> = (1..=18)
+        .map(|r| (1..=3).map(|c| r * 10 + c).collect())
+        .collect();
+    let base_refs: Vec<&[i32]> = base.iter().map(|row| row.as_slice()).collect();
+    let grid_a = grid_from_numbers(&base_refs);
+
+    let mut rows_b = base.clone();
+    let mut moved_block: Vec<Vec<i32>> = rows_b.drain(4..8).collect();
+    moved_block[1][1] = 9_999;
+    rows_b.splice(12..12, moved_block);
+    let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
+    let grid_b = grid_from_numbers(&rows_b_refs);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let mut disabled = excel_diff::DiffConfig::default();
+    disabled.enable_fuzzy_moves = false;
+    let report_disabled = diff_workbooks(&wb_a, &wb_b, &disabled);
+    let disabled_moves = report_disabled
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::BlockMovedRows { .. }))
+        .count();
+    let disabled_block_edits = report_disabled
+        .ops
+        .iter()
+        .filter(|op| {
+            matches!(
+                op,
+                DiffOp::CellEdited { addr, .. }
+                if addr.row >= 12 && addr.row < 16
+            )
+        })
+        .count();
+
+    let report_enabled = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let enabled_moves = report_enabled
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::BlockMovedRows { .. }))
+        .count();
+    let enabled_block_edits = report_enabled
+        .ops
+        .iter()
+        .filter(|op| {
+            matches!(
+                op,
+                DiffOp::CellEdited { addr, .. }
+                if addr.row >= 12 && addr.row < 16
+            )
+        })
+        .count();
+
+    assert!(
+        enabled_moves >= disabled_moves,
+        "enabling fuzzy moves should not reduce move detection"
+    );
+    assert!(
+        enabled_block_edits > disabled_block_edits,
+        "fuzzy move detection should emit edits within the moved block"
+    );
+}
+
+#[test]
 fn g13_in_place_edits_do_not_emit_blockmovedrows() {
     let rows: Vec<Vec<i32>> = (1..=12)
         .map(|r| (1..=3).map(|c| r * 10 + c).collect())
@@ -83,7 +149,7 @@ fn g13_in_place_edits_do_not_emit_blockmovedrows() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     assert!(
         !report
@@ -119,7 +185,7 @@ fn g13_ambiguous_repeated_blocks_do_not_emit_blockmovedrows() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     assert!(
         !report

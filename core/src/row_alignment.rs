@@ -7,8 +7,8 @@
 //! 1. **Fallback scenarios**: The engine may use these when AMR cannot produce
 //!    a useful alignment (e.g., heavily repetitive data).
 //!
-//! 2. **Move detection helpers**: Some functions (`detect_exact_row_block_move_with_config`,
-//!    `detect_fuzzy_row_block_move_with_config`) are still used by the engine's
+//! 2. **Move detection helpers**: Some functions (`detect_exact_row_block_move`,
+//!    `detect_fuzzy_row_block_move`) are still used by the engine's
 //!    masked move detection logic.
 //!
 //! 3. **Test coverage**: Unit tests validate these algorithms work correctly.
@@ -17,7 +17,7 @@
 //!
 //! The primary alignment path now uses `alignment::align_rows_amr`. The legacy
 //! functions are invoked only when:
-//! - AMR returns `None` (fallback to `align_row_changes_with_config`)
+//! - AMR returns `None` (fallback to `align_row_changes`)
 //! - Explicit move detection in masked regions
 //!
 //! Functions marked `#[allow(dead_code)]` are retained for testing but not
@@ -46,12 +46,7 @@ pub(crate) struct RowBlockMove {
 const _HASH_COLLISION_NOTE: &str = "128-bit xxHash3 collision probability ~10^-29 at 50K rows (birthday bound); \
      secondary verification not required; see hashing.rs for detailed rationale.";
 
-#[allow(dead_code)]
-pub(crate) fn detect_exact_row_block_move(old: &Grid, new: &Grid) -> Option<RowBlockMove> {
-    detect_exact_row_block_move_with_config(old, new, &DiffConfig::default())
-}
-
-pub(crate) fn detect_exact_row_block_move_with_config(
+pub(crate) fn detect_exact_row_block_move(
     old: &Grid,
     new: &Grid,
     config: &DiffConfig,
@@ -189,12 +184,7 @@ pub(crate) fn detect_exact_row_block_move_with_config(
     None
 }
 
-#[allow(dead_code)]
-pub(crate) fn detect_fuzzy_row_block_move(old: &Grid, new: &Grid) -> Option<RowBlockMove> {
-    detect_fuzzy_row_block_move_with_config(old, new, &DiffConfig::default())
-}
-
-pub(crate) fn detect_fuzzy_row_block_move_with_config(
+pub(crate) fn detect_fuzzy_row_block_move(
     old: &Grid,
     new: &Grid,
     config: &DiffConfig,
@@ -326,30 +316,20 @@ pub(crate) fn detect_fuzzy_row_block_move_with_config(
     candidate
 }
 
-#[allow(dead_code)]
-pub(crate) fn align_row_changes(old: &Grid, new: &Grid) -> Option<RowAlignment> {
-    align_row_changes_with_config(old, new, &DiffConfig::default())
-}
-
-pub(crate) fn align_row_changes_with_config(
+pub(crate) fn align_row_changes(
     old: &Grid,
     new: &Grid,
     config: &DiffConfig,
 ) -> Option<RowAlignment> {
     let row_diff = new.nrows as i64 - old.nrows as i64;
     if row_diff.abs() == 1 {
-        return align_single_row_change_with_config(old, new, config);
+        return align_single_row_change(old, new, config);
     }
 
     align_rows_internal(old, new, true, config)
 }
 
-#[allow(dead_code)]
-pub(crate) fn align_single_row_change(old: &Grid, new: &Grid) -> Option<RowAlignment> {
-    align_single_row_change_with_config(old, new, &DiffConfig::default())
-}
-
-pub(crate) fn align_single_row_change_with_config(
+pub(crate) fn align_single_row_change(
     old: &Grid,
     new: &Grid,
     config: &DiffConfig,
@@ -745,8 +725,8 @@ mod tests {
         let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
         let grid_b = grid_from_rows(&rows_b_refs);
 
-        let mv =
-            detect_exact_row_block_move(&grid_a, &grid_b).expect("expected block move to be found");
+        let mv = detect_exact_row_block_move(&grid_a, &grid_b, &DiffConfig::default())
+            .expect("expected block move to be found");
         assert_eq!(
             mv,
             RowBlockMove {
@@ -772,7 +752,7 @@ mod tests {
         let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
         let grid_b = grid_from_rows(&rows_b_refs);
 
-        assert!(detect_exact_row_block_move(&grid_a, &grid_b).is_none());
+        assert!(detect_exact_row_block_move(&grid_a, &grid_b, &DiffConfig::default()).is_none());
     }
 
     #[test]
@@ -791,11 +771,11 @@ mod tests {
         let grid_b = grid_from_rows(&rows_b_refs);
 
         assert!(
-            detect_exact_row_block_move(&grid_a, &grid_b).is_none(),
+            detect_exact_row_block_move(&grid_a, &grid_b, &DiffConfig::default()).is_none(),
             "internal edits should prevent exact move detection"
         );
 
-        let mv = detect_fuzzy_row_block_move(&grid_a, &grid_b)
+        let mv = detect_fuzzy_row_block_move(&grid_a, &grid_b, &DiffConfig::default())
             .expect("expected fuzzy row block move to be detected");
         assert_eq!(
             mv,
@@ -826,9 +806,9 @@ mod tests {
         let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
         let grid_b = grid_from_rows(&rows_b_refs);
 
-        assert!(detect_exact_row_block_move(&grid_a, &grid_b).is_none());
+        assert!(detect_exact_row_block_move(&grid_a, &grid_b, &DiffConfig::default()).is_none());
         assert!(
-            detect_fuzzy_row_block_move(&grid_a, &grid_b).is_none(),
+            detect_fuzzy_row_block_move(&grid_a, &grid_b, &DiffConfig::default()).is_none(),
             "similarity below threshold should bail out"
         );
     }
@@ -848,7 +828,7 @@ mod tests {
         let grid_b = grid_from_rows(&rows_b_refs);
 
         assert!(
-            detect_fuzzy_row_block_move(&grid_a, &grid_b).is_none(),
+            detect_fuzzy_row_block_move(&grid_a, &grid_b, &DiffConfig::default()).is_none(),
             "heavy repetition or ambiguous candidates should not emit a move"
         );
     }
@@ -862,8 +842,8 @@ mod tests {
         let grid_a = grid_from_rows(&base_refs);
         let grid_b = grid_from_rows(&base_refs);
 
-        assert!(detect_exact_row_block_move(&grid_a, &grid_b).is_none());
-        assert!(detect_fuzzy_row_block_move(&grid_a, &grid_b).is_none());
+        assert!(detect_exact_row_block_move(&grid_a, &grid_b, &DiffConfig::default()).is_none());
+        assert!(detect_fuzzy_row_block_move(&grid_a, &grid_b, &DiffConfig::default()).is_none());
     }
 
     #[test]
@@ -882,11 +862,11 @@ mod tests {
         let grid_b = grid_from_rows(&rows_b_refs);
 
         assert!(
-            detect_exact_row_block_move(&grid_a, &grid_b).is_none(),
+            detect_exact_row_block_move(&grid_a, &grid_b, &DiffConfig::default()).is_none(),
             "internal edits should prevent exact move detection"
         );
 
-        let mv = detect_fuzzy_row_block_move(&grid_a, &grid_b)
+        let mv = detect_fuzzy_row_block_move(&grid_a, &grid_b, &DiffConfig::default())
             .expect("expected fuzzy row block move upward to be detected");
         assert_eq!(
             mv,
@@ -915,7 +895,8 @@ mod tests {
         let grid_baseline_b = grid_from_rows(&refs_baseline_b);
 
         assert!(
-            detect_fuzzy_row_block_move(&grid_baseline_a, &grid_baseline_b).is_some(),
+            detect_fuzzy_row_block_move(&grid_baseline_a, &grid_baseline_b, &DiffConfig::default())
+                .is_some(),
             "baseline: non-ambiguous fuzzy move should be detected"
         );
 
@@ -944,7 +925,7 @@ mod tests {
         let grid_b = grid_from_rows(&refs_b);
 
         assert!(
-            detect_fuzzy_row_block_move(&grid_a, &grid_b).is_none(),
+            detect_fuzzy_row_block_move(&grid_a, &grid_b, &DiffConfig::default()).is_none(),
             "ambiguous candidates: two similar blocks swapped should trigger ambiguity bail-out"
         );
     }
@@ -966,11 +947,11 @@ mod tests {
         let grid_b = grid_from_rows(&rows_b_refs);
 
         assert!(
-            detect_exact_row_block_move(&grid_a, &grid_b).is_none(),
+            detect_exact_row_block_move(&grid_a, &grid_b, &config).is_none(),
             "internal edits should prevent exact move detection"
         );
 
-        let mv = detect_fuzzy_row_block_move_with_config(&grid_a, &grid_b, &config)
+        let mv = detect_fuzzy_row_block_move(&grid_a, &grid_b, &config)
             .expect("expected fuzzy move at configured max_fuzzy_block_rows to be detected");
         assert_eq!(
             mv,
@@ -998,7 +979,7 @@ mod tests {
         let grid_moved = grid_from_rows(&moved_refs);
 
         assert!(
-            detect_fuzzy_row_block_move(&grid_base, &grid_moved).is_some(),
+            detect_fuzzy_row_block_move(&grid_base, &grid_moved, &DiffConfig::default()).is_some(),
             "baseline: fuzzy move should work with unique rows"
         );
 
@@ -1019,7 +1000,7 @@ mod tests {
         let grid_9b = grid_from_rows(&refs_9b);
 
         assert!(
-            detect_fuzzy_row_block_move(&grid_9a, &grid_9b).is_none(),
+            detect_fuzzy_row_block_move(&grid_9a, &grid_9b, &DiffConfig::default()).is_none(),
             "repetition guard should trigger when repeat count exceeds max_hash_repeat"
         );
 
@@ -1040,7 +1021,7 @@ mod tests {
         let grid_8b = grid_from_rows(&refs_8b);
 
         assert!(
-            detect_fuzzy_row_block_move(&grid_8a, &grid_8b).is_some(),
+            detect_fuzzy_row_block_move(&grid_8a, &grid_8b, &DiffConfig::default()).is_some(),
             "repeat count equal to max_hash_repeat should not trigger heavy repetition guard"
         );
     }
@@ -1061,7 +1042,8 @@ mod tests {
         let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
         let grid_b = grid_from_rows(&rows_b_refs);
 
-        let alignment = align_row_changes(&grid_a, &grid_b).expect("alignment should succeed");
+        let alignment = align_row_changes(&grid_a, &grid_b, &DiffConfig::default())
+            .expect("alignment should succeed");
         assert_eq!(alignment.inserted, vec![3, 4, 5, 6]);
         assert!(alignment.deleted.is_empty());
         assert_eq!(alignment.matched.len(), 10);
@@ -1085,7 +1067,8 @@ mod tests {
         let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
         let grid_b = grid_from_rows(&rows_b_refs);
 
-        let alignment = align_row_changes(&grid_a, &grid_b).expect("alignment should succeed");
+        let alignment = align_row_changes(&grid_a, &grid_b, &DiffConfig::default())
+            .expect("alignment should succeed");
         assert_eq!(alignment.deleted, vec![3, 4, 5, 6]);
         assert!(alignment.inserted.is_empty());
         assert_eq!(alignment.matched.len(), 6);
@@ -1110,7 +1093,7 @@ mod tests {
         let rows_b_refs: Vec<&[i32]> = rows_b.iter().map(|row| row.as_slice()).collect();
         let grid_b = grid_from_rows(&rows_b_refs);
 
-        assert!(align_row_changes(&grid_a, &grid_b).is_none());
+        assert!(align_row_changes(&grid_a, &grid_b, &DiffConfig::default()).is_none());
     }
 
     #[test]
@@ -1119,7 +1102,7 @@ mod tests {
         let grid_b = grid_from_rows(&[&[0, 10, 11, 12], &[0, 20, 21, 22], &[0, 30, 31, 32]]);
 
         assert!(
-            align_row_changes(&grid_a, &grid_b).is_none(),
+            align_row_changes(&grid_a, &grid_b, &DiffConfig::default()).is_none(),
             "column insertion changing column count should skip row alignment"
         );
     }
@@ -1130,7 +1113,7 @@ mod tests {
         let grid_b = grid_from_rows(&[&[10, 12, 13], &[30, 32, 33]]);
 
         assert!(
-            align_row_changes(&grid_a, &grid_b).is_none(),
+            align_row_changes(&grid_a, &grid_b, &DiffConfig::default()).is_none(),
             "column deletion changing column count should skip row alignment"
         );
     }
@@ -1150,8 +1133,8 @@ mod tests {
         );
         let grid_b = grid_from_rows(&rows_b);
 
-        let alignment =
-            align_single_row_change(&grid_a, &grid_b).expect("alignment should succeed");
+        let alignment = align_single_row_change(&grid_a, &grid_b, &DiffConfig::default())
+            .expect("alignment should succeed");
         assert_eq!(alignment.inserted, vec![5]);
         assert!(alignment.deleted.is_empty());
         assert_eq!(alignment.matched.len(), 10);
@@ -1176,7 +1159,7 @@ mod tests {
         ];
         let grid_b = grid_from_rows(&rows_b);
 
-        assert!(align_single_row_change(&grid_a, &grid_b).is_none());
+        assert!(align_single_row_change(&grid_a, &grid_b, &DiffConfig::default()).is_none());
     }
 
     #[test]
@@ -1192,8 +1175,8 @@ mod tests {
         rows_b.extend(base_refs.iter().copied());
         let grid_b = grid_from_rows(&rows_b);
 
-        let alignment =
-            align_single_row_change(&grid_a, &grid_b).expect("alignment should succeed");
+        let alignment = align_single_row_change(&grid_a, &grid_b, &DiffConfig::default())
+            .expect("alignment should succeed");
         assert_eq!(alignment.inserted, vec![0]);
         assert!(alignment.deleted.is_empty());
         assert_eq!(alignment.matched.len(), 5);
@@ -1214,8 +1197,8 @@ mod tests {
         rows_b.push(new_last_row.as_slice());
         let grid_b = grid_from_rows(&rows_b);
 
-        let alignment =
-            align_single_row_change(&grid_a, &grid_b).expect("alignment should succeed");
+        let alignment = align_single_row_change(&grid_a, &grid_b, &DiffConfig::default())
+            .expect("alignment should succeed");
         assert_eq!(alignment.inserted, vec![5]);
         assert!(alignment.deleted.is_empty());
         assert_eq!(alignment.matched.len(), 5);
@@ -1234,8 +1217,8 @@ mod tests {
         let rows_b: Vec<&[i32]> = base_refs[1..].to_vec();
         let grid_b = grid_from_rows(&rows_b);
 
-        let alignment =
-            align_single_row_change(&grid_a, &grid_b).expect("alignment should succeed");
+        let alignment = align_single_row_change(&grid_a, &grid_b, &DiffConfig::default())
+            .expect("alignment should succeed");
         assert!(alignment.inserted.is_empty());
         assert_eq!(alignment.deleted, vec![0]);
         assert_eq!(alignment.matched.len(), 4);
@@ -1254,8 +1237,8 @@ mod tests {
         let rows_b: Vec<&[i32]> = base_refs[..4].to_vec();
         let grid_b = grid_from_rows(&rows_b);
 
-        let alignment =
-            align_single_row_change(&grid_a, &grid_b).expect("alignment should succeed");
+        let alignment = align_single_row_change(&grid_a, &grid_b, &DiffConfig::default())
+            .expect("alignment should succeed");
         assert!(alignment.inserted.is_empty());
         assert_eq!(alignment.deleted, vec![4]);
         assert_eq!(alignment.matched.len(), 4);
@@ -1273,8 +1256,8 @@ mod tests {
         let rows_b: Vec<&[i32]> = vec![single_refs[0], new_row.as_slice()];
         let grid_b = grid_from_rows(&rows_b);
 
-        let alignment =
-            align_single_row_change(&grid_a, &grid_b).expect("alignment should succeed");
+        let alignment = align_single_row_change(&grid_a, &grid_b, &DiffConfig::default())
+            .expect("alignment should succeed");
         assert_eq!(alignment.inserted, vec![1]);
         assert!(alignment.deleted.is_empty());
         assert_eq!(alignment.matched.len(), 1);
@@ -1290,8 +1273,8 @@ mod tests {
         let single_refs: Vec<&[i32]> = vec![two_refs[0]];
         let grid_b = grid_from_rows(&single_refs);
 
-        let alignment =
-            align_single_row_change(&grid_a, &grid_b).expect("alignment should succeed");
+        let alignment = align_single_row_change(&grid_a, &grid_b, &DiffConfig::default())
+            .expect("alignment should succeed");
         assert!(alignment.inserted.is_empty());
         assert_eq!(alignment.deleted, vec![1]);
         assert_eq!(alignment.matched.len(), 1);

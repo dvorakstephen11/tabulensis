@@ -6,20 +6,18 @@
 use crate::alignment::move_extraction::moves_from_matched_pairs;
 use crate::alignment::{RowAlignment as AmrAlignment, align_rows_amr_with_signatures};
 use crate::column_alignment::{
-    ColumnAlignment, ColumnBlockMove, align_single_column_change_with_config,
-    detect_exact_column_block_move_with_config,
+    ColumnAlignment, ColumnBlockMove, align_single_column_change, detect_exact_column_block_move,
 };
 use crate::config::{DiffConfig, LimitBehavior};
 use crate::database_alignment::{KeyColumnSpec, diff_table_by_key};
 use crate::diff::{DiffError, DiffOp, DiffReport, SheetId};
 #[cfg(feature = "perf-metrics")]
 use crate::perf::{DiffMetrics, Phase};
-use crate::rect_block_move::{RectBlockMove, detect_exact_rect_block_move_with_config};
+use crate::rect_block_move::{RectBlockMove, detect_exact_rect_block_move};
 use crate::region_mask::RegionMask;
 use crate::row_alignment::{
-    RowAlignment as LegacyRowAlignment, RowBlockMove as LegacyRowBlockMove,
-    align_row_changes_with_config, detect_exact_row_block_move_with_config,
-    detect_fuzzy_row_block_move_with_config,
+    RowAlignment as LegacyRowAlignment, RowBlockMove as LegacyRowBlockMove, align_row_changes,
+    detect_exact_row_block_move, detect_fuzzy_row_block_move,
 };
 use crate::workbook::{
     Cell, CellAddress, CellSnapshot, ColSignature, Grid, RowSignature, Sheet, SheetKind, Workbook,
@@ -55,11 +53,14 @@ fn sheet_kind_order(kind: &SheetKind) -> u8 {
     }
 }
 
-pub fn diff_workbooks(old: &Workbook, new: &Workbook) -> DiffReport {
-    diff_workbooks_with_config(old, new, &DiffConfig::default())
+pub fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    match try_diff_workbooks(old, new, config) {
+        Ok(report) => report,
+        Err(e) => panic!("{}", e),
+    }
 }
 
-pub fn try_diff_workbooks_with_config(
+pub fn try_diff_workbooks(
     old: &Workbook,
     new: &Workbook,
     config: &DiffConfig,
@@ -120,7 +121,7 @@ pub fn try_diff_workbooks_with_config(
             }
             (Some(old_sheet), Some(new_sheet)) => {
                 let sheet_id: SheetId = old_sheet.name.clone();
-                try_diff_grids_with_config(
+                try_diff_grids(
                     &sheet_id,
                     &old_sheet.grid,
                     &new_sheet.grid,
@@ -149,25 +150,19 @@ pub fn try_diff_workbooks_with_config(
     Ok(report)
 }
 
-pub fn diff_workbooks_with_config(
-    old: &Workbook,
-    new: &Workbook,
+pub fn diff_grids_database_mode(
+    old: &Grid,
+    new: &Grid,
+    key_columns: &[u32],
     config: &DiffConfig,
 ) -> DiffReport {
-    match try_diff_workbooks_with_config(old, new, config) {
-        Ok(report) => report,
-        Err(e) => panic!("{}", e),
-    }
-}
-
-pub fn diff_grids_database_mode(old: &Grid, new: &Grid, key_columns: &[u32]) -> DiffReport {
     let spec = KeyColumnSpec::new(key_columns.to_vec());
     let alignment = match diff_table_by_key(old, new, key_columns) {
         Ok(alignment) => alignment,
         Err(_) => {
             let mut ops = Vec::new();
             let sheet_id: SheetId = DATABASE_MODE_SHEET_ID.to_string();
-            diff_grids(&sheet_id, old, new, &mut ops);
+            diff_grids(&sheet_id, old, new, config, &mut ops);
             return DiffReport::new(ops);
         }
     };
@@ -208,13 +203,19 @@ pub fn diff_grids_database_mode(old: &Grid, new: &Grid, key_columns: &[u32]) -> 
     DiffReport::new(ops)
 }
 
-fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>) {
+fn diff_grids(
+    sheet_id: &SheetId,
+    old: &Grid,
+    new: &Grid,
+    config: &DiffConfig,
+    ops: &mut Vec<DiffOp>,
+) {
     let mut ctx = DiffContext::default();
-    let _ = try_diff_grids_with_config(
+    let _ = try_diff_grids(
         sheet_id,
         old,
         new,
-        &DiffConfig::default(),
+        config,
         ops,
         &mut ctx,
         #[cfg(feature = "perf-metrics")]
@@ -222,7 +223,7 @@ fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>)
     );
 }
 
-fn try_diff_grids_with_config(
+fn try_diff_grids(
     sheet_id: &SheetId,
     old: &Grid,
     new: &Grid,
@@ -321,7 +322,7 @@ fn diff_grids_core(
     let mut old_mask = RegionMask::all_active(old.nrows, old.ncols);
     let mut new_mask = RegionMask::all_active(new.nrows, new.ncols);
     let move_detection_enabled = old.nrows.max(new.nrows) <= config.recursive_align_threshold
-        && old.ncols.max(new.ncols) <= 256;
+        && old.ncols.max(new.ncols) <= config.max_move_detection_cols;
     let mut iteration = 0;
 
     if move_detection_enabled {
@@ -403,6 +404,7 @@ fn diff_grids_core(
             }
 
             if !found_move
+                && config.enable_fuzzy_moves
                 && let Some(mv) =
                     detect_fuzzy_row_block_move_masked(old, new, &old_mask, &new_mask, config)
             {
@@ -523,7 +525,7 @@ fn diff_grids_core(
             && alignment.inserted.is_empty()
             && alignment.deleted.is_empty()
             && old.ncols != new.ncols
-            && let Some(col_alignment) = align_single_column_change_with_config(old, new, config)
+            && let Some(col_alignment) = align_single_column_change(old, new, config)
         {
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
@@ -598,7 +600,7 @@ fn diff_grids_core(
         return;
     }
 
-    if let Some(alignment) = align_row_changes_with_config(old, new, config) {
+    if let Some(alignment) = align_row_changes(old, new, config) {
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
             m.start_phase(Phase::CellDiff);
@@ -610,7 +612,7 @@ fn diff_grids_core(
             m.add_cells_compared((alignment.matched.len() as u64).saturating_mul(overlap_cols));
             m.end_phase(Phase::CellDiff);
         }
-    } else if let Some(alignment) = align_single_column_change_with_config(old, new, config) {
+    } else if let Some(alignment) = align_single_column_change(old, new, config) {
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
             m.start_phase(Phase::CellDiff);
@@ -1027,7 +1029,7 @@ fn detect_exact_row_block_move_masked(
         return None;
     }
 
-    let mv_local = detect_exact_row_block_move_with_config(&old_proj, &new_proj, config)?;
+    let mv_local = detect_exact_row_block_move(&old_proj, &new_proj, config)?;
     let src_start_row = *old_rows.get(mv_local.src_start_row as usize)?;
     let dst_start_row = *new_rows.get(mv_local.dst_start_row as usize)?;
 
@@ -1056,7 +1058,7 @@ fn detect_exact_column_block_move_masked(
         return None;
     }
 
-    let mv_local = detect_exact_column_block_move_with_config(&old_proj, &new_proj, config)?;
+    let mv_local = detect_exact_column_block_move(&old_proj, &new_proj, config)?;
     let src_start_col = *old_cols.get(mv_local.src_start_col as usize)?;
     let dst_start_col = *new_cols.get(mv_local.dst_start_col as usize)?;
 
@@ -1117,7 +1119,7 @@ fn detect_exact_rect_block_move_masked(
         })
     };
 
-    if let Some(mv_local) = detect_exact_rect_block_move_with_config(&old_proj, &new_proj, config)
+    if let Some(mv_local) = detect_exact_rect_block_move(&old_proj, &new_proj, config)
         && let Some(mapped) = map_move(mv_local, &old_rows, &new_rows, &old_cols, &new_cols)
     {
         return Some(mapped);
@@ -1223,7 +1225,7 @@ fn detect_exact_rect_block_move_masked(
                 }
 
                 if let Some(candidate) =
-                    detect_exact_rect_block_move_with_config(&old_scoped, &new_scoped, config)
+                    detect_exact_rect_block_move(&old_scoped, &new_scoped, config)
                 {
                     let scoped_row_map_old: Option<Vec<u32>> = scoped_old_rows
                         .iter()
@@ -1321,7 +1323,7 @@ fn detect_fuzzy_row_block_move_masked(
         return None;
     }
 
-    let mv_local = detect_fuzzy_row_block_move_with_config(&old_proj, &new_proj, config)?;
+    let mv_local = detect_fuzzy_row_block_move(&old_proj, &new_proj, config)?;
     let src_start_row = *old_rows.get(mv_local.src_start_row as usize)?;
     let dst_start_row = *new_rows.get(mv_local.dst_start_row as usize)?;
 
