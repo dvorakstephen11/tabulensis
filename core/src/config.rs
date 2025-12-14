@@ -181,6 +181,12 @@ pub struct DiffConfigBuilder {
     inner: DiffConfig,
 }
 
+impl Default for DiffConfigBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DiffConfigBuilder {
     pub fn new() -> Self {
         DiffConfig::builder()

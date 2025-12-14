@@ -316,42 +316,64 @@ pub(crate) fn detect_fuzzy_row_block_move(
     candidate
 }
 
+#[allow(dead_code)]
 pub(crate) fn align_row_changes(
     old: &Grid,
     new: &Grid,
     config: &DiffConfig,
 ) -> Option<RowAlignment> {
-    let row_diff = new.nrows as i64 - old.nrows as i64;
-    if row_diff.abs() == 1 {
-        return align_single_row_change(old, new, config);
-    }
-
-    align_rows_internal(old, new, true, config)
+    let view_a = GridView::from_grid_with_config(old, config);
+    let view_b = GridView::from_grid_with_config(new, config);
+    align_row_changes_from_views(&view_a, &view_b, config)
 }
 
+pub(crate) fn align_row_changes_from_views(
+    old_view: &GridView,
+    new_view: &GridView,
+    config: &DiffConfig,
+) -> Option<RowAlignment> {
+    let row_diff = new_view.source.nrows as i64 - old_view.source.nrows as i64;
+    if row_diff.abs() == 1 {
+        return align_single_row_change_from_views(old_view, new_view, config);
+    }
+
+    align_rows_internal(old_view, new_view, true, config)
+}
+
+#[allow(dead_code)]
 pub(crate) fn align_single_row_change(
     old: &Grid,
     new: &Grid,
     config: &DiffConfig,
 ) -> Option<RowAlignment> {
-    align_rows_internal(old, new, false, config)
+    let view_a = GridView::from_grid_with_config(old, config);
+    let view_b = GridView::from_grid_with_config(new, config);
+    align_single_row_change_from_views(&view_a, &view_b, config)
+}
+
+pub(crate) fn align_single_row_change_from_views(
+    old_view: &GridView,
+    new_view: &GridView,
+    config: &DiffConfig,
+) -> Option<RowAlignment> {
+    align_rows_internal(old_view, new_view, false, config)
 }
 
 fn align_rows_internal(
-    old: &Grid,
-    new: &Grid,
+    old_view: &GridView,
+    new_view: &GridView,
     allow_blocks: bool,
     config: &DiffConfig,
 ) -> Option<RowAlignment> {
-    if !is_within_size_bounds(old, new, config) {
+    if !is_within_size_bounds(old_view.source, new_view.source, config) {
         return None;
     }
 
-    if old.ncols != new.ncols {
+    if old_view.source.ncols != new_view.source.ncols {
         return None;
     }
 
-    let row_diff = new.nrows as i64 - old.nrows as i64;
+    let row_diff = new_view.source.nrows as i64 - old_view.source.nrows as i64;
     if row_diff == 0 {
         return None;
     }
@@ -366,29 +388,26 @@ fn align_rows_internal(
         return None;
     }
 
-    let view_a = GridView::from_grid_with_config(old, config);
-    let view_b = GridView::from_grid_with_config(new, config);
-
-    if low_info_dominated(&view_a) || low_info_dominated(&view_b) {
+    if low_info_dominated(old_view) || low_info_dominated(new_view) {
         return None;
     }
 
-    let stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
+    let stats = HashStats::from_row_meta(&old_view.row_meta, &new_view.row_meta);
     if has_heavy_repetition(&stats, config) {
         return None;
     }
 
     if row_diff == 1 {
         find_single_gap_alignment(
-            &view_a.row_meta,
-            &view_b.row_meta,
+            &old_view.row_meta,
+            &new_view.row_meta,
             &stats,
             RowChange::Insert,
         )
     } else if row_diff == -1 {
         find_single_gap_alignment(
-            &view_a.row_meta,
-            &view_b.row_meta,
+            &old_view.row_meta,
+            &new_view.row_meta,
             &stats,
             RowChange::Delete,
         )
@@ -396,16 +415,16 @@ fn align_rows_internal(
         None
     } else if row_diff > 0 {
         find_block_gap_alignment(
-            &view_a.row_meta,
-            &view_b.row_meta,
+            &old_view.row_meta,
+            &new_view.row_meta,
             &stats,
             RowChange::Insert,
             abs_diff,
         )
     } else {
         find_block_gap_alignment(
-            &view_a.row_meta,
-            &view_b.row_meta,
+            &old_view.row_meta,
+            &new_view.row_meta,
             &stats,
             RowChange::Delete,
             abs_diff,

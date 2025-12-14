@@ -3,8 +3,9 @@ use std::hash::Hash;
 
 use crate::alignment::row_metadata::classify_row_frequencies;
 use crate::config::DiffConfig;
-use crate::hashing::{hash_col_content_128, hash_row_content_128};
+use crate::hashing::{hash_cell_value, hash_row_content_128};
 use crate::workbook::{Cell, CellValue, Grid, RowSignature};
+use xxhash_rust::xxh3::Xxh3;
 
 pub use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
 
@@ -48,7 +49,6 @@ impl<'a> GridView<'a> {
         let mut row_counts = vec![0u32; nrows];
         let mut row_first_non_blank: Vec<Option<u32>> = vec![None; nrows];
 
-        let mut col_cells: Vec<Vec<&'a Cell>> = vec![Vec::new(); ncols];
         let mut col_counts = vec![0u32; ncols];
         let mut col_first_non_blank: Vec<Option<u32>> = vec![None; ncols];
 
@@ -62,7 +62,6 @@ impl<'a> GridView<'a> {
             );
 
             rows[r].cells.push((*col, cell));
-            col_cells[c].push(cell);
 
             if is_non_blank(cell) {
                 row_counts[r] = row_counts[r].saturating_add(1);
@@ -115,22 +114,28 @@ impl<'a> GridView<'a> {
 
         classify_row_frequencies(&mut row_meta, config);
 
-        let col_meta = col_cells
-            .into_iter()
-            .enumerate()
-            .map(|(idx, mut cells)| {
-                cells.sort_unstable_by_key(|c| c.row);
-                let hash = hash_col_content_128(&cells);
+        let mut col_hashers: Vec<Xxh3> = (0..ncols).map(|_| Xxh3::new()).collect();
 
-                ColMeta {
-                    col_idx: idx as u32,
-                    hash,
-                    non_blank_count: to_u16(col_counts.get(idx).copied().unwrap_or(0)),
-                    first_non_blank_row: col_first_non_blank
-                        .get(idx)
-                        .and_then(|r| r.map(to_u16))
-                        .unwrap_or(0),
+        for row_view in rows.iter() {
+            for (col, cell) in row_view.cells.iter() {
+                let idx = *col as usize;
+                if idx >= col_hashers.len() {
+                    continue;
                 }
+                hash_cell_value(&cell.value, &mut col_hashers[idx]);
+                cell.formula.hash(&mut col_hashers[idx]);
+            }
+        }
+
+        let col_meta: Vec<ColMeta> = (0..ncols)
+            .map(|idx| ColMeta {
+                col_idx: idx as u32,
+                hash: col_hashers[idx].digest128(),
+                non_blank_count: to_u16(col_counts.get(idx).copied().unwrap_or(0)),
+                first_non_blank_row: col_first_non_blank
+                    .get(idx)
+                    .and_then(|r| r.map(to_u16))
+                    .unwrap_or(0),
             })
             .collect();
 

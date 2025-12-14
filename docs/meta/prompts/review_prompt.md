@@ -21,6 +21,24 @@
       2025-12-13_000410.json
       2025-12-13_155200_fullscale.json
       2025-12-13_165236_fullscale.json
+      2025-12-13_174735_fullscale.json
+      2025-12-13_174822_fullscale.json
+      2025-12-13_175318_fullscale.json
+      2025-12-13_202028.json
+      2025-12-13_202327_fullscale.json
+      2025-12-14_003645.json
+      2025-12-14_004611.json
+      2025-12-14_004643_fullscale.json
+      2025-12-14_005407_fullscale.json
+      combined_results.csv
+      plots/
+        commit_comparison.png
+        latest_comparison.png
+        metric_breakdown_fullscale.png
+        metric_breakdown_quick.png
+        speedup_heatmap.png
+        time_trends.png
+        trend_summary.md
   Cargo.lock
   Cargo.toml
   core/
@@ -130,8 +148,10 @@
   related_files.txt.md
   scripts/
     check_perf_thresholds.py
+    combine_results_to_csv.py
     compare_perf_results.py
     export_perf_metrics.py
+    visualize_benchmarks.py
 ```
 
 ## File Contents
@@ -522,6 +542,7 @@ base64 = "0.22"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 xxhash-rust = { version = "0.8", features = ["xxh64", "xxh3"] }
+rustc-hash = "1.1"
 
 [dev-dependencies]
 pretty_assertions = "1.4"
@@ -1030,6 +1051,14 @@ pub fn align_rows_amr_with_signatures(
 ) -> Option<RowAlignmentWithSignatures> {
     let view_a = GridView::from_grid_with_config(old, config);
     let view_b = GridView::from_grid_with_config(new, config);
+    align_rows_amr_with_signatures_from_views(&view_a, &view_b, config)
+}
+
+pub fn align_rows_amr_with_signatures_from_views(
+    view_a: &GridView,
+    view_b: &GridView,
+    config: &DiffConfig,
+) -> Option<RowAlignmentWithSignatures> {
     let alignment = align_rows_from_meta(&view_a.row_meta, &view_b.row_meta, config)?;
     let row_signatures_a: Vec<RowSignature> =
         view_a.row_meta.iter().map(|meta| meta.signature).collect();
@@ -2230,7 +2259,7 @@ pub(crate) mod runs;
 #[allow(unused_imports)]
 pub(crate) use assembly::{
     RowAlignment, RowAlignmentWithSignatures, RowBlockMove, align_rows_amr,
-    align_rows_amr_with_signatures,
+    align_rows_amr_with_signatures, align_rows_amr_with_signatures_from_views,
 };
 
 ```
@@ -2718,12 +2747,9 @@ fn unordered_col_hashes(grid: &Grid) -> Vec<ColHash> {
         let idx = cell.col as usize;
         col_cells[idx].push(cell);
     }
-    for cells in col_cells.iter_mut() {
-        cells.sort_by_key(|c| c.row);
-    }
     col_cells
-        .into_iter()
-        .map(|cells| hash_col_content_unordered_128(&cells))
+        .iter()
+        .map(|cells| hash_col_content_unordered_128(cells))
         .collect()
 }
 
@@ -2887,26 +2913,34 @@ pub(crate) fn detect_exact_column_block_move(
     None
 }
 
+#[allow(dead_code)]
 pub(crate) fn align_single_column_change(
     old: &Grid,
     new: &Grid,
     config: &DiffConfig,
 ) -> Option<ColumnAlignment> {
-    if !is_within_size_bounds(old, new, config) {
+    let view_a = GridView::from_grid_with_config(old, config);
+    let view_b = GridView::from_grid_with_config(new, config);
+    align_single_column_change_from_views(&view_a, &view_b, config)
+}
+
+pub(crate) fn align_single_column_change_from_views(
+    view_a: &GridView,
+    view_b: &GridView,
+    config: &DiffConfig,
+) -> Option<ColumnAlignment> {
+    if !is_within_size_bounds(view_a.source, view_b.source, config) {
         return None;
     }
 
-    if old.nrows != new.nrows {
+    if view_a.source.nrows != view_b.source.nrows {
         return None;
     }
 
-    let col_diff = new.ncols as i64 - old.ncols as i64;
+    let col_diff = view_b.source.ncols as i64 - view_a.source.ncols as i64;
     if col_diff.abs() != 1 {
         return None;
     }
-
-    let view_a = GridView::from_grid_with_config(old, config);
-    let view_b = GridView::from_grid_with_config(new, config);
 
     let stats = HashStats::from_col_meta(&view_a.col_meta, &view_b.col_meta);
     if has_heavy_repetition(&stats, config) {
@@ -3445,6 +3479,12 @@ fn ensure_non_zero_u32(value: u32, field: &'static str) -> Result<(), ConfigErro
 #[derive(Debug, Clone)]
 pub struct DiffConfigBuilder {
     inner: DiffConfig,
+}
+
+impl Default for DiffConfigBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DiffConfigBuilder {
@@ -5499,20 +5539,22 @@ impl DiffOp {
 //! and generating a [`DiffReport`] of all changes.
 
 use crate::alignment::move_extraction::moves_from_matched_pairs;
-use crate::alignment::{RowAlignment as AmrAlignment, align_rows_amr_with_signatures};
+use crate::alignment::{RowAlignment as AmrAlignment, align_rows_amr_with_signatures_from_views};
 use crate::column_alignment::{
-    ColumnAlignment, ColumnBlockMove, align_single_column_change, detect_exact_column_block_move,
+    ColumnAlignment, ColumnBlockMove, align_single_column_change_from_views,
+    detect_exact_column_block_move,
 };
 use crate::config::{DiffConfig, LimitBehavior};
 use crate::database_alignment::{KeyColumnSpec, diff_table_by_key};
 use crate::diff::{DiffError, DiffOp, DiffReport, SheetId};
+use crate::grid_view::GridView;
 #[cfg(feature = "perf-metrics")]
 use crate::perf::{DiffMetrics, Phase};
 use crate::rect_block_move::{RectBlockMove, detect_exact_rect_block_move};
 use crate::region_mask::RegionMask;
 use crate::row_alignment::{
-    RowAlignment as LegacyRowAlignment, RowBlockMove as LegacyRowBlockMove, align_row_changes,
-    detect_exact_row_block_move, detect_fuzzy_row_block_move,
+    RowAlignment as LegacyRowAlignment, RowBlockMove as LegacyRowBlockMove,
+    align_row_changes_from_views, detect_exact_row_block_move, detect_fuzzy_row_block_move,
 };
 use crate::workbook::{
     Cell, CellAddress, CellSnapshot, ColSignature, Grid, RowSignature, Sheet, SheetKind, Workbook,
@@ -5814,6 +5856,9 @@ fn diff_grids_core(
         return;
     }
 
+    let old_view = GridView::from_grid_with_config(old, config);
+    let new_view = GridView::from_grid_with_config(new, config);
+
     let mut old_mask = RegionMask::all_active(old.nrows, old.ncols);
     let mut new_mask = RegionMask::all_active(new.nrows, new.ncols);
     let move_detection_enabled = old.nrows.max(new.nrows) <= config.recursive_align_threshold
@@ -5904,7 +5949,7 @@ fn diff_grids_core(
                     detect_fuzzy_row_block_move_masked(old, new, &old_mask, &new_mask, config)
             {
                 emit_row_block_move(sheet_id, mv, ops);
-                emit_moved_row_block_edits(sheet_id, old, new, mv, ops);
+                emit_moved_row_block_edits(sheet_id, &old_view, &new_view, mv, ops, config);
                 #[cfg(feature = "perf-metrics")]
                 if let Some(m) = metrics.as_mut() {
                     m.moves_detected = m.moves_detected.saturating_add(1);
@@ -5964,7 +6009,9 @@ fn diff_grids_core(
         m.start_phase(Phase::Alignment);
     }
 
-    if let Some(amr_result) = align_rows_amr_with_signatures(old, new, config) {
+    if let Some(amr_result) =
+        align_rows_amr_with_signatures_from_views(&old_view, &new_view, config)
+    {
         let mut alignment = amr_result.alignment;
         let row_signatures_old = amr_result.row_signatures_a;
         let row_signatures_new = amr_result.row_signatures_b;
@@ -6020,7 +6067,8 @@ fn diff_grids_core(
             && alignment.inserted.is_empty()
             && alignment.deleted.is_empty()
             && old.ncols != new.ncols
-            && let Some(col_alignment) = align_single_column_change(old, new, config)
+            && let Some(col_alignment) =
+                align_single_column_change_from_views(&old_view, &new_view, config)
         {
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
@@ -6072,11 +6120,11 @@ fn diff_grids_core(
         if let Some(m) = metrics.as_mut() {
             m.start_phase(Phase::CellDiff);
         }
-        emit_amr_aligned_diffs(sheet_id, old, new, &alignment, ops);
+        let compared =
+            emit_amr_aligned_diffs(sheet_id, &old_view, &new_view, &alignment, ops, config);
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
-            let overlap_cols = old.ncols.min(new.ncols) as u64;
-            m.add_cells_compared((alignment.matched.len() as u64).saturating_mul(overlap_cols));
+            m.add_cells_compared(compared);
             m.anchors_found = m
                 .anchors_found
                 .saturating_add(alignment.matched.len() as u32);
@@ -6084,6 +6132,8 @@ fn diff_grids_core(
                 .moves_detected
                 .saturating_add(alignment.moves.len() as u32);
         }
+        #[cfg(not(feature = "perf-metrics"))]
+        let _ = compared;
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
             m.end_phase(Phase::CellDiff);
@@ -6095,19 +6145,22 @@ fn diff_grids_core(
         return;
     }
 
-    if let Some(alignment) = align_row_changes(old, new, config) {
+    if let Some(alignment) = align_row_changes_from_views(&old_view, &new_view, config) {
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
             m.start_phase(Phase::CellDiff);
         }
-        emit_aligned_diffs(sheet_id, old, new, &alignment, ops);
+        let compared = emit_aligned_diffs(sheet_id, &old_view, &new_view, &alignment, ops, config);
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
-            let overlap_cols = old.ncols.min(new.ncols) as u64;
-            m.add_cells_compared((alignment.matched.len() as u64).saturating_mul(overlap_cols));
+            m.add_cells_compared(compared);
             m.end_phase(Phase::CellDiff);
         }
-    } else if let Some(alignment) = align_single_column_change(old, new, config) {
+        #[cfg(not(feature = "perf-metrics"))]
+        let _ = compared;
+    } else if let Some(alignment) =
+        align_single_column_change_from_views(&old_view, &new_view, config)
+    {
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
             m.start_phase(Phase::CellDiff);
@@ -6517,6 +6570,10 @@ fn detect_exact_row_block_move_masked(
         return None;
     }
 
+    if !old_mask.has_exclusions() && !new_mask.has_exclusions() {
+        return detect_exact_row_block_move(old, new, config);
+    }
+
     let (old_proj, old_rows, _) = build_masked_grid(old, old_mask);
     let (new_proj, new_rows, _) = build_masked_grid(new, new_mask);
 
@@ -6546,6 +6603,10 @@ fn detect_exact_column_block_move_masked(
         return None;
     }
 
+    if !old_mask.has_exclusions() && !new_mask.has_exclusions() {
+        return detect_exact_column_block_move(old, new, config);
+    }
+
     let (old_proj, _, old_cols) = build_masked_grid(old, old_mask);
     let (new_proj, _, new_cols) = build_masked_grid(new, new_mask);
 
@@ -6573,6 +6634,14 @@ fn detect_exact_rect_block_move_masked(
 ) -> Option<RectBlockMove> {
     if !old_mask.has_active_cells() || !new_mask.has_active_cells() {
         return None;
+    }
+
+    if !old_mask.has_exclusions()
+        && !new_mask.has_exclusions()
+        && old.nrows == new.nrows
+        && old.ncols == new.ncols
+    {
+        return detect_exact_rect_block_move(old, new, config);
     }
 
     let aligned_rows = align_indices_by_signature(
@@ -6809,6 +6878,10 @@ fn detect_fuzzy_row_block_move_masked(
 ) -> Option<LegacyRowBlockMove> {
     if !old_mask.has_active_cells() || !new_mask.has_active_cells() {
         return None;
+    }
+
+    if !old_mask.has_exclusions() && !new_mask.has_exclusions() {
+        return detect_fuzzy_row_block_move(old, new, config);
     }
 
     let (old_proj, old_rows, _) = build_masked_grid(old, old_mask);
@@ -7104,36 +7177,61 @@ fn emit_rect_block_move(sheet_id: &SheetId, mv: RectBlockMove, ops: &mut Vec<Dif
 
 fn emit_moved_row_block_edits(
     sheet_id: &SheetId,
-    old: &Grid,
-    new: &Grid,
+    old_view: &GridView,
+    new_view: &GridView,
     mv: LegacyRowBlockMove,
     ops: &mut Vec<DiffOp>,
+    config: &DiffConfig,
 ) {
-    let overlap_cols = old.ncols.min(new.ncols);
+    let overlap_cols = old_view.source.ncols.min(new_view.source.ncols);
     for offset in 0..mv.row_count {
-        diff_row_pair(
+        let old_idx = (mv.src_start_row + offset) as usize;
+        let new_idx = (mv.dst_start_row + offset) as usize;
+        let Some(old_row) = old_view.rows.get(old_idx) else {
+            continue;
+        };
+        let Some(new_row) = new_view.rows.get(new_idx) else {
+            continue;
+        };
+
+        let _ = diff_row_pair_sparse(
             sheet_id,
-            old,
-            new,
-            mv.src_start_row + offset,
             mv.dst_start_row + offset,
             overlap_cols,
+            &old_row.cells,
+            &new_row.cells,
             ops,
+            config,
         );
     }
 }
 
 fn emit_aligned_diffs(
     sheet_id: &SheetId,
-    old: &Grid,
-    new: &Grid,
+    old_view: &GridView,
+    new_view: &GridView,
     alignment: &LegacyRowAlignment,
     ops: &mut Vec<DiffOp>,
-) {
-    let overlap_cols = old.ncols.min(new.ncols);
+    config: &DiffConfig,
+) -> u64 {
+    let overlap_cols = old_view.source.ncols.min(new_view.source.ncols);
+    let mut compared = 0u64;
 
     for (row_a, row_b) in &alignment.matched {
-        diff_row_pair(sheet_id, old, new, *row_a, *row_b, overlap_cols, ops);
+        if let (Some(old_row), Some(new_row)) = (
+            old_view.rows.get(*row_a as usize),
+            new_view.rows.get(*row_b as usize),
+        ) {
+            compared = compared.saturating_add(diff_row_pair_sparse(
+                sheet_id,
+                *row_b,
+                overlap_cols,
+                &old_row.cells,
+                &new_row.cells,
+                ops,
+                config,
+            ));
+        }
     }
 
     for row_idx in &alignment.inserted {
@@ -7143,19 +7241,36 @@ fn emit_aligned_diffs(
     for row_idx in &alignment.deleted {
         ops.push(DiffOp::row_removed(sheet_id.clone(), *row_idx, None));
     }
+
+    compared
 }
 
 fn emit_amr_aligned_diffs(
     sheet_id: &SheetId,
-    old: &Grid,
-    new: &Grid,
+    old_view: &GridView,
+    new_view: &GridView,
     alignment: &AmrAlignment,
     ops: &mut Vec<DiffOp>,
-) {
-    let overlap_cols = old.ncols.min(new.ncols);
+    config: &DiffConfig,
+) -> u64 {
+    let overlap_cols = old_view.source.ncols.min(new_view.source.ncols);
+    let mut compared = 0u64;
 
     for (row_a, row_b) in &alignment.matched {
-        diff_row_pair(sheet_id, old, new, *row_a, *row_b, overlap_cols, ops);
+        if let (Some(old_row), Some(new_row)) = (
+            old_view.rows.get(*row_a as usize),
+            new_view.rows.get(*row_b as usize),
+        ) {
+            compared = compared.saturating_add(diff_row_pair_sparse(
+                sheet_id,
+                *row_b,
+                overlap_cols,
+                &old_row.cells,
+                &new_row.cells,
+                ops,
+                config,
+            ));
+        }
     }
 
     for row_idx in &alignment.inserted {
@@ -7176,15 +7291,71 @@ fn emit_amr_aligned_diffs(
         });
     }
 
-    if new.ncols > old.ncols {
-        for col_idx in old.ncols..new.ncols {
+    if new_view.source.ncols > old_view.source.ncols {
+        for col_idx in old_view.source.ncols..new_view.source.ncols {
             ops.push(DiffOp::column_added(sheet_id.clone(), col_idx, None));
         }
-    } else if old.ncols > new.ncols {
-        for col_idx in new.ncols..old.ncols {
+    } else if old_view.source.ncols > new_view.source.ncols {
+        for col_idx in new_view.source.ncols..old_view.source.ncols {
             ops.push(DiffOp::column_removed(sheet_id.clone(), col_idx, None));
         }
     }
+
+    compared
+}
+
+fn diff_row_pair_sparse(
+    sheet_id: &SheetId,
+    row_b: u32,
+    overlap_cols: u32,
+    old_cells: &[(u32, &Cell)],
+    new_cells: &[(u32, &Cell)],
+    ops: &mut Vec<DiffOp>,
+    config: &DiffConfig,
+) -> u64 {
+    let mut i = 0usize;
+    let mut j = 0usize;
+    let mut compared = 0u64;
+
+    while i < old_cells.len() || j < new_cells.len() {
+        let col_a = old_cells.get(i).map(|(c, _)| *c).unwrap_or(u32::MAX);
+        let col_b = new_cells.get(j).map(|(c, _)| *c).unwrap_or(u32::MAX);
+        let col = col_a.min(col_b);
+
+        if col >= overlap_cols {
+            break;
+        }
+
+        compared = compared.saturating_add(1);
+
+        let old_cell = if col_a == col {
+            let (_, cell) = old_cells[i];
+            i += 1;
+            Some(cell)
+        } else {
+            None
+        };
+
+        let new_cell = if col_b == col {
+            let (_, cell) = new_cells[j];
+            j += 1;
+            Some(cell)
+        } else {
+            None
+        };
+
+        let changed = !cells_content_equal(old_cell, new_cell);
+
+        if changed || config.include_unchanged_cells {
+            let addr = CellAddress::from_indices(row_b, col);
+            let from = snapshot_with_addr(old_cell, addr);
+            let to = snapshot_with_addr(new_cell, addr);
+
+            ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
+        }
+    }
+
+    compared
 }
 
 fn diff_row_pair(
@@ -7263,6 +7434,16 @@ mod tests {
     use super::*;
     use crate::workbook::CellValue;
 
+    fn numbered_cell(row: u32, col: u32, value: f64) -> Cell {
+        Cell {
+            row,
+            col,
+            address: CellAddress::from_indices(row, col),
+            value: Some(CellValue::Number(value)),
+            formula: None,
+        }
+    }
+
     #[test]
     fn sheet_kind_order_ranking_includes_macro_and_other() {
         assert!(
@@ -7313,6 +7494,62 @@ mod tests {
         grid_a.insert(blank);
 
         assert!(!grids_non_blank_cells_equal(&grid_a, &grid_b));
+    }
+
+    #[test]
+    fn diff_row_pair_sparse_counts_union_columns_not_sum_lengths() {
+        let sheet_id: SheetId = "Sheet1".to_string();
+        let config = DiffConfig::default();
+        let mut ops = Vec::new();
+
+        let old_cells_storage = [
+            numbered_cell(0, 0, 1.0),
+            numbered_cell(0, 1, 2.0),
+            numbered_cell(0, 2, 3.0),
+        ];
+        let new_cells_storage = [
+            numbered_cell(0, 0, 1.0),
+            numbered_cell(0, 1, 2.0),
+            numbered_cell(0, 2, 4.0),
+        ];
+
+        let old_cells: Vec<(u32, &Cell)> = old_cells_storage
+            .iter()
+            .map(|cell| (cell.col, cell))
+            .collect();
+        let new_cells: Vec<(u32, &Cell)> = new_cells_storage
+            .iter()
+            .map(|cell| (cell.col, cell))
+            .collect();
+
+        let compared =
+            diff_row_pair_sparse(&sheet_id, 0, 3, &old_cells, &new_cells, &mut ops, &config);
+
+        assert_eq!(compared, 3);
+    }
+
+    #[test]
+    fn diff_row_pair_sparse_counts_union_for_sparse_columns() {
+        let sheet_id: SheetId = "Sheet1".to_string();
+        let config = DiffConfig::default();
+        let mut ops = Vec::new();
+
+        let old_cells_storage = [numbered_cell(0, 0, 1.0)];
+        let new_cells_storage = [numbered_cell(0, 2, 2.0)];
+
+        let old_cells: Vec<(u32, &Cell)> = old_cells_storage
+            .iter()
+            .map(|cell| (cell.col, cell))
+            .collect();
+        let new_cells: Vec<(u32, &Cell)> = new_cells_storage
+            .iter()
+            .map(|cell| (cell.col, cell))
+            .collect();
+
+        let compared =
+            diff_row_pair_sparse(&sheet_id, 0, 3, &old_cells, &new_cells, &mut ops, &config);
+
+        assert_eq!(compared, 2);
     }
 }
 
@@ -7926,8 +8163,9 @@ use std::hash::Hash;
 
 use crate::alignment::row_metadata::classify_row_frequencies;
 use crate::config::DiffConfig;
-use crate::hashing::{hash_col_content_128, hash_row_content_128};
+use crate::hashing::{hash_cell_value, hash_row_content_128};
 use crate::workbook::{Cell, CellValue, Grid, RowSignature};
+use xxhash_rust::xxh3::Xxh3;
 
 pub use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
 
@@ -7971,7 +8209,6 @@ impl<'a> GridView<'a> {
         let mut row_counts = vec![0u32; nrows];
         let mut row_first_non_blank: Vec<Option<u32>> = vec![None; nrows];
 
-        let mut col_cells: Vec<Vec<&'a Cell>> = vec![Vec::new(); ncols];
         let mut col_counts = vec![0u32; ncols];
         let mut col_first_non_blank: Vec<Option<u32>> = vec![None; ncols];
 
@@ -7985,7 +8222,6 @@ impl<'a> GridView<'a> {
             );
 
             rows[r].cells.push((*col, cell));
-            col_cells[c].push(cell);
 
             if is_non_blank(cell) {
                 row_counts[r] = row_counts[r].saturating_add(1);
@@ -8038,22 +8274,28 @@ impl<'a> GridView<'a> {
 
         classify_row_frequencies(&mut row_meta, config);
 
-        let col_meta = col_cells
-            .into_iter()
-            .enumerate()
-            .map(|(idx, mut cells)| {
-                cells.sort_unstable_by_key(|c| c.row);
-                let hash = hash_col_content_128(&cells);
+        let mut col_hashers: Vec<Xxh3> = (0..ncols).map(|_| Xxh3::new()).collect();
 
-                ColMeta {
-                    col_idx: idx as u32,
-                    hash,
-                    non_blank_count: to_u16(col_counts.get(idx).copied().unwrap_or(0)),
-                    first_non_blank_row: col_first_non_blank
-                        .get(idx)
-                        .and_then(|r| r.map(to_u16))
-                        .unwrap_or(0),
+        for row_view in rows.iter() {
+            for (col, cell) in row_view.cells.iter() {
+                let idx = *col as usize;
+                if idx >= col_hashers.len() {
+                    continue;
                 }
+                hash_cell_value(&cell.value, &mut col_hashers[idx]);
+                cell.formula.hash(&mut col_hashers[idx]);
+            }
+        }
+
+        let col_meta: Vec<ColMeta> = (0..ncols)
+            .map(|idx| ColMeta {
+                col_idx: idx as u32,
+                hash: col_hashers[idx].digest128(),
+                non_blank_count: to_u16(col_counts.get(idx).copied().unwrap_or(0)),
+                first_non_blank_row: col_first_non_blank
+                    .get(idx)
+                    .and_then(|r| r.map(to_u16))
+                    .unwrap_or(0),
             })
             .collect();
 
@@ -9529,6 +9771,20 @@ pub(crate) fn detect_exact_rect_block_move(
         return None;
     }
 
+    let shared_rows = row_stats
+        .freq_a
+        .keys()
+        .filter(|h| row_stats.freq_b.contains_key(*h))
+        .count();
+    let shared_cols = col_stats
+        .freq_a
+        .keys()
+        .filter(|h| col_stats.freq_b.contains_key(*h))
+        .count();
+    if shared_rows == 0 && shared_cols == 0 {
+        return None;
+    }
+
     let diff_positions = collect_differences(old, new);
     if diff_positions.is_empty() {
         return None;
@@ -10766,42 +11022,64 @@ pub(crate) fn detect_fuzzy_row_block_move(
     candidate
 }
 
+#[allow(dead_code)]
 pub(crate) fn align_row_changes(
     old: &Grid,
     new: &Grid,
     config: &DiffConfig,
 ) -> Option<RowAlignment> {
-    let row_diff = new.nrows as i64 - old.nrows as i64;
-    if row_diff.abs() == 1 {
-        return align_single_row_change(old, new, config);
-    }
-
-    align_rows_internal(old, new, true, config)
+    let view_a = GridView::from_grid_with_config(old, config);
+    let view_b = GridView::from_grid_with_config(new, config);
+    align_row_changes_from_views(&view_a, &view_b, config)
 }
 
+pub(crate) fn align_row_changes_from_views(
+    old_view: &GridView,
+    new_view: &GridView,
+    config: &DiffConfig,
+) -> Option<RowAlignment> {
+    let row_diff = new_view.source.nrows as i64 - old_view.source.nrows as i64;
+    if row_diff.abs() == 1 {
+        return align_single_row_change_from_views(old_view, new_view, config);
+    }
+
+    align_rows_internal(old_view, new_view, true, config)
+}
+
+#[allow(dead_code)]
 pub(crate) fn align_single_row_change(
     old: &Grid,
     new: &Grid,
     config: &DiffConfig,
 ) -> Option<RowAlignment> {
-    align_rows_internal(old, new, false, config)
+    let view_a = GridView::from_grid_with_config(old, config);
+    let view_b = GridView::from_grid_with_config(new, config);
+    align_single_row_change_from_views(&view_a, &view_b, config)
+}
+
+pub(crate) fn align_single_row_change_from_views(
+    old_view: &GridView,
+    new_view: &GridView,
+    config: &DiffConfig,
+) -> Option<RowAlignment> {
+    align_rows_internal(old_view, new_view, false, config)
 }
 
 fn align_rows_internal(
-    old: &Grid,
-    new: &Grid,
+    old_view: &GridView,
+    new_view: &GridView,
     allow_blocks: bool,
     config: &DiffConfig,
 ) -> Option<RowAlignment> {
-    if !is_within_size_bounds(old, new, config) {
+    if !is_within_size_bounds(old_view.source, new_view.source, config) {
         return None;
     }
 
-    if old.ncols != new.ncols {
+    if old_view.source.ncols != new_view.source.ncols {
         return None;
     }
 
-    let row_diff = new.nrows as i64 - old.nrows as i64;
+    let row_diff = new_view.source.nrows as i64 - old_view.source.nrows as i64;
     if row_diff == 0 {
         return None;
     }
@@ -10816,29 +11094,26 @@ fn align_rows_internal(
         return None;
     }
 
-    let view_a = GridView::from_grid_with_config(old, config);
-    let view_b = GridView::from_grid_with_config(new, config);
-
-    if low_info_dominated(&view_a) || low_info_dominated(&view_b) {
+    if low_info_dominated(old_view) || low_info_dominated(new_view) {
         return None;
     }
 
-    let stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
+    let stats = HashStats::from_row_meta(&old_view.row_meta, &new_view.row_meta);
     if has_heavy_repetition(&stats, config) {
         return None;
     }
 
     if row_diff == 1 {
         find_single_gap_alignment(
-            &view_a.row_meta,
-            &view_b.row_meta,
+            &old_view.row_meta,
+            &new_view.row_meta,
             &stats,
             RowChange::Insert,
         )
     } else if row_diff == -1 {
         find_single_gap_alignment(
-            &view_a.row_meta,
-            &view_b.row_meta,
+            &old_view.row_meta,
+            &new_view.row_meta,
             &stats,
             RowChange::Delete,
         )
@@ -10846,16 +11121,16 @@ fn align_rows_internal(
         None
     } else if row_diff > 0 {
         find_block_gap_alignment(
-            &view_a.row_meta,
-            &view_b.row_meta,
+            &old_view.row_meta,
+            &new_view.row_meta,
             &stats,
             RowChange::Insert,
             abs_diff,
         )
     } else {
         find_block_gap_alignment(
-            &view_a.row_meta,
-            &view_b.row_meta,
+            &old_view.row_meta,
+            &new_view.row_meta,
             &stats,
             RowChange::Delete,
             abs_diff,
@@ -11773,9 +12048,9 @@ mod tests {
 
 use crate::addressing::{AddressParseError, address_to_index, index_to_address};
 use crate::hashing::normalize_float_for_hash;
+use rustc_hash::FxHashMap;
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
@@ -11846,7 +12121,7 @@ pub struct Grid {
     /// Number of columns in the grid's bounding rectangle.
     pub ncols: u32,
     /// Sparse storage of non-empty cells, keyed by (row, col).
-    pub cells: HashMap<(u32, u32), Cell>,
+    pub cells: FxHashMap<(u32, u32), Cell>,
     /// Optional precomputed row signatures for alignment.
     pub row_signatures: Option<Vec<RowSignature>>,
     /// Optional precomputed column signatures for alignment.
@@ -12063,7 +12338,7 @@ impl Grid {
         Grid {
             nrows,
             ncols,
-            cells: HashMap::new(),
+            cells: FxHashMap::default(),
             row_signatures: None,
             col_signatures: None,
         }
@@ -12178,45 +12453,53 @@ impl Grid {
     }
 
     pub fn compute_all_signatures(&mut self) {
-        use crate::hashing::{hash_col_content_128, hash_row_content_128};
+        use crate::hashing::{hash_cell_value, hash_row_content_128};
+        use xxhash_rust::xxh3::Xxh3;
 
         let mut row_cells: Vec<Vec<(u32, &Cell)>> = vec![Vec::new(); self.nrows as usize];
-        let mut col_cells: Vec<Vec<&Cell>> = vec![Vec::new(); self.ncols as usize];
 
         for cell in self.cells.values() {
             let row_idx = cell.row as usize;
-            let col_idx = cell.col as usize;
-
             debug_assert!(
-                row_idx < row_cells.len() && col_idx < col_cells.len(),
+                row_idx < row_cells.len() && cell.col < self.ncols,
                 "cell coordinates must lie within the grid bounds"
             );
 
             row_cells[row_idx].push((cell.col, cell));
-            col_cells[col_idx].push(cell);
         }
 
-        self.row_signatures = Some(
-            row_cells
-                .into_iter()
-                .map(|mut cells| {
-                    cells.sort_unstable_by_key(|(col, _)| *col);
-                    let hash = hash_row_content_128(&cells);
-                    RowSignature { hash }
-                })
-                .collect(),
-        );
+        for row in row_cells.iter_mut() {
+            row.sort_by_key(|(col, _)| *col);
+        }
 
-        self.col_signatures = Some(
-            col_cells
-                .into_iter()
-                .map(|mut cells| {
-                    cells.sort_unstable_by_key(|c| c.row);
-                    let hash = hash_col_content_128(&cells);
-                    ColSignature { hash }
-                })
-                .collect(),
-        );
+        let row_signatures: Vec<RowSignature> = row_cells
+            .iter()
+            .map(|row| RowSignature {
+                hash: hash_row_content_128(row),
+            })
+            .collect();
+
+        let mut col_hashers: Vec<Xxh3> = (0..self.ncols).map(|_| Xxh3::new()).collect();
+        for row in row_cells.iter() {
+            for (col, cell) in row.iter() {
+                let idx = *col as usize;
+                if idx >= col_hashers.len() {
+                    continue;
+                }
+                hash_cell_value(&cell.value, &mut col_hashers[idx]);
+                cell.formula.hash(&mut col_hashers[idx]);
+            }
+        }
+
+        let col_signatures: Vec<ColSignature> = col_hashers
+            .into_iter()
+            .map(|hasher| ColSignature {
+                hash: hasher.digest128(),
+            })
+            .collect();
+
+        self.row_signatures = Some(row_signatures);
+        self.col_signatures = Some(col_signatures);
     }
 }
 
@@ -14096,8 +14379,10 @@ fn move_detection_respects_column_gate() {
         "default gate should skip block move detection on wide sheets"
     );
 
-    let mut wide_gate = excel_diff::DiffConfig::default();
-    wide_gate.max_move_detection_cols = 512;
+    let wide_gate = excel_diff::DiffConfig {
+        max_move_detection_cols: 512,
+        ..excel_diff::DiffConfig::default()
+    };
     let wide_report = diff_workbooks(&wb_a, &wb_b, &wide_gate);
     assert!(
         !wide_report.ops.is_empty(),
@@ -14943,8 +15228,10 @@ fn g13_fuzzy_row_move_can_be_disabled() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let mut disabled = excel_diff::DiffConfig::default();
-    disabled.enable_fuzzy_moves = false;
+    let disabled = excel_diff::DiffConfig {
+        enable_fuzzy_moves: false,
+        ..excel_diff::DiffConfig::default()
+    };
     let report_disabled = diff_workbooks(&wb_a, &wb_b, &disabled);
     let disabled_moves = report_disabled
         .ops
@@ -19017,8 +19304,10 @@ fn semantic_gate_can_be_disabled() {
     let dm_a = load_datamashup("m_formatting_only_a.xlsx");
     let dm_b = load_datamashup("m_formatting_only_b.xlsx");
 
-    let mut config = excel_diff::DiffConfig::default();
-    config.enable_m_semantic_diff = false;
+    let config = excel_diff::DiffConfig {
+        enable_m_semantic_diff: false,
+        ..excel_diff::DiffConfig::default()
+    };
 
     let diffs = diff_m_queries(&dm_a, &dm_b, &config).expect("diff should succeed");
 
@@ -26422,11 +26711,11 @@ from pathlib import Path
 PERF_TEST_TIMEOUT_SECONDS = 120
 
 THRESHOLDS = {
-    "perf_p1_large_dense": {"max_time_s": 30},
-    "perf_p2_large_noise": {"max_time_s": 30},
-    "perf_p3_adversarial_repetitive": {"max_time_s": 60},
-    "perf_p4_99_percent_blank": {"max_time_s": 15},
-    "perf_p5_identical": {"max_time_s": 10},
+    "perf_p1_large_dense": {"max_time_s": 5},
+    "perf_p2_large_noise": {"max_time_s": 10},
+    "perf_p3_adversarial_repetitive": {"max_time_s": 15},
+    "perf_p4_99_percent_blank": {"max_time_s": 2},
+    "perf_p5_identical": {"max_time_s": 1},
 }
 
 ENV_VAR_MAP = {
@@ -26596,6 +26885,171 @@ def run_perf_tests():
 
 if __name__ == "__main__":
     sys.exit(run_perf_tests())
+
+```
+
+---
+
+### File: `scripts\combine_results_to_csv.py`
+
+```python
+#!/usr/bin/env python3
+"""
+Combine benchmark JSON results into a single CSV for comparison over time.
+
+Usage:
+    python scripts/combine_results_to_csv.py [--output FILE] [--results-dir DIR]
+
+Options:
+    --output      Output CSV file path (default: benchmarks/results/combined_results.csv)
+    --results-dir Directory containing JSON results (default: benchmarks/results)
+"""
+
+import argparse
+import csv
+import json
+import sys
+from pathlib import Path
+
+
+ALL_TEST_FIELDS = [
+    "total_time_ms",
+    "move_detection_time_ms",
+    "alignment_time_ms",
+    "cell_diff_time_ms",
+    "rows_processed",
+    "cells_compared",
+    "anchors_found",
+    "moves_detected",
+]
+
+
+def load_json_results(results_dir: Path) -> list[dict]:
+    """Load all JSON result files from the results directory."""
+    results = []
+    for json_file in sorted(results_dir.glob("*.json")):
+        try:
+            with open(json_file) as f:
+                data = json.load(f)
+                data["_source_file"] = json_file.name
+                results.append(data)
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"Warning: Could not load {json_file}: {e}", file=sys.stderr)
+    return results
+
+
+def flatten_results(results: list[dict]) -> list[dict]:
+    """Flatten nested test results into individual rows."""
+    rows = []
+    for result in results:
+        timestamp = result.get("timestamp", "")
+        git_commit = result.get("git_commit", "")
+        git_branch = result.get("git_branch", "")
+        full_scale = result.get("full_scale", False)
+        source_file = result.get("_source_file", "")
+
+        tests = result.get("tests", {})
+        for test_name, test_data in tests.items():
+            row = {
+                "source_file": source_file,
+                "timestamp": timestamp,
+                "git_commit": git_commit,
+                "git_branch": git_branch,
+                "full_scale": full_scale,
+                "test_name": test_name,
+            }
+            for field in ALL_TEST_FIELDS:
+                row[field] = test_data.get(field, "")
+            rows.append(row)
+
+        summary = result.get("summary", {})
+        if summary:
+            row = {
+                "source_file": source_file,
+                "timestamp": timestamp,
+                "git_commit": git_commit,
+                "git_branch": git_branch,
+                "full_scale": full_scale,
+                "test_name": "_SUMMARY_",
+                "total_time_ms": summary.get("total_time_ms", ""),
+                "rows_processed": summary.get("total_rows_processed", ""),
+                "cells_compared": summary.get("total_cells_compared", ""),
+            }
+            for field in ALL_TEST_FIELDS:
+                if field not in row:
+                    row[field] = ""
+            rows.append(row)
+
+    return rows
+
+
+def write_csv(rows: list[dict], output_path: Path):
+    """Write flattened results to CSV."""
+    if not rows:
+        print("No data to write.", file=sys.stderr)
+        return
+
+    fieldnames = [
+        "source_file",
+        "timestamp",
+        "git_commit",
+        "git_branch",
+        "full_scale",
+        "test_name",
+    ] + ALL_TEST_FIELDS
+
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Combine benchmark JSON results into a single CSV"
+    )
+    parser.add_argument(
+        "--results-dir",
+        type=Path,
+        default=Path(__file__).parent.parent / "benchmarks" / "results",
+        help="Directory containing JSON results",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Output CSV file path",
+    )
+    args = parser.parse_args()
+
+    if args.output is None:
+        args.output = args.results_dir / "combined_results.csv"
+
+    if not args.results_dir.exists():
+        print(f"ERROR: Results directory not found: {args.results_dir}", file=sys.stderr)
+        return 1
+
+    print(f"Loading results from: {args.results_dir}")
+    results = load_json_results(args.results_dir)
+
+    if not results:
+        print("ERROR: No JSON result files found.", file=sys.stderr)
+        return 1
+
+    print(f"Found {len(results)} result files")
+
+    rows = flatten_results(results)
+    print(f"Generated {len(rows)} rows")
+
+    write_csv(rows, args.output)
+    print(f"CSV written to: {args.output}")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+
 
 ```
 
@@ -26996,6 +27450,450 @@ def main():
         print("\nWARNING: Some tests may have failed")
         return 1
 
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+
+
+```
+
+---
+
+### File: `scripts\visualize_benchmarks.py`
+
+```python
+#!/usr/bin/env python3
+"""
+Visualize benchmark trends from combined_results.csv.
+
+Usage:
+    python scripts/visualize_benchmarks.py [--input FILE] [--output-dir DIR] [--show]
+
+Options:
+    --input       Input CSV file (default: benchmarks/results/combined_results.csv)
+    --output-dir  Directory to save plots (default: benchmarks/results/plots)
+    --show        Display plots interactively instead of saving
+"""
+
+import argparse
+import sys
+from datetime import datetime
+from pathlib import Path
+
+try:
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+    import pandas as pd
+except ImportError as e:
+    print(f"Missing required dependency: {e}")
+    print("Install with: pip install matplotlib pandas")
+    sys.exit(1)
+
+
+COLORS = [
+    "#2ecc71", "#3498db", "#9b59b6", "#e74c3c", "#f39c12",
+    "#1abc9c", "#e67e22", "#34495e", "#16a085", "#c0392b",
+]
+
+
+def load_data(csv_path: Path) -> pd.DataFrame:
+    df = pd.read_csv(csv_path)
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df = df[df["test_name"] != "_SUMMARY_"]
+    df = df.sort_values("timestamp")
+    return df
+
+
+def plot_time_trends(df: pd.DataFrame, output_dir: Path, show: bool = False):
+    fig, ax = plt.subplots(figsize=(14, 8))
+
+    quick_df = df[df["full_scale"] == False]
+    full_df = df[df["full_scale"] == True]
+
+    for i, (scale_df, scale_name) in enumerate([(quick_df, "Quick"), (full_df, "Full-Scale")]):
+        if scale_df.empty:
+            continue
+
+        test_names = scale_df["test_name"].unique()
+        for j, test_name in enumerate(test_names):
+            test_data = scale_df[scale_df["test_name"] == test_name]
+            color = COLORS[j % len(COLORS)]
+            linestyle = "-" if scale_name == "Quick" else "--"
+            marker = "o" if scale_name == "Quick" else "s"
+            label = f"{test_name} ({scale_name})"
+            ax.plot(
+                test_data["timestamp"],
+                test_data["total_time_ms"],
+                marker=marker,
+                linestyle=linestyle,
+                color=color,
+                label=label,
+                markersize=6,
+                linewidth=2,
+                alpha=0.8,
+            )
+
+    ax.set_xlabel("Timestamp", fontsize=12)
+    ax.set_ylabel("Total Time (ms)", fontsize=12)
+    ax.set_title("Benchmark Performance Over Time", fontsize=14, fontweight="bold")
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%m/%d %H:%M"))
+    ax.tick_params(axis="x", rotation=45)
+    ax.legend(bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=9)
+    ax.grid(True, alpha=0.3)
+    ax.set_yscale("log")
+    fig.tight_layout()
+
+    if show:
+        plt.show()
+    else:
+        fig.savefig(output_dir / "time_trends.png", dpi=150, bbox_inches="tight")
+        print(f"Saved: {output_dir / 'time_trends.png'}")
+    plt.close(fig)
+
+
+def plot_speedup_heatmap(df: pd.DataFrame, output_dir: Path, show: bool = False):
+    quick_df = df[df["full_scale"] == False].copy()
+    if quick_df.empty:
+        print("No quick-scale data for speedup heatmap")
+        return
+
+    runs = quick_df.groupby("source_file")["timestamp"].first().sort_values()
+    if len(runs) < 2:
+        print("Need at least 2 runs for speedup comparison")
+        return
+
+    pivot = quick_df.pivot_table(
+        index="test_name",
+        columns="source_file",
+        values="total_time_ms",
+        aggfunc="first",
+    )
+    pivot = pivot[runs.index]
+
+    speedup = pd.DataFrame(index=pivot.index)
+    run_files = list(pivot.columns)
+    for i in range(1, len(run_files)):
+        prev_run = run_files[i - 1]
+        curr_run = run_files[i]
+        col_name = f"{curr_run[:10]}"
+        speedup[col_name] = ((pivot[prev_run] - pivot[curr_run]) / pivot[prev_run] * 100).round(1)
+
+    if speedup.empty or speedup.shape[1] == 0:
+        print("Not enough data for speedup heatmap")
+        return
+
+    fig, ax = plt.subplots(figsize=(max(10, len(speedup.columns) * 1.5), max(6, len(speedup) * 0.6)))
+
+    im = ax.imshow(speedup.values, cmap="RdYlGn", aspect="auto", vmin=-50, vmax=50)
+
+    ax.set_xticks(range(len(speedup.columns)))
+    ax.set_xticklabels(speedup.columns, rotation=45, ha="right", fontsize=9)
+    ax.set_yticks(range(len(speedup.index)))
+    ax.set_yticklabels(speedup.index, fontsize=9)
+
+    for i in range(len(speedup.index)):
+        for j in range(len(speedup.columns)):
+            val = speedup.iloc[i, j]
+            if pd.notna(val):
+                color = "white" if abs(val) > 25 else "black"
+                text = f"{val:+.0f}%" if val != 0 else "0%"
+                ax.text(j, i, text, ha="center", va="center", color=color, fontsize=8)
+
+    cbar = fig.colorbar(im, ax=ax, shrink=0.8)
+    cbar.set_label("Speedup % (positive = faster)", fontsize=10)
+
+    ax.set_title("Performance Change Between Runs (Quick Tests)", fontsize=14, fontweight="bold")
+    ax.set_xlabel("Run", fontsize=12)
+    ax.set_ylabel("Test", fontsize=12)
+    fig.tight_layout()
+
+    if show:
+        plt.show()
+    else:
+        fig.savefig(output_dir / "speedup_heatmap.png", dpi=150, bbox_inches="tight")
+        print(f"Saved: {output_dir / 'speedup_heatmap.png'}")
+    plt.close(fig)
+
+
+def plot_latest_comparison(df: pd.DataFrame, output_dir: Path, show: bool = False):
+    latest_runs = df.groupby("full_scale")["source_file"].apply(lambda x: x.iloc[-1] if len(x) > 0 else None)
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+    for idx, (full_scale, ax) in enumerate(zip([False, True], axes)):
+        if full_scale not in latest_runs.index or latest_runs[full_scale] is None:
+            ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
+            ax.set_title(f"{'Full-Scale' if full_scale else 'Quick'} Tests - No Data")
+            continue
+
+        latest_file = latest_runs[full_scale]
+        latest_data = df[(df["source_file"] == latest_file) & (df["full_scale"] == full_scale)]
+
+        if latest_data.empty:
+            continue
+
+        tests = latest_data["test_name"].values
+        times = latest_data["total_time_ms"].values
+
+        colors = [COLORS[i % len(COLORS)] for i in range(len(tests))]
+        bars = ax.barh(tests, times, color=colors, alpha=0.8)
+
+        for bar, time in zip(bars, times):
+            ax.text(
+                bar.get_width() + max(times) * 0.01,
+                bar.get_y() + bar.get_height() / 2,
+                f"{time:,.0f}ms",
+                va="center",
+                fontsize=9,
+            )
+
+        scale_name = "Full-Scale (50K rows)" if full_scale else "Quick (1-2K rows)"
+        timestamp = latest_data["timestamp"].iloc[0].strftime("%Y-%m-%d %H:%M")
+        ax.set_title(f"{scale_name}\n{latest_file} ({timestamp})", fontsize=11, fontweight="bold")
+        ax.set_xlabel("Time (ms)", fontsize=10)
+        ax.set_xlim(0, max(times) * 1.15)
+        ax.grid(True, axis="x", alpha=0.3)
+
+    fig.suptitle("Latest Benchmark Results", fontsize=14, fontweight="bold", y=1.02)
+    fig.tight_layout()
+
+    if show:
+        plt.show()
+    else:
+        fig.savefig(output_dir / "latest_comparison.png", dpi=150, bbox_inches="tight")
+        print(f"Saved: {output_dir / 'latest_comparison.png'}")
+    plt.close(fig)
+
+
+def plot_metric_breakdown(df: pd.DataFrame, output_dir: Path, show: bool = False):
+    metrics = ["move_detection_time_ms", "alignment_time_ms", "cell_diff_time_ms"]
+    available_metrics = [m for m in metrics if m in df.columns and df[m].notna().any()]
+
+    if not available_metrics:
+        print("No detailed timing metrics available for breakdown chart")
+        return
+
+    latest_quick = df[df["full_scale"] == False].groupby("test_name").last().reset_index()
+    latest_full = df[df["full_scale"] == True].groupby("test_name").last().reset_index()
+
+    for scale_name, scale_df in [("Quick", latest_quick), ("Full-Scale", latest_full)]:
+        if scale_df.empty:
+            continue
+
+        scale_df = scale_df[scale_df[available_metrics].notna().any(axis=1)]
+        if scale_df.empty:
+            continue
+
+        fig, ax = plt.subplots(figsize=(12, 6))
+
+        tests = scale_df["test_name"].values
+        x = range(len(tests))
+        width = 0.25
+
+        metric_labels = {
+            "move_detection_time_ms": "Move Detection",
+            "alignment_time_ms": "Alignment",
+            "cell_diff_time_ms": "Cell Diff",
+        }
+
+        for i, metric in enumerate(available_metrics):
+            values = scale_df[metric].fillna(0).values
+            offset = (i - len(available_metrics) / 2 + 0.5) * width
+            bars = ax.bar([xi + offset for xi in x], values, width, label=metric_labels.get(metric, metric), color=COLORS[i], alpha=0.8)
+
+        ax.set_xlabel("Test", fontsize=12)
+        ax.set_ylabel("Time (ms)", fontsize=12)
+        ax.set_title(f"Timing Breakdown by Phase ({scale_name} Tests)", fontsize=14, fontweight="bold")
+        ax.set_xticks(x)
+        ax.set_xticklabels(tests, rotation=45, ha="right", fontsize=9)
+        ax.legend()
+        ax.grid(True, axis="y", alpha=0.3)
+        fig.tight_layout()
+
+        suffix = "quick" if scale_name == "Quick" else "fullscale"
+        if show:
+            plt.show()
+        else:
+            fig.savefig(output_dir / f"metric_breakdown_{suffix}.png", dpi=150, bbox_inches="tight")
+            print(f"Saved: {output_dir / f'metric_breakdown_{suffix}.png'}")
+        plt.close(fig)
+
+
+def plot_commit_comparison(df: pd.DataFrame, output_dir: Path, show: bool = False):
+    quick_df = df[df["full_scale"] == False].copy()
+    if quick_df.empty:
+        print("No quick-scale data for commit comparison")
+        return
+
+    commit_totals = quick_df.groupby(["git_commit", "source_file"])["total_time_ms"].sum().reset_index()
+    commit_totals = commit_totals.sort_values("source_file")
+
+    if len(commit_totals) < 2:
+        print("Need at least 2 commits for comparison")
+        return
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    commits = commit_totals["git_commit"].values
+    totals = commit_totals["total_time_ms"].values
+    files = commit_totals["source_file"].values
+
+    colors = [COLORS[i % len(COLORS)] for i in range(len(commits))]
+    bars = ax.bar(range(len(commits)), totals, color=colors, alpha=0.8)
+
+    for i, (bar, total, commit, fname) in enumerate(zip(bars, totals, commits, files)):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + max(totals) * 0.01,
+            f"{total:,.0f}ms",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
+
+    ax.set_xlabel("Commit", fontsize=12)
+    ax.set_ylabel("Total Time (ms)", fontsize=12)
+    ax.set_title("Total Test Suite Time by Commit (Quick Tests)", fontsize=14, fontweight="bold")
+    ax.set_xticks(range(len(commits)))
+    labels = [f"{c[:8]}\n{f[:10]}" for c, f in zip(commits, files)]
+    ax.set_xticklabels(labels, rotation=0, fontsize=8)
+    ax.grid(True, axis="y", alpha=0.3)
+
+    if len(totals) >= 2:
+        first_total = totals[0]
+        last_total = totals[-1]
+        overall_change = ((last_total - first_total) / first_total) * 100
+        direction = "faster" if overall_change < 0 else "slower"
+        ax.text(
+            0.98, 0.98,
+            f"Overall: {abs(overall_change):.1f}% {direction}",
+            transform=ax.transAxes,
+            ha="right", va="top",
+            fontsize=11,
+            fontweight="bold",
+            color="green" if overall_change < 0 else "red",
+            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+        )
+
+    fig.tight_layout()
+
+    if show:
+        plt.show()
+    else:
+        fig.savefig(output_dir / "commit_comparison.png", dpi=150, bbox_inches="tight")
+        print(f"Saved: {output_dir / 'commit_comparison.png'}")
+    plt.close(fig)
+
+
+def generate_summary_report(df: pd.DataFrame, output_dir: Path):
+    lines = [
+        "# Benchmark Trend Summary",
+        "",
+        f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+        "## Overview",
+        "",
+        f"- Total benchmark runs: {df['source_file'].nunique()}",
+        f"- Quick-scale runs: {df[df['full_scale'] == False]['source_file'].nunique()}",
+        f"- Full-scale runs: {df[df['full_scale'] == True]['source_file'].nunique()}",
+        f"- Unique tests: {df['test_name'].nunique()}",
+        f"- Date range: {df['timestamp'].min().strftime('%Y-%m-%d')} to {df['timestamp'].max().strftime('%Y-%m-%d')}",
+        "",
+    ]
+
+    for scale_name, full_scale in [("Quick", False), ("Full-Scale", True)]:
+        scale_df = df[df["full_scale"] == full_scale]
+        if scale_df.empty:
+            continue
+
+        lines.extend([f"## {scale_name} Tests Performance", ""])
+
+        runs = scale_df.groupby("source_file")["timestamp"].first().sort_values()
+        if len(runs) >= 2:
+            first_run = runs.index[0]
+            last_run = runs.index[-1]
+
+            first_total = scale_df[scale_df["source_file"] == first_run]["total_time_ms"].sum()
+            last_total = scale_df[scale_df["source_file"] == last_run]["total_time_ms"].sum()
+            change = ((last_total - first_total) / first_total) * 100
+
+            lines.extend([
+                f"- First run total: {first_total:,.0f}ms ({first_run})",
+                f"- Latest run total: {last_total:,.0f}ms ({last_run})",
+                f"- Overall change: {change:+.1f}% ({'faster' if change < 0 else 'slower'})",
+                "",
+            ])
+
+        lines.append("### Per-Test Trends")
+        lines.append("")
+        lines.append("| Test | First (ms) | Latest (ms) | Change |")
+        lines.append("|:-----|----------:|------------:|-------:|")
+
+        for test_name in scale_df["test_name"].unique():
+            test_data = scale_df[scale_df["test_name"] == test_name].sort_values("timestamp")
+            if len(test_data) >= 2:
+                first_time = test_data.iloc[0]["total_time_ms"]
+                last_time = test_data.iloc[-1]["total_time_ms"]
+                pct_change = ((last_time - first_time) / first_time) * 100
+                lines.append(f"| {test_name} | {first_time:,.0f} | {last_time:,.0f} | {pct_change:+.1f}% |")
+            elif len(test_data) == 1:
+                lines.append(f"| {test_name} | {test_data.iloc[0]['total_time_ms']:,.0f} | - | N/A |")
+
+        lines.extend(["", ""])
+
+    report_path = output_dir / "trend_summary.md"
+    report_path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"Saved: {report_path}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Visualize benchmark trends")
+    parser.add_argument(
+        "--input",
+        type=Path,
+        default=Path(__file__).parent.parent / "benchmarks" / "results" / "combined_results.csv",
+        help="Input CSV file",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Output directory for plots",
+    )
+    parser.add_argument(
+        "--show",
+        action="store_true",
+        help="Display plots interactively",
+    )
+    args = parser.parse_args()
+
+    if not args.input.exists():
+        print(f"ERROR: Input file not found: {args.input}")
+        print("Run scripts/combine_results_to_csv.py first to generate the combined CSV.")
+        return 1
+
+    if args.output_dir is None:
+        args.output_dir = args.input.parent / "plots"
+
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Loading data from: {args.input}")
+    df = load_data(args.input)
+    print(f"Loaded {len(df)} data points from {df['source_file'].nunique()} benchmark runs")
+    print()
+
+    print("Generating visualizations...")
+    plot_time_trends(df, args.output_dir, args.show)
+    plot_speedup_heatmap(df, args.output_dir, args.show)
+    plot_latest_comparison(df, args.output_dir, args.show)
+    plot_metric_breakdown(df, args.output_dir, args.show)
+    plot_commit_comparison(df, args.output_dir, args.show)
+    generate_summary_report(df, args.output_dir)
+
+    print()
+    print(f"All outputs saved to: {args.output_dir}")
     return 0
 
 

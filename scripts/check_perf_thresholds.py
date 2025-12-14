@@ -37,11 +37,11 @@ from pathlib import Path
 PERF_TEST_TIMEOUT_SECONDS = 120
 
 THRESHOLDS = {
-    "perf_p1_large_dense": {"max_time_s": 30},
-    "perf_p2_large_noise": {"max_time_s": 30},
-    "perf_p3_adversarial_repetitive": {"max_time_s": 60},
-    "perf_p4_99_percent_blank": {"max_time_s": 15},
-    "perf_p5_identical": {"max_time_s": 10},
+    "perf_p1_large_dense": {"max_time_s": 5},
+    "perf_p2_large_noise": {"max_time_s": 10},
+    "perf_p3_adversarial_repetitive": {"max_time_s": 15},
+    "perf_p4_99_percent_blank": {"max_time_s": 2},
+    "perf_p5_identical": {"max_time_s": 1},
 }
 
 ENV_VAR_MAP = {

@@ -23,12 +23,9 @@ fn unordered_col_hashes(grid: &Grid) -> Vec<ColHash> {
         let idx = cell.col as usize;
         col_cells[idx].push(cell);
     }
-    for cells in col_cells.iter_mut() {
-        cells.sort_by_key(|c| c.row);
-    }
     col_cells
-        .into_iter()
-        .map(|cells| hash_col_content_unordered_128(&cells))
+        .iter()
+        .map(|cells| hash_col_content_unordered_128(cells))
         .collect()
 }
 
@@ -192,26 +189,34 @@ pub(crate) fn detect_exact_column_block_move(
     None
 }
 
+#[allow(dead_code)]
 pub(crate) fn align_single_column_change(
     old: &Grid,
     new: &Grid,
     config: &DiffConfig,
 ) -> Option<ColumnAlignment> {
-    if !is_within_size_bounds(old, new, config) {
+    let view_a = GridView::from_grid_with_config(old, config);
+    let view_b = GridView::from_grid_with_config(new, config);
+    align_single_column_change_from_views(&view_a, &view_b, config)
+}
+
+pub(crate) fn align_single_column_change_from_views(
+    view_a: &GridView,
+    view_b: &GridView,
+    config: &DiffConfig,
+) -> Option<ColumnAlignment> {
+    if !is_within_size_bounds(view_a.source, view_b.source, config) {
         return None;
     }
 
-    if old.nrows != new.nrows {
+    if view_a.source.nrows != view_b.source.nrows {
         return None;
     }
 
-    let col_diff = new.ncols as i64 - old.ncols as i64;
+    let col_diff = view_b.source.ncols as i64 - view_a.source.ncols as i64;
     if col_diff.abs() != 1 {
         return None;
     }
-
-    let view_a = GridView::from_grid_with_config(old, config);
-    let view_b = GridView::from_grid_with_config(new, config);
 
     let stats = HashStats::from_col_meta(&view_a.col_meta, &view_b.col_meta);
     if has_heavy_repetition(&stats, config) {

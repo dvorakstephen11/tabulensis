@@ -66,6 +66,14 @@ pub fn align_rows_amr_with_signatures(
 ) -> Option<RowAlignmentWithSignatures> {
     let view_a = GridView::from_grid_with_config(old, config);
     let view_b = GridView::from_grid_with_config(new, config);
+    align_rows_amr_with_signatures_from_views(&view_a, &view_b, config)
+}
+
+pub fn align_rows_amr_with_signatures_from_views(
+    view_a: &GridView,
+    view_b: &GridView,
+    config: &DiffConfig,
+) -> Option<RowAlignmentWithSignatures> {
     let alignment = align_rows_from_meta(&view_a.row_meta, &view_b.row_meta, config)?;
     let row_signatures_a: Vec<RowSignature> =
         view_a.row_meta.iter().map(|meta| meta.signature).collect();

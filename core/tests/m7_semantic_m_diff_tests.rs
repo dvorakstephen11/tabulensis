@@ -39,8 +39,10 @@ fn semantic_gate_can_be_disabled() {
     let dm_a = load_datamashup("m_formatting_only_a.xlsx");
     let dm_b = load_datamashup("m_formatting_only_b.xlsx");
 
-    let mut config = excel_diff::DiffConfig::default();
-    config.enable_m_semantic_diff = false;
+    let config = excel_diff::DiffConfig {
+        enable_m_semantic_diff: false,
+        ..excel_diff::DiffConfig::default()
+    };
 
     let diffs = diff_m_queries(&dm_a, &dm_b, &config).expect("diff should succeed");
 

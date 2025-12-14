@@ -410,8 +410,10 @@ fn move_detection_respects_column_gate() {
         "default gate should skip block move detection on wide sheets"
     );
 
-    let mut wide_gate = excel_diff::DiffConfig::default();
-    wide_gate.max_move_detection_cols = 512;
+    let wide_gate = excel_diff::DiffConfig {
+        max_move_detection_cols: 512,
+        ..excel_diff::DiffConfig::default()
+    };
     let wide_report = diff_workbooks(&wb_a, &wb_b, &wide_gate);
     assert!(
         !wide_report.ops.is_empty(),

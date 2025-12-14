@@ -57,6 +57,20 @@ pub(crate) fn detect_exact_rect_block_move(
         return None;
     }
 
+    let shared_rows = row_stats
+        .freq_a
+        .keys()
+        .filter(|h| row_stats.freq_b.contains_key(*h))
+        .count();
+    let shared_cols = col_stats
+        .freq_a
+        .keys()
+        .filter(|h| col_stats.freq_b.contains_key(*h))
+        .count();
+    if shared_rows == 0 && shared_cols == 0 {
+        return None;
+    }
+
     let diff_positions = collect_differences(old, new);
     if diff_positions.is_empty() {
         return None;
