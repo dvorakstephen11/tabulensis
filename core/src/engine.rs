@@ -21,9 +21,8 @@ use crate::row_alignment::{
     RowAlignment as LegacyRowAlignment, RowBlockMove as LegacyRowBlockMove,
     align_row_changes_from_views, detect_exact_row_block_move, detect_fuzzy_row_block_move,
 };
-use crate::workbook::{
-    Cell, CellAddress, CellSnapshot, ColSignature, Grid, RowSignature, Sheet, SheetKind, Workbook,
-};
+use crate::string_pool::StringPool;
+use crate::workbook::{Cell, CellAddress, CellSnapshot, ColSignature, Grid, RowSignature, Sheet, SheetKind, Workbook};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug, Default)]
@@ -35,13 +34,15 @@ const DATABASE_MODE_SHEET_ID: &str = "<database>";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SheetKey {
+    id: SheetId,
     name_lower: String,
     kind: SheetKind,
 }
 
-fn make_sheet_key(sheet: &Sheet) -> SheetKey {
+fn make_sheet_key(sheet: &Sheet, pool: &StringPool) -> SheetKey {
     SheetKey {
-        name_lower: sheet.name.to_lowercase(),
+        id: sheet.name,
+        name_lower: pool.resolve(sheet.name).to_lowercase(),
         kind: sheet.kind.clone(),
     }
 }
@@ -55,8 +56,13 @@ fn sheet_kind_order(kind: &SheetKind) -> u8 {
     }
 }
 
-pub fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
-    match try_diff_workbooks(old, new, config) {
+pub fn diff_workbooks(
+    old: &Workbook,
+    new: &Workbook,
+    pool: &mut StringPool,
+    config: &DiffConfig,
+) -> DiffReport {
+    match try_diff_workbooks(old, new, pool, config) {
         Ok(report) => report,
         Err(e) => panic!("{}", e),
     }
@@ -65,6 +71,7 @@ pub fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> Di
 pub fn try_diff_workbooks(
     old: &Workbook,
     new: &Workbook,
+    pool: &mut StringPool,
     config: &DiffConfig,
 ) -> Result<DiffReport, DiffError> {
     let mut ops = Vec::new();
@@ -78,7 +85,7 @@ pub fn try_diff_workbooks(
 
     let mut old_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
     for sheet in &old.sheets {
-        let key = make_sheet_key(sheet);
+        let key = make_sheet_key(sheet, pool);
         let was_unique = old_sheets.insert(key.clone(), sheet).is_none();
         debug_assert!(
             was_unique,
@@ -89,7 +96,7 @@ pub fn try_diff_workbooks(
 
     let mut new_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
     for sheet in &new.sheets {
-        let key = make_sheet_key(sheet);
+        let key = make_sheet_key(sheet, pool);
         let was_unique = new_sheets.insert(key.clone(), sheet).is_none();
         debug_assert!(
             was_unique,
@@ -122,12 +129,13 @@ pub fn try_diff_workbooks(
                 });
             }
             (Some(old_sheet), Some(new_sheet)) => {
-                let sheet_id: SheetId = old_sheet.name.clone();
+                let sheet_id: SheetId = old_sheet.name;
                 try_diff_grids(
                     &sheet_id,
                     &old_sheet.grid,
                     &new_sheet.grid,
                     config,
+                    pool,
                     &mut ops,
                     &mut ctx,
                     #[cfg(feature = "perf-metrics")]
@@ -149,6 +157,7 @@ pub fn try_diff_workbooks(
         metrics.end_phase(Phase::Total);
         report.metrics = Some(metrics);
     }
+    report.strings = pool.strings().to_vec();
     Ok(report)
 }
 
@@ -156,6 +165,7 @@ pub fn diff_grids_database_mode(
     old: &Grid,
     new: &Grid,
     key_columns: &[u32],
+    pool: &mut StringPool,
     config: &DiffConfig,
 ) -> DiffReport {
     let spec = KeyColumnSpec::new(key_columns.to_vec());
@@ -163,14 +173,16 @@ pub fn diff_grids_database_mode(
         Ok(alignment) => alignment,
         Err(_) => {
             let mut ops = Vec::new();
-            let sheet_id: SheetId = DATABASE_MODE_SHEET_ID.to_string();
-            diff_grids(&sheet_id, old, new, config, &mut ops);
-            return DiffReport::new(ops);
+            let sheet_id: SheetId = pool.intern(DATABASE_MODE_SHEET_ID);
+            diff_grids(&sheet_id, old, new, config, pool, &mut ops);
+            let mut report = DiffReport::new(ops);
+            report.strings = pool.strings().to_vec();
+            return report;
         }
     };
 
     let mut ops = Vec::new();
-    let sheet_id: SheetId = DATABASE_MODE_SHEET_ID.to_string();
+    let sheet_id: SheetId = pool.intern(DATABASE_MODE_SHEET_ID);
     let max_cols = old.ncols.max(new.ncols);
 
     for row_idx in &alignment.left_only_rows {
@@ -202,7 +214,9 @@ pub fn diff_grids_database_mode(
         }
     }
 
-    DiffReport::new(ops)
+    let mut report = DiffReport::new(ops);
+    report.strings = pool.strings().to_vec();
+    report
 }
 
 fn diff_grids(
@@ -210,6 +224,7 @@ fn diff_grids(
     old: &Grid,
     new: &Grid,
     config: &DiffConfig,
+    pool: &StringPool,
     ops: &mut Vec<DiffOp>,
 ) {
     let mut ctx = DiffContext::default();
@@ -218,6 +233,7 @@ fn diff_grids(
         old,
         new,
         config,
+        pool,
         ops,
         &mut ctx,
         #[cfg(feature = "perf-metrics")]
@@ -230,6 +246,7 @@ fn try_diff_grids(
     old: &Grid,
     new: &Grid,
     config: &DiffConfig,
+    pool: &StringPool,
     ops: &mut Vec<DiffOp>,
     ctx: &mut DiffContext,
     #[cfg(feature = "perf-metrics")] mut metrics: Option<&mut DiffMetrics>,
@@ -256,7 +273,7 @@ fn try_diff_grids(
         }
         let warning = format!(
             "Sheet '{}': alignment limits exceeded (rows={}, cols={}; limits: rows={}, cols={})",
-            sheet_id,
+            pool.resolve(*sheet_id),
             old.nrows.max(new.nrows),
             old.ncols.max(new.ncols),
             config.max_align_rows,
@@ -1001,23 +1018,18 @@ fn build_projected_grid_from_maps(
 
     let mut projected = Grid::new(nrows, ncols);
 
-    for cell in source.cells.values() {
-        if !mask.is_cell_active(cell.row, cell.col) {
+    for ((row, col), cell) in source.iter_cells() {
+        if !mask.is_cell_active(row, col) {
             continue;
         }
-        let Some(new_row) = row_lookup.get(cell.row as usize).and_then(|v| *v) else {
+        let Some(new_row) = row_lookup.get(row as usize).and_then(|v| *v) else {
             continue;
         };
-        let Some(new_col) = col_lookup.get(cell.col as usize).and_then(|v| *v) else {
+        let Some(new_col) = col_lookup.get(col as usize).and_then(|v| *v) else {
             continue;
         };
 
-        let mut new_cell = cell.clone();
-        new_cell.row = new_row;
-        new_cell.col = new_col;
-        new_cell.address = CellAddress::from_indices(new_row, new_col);
-
-        projected.cells.insert((new_row, new_col), new_cell);
+        projected.insert_cell(new_row, new_col, cell.value.clone(), cell.formula);
     }
 
     (projected, row_map.to_vec(), col_map.to_vec())
@@ -1042,24 +1054,19 @@ fn build_masked_grid(source: &Grid, mask: &RegionMask) -> (Grid, Vec<u32>, Vec<u
 
     let mut projected = Grid::new(nrows, ncols);
 
-    for cell in source.cells.values() {
-        if !mask.is_cell_active(cell.row, cell.col) {
+    for ((row, col), cell) in source.iter_cells() {
+        if !mask.is_cell_active(row, col) {
             continue;
         }
 
-        let Some(new_row) = row_lookup.get(cell.row as usize).and_then(|v| *v) else {
+        let Some(new_row) = row_lookup.get(row as usize).and_then(|v| *v) else {
             continue;
         };
-        let Some(new_col) = col_lookup.get(cell.col as usize).and_then(|v| *v) else {
+        let Some(new_col) = col_lookup.get(col as usize).and_then(|v| *v) else {
             continue;
         };
 
-        let mut new_cell = cell.clone();
-        new_cell.row = new_row;
-        new_cell.col = new_col;
-        new_cell.address = CellAddress::from_indices(new_row, new_col);
-
-        projected.cells.insert((new_row, new_col), new_cell);
+        projected.insert_cell(new_row, new_col, cell.value.clone(), cell.formula);
     }
 
     (projected, row_map, col_map)
@@ -1941,13 +1948,11 @@ fn snapshot_with_addr(cell: Option<&Cell>, addr: CellAddress) -> CellSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::string_pool::StringPool;
     use crate::workbook::CellValue;
 
-    fn numbered_cell(row: u32, col: u32, value: f64) -> Cell {
+    fn numbered_cell(value: f64) -> Cell {
         Cell {
-            row,
-            col,
-            address: CellAddress::from_indices(row, col),
             value: Some(CellValue::Number(value)),
             formula: None,
         }
@@ -1963,13 +1968,7 @@ mod tests {
         let mut grid = Grid::new(nrows, ncols);
         for (r, row) in values.iter().enumerate() {
             for (c, val) in row.iter().enumerate() {
-                grid.insert(Cell {
-                    row: r as u32,
-                    col: c as u32,
-                    address: CellAddress::from_indices(r as u32, c as u32),
-                    value: Some(CellValue::Number(*val as f64)),
-                    formula: None,
-                });
+                grid.insert_cell(r as u32, c as u32, Some(CellValue::Number(*val as f64)), None);
             }
         }
         grid
@@ -1994,63 +1993,56 @@ mod tests {
     #[test]
     fn grids_non_blank_cells_equal_requires_matching_entries() {
         let base_cell = Cell {
-            row: 0,
-            col: 0,
-            address: CellAddress::from_indices(0, 0),
             value: Some(CellValue::Number(1.0)),
             formula: None,
         };
 
         let mut grid_a = Grid::new(2, 2);
         let mut grid_b = Grid::new(2, 2);
-        grid_a.insert(base_cell.clone());
-        grid_b.insert(base_cell.clone());
+        grid_a.insert_cell(0, 0, base_cell.value.clone(), base_cell.formula);
+        grid_b.insert_cell(0, 0, base_cell.value.clone(), base_cell.formula);
 
         assert!(grids_non_blank_cells_equal(&grid_a, &grid_b));
 
         let mut grid_b_changed = grid_b.clone();
         let mut changed_cell = base_cell.clone();
         changed_cell.value = Some(CellValue::Number(2.0));
-        grid_b_changed.insert(changed_cell);
+        grid_b_changed.insert_cell(0, 0, changed_cell.value.clone(), changed_cell.formula);
 
         assert!(!grids_non_blank_cells_equal(&grid_a, &grid_b_changed));
 
-        let blank = Cell {
-            row: 1,
-            col: 1,
-            address: CellAddress::from_indices(1, 1),
-            value: None,
-            formula: None,
-        };
-        grid_a.insert(blank);
+        grid_a.insert_cell(1, 1, None, None);
 
         assert!(!grids_non_blank_cells_equal(&grid_a, &grid_b));
     }
 
     #[test]
     fn diff_row_pair_sparse_counts_union_columns_not_sum_lengths() {
-        let sheet_id: SheetId = "Sheet1".to_string();
+        let mut pool = StringPool::new();
+        let sheet_id: SheetId = pool.intern("Sheet1");
         let config = DiffConfig::default();
         let mut ops = Vec::new();
 
         let old_cells_storage = [
-            numbered_cell(0, 0, 1.0),
-            numbered_cell(0, 1, 2.0),
-            numbered_cell(0, 2, 3.0),
+            numbered_cell(1.0),
+            numbered_cell(2.0),
+            numbered_cell(3.0),
         ];
         let new_cells_storage = [
-            numbered_cell(0, 0, 1.0),
-            numbered_cell(0, 1, 2.0),
-            numbered_cell(0, 2, 4.0),
+            numbered_cell(1.0),
+            numbered_cell(2.0),
+            numbered_cell(4.0),
         ];
 
         let old_cells: Vec<(u32, &Cell)> = old_cells_storage
             .iter()
-            .map(|cell| (cell.col, cell))
+            .enumerate()
+            .map(|(idx, cell)| (idx as u32, cell))
             .collect();
         let new_cells: Vec<(u32, &Cell)> = new_cells_storage
             .iter()
-            .map(|cell| (cell.col, cell))
+            .enumerate()
+            .map(|(idx, cell)| (idx as u32, cell))
             .collect();
 
         let compared =
@@ -2061,21 +2053,16 @@ mod tests {
 
     #[test]
     fn diff_row_pair_sparse_counts_union_for_sparse_columns() {
-        let sheet_id: SheetId = "Sheet1".to_string();
+        let mut pool = StringPool::new();
+        let sheet_id: SheetId = pool.intern("Sheet1");
         let config = DiffConfig::default();
         let mut ops = Vec::new();
 
-        let old_cells_storage = [numbered_cell(0, 0, 1.0)];
-        let new_cells_storage = [numbered_cell(0, 2, 2.0)];
+        let old_cells_storage = [numbered_cell(1.0)];
+        let new_cells_storage = [numbered_cell(2.0)];
 
-        let old_cells: Vec<(u32, &Cell)> = old_cells_storage
-            .iter()
-            .map(|cell| (cell.col, cell))
-            .collect();
-        let new_cells: Vec<(u32, &Cell)> = new_cells_storage
-            .iter()
-            .map(|cell| (cell.col, cell))
-            .collect();
+        let old_cells: Vec<(u32, &Cell)> = vec![(0, &old_cells_storage[0])];
+        let new_cells: Vec<(u32, &Cell)> = vec![(2, &new_cells_storage[0])];
 
         let compared =
             diff_row_pair_sparse(&sheet_id, 0, 3, &old_cells, &new_cells, &mut ops, &config);

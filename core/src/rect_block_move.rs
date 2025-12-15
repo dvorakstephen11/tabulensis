@@ -388,7 +388,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workbook::{CellAddress, CellValue};
+    use crate::workbook::CellValue;
 
     fn grid_from_numbers(values: &[&[i32]]) -> Grid {
         let nrows = values.len() as u32;
@@ -401,13 +401,12 @@ mod tests {
         let mut grid = Grid::new(nrows, ncols);
         for (r, row_vals) in values.iter().enumerate() {
             for (c, v) in row_vals.iter().enumerate() {
-                grid.insert(Cell {
-                    row: r as u32,
-                    col: c as u32,
-                    address: CellAddress::from_indices(r as u32, c as u32),
-                    value: Some(CellValue::Number(*v as f64)),
-                    formula: None,
-                });
+                grid.insert_cell(
+                    r as u32,
+                    c as u32,
+                    Some(CellValue::Number(*v as f64)),
+                    None,
+                );
             }
         }
 

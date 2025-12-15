@@ -5,6 +5,7 @@
 //! - [`DiffReport`]: A versioned collection of diff operations
 //! - [`DiffError`]: Errors that can occur during the diff process
 
+use crate::string_pool::StringId;
 use crate::workbook::{CellAddress, CellSnapshot, ColSignature, RowSignature};
 use thiserror::Error;
 
@@ -15,7 +16,7 @@ pub enum DiffError {
         "alignment limits exceeded for sheet '{sheet}': rows={rows}, cols={cols} (limits: rows={max_rows}, cols={max_cols})"
     )]
     LimitsExceeded {
-        sheet: String,
+        sheet: StringId,
         rows: u32,
         cols: u32,
         max_rows: u32,
@@ -23,7 +24,7 @@ pub enum DiffError {
     },
 }
 
-pub type SheetId = String;
+pub type SheetId = StringId;
 
 /// A single diff operation representing one logical change between workbooks.
 ///
@@ -114,6 +115,9 @@ pub enum DiffOp {
 pub struct DiffReport {
     /// Schema version (currently "1").
     pub version: String,
+    /// Interned string table used by ids referenced in this report.
+    #[serde(default)]
+    pub strings: Vec<String>,
     /// The list of diff operations.
     pub ops: Vec<DiffOp>,
     /// Whether the diff result is complete. When `false`, some operations may be missing
@@ -139,6 +143,7 @@ impl DiffReport {
     pub fn new(ops: Vec<DiffOp>) -> DiffReport {
         DiffReport {
             version: Self::SCHEMA_VERSION.to_string(),
+            strings: Vec::new(),
             ops,
             complete: true,
             warnings: Vec::new(),
@@ -150,6 +155,7 @@ impl DiffReport {
     pub fn with_partial_result(ops: Vec<DiffOp>, warning: String) -> DiffReport {
         DiffReport {
             version: Self::SCHEMA_VERSION.to_string(),
+            strings: Vec::new(),
             ops,
             complete: false,
             warnings: vec![warning],

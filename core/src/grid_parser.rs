@@ -4,7 +4,8 @@
 //! relationship files to construct [`Grid`] representations of sheet data.
 
 use crate::addressing::address_to_index;
-use crate::workbook::{Cell, CellAddress, CellValue, Grid};
+use crate::string_pool::{StringId, StringPool};
+use crate::workbook::{CellValue, Grid};
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 use std::collections::HashMap;
@@ -27,7 +28,10 @@ pub struct SheetDescriptor {
     pub sheet_id: Option<u32>,
 }
 
-pub fn parse_shared_strings(xml: &[u8]) -> Result<Vec<String>, GridParseError> {
+pub fn parse_shared_strings(
+    xml: &[u8],
+    pool: &mut StringPool,
+) -> Result<Vec<StringId>, GridParseError> {
     let mut reader = Reader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
@@ -49,7 +53,8 @@ pub fn parse_shared_strings(xml: &[u8]) -> Result<Vec<String>, GridParseError> {
                 current.push_str(&text);
             }
             Ok(Event::End(e)) if e.name().as_ref() == b"si" => {
-                strings.push(current.clone());
+                let id = pool.intern(&current);
+                strings.push(id);
                 in_si = false;
             }
             Ok(Event::Eof) => break,
@@ -177,7 +182,11 @@ fn normalize_target(target: &str) -> String {
     }
 }
 
-pub fn parse_sheet_xml(xml: &[u8], shared_strings: &[String]) -> Result<Grid, GridParseError> {
+pub fn parse_sheet_xml(
+    xml: &[u8],
+    shared_strings: &[StringId],
+    pool: &mut StringPool,
+) -> Result<Grid, GridParseError> {
     let mut reader = Reader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
@@ -195,7 +204,7 @@ pub fn parse_sheet_xml(xml: &[u8], shared_strings: &[String]) -> Result<Grid, Gr
                 }
             }
             Ok(Event::Start(e)) if e.name().as_ref() == b"c" => {
-                let cell = parse_cell(&mut reader, e, shared_strings)?;
+                let cell = parse_cell(&mut reader, e, shared_strings, pool)?;
                 max_row = Some(max_row.map_or(cell.row, |r| r.max(cell.row)));
                 max_col = Some(max_col.map_or(cell.col, |c| c.max(cell.col)));
                 parsed_cells.push(cell);
@@ -227,7 +236,8 @@ pub fn parse_sheet_xml(xml: &[u8], shared_strings: &[String]) -> Result<Grid, Gr
 fn parse_cell(
     reader: &mut Reader<&[u8]>,
     start: BytesStart,
-    shared_strings: &[String],
+    shared_strings: &[StringId],
+    pool: &mut StringPool,
 ) -> Result<ParsedCell, GridParseError> {
     let address_raw = get_attr_value(&start, b"r")?
         .ok_or_else(|| GridParseError::XmlError("cell missing address".into()))?;
@@ -276,15 +286,20 @@ fn parse_cell(
     }
 
     let value = match inline_text {
-        Some(text) => Some(CellValue::Text(text)),
-        None => convert_value(value_text.as_deref(), cell_type.as_deref(), shared_strings)?,
+        Some(text) => Some(CellValue::Text(pool.intern(&text))),
+        None => convert_value(
+            value_text.as_deref(),
+            cell_type.as_deref(),
+            shared_strings,
+            pool,
+        )?,
     };
 
     Ok(ParsedCell {
         row,
         col,
         value,
-        formula: formula_text,
+        formula: formula_text.map(|f| pool.intern(&f)),
     })
 }
 
@@ -317,7 +332,8 @@ fn read_inline_string(reader: &mut Reader<&[u8]>) -> Result<String, GridParseErr
 fn convert_value(
     value_text: Option<&str>,
     cell_type: Option<&str>,
-    shared_strings: &[String],
+    shared_strings: &[StringId],
+    pool: &mut StringPool,
 ) -> Result<Option<CellValue>, GridParseError> {
     let raw = match value_text {
         Some(t) => t,
@@ -326,7 +342,7 @@ fn convert_value(
 
     let trimmed = raw.trim();
     if raw.is_empty() || trimmed.is_empty() {
-        return Ok(Some(CellValue::Text(String::new())));
+        return Ok(Some(CellValue::Text(pool.intern(""))));
     }
 
     match cell_type {
@@ -334,22 +350,23 @@ fn convert_value(
             let idx = trimmed
                 .parse::<usize>()
                 .map_err(|e| GridParseError::XmlError(e.to_string()))?;
-            let text = shared_strings
+            let text_id = *shared_strings
                 .get(idx)
                 .ok_or(GridParseError::SharedStringOutOfBounds(idx))?;
-            Ok(Some(CellValue::Text(text.clone())))
+            Ok(Some(CellValue::Text(text_id)))
         }
         Some("b") => Ok(match trimmed {
             "1" => Some(CellValue::Bool(true)),
             "0" => Some(CellValue::Bool(false)),
             _ => None,
         }),
-        Some("str") | Some("inlineStr") => Ok(Some(CellValue::Text(raw.to_string()))),
+        Some("e") => Ok(Some(CellValue::Error(pool.intern(trimmed)))),
+        Some("str") | Some("inlineStr") => Ok(Some(CellValue::Text(pool.intern(raw)))),
         _ => {
             if let Ok(n) = trimmed.parse::<f64>() {
                 Ok(Some(CellValue::Number(n)))
             } else {
-                Ok(Some(CellValue::Text(trimmed.to_string())))
+                Ok(Some(CellValue::Text(pool.intern(trimmed))))
             }
         }
     }
@@ -370,14 +387,7 @@ fn build_grid(nrows: u32, ncols: u32, cells: Vec<ParsedCell>) -> Result<Grid, Gr
     let mut grid = Grid::new(nrows, ncols);
 
     for parsed in cells {
-        let cell = Cell {
-            row: parsed.row,
-            col: parsed.col,
-            address: CellAddress::from_indices(parsed.row, parsed.col),
-            value: parsed.value,
-            formula: parsed.formula,
-        };
-        grid.insert(cell);
+        grid.insert_cell(parsed.row, parsed.col, parsed.value, parsed.formula);
     }
 
     Ok(grid)
@@ -403,12 +413,13 @@ struct ParsedCell {
     row: u32,
     col: u32,
     value: Option<CellValue>,
-    formula: Option<String>,
+    formula: Option<StringId>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::{GridParseError, convert_value, parse_shared_strings, read_inline_string};
+    use crate::string_pool::StringPool;
     use crate::workbook::CellValue;
     use quick_xml::Reader;
 
@@ -421,8 +432,10 @@ mod tests {
     <r><t xml:space="preserve"> World</t></r>
   </si>
 </sst>"#;
-        let strings = parse_shared_strings(xml).expect("shared strings should parse");
-        assert_eq!(strings.first(), Some(&"Hello World".to_string()));
+        let mut pool = StringPool::new();
+        let strings = parse_shared_strings(xml, &mut pool).expect("shared strings should parse");
+        let first = strings.first().copied().unwrap();
+        assert_eq!(pool.resolve(first), "Hello World");
     }
 
     #[test]
@@ -433,37 +446,50 @@ mod tests {
         let value = read_inline_string(&mut reader).expect("inline string should parse");
         assert_eq!(value, " hello");
 
-        let converted = convert_value(Some(value.as_str()), Some("inlineStr"), &[])
+        let mut pool = StringPool::new();
+        let converted = convert_value(Some(value.as_str()), Some("inlineStr"), &[], &mut pool)
             .expect("inlineStr conversion should succeed");
-        assert_eq!(converted, Some(CellValue::Text(" hello".into())));
+        let text_id = converted
+            .as_ref()
+            .and_then(CellValue::as_text_id)
+            .expect("text id");
+        assert_eq!(pool.resolve(text_id), " hello");
     }
 
     #[test]
     fn convert_value_bool_0_1_and_other() {
-        let false_val =
-            convert_value(Some("0"), Some("b"), &[]).expect("bool cell conversion should succeed");
+        let mut pool = StringPool::new();
+        let false_val = convert_value(Some("0"), Some("b"), &[], &mut pool)
+            .expect("bool cell conversion should succeed");
         assert_eq!(false_val, Some(CellValue::Bool(false)));
 
-        let true_val =
-            convert_value(Some("1"), Some("b"), &[]).expect("bool cell conversion should succeed");
+        let mut pool = StringPool::new();
+        let true_val = convert_value(Some("1"), Some("b"), &[], &mut pool)
+            .expect("bool cell conversion should succeed");
         assert_eq!(true_val, Some(CellValue::Bool(true)));
 
-        let none_val = convert_value(Some("2"), Some("b"), &[])
+        let none_val = convert_value(Some("2"), Some("b"), &[], &mut pool)
             .expect("unexpected bool tokens should still parse");
         assert!(none_val.is_none());
     }
 
     #[test]
     fn convert_value_shared_string_index_out_of_bounds_errors() {
-        let err = convert_value(Some("5"), Some("s"), &["only".into()])
+        let mut pool = StringPool::new();
+        let only_id = pool.intern("only");
+        let err = convert_value(Some("5"), Some("s"), &[only_id], &mut pool)
             .expect_err("invalid shared string index should error");
         assert!(matches!(err, GridParseError::SharedStringOutOfBounds(5)));
     }
 
     #[test]
     fn convert_value_error_cell_as_text() {
-        let value =
-            convert_value(Some("#DIV/0!"), Some("e"), &[]).expect("error cell should convert");
-        assert_eq!(value, Some(CellValue::Text("#DIV/0!".into())));
+        let mut pool = StringPool::new();
+        let value = convert_value(Some("#DIV/0!"), Some("e"), &[], &mut pool)
+            .expect("error cell should convert");
+        let err_id = value
+            .and_then(|v| if let CellValue::Error(id) = v { Some(id) } else { None })
+            .expect("error id");
+        assert_eq!(pool.resolve(err_id), "#DIV/0!");
     }
 }

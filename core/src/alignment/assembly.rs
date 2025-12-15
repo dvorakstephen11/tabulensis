@@ -776,7 +776,7 @@ where
 mod tests {
     use super::*;
     use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
-    use crate::workbook::{Cell, CellAddress, CellValue};
+    use crate::workbook::CellValue;
 
     fn grid_from_run_lengths(pattern: &[(i32, u32)]) -> Grid {
         let total_rows: u32 = pattern.iter().map(|(_, count)| *count).sum();
@@ -784,13 +784,7 @@ mod tests {
         let mut row_idx = 0u32;
         for (val, count) in pattern {
             for _ in 0..*count {
-                grid.insert(Cell {
-                    row: row_idx,
-                    col: 0,
-                    address: CellAddress::from_indices(row_idx, 0),
-                    value: Some(CellValue::Number(*val as f64)),
-                    formula: None,
-                });
+                grid.insert_cell(row_idx, 0, Some(CellValue::Number(*val as f64)), None);
                 row_idx = row_idx.saturating_add(1);
             }
         }
@@ -801,13 +795,7 @@ mod tests {
         let nrows = rows.len() as u32;
         let mut grid = Grid::new(nrows, 1);
         for (r, &val) in rows.iter().enumerate() {
-            grid.insert(Cell {
-                row: r as u32,
-                col: 0,
-                address: CellAddress::from_indices(r as u32, 0),
-                value: Some(CellValue::Number(val as f64)),
-                formula: None,
-            });
+            grid.insert_cell(r as u32, 0, Some(CellValue::Number(val as f64)), None);
         }
         grid
     }

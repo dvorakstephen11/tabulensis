@@ -3,9 +3,7 @@
 //! Provides abstraction over ZIP-based Office Open XML packages, validating
 //! that required structural elements like `[Content_Types].xml` are present.
 
-use std::fs::File;
-use std::io::Read;
-use std::path::Path;
+use std::io::{Read, Seek};
 use thiserror::Error;
 use zip::ZipArchive;
 use zip::result::ZipError;
@@ -24,14 +22,19 @@ pub enum ContainerError {
     NotOpcPackage,
 }
 
+pub(crate) trait ReadSeek: Read + Seek {}
+impl<T: Read + Seek> ReadSeek for T {}
+
 pub struct OpcContainer {
-    pub(crate) archive: ZipArchive<File>,
+    pub(crate) archive: ZipArchive<Box<dyn ReadSeek>>,
 }
 
 impl OpcContainer {
-    pub fn open(path: impl AsRef<Path>) -> Result<OpcContainer, ContainerError> {
-        let file = File::open(path)?;
-        let archive = ZipArchive::new(file).map_err(|err| match err {
+    pub fn open_from_reader<R: Read + Seek + 'static>(
+        reader: R,
+    ) -> Result<OpcContainer, ContainerError> {
+        let reader: Box<dyn ReadSeek> = Box::new(reader);
+        let archive = ZipArchive::new(reader).map_err(|err| match err {
             ZipError::InvalidArchive(_) | ZipError::UnsupportedArchive(_) => {
                 ContainerError::NotZipContainer
             }
@@ -48,6 +51,17 @@ impl OpcContainer {
         }
 
         Ok(container)
+    }
+
+    #[cfg(feature = "std-fs")]
+    pub fn open_from_path(path: impl AsRef<std::path::Path>) -> Result<OpcContainer, ContainerError> {
+        let file = std::fs::File::open(path)?;
+        Self::open_from_reader(file)
+    }
+
+    #[cfg(feature = "std-fs")]
+    pub fn open(path: impl AsRef<std::path::Path>) -> Result<OpcContainer, ContainerError> {
+        Self::open_from_path(path)
     }
 
     pub fn read_file(&mut self, name: &str) -> Result<Vec<u8>, ZipError> {

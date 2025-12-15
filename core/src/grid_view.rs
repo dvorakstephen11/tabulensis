@@ -49,7 +49,7 @@ impl<'a> GridView<'a> {
         let mut row_counts = vec![0u32; nrows];
         let mut row_first_non_blank: Vec<Option<u32>> = vec![None; nrows];
 
-        let mut col_counts = vec![0u32; ncols];
+            let mut col_counts = vec![0u32; ncols];
         let mut col_first_non_blank: Vec<Option<u32>> = vec![None; ncols];
 
         for ((row, col), cell) in &grid.cells {
@@ -256,9 +256,11 @@ fn compute_is_low_info(non_blank_count: u16, row_view: &RowView<'_>) -> bool {
         None => true,
         Some(cell) => match (&cell.value, &cell.formula) {
             (_, Some(_)) => false,
-            (Some(CellValue::Text(s)), None) => s.trim().is_empty(),
+            (Some(CellValue::Text(id)), None) => id.0 == 0,
             (Some(CellValue::Number(_)), _) => false,
             (Some(CellValue::Bool(_)), _) => false,
+            (Some(CellValue::Error(_)), _) => false,
+            (Some(CellValue::Blank), _) => true,
             (None, None) => true,
         },
     }

@@ -1,4 +1,5 @@
 use crate::hashing::normalize_float_for_hash;
+use crate::string_pool::StringId;
 use crate::workbook::{CellValue, Grid};
 use std::collections::{HashMap, HashSet};
 
@@ -21,7 +22,7 @@ impl KeyColumnSpec {
 pub(crate) enum KeyValueRepr {
     None,
     Number(u64),
-    Text(String),
+    Text(StringId),
     Bool(bool),
 }
 
@@ -29,8 +30,10 @@ impl KeyValueRepr {
     fn from_cell_value(value: Option<&CellValue>) -> KeyValueRepr {
         match value {
             Some(CellValue::Number(n)) => KeyValueRepr::Number(normalize_float_for_hash(*n)),
-            Some(CellValue::Text(s)) => KeyValueRepr::Text(s.clone()),
+            Some(CellValue::Text(id)) => KeyValueRepr::Text(*id),
             Some(CellValue::Bool(b)) => KeyValueRepr::Bool(*b),
+            Some(CellValue::Blank) => KeyValueRepr::None,
+            Some(CellValue::Error(id)) => KeyValueRepr::Text(*id),
             None => KeyValueRepr::None,
         }
     }
@@ -39,7 +42,7 @@ impl KeyValueRepr {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct KeyComponent {
     pub value: KeyValueRepr,
-    pub formula: Option<String>,
+    pub formula: Option<StringId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -155,7 +158,7 @@ fn extract_key(grid: &Grid, row_idx: u32, spec: &KeyColumnSpec) -> KeyValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workbook::{Cell, CellAddress};
+    use crate::workbook::CellValue;
 
     fn grid_from_rows(rows: &[&[i32]]) -> Grid {
         let nrows = rows.len() as u32;
@@ -164,13 +167,12 @@ mod tests {
 
         for (r_idx, row_vals) in rows.iter().enumerate() {
             for (c_idx, value) in row_vals.iter().enumerate() {
-                grid.insert(Cell {
-                    row: r_idx as u32,
-                    col: c_idx as u32,
-                    address: CellAddress::from_indices(r_idx as u32, c_idx as u32),
-                    value: Some(CellValue::Number(*value as f64)),
-                    formula: None,
-                });
+                grid.insert_cell(
+                    r_idx as u32,
+                    c_idx as u32,
+                    Some(CellValue::Number(*value as f64)),
+                    None,
+                );
             }
         }
 

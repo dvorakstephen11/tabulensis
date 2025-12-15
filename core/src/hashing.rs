@@ -21,7 +21,7 @@ use std::hash::{Hash, Hasher};
 use xxhash_rust::xxh3::Xxh3;
 use xxhash_rust::xxh64::Xxh64;
 
-use crate::workbook::{Cell, CellValue, ColSignature, RowSignature};
+use crate::workbook::{CellContent, CellValue, ColSignature, RowSignature};
 
 #[allow(dead_code)]
 pub(crate) const XXH64_SEED: u64 = 0;
@@ -46,6 +46,9 @@ pub(crate) fn hash_cell_value<H: Hasher>(value: &Option<CellValue>, state: &mut 
         None => {
             3u8.hash(state);
         }
+        Some(CellValue::Blank) => {
+            4u8.hash(state);
+        }
         Some(CellValue::Number(n)) => {
             0u8.hash(state);
             normalize_float_for_hash(*n).hash(state);
@@ -58,11 +61,15 @@ pub(crate) fn hash_cell_value<H: Hasher>(value: &Option<CellValue>, state: &mut 
             2u8.hash(state);
             b.hash(state);
         }
+        Some(CellValue::Error(id)) => {
+            5u8.hash(state);
+            id.hash(state);
+        }
     }
 }
 
 #[allow(dead_code)]
-pub(crate) fn hash_cell_content(cell: &Cell) -> u64 {
+pub(crate) fn hash_cell_content(cell: &CellContent) -> u64 {
     let mut hasher = Xxh64::new(XXH64_SEED);
     hash_cell_value(&cell.value, &mut hasher);
     cell.formula.hash(&mut hasher);
@@ -70,14 +77,14 @@ pub(crate) fn hash_cell_content(cell: &Cell) -> u64 {
 }
 
 #[allow(dead_code)]
-pub(crate) fn hash_cell_content_128(cell: &Cell) -> u128 {
+pub(crate) fn hash_cell_content_128(cell: &CellContent) -> u128 {
     let mut hasher = Xxh3::new();
     hash_cell_value(&cell.value, &mut hasher);
     cell.formula.hash(&mut hasher);
     hasher.digest128()
 }
 
-pub(crate) fn hash_row_content_128(cells: &[(u32, &Cell)]) -> u128 {
+pub(crate) fn hash_row_content_128(cells: &[(u32, &CellContent)]) -> u128 {
     let mut hasher = Xxh3::new();
     for (_, cell) in cells.iter() {
         hash_cell_value(&cell.value, &mut hasher);
@@ -86,7 +93,7 @@ pub(crate) fn hash_row_content_128(cells: &[(u32, &Cell)]) -> u128 {
     hasher.digest128()
 }
 
-pub(crate) fn hash_col_content_128(cells: &[&Cell]) -> u128 {
+pub(crate) fn hash_col_content_128(cells: &[&CellContent]) -> u128 {
     let mut hasher = Xxh3::new();
     for cell in cells.iter() {
         hash_cell_value(&cell.value, &mut hasher);
@@ -95,7 +102,7 @@ pub(crate) fn hash_col_content_128(cells: &[&Cell]) -> u128 {
     hasher.digest128()
 }
 
-pub(crate) fn hash_col_content_unordered_128(cells: &[&Cell]) -> u128 {
+pub(crate) fn hash_col_content_unordered_128(cells: &[&CellContent]) -> u128 {
     if cells.is_empty() {
         return Xxh3::new().digest128();
     }
@@ -141,10 +148,12 @@ pub(crate) fn combine_hashes_128(current: u128, contribution: u128) -> u128 {
 
 #[allow(dead_code)]
 pub(crate) fn compute_row_signature<'a>(
-    cells: impl Iterator<Item = (u32, &'a Cell)>,
+    cells: impl Iterator<Item = ((u32, u32), &'a CellContent)>,
     row: u32,
 ) -> RowSignature {
-    let mut row_cells: Vec<_> = cells.filter(|(_, cell)| cell.row == row).collect();
+    let mut row_cells: Vec<(u32, &CellContent)> = cells
+        .filter_map(|((r, c), cell)| (r == row).then_some((c, cell)))
+        .collect();
     row_cells.sort_by_key(|(col, _)| *col);
 
     let hash = hash_row_content_128(&row_cells);
@@ -153,17 +162,15 @@ pub(crate) fn compute_row_signature<'a>(
 
 #[allow(dead_code)]
 pub(crate) fn compute_col_signature<'a>(
-    cells: impl Iterator<Item = (u32, &'a Cell)>,
+    cells: impl Iterator<Item = ((u32, u32), &'a CellContent)>,
     col: u32,
 ) -> ColSignature {
-    let col_cells: Vec<_> = cells
-        .filter(|(_, cell)| cell.col == col)
-        .map(|(_, cell)| cell)
+    let mut col_cells: Vec<(u32, &CellContent)> = cells
+        .filter_map(|((r, c), cell)| (c == col).then_some((r, cell)))
         .collect();
-    let mut sorted_cells = col_cells;
-    sorted_cells.sort_by_key(|cell| cell.row);
-
-    let hash = hash_col_content_128(&sorted_cells);
+    col_cells.sort_by_key(|(r, _)| *r);
+    let ordered: Vec<&CellContent> = col_cells.into_iter().map(|(_, cell)| cell).collect();
+    let hash = hash_col_content_128(&ordered);
     ColSignature { hash }
 }
 

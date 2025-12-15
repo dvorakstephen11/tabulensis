@@ -4,6 +4,10 @@ use std::collections::BTreeSet;
 mod common;
 use common::{grid_from_numbers, single_sheet_workbook};
 
+fn sheet_name<'a>(report: &'a excel_diff::DiffReport, id: &excel_diff::SheetId) -> &'a str {
+    report.strings[id.0 as usize].as_str()
+}
+
 #[test]
 fn pg5_1_grid_diff_1x1_identical_empty_diff() {
     let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1]]));
@@ -28,7 +32,7 @@ fn pg5_2_grid_diff_1x1_value_change_single_cell_edited() {
             from,
             to,
         } => {
-            assert_eq!(sheet, "Sheet1");
+            assert_eq!(sheet_name(&report, sheet), "Sheet1");
             assert_eq!(addr.to_a1(), "A1");
             assert_eq!(from.value, Some(CellValue::Number(1.0)));
             assert_eq!(to.value, Some(CellValue::Number(2.0)));
@@ -51,7 +55,7 @@ fn pg5_3_grid_diff_row_appended_row_added_only() {
             row_idx,
             row_signature,
         } => {
-            assert_eq!(sheet, "Sheet1");
+            assert_eq!(sheet_name(&report, sheet), "Sheet1");
             assert_eq!(*row_idx, 1);
             assert!(row_signature.is_none());
         }
@@ -73,7 +77,7 @@ fn pg5_4_grid_diff_column_appended_column_added_only() {
             col_idx,
             col_signature,
         } => {
-            assert_eq!(sheet, "Sheet1");
+            assert_eq!(sheet_name(&report, sheet), "Sheet1");
             assert_eq!(*col_idx, 1);
             assert!(col_signature.is_none());
         }
@@ -148,7 +152,7 @@ fn pg5_6_grid_diff_degenerate_grids() {
                 col_idx,
                 col_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                assert_eq!(sheet_name(&report, sheet), "Sheet1");
                 assert_eq!(*col_idx, 0);
                 assert!(col_signature.is_none());
                 col_added += 1;
@@ -177,7 +181,7 @@ fn pg5_7_grid_diff_row_truncated_row_removed_only() {
             row_idx,
             row_signature,
         } => {
-            assert_eq!(sheet, "Sheet1");
+            assert_eq!(sheet_name(&report, sheet), "Sheet1");
             assert_eq!(*row_idx, 1);
             assert!(row_signature.is_none());
         }
@@ -199,7 +203,7 @@ fn pg5_8_grid_diff_column_truncated_column_removed_only() {
             col_idx,
             col_signature,
         } => {
-            assert_eq!(sheet, "Sheet1");
+            assert_eq!(sheet_name(&report, sheet), "Sheet1");
             assert_eq!(*col_idx, 1);
             assert!(col_signature.is_none());
         }
@@ -226,7 +230,7 @@ fn pg5_9_grid_diff_row_and_column_truncated_structure_only() {
                 row_idx,
                 row_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                assert_eq!(sheet_name(&report, sheet), "Sheet1");
                 assert_eq!(*row_idx, 1);
                 assert!(row_signature.is_none());
                 rows_removed += 1;
@@ -236,7 +240,7 @@ fn pg5_9_grid_diff_row_and_column_truncated_structure_only() {
                 col_idx,
                 col_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                assert_eq!(sheet_name(&report, sheet), "Sheet1");
                 assert_eq!(*col_idx, 1);
                 assert!(col_signature.is_none());
                 cols_removed += 1;
@@ -269,7 +273,7 @@ fn pg5_10_grid_diff_row_appended_with_overlap_cell_edits() {
                 row_idx,
                 row_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                assert_eq!(sheet_name(&report, sheet), "Sheet1");
                 assert_eq!(*row_idx, 2);
                 assert!(row_signature.is_none());
                 row_added += 1;

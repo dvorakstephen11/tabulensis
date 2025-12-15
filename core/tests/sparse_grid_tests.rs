@@ -1,4 +1,4 @@
-use excel_diff::{Cell, CellAddress, CellValue, Grid};
+use excel_diff::{CellValue, Grid, with_default_session};
 
 #[test]
 fn sparse_grid_empty_has_zero_cells() {
@@ -12,14 +12,7 @@ fn sparse_grid_empty_has_zero_cells() {
 #[test]
 fn sparse_grid_insert_and_retrieve() {
     let mut grid = Grid::new(100, 100);
-    let cell = Cell {
-        row: 50,
-        col: 50,
-        address: CellAddress::from_indices(50, 50),
-        value: Some(CellValue::Number(42.0)),
-        formula: None,
-    };
-    grid.insert(cell);
+    grid.insert_cell(50, 50, Some(CellValue::Number(42.0)), None);
     assert_eq!(grid.cell_count(), 1);
     let retrieved = grid.get(50, 50).expect("cell should exist");
     assert_eq!(retrieved.value, Some(CellValue::Number(42.0)));
@@ -30,14 +23,7 @@ fn sparse_grid_insert_and_retrieve() {
 fn sparse_grid_iter_cells_only_populated() {
     let mut grid = Grid::new(1000, 1000);
     for i in 0..10 {
-        let cell = Cell {
-            row: i * 100,
-            col: i * 100,
-            address: CellAddress::from_indices(i * 100, i * 100),
-            value: Some(CellValue::Number(i as f64)),
-            formula: None,
-        };
-        grid.insert(cell);
+        grid.insert_cell(i * 100, i * 100, Some(CellValue::Number(i as f64)), None);
     }
     let cells: Vec<_> = grid.iter_cells().collect();
     assert_eq!(cells.len(), 10);
@@ -66,13 +52,7 @@ fn cols_iter_covers_all_cols() {
 #[test]
 fn rows_iter_and_get_are_consistent() {
     let mut grid = Grid::new(2, 2);
-    grid.insert(Cell {
-        row: 1,
-        col: 1,
-        address: CellAddress::from_indices(1, 1),
-        value: Some(CellValue::Number(1.0)),
-        formula: None,
-    });
+    grid.insert_cell(1, 1, Some(CellValue::Number(1.0)), None);
 
     for r in grid.rows_iter() {
         for c in grid.cols_iter() {
@@ -107,12 +87,10 @@ fn sparse_grid_all_empty_rows_have_zero_signatures() {
 #[test]
 fn compute_signatures_on_sparse_grid_produces_hashes() {
     let mut grid = Grid::new(4, 4);
-    grid.insert(Cell {
-        row: 1,
-        col: 3,
-        address: CellAddress::from_indices(1, 3),
-        value: Some(CellValue::Text("value".into())),
-        formula: Some("=A1".into()),
+    with_default_session(|session| {
+        let text_id = session.strings.intern("value");
+        let formula_id = session.strings.intern("=A1");
+        grid.insert_cell(1, 3, Some(CellValue::Text(text_id)), Some(formula_id));
     });
 
     grid.compute_all_signatures();
@@ -135,26 +113,13 @@ fn compute_signatures_on_sparse_grid_produces_hashes() {
 #[test]
 fn compute_all_signatures_matches_direct_computation() {
     let mut grid = Grid::new(3, 3);
-    grid.insert(Cell {
-        row: 0,
-        col: 1,
-        address: CellAddress::from_indices(0, 1),
-        value: Some(CellValue::Number(10.0)),
-        formula: Some("=5+5".into()),
-    });
-    grid.insert(Cell {
-        row: 1,
-        col: 0,
-        address: CellAddress::from_indices(1, 0),
-        value: Some(CellValue::Text("x".into())),
-        formula: None,
-    });
-    grid.insert(Cell {
-        row: 2,
-        col: 2,
-        address: CellAddress::from_indices(2, 2),
-        value: Some(CellValue::Bool(false)),
-        formula: Some("=A1".into()),
+    with_default_session(|session| {
+        let formula_a = session.strings.intern("=5+5");
+        let text_id = session.strings.intern("x");
+        let formula_b = session.strings.intern("=A1");
+        grid.insert_cell(0, 1, Some(CellValue::Number(10.0)), Some(formula_a));
+        grid.insert_cell(1, 0, Some(CellValue::Text(text_id)), None);
+        grid.insert_cell(2, 2, Some(CellValue::Bool(false)), Some(formula_b));
     });
 
     grid.compute_all_signatures();

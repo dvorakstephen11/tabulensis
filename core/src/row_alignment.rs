@@ -708,7 +708,7 @@ fn block_similarity(slice_a: &[RowMeta], slice_b: &[RowMeta]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workbook::{Cell, CellAddress, CellValue};
+    use crate::workbook::CellValue;
 
     fn grid_from_rows(rows: &[&[i32]]) -> Grid {
         let nrows = rows.len() as u32;
@@ -717,13 +717,12 @@ mod tests {
 
         for (r_idx, row_vals) in rows.iter().enumerate() {
             for (c_idx, value) in row_vals.iter().enumerate() {
-                grid.insert(Cell {
-                    row: r_idx as u32,
-                    col: c_idx as u32,
-                    address: CellAddress::from_indices(r_idx as u32, c_idx as u32),
-                    value: Some(CellValue::Number(*value as f64)),
-                    formula: None,
-                });
+                grid.insert_cell(
+                    r_idx as u32,
+                    c_idx as u32,
+                    Some(CellValue::Number(*value as f64)),
+                    None,
+                );
             }
         }
 

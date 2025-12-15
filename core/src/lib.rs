@@ -20,6 +20,8 @@
 //! }
 //! ```
 
+use std::cell::RefCell;
+
 pub mod addressing;
 pub(crate) mod alignment;
 pub(crate) mod column_alignment;
@@ -45,7 +47,46 @@ pub mod perf;
 pub(crate) mod rect_block_move;
 pub(crate) mod region_mask;
 pub(crate) mod row_alignment;
+pub mod session;
+pub mod string_pool;
 pub mod workbook;
+
+thread_local! {
+    static DEFAULT_SESSION: RefCell<DiffSession> = RefCell::new(DiffSession::new());
+}
+
+pub fn with_default_session<T>(f: impl FnOnce(&mut DiffSession) -> T) -> T {
+    DEFAULT_SESSION.with(|session| {
+        let mut session = session.borrow_mut();
+        f(&mut session)
+    })
+}
+
+pub fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    DEFAULT_SESSION.with(|session| {
+        let mut session = session.borrow_mut();
+        engine::diff_workbooks(old, new, &mut session.strings, config)
+    })
+}
+
+pub fn try_diff_workbooks(
+    old: &Workbook,
+    new: &Workbook,
+    config: &DiffConfig,
+) -> Result<DiffReport, DiffError> {
+    DEFAULT_SESSION.with(|session| {
+        let mut session = session.borrow_mut();
+        engine::try_diff_workbooks(old, new, &mut session.strings, config)
+    })
+}
+
+#[cfg(feature = "excel-open-xml")]
+pub fn open_workbook(path: impl AsRef<std::path::Path>) -> Result<Workbook, ExcelOpenError> {
+    DEFAULT_SESSION.with(|session| {
+        let mut session = session.borrow_mut();
+        excel_open_xml::open_workbook(path, &mut session.strings)
+    })
+}
 
 pub use addressing::{AddressParseError, address_to_index, index_to_address};
 pub use config::DiffConfig;
@@ -58,9 +99,13 @@ pub use datamashup_package::{
     EmbeddedContent, PackageParts, PackageXml, SectionDocument, parse_package_parts,
 };
 pub use diff::{DiffError, DiffOp, DiffReport, SheetId};
-pub use engine::{diff_grids_database_mode, diff_workbooks, try_diff_workbooks};
+pub use engine::{
+    diff_grids_database_mode,
+    diff_workbooks as diff_workbooks_with_pool,
+    try_diff_workbooks as try_diff_workbooks_with_pool,
+};
 #[cfg(feature = "excel-open-xml")]
-pub use excel_open_xml::{ExcelOpenError, open_data_mashup, open_workbook};
+pub use excel_open_xml::{ExcelOpenError, open_data_mashup, open_workbook as open_workbook_with_pool};
 pub use grid_parser::{GridParseError, SheetDescriptor};
 pub use grid_view::{ColHash, ColMeta, GridView, HashStats, RowHash, RowMeta, RowView};
 pub use m_ast::{
@@ -71,6 +116,8 @@ pub use m_section::{SectionMember, SectionParseError, parse_section_members};
 #[cfg(feature = "excel-open-xml")]
 pub use output::json::diff_workbooks_to_json;
 pub use output::json::{CellDiff, serialize_cell_diffs, serialize_diff_report};
+pub use session::DiffSession;
+pub use string_pool::{StringId, StringPool};
 pub use workbook::{
     Cell, CellAddress, CellSnapshot, CellValue, ColSignature, Grid, RowSignature, Sheet, SheetKind,
     Workbook,

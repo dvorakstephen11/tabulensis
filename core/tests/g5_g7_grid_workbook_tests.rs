@@ -1,4 +1,4 @@
-use excel_diff::{CellValue, DiffOp, diff_workbooks, open_workbook};
+use excel_diff::{CellValue, DiffOp, diff_workbooks, open_workbook, with_default_session};
 use std::collections::BTreeSet;
 
 mod common;
@@ -13,15 +13,16 @@ fn g5_multi_cell_edits_produces_only_celledited_ops() {
 
     let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
+    let (text_x, text_y) = with_default_session(|session| {
+        let x = session.strings.intern("x");
+        let y = session.strings.intern("y");
+        (CellValue::Text(x), CellValue::Text(y))
+    });
     let expected = vec![
         ("B2", CellValue::Number(1.0), CellValue::Number(42.0)),
         ("D5", CellValue::Number(2.0), CellValue::Number(99.0)),
         ("H7", CellValue::Number(3.0), CellValue::Number(3.5)),
-        (
-            "J10",
-            CellValue::Text("x".into()),
-            CellValue::Text("y".into()),
-        ),
+        ("J10", text_x, text_y),
     ];
 
     assert_eq!(
@@ -52,7 +53,8 @@ fn g5_multi_cell_edits_produces_only_celledited_ops() {
             })
             .unwrap_or_else(|| panic!("missing CellEdited for {addr}"));
 
-        assert_eq!(sheet, "Sheet1");
+        let sheet_name = report.strings[sheet.0 as usize].as_str();
+        assert_eq!(sheet_name, "Sheet1");
         assert_eq!(from.value, Some(expected_from));
         assert_eq!(to.value, Some(expected_to));
         assert_eq!(from.formula, to.formula, "no formula changes expected");
@@ -94,7 +96,8 @@ fn g6_row_append_bottom_emits_two_rowadded_and_no_celledited() {
                 row_idx,
                 row_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                let sheet_name = report.strings[sheet.0 as usize].as_str();
+                assert_eq!(sheet_name, "Sheet1");
                 assert!(row_signature.is_none());
                 Some(*row_idx)
             }
@@ -141,7 +144,8 @@ fn g6_row_delete_bottom_emits_two_rowremoved_and_no_celledited() {
                 row_idx,
                 row_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                let sheet_name = report.strings[sheet.0 as usize].as_str();
+                assert_eq!(sheet_name, "Sheet1");
                 assert!(row_signature.is_none());
                 Some(*row_idx)
             }
@@ -188,7 +192,8 @@ fn g7_col_append_right_emits_two_columnadded_and_no_celledited() {
                 col_idx,
                 col_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                let sheet_name = report.strings[sheet.0 as usize].as_str();
+                assert_eq!(sheet_name, "Sheet1");
                 assert!(col_signature.is_none());
                 Some(*col_idx)
             }
@@ -235,7 +240,8 @@ fn g7_col_delete_right_emits_two_columnremoved_and_no_celledited() {
                 col_idx,
                 col_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                let sheet_name = report.strings[sheet.0 as usize].as_str();
+                assert_eq!(sheet_name, "Sheet1");
                 assert!(col_signature.is_none());
                 Some(*col_idx)
             }

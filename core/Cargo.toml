@@ -8,8 +8,9 @@ name = "excel_diff"
 path = "src/lib.rs"
 
 [features]
-default = ["excel-open-xml"]
+default = ["excel-open-xml", "std-fs"]
 excel-open-xml = []
+std-fs = []
 perf-metrics = []
 
 [dependencies]

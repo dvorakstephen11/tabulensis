@@ -1,16 +1,21 @@
-use excel_diff::{Cell, CellAddress, CellValue, DiffConfig, Grid, GridView};
+use excel_diff::{Cell, CellValue, DiffConfig, Grid, GridView, with_default_session};
 
 mod common;
 use common::grid_from_numbers;
 
-fn make_cell(row: u32, col: u32, value: Option<CellValue>, formula: Option<&str>) -> Cell {
-    Cell {
-        row,
-        col,
-        address: CellAddress::from_indices(row, col),
-        value,
-        formula: formula.map(|s| s.to_string()),
-    }
+fn insert_cell(
+    grid: &mut Grid,
+    row: u32,
+    col: u32,
+    value: Option<CellValue>,
+    formula: Option<&str>,
+) {
+    let formula_id = formula.map(|s| with_default_session(|session| session.strings.intern(s)));
+    grid.insert_cell(row, col, value, formula_id);
+}
+
+fn text(value: &str) -> CellValue {
+    with_default_session(|session| CellValue::Text(session.strings.intern(value)))
 }
 
 #[test]
@@ -27,8 +32,6 @@ fn gridview_dense_3x3_layout_and_metadata() {
         assert_eq!(row_view.cells.len(), 3);
         for (col_idx, (col, cell)) in row_view.cells.iter().enumerate() {
             assert_eq!(*col as usize, col_idx);
-            assert_eq!(cell.row as usize, row_idx);
-            assert_eq!(cell.col as usize, col_idx);
         }
 
         let meta = &view.row_meta[row_idx];
@@ -47,14 +50,9 @@ fn gridview_dense_3x3_layout_and_metadata() {
 #[test]
 fn gridview_sparse_rows_low_info_classification() {
     let mut grid = Grid::new(4, 4);
-    grid.insert(make_cell(
-        0,
-        0,
-        Some(CellValue::Text("Header".into())),
-        None,
-    ));
-    grid.insert(make_cell(2, 2, Some(CellValue::Number(10.0)), None));
-    grid.insert(make_cell(3, 1, Some(CellValue::Text("   ".into())), None));
+    insert_cell(&mut grid, 0, 0, Some(text("Header")), None);
+    insert_cell(&mut grid, 2, 2, Some(CellValue::Number(10.0)), None);
+    insert_cell(&mut grid, 3, 1, Some(text("   ")), None);
 
     let view = GridView::from_grid(&grid);
 
@@ -79,7 +77,7 @@ fn gridview_sparse_rows_low_info_classification() {
 #[test]
 fn gridview_formula_only_row_respects_threshold() {
     let mut grid = Grid::new(2, 2);
-    grid.insert(make_cell(0, 0, None, Some("=A1+1")));
+    insert_cell(&mut grid, 0, 0, None, Some("=A1+1"));
 
     let view_default = GridView::from_grid(&grid);
     assert_eq!(view_default.row_meta[0].non_blank_count, 1);
@@ -95,16 +93,11 @@ fn gridview_formula_only_row_respects_threshold() {
 #[test]
 fn gridview_column_metadata_matches_signatures() {
     let mut grid = Grid::new(4, 4);
-    grid.insert(make_cell(
-        0,
-        1,
-        Some(CellValue::Text("a".into())),
-        Some("=B1"),
-    ));
-    grid.insert(make_cell(1, 3, Some(CellValue::Number(2.0)), Some("=1+1")));
-    grid.insert(make_cell(2, 0, Some(CellValue::Bool(true)), None));
-    grid.insert(make_cell(2, 2, Some(CellValue::Text("mid".into())), None));
-    grid.insert(make_cell(3, 0, None, Some("=A1")));
+    insert_cell(&mut grid, 0, 1, Some(text("a")), Some("=B1"));
+    insert_cell(&mut grid, 1, 3, Some(CellValue::Number(2.0)), Some("=1+1"));
+    insert_cell(&mut grid, 2, 0, Some(CellValue::Bool(true)), None);
+    insert_cell(&mut grid, 2, 2, Some(text("mid")), None);
+    insert_cell(&mut grid, 3, 0, None, Some("=A1"));
 
     grid.compute_all_signatures();
     let row_signatures = grid
@@ -157,12 +150,13 @@ fn gridview_large_sparse_grid_constructs_without_panic() {
 
     for r in (0..nrows).step_by(100) {
         let col = (r / 100) % ncols;
-        grid.insert(make_cell(
+        insert_cell(
+            &mut grid,
             r,
             col,
             Some(CellValue::Number((r / 100) as f64)),
             None,
-        ));
+        );
     }
 
     let view = GridView::from_grid(&grid);
@@ -184,15 +178,16 @@ fn gridview_large_sparse_grid_constructs_without_panic() {
 #[test]
 fn gridview_row_hashes_ignore_small_float_drift() {
     let mut grid_a = Grid::new(1, 1);
-    grid_a.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    insert_cell(&mut grid_a, 0, 0, Some(CellValue::Number(1.0)), None);
 
     let mut grid_b = Grid::new(1, 1);
-    grid_b.insert(make_cell(
+    insert_cell(
+        &mut grid_b,
         0,
         0,
         Some(CellValue::Number(1.0000000000000002)),
         None,
-    ));
+    );
 
     let view_a = GridView::from_grid(&grid_a);
     let view_b = GridView::from_grid(&grid_b);

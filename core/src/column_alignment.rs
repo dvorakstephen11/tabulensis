@@ -19,9 +19,11 @@ pub(crate) struct ColumnBlockMove {
 
 fn unordered_col_hashes(grid: &Grid) -> Vec<ColHash> {
     let mut col_cells: Vec<Vec<&crate::workbook::Cell>> = vec![Vec::new(); grid.ncols as usize];
-    for cell in grid.cells.values() {
-        let idx = cell.col as usize;
-        col_cells[idx].push(cell);
+    for ((_, col), cell) in grid.iter_cells() {
+        let idx = col as usize;
+        if idx < col_cells.len() {
+            col_cells[idx].push(cell);
+        }
     }
     col_cells
         .iter()
@@ -384,7 +386,7 @@ fn blank_dominated(view: &GridView<'_>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workbook::{Cell, CellAddress, CellValue};
+    use crate::workbook::CellValue;
 
     fn grid_from_numbers(rows: &[&[i32]]) -> Grid {
         let nrows = rows.len() as u32;
@@ -393,13 +395,12 @@ mod tests {
 
         for (r_idx, row_vals) in rows.iter().enumerate() {
             for (c_idx, value) in row_vals.iter().enumerate() {
-                grid.insert(Cell {
-                    row: r_idx as u32,
-                    col: c_idx as u32,
-                    address: CellAddress::from_indices(r_idx as u32, c_idx as u32),
-                    value: Some(CellValue::Number(*value as f64)),
-                    formula: None,
-                });
+                grid.insert_cell(
+                    r_idx as u32,
+                    c_idx as u32,
+                    Some(CellValue::Number(*value as f64)),
+                    None,
+                );
             }
         }
 

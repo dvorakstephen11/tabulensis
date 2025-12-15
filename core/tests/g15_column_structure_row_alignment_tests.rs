@@ -1,7 +1,7 @@
 //! Integration tests verifying column structural changes do not break row alignment when row content is preserved.
 //! Covers Branch 1.3 acceptance criteria for column insertion/deletion resilience.
 
-use excel_diff::{Cell, CellAddress, CellValue, DiffOp, Grid, diff_workbooks};
+use excel_diff::{CellValue, DiffOp, Grid, diff_workbooks};
 
 mod common;
 use common::single_sheet_workbook;
@@ -9,13 +9,7 @@ use common::single_sheet_workbook;
 fn make_grid_with_cells(nrows: u32, ncols: u32, cells: &[(u32, u32, i32)]) -> Grid {
     let mut grid = Grid::new(nrows, ncols);
     for (row, col, val) in cells {
-        grid.insert(Cell {
-            row: *row,
-            col: *col,
-            address: CellAddress::from_indices(*row, *col),
-            value: Some(CellValue::Number(*val as f64)),
-            formula: None,
-        });
+        grid.insert_cell(*row, *col, Some(CellValue::Number(*val as f64)), None);
     }
     grid
 }
@@ -27,13 +21,7 @@ fn grid_from_row_data(rows: &[Vec<i32>]) -> Grid {
 
     for (r, row_vals) in rows.iter().enumerate() {
         for (c, val) in row_vals.iter().enumerate() {
-            grid.insert(Cell {
-                row: r as u32,
-                col: c as u32,
-                address: CellAddress::from_indices(r as u32, c as u32),
-                value: Some(CellValue::Number(*val as f64)),
-                formula: None,
-            });
+            grid.insert_cell(r as u32, c as u32, Some(CellValue::Number(*val as f64)), None);
         }
     }
     grid

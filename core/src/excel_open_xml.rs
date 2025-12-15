@@ -12,6 +12,7 @@ use crate::grid_parser::{
     GridParseError, parse_relationships, parse_shared_strings, parse_sheet_xml, parse_workbook_xml,
     resolve_sheet_target,
 };
+use crate::string_pool::StringPool;
 use crate::workbook::{Sheet, SheetKind, Workbook};
 use std::collections::HashMap;
 use std::path::Path;
@@ -34,14 +35,17 @@ pub enum ExcelOpenError {
     SerializationError(String),
 }
 
-pub fn open_workbook(path: impl AsRef<Path>) -> Result<Workbook, ExcelOpenError> {
-    let mut container = OpcContainer::open(path.as_ref())?;
+pub fn open_workbook(
+    path: impl AsRef<Path>,
+    pool: &mut StringPool,
+) -> Result<Workbook, ExcelOpenError> {
+    let mut container = OpcContainer::open_from_path(path.as_ref())?;
 
     let shared_strings = match container
         .read_file_optional("xl/sharedStrings.xml")
         .map_err(ContainerError::from)?
     {
-        Some(bytes) => parse_shared_strings(&bytes)?,
+        Some(bytes) => parse_shared_strings(&bytes, pool)?,
         None => Vec::new(),
     };
 
@@ -68,9 +72,9 @@ pub fn open_workbook(path: impl AsRef<Path>) -> Result<Workbook, ExcelOpenError>
                 .map_err(|_| ExcelOpenError::WorksheetXmlMissing {
                     sheet_name: sheet.name.clone(),
                 })?;
-        let grid = parse_sheet_xml(&sheet_bytes, &shared_strings)?;
+        let grid = parse_sheet_xml(&sheet_bytes, &shared_strings, pool)?;
         sheet_ir.push(Sheet {
-            name: sheet.name.clone(),
+            name: pool.intern(&sheet.name),
             kind: SheetKind::Worksheet,
             grid,
         });
@@ -80,7 +84,7 @@ pub fn open_workbook(path: impl AsRef<Path>) -> Result<Workbook, ExcelOpenError>
 }
 
 pub fn open_data_mashup(path: impl AsRef<Path>) -> Result<Option<RawDataMashup>, ExcelOpenError> {
-    let mut container = OpcContainer::open(path.as_ref())?;
+    let mut container = OpcContainer::open_from_path(path.as_ref())?;
     let mut found: Option<RawDataMashup> = None;
 
     for i in 0..container.len() {
