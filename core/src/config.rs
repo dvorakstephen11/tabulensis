@@ -17,6 +17,8 @@ pub enum LimitBehavior {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DiffConfig {
+    /// Maximum number of masked move-detection iterations per sheet.
+    /// Set to 0 to disable move detection and represent moves as insert/delete.
     pub max_move_iterations: u32,
     pub max_align_rows: u32,
     pub max_align_cols: u32,
@@ -28,6 +30,7 @@ pub struct DiffConfig {
     pub rare_threshold: u32,
     #[serde(alias = "low_info_cell_threshold")]
     pub low_info_threshold: u32,
+    /// Row-count threshold for recursive gap alignment. Does not gate masked move detection.
     #[serde(alias = "recursive_threshold")]
     pub recursive_align_threshold: u32,
     pub small_gap_threshold: u32,
@@ -47,7 +50,9 @@ pub struct DiffConfig {
     pub move_extraction_max_candidates_per_sig: u32,
     pub context_anchor_k1: u32,
     pub context_anchor_k2: u32,
+    /// Masked move detection runs only when max(old.nrows, new.nrows) <= this.
     pub max_move_detection_rows: u32,
+    /// Masked move detection runs only when max(old.ncols, new.ncols) <= this.
     pub max_move_detection_cols: u32,
 }
 

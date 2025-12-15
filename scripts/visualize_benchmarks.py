@@ -227,8 +227,8 @@ def plot_metric_breakdown(df: pd.DataFrame, output_dir: Path, show: bool = False
         width = 0.25
 
         metric_labels = {
-            "move_detection_time_ms": "Move Detection",
-            "alignment_time_ms": "Alignment",
+            "move_detection_time_ms": "Fingerprinting + Move Detection",
+            "alignment_time_ms": "Alignment (incl. diff)",
             "cell_diff_time_ms": "Cell Diff",
         }
 
@@ -433,4 +433,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-

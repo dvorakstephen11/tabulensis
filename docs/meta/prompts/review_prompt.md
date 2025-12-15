@@ -31,6 +31,7 @@
       2025-12-14_004643_fullscale.json
       2025-12-14_005407_fullscale.json
       2025-12-14_202417_fullscale.json
+      2025-12-15_183914.json
       combined_results.csv
       plots/
         commit_comparison.png
@@ -3337,6 +3338,8 @@ pub struct DiffConfig {
     pub enable_fuzzy_moves: bool,
     pub enable_m_semantic_diff: bool,
     pub enable_formula_semantic_diff: bool,
+    /// When true, emits CellEdited ops even when values are unchanged (diagnostic);
+    /// downstream consumers should treat edits as semantic only if from != to.
     pub include_unchanged_cells: bool,
     pub max_context_rows: u32,
     pub min_block_size_for_move: u32,
@@ -3346,6 +3349,7 @@ pub struct DiffConfig {
     pub move_extraction_max_candidates_per_sig: u32,
     pub context_anchor_k1: u32,
     pub context_anchor_k2: u32,
+    pub max_move_detection_rows: u32,
     pub max_move_detection_cols: u32,
 }
 
@@ -3370,13 +3374,14 @@ impl Default for DiffConfig {
             enable_formula_semantic_diff: false,
             include_unchanged_cells: false,
             max_context_rows: 3,
-            min_block_size_for_move: 1,
+            min_block_size_for_move: 3,
             max_lcs_gap_size: 1_500,
             lcs_dp_work_limit: 20_000,
             move_extraction_max_slice_len: 10_000,
             move_extraction_max_candidates_per_sig: 16,
             context_anchor_k1: 4,
             context_anchor_k2: 8,
+            max_move_detection_rows: 200,
             max_move_detection_cols: 256,
         }
     }
@@ -3389,6 +3394,7 @@ impl DiffConfig {
             max_block_gap: 1_000,
             small_gap_threshold: 20,
             recursive_align_threshold: 80,
+            max_move_detection_rows: 80,
             enable_fuzzy_moves: false,
             enable_m_semantic_diff: false,
             ..Default::default()
@@ -3403,13 +3409,15 @@ impl DiffConfig {
         Self {
             max_move_iterations: 30,
             max_block_gap: 20_000,
-            fuzzy_similarity_threshold: 0.90,
+            fuzzy_similarity_threshold: 0.95,
             small_gap_threshold: 80,
             recursive_align_threshold: 400,
+            enable_formula_semantic_diff: true,
             max_lcs_gap_size: 1_500,
             lcs_dp_work_limit: 20_000,
             move_extraction_max_slice_len: 10_000,
             move_extraction_max_candidates_per_sig: 16,
+            max_move_detection_rows: 400,
             max_move_detection_cols: 256,
             ..Default::default()
         }
@@ -3444,6 +3452,7 @@ impl DiffConfig {
         )?;
         ensure_non_zero_u32(self.context_anchor_k1, "context_anchor_k1")?;
         ensure_non_zero_u32(self.context_anchor_k2, "context_anchor_k2")?;
+        ensure_non_zero_u32(self.max_move_detection_rows, "max_move_detection_rows")?;
         ensure_non_zero_u32(self.max_move_detection_cols, "max_move_detection_cols")?;
         ensure_non_zero_u32(self.max_context_rows, "max_context_rows")?;
         ensure_non_zero_u32(self.min_block_size_for_move, "min_block_size_for_move")?;
@@ -3618,6 +3627,11 @@ impl DiffConfigBuilder {
         self
     }
 
+    pub fn max_move_detection_rows(mut self, value: u32) -> Self {
+        self.inner.max_move_detection_rows = value;
+        self
+    }
+
     pub fn max_move_detection_cols(mut self, value: u32) -> Self {
         self.inner.max_move_detection_cols = value;
         self
@@ -3636,11 +3650,34 @@ mod tests {
     #[test]
     fn defaults_match_limit_spec() {
         let cfg = DiffConfig::default();
+
         assert_eq!(cfg.max_align_rows, 500_000);
         assert_eq!(cfg.max_align_cols, 16_384);
-        assert_eq!(cfg.low_info_threshold, 2);
+        assert_eq!(cfg.max_recursion_depth, 10);
+        assert!(matches!(
+            cfg.on_limit_exceeded,
+            LimitBehavior::FallbackToPositional
+        ));
+
+        assert_eq!(cfg.fuzzy_similarity_threshold, 0.80);
+        assert_eq!(cfg.min_block_size_for_move, 3);
         assert_eq!(cfg.max_move_iterations, 20);
+
+        assert_eq!(cfg.recursive_align_threshold, 200);
+        assert_eq!(cfg.small_gap_threshold, 50);
+        assert_eq!(cfg.low_info_threshold, 2);
+        assert_eq!(cfg.rare_threshold, 5);
         assert_eq!(cfg.max_block_gap, 10_000);
+
+        assert_eq!(cfg.max_move_detection_rows, 200);
+        assert_eq!(cfg.max_move_detection_cols, 256);
+
+        assert!(!cfg.include_unchanged_cells);
+        assert_eq!(cfg.max_context_rows, 3);
+
+        assert!(cfg.enable_fuzzy_moves);
+        assert!(cfg.enable_m_semantic_diff);
+        assert!(!cfg.enable_formula_semantic_diff);
     }
 
     #[test]
@@ -3687,6 +3724,13 @@ mod tests {
         assert!(precise.max_move_iterations >= balanced.max_move_iterations);
         assert!(precise.max_block_gap >= balanced.max_block_gap);
         assert!(precise.fuzzy_similarity_threshold >= balanced.fuzzy_similarity_threshold);
+    }
+
+    #[test]
+    fn most_precise_matches_sprint_plan_values() {
+        let cfg = DiffConfig::most_precise();
+        assert_eq!(cfg.fuzzy_similarity_threshold, 0.95);
+        assert!(cfg.enable_formula_semantic_diff);
     }
 }
 
@@ -5862,7 +5906,7 @@ fn diff_grids_core(
 
     let mut old_mask = RegionMask::all_active(old.nrows, old.ncols);
     let mut new_mask = RegionMask::all_active(new.nrows, new.ncols);
-    let move_detection_enabled = old.nrows.max(new.nrows) <= config.recursive_align_threshold
+    let move_detection_enabled = old.nrows.max(new.nrows) <= config.max_move_detection_rows
         && old.ncols.max(new.ncols) <= config.max_move_detection_cols;
     let mut iteration = 0;
 
@@ -6014,15 +6058,55 @@ fn diff_grids_core(
         align_rows_amr_with_signatures_from_views(&old_view, &new_view, config)
     {
         let mut alignment = amr_result.alignment;
-        let row_signatures_old = amr_result.row_signatures_a;
-        let row_signatures_new = amr_result.row_signatures_b;
-        inject_moves_from_insert_delete(
-            old,
-            new,
-            &mut alignment,
-            &row_signatures_old,
-            &row_signatures_new,
-        );
+
+        if config.max_move_iterations > 0 {
+            let row_signatures_old = amr_result.row_signatures_a;
+            let row_signatures_new = amr_result.row_signatures_b;
+            inject_moves_from_insert_delete(
+                old,
+                new,
+                &mut alignment,
+                &row_signatures_old,
+                &row_signatures_new,
+            );
+        } else {
+            let mut deleted_from_moves = Vec::new();
+            let mut inserted_from_moves = Vec::new();
+            for mv in &alignment.moves {
+                deleted_from_moves
+                    .extend(mv.src_start_row..mv.src_start_row.saturating_add(mv.row_count));
+                inserted_from_moves
+                    .extend(mv.dst_start_row..mv.dst_start_row.saturating_add(mv.row_count));
+            }
+
+            let multiset_equal = row_signature_multiset_equal(old, new);
+            if multiset_equal {
+                for (a, b) in &alignment.matched {
+                    if row_signature_at(old, *a) != row_signature_at(new, *b) {
+                        deleted_from_moves.push(*a);
+                        inserted_from_moves.push(*b);
+                    }
+                }
+            }
+
+            if !deleted_from_moves.is_empty() || !inserted_from_moves.is_empty() {
+                let deleted_set: HashSet<u32> = deleted_from_moves.iter().copied().collect();
+                let inserted_set: HashSet<u32> = inserted_from_moves.iter().copied().collect();
+
+                alignment
+                    .matched
+                    .retain(|(a, b)| !deleted_set.contains(a) && !inserted_set.contains(b));
+
+                alignment.deleted.extend(deleted_set);
+                alignment.inserted.extend(inserted_set);
+                alignment.deleted.sort_unstable();
+                alignment.deleted.dedup();
+                alignment.inserted.sort_unstable();
+                alignment.inserted.dedup();
+            }
+
+            alignment.moves.clear();
+        }
         let has_structural_rows = !alignment.inserted.is_empty() || !alignment.deleted.is_empty();
         if has_structural_rows && alignment.matched.is_empty() {
             #[cfg(feature = "perf-metrics")]
@@ -6046,7 +6130,7 @@ fn diff_grids_core(
                 .matched
                 .iter()
                 .any(|(a, b)| row_signature_at(old, *a) != row_signature_at(new, *b));
-            if has_row_edits {
+            if has_row_edits && config.max_move_iterations > 0 {
                 #[cfg(feature = "perf-metrics")]
                 if let Some(m) = metrics.as_mut() {
                     m.start_phase(Phase::CellDiff);
@@ -6100,6 +6184,7 @@ fn diff_grids_core(
         if !alignment_is_trivial_identity
             && alignment.moves.is_empty()
             && row_signature_multiset_equal(old, new)
+            && config.max_move_iterations > 0
         {
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
@@ -6643,10 +6728,9 @@ fn detect_exact_rect_block_move_masked(
         && !new_mask.has_exclusions()
         && old.nrows == new.nrows
         && old.ncols == new.ncols
+        && let Some(mv) = detect_exact_rect_block_move(old, new, config)
     {
-        if let Some(mv) = detect_exact_rect_block_move(old, new, config) {
-            return Some(mv);
-        }
+        return Some(mv);
     }
 
     let aligned_rows = align_indices_by_signature(
@@ -7583,8 +7667,12 @@ mod tests {
     fn rect_move_masked_falls_back_when_outside_edit_exists() {
         let rows = 12usize;
         let cols = 12usize;
-        let mut base: Vec<Vec<i32>> = (0..rows)
-            .map(|r| (0..cols).map(|c| 10_000 + (r as i32) * 100 + c as i32).collect())
+        let base: Vec<Vec<i32>> = (0..rows)
+            .map(|r| {
+                (0..cols)
+                    .map(|c| 10_000 + (r as i32) * 100 + c as i32)
+                    .collect()
+            })
             .collect();
         let mut changed = base.clone();
 
@@ -7614,8 +7702,14 @@ mod tests {
         let old_mask = RegionMask::all_active(old.nrows, old.ncols);
         let new_mask = RegionMask::all_active(new.nrows, new.ncols);
 
-        let mv = detect_exact_rect_block_move_masked(&old, &new, &old_mask, &new_mask, &DiffConfig::default())
-            .expect("masked detector should fall back and still detect the move");
+        let mv = detect_exact_rect_block_move_masked(
+            &old,
+            &new,
+            &old_mask,
+            &new_mask,
+            &DiffConfig::default(),
+        )
+        .expect("masked detector should fall back and still detect the move");
 
         assert_eq!(mv.src_start_row, src.0 as u32);
         assert_eq!(mv.src_start_col, src.1 as u32);
@@ -9688,6 +9782,9 @@ pub fn diff_report_to_cell_diffs(report: &DiffReport) -> Vec<CellDiff> {
         .iter()
         .filter_map(|op| {
             if let DiffOp::CellEdited { addr, from, to, .. } = op {
+                if from == to {
+                    return None;
+                }
                 Some(CellDiff {
                     coords: addr.to_a1(),
                     value_file1: render_value(&from.value),
@@ -16144,39 +16241,89 @@ fn g14_row_block_move_plus_row_insertion_outside_no_silent_data_loss() {
 
 #[test]
 fn g14_move_detection_disabled_falls_back_to_positional() {
-    let mut grid_a = base_grid(12, 10);
-    let mut grid_b = base_grid(12, 10);
+    let grid_a = grid_from_numbers(&[
+        &[1, 2, 3],
+        &[10, 20, 30],
+        &[100, 200, 300],
+        &[1000, 2000, 3000],
+        &[10000, 20000, 30000],
+    ]);
 
-    let block = vec![vec![9001, 9002], vec![9003, 9004]];
-    place_block(&mut grid_a, 2, 2, &block);
-    place_block(&mut grid_b, 8, 6, &block);
+    let grid_b = grid_from_numbers(&[
+        &[1, 2, 3],
+        &[1000, 2000, 3000],
+        &[10000, 20000, 30000],
+        &[10, 20, 30],
+        &[100, 200, 300],
+    ]);
 
-    let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
-    let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let disabled_config = DiffConfig {
+    let config = DiffConfig {
         max_move_iterations: 0,
         ..DiffConfig::default()
     };
-    let report_disabled = diff_workbooks(&wb_a, &wb_b, &disabled_config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
-    let rect_moves_disabled = collect_rect_moves(&report_disabled);
     assert!(
-        rect_moves_disabled.is_empty(),
-        "with move detection disabled, no BlockMovedRect should be emitted"
+        report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::RowRemoved { .. })),
+        "expected positional fallback when move detection disabled"
     );
     assert!(
-        !report_disabled.ops.is_empty(),
-        "with move detection disabled, positional changes should still be reported"
+        report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::RowAdded { .. })),
+        "expected positional fallback when move detection disabled"
     );
+    assert!(
+        !report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::BlockMovedRows { .. })),
+        "no block move should be present when move detection disabled"
+    );
+}
 
-    let report_enabled = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+#[test]
+fn g14_masked_move_detection_not_gated_by_recursive_align_threshold() {
+    let grid_a = grid_from_numbers(&[
+        &[1, 2, 3],
+        &[10, 20, 30],
+        &[100, 200, 300],
+        &[1000, 2000, 3000],
+        &[10000, 20000, 30000],
+    ]);
 
-    let rect_moves_enabled = collect_rect_moves(&report_enabled);
-    assert_eq!(
-        rect_moves_enabled.len(),
-        1,
-        "with move detection enabled, BlockMovedRect should be detected"
+    let grid_b = grid_from_numbers(&[
+        &[1, 2, 3],
+        &[1000, 2000, 3000],
+        &[10000, 20000, 30000],
+        &[10, 20, 30],
+        &[100, 200, 300],
+    ]);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let config = DiffConfig {
+        recursive_align_threshold: 1,
+        max_move_detection_rows: 10,
+        ..DiffConfig::default()
+    };
+
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
+
+    assert!(
+        report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::BlockMovedRows { .. })),
+        "masked move detection should be enabled by max_move_detection_rows, independent of recursion threshold"
     );
 }
 
@@ -19952,6 +20099,34 @@ fn diff_report_to_cell_diffs_maps_values_correctly() {
 }
 
 #[test]
+fn diff_report_to_cell_diffs_filters_no_op_cell_edits() {
+    let addr_a1 = CellAddress::from_indices(0, 0);
+    let addr_a2 = CellAddress::from_indices(1, 0);
+
+    let report = DiffReport::new(vec![
+        DiffOp::cell_edited(
+            "Sheet1".to_string(),
+            addr_a1,
+            make_cell_snapshot(addr_a1, Some(CellValue::Number(1.0))),
+            make_cell_snapshot(addr_a1, Some(CellValue::Number(1.0))),
+        ),
+        DiffOp::cell_edited(
+            "Sheet1".to_string(),
+            addr_a2,
+            make_cell_snapshot(addr_a2, Some(CellValue::Number(1.0))),
+            make_cell_snapshot(addr_a2, Some(CellValue::Number(2.0))),
+        ),
+    ]);
+
+    let diffs = diff_report_to_cell_diffs(&report);
+
+    assert_eq!(diffs.len(), 1);
+    assert_eq!(diffs[0].coords, "A2");
+    assert_eq!(diffs[0].value_file1, Some("1".to_string()));
+    assert_eq!(diffs[0].value_file2, Some("2".to_string()));
+}
+
+#[test]
 fn test_json_format() {
     let diffs = vec![
         CellDiff {
@@ -20659,7 +20834,11 @@ fn perf_50k_dense_single_edit() {
         "50k dense should detect the cell edit"
     );
     let metrics = report.metrics.expect("should have metrics");
-    log_perf_metric("perf_50k_dense_single_edit", &metrics, " (target: <5s)");
+    log_perf_metric(
+        "perf_50k_dense_single_edit",
+        &metrics,
+        " (enforced: <30s; target: <5s)",
+    );
     assert!(
         metrics.total_time_ms < 30000,
         "50k dense grid should complete in <30s, took {}ms",
@@ -20681,7 +20860,11 @@ fn perf_50k_completely_different() {
 
     assert!(report.complete, "50k different grids should complete");
     let metrics = report.metrics.expect("should have metrics");
-    log_perf_metric("perf_50k_completely_different", &metrics, " (target: <10s)");
+    log_perf_metric(
+        "perf_50k_completely_different",
+        &metrics,
+        " (enforced: <60s; target: <10s)",
+    );
     assert!(
         metrics.total_time_ms < 60000,
         "50k completely different should complete in <60s, took {}ms",
@@ -20713,7 +20896,7 @@ fn perf_50k_adversarial_repetitive() {
     log_perf_metric(
         "perf_50k_adversarial_repetitive",
         &metrics,
-        " (target: <15s)",
+        " (enforced: <120s; target: <15s)",
     );
     assert!(
         metrics.total_time_ms < 120000,
