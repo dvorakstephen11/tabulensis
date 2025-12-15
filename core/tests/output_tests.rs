@@ -152,6 +152,34 @@ fn diff_report_to_cell_diffs_maps_values_correctly() {
 }
 
 #[test]
+fn diff_report_to_cell_diffs_filters_no_op_cell_edits() {
+    let addr_a1 = CellAddress::from_indices(0, 0);
+    let addr_a2 = CellAddress::from_indices(1, 0);
+
+    let report = DiffReport::new(vec![
+        DiffOp::cell_edited(
+            "Sheet1".to_string(),
+            addr_a1,
+            make_cell_snapshot(addr_a1, Some(CellValue::Number(1.0))),
+            make_cell_snapshot(addr_a1, Some(CellValue::Number(1.0))),
+        ),
+        DiffOp::cell_edited(
+            "Sheet1".to_string(),
+            addr_a2,
+            make_cell_snapshot(addr_a2, Some(CellValue::Number(1.0))),
+            make_cell_snapshot(addr_a2, Some(CellValue::Number(2.0))),
+        ),
+    ]);
+
+    let diffs = diff_report_to_cell_diffs(&report);
+
+    assert_eq!(diffs.len(), 1);
+    assert_eq!(diffs[0].coords, "A2");
+    assert_eq!(diffs[0].value_file1, Some("1".to_string()));
+    assert_eq!(diffs[0].value_file2, Some("2".to_string()));
+}
+
+#[test]
 fn test_json_format() {
     let diffs = vec![
         CellDiff {

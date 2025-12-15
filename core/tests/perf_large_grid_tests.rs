@@ -251,7 +251,11 @@ fn perf_50k_dense_single_edit() {
         "50k dense should detect the cell edit"
     );
     let metrics = report.metrics.expect("should have metrics");
-    log_perf_metric("perf_50k_dense_single_edit", &metrics, " (target: <5s)");
+    log_perf_metric(
+        "perf_50k_dense_single_edit",
+        &metrics,
+        " (enforced: <30s; target: <5s)",
+    );
     assert!(
         metrics.total_time_ms < 30000,
         "50k dense grid should complete in <30s, took {}ms",
@@ -273,7 +277,11 @@ fn perf_50k_completely_different() {
 
     assert!(report.complete, "50k different grids should complete");
     let metrics = report.metrics.expect("should have metrics");
-    log_perf_metric("perf_50k_completely_different", &metrics, " (target: <10s)");
+    log_perf_metric(
+        "perf_50k_completely_different",
+        &metrics,
+        " (enforced: <60s; target: <10s)",
+    );
     assert!(
         metrics.total_time_ms < 60000,
         "50k completely different should complete in <60s, took {}ms",
@@ -305,7 +313,7 @@ fn perf_50k_adversarial_repetitive() {
     log_perf_metric(
         "perf_50k_adversarial_repetitive",
         &metrics,
-        " (target: <15s)",
+        " (enforced: <120s; target: <15s)",
     );
     assert!(
         metrics.total_time_ms < 120000,

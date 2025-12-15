@@ -36,6 +36,8 @@ pub struct DiffConfig {
     pub enable_fuzzy_moves: bool,
     pub enable_m_semantic_diff: bool,
     pub enable_formula_semantic_diff: bool,
+    /// When true, emits CellEdited ops even when values are unchanged (diagnostic);
+    /// downstream consumers should treat edits as semantic only if from != to.
     pub include_unchanged_cells: bool,
     pub max_context_rows: u32,
     pub min_block_size_for_move: u32,
@@ -45,6 +47,7 @@ pub struct DiffConfig {
     pub move_extraction_max_candidates_per_sig: u32,
     pub context_anchor_k1: u32,
     pub context_anchor_k2: u32,
+    pub max_move_detection_rows: u32,
     pub max_move_detection_cols: u32,
 }
 
@@ -69,13 +72,14 @@ impl Default for DiffConfig {
             enable_formula_semantic_diff: false,
             include_unchanged_cells: false,
             max_context_rows: 3,
-            min_block_size_for_move: 1,
+            min_block_size_for_move: 3,
             max_lcs_gap_size: 1_500,
             lcs_dp_work_limit: 20_000,
             move_extraction_max_slice_len: 10_000,
             move_extraction_max_candidates_per_sig: 16,
             context_anchor_k1: 4,
             context_anchor_k2: 8,
+            max_move_detection_rows: 200,
             max_move_detection_cols: 256,
         }
     }
@@ -88,6 +92,7 @@ impl DiffConfig {
             max_block_gap: 1_000,
             small_gap_threshold: 20,
             recursive_align_threshold: 80,
+            max_move_detection_rows: 80,
             enable_fuzzy_moves: false,
             enable_m_semantic_diff: false,
             ..Default::default()
@@ -102,13 +107,15 @@ impl DiffConfig {
         Self {
             max_move_iterations: 30,
             max_block_gap: 20_000,
-            fuzzy_similarity_threshold: 0.90,
+            fuzzy_similarity_threshold: 0.95,
             small_gap_threshold: 80,
             recursive_align_threshold: 400,
+            enable_formula_semantic_diff: true,
             max_lcs_gap_size: 1_500,
             lcs_dp_work_limit: 20_000,
             move_extraction_max_slice_len: 10_000,
             move_extraction_max_candidates_per_sig: 16,
+            max_move_detection_rows: 400,
             max_move_detection_cols: 256,
             ..Default::default()
         }
@@ -143,6 +150,7 @@ impl DiffConfig {
         )?;
         ensure_non_zero_u32(self.context_anchor_k1, "context_anchor_k1")?;
         ensure_non_zero_u32(self.context_anchor_k2, "context_anchor_k2")?;
+        ensure_non_zero_u32(self.max_move_detection_rows, "max_move_detection_rows")?;
         ensure_non_zero_u32(self.max_move_detection_cols, "max_move_detection_cols")?;
         ensure_non_zero_u32(self.max_context_rows, "max_context_rows")?;
         ensure_non_zero_u32(self.min_block_size_for_move, "min_block_size_for_move")?;
@@ -317,6 +325,11 @@ impl DiffConfigBuilder {
         self
     }
 
+    pub fn max_move_detection_rows(mut self, value: u32) -> Self {
+        self.inner.max_move_detection_rows = value;
+        self
+    }
+
     pub fn max_move_detection_cols(mut self, value: u32) -> Self {
         self.inner.max_move_detection_cols = value;
         self
@@ -335,11 +348,34 @@ mod tests {
     #[test]
     fn defaults_match_limit_spec() {
         let cfg = DiffConfig::default();
+
         assert_eq!(cfg.max_align_rows, 500_000);
         assert_eq!(cfg.max_align_cols, 16_384);
-        assert_eq!(cfg.low_info_threshold, 2);
+        assert_eq!(cfg.max_recursion_depth, 10);
+        assert!(matches!(
+            cfg.on_limit_exceeded,
+            LimitBehavior::FallbackToPositional
+        ));
+
+        assert_eq!(cfg.fuzzy_similarity_threshold, 0.80);
+        assert_eq!(cfg.min_block_size_for_move, 3);
         assert_eq!(cfg.max_move_iterations, 20);
+
+        assert_eq!(cfg.recursive_align_threshold, 200);
+        assert_eq!(cfg.small_gap_threshold, 50);
+        assert_eq!(cfg.low_info_threshold, 2);
+        assert_eq!(cfg.rare_threshold, 5);
         assert_eq!(cfg.max_block_gap, 10_000);
+
+        assert_eq!(cfg.max_move_detection_rows, 200);
+        assert_eq!(cfg.max_move_detection_cols, 256);
+
+        assert!(!cfg.include_unchanged_cells);
+        assert_eq!(cfg.max_context_rows, 3);
+
+        assert!(cfg.enable_fuzzy_moves);
+        assert!(cfg.enable_m_semantic_diff);
+        assert!(!cfg.enable_formula_semantic_diff);
     }
 
     #[test]
@@ -386,5 +422,12 @@ mod tests {
         assert!(precise.max_move_iterations >= balanced.max_move_iterations);
         assert!(precise.max_block_gap >= balanced.max_block_gap);
         assert!(precise.fuzzy_similarity_threshold >= balanced.fuzzy_similarity_threshold);
+    }
+
+    #[test]
+    fn most_precise_matches_sprint_plan_values() {
+        let cfg = DiffConfig::most_precise();
+        assert_eq!(cfg.fuzzy_similarity_threshold, 0.95);
+        assert!(cfg.enable_formula_semantic_diff);
     }
 }

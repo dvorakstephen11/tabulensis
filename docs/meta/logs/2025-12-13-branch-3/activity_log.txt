@@ -11,3 +11,10 @@
 - Files touched: core/src/engine.rs; benchmarks/results/2025-12-14_003645.json.
 - Complications: Clippy flagged clippy::useless-vec in new tests; resolved by using fixed arrays before mapping to sparse tuples.
 - Verification: cargo fmt; cargo test; cargo clippy --workspace --all-targets --all-features -- -D warnings; python scripts/export_perf_metrics.py (results saved to benchmarks/results/2025-12-14_003645.json).
+
+## Remediation Round 3
+
+- Findings addressed: RemediationE fixes (config defaults/presets alignment, move detection gating decoupled from recursion, include_unchanged_cells no-op filtering, perf messaging clarity, unused_mut cleanup).
+- Files touched: core/src/engine.rs; core/src/output/json.rs; core/tests/g14_move_combination_tests.rs; core/tests/output_tests.rs; core/tests/perf_large_grid_tests.rs.
+- Complications: move-disable test revealed AMR alignment was still emitting cell edits; resolved by treating config.max_move_iterations=0 as disabling move-based fallbacks and surfacing add/remove rows instead of masked edits.
+- Verification: cargo fmt; cargo clippy --workspace --all-targets --all-features -- -D warnings; cargo test --workspace; python scripts/export_perf_metrics.py (benchmarks/results/2025-12-15_183914.json).

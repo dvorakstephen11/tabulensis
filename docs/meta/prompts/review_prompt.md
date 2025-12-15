@@ -30,6 +30,7 @@
       2025-12-14_004611.json
       2025-12-14_004643_fullscale.json
       2025-12-14_005407_fullscale.json
+      2025-12-14_202417_fullscale.json
       combined_results.csv
       plots/
         commit_comparison.png
@@ -6636,12 +6637,16 @@ fn detect_exact_rect_block_move_masked(
         return None;
     }
 
+    // Fast path: allow the strict detector to short-circuit when it succeeds, but
+    // fall back to the masked search if it fails (e.g., when extra diffs exist).
     if !old_mask.has_exclusions()
         && !new_mask.has_exclusions()
         && old.nrows == new.nrows
         && old.ncols == new.ncols
     {
-        return detect_exact_rect_block_move(old, new, config);
+        if let Some(mv) = detect_exact_rect_block_move(old, new, config) {
+            return Some(mv);
+        }
     }
 
     let aligned_rows = align_indices_by_signature(
@@ -7444,6 +7449,28 @@ mod tests {
         }
     }
 
+    fn grid_from_matrix(values: &[Vec<i32>]) -> Grid {
+        let nrows = values.len() as u32;
+        let ncols = if nrows == 0 {
+            0
+        } else {
+            values[0].len() as u32
+        };
+        let mut grid = Grid::new(nrows, ncols);
+        for (r, row) in values.iter().enumerate() {
+            for (c, val) in row.iter().enumerate() {
+                grid.insert(Cell {
+                    row: r as u32,
+                    col: c as u32,
+                    address: CellAddress::from_indices(r as u32, c as u32),
+                    value: Some(CellValue::Number(*val as f64)),
+                    formula: None,
+                });
+            }
+        }
+        grid
+    }
+
     #[test]
     fn sheet_kind_order_ranking_includes_macro_and_other() {
         assert!(
@@ -7550,6 +7577,52 @@ mod tests {
             diff_row_pair_sparse(&sheet_id, 0, 3, &old_cells, &new_cells, &mut ops, &config);
 
         assert_eq!(compared, 2);
+    }
+
+    #[test]
+    fn rect_move_masked_falls_back_when_outside_edit_exists() {
+        let rows = 12usize;
+        let cols = 12usize;
+        let mut base: Vec<Vec<i32>> = (0..rows)
+            .map(|r| (0..cols).map(|c| 10_000 + (r as i32) * 100 + c as i32).collect())
+            .collect();
+        let mut changed = base.clone();
+
+        let src = (2usize, 2usize);
+        let dst = (8usize, 6usize);
+        let size = (2usize, 3usize);
+
+        for dr in 0..size.0 {
+            for dc in 0..size.1 {
+                let src_r = src.0 + dr;
+                let src_c = src.1 + dc;
+                let dst_r = dst.0 + dr;
+                let dst_c = dst.1 + dc;
+
+                let src_val = base[src_r][src_c];
+                let dst_val = base[dst_r][dst_c];
+
+                changed[dst_r][dst_c] = src_val;
+                changed[src_r][src_c] = dst_val;
+            }
+        }
+
+        changed[0][0] = 77_777;
+
+        let old = grid_from_matrix(&base);
+        let new = grid_from_matrix(&changed);
+        let old_mask = RegionMask::all_active(old.nrows, old.ncols);
+        let new_mask = RegionMask::all_active(new.nrows, new.ncols);
+
+        let mv = detect_exact_rect_block_move_masked(&old, &new, &old_mask, &new_mask, &DiffConfig::default())
+            .expect("masked detector should fall back and still detect the move");
+
+        assert_eq!(mv.src_start_row, src.0 as u32);
+        assert_eq!(mv.src_start_col, src.1 as u32);
+        assert_eq!(mv.src_row_count, size.0 as u32);
+        assert_eq!(mv.src_col_count, size.1 as u32);
+        assert_eq!(mv.dst_start_row, dst.0 as u32);
+        assert_eq!(mv.dst_start_col, dst.1 as u32);
     }
 }
 

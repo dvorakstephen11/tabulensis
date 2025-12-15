@@ -715,39 +715,89 @@ fn g14_row_block_move_plus_row_insertion_outside_no_silent_data_loss() {
 
 #[test]
 fn g14_move_detection_disabled_falls_back_to_positional() {
-    let mut grid_a = base_grid(12, 10);
-    let mut grid_b = base_grid(12, 10);
+    let grid_a = grid_from_numbers(&[
+        &[1, 2, 3],
+        &[10, 20, 30],
+        &[100, 200, 300],
+        &[1000, 2000, 3000],
+        &[10000, 20000, 30000],
+    ]);
 
-    let block = vec![vec![9001, 9002], vec![9003, 9004]];
-    place_block(&mut grid_a, 2, 2, &block);
-    place_block(&mut grid_b, 8, 6, &block);
+    let grid_b = grid_from_numbers(&[
+        &[1, 2, 3],
+        &[1000, 2000, 3000],
+        &[10000, 20000, 30000],
+        &[10, 20, 30],
+        &[100, 200, 300],
+    ]);
 
-    let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
-    let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let disabled_config = DiffConfig {
+    let config = DiffConfig {
         max_move_iterations: 0,
         ..DiffConfig::default()
     };
-    let report_disabled = diff_workbooks(&wb_a, &wb_b, &disabled_config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
-    let rect_moves_disabled = collect_rect_moves(&report_disabled);
     assert!(
-        rect_moves_disabled.is_empty(),
-        "with move detection disabled, no BlockMovedRect should be emitted"
+        report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::RowRemoved { .. })),
+        "expected positional fallback when move detection disabled"
     );
     assert!(
-        !report_disabled.ops.is_empty(),
-        "with move detection disabled, positional changes should still be reported"
+        report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::RowAdded { .. })),
+        "expected positional fallback when move detection disabled"
     );
+    assert!(
+        !report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::BlockMovedRows { .. })),
+        "no block move should be present when move detection disabled"
+    );
+}
 
-    let report_enabled = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+#[test]
+fn g14_masked_move_detection_not_gated_by_recursive_align_threshold() {
+    let grid_a = grid_from_numbers(&[
+        &[1, 2, 3],
+        &[10, 20, 30],
+        &[100, 200, 300],
+        &[1000, 2000, 3000],
+        &[10000, 20000, 30000],
+    ]);
 
-    let rect_moves_enabled = collect_rect_moves(&report_enabled);
-    assert_eq!(
-        rect_moves_enabled.len(),
-        1,
-        "with move detection enabled, BlockMovedRect should be detected"
+    let grid_b = grid_from_numbers(&[
+        &[1, 2, 3],
+        &[1000, 2000, 3000],
+        &[10000, 20000, 30000],
+        &[10, 20, 30],
+        &[100, 200, 300],
+    ]);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let config = DiffConfig {
+        recursive_align_threshold: 1,
+        max_move_detection_rows: 10,
+        ..DiffConfig::default()
+    };
+
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
+
+    assert!(
+        report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::BlockMovedRows { .. })),
+        "masked move detection should be enabled by max_move_detection_rows, independent of recursion threshold"
     );
 }
 

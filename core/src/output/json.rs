@@ -72,6 +72,9 @@ pub fn diff_report_to_cell_diffs(report: &DiffReport) -> Vec<CellDiff> {
         .iter()
         .filter_map(|op| {
             if let DiffOp::CellEdited { addr, from, to, .. } = op {
+                if from == to {
+                    return None;
+                }
                 Some(CellDiff {
                     coords: addr.to_a1(),
                     value_file1: render_value(&from.value),

@@ -326,7 +326,7 @@ fn diff_grids_core(
 
     let mut old_mask = RegionMask::all_active(old.nrows, old.ncols);
     let mut new_mask = RegionMask::all_active(new.nrows, new.ncols);
-    let move_detection_enabled = old.nrows.max(new.nrows) <= config.recursive_align_threshold
+    let move_detection_enabled = old.nrows.max(new.nrows) <= config.max_move_detection_rows
         && old.ncols.max(new.ncols) <= config.max_move_detection_cols;
     let mut iteration = 0;
 
@@ -478,15 +478,55 @@ fn diff_grids_core(
         align_rows_amr_with_signatures_from_views(&old_view, &new_view, config)
     {
         let mut alignment = amr_result.alignment;
-        let row_signatures_old = amr_result.row_signatures_a;
-        let row_signatures_new = amr_result.row_signatures_b;
-        inject_moves_from_insert_delete(
-            old,
-            new,
-            &mut alignment,
-            &row_signatures_old,
-            &row_signatures_new,
-        );
+
+        if config.max_move_iterations > 0 {
+            let row_signatures_old = amr_result.row_signatures_a;
+            let row_signatures_new = amr_result.row_signatures_b;
+            inject_moves_from_insert_delete(
+                old,
+                new,
+                &mut alignment,
+                &row_signatures_old,
+                &row_signatures_new,
+            );
+        } else {
+            let mut deleted_from_moves = Vec::new();
+            let mut inserted_from_moves = Vec::new();
+            for mv in &alignment.moves {
+                deleted_from_moves
+                    .extend(mv.src_start_row..mv.src_start_row.saturating_add(mv.row_count));
+                inserted_from_moves
+                    .extend(mv.dst_start_row..mv.dst_start_row.saturating_add(mv.row_count));
+            }
+
+            let multiset_equal = row_signature_multiset_equal(old, new);
+            if multiset_equal {
+                for (a, b) in &alignment.matched {
+                    if row_signature_at(old, *a) != row_signature_at(new, *b) {
+                        deleted_from_moves.push(*a);
+                        inserted_from_moves.push(*b);
+                    }
+                }
+            }
+
+            if !deleted_from_moves.is_empty() || !inserted_from_moves.is_empty() {
+                let deleted_set: HashSet<u32> = deleted_from_moves.iter().copied().collect();
+                let inserted_set: HashSet<u32> = inserted_from_moves.iter().copied().collect();
+
+                alignment
+                    .matched
+                    .retain(|(a, b)| !deleted_set.contains(a) && !inserted_set.contains(b));
+
+                alignment.deleted.extend(deleted_set);
+                alignment.inserted.extend(inserted_set);
+                alignment.deleted.sort_unstable();
+                alignment.deleted.dedup();
+                alignment.inserted.sort_unstable();
+                alignment.inserted.dedup();
+            }
+
+            alignment.moves.clear();
+        }
         let has_structural_rows = !alignment.inserted.is_empty() || !alignment.deleted.is_empty();
         if has_structural_rows && alignment.matched.is_empty() {
             #[cfg(feature = "perf-metrics")]
@@ -510,7 +550,7 @@ fn diff_grids_core(
                 .matched
                 .iter()
                 .any(|(a, b)| row_signature_at(old, *a) != row_signature_at(new, *b));
-            if has_row_edits {
+            if has_row_edits && config.max_move_iterations > 0 {
                 #[cfg(feature = "perf-metrics")]
                 if let Some(m) = metrics.as_mut() {
                     m.start_phase(Phase::CellDiff);
@@ -564,6 +604,7 @@ fn diff_grids_core(
         if !alignment_is_trivial_identity
             && alignment.moves.is_empty()
             && row_signature_multiset_equal(old, new)
+            && config.max_move_iterations > 0
         {
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
@@ -1107,10 +1148,9 @@ fn detect_exact_rect_block_move_masked(
         && !new_mask.has_exclusions()
         && old.nrows == new.nrows
         && old.ncols == new.ncols
+        && let Some(mv) = detect_exact_rect_block_move(old, new, config)
     {
-        if let Some(mv) = detect_exact_rect_block_move(old, new, config) {
-            return Some(mv);
-        }
+        return Some(mv);
     }
 
     let aligned_rows = align_indices_by_signature(
@@ -2047,8 +2087,12 @@ mod tests {
     fn rect_move_masked_falls_back_when_outside_edit_exists() {
         let rows = 12usize;
         let cols = 12usize;
-        let mut base: Vec<Vec<i32>> = (0..rows)
-            .map(|r| (0..cols).map(|c| 10_000 + (r as i32) * 100 + c as i32).collect())
+        let base: Vec<Vec<i32>> = (0..rows)
+            .map(|r| {
+                (0..cols)
+                    .map(|c| 10_000 + (r as i32) * 100 + c as i32)
+                    .collect()
+            })
             .collect();
         let mut changed = base.clone();
 
@@ -2078,8 +2122,14 @@ mod tests {
         let old_mask = RegionMask::all_active(old.nrows, old.ncols);
         let new_mask = RegionMask::all_active(new.nrows, new.ncols);
 
-        let mv = detect_exact_rect_block_move_masked(&old, &new, &old_mask, &new_mask, &DiffConfig::default())
-            .expect("masked detector should fall back and still detect the move");
+        let mv = detect_exact_rect_block_move_masked(
+            &old,
+            &new,
+            &old_mask,
+            &new_mask,
+            &DiffConfig::default(),
+        )
+        .expect("masked detector should fall back and still detect the move");
 
         assert_eq!(mv.src_start_row, src.0 as u32);
         assert_eq!(mv.src_start_col, src.1 as u32);
