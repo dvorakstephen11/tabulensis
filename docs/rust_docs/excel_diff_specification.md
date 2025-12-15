@@ -855,9 +855,9 @@ When the `perf-metrics` feature is enabled, the diff engine collects timing and 
 
 ```rust
 pub struct DiffMetrics {
-    pub alignment_time_ms: u64,       // Time spent in row/column alignment
-    pub move_detection_time_ms: u64,  // Time spent detecting block moves
-    pub cell_diff_time_ms: u64,       // Time spent comparing cells
+    pub alignment_time_ms: u64,       // Time spent in alignment stage (may include nested cell diff time)
+    pub move_detection_time_ms: u64,  // Time spent in fingerprinting + masked move detection
+    pub cell_diff_time_ms: u64,       // Time spent emitting cell diffs
     pub total_time_ms: u64,           // Total diff operation time
     pub rows_processed: u64,          // Number of rows examined
     pub cells_compared: u64,          // Number of cell pairs compared

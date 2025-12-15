@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::config::DiffConfig;
 use crate::datamashup::{DataMashup, Query, build_queries};
 use crate::m_ast::{ast_semantically_equal, canonicalize_m_ast, parse_m_expression};
 use crate::m_section::SectionParseError;
@@ -22,13 +23,18 @@ pub struct MQueryDiff {
 pub fn diff_m_queries(
     old_dm: &DataMashup,
     new_dm: &DataMashup,
+    config: &DiffConfig,
 ) -> Result<Vec<MQueryDiff>, SectionParseError> {
     let old_queries = build_queries(old_dm)?;
     let new_queries = build_queries(new_dm)?;
-    Ok(diff_queries(&old_queries, &new_queries))
+    Ok(diff_queries(&old_queries, &new_queries, config))
 }
 
-fn diff_queries(old_queries: &[Query], new_queries: &[Query]) -> Vec<MQueryDiff> {
+fn diff_queries(
+    old_queries: &[Query],
+    new_queries: &[Query],
+    config: &DiffConfig,
+) -> Vec<MQueryDiff> {
     let mut old_map: HashMap<String, &Query> = HashMap::new();
     for query in old_queries {
         old_map.insert(query.name.clone(), query);
@@ -65,9 +71,16 @@ fn diff_queries(old_queries: &[Query], new_queries: &[Query]) -> Vec<MQueryDiff>
                     continue;
                 }
 
-                if old_q.metadata == new_q.metadata
-                    && expressions_semantically_equal(&old_q.expression_m, &new_q.expression_m)
-                {
+                if old_q.metadata == new_q.metadata {
+                    if config.enable_m_semantic_diff
+                        && expressions_semantically_equal(&old_q.expression_m, &new_q.expression_m)
+                    {
+                        continue;
+                    }
+                    diffs.push(MQueryDiff {
+                        name,
+                        kind: QueryChangeKind::DefinitionChanged,
+                    });
                     continue;
                 }
 

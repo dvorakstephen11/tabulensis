@@ -11,7 +11,7 @@ fn g5_multi_cell_edits_produces_only_celledited_ops() {
     let wb_b = open_workbook(fixture_path("multi_cell_edits_b.xlsx"))
         .expect("failed to open fixture: multi_cell_edits_b.xlsx");
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     let expected = vec![
         ("B2", CellValue::Number(1.0), CellValue::Number(42.0)),
@@ -77,7 +77,7 @@ fn g6_row_append_bottom_emits_two_rowadded_and_no_celledited() {
     let wb_b = open_workbook(fixture_path("row_append_bottom_b.xlsx"))
         .expect("failed to open fixture: row_append_bottom_b.xlsx");
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     assert_eq!(
         report.ops.len(),
@@ -124,7 +124,7 @@ fn g6_row_delete_bottom_emits_two_rowremoved_and_no_celledited() {
     let wb_b = open_workbook(fixture_path("row_delete_bottom_b.xlsx"))
         .expect("failed to open fixture: row_delete_bottom_b.xlsx");
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     assert_eq!(
         report.ops.len(),
@@ -171,7 +171,7 @@ fn g7_col_append_right_emits_two_columnadded_and_no_celledited() {
     let wb_b = open_workbook(fixture_path("col_append_right_b.xlsx"))
         .expect("failed to open fixture: col_append_right_b.xlsx");
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     assert_eq!(
         report.ops.len(),
@@ -218,7 +218,7 @@ fn g7_col_delete_right_emits_two_columnremoved_and_no_celledited() {
     let wb_b = open_workbook(fixture_path("col_delete_right_b.xlsx"))
         .expect("failed to open fixture: col_delete_right_b.xlsx");
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     assert_eq!(
         report.ops.len(),

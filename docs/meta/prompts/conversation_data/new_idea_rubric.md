@@ -12,7 +12,7 @@ Your job is to systematically generate and rank new software product ideas. I wa
 
 Use these constraints and preferences as hard filters:
 
-- I am a solo developer with a data engineering background (Python, SQL) and I’m learning Rust.
+- I am a solo developer with a data engineering background (Python, SQL) and Rust experience.
 - I strongly prefer:
   - Software‑only products with minimal dependence on third‑party APIs or vendors.
   - No ads inside the product, ever. Revenue = one‑time license, subscription, or B2B deals.
@@ -24,7 +24,7 @@ Use these constraints and preferences as hard filters:
   - Low operational overhead (few or no employees),
   - No physically demanding responsibilities.
 - I like:
-  - Deep technical work (knowledge graphs, data tooling, parsers, diffing, static analysis, scheduling/optimization, simulation, complex automation; but don't limit suggestions just to this list),
+  - Deep technical work (knowledge graphs, data tooling, parsers, static analysis, scheduling/optimization, simulation, complex automation; but don't limit suggestions just to this list),
   - High‑stakes, “serious” workflows (finance, legal, compliance, safety),
   - Tools that empower normal people or professionals, not zero‑sum attention hacks.
 
@@ -42,11 +42,7 @@ A. Platform / User Gap
   - Or designed for generic use, not for a specific high‑value niche.
 
 B. Binary Black Box / Deep Structure
-- The workflow involves a complex, opaque artifact that normal tools don’t fully understand, such as:
-  - Proprietary or semi‑proprietary file formats (CAD, BI models, simulation files, design files, ETL configs, medical data formats, etc.).
-  - Complex configuration bundles, schemas, or dependency graphs.
-  - Large structured documents where semantics matter (contracts, clinical protocols, safety manuals, specs).
-- Good ideas should require building a **real parser or semantic model**, not just “call an API and display JSON.”
+
 
 C. High‑Stakes Pain
 - Mistakes in this workflow are expensive or risky:
@@ -54,7 +50,7 @@ C. High‑Stakes Pain
   - Compliance / audit / legal risk,
   - Safety or operational reliability.
 - The best ideas:
-  - Sit where people currently use spreadsheets, PDFs, or DIY scripts for something mission‑critical,
+  - Sit where people currently use some variety of unwieldy products or tools,
   - And where “good enough” is not good enough.
 
 D. Pricing Void (Prosumer / Team Tier)
@@ -68,8 +64,9 @@ D. Pricing Void (Prosumer / Team Tier)
 
 E. AI / Automation Resilience
 - The idea should be **hard to fully commoditize** by a generic LLM or basic AI agent because it needs at least one of:
-  - Deterministic, exhaustive correctness (audits, diffs, safety‑critical checks).
-  - Deep domain modeling or specialized parsing of niche formats.
+  - Deterministic, exhaustive correctness.
+  - Deep domain modeling.
+  - Extremely quick performance.
   - Local, offline, or on‑prem execution due to privacy or regulation.
   - Ongoing accumulation of proprietary test suites or domain datasets.
 
@@ -114,18 +111,18 @@ Do *not* require me to specify ecosystems up front.
 Instead:
 
 1. Automatically select at least 5–8 promising ecosystems / domains to scan, such as:
-   - Productivity & office suites
-   - Scientific/engineering tools
-   - Data platforms & ETL / integration tools.
-   - Legal, compliance, and audit tooling.
+   - Productivity & office suites.
+   - Scientific/engineering tools.
+   - Data platforms & ETL.
+   - Legal, compliance, and auditing.
    - Healthcare / pharma / clinical workflows (within safe and legal bounds).
    - Creative & media production (audio, video, design).
    - Niche professional software: architecture, construction, logistics, energy, etc.
 
 2. For each chosen ecosystem, look for:
-   - Under‑served user segments (e.g., Mac‑using quants, small clinics, regional firms),
-   - Opaque file formats or configuration systems,
-   - High‑stakes but poorly tooled workflows.
+   - Under‑served user segments,
+   - Opaque systems,
+   - High‑stakes workflows.
 
 If I optionally append a list like:
 
@@ -146,13 +143,12 @@ For the top 1 idea, include:
 
 1. **Name** of the idea.  
 2. **One‑sentence elevator pitch.**  
-3. **Primary ecosystem / domain** (e.g., “Power BI / Modern Excel,” “Autodesk Revit,” “Epic EHR exports,” etc.).  
+3. **Primary ecosystem / domain**  
 4. **Target persona** (role, seniority, typical company type, and maybe “Mac/Windows/Web/CLI”).  
 5. **Platform gap**  
    - Who is under‑served today?  
-   - Which platforms (Mac, web, on‑prem, CLI) are neglected?  
+   - Which platforms are neglected?  
 6. **Binary black box**  
-   - What complex file, schema, or workflow needs to be parsed or modeled?  
    - Why can’t simple wrappers or generic LLMs handle it well?  
 7. **High‑stakes pain**  
    - What goes wrong today?  
@@ -161,11 +157,11 @@ For the top 1 idea, include:
    - Current options and their pricing.  
    - Your suggested prosumer / team pricing (one‑time vs subscription).  
 9. **Technical moat**  
-   - What is technically hard about this (parsing, alignment, modeling, scale)?  
+   - What is technically hard about this?  
    - How my skills (data engineering, Rust/Python, graphs) map onto that difficulty.  
 10. **AI / Copilot positioning**  
     - How this product complements, rather than competes head‑on with, general AI assistants.  
-    - Why a future GPT‑like system still benefits from this deterministic engine / parser / tool.  
+    - Why a future GPT‑like system still benefits from this tool.  
 11. **Rubric scores** (1–5 for each of the 10 criteria above, plus total /50).  
 12. **Fast validation plan**  
     - How I could test demand in 2–4 weeks with minimal code: who to talk to, what to prototype, what signal would count as “strong interest.”  

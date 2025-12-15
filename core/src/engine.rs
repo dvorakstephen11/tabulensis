@@ -4,22 +4,22 @@
 //! and generating a [`DiffReport`] of all changes.
 
 use crate::alignment::move_extraction::moves_from_matched_pairs;
-use crate::alignment::{RowAlignment as AmrAlignment, align_rows_amr_with_signatures};
+use crate::alignment::{RowAlignment as AmrAlignment, align_rows_amr_with_signatures_from_views};
 use crate::column_alignment::{
-    ColumnAlignment, ColumnBlockMove, align_single_column_change_with_config,
-    detect_exact_column_block_move_with_config,
+    ColumnAlignment, ColumnBlockMove, align_single_column_change_from_views,
+    detect_exact_column_block_move,
 };
 use crate::config::{DiffConfig, LimitBehavior};
 use crate::database_alignment::{KeyColumnSpec, diff_table_by_key};
 use crate::diff::{DiffError, DiffOp, DiffReport, SheetId};
+use crate::grid_view::GridView;
 #[cfg(feature = "perf-metrics")]
 use crate::perf::{DiffMetrics, Phase};
-use crate::rect_block_move::{RectBlockMove, detect_exact_rect_block_move_with_config};
+use crate::rect_block_move::{RectBlockMove, detect_exact_rect_block_move};
 use crate::region_mask::RegionMask;
 use crate::row_alignment::{
     RowAlignment as LegacyRowAlignment, RowBlockMove as LegacyRowBlockMove,
-    align_row_changes_with_config, detect_exact_row_block_move_with_config,
-    detect_fuzzy_row_block_move_with_config,
+    align_row_changes_from_views, detect_exact_row_block_move, detect_fuzzy_row_block_move,
 };
 use crate::workbook::{
     Cell, CellAddress, CellSnapshot, ColSignature, Grid, RowSignature, Sheet, SheetKind, Workbook,
@@ -55,11 +55,14 @@ fn sheet_kind_order(kind: &SheetKind) -> u8 {
     }
 }
 
-pub fn diff_workbooks(old: &Workbook, new: &Workbook) -> DiffReport {
-    diff_workbooks_with_config(old, new, &DiffConfig::default())
+pub fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    match try_diff_workbooks(old, new, config) {
+        Ok(report) => report,
+        Err(e) => panic!("{}", e),
+    }
 }
 
-pub fn try_diff_workbooks_with_config(
+pub fn try_diff_workbooks(
     old: &Workbook,
     new: &Workbook,
     config: &DiffConfig,
@@ -120,7 +123,7 @@ pub fn try_diff_workbooks_with_config(
             }
             (Some(old_sheet), Some(new_sheet)) => {
                 let sheet_id: SheetId = old_sheet.name.clone();
-                try_diff_grids_with_config(
+                try_diff_grids(
                     &sheet_id,
                     &old_sheet.grid,
                     &new_sheet.grid,
@@ -149,25 +152,19 @@ pub fn try_diff_workbooks_with_config(
     Ok(report)
 }
 
-pub fn diff_workbooks_with_config(
-    old: &Workbook,
-    new: &Workbook,
+pub fn diff_grids_database_mode(
+    old: &Grid,
+    new: &Grid,
+    key_columns: &[u32],
     config: &DiffConfig,
 ) -> DiffReport {
-    match try_diff_workbooks_with_config(old, new, config) {
-        Ok(report) => report,
-        Err(e) => panic!("{}", e),
-    }
-}
-
-pub fn diff_grids_database_mode(old: &Grid, new: &Grid, key_columns: &[u32]) -> DiffReport {
     let spec = KeyColumnSpec::new(key_columns.to_vec());
     let alignment = match diff_table_by_key(old, new, key_columns) {
         Ok(alignment) => alignment,
         Err(_) => {
             let mut ops = Vec::new();
             let sheet_id: SheetId = DATABASE_MODE_SHEET_ID.to_string();
-            diff_grids(&sheet_id, old, new, &mut ops);
+            diff_grids(&sheet_id, old, new, config, &mut ops);
             return DiffReport::new(ops);
         }
     };
@@ -208,13 +205,19 @@ pub fn diff_grids_database_mode(old: &Grid, new: &Grid, key_columns: &[u32]) -> 
     DiffReport::new(ops)
 }
 
-fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>) {
+fn diff_grids(
+    sheet_id: &SheetId,
+    old: &Grid,
+    new: &Grid,
+    config: &DiffConfig,
+    ops: &mut Vec<DiffOp>,
+) {
     let mut ctx = DiffContext::default();
-    let _ = try_diff_grids_with_config(
+    let _ = try_diff_grids(
         sheet_id,
         old,
         new,
-        &DiffConfig::default(),
+        config,
         ops,
         &mut ctx,
         #[cfg(feature = "perf-metrics")]
@@ -222,7 +225,7 @@ fn diff_grids(sheet_id: &SheetId, old: &Grid, new: &Grid, ops: &mut Vec<DiffOp>)
     );
 }
 
-fn try_diff_grids_with_config(
+fn try_diff_grids(
     sheet_id: &SheetId,
     old: &Grid,
     new: &Grid,
@@ -318,10 +321,13 @@ fn diff_grids_core(
         return;
     }
 
+    let old_view = GridView::from_grid_with_config(old, config);
+    let new_view = GridView::from_grid_with_config(new, config);
+
     let mut old_mask = RegionMask::all_active(old.nrows, old.ncols);
     let mut new_mask = RegionMask::all_active(new.nrows, new.ncols);
-    let move_detection_enabled = old.nrows.max(new.nrows) <= config.recursive_align_threshold
-        && old.ncols.max(new.ncols) <= 256;
+    let move_detection_enabled = old.nrows.max(new.nrows) <= config.max_move_detection_rows
+        && old.ncols.max(new.ncols) <= config.max_move_detection_cols;
     let mut iteration = 0;
 
     if move_detection_enabled {
@@ -403,11 +409,12 @@ fn diff_grids_core(
             }
 
             if !found_move
+                && config.enable_fuzzy_moves
                 && let Some(mv) =
                     detect_fuzzy_row_block_move_masked(old, new, &old_mask, &new_mask, config)
             {
                 emit_row_block_move(sheet_id, mv, ops);
-                emit_moved_row_block_edits(sheet_id, old, new, mv, ops);
+                emit_moved_row_block_edits(sheet_id, &old_view, &new_view, mv, ops, config);
                 #[cfg(feature = "perf-metrics")]
                 if let Some(m) = metrics.as_mut() {
                     m.moves_detected = m.moves_detected.saturating_add(1);
@@ -467,17 +474,59 @@ fn diff_grids_core(
         m.start_phase(Phase::Alignment);
     }
 
-    if let Some(amr_result) = align_rows_amr_with_signatures(old, new, config) {
+    if let Some(amr_result) =
+        align_rows_amr_with_signatures_from_views(&old_view, &new_view, config)
+    {
         let mut alignment = amr_result.alignment;
-        let row_signatures_old = amr_result.row_signatures_a;
-        let row_signatures_new = amr_result.row_signatures_b;
-        inject_moves_from_insert_delete(
-            old,
-            new,
-            &mut alignment,
-            &row_signatures_old,
-            &row_signatures_new,
-        );
+
+        if config.max_move_iterations > 0 {
+            let row_signatures_old = amr_result.row_signatures_a;
+            let row_signatures_new = amr_result.row_signatures_b;
+            inject_moves_from_insert_delete(
+                old,
+                new,
+                &mut alignment,
+                &row_signatures_old,
+                &row_signatures_new,
+            );
+        } else {
+            let mut deleted_from_moves = Vec::new();
+            let mut inserted_from_moves = Vec::new();
+            for mv in &alignment.moves {
+                deleted_from_moves
+                    .extend(mv.src_start_row..mv.src_start_row.saturating_add(mv.row_count));
+                inserted_from_moves
+                    .extend(mv.dst_start_row..mv.dst_start_row.saturating_add(mv.row_count));
+            }
+
+            let multiset_equal = row_signature_multiset_equal(old, new);
+            if multiset_equal {
+                for (a, b) in &alignment.matched {
+                    if row_signature_at(old, *a) != row_signature_at(new, *b) {
+                        deleted_from_moves.push(*a);
+                        inserted_from_moves.push(*b);
+                    }
+                }
+            }
+
+            if !deleted_from_moves.is_empty() || !inserted_from_moves.is_empty() {
+                let deleted_set: HashSet<u32> = deleted_from_moves.iter().copied().collect();
+                let inserted_set: HashSet<u32> = inserted_from_moves.iter().copied().collect();
+
+                alignment
+                    .matched
+                    .retain(|(a, b)| !deleted_set.contains(a) && !inserted_set.contains(b));
+
+                alignment.deleted.extend(deleted_set);
+                alignment.inserted.extend(inserted_set);
+                alignment.deleted.sort_unstable();
+                alignment.deleted.dedup();
+                alignment.inserted.sort_unstable();
+                alignment.inserted.dedup();
+            }
+
+            alignment.moves.clear();
+        }
         let has_structural_rows = !alignment.inserted.is_empty() || !alignment.deleted.is_empty();
         if has_structural_rows && alignment.matched.is_empty() {
             #[cfg(feature = "perf-metrics")]
@@ -501,7 +550,7 @@ fn diff_grids_core(
                 .matched
                 .iter()
                 .any(|(a, b)| row_signature_at(old, *a) != row_signature_at(new, *b));
-            if has_row_edits {
+            if has_row_edits && config.max_move_iterations > 0 {
                 #[cfg(feature = "perf-metrics")]
                 if let Some(m) = metrics.as_mut() {
                     m.start_phase(Phase::CellDiff);
@@ -523,7 +572,8 @@ fn diff_grids_core(
             && alignment.inserted.is_empty()
             && alignment.deleted.is_empty()
             && old.ncols != new.ncols
-            && let Some(col_alignment) = align_single_column_change_with_config(old, new, config)
+            && let Some(col_alignment) =
+                align_single_column_change_from_views(&old_view, &new_view, config)
         {
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
@@ -554,6 +604,7 @@ fn diff_grids_core(
         if !alignment_is_trivial_identity
             && alignment.moves.is_empty()
             && row_signature_multiset_equal(old, new)
+            && config.max_move_iterations > 0
         {
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
@@ -575,11 +626,11 @@ fn diff_grids_core(
         if let Some(m) = metrics.as_mut() {
             m.start_phase(Phase::CellDiff);
         }
-        emit_amr_aligned_diffs(sheet_id, old, new, &alignment, ops);
+        let compared =
+            emit_amr_aligned_diffs(sheet_id, &old_view, &new_view, &alignment, ops, config);
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
-            let overlap_cols = old.ncols.min(new.ncols) as u64;
-            m.add_cells_compared((alignment.matched.len() as u64).saturating_mul(overlap_cols));
+            m.add_cells_compared(compared);
             m.anchors_found = m
                 .anchors_found
                 .saturating_add(alignment.matched.len() as u32);
@@ -587,6 +638,8 @@ fn diff_grids_core(
                 .moves_detected
                 .saturating_add(alignment.moves.len() as u32);
         }
+        #[cfg(not(feature = "perf-metrics"))]
+        let _ = compared;
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
             m.end_phase(Phase::CellDiff);
@@ -598,19 +651,22 @@ fn diff_grids_core(
         return;
     }
 
-    if let Some(alignment) = align_row_changes_with_config(old, new, config) {
+    if let Some(alignment) = align_row_changes_from_views(&old_view, &new_view, config) {
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
             m.start_phase(Phase::CellDiff);
         }
-        emit_aligned_diffs(sheet_id, old, new, &alignment, ops);
+        let compared = emit_aligned_diffs(sheet_id, &old_view, &new_view, &alignment, ops, config);
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
-            let overlap_cols = old.ncols.min(new.ncols) as u64;
-            m.add_cells_compared((alignment.matched.len() as u64).saturating_mul(overlap_cols));
+            m.add_cells_compared(compared);
             m.end_phase(Phase::CellDiff);
         }
-    } else if let Some(alignment) = align_single_column_change_with_config(old, new, config) {
+        #[cfg(not(feature = "perf-metrics"))]
+        let _ = compared;
+    } else if let Some(alignment) =
+        align_single_column_change_from_views(&old_view, &new_view, config)
+    {
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
             m.start_phase(Phase::CellDiff);
@@ -1020,6 +1076,10 @@ fn detect_exact_row_block_move_masked(
         return None;
     }
 
+    if !old_mask.has_exclusions() && !new_mask.has_exclusions() {
+        return detect_exact_row_block_move(old, new, config);
+    }
+
     let (old_proj, old_rows, _) = build_masked_grid(old, old_mask);
     let (new_proj, new_rows, _) = build_masked_grid(new, new_mask);
 
@@ -1027,7 +1087,7 @@ fn detect_exact_row_block_move_masked(
         return None;
     }
 
-    let mv_local = detect_exact_row_block_move_with_config(&old_proj, &new_proj, config)?;
+    let mv_local = detect_exact_row_block_move(&old_proj, &new_proj, config)?;
     let src_start_row = *old_rows.get(mv_local.src_start_row as usize)?;
     let dst_start_row = *new_rows.get(mv_local.dst_start_row as usize)?;
 
@@ -1049,6 +1109,10 @@ fn detect_exact_column_block_move_masked(
         return None;
     }
 
+    if !old_mask.has_exclusions() && !new_mask.has_exclusions() {
+        return detect_exact_column_block_move(old, new, config);
+    }
+
     let (old_proj, _, old_cols) = build_masked_grid(old, old_mask);
     let (new_proj, _, new_cols) = build_masked_grid(new, new_mask);
 
@@ -1056,7 +1120,7 @@ fn detect_exact_column_block_move_masked(
         return None;
     }
 
-    let mv_local = detect_exact_column_block_move_with_config(&old_proj, &new_proj, config)?;
+    let mv_local = detect_exact_column_block_move(&old_proj, &new_proj, config)?;
     let src_start_col = *old_cols.get(mv_local.src_start_col as usize)?;
     let dst_start_col = *new_cols.get(mv_local.dst_start_col as usize)?;
 
@@ -1076,6 +1140,17 @@ fn detect_exact_rect_block_move_masked(
 ) -> Option<RectBlockMove> {
     if !old_mask.has_active_cells() || !new_mask.has_active_cells() {
         return None;
+    }
+
+    // Fast path: allow the strict detector to short-circuit when it succeeds, but
+    // fall back to the masked search if it fails (e.g., when extra diffs exist).
+    if !old_mask.has_exclusions()
+        && !new_mask.has_exclusions()
+        && old.nrows == new.nrows
+        && old.ncols == new.ncols
+        && let Some(mv) = detect_exact_rect_block_move(old, new, config)
+    {
+        return Some(mv);
     }
 
     let aligned_rows = align_indices_by_signature(
@@ -1117,7 +1192,7 @@ fn detect_exact_rect_block_move_masked(
         })
     };
 
-    if let Some(mv_local) = detect_exact_rect_block_move_with_config(&old_proj, &new_proj, config)
+    if let Some(mv_local) = detect_exact_rect_block_move(&old_proj, &new_proj, config)
         && let Some(mapped) = map_move(mv_local, &old_rows, &new_rows, &old_cols, &new_cols)
     {
         return Some(mapped);
@@ -1223,7 +1298,7 @@ fn detect_exact_rect_block_move_masked(
                 }
 
                 if let Some(candidate) =
-                    detect_exact_rect_block_move_with_config(&old_scoped, &new_scoped, config)
+                    detect_exact_rect_block_move(&old_scoped, &new_scoped, config)
                 {
                     let scoped_row_map_old: Option<Vec<u32>> = scoped_old_rows
                         .iter()
@@ -1314,6 +1389,10 @@ fn detect_fuzzy_row_block_move_masked(
         return None;
     }
 
+    if !old_mask.has_exclusions() && !new_mask.has_exclusions() {
+        return detect_fuzzy_row_block_move(old, new, config);
+    }
+
     let (old_proj, old_rows, _) = build_masked_grid(old, old_mask);
     let (new_proj, new_rows, _) = build_masked_grid(new, new_mask);
 
@@ -1321,7 +1400,7 @@ fn detect_fuzzy_row_block_move_masked(
         return None;
     }
 
-    let mv_local = detect_fuzzy_row_block_move_with_config(&old_proj, &new_proj, config)?;
+    let mv_local = detect_fuzzy_row_block_move(&old_proj, &new_proj, config)?;
     let src_start_row = *old_rows.get(mv_local.src_start_row as usize)?;
     let dst_start_row = *new_rows.get(mv_local.dst_start_row as usize)?;
 
@@ -1607,36 +1686,61 @@ fn emit_rect_block_move(sheet_id: &SheetId, mv: RectBlockMove, ops: &mut Vec<Dif
 
 fn emit_moved_row_block_edits(
     sheet_id: &SheetId,
-    old: &Grid,
-    new: &Grid,
+    old_view: &GridView,
+    new_view: &GridView,
     mv: LegacyRowBlockMove,
     ops: &mut Vec<DiffOp>,
+    config: &DiffConfig,
 ) {
-    let overlap_cols = old.ncols.min(new.ncols);
+    let overlap_cols = old_view.source.ncols.min(new_view.source.ncols);
     for offset in 0..mv.row_count {
-        diff_row_pair(
+        let old_idx = (mv.src_start_row + offset) as usize;
+        let new_idx = (mv.dst_start_row + offset) as usize;
+        let Some(old_row) = old_view.rows.get(old_idx) else {
+            continue;
+        };
+        let Some(new_row) = new_view.rows.get(new_idx) else {
+            continue;
+        };
+
+        let _ = diff_row_pair_sparse(
             sheet_id,
-            old,
-            new,
-            mv.src_start_row + offset,
             mv.dst_start_row + offset,
             overlap_cols,
+            &old_row.cells,
+            &new_row.cells,
             ops,
+            config,
         );
     }
 }
 
 fn emit_aligned_diffs(
     sheet_id: &SheetId,
-    old: &Grid,
-    new: &Grid,
+    old_view: &GridView,
+    new_view: &GridView,
     alignment: &LegacyRowAlignment,
     ops: &mut Vec<DiffOp>,
-) {
-    let overlap_cols = old.ncols.min(new.ncols);
+    config: &DiffConfig,
+) -> u64 {
+    let overlap_cols = old_view.source.ncols.min(new_view.source.ncols);
+    let mut compared = 0u64;
 
     for (row_a, row_b) in &alignment.matched {
-        diff_row_pair(sheet_id, old, new, *row_a, *row_b, overlap_cols, ops);
+        if let (Some(old_row), Some(new_row)) = (
+            old_view.rows.get(*row_a as usize),
+            new_view.rows.get(*row_b as usize),
+        ) {
+            compared = compared.saturating_add(diff_row_pair_sparse(
+                sheet_id,
+                *row_b,
+                overlap_cols,
+                &old_row.cells,
+                &new_row.cells,
+                ops,
+                config,
+            ));
+        }
     }
 
     for row_idx in &alignment.inserted {
@@ -1646,19 +1750,36 @@ fn emit_aligned_diffs(
     for row_idx in &alignment.deleted {
         ops.push(DiffOp::row_removed(sheet_id.clone(), *row_idx, None));
     }
+
+    compared
 }
 
 fn emit_amr_aligned_diffs(
     sheet_id: &SheetId,
-    old: &Grid,
-    new: &Grid,
+    old_view: &GridView,
+    new_view: &GridView,
     alignment: &AmrAlignment,
     ops: &mut Vec<DiffOp>,
-) {
-    let overlap_cols = old.ncols.min(new.ncols);
+    config: &DiffConfig,
+) -> u64 {
+    let overlap_cols = old_view.source.ncols.min(new_view.source.ncols);
+    let mut compared = 0u64;
 
     for (row_a, row_b) in &alignment.matched {
-        diff_row_pair(sheet_id, old, new, *row_a, *row_b, overlap_cols, ops);
+        if let (Some(old_row), Some(new_row)) = (
+            old_view.rows.get(*row_a as usize),
+            new_view.rows.get(*row_b as usize),
+        ) {
+            compared = compared.saturating_add(diff_row_pair_sparse(
+                sheet_id,
+                *row_b,
+                overlap_cols,
+                &old_row.cells,
+                &new_row.cells,
+                ops,
+                config,
+            ));
+        }
     }
 
     for row_idx in &alignment.inserted {
@@ -1679,15 +1800,71 @@ fn emit_amr_aligned_diffs(
         });
     }
 
-    if new.ncols > old.ncols {
-        for col_idx in old.ncols..new.ncols {
+    if new_view.source.ncols > old_view.source.ncols {
+        for col_idx in old_view.source.ncols..new_view.source.ncols {
             ops.push(DiffOp::column_added(sheet_id.clone(), col_idx, None));
         }
-    } else if old.ncols > new.ncols {
-        for col_idx in new.ncols..old.ncols {
+    } else if old_view.source.ncols > new_view.source.ncols {
+        for col_idx in new_view.source.ncols..old_view.source.ncols {
             ops.push(DiffOp::column_removed(sheet_id.clone(), col_idx, None));
         }
     }
+
+    compared
+}
+
+fn diff_row_pair_sparse(
+    sheet_id: &SheetId,
+    row_b: u32,
+    overlap_cols: u32,
+    old_cells: &[(u32, &Cell)],
+    new_cells: &[(u32, &Cell)],
+    ops: &mut Vec<DiffOp>,
+    config: &DiffConfig,
+) -> u64 {
+    let mut i = 0usize;
+    let mut j = 0usize;
+    let mut compared = 0u64;
+
+    while i < old_cells.len() || j < new_cells.len() {
+        let col_a = old_cells.get(i).map(|(c, _)| *c).unwrap_or(u32::MAX);
+        let col_b = new_cells.get(j).map(|(c, _)| *c).unwrap_or(u32::MAX);
+        let col = col_a.min(col_b);
+
+        if col >= overlap_cols {
+            break;
+        }
+
+        compared = compared.saturating_add(1);
+
+        let old_cell = if col_a == col {
+            let (_, cell) = old_cells[i];
+            i += 1;
+            Some(cell)
+        } else {
+            None
+        };
+
+        let new_cell = if col_b == col {
+            let (_, cell) = new_cells[j];
+            j += 1;
+            Some(cell)
+        } else {
+            None
+        };
+
+        let changed = !cells_content_equal(old_cell, new_cell);
+
+        if changed || config.include_unchanged_cells {
+            let addr = CellAddress::from_indices(row_b, col);
+            let from = snapshot_with_addr(old_cell, addr);
+            let to = snapshot_with_addr(new_cell, addr);
+
+            ops.push(DiffOp::cell_edited(sheet_id.clone(), addr, from, to));
+        }
+    }
+
+    compared
 }
 
 fn diff_row_pair(
@@ -1766,6 +1943,38 @@ mod tests {
     use super::*;
     use crate::workbook::CellValue;
 
+    fn numbered_cell(row: u32, col: u32, value: f64) -> Cell {
+        Cell {
+            row,
+            col,
+            address: CellAddress::from_indices(row, col),
+            value: Some(CellValue::Number(value)),
+            formula: None,
+        }
+    }
+
+    fn grid_from_matrix(values: &[Vec<i32>]) -> Grid {
+        let nrows = values.len() as u32;
+        let ncols = if nrows == 0 {
+            0
+        } else {
+            values[0].len() as u32
+        };
+        let mut grid = Grid::new(nrows, ncols);
+        for (r, row) in values.iter().enumerate() {
+            for (c, val) in row.iter().enumerate() {
+                grid.insert(Cell {
+                    row: r as u32,
+                    col: c as u32,
+                    address: CellAddress::from_indices(r as u32, c as u32),
+                    value: Some(CellValue::Number(*val as f64)),
+                    formula: None,
+                });
+            }
+        }
+        grid
+    }
+
     #[test]
     fn sheet_kind_order_ranking_includes_macro_and_other() {
         assert!(
@@ -1816,5 +2025,117 @@ mod tests {
         grid_a.insert(blank);
 
         assert!(!grids_non_blank_cells_equal(&grid_a, &grid_b));
+    }
+
+    #[test]
+    fn diff_row_pair_sparse_counts_union_columns_not_sum_lengths() {
+        let sheet_id: SheetId = "Sheet1".to_string();
+        let config = DiffConfig::default();
+        let mut ops = Vec::new();
+
+        let old_cells_storage = [
+            numbered_cell(0, 0, 1.0),
+            numbered_cell(0, 1, 2.0),
+            numbered_cell(0, 2, 3.0),
+        ];
+        let new_cells_storage = [
+            numbered_cell(0, 0, 1.0),
+            numbered_cell(0, 1, 2.0),
+            numbered_cell(0, 2, 4.0),
+        ];
+
+        let old_cells: Vec<(u32, &Cell)> = old_cells_storage
+            .iter()
+            .map(|cell| (cell.col, cell))
+            .collect();
+        let new_cells: Vec<(u32, &Cell)> = new_cells_storage
+            .iter()
+            .map(|cell| (cell.col, cell))
+            .collect();
+
+        let compared =
+            diff_row_pair_sparse(&sheet_id, 0, 3, &old_cells, &new_cells, &mut ops, &config);
+
+        assert_eq!(compared, 3);
+    }
+
+    #[test]
+    fn diff_row_pair_sparse_counts_union_for_sparse_columns() {
+        let sheet_id: SheetId = "Sheet1".to_string();
+        let config = DiffConfig::default();
+        let mut ops = Vec::new();
+
+        let old_cells_storage = [numbered_cell(0, 0, 1.0)];
+        let new_cells_storage = [numbered_cell(0, 2, 2.0)];
+
+        let old_cells: Vec<(u32, &Cell)> = old_cells_storage
+            .iter()
+            .map(|cell| (cell.col, cell))
+            .collect();
+        let new_cells: Vec<(u32, &Cell)> = new_cells_storage
+            .iter()
+            .map(|cell| (cell.col, cell))
+            .collect();
+
+        let compared =
+            diff_row_pair_sparse(&sheet_id, 0, 3, &old_cells, &new_cells, &mut ops, &config);
+
+        assert_eq!(compared, 2);
+    }
+
+    #[test]
+    fn rect_move_masked_falls_back_when_outside_edit_exists() {
+        let rows = 12usize;
+        let cols = 12usize;
+        let base: Vec<Vec<i32>> = (0..rows)
+            .map(|r| {
+                (0..cols)
+                    .map(|c| 10_000 + (r as i32) * 100 + c as i32)
+                    .collect()
+            })
+            .collect();
+        let mut changed = base.clone();
+
+        let src = (2usize, 2usize);
+        let dst = (8usize, 6usize);
+        let size = (2usize, 3usize);
+
+        for dr in 0..size.0 {
+            for dc in 0..size.1 {
+                let src_r = src.0 + dr;
+                let src_c = src.1 + dc;
+                let dst_r = dst.0 + dr;
+                let dst_c = dst.1 + dc;
+
+                let src_val = base[src_r][src_c];
+                let dst_val = base[dst_r][dst_c];
+
+                changed[dst_r][dst_c] = src_val;
+                changed[src_r][src_c] = dst_val;
+            }
+        }
+
+        changed[0][0] = 77_777;
+
+        let old = grid_from_matrix(&base);
+        let new = grid_from_matrix(&changed);
+        let old_mask = RegionMask::all_active(old.nrows, old.ncols);
+        let new_mask = RegionMask::all_active(new.nrows, new.ncols);
+
+        let mv = detect_exact_rect_block_move_masked(
+            &old,
+            &new,
+            &old_mask,
+            &new_mask,
+            &DiffConfig::default(),
+        )
+        .expect("masked detector should fall back and still detect the move");
+
+        assert_eq!(mv.src_start_row, src.0 as u32);
+        assert_eq!(mv.src_start_col, src.1 as u32);
+        assert_eq!(mv.src_row_count, size.0 as u32);
+        assert_eq!(mv.src_col_count, size.1 as u32);
+        assert_eq!(mv.dst_start_row, dst.0 as u32);
+        assert_eq!(mv.dst_start_col, dst.1 as u32);
     }
 }

@@ -10,7 +10,7 @@ fn g11_row_block_move_emits_single_blockmovedrows() {
     let wb_b = open_workbook(fixture_path("row_block_move_b.xlsx"))
         .expect("failed to open fixture: row_block_move_b.xlsx");
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     assert_eq!(report.ops.len(), 1, "expected a single diff op");
 
@@ -63,7 +63,7 @@ fn g11_repeated_rows_do_not_emit_blockmove() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     assert!(
         !report

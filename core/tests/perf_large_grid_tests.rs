@@ -5,7 +5,7 @@ mod common;
 use common::single_sheet_workbook;
 use excel_diff::config::DiffConfig;
 use excel_diff::diff::DiffOp;
-use excel_diff::engine::diff_workbooks_with_config;
+use excel_diff::engine::diff_workbooks;
 use excel_diff::perf::DiffMetrics;
 use excel_diff::{Cell, CellAddress, CellValue, Grid};
 
@@ -99,7 +99,7 @@ fn perf_p1_large_dense() {
     let wb_b = single_sheet_workbook("Performance", grid_b);
 
     let config = DiffConfig::default();
-    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
     assert!(
         report.complete,
@@ -132,7 +132,7 @@ fn perf_p2_large_noise() {
     let wb_b = single_sheet_workbook("Performance", grid_b);
 
     let config = DiffConfig::default();
-    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
     assert!(
         report.complete,
@@ -160,7 +160,7 @@ fn perf_p3_adversarial_repetitive() {
     let wb_b = single_sheet_workbook("Performance", grid_b);
 
     let config = DiffConfig::default();
-    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
     assert!(report.complete, "P3 repetitive grid should complete");
     assert!(report.metrics.is_some(), "P3 should have metrics");
@@ -185,7 +185,7 @@ fn perf_p4_99_percent_blank() {
     let wb_b = single_sheet_workbook("Performance", grid_b);
 
     let config = DiffConfig::default();
-    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
     assert!(report.complete, "P4 sparse grid should complete");
     assert!(report.metrics.is_some(), "P4 should have metrics");
@@ -203,7 +203,7 @@ fn perf_p5_identical() {
     let wb_b = single_sheet_workbook("Performance", grid_b);
 
     let config = DiffConfig::default();
-    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
     assert!(report.complete, "P5 identical grid should complete");
     assert!(
@@ -233,7 +233,7 @@ fn perf_50k_dense_single_edit() {
     let wb_b = single_sheet_workbook("Performance", grid_b);
 
     let config = DiffConfig::default();
-    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
     assert!(
         report.complete,
@@ -251,7 +251,11 @@ fn perf_50k_dense_single_edit() {
         "50k dense should detect the cell edit"
     );
     let metrics = report.metrics.expect("should have metrics");
-    log_perf_metric("perf_50k_dense_single_edit", &metrics, " (target: <5s)");
+    log_perf_metric(
+        "perf_50k_dense_single_edit",
+        &metrics,
+        " (enforced: <30s; target: <5s)",
+    );
     assert!(
         metrics.total_time_ms < 30000,
         "50k dense grid should complete in <30s, took {}ms",
@@ -269,11 +273,15 @@ fn perf_50k_completely_different() {
     let wb_b = single_sheet_workbook("Performance", grid_b);
 
     let config = DiffConfig::default();
-    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
     assert!(report.complete, "50k different grids should complete");
     let metrics = report.metrics.expect("should have metrics");
-    log_perf_metric("perf_50k_completely_different", &metrics, " (target: <10s)");
+    log_perf_metric(
+        "perf_50k_completely_different",
+        &metrics,
+        " (enforced: <60s; target: <10s)",
+    );
     assert!(
         metrics.total_time_ms < 60000,
         "50k completely different should complete in <60s, took {}ms",
@@ -298,14 +306,14 @@ fn perf_50k_adversarial_repetitive() {
     let wb_b = single_sheet_workbook("Performance", grid_b);
 
     let config = DiffConfig::default();
-    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
     assert!(report.complete, "50k repetitive should complete");
     let metrics = report.metrics.expect("should have metrics");
     log_perf_metric(
         "perf_50k_adversarial_repetitive",
         &metrics,
-        " (target: <15s)",
+        " (enforced: <120s; target: <15s)",
     );
     assert!(
         metrics.total_time_ms < 120000,
@@ -331,7 +339,7 @@ fn perf_50k_99_percent_blank() {
     let wb_b = single_sheet_workbook("Performance", grid_b);
 
     let config = DiffConfig::default();
-    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
     assert!(report.complete, "50k sparse should complete");
     let metrics = report.metrics.expect("should have metrics");
@@ -353,7 +361,7 @@ fn perf_50k_identical() {
     let wb_b = single_sheet_workbook("Performance", grid_b);
 
     let config = DiffConfig::default();
-    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
     assert!(report.complete, "50k identical should complete");
     assert!(

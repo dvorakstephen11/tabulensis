@@ -51,5 +51,5 @@ pub(crate) mod runs;
 #[allow(unused_imports)]
 pub(crate) use assembly::{
     RowAlignment, RowAlignmentWithSignatures, RowBlockMove, align_rows_amr,
-    align_rows_amr_with_signatures,
+    align_rows_amr_with_signatures, align_rows_amr_with_signatures_from_views,
 };

@@ -25,7 +25,8 @@ fn basic_add_query_diff() {
     let dm_a = load_datamashup("m_add_query_a.xlsx");
     let dm_b = load_datamashup("m_add_query_b.xlsx");
 
-    let diffs = diff_m_queries(&dm_a, &dm_b).expect("diff should succeed");
+    let diffs = diff_m_queries(&dm_a, &dm_b, &excel_diff::DiffConfig::default())
+        .expect("diff should succeed");
 
     assert_eq!(diffs.len(), 1, "expected exactly one diff for added query");
     let diff = &diffs[0];
@@ -38,7 +39,8 @@ fn basic_remove_query_diff() {
     let dm_a = load_datamashup("m_remove_query_a.xlsx");
     let dm_b = load_datamashup("m_remove_query_b.xlsx");
 
-    let diffs = diff_m_queries(&dm_a, &dm_b).expect("diff should succeed");
+    let diffs = diff_m_queries(&dm_a, &dm_b, &excel_diff::DiffConfig::default())
+        .expect("diff should succeed");
 
     assert_eq!(
         diffs.len(),
@@ -55,7 +57,8 @@ fn literal_change_produces_definitionchanged() {
     let dm_a = load_datamashup("m_change_literal_a.xlsx");
     let dm_b = load_datamashup("m_change_literal_b.xlsx");
 
-    let diffs = diff_m_queries(&dm_a, &dm_b).expect("diff should succeed");
+    let diffs = diff_m_queries(&dm_a, &dm_b, &excel_diff::DiffConfig::default())
+        .expect("diff should succeed");
 
     assert_eq!(diffs.len(), 1, "expected one diff for changed literal");
     let diff = &diffs[0];
@@ -68,7 +71,8 @@ fn metadata_change_produces_metadataonly() {
     let dm_a = load_datamashup("m_metadata_only_change_a.xlsx");
     let dm_b = load_datamashup("m_metadata_only_change_b.xlsx");
 
-    let diffs = diff_m_queries(&dm_a, &dm_b).expect("diff should succeed");
+    let diffs = diff_m_queries(&dm_a, &dm_b, &excel_diff::DiffConfig::default())
+        .expect("diff should succeed");
 
     assert_eq!(diffs.len(), 1, "expected one diff for metadata-only change");
     let diff = &diffs[0];
@@ -81,7 +85,8 @@ fn definition_and_metadata_change_prefers_definitionchanged() {
     let dm_a = load_datamashup("m_def_and_metadata_change_a.xlsx");
     let dm_b = load_datamashup("m_def_and_metadata_change_b.xlsx");
 
-    let diffs = diff_m_queries(&dm_a, &dm_b).expect("diff should succeed");
+    let diffs = diff_m_queries(&dm_a, &dm_b, &excel_diff::DiffConfig::default())
+        .expect("diff should succeed");
 
     assert_eq!(
         diffs.len(),
@@ -97,7 +102,8 @@ fn definition_and_metadata_change_prefers_definitionchanged() {
 fn identical_workbooks_produce_no_diffs() {
     let dm = load_datamashup("one_query.xlsx");
 
-    let diffs = diff_m_queries(&dm, &dm).expect("diff should succeed");
+    let diffs =
+        diff_m_queries(&dm, &dm, &excel_diff::DiffConfig::default()).expect("diff should succeed");
 
     assert!(
         diffs.is_empty(),
@@ -110,7 +116,8 @@ fn rename_reports_add_and_remove() {
     let dm_a = load_datamashup("m_rename_query_a.xlsx");
     let dm_b = load_datamashup("m_rename_query_b.xlsx");
 
-    let diffs = diff_m_queries(&dm_a, &dm_b).expect("diff should succeed");
+    let diffs = diff_m_queries(&dm_a, &dm_b, &excel_diff::DiffConfig::default())
+        .expect("diff should succeed");
 
     assert_eq!(diffs.len(), 2, "expected add + remove for rename scenario");
 
@@ -125,7 +132,8 @@ fn multiple_diffs_are_sorted_by_name() {
     let dm_a = datamashup_with_section(&["shared Zeta = 1;", "shared Bravo = 1;"]);
     let dm_b = datamashup_with_section(&["shared Alpha = 1;", "shared Delta = 1;"]);
 
-    let diffs = diff_m_queries(&dm_a, &dm_b).expect("diff should succeed");
+    let diffs = diff_m_queries(&dm_a, &dm_b, &excel_diff::DiffConfig::default())
+        .expect("diff should succeed");
 
     assert_eq!(diffs.len(), 4, "expected four diffs across both sides");
     assert!(
@@ -149,7 +157,7 @@ fn multiple_diffs_are_sorted_by_name() {
 fn invalid_section_syntax_propagates_error() {
     let dm_invalid = datamashup_with_section(&["shared Broken // missing '=' and ';'"]);
 
-    let result = diff_m_queries(&dm_invalid, &dm_invalid);
+    let result = diff_m_queries(&dm_invalid, &dm_invalid, &excel_diff::DiffConfig::default());
 
     assert!(matches!(
         result,

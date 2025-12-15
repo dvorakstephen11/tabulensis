@@ -8,9 +8,9 @@
 
 use crate::addressing::{AddressParseError, address_to_index, index_to_address};
 use crate::hashing::normalize_float_for_hash;
+use rustc_hash::FxHashMap;
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
@@ -81,7 +81,7 @@ pub struct Grid {
     /// Number of columns in the grid's bounding rectangle.
     pub ncols: u32,
     /// Sparse storage of non-empty cells, keyed by (row, col).
-    pub cells: HashMap<(u32, u32), Cell>,
+    pub cells: FxHashMap<(u32, u32), Cell>,
     /// Optional precomputed row signatures for alignment.
     pub row_signatures: Option<Vec<RowSignature>>,
     /// Optional precomputed column signatures for alignment.
@@ -298,7 +298,7 @@ impl Grid {
         Grid {
             nrows,
             ncols,
-            cells: HashMap::new(),
+            cells: FxHashMap::default(),
             row_signatures: None,
             col_signatures: None,
         }
@@ -413,45 +413,53 @@ impl Grid {
     }
 
     pub fn compute_all_signatures(&mut self) {
-        use crate::hashing::{hash_col_content_128, hash_row_content_128};
+        use crate::hashing::{hash_cell_value, hash_row_content_128};
+        use xxhash_rust::xxh3::Xxh3;
 
         let mut row_cells: Vec<Vec<(u32, &Cell)>> = vec![Vec::new(); self.nrows as usize];
-        let mut col_cells: Vec<Vec<&Cell>> = vec![Vec::new(); self.ncols as usize];
 
         for cell in self.cells.values() {
             let row_idx = cell.row as usize;
-            let col_idx = cell.col as usize;
-
             debug_assert!(
-                row_idx < row_cells.len() && col_idx < col_cells.len(),
+                row_idx < row_cells.len() && cell.col < self.ncols,
                 "cell coordinates must lie within the grid bounds"
             );
 
             row_cells[row_idx].push((cell.col, cell));
-            col_cells[col_idx].push(cell);
         }
 
-        self.row_signatures = Some(
-            row_cells
-                .into_iter()
-                .map(|mut cells| {
-                    cells.sort_unstable_by_key(|(col, _)| *col);
-                    let hash = hash_row_content_128(&cells);
-                    RowSignature { hash }
-                })
-                .collect(),
-        );
+        for row in row_cells.iter_mut() {
+            row.sort_by_key(|(col, _)| *col);
+        }
 
-        self.col_signatures = Some(
-            col_cells
-                .into_iter()
-                .map(|mut cells| {
-                    cells.sort_unstable_by_key(|c| c.row);
-                    let hash = hash_col_content_128(&cells);
-                    ColSignature { hash }
-                })
-                .collect(),
-        );
+        let row_signatures: Vec<RowSignature> = row_cells
+            .iter()
+            .map(|row| RowSignature {
+                hash: hash_row_content_128(row),
+            })
+            .collect();
+
+        let mut col_hashers: Vec<Xxh3> = (0..self.ncols).map(|_| Xxh3::new()).collect();
+        for row in row_cells.iter() {
+            for (col, cell) in row.iter() {
+                let idx = *col as usize;
+                if idx >= col_hashers.len() {
+                    continue;
+                }
+                hash_cell_value(&cell.value, &mut col_hashers[idx]);
+                cell.formula.hash(&mut col_hashers[idx]);
+            }
+        }
+
+        let col_signatures: Vec<ColSignature> = col_hashers
+            .into_iter()
+            .map(|hasher| ColSignature {
+                hash: hasher.digest128(),
+            })
+            .collect();
+
+        self.row_signatures = Some(row_signatures);
+        self.col_signatures = Some(col_signatures);
     }
 }
 

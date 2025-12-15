@@ -3,7 +3,7 @@ mod common;
 use common::{grid_from_numbers, single_sheet_workbook};
 use excel_diff::config::DiffConfig;
 use excel_diff::diff::DiffOp;
-use excel_diff::engine::diff_workbooks_with_config;
+use excel_diff::engine::diff_workbooks;
 
 fn count_ops(ops: &[DiffOp], predicate: impl Fn(&DiffOp) -> bool) -> usize {
     ops.iter().filter(|op| predicate(op)).count()
@@ -46,7 +46,7 @@ fn amr_two_disjoint_insertion_regions() {
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
     let config = DiffConfig::default();
 
-    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
     assert!(
         report.complete,
@@ -88,7 +88,7 @@ fn amr_insertion_and_deletion_in_different_regions() {
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
     let config = DiffConfig::default();
 
-    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
     assert!(
         report.complete,
@@ -134,7 +134,7 @@ fn amr_gap_contains_moved_block_scenario() {
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
     let config = DiffConfig::default();
 
-    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
     assert!(
         report.complete,
@@ -187,7 +187,7 @@ fn amr_multiple_anchors_with_gaps() {
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
     let config = DiffConfig::default();
 
-    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
     assert!(
         report.complete,
@@ -273,7 +273,7 @@ fn amr_recursive_gap_alignment() {
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
     let config = DiffConfig::default();
 
-    let report = diff_workbooks_with_config(&wb_a, &wb_b, &config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
     assert!(
         report.complete,

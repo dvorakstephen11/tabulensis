@@ -74,7 +74,7 @@ fn g15_blank_column_insert_at_position_zero_preserves_row_alignment() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     let column_adds: Vec<u32> = report
         .ops
@@ -143,7 +143,7 @@ fn g15_blank_column_insert_middle_preserves_row_alignment() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     let row_structural_ops: Vec<&DiffOp> = report
         .ops
@@ -194,7 +194,7 @@ fn g15_column_delete_preserves_row_alignment_when_content_order_maintained() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     let column_removes: Vec<u32> = report
         .ops
@@ -258,7 +258,7 @@ fn g15_row_insert_with_column_structure_change_both_detected() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     assert!(
         !report.ops.is_empty(),
@@ -294,7 +294,7 @@ fn g15_single_row_grid_column_insert_no_spurious_row_ops() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     let row_ops: Vec<&DiffOp> = report
         .ops
@@ -329,7 +329,7 @@ fn g15_all_blank_column_insert_no_content_change_minimal_diff() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     let row_ops: Vec<&DiffOp> = report
         .ops
@@ -363,7 +363,7 @@ fn g15_large_grid_column_insert_row_alignment_preserved() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     let row_structural_ops: Vec<&DiffOp> = report
         .ops

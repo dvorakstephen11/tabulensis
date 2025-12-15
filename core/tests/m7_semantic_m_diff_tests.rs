@@ -24,7 +24,8 @@ fn formatting_only_diff_produces_no_diffs() {
     let dm_a = load_datamashup("m_formatting_only_a.xlsx");
     let dm_b = load_datamashup("m_formatting_only_b.xlsx");
 
-    let diffs = diff_m_queries(&dm_a, &dm_b).expect("diff should succeed");
+    let diffs = diff_m_queries(&dm_a, &dm_b, &excel_diff::DiffConfig::default())
+        .expect("diff should succeed");
 
     assert!(
         diffs.is_empty(),
@@ -34,11 +35,33 @@ fn formatting_only_diff_produces_no_diffs() {
 }
 
 #[test]
+fn semantic_gate_can_be_disabled() {
+    let dm_a = load_datamashup("m_formatting_only_a.xlsx");
+    let dm_b = load_datamashup("m_formatting_only_b.xlsx");
+
+    let config = excel_diff::DiffConfig {
+        enable_m_semantic_diff: false,
+        ..excel_diff::DiffConfig::default()
+    };
+
+    let diffs = diff_m_queries(&dm_a, &dm_b, &config).expect("diff should succeed");
+
+    assert_eq!(
+        diffs.len(),
+        1,
+        "disabling semantic gate should surface formatting-only differences"
+    );
+    assert_eq!(diffs[0].name, "Section1/FormatTest");
+    assert_eq!(diffs[0].kind, QueryChangeKind::DefinitionChanged);
+}
+
+#[test]
 fn formatting_variant_with_real_change_still_reports_definitionchanged() {
     let dm_b = load_datamashup("m_formatting_only_b.xlsx");
     let dm_b_variant = load_datamashup("m_formatting_only_b_variant.xlsx");
 
-    let diffs = diff_m_queries(&dm_b, &dm_b_variant).expect("diff should succeed");
+    let diffs = diff_m_queries(&dm_b, &dm_b_variant, &excel_diff::DiffConfig::default())
+        .expect("diff should succeed");
 
     assert_eq!(
         diffs.len(),
@@ -54,7 +77,8 @@ fn semantic_gate_does_not_mask_metadata_only_change() {
     let dm_a = load_datamashup("m_metadata_only_change_a.xlsx");
     let dm_b = load_datamashup("m_metadata_only_change_b.xlsx");
 
-    let diffs = diff_m_queries(&dm_a, &dm_b).expect("diff should succeed");
+    let diffs = diff_m_queries(&dm_a, &dm_b, &excel_diff::DiffConfig::default())
+        .expect("diff should succeed");
 
     assert_eq!(
         diffs.len(),
@@ -70,7 +94,8 @@ fn semantic_gate_does_not_mask_definition_plus_metadata_change() {
     let dm_a = load_datamashup("m_def_and_metadata_change_a.xlsx");
     let dm_b = load_datamashup("m_def_and_metadata_change_b.xlsx");
 
-    let diffs = diff_m_queries(&dm_a, &dm_b).expect("diff should succeed");
+    let diffs = diff_m_queries(&dm_a, &dm_b, &excel_diff::DiffConfig::default())
+        .expect("diff should succeed");
 
     assert_eq!(
         diffs.len(),
@@ -86,8 +111,8 @@ fn semantic_gate_falls_back_on_ast_parse_failure() {
     let dm_a = datamashup_with_section(&["shared Foo = let Source = 1 in Source;"]);
     let dm_b = datamashup_with_section(&["shared Foo = let Source = (1;"]);
 
-    let diffs =
-        diff_m_queries(&dm_a, &dm_b).expect("diff should succeed (not panic on AST failure)");
+    let diffs = diff_m_queries(&dm_a, &dm_b, &excel_diff::DiffConfig::default())
+        .expect("diff should succeed (not panic on AST failure)");
 
     assert_eq!(
         diffs.len(),
@@ -107,8 +132,8 @@ fn semantic_gate_falls_back_when_both_sides_malformed() {
     let dm_a = datamashup_with_section(&["shared Foo = let Source = (1;"]);
     let dm_b = datamashup_with_section(&["shared Foo = let Source = (2;"]);
 
-    let diffs =
-        diff_m_queries(&dm_a, &dm_b).expect("diff should succeed (not panic on AST failure)");
+    let diffs = diff_m_queries(&dm_a, &dm_b, &excel_diff::DiffConfig::default())
+        .expect("diff should succeed (not panic on AST failure)");
 
     assert_eq!(
         diffs.len(),

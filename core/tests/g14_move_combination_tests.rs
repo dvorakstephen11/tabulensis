@@ -1,4 +1,4 @@
-use excel_diff::{DiffConfig, DiffOp, DiffReport, diff_workbooks, diff_workbooks_with_config};
+use excel_diff::{DiffConfig, DiffOp, DiffReport, diff_workbooks};
 
 mod common;
 use common::{grid_from_numbers, single_sheet_workbook};
@@ -92,7 +92,7 @@ fn g14_rect_move_no_additional_changes_produces_single_op() {
     let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
     let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     let has_rect_move = report
         .ops
@@ -121,7 +121,7 @@ fn g14_rect_move_plus_cell_edit_no_silent_data_loss() {
     let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
     let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     let rect_moves = collect_rect_moves(&report);
     let cell_edits = collect_cell_edits(&report);
@@ -175,7 +175,7 @@ fn g14_pure_row_move_produces_single_op() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     let has_row_move = report
         .ops
@@ -209,7 +209,7 @@ fn g14_row_move_plus_cell_edit_no_silent_data_loss() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     assert!(
         !report.ops.is_empty(),
@@ -236,7 +236,7 @@ fn g14_pure_column_move_produces_single_op() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     let has_col_move = report
         .ops
@@ -272,7 +272,7 @@ fn g14_column_move_plus_cell_edit_no_silent_data_loss() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     assert!(
         !report.ops.is_empty(),
@@ -302,7 +302,7 @@ fn g14_two_disjoint_row_block_moves_detected() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     let row_moves = collect_row_moves(&report);
     assert_eq!(
@@ -362,7 +362,7 @@ fn g14_row_move_plus_column_move_both_detected() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     let row_moves = collect_row_moves(&report);
     let col_moves = collect_col_moves(&report);
@@ -425,7 +425,7 @@ fn g14_fuzzy_row_move_produces_move_and_internal_edits() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     let has_row_move = report
         .ops
@@ -463,7 +463,7 @@ fn g14_fuzzy_row_move_plus_outside_edit_no_silent_data_loss() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     assert!(
         !report.ops.is_empty(),
@@ -487,7 +487,7 @@ fn g14_grid_changes_no_silent_data_loss() {
     let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
     let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     assert!(
         !report.ops.is_empty(),
@@ -532,7 +532,7 @@ fn g14_three_disjoint_rect_block_moves_detected() {
     let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
     let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     let rect_moves: Vec<_> = report
         .ops
@@ -572,7 +572,7 @@ fn g14_two_disjoint_rect_moves_plus_outside_edits_no_silent_data_loss() {
     let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
     let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     let rect_moves: Vec<_> = report
         .ops
@@ -637,7 +637,7 @@ fn g14_rect_move_plus_row_insertion_outside_no_silent_data_loss() {
     let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
     let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     let rect_moves = collect_rect_moves(&report);
     let row_adds = collect_row_adds(&report);
@@ -666,7 +666,7 @@ fn g14_rect_move_plus_row_deletion_outside_no_silent_data_loss() {
     let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
     let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     let rect_moves = collect_rect_moves(&report);
     let row_removes = collect_row_removes(&report);
@@ -705,7 +705,7 @@ fn g14_row_block_move_plus_row_insertion_outside_no_silent_data_loss() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b);
+    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     assert!(
         !report.ops.is_empty(),
@@ -715,39 +715,89 @@ fn g14_row_block_move_plus_row_insertion_outside_no_silent_data_loss() {
 
 #[test]
 fn g14_move_detection_disabled_falls_back_to_positional() {
-    let mut grid_a = base_grid(12, 10);
-    let mut grid_b = base_grid(12, 10);
+    let grid_a = grid_from_numbers(&[
+        &[1, 2, 3],
+        &[10, 20, 30],
+        &[100, 200, 300],
+        &[1000, 2000, 3000],
+        &[10000, 20000, 30000],
+    ]);
 
-    let block = vec![vec![9001, 9002], vec![9003, 9004]];
-    place_block(&mut grid_a, 2, 2, &block);
-    place_block(&mut grid_b, 8, 6, &block);
+    let grid_b = grid_from_numbers(&[
+        &[1, 2, 3],
+        &[1000, 2000, 3000],
+        &[10000, 20000, 30000],
+        &[10, 20, 30],
+        &[100, 200, 300],
+    ]);
 
-    let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
-    let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let disabled_config = DiffConfig {
+    let config = DiffConfig {
         max_move_iterations: 0,
         ..DiffConfig::default()
     };
-    let report_disabled = diff_workbooks_with_config(&wb_a, &wb_b, &disabled_config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
 
-    let rect_moves_disabled = collect_rect_moves(&report_disabled);
     assert!(
-        rect_moves_disabled.is_empty(),
-        "with move detection disabled, no BlockMovedRect should be emitted"
+        report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::RowRemoved { .. })),
+        "expected positional fallback when move detection disabled"
     );
     assert!(
-        !report_disabled.ops.is_empty(),
-        "with move detection disabled, positional changes should still be reported"
+        report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::RowAdded { .. })),
+        "expected positional fallback when move detection disabled"
     );
+    assert!(
+        !report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::BlockMovedRows { .. })),
+        "no block move should be present when move detection disabled"
+    );
+}
 
-    let report_enabled = diff_workbooks(&wb_a, &wb_b);
+#[test]
+fn g14_masked_move_detection_not_gated_by_recursive_align_threshold() {
+    let grid_a = grid_from_numbers(&[
+        &[1, 2, 3],
+        &[10, 20, 30],
+        &[100, 200, 300],
+        &[1000, 2000, 3000],
+        &[10000, 20000, 30000],
+    ]);
 
-    let rect_moves_enabled = collect_rect_moves(&report_enabled);
-    assert_eq!(
-        rect_moves_enabled.len(),
-        1,
-        "with move detection enabled, BlockMovedRect should be detected"
+    let grid_b = grid_from_numbers(&[
+        &[1, 2, 3],
+        &[1000, 2000, 3000],
+        &[10000, 20000, 30000],
+        &[10, 20, 30],
+        &[100, 200, 300],
+    ]);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let config = DiffConfig {
+        recursive_align_threshold: 1,
+        max_move_detection_rows: 10,
+        ..DiffConfig::default()
+    };
+
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
+
+    assert!(
+        report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::BlockMovedRows { .. })),
+        "masked move detection should be enabled by max_move_detection_rows, independent of recursion threshold"
     );
 }
 
@@ -781,7 +831,7 @@ fn g14_max_move_iterations_limits_detected_moves() {
         max_move_iterations: 2,
         ..DiffConfig::default()
     };
-    let report_limited = diff_workbooks_with_config(&wb_a, &wb_b, &limited_config);
+    let report_limited = diff_workbooks(&wb_a, &wb_b, &limited_config);
 
     let rect_moves_limited = collect_rect_moves(&report_limited);
 
@@ -797,7 +847,7 @@ fn g14_max_move_iterations_limits_detected_moves() {
     );
 
     let full_config = DiffConfig::default();
-    let report_full = diff_workbooks_with_config(&wb_a, &wb_b, &full_config);
+    let report_full = diff_workbooks(&wb_a, &wb_b, &full_config);
 
     let rect_moves_full = collect_rect_moves(&report_full);
 

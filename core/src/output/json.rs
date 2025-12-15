@@ -1,3 +1,5 @@
+#[cfg(feature = "excel-open-xml")]
+use crate::config::DiffConfig;
 use crate::diff::DiffReport;
 #[cfg(feature = "excel-open-xml")]
 use crate::engine::diff_workbooks as compute_diff;
@@ -35,18 +37,20 @@ pub fn serialize_diff_report(report: &DiffReport) -> serde_json::Result<String> 
 pub fn diff_workbooks(
     path_a: impl AsRef<Path>,
     path_b: impl AsRef<Path>,
+    config: &DiffConfig,
 ) -> Result<DiffReport, ExcelOpenError> {
     let wb_a = open_workbook(path_a)?;
     let wb_b = open_workbook(path_b)?;
-    Ok(compute_diff(&wb_a, &wb_b))
+    Ok(compute_diff(&wb_a, &wb_b, config))
 }
 
 #[cfg(feature = "excel-open-xml")]
 pub fn diff_workbooks_to_json(
     path_a: impl AsRef<Path>,
     path_b: impl AsRef<Path>,
+    config: &DiffConfig,
 ) -> Result<String, ExcelOpenError> {
-    let report = diff_workbooks(path_a, path_b)?;
+    let report = diff_workbooks(path_a, path_b, config)?;
     serialize_diff_report(&report).map_err(|e| ExcelOpenError::SerializationError(e.to_string()))
 }
 
@@ -68,6 +72,9 @@ pub fn diff_report_to_cell_diffs(report: &DiffReport) -> Vec<CellDiff> {
         .iter()
         .filter_map(|op| {
             if let DiffOp::CellEdited { addr, from, to, .. } = op {
+                if from == to {
+                    return None;
+                }
                 Some(CellDiff {
                     coords: addr.to_a1(),
                     value_file1: render_value(&from.value),

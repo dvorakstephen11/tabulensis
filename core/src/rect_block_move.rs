@@ -22,12 +22,7 @@ pub(crate) struct RectBlockMove {
     pub block_hash: Option<u64>,
 }
 
-#[allow(dead_code)]
-pub(crate) fn detect_exact_rect_block_move(old: &Grid, new: &Grid) -> Option<RectBlockMove> {
-    detect_exact_rect_block_move_with_config(old, new, &DiffConfig::default())
-}
-
-pub(crate) fn detect_exact_rect_block_move_with_config(
+pub(crate) fn detect_exact_rect_block_move(
     old: &Grid,
     new: &Grid,
     config: &DiffConfig,
@@ -59,6 +54,20 @@ pub(crate) fn detect_exact_rect_block_move_with_config(
     let col_stats = HashStats::from_col_meta(&view_a.col_meta, &view_b.col_meta);
 
     if has_heavy_repetition(&row_stats, config) || has_heavy_repetition(&col_stats, config) {
+        return None;
+    }
+
+    let shared_rows = row_stats
+        .freq_a
+        .keys()
+        .filter(|h| row_stats.freq_b.contains_key(*h))
+        .count();
+    let shared_cols = col_stats
+        .freq_a
+        .keys()
+        .filter(|h| col_stats.freq_b.contains_key(*h))
+        .count();
+    if shared_rows == 0 && shared_cols == 0 {
         return None;
     }
 
@@ -443,7 +452,7 @@ mod tests {
         let old = grid_from_matrix(grid_a);
         let new = grid_from_matrix(grid_b);
 
-        let result = detect_exact_rect_block_move(&old, &new);
+        let result = detect_exact_rect_block_move(&old, &new, &DiffConfig::default());
         assert!(
             result.is_some(),
             "should detect exact rectangular block move"
@@ -471,7 +480,7 @@ mod tests {
         let old = grid_from_matrix(grid_a);
         let new = grid_from_matrix(grid_b);
 
-        let result = detect_exact_rect_block_move(&old, &new);
+        let result = detect_exact_rect_block_move(&old, &new, &DiffConfig::default());
         assert!(
             result.is_some(),
             "should detect a vertical rect move when columns overlap"
@@ -491,7 +500,7 @@ mod tests {
         let old = grid_from_numbers(&[&[1, 2], &[3, 4]]);
         let new = grid_from_numbers(&[&[1, 2, 5], &[3, 4, 6]]);
 
-        let result = detect_exact_rect_block_move(&old, &new);
+        let result = detect_exact_rect_block_move(&old, &new, &DiffConfig::default());
         assert!(result.is_none(), "different dimensions should bail");
     }
 
@@ -500,7 +509,7 @@ mod tests {
         let old = Grid::new(0, 0);
         let new = Grid::new(0, 0);
 
-        let result = detect_exact_rect_block_move(&old, &new);
+        let result = detect_exact_rect_block_move(&old, &new, &DiffConfig::default());
         assert!(result.is_none(), "empty grid should bail");
     }
 
@@ -509,7 +518,7 @@ mod tests {
         let old = grid_from_numbers(&[&[1, 2], &[3, 4]]);
         let new = grid_from_numbers(&[&[1, 2], &[3, 4]]);
 
-        let result = detect_exact_rect_block_move(&old, &new);
+        let result = detect_exact_rect_block_move(&old, &new, &DiffConfig::default());
         assert!(
             result.is_none(),
             "identical grids should bail (no differences)"
@@ -530,7 +539,7 @@ mod tests {
         let old = grid_from_matrix(grid_a);
         let new = grid_from_matrix(grid_b);
 
-        let result = detect_exact_rect_block_move(&old, &new);
+        let result = detect_exact_rect_block_move(&old, &new, &DiffConfig::default());
         assert!(
             result.is_none(),
             "move with internal edit should not be detected as exact rectangular move"
@@ -557,7 +566,7 @@ mod tests {
         let old = grid_from_matrix(grid_a);
         let new = grid_from_matrix(grid_b);
 
-        let result = detect_exact_rect_block_move(&old, &new);
+        let result = detect_exact_rect_block_move(&old, &new, &DiffConfig::default());
         assert!(
             result.is_none(),
             "ambiguous block swap should not emit a rectangular move"
@@ -572,7 +581,7 @@ mod tests {
         let old = Grid::new(config.max_align_rows + 1, 10);
         let new = Grid::new(config.max_align_rows + 1, 10);
 
-        let result = detect_exact_rect_block_move_with_config(&old, &new, &config);
+        let result = detect_exact_rect_block_move(&old, &new, &config);
         assert!(
             result.is_none(),
             "grids exceeding configured max_align_rows should bail"
@@ -587,7 +596,7 @@ mod tests {
         let old = Grid::new(10, config.max_align_cols + 1);
         let new = Grid::new(10, config.max_align_cols + 1);
 
-        let result = detect_exact_rect_block_move_with_config(&old, &new, &config);
+        let result = detect_exact_rect_block_move(&old, &new, &config);
         assert!(
             result.is_none(),
             "grids exceeding configured max_align_cols should bail"
@@ -599,7 +608,7 @@ mod tests {
         let old = grid_from_numbers(&[&[1, 2, 3], &[4, 5, 6], &[7, 8, 9]]);
         let new = grid_from_numbers(&[&[1, 2, 3], &[4, 99, 6], &[7, 8, 9]]);
 
-        let result = detect_exact_rect_block_move(&old, &new);
+        let result = detect_exact_rect_block_move(&old, &new, &DiffConfig::default());
         assert!(
             result.is_none(),
             "single cell edit is not a rectangular block move"
@@ -611,7 +620,7 @@ mod tests {
         let old = grid_from_numbers(&[&[1, 2, 3], &[4, 5, 6], &[7, 8, 9], &[10, 11, 12]]);
         let new = grid_from_numbers(&[&[7, 8, 9], &[4, 5, 6], &[1, 2, 3], &[10, 11, 12]]);
 
-        let result = detect_exact_rect_block_move(&old, &new);
+        let result = detect_exact_rect_block_move(&old, &new, &DiffConfig::default());
         assert!(
             result.is_none(),
             "pure row swap without column displacement is not a rectangular block move"
@@ -633,7 +642,7 @@ mod tests {
         let old = grid_from_matrix(grid_a);
         let new = grid_from_matrix(grid_b);
 
-        let result = detect_exact_rect_block_move(&old, &new);
+        let result = detect_exact_rect_block_move(&old, &new, &DiffConfig::default());
         assert!(
             result.is_none(),
             "non-contiguous differences should not form a rectangular block move"

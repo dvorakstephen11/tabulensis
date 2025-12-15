@@ -1,6 +1,6 @@
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use excel_diff::config::DiffConfig;
-use excel_diff::engine::diff_workbooks_with_config;
+use excel_diff::engine::diff_workbooks;
 use excel_diff::{Cell, CellAddress, CellValue, Grid, Sheet, SheetKind, Workbook};
 use std::time::Duration;
 
@@ -92,7 +92,7 @@ fn bench_identical_grids(c: &mut Criterion) {
 
         group.throughput(Throughput::Elements(*size as u64 * 50));
         group.bench_with_input(BenchmarkId::new("rows", size), size, |b, _| {
-            b.iter(|| diff_workbooks_with_config(&wb_a, &wb_b, &config));
+            b.iter(|| diff_workbooks(&wb_a, &wb_b, &config));
         });
     }
     group.finish();
@@ -120,7 +120,7 @@ fn bench_single_cell_edit(c: &mut Criterion) {
 
         group.throughput(Throughput::Elements(*size as u64 * 50));
         group.bench_with_input(BenchmarkId::new("rows", size), size, |b, _| {
-            b.iter(|| diff_workbooks_with_config(&wb_a, &wb_b, &config));
+            b.iter(|| diff_workbooks(&wb_a, &wb_b, &config));
         });
     }
     group.finish();
@@ -141,7 +141,7 @@ fn bench_all_rows_different(c: &mut Criterion) {
 
         group.throughput(Throughput::Elements(*size as u64 * 50));
         group.bench_with_input(BenchmarkId::new("rows", size), size, |b, _| {
-            b.iter(|| diff_workbooks_with_config(&wb_a, &wb_b, &config));
+            b.iter(|| diff_workbooks(&wb_a, &wb_b, &config));
         });
     }
     group.finish();
@@ -169,7 +169,7 @@ fn bench_adversarial_repetitive(c: &mut Criterion) {
 
         group.throughput(Throughput::Elements(*size as u64 * 50));
         group.bench_with_input(BenchmarkId::new("rows", size), size, |b, _| {
-            b.iter(|| diff_workbooks_with_config(&wb_a, &wb_b, &config));
+            b.iter(|| diff_workbooks(&wb_a, &wb_b, &config));
         });
     }
     group.finish();
@@ -197,7 +197,7 @@ fn bench_sparse_grid(c: &mut Criterion) {
 
         group.throughput(Throughput::Elements(*size as u64 * 100));
         group.bench_with_input(BenchmarkId::new("rows", size), size, |b, _| {
-            b.iter(|| diff_workbooks_with_config(&wb_a, &wb_b, &config));
+            b.iter(|| diff_workbooks(&wb_a, &wb_b, &config));
         });
     }
     group.finish();
@@ -253,7 +253,7 @@ fn bench_row_insertion(c: &mut Criterion) {
 
         group.throughput(Throughput::Elements(*size as u64 * 50));
         group.bench_with_input(BenchmarkId::new("rows", size), size, |b, _| {
-            b.iter(|| diff_workbooks_with_config(&wb_a, &wb_b, &config));
+            b.iter(|| diff_workbooks(&wb_a, &wb_b, &config));
         });
     }
     group.finish();

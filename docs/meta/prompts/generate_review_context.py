@@ -493,6 +493,11 @@ def get_latest_benchmark_result(ctx: ProjectContext) -> Path | None:
     return json_files[0] if json_files else None
 
 
+def get_combined_benchmarks_csv(ctx: ProjectContext) -> Path | None:
+    csv_path = ctx.root / "benchmarks" / "results" / "combined_results.csv"
+    return csv_path if csv_path.exists() else None
+
+
 def render_benchmark_results(benchmark_path: Path | None) -> str:
     lines = [
         "=" * 60,
@@ -822,6 +827,9 @@ def collate_post_implementation_review(
     builder.add_content("cycle_summary.txt", "\n".join(summary_lines) + "\n")
     if benchmark_path and benchmark_path.exists():
         builder.add_file(benchmark_path, dest_name="benchmark_results.json")
+    combined_csv = get_combined_benchmarks_csv(ctx)
+    if combined_csv:
+        builder.add_file(combined_csv, dest_name="combined_benchmark_results.csv")
 
     reviews_branch_dir = ctx.root / "docs" / "meta" / "reviews" / branch
     remediation_files = sorted(
@@ -866,6 +874,9 @@ def collate_percent_completion(ctx: ProjectContext, downloads_dir: Path | None =
     builder.add_content("benchmark_results.txt", render_benchmark_results(benchmark_path))
     if benchmark_path and benchmark_path.exists():
         builder.add_file(benchmark_path, dest_name="benchmark_results.json")
+    combined_csv = get_combined_benchmarks_csv(ctx)
+    if combined_csv:
+        builder.add_file(combined_csv, dest_name="combined_benchmark_results.csv")
 
     builder.inject_prompt(PROMPT_FILES["percent"])
     builder.write_manifest()
@@ -893,6 +904,9 @@ def collate_planner(ctx: ProjectContext, downloads_dir: Path | None = None) -> P
     builder.add_content("benchmark_results.txt", render_benchmark_results(benchmark_path))
     if benchmark_path and benchmark_path.exists():
         builder.add_file(benchmark_path, dest_name="benchmark_results.json")
+    combined_csv = get_combined_benchmarks_csv(ctx)
+    if combined_csv:
+        builder.add_file(combined_csv, dest_name="combined_benchmark_results.csv")
 
     builder.inject_prompt(PROMPT_FILES["planner"])
     builder.write_manifest()
@@ -1031,6 +1045,9 @@ def collate_design_evaluation(ctx: ProjectContext, downloads_dir: Path | None = 
     builder.add_content("benchmark_results.txt", render_benchmark_results(benchmark_path))
     if benchmark_path and benchmark_path.exists():
         builder.add_file(benchmark_path, dest_name="benchmark_results.json")
+    combined_csv = get_combined_benchmarks_csv(ctx)
+    if combined_csv:
+        builder.add_file(combined_csv, dest_name="combined_benchmark_results.csv")
 
     token_report.sort(key=lambda item: item[1], reverse=True)
     report_lines = ["Token estimates per bundle:", ""]

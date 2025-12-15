@@ -17,8 +17,6 @@ use std::collections::HashSet;
 use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
 use crate::config::DiffConfig;
 
-pub const MAX_LCS_GAP_SIZE: u32 = 1500;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GapStrategy {
     Empty,
@@ -51,7 +49,7 @@ pub fn select_gap_strategy(
 
     let is_move_candidate = has_matching_signatures(old_slice, new_slice);
 
-    let small_threshold = config.small_gap_threshold.min(MAX_LCS_GAP_SIZE);
+    let small_threshold = config.small_gap_threshold.min(config.max_lcs_gap_size);
     if old_len <= small_threshold && new_len <= small_threshold {
         return if is_move_candidate {
             GapStrategy::MoveCandidate
@@ -70,7 +68,7 @@ pub fn select_gap_strategy(
         return GapStrategy::MoveCandidate;
     }
 
-    if old_len > MAX_LCS_GAP_SIZE || new_len > MAX_LCS_GAP_SIZE {
+    if old_len > config.max_lcs_gap_size || new_len > config.max_lcs_gap_size {
         return GapStrategy::HashFallback;
     }
 
@@ -88,4 +86,38 @@ fn has_matching_signatures(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> bool
         .iter()
         .filter(|m| m.frequency_class == FrequencyClass::Unique)
         .any(|m| set.contains(&m.signature))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
+    use crate::workbook::RowSignature;
+
+    fn meta(row_idx: u32, hash: u128) -> RowMeta {
+        let signature = RowSignature { hash };
+        RowMeta {
+            row_idx,
+            signature,
+            hash: signature,
+            non_blank_count: 1,
+            first_non_blank_col: 0,
+            frequency_class: FrequencyClass::Common,
+            is_low_info: false,
+        }
+    }
+
+    #[test]
+    fn respects_configured_max_lcs_gap_size() {
+        let config = DiffConfig {
+            max_lcs_gap_size: 2,
+            small_gap_threshold: 10,
+            ..Default::default()
+        };
+        let rows_a = vec![meta(0, 1), meta(1, 2), meta(2, 3)];
+        let rows_b = vec![meta(0, 4), meta(1, 5), meta(2, 6)];
+
+        let strategy = select_gap_strategy(&rows_a, &rows_b, &config, false);
+        assert_eq!(strategy, GapStrategy::HashFallback);
+    }
 }
