@@ -9,6 +9,26 @@ pub trait DiffSink {
     }
 }
 
+pub(crate) struct NoFinishSink<'a, S: DiffSink> {
+    inner: &'a mut S,
+}
+
+impl<'a, S: DiffSink> NoFinishSink<'a, S> {
+    pub(crate) fn new(inner: &'a mut S) -> Self {
+        Self { inner }
+    }
+}
+
+impl<S: DiffSink> DiffSink for NoFinishSink<'_, S> {
+    fn emit(&mut self, op: DiffOp) -> Result<(), DiffError> {
+        self.inner.emit(op)
+    }
+
+    fn finish(&mut self) -> Result<(), DiffError> {
+        Ok(())
+    }
+}
+
 /// A sink that collects ops into a Vec for compatibility.
 pub struct VecSink {
     ops: Vec<DiffOp>,

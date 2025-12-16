@@ -5535,6 +5535,11 @@ pub enum DiffOp {
         old: Option<StringId>,
         new: Option<StringId>,
     },
+
+    // Future: DAX operations
+    // MeasureAdded { name: StringId }
+    // MeasureRemoved { name: StringId }
+    // MeasureDefinitionChanged { name: StringId, change_kind: QueryChangeKind }
 }
 
 /// A versioned collection of diff operations between two workbooks.
@@ -9402,7 +9407,6 @@ pub mod m_ast;
 pub mod m_diff;
 pub mod m_section;
 pub mod output;
-#[cfg(feature = "excel-open-xml")]
 pub mod package;
 #[cfg(feature = "perf-metrics")]
 pub mod perf;
@@ -9481,14 +9485,11 @@ pub use grid_view::{ColHash, ColMeta, GridView, HashStats, RowHash, RowMeta, Row
 pub use m_ast::{
     MModuleAst, MParseError, ast_semantically_equal, canonicalize_m_ast, parse_m_expression,
 };
-#[allow(deprecated)]
-pub use m_diff::{MQueryDiff, QueryChangeKind as LegacyQueryChangeKind, diff_m_queries};
 pub use m_section::{SectionMember, SectionParseError, parse_section_members};
 #[cfg(feature = "excel-open-xml")]
 pub use output::json::diff_workbooks_to_json;
 pub use output::json::{CellDiff, serialize_cell_diffs, serialize_diff_report};
 pub use output::json_lines::JsonLinesSink;
-#[cfg(feature = "excel-open-xml")]
 pub use package::WorkbookPackage;
 pub use session::DiffSession;
 pub use sink::{CallbackSink, DiffSink, VecSink};
@@ -9939,128 +9940,21 @@ fn delimiters_match(open: char, close: char) -> bool {
 ### File: `core\src\m_diff.rs`
 
 ```rust
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
 use crate::config::DiffConfig;
 use crate::datamashup::{DataMashup, Query, build_queries};
 use crate::diff::{DiffOp, QueryChangeKind as DiffQueryChangeKind, QueryMetadataField};
 use crate::hashing::XXH64_SEED;
-use crate::m_ast::{MModuleAst, ast_semantically_equal, canonicalize_m_ast, parse_m_expression};
-use crate::m_section::SectionParseError;
+use crate::m_ast::{MModuleAst, canonicalize_m_ast, parse_m_expression};
 use crate::string_pool::{StringId, StringPool};
 
-#[deprecated(note = "use DiffOp query variants instead")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum QueryChangeKind {
-    Added,
-    Removed,
-    Renamed { from: String, to: String },
-    DefinitionChanged,
-    MetadataChangedOnly,
-}
-
-#[deprecated(note = "use DiffOp query variants instead")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MQueryDiff {
-    pub name: String,
-    #[allow(deprecated)]
-    pub kind: QueryChangeKind,
-}
-
 #[deprecated(note = "use WorkbookPackage::diff instead")]
-#[allow(deprecated)]
-pub fn diff_m_queries(
-    old_dm: &DataMashup,
-    new_dm: &DataMashup,
-    config: &DiffConfig,
-) -> Result<Vec<MQueryDiff>, SectionParseError> {
-    let old_queries = build_queries(old_dm)?;
-    let new_queries = build_queries(new_dm)?;
-    Ok(diff_queries_legacy(&old_queries, &new_queries, config))
-}
-
-#[allow(deprecated)]
-fn diff_queries_legacy(
-    old_queries: &[Query],
-    new_queries: &[Query],
-    config: &DiffConfig,
-) -> Vec<MQueryDiff> {
-    let mut old_map: HashMap<String, &Query> = HashMap::new();
-    for query in old_queries {
-        old_map.insert(query.name.clone(), query);
-    }
-
-    let mut new_map: HashMap<String, &Query> = HashMap::new();
-    for query in new_queries {
-        new_map.insert(query.name.clone(), query);
-    }
-
-    let mut names: Vec<String> = old_map.keys().chain(new_map.keys()).cloned().collect();
-    names.sort();
-    names.dedup();
-
-    let mut diffs = Vec::new();
-    for name in names {
-        match (old_map.get(&name), new_map.get(&name)) {
-            (None, Some(_)) => diffs.push(MQueryDiff {
-                name,
-                kind: QueryChangeKind::Added,
-            }),
-            (Some(_), None) => diffs.push(MQueryDiff {
-                name,
-                kind: QueryChangeKind::Removed,
-            }),
-            (Some(old_q), Some(new_q)) => {
-                if old_q.expression_m == new_q.expression_m {
-                    if old_q.metadata != new_q.metadata {
-                        diffs.push(MQueryDiff {
-                            name,
-                            kind: QueryChangeKind::MetadataChangedOnly,
-                        });
-                    }
-                    continue;
-                }
-
-                if old_q.metadata == new_q.metadata {
-                    if config.enable_m_semantic_diff
-                        && expressions_semantically_equal(&old_q.expression_m, &new_q.expression_m)
-                    {
-                        continue;
-                    }
-                    diffs.push(MQueryDiff {
-                        name,
-                        kind: QueryChangeKind::DefinitionChanged,
-                    });
-                    continue;
-                }
-
-                diffs.push(MQueryDiff {
-                    name,
-                    kind: QueryChangeKind::DefinitionChanged,
-                });
-            }
-            (None, None) => {
-                debug_assert!(false, "query name missing from both maps");
-            }
-        }
-    }
-
-    diffs
-}
-
-fn expressions_semantically_equal(old_expr: &str, new_expr: &str) -> bool {
-    let Ok(mut old_ast) = parse_m_expression(old_expr) else {
-        return false;
-    };
-    let Ok(mut new_ast) = parse_m_expression(new_expr) else {
-        return false;
-    };
-
-    canonicalize_m_ast(&mut old_ast);
-    canonicalize_m_ast(&mut new_ast);
-
-    ast_semantically_equal(&old_ast, &new_ast)
+pub fn diff_m_queries(old_queries: &[Query], new_queries: &[Query], config: &DiffConfig) -> Vec<DiffOp> {
+    crate::with_default_session(|session| {
+        diff_queries_to_ops(old_queries, new_queries, &mut session.strings, config)
+    })
 }
 
 fn hash64<T: Hash>(value: &T) -> u64 {
@@ -10596,7 +10490,9 @@ fn strip_leading_bom(text: &str) -> &str {
 use crate::config::DiffConfig;
 use crate::diff::DiffReport;
 #[cfg(feature = "excel-open-xml")]
-use crate::excel_open_xml::{PackageError, open_workbook};
+use crate::datamashup::build_data_mashup;
+#[cfg(feature = "excel-open-xml")]
+use crate::excel_open_xml::{PackageError, open_data_mashup, open_workbook};
 use crate::session::DiffSession;
 #[cfg(feature = "excel-open-xml")]
 use crate::sink::VecSink;
@@ -10637,9 +10533,20 @@ pub fn diff_workbooks(
     path_b: impl AsRef<Path>,
     config: &DiffConfig,
 ) -> Result<DiffReport, PackageError> {
+    let path_a = path_a.as_ref();
+    let path_b = path_b.as_ref();
+
     let mut session = DiffSession::new();
+
     let wb_a = open_workbook(path_a, session.strings_mut())?;
     let wb_b = open_workbook(path_b, session.strings_mut())?;
+
+    let dm_a = open_data_mashup(path_a)?
+        .map(|raw| build_data_mashup(&raw))
+        .transpose()?;
+    let dm_b = open_data_mashup(path_b)?
+        .map(|raw| build_data_mashup(&raw))
+        .transpose()?;
 
     let mut sink = VecSink::new();
     let summary = crate::engine::try_diff_workbooks_streaming(
@@ -10650,7 +10557,12 @@ pub fn diff_workbooks(
         &mut sink,
     )
     .map_err(|e| PackageError::SerializationError(e.to_string()))?;
-    Ok(build_report_from_sink(sink, summary, session))
+
+    let m_ops = crate::m_diff::diff_m_ops_for_packages(&dm_a, &dm_b, session.strings_mut(), config);
+
+    let mut report = build_report_from_sink(sink, summary, session);
+    report.ops.extend(m_ops);
+    Ok(report)
 }
 
 #[cfg(feature = "excel-open-xml")]

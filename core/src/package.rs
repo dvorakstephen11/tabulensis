@@ -1,7 +1,7 @@
 use crate::config::DiffConfig;
 use crate::datamashup::DataMashup;
 use crate::diff::{DiffError, DiffReport, DiffSummary};
-use crate::sink::DiffSink;
+use crate::sink::{DiffSink, NoFinishSink};
 use crate::workbook::Workbook;
 
 #[derive(Debug, Clone)]
@@ -62,13 +62,24 @@ impl WorkbookPackage {
         sink: &mut S,
     ) -> Result<DiffSummary, DiffError> {
         crate::with_default_session(|session| {
-            let mut summary = crate::engine::try_diff_workbooks_streaming(
-                &self.workbook,
-                &other.workbook,
-                &mut session.strings,
-                config,
-                sink,
-            )?;
+            let grid_result = {
+                let mut no_finish = NoFinishSink::new(sink);
+                crate::engine::try_diff_workbooks_streaming(
+                    &self.workbook,
+                    &other.workbook,
+                    &mut session.strings,
+                    config,
+                    &mut no_finish,
+                )
+            };
+
+            let mut summary = match grid_result {
+                Ok(summary) => summary,
+                Err(e) => {
+                    let _ = sink.finish();
+                    return Err(e);
+                }
+            };
 
             let m_ops = crate::m_diff::diff_m_ops_for_packages(
                 &self.data_mashup,
@@ -79,8 +90,10 @@ impl WorkbookPackage {
 
             for op in m_ops {
                 sink.emit(op)?;
-                summary.op_count += 1;
+                summary.op_count = summary.op_count.saturating_add(1);
             }
+
+            sink.finish()?;
 
             Ok(summary)
         })
