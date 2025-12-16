@@ -2,8 +2,8 @@ mod common;
 
 use common::sid;
 use excel_diff::{
-    CellAddress, CellSnapshot, CellValue, ColSignature, DiffOp, DiffReport, RowSignature,
-    with_default_session,
+    CellAddress, CellSnapshot, CellValue, ColSignature, DiffOp, DiffReport, QueryChangeKind,
+    QueryMetadataField, RowSignature, with_default_session,
 };
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -991,6 +991,52 @@ fn pg4_diffop_roundtrip_each_variant() {
             block_hash: None,
         },
         sample_cell_edited(),
+        DiffOp::QueryAdded {
+            name: sid("Section1/NewQuery"),
+        },
+        DiffOp::QueryRemoved {
+            name: sid("Section1/OldQuery"),
+        },
+        DiffOp::QueryRenamed {
+            from: sid("Section1/Foo"),
+            to: sid("Section1/Bar"),
+        },
+        DiffOp::QueryDefinitionChanged {
+            name: sid("Section1/Query1"),
+            change_kind: QueryChangeKind::Semantic,
+            old_hash: 0x1234567890ABCDEF,
+            new_hash: 0xFEDCBA0987654321,
+        },
+        DiffOp::QueryDefinitionChanged {
+            name: sid("Section1/Query2"),
+            change_kind: QueryChangeKind::FormattingOnly,
+            old_hash: 0xAAAABBBBCCCCDDDD,
+            new_hash: 0xAAAABBBBCCCCDDDD,
+        },
+        DiffOp::QueryMetadataChanged {
+            name: sid("Section1/Query3"),
+            field: QueryMetadataField::LoadToSheet,
+            old: Some(sid("true")),
+            new: Some(sid("false")),
+        },
+        DiffOp::QueryMetadataChanged {
+            name: sid("Section1/Query4"),
+            field: QueryMetadataField::LoadToModel,
+            old: Some(sid("false")),
+            new: Some(sid("true")),
+        },
+        DiffOp::QueryMetadataChanged {
+            name: sid("Section1/Query5"),
+            field: QueryMetadataField::GroupPath,
+            old: None,
+            new: Some(sid("Reports/Sales")),
+        },
+        DiffOp::QueryMetadataChanged {
+            name: sid("Section1/Query6"),
+            field: QueryMetadataField::ConnectionOnly,
+            old: Some(sid("true")),
+            new: Some(sid("false")),
+        },
     ];
 
     for original in ops {

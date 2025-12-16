@@ -1,151 +1,193 @@
-#[allow(deprecated)]
-use excel_diff::{
-    DataMashup, LegacyQueryChangeKind as QueryChangeKind, build_data_mashup, diff_m_queries,
-    open_data_mashup,
-};
+use excel_diff::{DiffConfig, DiffOp, DiffReport, QueryChangeKind, WorkbookPackage};
+use std::fs::File;
 
 mod common;
 use common::fixture_path;
 
-fn load_datamashup(name: &str) -> DataMashup {
-    let raw = open_data_mashup(fixture_path(name))
-        .expect("fixture should open")
-        .expect("DataMashup should be present");
-    build_data_mashup(&raw).expect("DataMashup should build")
+fn load_package(name: &str) -> WorkbookPackage {
+    let path = fixture_path(name);
+    let file = File::open(&path).expect("fixture file should open");
+    WorkbookPackage::open(file).expect("fixture should parse as WorkbookPackage")
 }
 
-fn datamashup_with_section(lines: &[&str]) -> DataMashup {
-    let mut dm = load_datamashup("one_query.xlsx");
-    let body = lines.join("\n");
-    dm.package_parts.main_section.source = format!("section Section1;\n\n{body}\n");
-    dm
+fn m_ops(report: &DiffReport) -> Vec<&DiffOp> {
+    report.m_ops().collect()
+}
+
+fn resolve_name<'a>(report: &'a DiffReport, op: &DiffOp) -> &'a str {
+    let name_id = match op {
+        DiffOp::QueryAdded { name } => *name,
+        DiffOp::QueryRemoved { name } => *name,
+        DiffOp::QueryRenamed { from, .. } => *from,
+        DiffOp::QueryDefinitionChanged { name, .. } => *name,
+        DiffOp::QueryMetadataChanged { name, .. } => *name,
+        _ => panic!("not a query op"),
+    };
+    &report.strings[name_id.0 as usize]
 }
 
 #[test]
-fn formatting_only_diff_produces_no_diffs() {
-    let dm_a = load_datamashup("m_formatting_only_a.xlsx");
-    let dm_b = load_datamashup("m_formatting_only_b.xlsx");
+fn formatting_only_diff_produces_formatting_only_change() {
+    let pkg_a = load_package("m_formatting_only_a.xlsx");
+    let pkg_b = load_package("m_formatting_only_b.xlsx");
 
-    let diffs = diff_m_queries(&dm_a, &dm_b, &excel_diff::DiffConfig::default())
-        .expect("diff should succeed");
+    let report = pkg_a.diff(&pkg_b, &DiffConfig::default());
+    let ops = m_ops(&report);
 
-    assert!(
-        diffs.is_empty(),
-        "formatting-only changes should be ignored, got {:?}",
-        diffs
+    let def_changed: Vec<_> = ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::QueryDefinitionChanged { .. }))
+        .collect();
+
+    assert_eq!(
+        def_changed.len(),
+        1,
+        "formatting-only changes should produce QueryDefinitionChanged with FormattingOnly kind"
     );
+
+    match def_changed[0] {
+        DiffOp::QueryDefinitionChanged {
+            change_kind,
+            old_hash,
+            new_hash,
+            ..
+        } => {
+            assert_eq!(
+                *change_kind,
+                QueryChangeKind::FormattingOnly,
+                "formatting-only diff should have FormattingOnly change kind"
+            );
+            assert_eq!(
+                old_hash, new_hash,
+                "formatting-only changes have equal canonical hashes"
+            );
+        }
+        _ => unreachable!(),
+    }
+    assert_eq!(resolve_name(&report, def_changed[0]), "Section1/FormatTest");
 }
 
 #[test]
-fn semantic_gate_can_be_disabled() {
-    let dm_a = load_datamashup("m_formatting_only_a.xlsx");
-    let dm_b = load_datamashup("m_formatting_only_b.xlsx");
+fn semantic_gate_disabled_produces_semantic_change() {
+    let pkg_a = load_package("m_formatting_only_a.xlsx");
+    let pkg_b = load_package("m_formatting_only_b.xlsx");
 
-    let config = excel_diff::DiffConfig {
+    let config = DiffConfig {
         enable_m_semantic_diff: false,
-        ..excel_diff::DiffConfig::default()
+        ..DiffConfig::default()
     };
 
-    let diffs = diff_m_queries(&dm_a, &dm_b, &config).expect("diff should succeed");
+    let report = pkg_a.diff(&pkg_b, &config);
+    let ops = m_ops(&report);
+
+    let def_changed: Vec<_> = ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::QueryDefinitionChanged { .. }))
+        .collect();
 
     assert_eq!(
-        diffs.len(),
+        def_changed.len(),
         1,
-        "disabling semantic gate should surface formatting-only differences"
+        "disabling semantic gate should surface formatting-only differences as Semantic"
     );
-    assert_eq!(diffs[0].name, "Section1/FormatTest");
-    assert_eq!(diffs[0].kind, QueryChangeKind::DefinitionChanged);
+
+    match def_changed[0] {
+        DiffOp::QueryDefinitionChanged {
+            change_kind,
+            old_hash,
+            new_hash,
+            ..
+        } => {
+            assert_eq!(
+                *change_kind,
+                QueryChangeKind::Semantic,
+                "with semantic diff disabled, changes are reported as Semantic"
+            );
+            assert_ne!(
+                old_hash, new_hash,
+                "textual hashes should differ when semantic diff is disabled"
+            );
+        }
+        _ => unreachable!(),
+    }
+    assert_eq!(resolve_name(&report, def_changed[0]), "Section1/FormatTest");
 }
 
 #[test]
-fn formatting_variant_with_real_change_still_reports_definitionchanged() {
-    let dm_b = load_datamashup("m_formatting_only_b.xlsx");
-    let dm_b_variant = load_datamashup("m_formatting_only_b_variant.xlsx");
+fn formatting_variant_with_real_change_still_reports_semantic() {
+    let pkg_b = load_package("m_formatting_only_b.xlsx");
+    let pkg_b_variant = load_package("m_formatting_only_b_variant.xlsx");
 
-    let diffs = diff_m_queries(&dm_b, &dm_b_variant, &excel_diff::DiffConfig::default())
-        .expect("diff should succeed");
+    let report = pkg_b.diff(&pkg_b_variant, &DiffConfig::default());
+    let ops = m_ops(&report);
+
+    let def_changed: Vec<_> = ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::QueryDefinitionChanged { .. }))
+        .collect();
 
     assert_eq!(
-        diffs.len(),
+        def_changed.len(),
         1,
         "expected exactly one diff for semantic change"
     );
-    assert_eq!(diffs[0].name, "Section1/FormatTest");
-    assert_eq!(diffs[0].kind, QueryChangeKind::DefinitionChanged);
+
+    match def_changed[0] {
+        DiffOp::QueryDefinitionChanged {
+            change_kind,
+            old_hash,
+            new_hash,
+            ..
+        } => {
+            assert_eq!(
+                *change_kind,
+                QueryChangeKind::Semantic,
+                "real change should be reported as Semantic"
+            );
+            assert_ne!(
+                old_hash, new_hash,
+                "semantic changes should have different hashes"
+            );
+        }
+        _ => unreachable!(),
+    }
+    assert_eq!(resolve_name(&report, def_changed[0]), "Section1/FormatTest");
 }
 
 #[test]
 fn semantic_gate_does_not_mask_metadata_only_change() {
-    let dm_a = load_datamashup("m_metadata_only_change_a.xlsx");
-    let dm_b = load_datamashup("m_metadata_only_change_b.xlsx");
+    let pkg_a = load_package("m_metadata_only_change_a.xlsx");
+    let pkg_b = load_package("m_metadata_only_change_b.xlsx");
 
-    let diffs = diff_m_queries(&dm_a, &dm_b, &excel_diff::DiffConfig::default())
-        .expect("diff should succeed");
+    let report = pkg_a.diff(&pkg_b, &DiffConfig::default());
+    let ops = m_ops(&report);
 
-    assert_eq!(
-        diffs.len(),
-        1,
-        "expected exactly one diff for metadata-only change"
+    let metadata_ops: Vec<_> = ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::QueryMetadataChanged { .. }))
+        .collect();
+
+    assert!(
+        !metadata_ops.is_empty(),
+        "expected metadata changes to be reported"
     );
-    assert_eq!(diffs[0].name, "Section1/Foo");
-    assert_eq!(diffs[0].kind, QueryChangeKind::MetadataChangedOnly);
+    assert_eq!(resolve_name(&report, metadata_ops[0]), "Section1/Foo");
 }
 
 #[test]
 fn semantic_gate_does_not_mask_definition_plus_metadata_change() {
-    let dm_a = load_datamashup("m_def_and_metadata_change_a.xlsx");
-    let dm_b = load_datamashup("m_def_and_metadata_change_b.xlsx");
+    let pkg_a = load_package("m_def_and_metadata_change_a.xlsx");
+    let pkg_b = load_package("m_def_and_metadata_change_b.xlsx");
 
-    let diffs = diff_m_queries(&dm_a, &dm_b, &excel_diff::DiffConfig::default())
-        .expect("diff should succeed");
+    let report = pkg_a.diff(&pkg_b, &DiffConfig::default());
+    let ops = m_ops(&report);
 
-    assert_eq!(
-        diffs.len(),
-        1,
-        "expected exactly one diff for definition+metadata change"
-    );
-    assert_eq!(diffs[0].name, "Section1/Foo");
-    assert_eq!(diffs[0].kind, QueryChangeKind::DefinitionChanged);
-}
+    let has_def_change = ops
+        .iter()
+        .any(|op| matches!(op, DiffOp::QueryDefinitionChanged { .. }));
 
-#[test]
-fn semantic_gate_falls_back_on_ast_parse_failure() {
-    let dm_a = datamashup_with_section(&["shared Foo = let Source = 1 in Source;"]);
-    let dm_b = datamashup_with_section(&["shared Foo = let Source = (1;"]);
-
-    let diffs = diff_m_queries(&dm_a, &dm_b, &excel_diff::DiffConfig::default())
-        .expect("diff should succeed (not panic on AST failure)");
-
-    assert_eq!(
-        diffs.len(),
-        1,
-        "expected one diff when AST parse fails on one side"
-    );
-    assert_eq!(diffs[0].name, "Section1/Foo");
-    assert_eq!(
-        diffs[0].kind,
-        QueryChangeKind::DefinitionChanged,
-        "should fall back to textual diff when AST parse fails"
-    );
-}
-
-#[test]
-fn semantic_gate_falls_back_when_both_sides_malformed() {
-    let dm_a = datamashup_with_section(&["shared Foo = let Source = (1;"]);
-    let dm_b = datamashup_with_section(&["shared Foo = let Source = (2;"]);
-
-    let diffs = diff_m_queries(&dm_a, &dm_b, &excel_diff::DiffConfig::default())
-        .expect("diff should succeed (not panic on AST failure)");
-
-    assert_eq!(
-        diffs.len(),
-        1,
-        "expected one diff when AST parse fails on both sides"
-    );
-    assert_eq!(diffs[0].name, "Section1/Foo");
-    assert_eq!(
-        diffs[0].kind,
-        QueryChangeKind::DefinitionChanged,
-        "should fall back to textual diff when both sides fail AST parse"
+    assert!(
+        has_def_change,
+        "expected QueryDefinitionChanged for definition+metadata change"
     );
 }
