@@ -2,7 +2,7 @@
 use crate::config::DiffConfig;
 use crate::diff::DiffReport;
 #[cfg(feature = "excel-open-xml")]
-use crate::excel_open_xml::{ExcelOpenError, open_workbook};
+use crate::excel_open_xml::{PackageError, open_workbook};
 use crate::session::DiffSession;
 #[cfg(feature = "excel-open-xml")]
 use crate::sink::VecSink;
@@ -42,7 +42,7 @@ pub fn diff_workbooks(
     path_a: impl AsRef<Path>,
     path_b: impl AsRef<Path>,
     config: &DiffConfig,
-) -> Result<DiffReport, ExcelOpenError> {
+) -> Result<DiffReport, PackageError> {
     let mut session = DiffSession::new();
     let wb_a = open_workbook(path_a, session.strings_mut())?;
     let wb_b = open_workbook(path_b, session.strings_mut())?;
@@ -55,7 +55,7 @@ pub fn diff_workbooks(
         config,
         &mut sink,
     )
-    .map_err(|e| ExcelOpenError::SerializationError(e.to_string()))?;
+    .map_err(|e| PackageError::SerializationError(e.to_string()))?;
     Ok(build_report_from_sink(sink, summary, session))
 }
 
@@ -64,9 +64,9 @@ pub fn diff_workbooks_to_json(
     path_a: impl AsRef<Path>,
     path_b: impl AsRef<Path>,
     config: &DiffConfig,
-) -> Result<String, ExcelOpenError> {
+) -> Result<String, PackageError> {
     let report = diff_workbooks(path_a, path_b, config)?;
-    serialize_diff_report(&report).map_err(|e| ExcelOpenError::SerializationError(e.to_string()))
+    serialize_diff_report(&report).map_err(|e| PackageError::SerializationError(e.to_string()))
 }
 
 pub fn diff_report_to_cell_diffs(report: &DiffReport) -> Vec<CellDiff> {

@@ -3,7 +3,7 @@ use std::str::Chars;
 
 use thiserror::Error;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MModuleAst {
     root: MExpr,
 }
@@ -14,7 +14,7 @@ pub enum MAstKind {
     Sequence { token_count: usize },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum MExpr {
     Let {
         bindings: Vec<LetBinding>,
@@ -23,13 +23,13 @@ enum MExpr {
     Sequence(Vec<MToken>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct LetBinding {
     name: String,
     value: Box<MExpr>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum MToken {
     KeywordLet,
     KeywordIn,

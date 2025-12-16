@@ -1,5 +1,7 @@
+#[allow(deprecated)]
 use excel_diff::{
-    DataMashup, QueryChangeKind, build_data_mashup, diff_m_queries, open_data_mashup,
+    DataMashup, LegacyQueryChangeKind as QueryChangeKind, build_data_mashup, diff_m_queries,
+    open_data_mashup,
 };
 
 mod common;

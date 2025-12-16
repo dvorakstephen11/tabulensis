@@ -9,6 +9,21 @@ use crate::string_pool::StringId;
 use crate::workbook::{CellAddress, CellSnapshot, ColSignature, RowSignature};
 use thiserror::Error;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum QueryChangeKind {
+    Semantic,
+    FormattingOnly,
+    Renamed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum QueryMetadataField {
+    LoadToSheet,
+    LoadToModel,
+    GroupPath,
+    ConnectionOnly,
+}
+
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum DiffError {
@@ -119,6 +134,29 @@ pub enum DiffOp {
         from: CellSnapshot,
         to: CellSnapshot,
     },
+
+    QueryAdded {
+        name: StringId,
+    },
+    QueryRemoved {
+        name: StringId,
+    },
+    QueryRenamed {
+        from: StringId,
+        to: StringId,
+    },
+    QueryDefinitionChanged {
+        name: StringId,
+        change_kind: QueryChangeKind,
+        old_hash: u64,
+        new_hash: u64,
+    },
+    QueryMetadataChanged {
+        name: StringId,
+        field: QueryMetadataField,
+        old: Option<StringId>,
+        new: Option<StringId>,
+    },
 }
 
 /// A versioned collection of diff operations between two workbooks.
@@ -181,9 +219,28 @@ impl DiffReport {
         self.warnings.push(warning);
         self.complete = false;
     }
+
+    pub fn grid_ops(&self) -> impl Iterator<Item = &DiffOp> {
+        self.ops.iter().filter(|op| !op.is_m_op())
+    }
+
+    pub fn m_ops(&self) -> impl Iterator<Item = &DiffOp> {
+        self.ops.iter().filter(|op| op.is_m_op())
+    }
 }
 
 impl DiffOp {
+    pub fn is_m_op(&self) -> bool {
+        matches!(
+            self,
+            DiffOp::QueryAdded { .. }
+                | DiffOp::QueryRemoved { .. }
+                | DiffOp::QueryRenamed { .. }
+                | DiffOp::QueryDefinitionChanged { .. }
+                | DiffOp::QueryMetadataChanged { .. }
+        )
+    }
+
     pub fn cell_edited(
         sheet: SheetId,
         addr: CellAddress,

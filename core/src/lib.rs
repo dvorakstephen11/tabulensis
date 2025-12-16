@@ -9,11 +9,11 @@
 //! # Quick Start
 //!
 //! ```ignore
-//! use excel_diff::{open_workbook, diff_workbooks};
+//! use excel_diff::WorkbookPackage;
 //!
-//! let wb_a = open_workbook("file_a.xlsx")?;
-//! let wb_b = open_workbook("file_b.xlsx")?;
-//! let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+//! let pkg_a = WorkbookPackage::open(std::fs::File::open("file_a.xlsx")?)?;
+//! let pkg_b = WorkbookPackage::open(std::fs::File::open("file_b.xlsx")?)?;
+//! let report = pkg_a.diff(&pkg_b, &excel_diff::DiffConfig::default());
 //!
 //! for op in &report.ops {
 //!     println!("{:?}", op);
@@ -42,6 +42,8 @@ pub mod m_ast;
 pub mod m_diff;
 pub mod m_section;
 pub mod output;
+#[cfg(feature = "excel-open-xml")]
+pub mod package;
 #[cfg(feature = "perf-metrics")]
 pub mod perf;
 pub(crate) mod rect_block_move;
@@ -63,6 +65,7 @@ pub fn with_default_session<T>(f: impl FnOnce(&mut DiffSession) -> T) -> T {
     })
 }
 
+#[deprecated(note = "use WorkbookPackage::diff")]
 pub fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
     DEFAULT_SESSION.with(|session| {
         let mut session = session.borrow_mut();
@@ -70,6 +73,7 @@ pub fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> Di
     })
 }
 
+#[deprecated(note = "use WorkbookPackage::diff")]
 pub fn try_diff_workbooks(
     old: &Workbook,
     new: &Workbook,
@@ -82,6 +86,8 @@ pub fn try_diff_workbooks(
 }
 
 #[cfg(feature = "excel-open-xml")]
+#[deprecated(note = "use WorkbookPackage::open")]
+#[allow(deprecated)]
 pub fn open_workbook(path: impl AsRef<std::path::Path>) -> Result<Workbook, ExcelOpenError> {
     DEFAULT_SESSION.with(|session| {
         let mut session = session.borrow_mut();
@@ -99,7 +105,7 @@ pub use datamashup_framing::{DataMashupError, RawDataMashup};
 pub use datamashup_package::{
     EmbeddedContent, PackageParts, PackageXml, SectionDocument, parse_package_parts,
 };
-pub use diff::{DiffError, DiffOp, DiffReport, DiffSummary, SheetId};
+pub use diff::{DiffError, DiffOp, DiffReport, DiffSummary, QueryChangeKind, QueryMetadataField, SheetId};
 pub use engine::{
     diff_grids_database_mode,
     diff_workbooks as diff_workbooks_with_pool,
@@ -108,18 +114,22 @@ pub use engine::{
     try_diff_workbooks_streaming,
 };
 #[cfg(feature = "excel-open-xml")]
-pub use excel_open_xml::{ExcelOpenError, open_data_mashup, open_workbook as open_workbook_with_pool};
+#[allow(deprecated)]
+pub use excel_open_xml::{ExcelOpenError, PackageError, open_data_mashup, open_workbook as open_workbook_with_pool};
 pub use grid_parser::{GridParseError, SheetDescriptor};
 pub use grid_view::{ColHash, ColMeta, GridView, HashStats, RowHash, RowMeta, RowView};
 pub use m_ast::{
     MModuleAst, MParseError, ast_semantically_equal, canonicalize_m_ast, parse_m_expression,
 };
-pub use m_diff::{MQueryDiff, QueryChangeKind, diff_m_queries};
+#[allow(deprecated)]
+pub use m_diff::{MQueryDiff, QueryChangeKind as LegacyQueryChangeKind, diff_m_queries};
 pub use m_section::{SectionMember, SectionParseError, parse_section_members};
 #[cfg(feature = "excel-open-xml")]
 pub use output::json::diff_workbooks_to_json;
 pub use output::json::{CellDiff, serialize_cell_diffs, serialize_diff_report};
 pub use output::json_lines::JsonLinesSink;
+#[cfg(feature = "excel-open-xml")]
+pub use package::WorkbookPackage;
 pub use session::DiffSession;
 pub use sink::{CallbackSink, DiffSink, VecSink};
 pub use string_pool::{StringId, StringPool};

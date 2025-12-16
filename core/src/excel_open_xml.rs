@@ -20,7 +20,7 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum ExcelOpenError {
+pub enum PackageError {
     #[error("container error: {0}")]
     Container(#[from] ContainerError),
     #[error("grid parse error: {0}")]
@@ -35,12 +35,13 @@ pub enum ExcelOpenError {
     SerializationError(String),
 }
 
-pub fn open_workbook(
-    path: impl AsRef<Path>,
-    pool: &mut StringPool,
-) -> Result<Workbook, ExcelOpenError> {
-    let mut container = OpcContainer::open_from_path(path.as_ref())?;
+#[deprecated(note = "use PackageError")]
+pub type ExcelOpenError = PackageError;
 
+pub(crate) fn open_workbook_from_container(
+    container: &mut OpcContainer,
+    pool: &mut StringPool,
+) -> Result<Workbook, PackageError> {
     let shared_strings = match container
         .read_file_optional("xl/sharedStrings.xml")
         .map_err(ContainerError::from)?
@@ -51,7 +52,7 @@ pub fn open_workbook(
 
     let workbook_bytes = container
         .read_file("xl/workbook.xml")
-        .map_err(|_| ExcelOpenError::WorkbookXmlMissing)?;
+        .map_err(|_| PackageError::WorkbookXmlMissing)?;
 
     let sheets = parse_workbook_xml(&workbook_bytes)?;
 
@@ -66,12 +67,11 @@ pub fn open_workbook(
     let mut sheet_ir = Vec::with_capacity(sheets.len());
     for (idx, sheet) in sheets.iter().enumerate() {
         let target = resolve_sheet_target(sheet, &relationships, idx);
-        let sheet_bytes =
-            container
-                .read_file(&target)
-                .map_err(|_| ExcelOpenError::WorksheetXmlMissing {
-                    sheet_name: sheet.name.clone(),
-                })?;
+        let sheet_bytes = container
+            .read_file(&target)
+            .map_err(|_| PackageError::WorksheetXmlMissing {
+                sheet_name: sheet.name.clone(),
+            })?;
         let grid = parse_sheet_xml(&sheet_bytes, &shared_strings, pool)?;
         sheet_ir.push(Sheet {
             name: pool.intern(&sheet.name),
@@ -83,8 +83,18 @@ pub fn open_workbook(
     Ok(Workbook { sheets: sheet_ir })
 }
 
-pub fn open_data_mashup(path: impl AsRef<Path>) -> Result<Option<RawDataMashup>, ExcelOpenError> {
+#[allow(deprecated)]
+pub fn open_workbook(
+    path: impl AsRef<Path>,
+    pool: &mut StringPool,
+) -> Result<Workbook, PackageError> {
     let mut container = OpcContainer::open_from_path(path.as_ref())?;
+    open_workbook_from_container(&mut container, pool)
+}
+
+pub(crate) fn open_data_mashup_from_container(
+    container: &mut OpcContainer,
+) -> Result<Option<RawDataMashup>, PackageError> {
     let mut found: Option<RawDataMashup> = None;
 
     for i in 0..container.len() {
@@ -114,4 +124,10 @@ pub fn open_data_mashup(path: impl AsRef<Path>) -> Result<Option<RawDataMashup>,
     }
 
     Ok(found)
+}
+
+#[allow(deprecated)]
+pub fn open_data_mashup(path: impl AsRef<Path>) -> Result<Option<RawDataMashup>, PackageError> {
+    let mut container = OpcContainer::open_from_path(path.as_ref())?;
+    open_data_mashup_from_container(&mut container)
 }
