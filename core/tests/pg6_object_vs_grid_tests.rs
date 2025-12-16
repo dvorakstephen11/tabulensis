@@ -1,14 +1,14 @@
-use excel_diff::{DiffOp, diff_workbooks, open_workbook};
-
 mod common;
-use common::{fixture_path, sid};
+
+use common::{fixture_path, open_fixture_workbook, sid};
+use excel_diff::{DiffConfig, DiffOp, WorkbookPackage};
 
 #[test]
 fn pg6_1_sheet_added_no_grid_ops_on_main() {
-    let old = open_workbook(fixture_path("pg6_sheet_added_a.xlsx")).expect("open pg6 added A");
-    let new = open_workbook(fixture_path("pg6_sheet_added_b.xlsx")).expect("open pg6 added B");
+    let old = open_fixture_workbook("pg6_sheet_added_a.xlsx");
+    let new = open_fixture_workbook("pg6_sheet_added_b.xlsx");
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
 
     let mut sheet_added = 0;
     for op in &report.ops {
@@ -42,10 +42,10 @@ fn pg6_1_sheet_added_no_grid_ops_on_main() {
 
 #[test]
 fn pg6_2_sheet_removed_no_grid_ops_on_main() {
-    let old = open_workbook(fixture_path("pg6_sheet_removed_a.xlsx")).expect("open pg6 removed A");
-    let new = open_workbook(fixture_path("pg6_sheet_removed_b.xlsx")).expect("open pg6 removed B");
+    let old = open_fixture_workbook("pg6_sheet_removed_a.xlsx");
+    let new = open_fixture_workbook("pg6_sheet_removed_b.xlsx");
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
 
     let mut sheet_removed = 0;
     for op in &report.ops {
@@ -79,10 +79,10 @@ fn pg6_2_sheet_removed_no_grid_ops_on_main() {
 
 #[test]
 fn pg6_3_rename_as_remove_plus_add_no_grid_ops() {
-    let old = open_workbook(fixture_path("pg6_sheet_renamed_a.xlsx")).expect("open pg6 rename A");
-    let new = open_workbook(fixture_path("pg6_sheet_renamed_b.xlsx")).expect("open pg6 rename B");
+    let old = open_fixture_workbook("pg6_sheet_renamed_a.xlsx");
+    let new = open_fixture_workbook("pg6_sheet_renamed_b.xlsx");
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
 
     let mut added = 0;
     let mut removed = 0;
@@ -117,12 +117,10 @@ fn pg6_3_rename_as_remove_plus_add_no_grid_ops() {
 
 #[test]
 fn pg6_4_sheet_and_grid_change_composed_cleanly() {
-    let old =
-        open_workbook(fixture_path("pg6_sheet_and_grid_change_a.xlsx")).expect("open pg6 4 A");
-    let new =
-        open_workbook(fixture_path("pg6_sheet_and_grid_change_b.xlsx")).expect("open pg6 4 B");
+    let old = open_fixture_workbook("pg6_sheet_and_grid_change_a.xlsx");
+    let new = open_fixture_workbook("pg6_sheet_and_grid_change_b.xlsx");
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
 
     let mut scratch_added = 0;
     let mut main_cell_edits = 0;

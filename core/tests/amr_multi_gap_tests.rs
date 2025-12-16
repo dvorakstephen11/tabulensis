@@ -1,9 +1,11 @@
 mod common;
 
 use common::{grid_from_numbers, single_sheet_workbook};
-use excel_diff::config::DiffConfig;
-use excel_diff::diff::DiffOp;
-use excel_diff::diff_workbooks;
+use excel_diff::{DiffConfig, DiffOp, DiffReport, Workbook, WorkbookPackage};
+
+fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
+}
 
 fn count_ops(ops: &[DiffOp], predicate: impl Fn(&DiffOp) -> bool) -> usize {
     ops.iter().filter(|op| predicate(op)).count()

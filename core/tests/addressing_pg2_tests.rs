@@ -1,12 +1,11 @@
-use excel_diff::{CellValue, address_to_index, index_to_address, open_workbook, with_default_session};
-
 mod common;
-use common::{fixture_path, sid};
+
+use common::{open_fixture_workbook, sid};
+use excel_diff::{CellValue, address_to_index, index_to_address, with_default_session};
 
 #[test]
 fn pg2_addressing_matrix_consistency() {
-    let workbook =
-        open_workbook(fixture_path("pg2_addressing_matrix.xlsx")).expect("address fixture opens");
+    let workbook = open_fixture_workbook("pg2_addressing_matrix.xlsx");
     let sheet_names: Vec<String> = with_default_session(|session| {
         workbook
             .sheets

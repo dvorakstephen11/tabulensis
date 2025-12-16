@@ -1,11 +1,15 @@
-use excel_diff::{CellValue, DiffOp, Grid, diff_workbooks};
+mod common;
+
+use common::{grid_from_numbers, single_sheet_workbook};
+use excel_diff::{CellValue, DiffConfig, DiffOp, DiffReport, Grid, Workbook, WorkbookPackage};
 use std::collections::BTreeSet;
 
-mod common;
-use common::{grid_from_numbers, single_sheet_workbook};
-
-fn sheet_name<'a>(report: &'a excel_diff::DiffReport, id: &excel_diff::SheetId) -> &'a str {
+fn sheet_name<'a>(report: &'a DiffReport, id: &excel_diff::SheetId) -> &'a str {
     report.strings[id.0 as usize].as_str()
+}
+
+fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
 }
 
 #[test]
@@ -13,7 +17,7 @@ fn pg5_1_grid_diff_1x1_identical_empty_diff() {
     let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1]]));
     let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1]]));
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert!(report.ops.is_empty());
 }
 
@@ -22,7 +26,7 @@ fn pg5_2_grid_diff_1x1_value_change_single_cell_edited() {
     let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1]]));
     let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[2]]));
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(report.ops.len(), 1);
 
     match &report.ops[0] {
@@ -46,7 +50,7 @@ fn pg5_3_grid_diff_row_appended_row_added_only() {
     let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1]]));
     let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1], &[2]]));
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(report.ops.len(), 1);
 
     match &report.ops[0] {
@@ -68,7 +72,7 @@ fn pg5_4_grid_diff_column_appended_column_added_only() {
     let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1], &[2]]));
     let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1, 10], &[2, 20]]));
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(report.ops.len(), 1);
 
     match &report.ops[0] {
@@ -96,7 +100,7 @@ fn pg5_5_grid_diff_same_shape_scattered_cell_edits() {
         grid_from_numbers(&[&[10, 2, 3], &[4, 50, 6], &[7, 8, 90]]),
     );
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(report.ops.len(), 3);
     assert!(
         report
@@ -122,13 +126,13 @@ fn pg5_6_grid_diff_degenerate_grids() {
     let empty_old = single_sheet_workbook("Sheet1", Grid::new(0, 0));
     let empty_new = single_sheet_workbook("Sheet1", Grid::new(0, 0));
 
-    let empty_report = diff_workbooks(&empty_old, &empty_new, &excel_diff::DiffConfig::default());
+    let empty_report = diff_workbooks(&empty_old, &empty_new, &DiffConfig::default());
     assert!(empty_report.ops.is_empty());
 
     let old = single_sheet_workbook("Sheet1", Grid::new(0, 0));
     let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1]]));
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(report.ops.len(), 2);
 
     let mut row_added = 0;
@@ -172,7 +176,7 @@ fn pg5_7_grid_diff_row_truncated_row_removed_only() {
     let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1], &[2]]));
     let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1]]));
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(report.ops.len(), 1);
 
     match &report.ops[0] {
@@ -194,7 +198,7 @@ fn pg5_8_grid_diff_column_truncated_column_removed_only() {
     let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1, 10], &[2, 20]]));
     let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1], &[2]]));
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(report.ops.len(), 1);
 
     match &report.ops[0] {
@@ -216,7 +220,7 @@ fn pg5_9_grid_diff_row_and_column_truncated_structure_only() {
     let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1, 2], &[3, 4]]));
     let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1]]));
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(report.ops.len(), 2);
 
     let mut rows_removed = 0;
@@ -260,7 +264,7 @@ fn pg5_10_grid_diff_row_appended_with_overlap_cell_edits() {
     let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1, 2], &[3, 4]]));
     let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1, 20], &[30, 4], &[5, 6]]));
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(report.ops.len(), 3);
 
     let mut row_added = 0;

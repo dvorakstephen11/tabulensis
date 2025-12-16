@@ -1,19 +1,23 @@
+mod common;
+
+use common::{grid_from_numbers, open_fixture_workbook, sid};
 use excel_diff::{
-    CellValue, DiffOp, Grid, Workbook, diff_grids_database_mode, diff_workbooks, open_workbook,
-    with_default_session,
+    CellValue, DiffConfig, DiffOp, DiffReport, Grid, Workbook, WorkbookPackage,
+    diff_grids_database_mode, with_default_session,
 };
 
-mod common;
-use common::{fixture_path, grid_from_numbers, sid};
+fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
+}
 
-fn diff_db(grid_a: &Grid, grid_b: &Grid, keys: &[u32]) -> excel_diff::DiffReport {
+fn diff_db(grid_a: &Grid, grid_b: &Grid, keys: &[u32]) -> DiffReport {
     with_default_session(|session| {
         diff_grids_database_mode(
             grid_a,
             grid_b,
             keys,
             &mut session.strings,
-            &excel_diff::DiffConfig::default(),
+            &DiffConfig::default(),
         )
     })
 }
@@ -44,7 +48,7 @@ fn grid_from_float_rows(rows: &[&[f64]]) -> Grid {
 
 #[test]
 fn d1_equal_ordered_database_mode_empty_diff() {
-    let workbook = open_workbook(fixture_path("db_equal_ordered_a.xlsx")).expect("fixture A opens");
+    let workbook = open_fixture_workbook("db_equal_ordered_a.xlsx");
     let grid = data_grid(&workbook);
 
     let report = diff_db(grid, grid, &[0]);
@@ -56,8 +60,8 @@ fn d1_equal_ordered_database_mode_empty_diff() {
 
 #[test]
 fn d1_equal_reordered_database_mode_empty_diff() {
-    let wb_a = open_workbook(fixture_path("db_equal_ordered_a.xlsx")).expect("fixture A opens");
-    let wb_b = open_workbook(fixture_path("db_equal_ordered_b.xlsx")).expect("fixture B opens");
+    let wb_a = open_fixture_workbook("db_equal_ordered_a.xlsx");
+    let wb_b = open_fixture_workbook("db_equal_ordered_b.xlsx");
 
     let grid_a = data_grid(&wb_a);
     let grid_b = data_grid(&wb_b);
@@ -71,10 +75,10 @@ fn d1_equal_reordered_database_mode_empty_diff() {
 
 #[test]
 fn d1_spreadsheet_mode_sees_reorder_as_changes() {
-    let wb_a = open_workbook(fixture_path("db_equal_ordered_a.xlsx")).expect("fixture A opens");
-    let wb_b = open_workbook(fixture_path("db_equal_ordered_b.xlsx")).expect("fixture B opens");
+    let wb_a = open_fixture_workbook("db_equal_ordered_a.xlsx");
+    let wb_b = open_fixture_workbook("db_equal_ordered_b.xlsx");
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     assert!(
         !report.ops.is_empty(),

@@ -1,17 +1,16 @@
-use excel_diff::{CellValue, DiffOp, diff_workbooks, open_workbook, with_default_session};
-use std::collections::BTreeSet;
-
 mod common;
-use common::fixture_path;
+
+use common::{diff_fixture_pkgs, fixture_path, open_fixture_pkg};
+use excel_diff::{CellValue, DiffConfig, DiffOp, with_default_session};
+use std::collections::BTreeSet;
 
 #[test]
 fn g5_multi_cell_edits_produces_only_celledited_ops() {
-    let wb_a = open_workbook(fixture_path("multi_cell_edits_a.xlsx"))
-        .expect("failed to open fixture: multi_cell_edits_a.xlsx");
-    let wb_b = open_workbook(fixture_path("multi_cell_edits_b.xlsx"))
-        .expect("failed to open fixture: multi_cell_edits_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "multi_cell_edits_a.xlsx",
+        "multi_cell_edits_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     let (text_x, text_y) = with_default_session(|session| {
         let x = session.strings.intern("x");
@@ -74,12 +73,11 @@ fn g5_multi_cell_edits_produces_only_celledited_ops() {
 
 #[test]
 fn g6_row_append_bottom_emits_two_rowadded_and_no_celledited() {
-    let wb_a = open_workbook(fixture_path("row_append_bottom_a.xlsx"))
-        .expect("failed to open fixture: row_append_bottom_a.xlsx");
-    let wb_b = open_workbook(fixture_path("row_append_bottom_b.xlsx"))
-        .expect("failed to open fixture: row_append_bottom_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "row_append_bottom_a.xlsx",
+        "row_append_bottom_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     assert_eq!(
         report.ops.len(),
@@ -122,12 +120,11 @@ fn g6_row_append_bottom_emits_two_rowadded_and_no_celledited() {
 
 #[test]
 fn g6_row_delete_bottom_emits_two_rowremoved_and_no_celledited() {
-    let wb_a = open_workbook(fixture_path("row_delete_bottom_a.xlsx"))
-        .expect("failed to open fixture: row_delete_bottom_a.xlsx");
-    let wb_b = open_workbook(fixture_path("row_delete_bottom_b.xlsx"))
-        .expect("failed to open fixture: row_delete_bottom_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "row_delete_bottom_a.xlsx",
+        "row_delete_bottom_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     assert_eq!(
         report.ops.len(),
@@ -170,12 +167,11 @@ fn g6_row_delete_bottom_emits_two_rowremoved_and_no_celledited() {
 
 #[test]
 fn g7_col_append_right_emits_two_columnadded_and_no_celledited() {
-    let wb_a = open_workbook(fixture_path("col_append_right_a.xlsx"))
-        .expect("failed to open fixture: col_append_right_a.xlsx");
-    let wb_b = open_workbook(fixture_path("col_append_right_b.xlsx"))
-        .expect("failed to open fixture: col_append_right_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "col_append_right_a.xlsx",
+        "col_append_right_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     assert_eq!(
         report.ops.len(),
@@ -218,12 +214,11 @@ fn g7_col_append_right_emits_two_columnadded_and_no_celledited() {
 
 #[test]
 fn g7_col_delete_right_emits_two_columnremoved_and_no_celledited() {
-    let wb_a = open_workbook(fixture_path("col_delete_right_a.xlsx"))
-        .expect("failed to open fixture: col_delete_right_a.xlsx");
-    let wb_b = open_workbook(fixture_path("col_delete_right_b.xlsx"))
-        .expect("failed to open fixture: col_delete_right_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "col_delete_right_a.xlsx",
+        "col_delete_right_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     assert_eq!(
         report.ops.len(),

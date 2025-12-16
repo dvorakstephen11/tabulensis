@@ -3,11 +3,12 @@
 mod common;
 
 use common::single_sheet_workbook;
-use excel_diff::config::DiffConfig;
-use excel_diff::diff::DiffOp;
-use excel_diff::engine::diff_workbooks;
+use excel_diff::{CellValue, DiffConfig, DiffOp, DiffReport, Grid, Workbook, WorkbookPackage};
 use excel_diff::perf::DiffMetrics;
-use excel_diff::{CellValue, Grid};
+
+fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
+}
 
 fn create_large_grid(nrows: u32, ncols: u32, base_value: i32) -> Grid {
     let mut grid = Grid::new(nrows, ncols);

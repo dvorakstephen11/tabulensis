@@ -22,25 +22,40 @@
 
 use std::cell::RefCell;
 
+#[doc(hidden)]
 pub mod addressing;
 pub(crate) mod alignment;
 pub(crate) mod column_alignment;
+#[doc(hidden)]
 pub mod config;
+#[doc(hidden)]
 pub mod container;
 pub(crate) mod database_alignment;
+#[doc(hidden)]
 pub mod datamashup;
+#[doc(hidden)]
 pub mod datamashup_framing;
+#[doc(hidden)]
 pub mod datamashup_package;
+#[doc(hidden)]
 pub mod diff;
+#[doc(hidden)]
 pub mod engine;
 #[cfg(feature = "excel-open-xml")]
+#[doc(hidden)]
 pub mod excel_open_xml;
+#[doc(hidden)]
 pub mod grid_parser;
+#[doc(hidden)]
 pub mod grid_view;
 pub(crate) mod hashing;
+#[doc(hidden)]
 pub mod m_ast;
+#[doc(hidden)]
 pub mod m_diff;
+#[doc(hidden)]
 pub mod m_section;
+#[doc(hidden)]
 pub mod output;
 pub mod package;
 #[cfg(feature = "perf-metrics")]
@@ -48,9 +63,13 @@ pub mod perf;
 pub(crate) mod rect_block_move;
 pub(crate) mod region_mask;
 pub(crate) mod row_alignment;
+#[doc(hidden)]
 pub mod session;
+#[doc(hidden)]
 pub mod sink;
+#[doc(hidden)]
 pub mod string_pool;
+#[doc(hidden)]
 pub mod workbook;
 
 thread_local! {
@@ -95,7 +114,7 @@ pub fn open_workbook(path: impl AsRef<std::path::Path>) -> Result<Workbook, Exce
 }
 
 pub use addressing::{AddressParseError, address_to_index, index_to_address};
-pub use config::DiffConfig;
+pub use config::{DiffConfig, LimitBehavior};
 pub use container::{ContainerError, OpcContainer};
 pub use datamashup::{
     DataMashup, Metadata, Permissions, Query, QueryMetadata, build_data_mashup, build_queries,

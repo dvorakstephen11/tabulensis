@@ -1,16 +1,15 @@
-use excel_diff::{DiffOp, diff_workbooks, open_workbook};
-
 mod common;
-use common::{fixture_path, sid};
+
+use common::{diff_fixture_pkgs, sid};
+use excel_diff::{DiffConfig, DiffOp};
 
 #[test]
 fn g10_row_block_insert_middle_emits_four_rowadded_and_no_noise() {
-    let wb_a = open_workbook(fixture_path("row_block_insert_a.xlsx"))
-        .expect("failed to open fixture: row_block_insert_a.xlsx");
-    let wb_b = open_workbook(fixture_path("row_block_insert_b.xlsx"))
-        .expect("failed to open fixture: row_block_insert_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "row_block_insert_a.xlsx",
+        "row_block_insert_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     let rows_added: Vec<u32> = report
         .ops
@@ -54,12 +53,11 @@ fn g10_row_block_insert_middle_emits_four_rowadded_and_no_noise() {
 
 #[test]
 fn g10_row_block_delete_middle_emits_four_rowremoved_and_no_noise() {
-    let wb_a = open_workbook(fixture_path("row_block_delete_a.xlsx"))
-        .expect("failed to open fixture: row_block_delete_a.xlsx");
-    let wb_b = open_workbook(fixture_path("row_block_delete_b.xlsx"))
-        .expect("failed to open fixture: row_block_delete_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "row_block_delete_a.xlsx",
+        "row_block_delete_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     let rows_removed: Vec<u32> = report
         .ops

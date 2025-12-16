@@ -1,17 +1,16 @@
-use excel_diff::{CellAddress, CellValue, Sheet, SheetKind, open_workbook, with_default_session};
-
 mod common;
-use common::{fixture_path, sid};
+
+use common::{fixture_path, open_fixture_workbook, sid};
+use excel_diff::{CellAddress, CellValue, Sheet, with_default_session};
 
 #[test]
 fn pg1_basic_two_sheets_structure() {
-    let workbook = open_workbook(fixture_path("pg1_basic_two_sheets.xlsx"))
-        .expect("pg1 basic fixture should open");
+    let workbook = open_fixture_workbook("pg1_basic_two_sheets.xlsx");
     assert_eq!(workbook.sheets.len(), 2);
     assert_eq!(workbook.sheets[0].name, sid("Sheet1"));
     assert_eq!(workbook.sheets[1].name, sid("Sheet2"));
-    assert!(matches!(workbook.sheets[0].kind, SheetKind::Worksheet));
-    assert!(matches!(workbook.sheets[1].kind, SheetKind::Worksheet));
+    assert!(matches!(workbook.sheets[0].kind, excel_diff::SheetKind::Worksheet));
+    assert!(matches!(workbook.sheets[1].kind, excel_diff::SheetKind::Worksheet));
 
     let sheet1 = &workbook.sheets[0];
     assert_eq!(sheet1.grid.nrows, 3);
@@ -43,8 +42,7 @@ fn pg1_basic_two_sheets_structure() {
 
 #[test]
 fn pg1_sparse_used_range_extents() {
-    let workbook =
-        open_workbook(fixture_path("pg1_sparse_used_range.xlsx")).expect("sparse fixture opens");
+    let workbook = open_fixture_workbook("pg1_sparse_used_range.xlsx");
     let sheet = workbook
         .sheets
         .iter()
@@ -62,8 +60,7 @@ fn pg1_sparse_used_range_extents() {
 
 #[test]
 fn pg1_empty_and_mixed_sheets() {
-    let workbook = open_workbook(fixture_path("pg1_empty_and_mixed_sheets.xlsx"))
-        .expect("mixed sheets fixture opens");
+    let workbook = open_fixture_workbook("pg1_empty_and_mixed_sheets.xlsx");
 
     let empty = sheet_by_name(&workbook, "Empty");
     assert_eq!(empty.grid.nrows, 0);

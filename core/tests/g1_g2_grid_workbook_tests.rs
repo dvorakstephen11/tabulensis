@@ -1,7 +1,9 @@
-use excel_diff::{CellValue, DiffOp, Grid, Sheet, SheetKind, Workbook, diff_workbooks, open_workbook};
-
 mod common;
-use common::{fixture_path, sid};
+
+use common::{diff_fixture_pkgs, sid};
+use excel_diff::{
+    CellValue, DiffConfig, DiffOp, DiffReport, Grid, Sheet, SheetKind, Workbook, WorkbookPackage,
+};
 
 fn workbook_with_number(value: f64) -> Workbook {
     let mut grid = Grid::new(1, 1);
@@ -16,14 +18,13 @@ fn workbook_with_number(value: f64) -> Workbook {
     }
 }
 
+fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
+}
+
 #[test]
 fn g1_equal_sheet_produces_empty_diff() {
-    let wb_a = open_workbook(fixture_path("equal_sheet_a.xlsx"))
-        .expect("failed to open fixture: equal_sheet_a.xlsx");
-    let wb_b = open_workbook(fixture_path("equal_sheet_b.xlsx"))
-        .expect("failed to open fixture: equal_sheet_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs("equal_sheet_a.xlsx", "equal_sheet_b.xlsx", &DiffConfig::default());
 
     assert!(
         report.ops.is_empty(),
@@ -33,12 +34,11 @@ fn g1_equal_sheet_produces_empty_diff() {
 
 #[test]
 fn g2_single_cell_literal_change_produces_one_celledited() {
-    let wb_a = open_workbook(fixture_path("single_cell_value_a.xlsx"))
-        .expect("failed to open fixture: single_cell_value_a.xlsx");
-    let wb_b = open_workbook(fixture_path("single_cell_value_b.xlsx"))
-        .expect("failed to open fixture: single_cell_value_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "single_cell_value_a.xlsx",
+        "single_cell_value_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     assert_eq!(
         report.ops.len(),
@@ -79,7 +79,7 @@ fn g2_float_ulp_noise_is_ignored_in_diff() {
     let old = workbook_with_number(1.0);
     let new = workbook_with_number(1.0000000000000002);
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
 
     assert!(
         report.ops.is_empty(),
@@ -92,7 +92,7 @@ fn g2_meaningful_float_change_emits_cell_edit() {
     let old = workbook_with_number(1.0);
     let new = workbook_with_number(1.0001);
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
 
     assert_eq!(
         report.ops.len(),
@@ -118,7 +118,7 @@ fn g2_nan_values_are_treated_as_equal() {
     let old = workbook_with_number(signaling_nan);
     let new = workbook_with_number(quiet_nan);
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
 
     assert!(
         report.ops.is_empty(),

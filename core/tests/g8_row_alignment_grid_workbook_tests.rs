@@ -1,16 +1,15 @@
-use excel_diff::{DiffOp, diff_workbooks, open_workbook};
-
 mod common;
-use common::fixture_path;
+
+use common::diff_fixture_pkgs;
+use excel_diff::{DiffConfig, DiffOp};
 
 #[test]
 fn single_row_insert_middle_produces_one_row_added() {
-    let wb_a = open_workbook(fixture_path("row_insert_middle_a.xlsx"))
-        .expect("failed to open fixture: row_insert_middle_a.xlsx");
-    let wb_b = open_workbook(fixture_path("row_insert_middle_b.xlsx"))
-        .expect("failed to open fixture: row_insert_middle_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "row_insert_middle_a.xlsx",
+        "row_insert_middle_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     let strings = &report.strings;
 
@@ -55,12 +54,11 @@ fn single_row_insert_middle_produces_one_row_added() {
 
 #[test]
 fn single_row_delete_middle_produces_one_row_removed() {
-    let wb_a = open_workbook(fixture_path("row_delete_middle_a.xlsx"))
-        .expect("failed to open fixture: row_delete_middle_a.xlsx");
-    let wb_b = open_workbook(fixture_path("row_delete_middle_b.xlsx"))
-        .expect("failed to open fixture: row_delete_middle_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "row_delete_middle_a.xlsx",
+        "row_delete_middle_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     let strings = &report.strings;
 
@@ -109,12 +107,11 @@ fn single_row_delete_middle_produces_one_row_removed() {
 
 #[test]
 fn alignment_bails_out_when_additional_edits_present() {
-    let wb_a = open_workbook(fixture_path("row_insert_with_edit_a.xlsx"))
-        .expect("failed to open fixture: row_insert_with_edit_a.xlsx");
-    let wb_b = open_workbook(fixture_path("row_insert_with_edit_b.xlsx"))
-        .expect("failed to open fixture: row_insert_with_edit_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "row_insert_with_edit_a.xlsx",
+        "row_insert_with_edit_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     let rows_added: Vec<u32> = report
         .ops

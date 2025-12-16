@@ -2,11 +2,15 @@ mod common;
 
 use common::sid;
 use excel_diff::{
-    Cell, CellAddress, CellSnapshot, CellValue, DiffOp, DiffReport, Grid, Sheet, SheetKind,
-    Workbook, diff_workbooks,
+    CellAddress, CellSnapshot, CellValue, DiffConfig, DiffOp, DiffReport, Grid, Sheet, SheetKind,
+    Workbook, WorkbookPackage,
 };
 
 type SheetSpec<'a> = (&'a str, Vec<(u32, u32, f64)>);
+
+fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
+}
 
 fn make_workbook(sheets: Vec<SheetSpec<'_>>) -> Workbook {
     let sheet_ir: Vec<Sheet> = sheets
@@ -52,7 +56,7 @@ fn make_sheet_with_kind(name: &str, kind: SheetKind, cells: Vec<(u32, u32, f64)>
 #[test]
 fn identical_workbooks_produce_empty_report() {
     let wb = make_workbook(vec![("Sheet1", vec![(0, 0, 1.0)])]);
-    let report = diff_workbooks(&wb, &wb, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb, &wb, &DiffConfig::default());
     assert!(report.ops.is_empty());
 }
 
@@ -63,7 +67,7 @@ fn sheet_added_detected() {
         ("Sheet1", vec![(0, 0, 1.0)]),
         ("Sheet2", vec![(0, 0, 2.0)]),
     ]);
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert!(
         report
             .ops
@@ -79,7 +83,7 @@ fn sheet_removed_detected() {
         ("Sheet2", vec![(0, 0, 2.0)]),
     ]);
     let new = make_workbook(vec![("Sheet1", vec![(0, 0, 1.0)])]);
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert!(
         report
             .ops
@@ -92,7 +96,7 @@ fn sheet_removed_detected() {
 fn cell_edited_detected() {
     let old = make_workbook(vec![("Sheet1", vec![(0, 0, 1.0)])]);
     let new = make_workbook(vec![("Sheet1", vec![(0, 0, 2.0)])]);
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(report.ops.len(), 1);
     match &report.ops[0] {
         DiffOp::CellEdited {
@@ -114,7 +118,7 @@ fn cell_edited_detected() {
 fn diff_report_json_round_trips() {
     let old = make_workbook(vec![("Sheet1", vec![(0, 0, 1.0)])]);
     let new = make_workbook(vec![("Sheet1", vec![(0, 0, 2.0)])]);
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     let json = serde_json::to_string(&report).expect("serialize");
     let parsed: DiffReport = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(report, parsed);
@@ -125,7 +129,7 @@ fn sheet_name_case_insensitive_no_changes() {
     let old = make_workbook(vec![("Sheet1", vec![(0, 0, 1.0)])]);
     let new = make_workbook(vec![("sheet1", vec![(0, 0, 1.0)])]);
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert!(report.ops.is_empty());
 }
 
@@ -134,7 +138,7 @@ fn sheet_name_case_insensitive_cell_edit() {
     let old = make_workbook(vec![("Sheet1", vec![(0, 0, 1.0)])]);
     let new = make_workbook(vec![("sheet1", vec![(0, 0, 2.0)])]);
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(report.ops.len(), 1);
 
     match &report.ops[0] {
@@ -177,7 +181,7 @@ fn sheet_identity_includes_kind() {
         sheets: vec![chart],
     };
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
 
     let mut added = 0;
     let mut removed = 0;
@@ -239,7 +243,7 @@ fn deterministic_sheet_op_ordering() {
         },
     ];
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(
         report.ops, expected,
         "ops should be ordered by lowercase name then sheet kind"
@@ -270,7 +274,7 @@ fn sheet_identity_includes_kind_for_macro_and_other() {
         sheets: vec![other_sheet],
     };
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
 
     let mut added = 0;
     let mut removed = 0;
@@ -298,7 +302,7 @@ fn duplicate_sheet_identity_last_writer_wins_release() {
     };
     let new = Workbook { sheets: Vec::new() };
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(report.ops.len(), 1, "expected last writer to win");
 
     match &report.ops[0] {
@@ -357,7 +361,7 @@ fn move_detection_respects_column_gate() {
         }],
     };
 
-    let default_report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let default_report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
     assert!(
         !default_report.ops.is_empty(),
         "changes should be detected even when move detection is gated off"
@@ -370,9 +374,9 @@ fn move_detection_respects_column_gate() {
         "default gate should skip block move detection on wide sheets"
     );
 
-    let wide_gate = excel_diff::DiffConfig {
+    let wide_gate = DiffConfig {
         max_move_detection_cols: 512,
-        ..excel_diff::DiffConfig::default()
+        ..DiffConfig::default()
     };
     let wide_report = diff_workbooks(&wb_a, &wb_b, &wide_gate);
     assert!(
@@ -398,7 +402,7 @@ fn duplicate_sheet_identity_panics_in_debug() {
     let new = Workbook { sheets: Vec::new() };
 
     let result =
-        std::panic::catch_unwind(|| diff_workbooks(&old, &new, &excel_diff::DiffConfig::default()));
+        std::panic::catch_unwind(|| diff_workbooks(&old, &new, &DiffConfig::default()));
     if cfg!(debug_assertions) {
         assert!(
             result.is_err(),

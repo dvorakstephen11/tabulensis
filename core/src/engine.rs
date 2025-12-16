@@ -321,31 +321,6 @@ fn diff_grids_database_mode_streaming<S: DiffSink>(
     })
 }
 
-fn diff_grids<S: DiffSink>(
-    sheet_id: &SheetId,
-    old: &Grid,
-    new: &Grid,
-    config: &DiffConfig,
-    pool: &StringPool,
-    sink: &mut S,
-    op_count: &mut usize,
-) -> Result<(), DiffError> {
-    let mut ctx = DiffContext::default();
-    try_diff_grids(
-        sheet_id,
-        old,
-        new,
-        config,
-        pool,
-        sink,
-        op_count,
-        &mut ctx,
-        #[cfg(feature = "perf-metrics")]
-        None,
-    )?;
-    Ok(())
-}
-
 fn try_diff_grids<S: DiffSink>(
     sheet_id: &SheetId,
     old: &Grid,

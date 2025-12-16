@@ -3,8 +3,10 @@
 #![allow(dead_code)]
 
 use excel_diff::{
-    CellValue, Grid, Sheet, SheetKind, StringId, Workbook, with_default_session,
+    CellValue, DiffConfig, DiffReport, Grid, Sheet, SheetKind, StringId, Workbook,
+    WorkbookPackage, with_default_session,
 };
+use std::fs::File;
 use std::path::PathBuf;
 
 pub fn fixture_path(filename: &str) -> PathBuf {
@@ -12,6 +14,26 @@ pub fn fixture_path(filename: &str) -> PathBuf {
     path.push("../fixtures/generated");
     path.push(filename);
     path
+}
+
+pub fn open_fixture_pkg(name: &str) -> WorkbookPackage {
+    let path = fixture_path(name);
+    let file = File::open(&path).unwrap_or_else(|e| {
+        panic!("failed to open fixture {}: {e}", path.display());
+    });
+    WorkbookPackage::open(file).unwrap_or_else(|e| {
+        panic!("failed to parse fixture {}: {e}", path.display());
+    })
+}
+
+pub fn open_fixture_workbook(name: &str) -> Workbook {
+    open_fixture_pkg(name).workbook
+}
+
+pub fn diff_fixture_pkgs(a: &str, b: &str, config: &DiffConfig) -> DiffReport {
+    let pkg_a = open_fixture_pkg(a);
+    let pkg_b = open_fixture_pkg(b);
+    pkg_a.diff(&pkg_b, config)
 }
 
 pub fn grid_from_numbers(values: &[&[i32]]) -> Grid {

@@ -1,10 +1,14 @@
 //! Integration tests verifying column structural changes do not break row alignment when row content is preserved.
 //! Covers Branch 1.3 acceptance criteria for column insertion/deletion resilience.
 
-use excel_diff::{CellValue, DiffOp, Grid, diff_workbooks};
-
 mod common;
+
 use common::single_sheet_workbook;
+use excel_diff::{CellValue, DiffConfig, DiffOp, DiffReport, Grid, Workbook, WorkbookPackage};
+
+fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
+}
 
 fn make_grid_with_cells(nrows: u32, ncols: u32, cells: &[(u32, u32, i32)]) -> Grid {
     let mut grid = Grid::new(nrows, ncols);
@@ -62,7 +66,7 @@ fn g15_blank_column_insert_at_position_zero_preserves_row_alignment() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     let column_adds: Vec<u32> = report
         .ops
@@ -131,7 +135,7 @@ fn g15_blank_column_insert_middle_preserves_row_alignment() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     let row_structural_ops: Vec<&DiffOp> = report
         .ops
@@ -182,7 +186,7 @@ fn g15_column_delete_preserves_row_alignment_when_content_order_maintained() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     let column_removes: Vec<u32> = report
         .ops
@@ -246,7 +250,7 @@ fn g15_row_insert_with_column_structure_change_both_detected() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     assert!(
         !report.ops.is_empty(),
@@ -282,7 +286,7 @@ fn g15_single_row_grid_column_insert_no_spurious_row_ops() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     let row_ops: Vec<&DiffOp> = report
         .ops
@@ -317,7 +321,7 @@ fn g15_all_blank_column_insert_no_content_change_minimal_diff() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     let row_ops: Vec<&DiffOp> = report
         .ops
@@ -351,7 +355,7 @@ fn g15_large_grid_column_insert_row_alignment_preserved() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     let row_structural_ops: Vec<&DiffOp> = report
         .ops

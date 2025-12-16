@@ -1,10 +1,10 @@
+mod common;
+
+use common::{open_fixture_workbook, sid};
 use excel_diff::{
-    Cell, CellAddress, CellSnapshot, CellValue, Sheet, Workbook, address_to_index, open_workbook,
+    Cell, CellAddress, CellSnapshot, CellValue, Sheet, Workbook, address_to_index,
     with_default_session,
 };
-
-mod common;
-use common::{fixture_path, sid};
 
 fn sheet_by_name<'a>(workbook: &'a Workbook, name: &str) -> &'a Sheet {
     with_default_session(|session| {
@@ -41,8 +41,7 @@ fn resolve_text(id: excel_diff::StringId) -> String {
 
 #[test]
 fn pg3_value_and_formula_cells_snapshot_from_excel() {
-    let path = fixture_path("pg3_value_and_formula_cells.xlsx");
-    let workbook = open_workbook(&path).expect("fixture should load");
+    let workbook = open_fixture_workbook("pg3_value_and_formula_cells.xlsx");
     let sheet = sheet_by_name(&workbook, "Types");
 
     let a1 = snapshot(sheet, "A1");
@@ -98,8 +97,7 @@ fn pg3_value_and_formula_cells_snapshot_from_excel() {
 
 #[test]
 fn snapshot_json_roundtrip() {
-    let path = fixture_path("pg3_value_and_formula_cells.xlsx");
-    let workbook = open_workbook(&path).expect("fixture should load");
+    let workbook = open_fixture_workbook("pg3_value_and_formula_cells.xlsx");
     let sheet = sheet_by_name(&workbook, "Types");
 
     let snapshots = vec![

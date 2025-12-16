@@ -69,10 +69,6 @@ fn op_kind(op: &DiffOp) -> &'static str {
     }
 }
 
-fn attach_strings(mut report: DiffReport) -> DiffReport {
-    report.strings = with_default_session(|session| session.strings.strings().to_vec());
-    report
-}
 
 fn json_keys(json: &Value) -> BTreeSet<String> {
     json.as_object()

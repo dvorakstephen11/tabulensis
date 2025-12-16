@@ -10,6 +10,15 @@ pub struct WorkbookPackage {
     pub data_mashup: Option<DataMashup>,
 }
 
+impl From<Workbook> for WorkbookPackage {
+    fn from(workbook: Workbook) -> Self {
+        Self {
+            workbook,
+            data_mashup: None,
+        }
+    }
+}
+
 impl WorkbookPackage {
     #[cfg(feature = "excel-open-xml")]
     pub fn open<R: std::io::Read + std::io::Seek + 'static>(

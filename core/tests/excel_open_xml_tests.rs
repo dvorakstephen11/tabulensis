@@ -1,14 +1,13 @@
+mod common;
+
+use common::{fixture_path, open_fixture_pkg, open_fixture_workbook, sid};
+use excel_diff::{CellAddress, ContainerError, PackageError, SheetKind, WorkbookPackage};
 use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::Path;
 use std::time::SystemTime;
-
-use excel_diff::{CellAddress, ContainerError, ExcelOpenError, SheetKind, open_workbook};
 use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipWriter};
-
-mod common;
-use common::{fixture_path, sid};
 
 fn temp_xlsx_path(prefix: &str) -> std::path::PathBuf {
     let mut path = std::env::temp_dir();
@@ -37,8 +36,7 @@ fn write_zip(entries: &[(&str, &str)], path: &Path) {
 
 #[test]
 fn open_minimal_workbook_succeeds() {
-    let path = fixture_path("minimal.xlsx");
-    let workbook = open_workbook(&path).expect("minimal workbook should open");
+    let workbook = open_fixture_workbook("minimal.xlsx");
     assert_eq!(workbook.sheets.len(), 1);
 
     let sheet = &workbook.sheets[0];
@@ -55,32 +53,31 @@ fn open_minimal_workbook_succeeds() {
 #[test]
 fn open_nonexistent_file_returns_io_error() {
     let path = fixture_path("definitely_missing.xlsx");
-    let err = open_workbook(&path).expect_err("missing file should error");
-    match err {
-        ExcelOpenError::Container(ContainerError::Io(e)) => {
-            assert_eq!(e.kind(), ErrorKind::NotFound)
-        }
-        other => panic!("expected Io error, got {other:?}"),
-    }
+    let file = std::fs::File::open(&path);
+    assert!(file.is_err(), "missing file should error");
+    let io_err = file.unwrap_err();
+    assert_eq!(io_err.kind(), ErrorKind::NotFound);
 }
 
 #[test]
 fn random_zip_is_not_excel() {
     let path = fixture_path("random_zip.zip");
-    let err = open_workbook(&path).expect_err("random zip should not parse");
+    let file = std::fs::File::open(&path).expect("random zip file exists");
+    let err = WorkbookPackage::open(file).expect_err("random zip should not parse");
     assert!(matches!(
         err,
-        ExcelOpenError::Container(ContainerError::NotOpcPackage)
+        PackageError::Container(ContainerError::NotOpcPackage)
     ));
 }
 
 #[test]
 fn no_content_types_is_not_excel() {
     let path = fixture_path("no_content_types.xlsx");
-    let err = open_workbook(&path).expect_err("missing content types should fail");
+    let file = std::fs::File::open(&path).expect("no content types file exists");
+    let err = WorkbookPackage::open(file).expect_err("missing content types should fail");
     assert!(matches!(
         err,
-        ExcelOpenError::Container(ContainerError::NotOpcPackage)
+        PackageError::Container(ContainerError::NotOpcPackage)
     ));
 }
 
@@ -88,10 +85,11 @@ fn no_content_types_is_not_excel() {
 fn not_zip_container_returns_error() {
     let path = std::env::temp_dir().join("excel_diff_not_zip.txt");
     fs::write(&path, "this is not a zip container").expect("write temp file");
-    let err = open_workbook(&path).expect_err("non-zip should fail");
+    let file = std::fs::File::open(&path).expect("not zip file exists");
+    let err = WorkbookPackage::open(file).expect_err("non-zip should fail");
     assert!(matches!(
         err,
-        ExcelOpenError::Container(ContainerError::NotZipContainer)
+        PackageError::Container(ContainerError::NotZipContainer)
     ));
     let _ = fs::remove_file(&path);
 }
@@ -107,8 +105,9 @@ fn missing_workbook_xml_returns_workbookxmlmissing() {
 
     write_zip(&[("[Content_Types].xml", content_types)], &path);
 
-    let err = open_workbook(&path).expect_err("missing workbook xml should error");
-    assert!(matches!(err, ExcelOpenError::WorkbookXmlMissing));
+    let file = std::fs::File::open(&path).expect("temp file exists");
+    let err = WorkbookPackage::open(file).expect_err("missing workbook xml should error");
+    assert!(matches!(err, PackageError::WorkbookXmlMissing));
 
     let _ = fs::remove_file(&path);
 }
@@ -146,9 +145,10 @@ fn missing_worksheet_xml_returns_worksheetxmlmissing() {
         &path,
     );
 
-    let err = open_workbook(&path).expect_err("missing worksheet xml should error");
+    let file = std::fs::File::open(&path).expect("temp file exists");
+    let err = WorkbookPackage::open(file).expect_err("missing worksheet xml should error");
     match err {
-        ExcelOpenError::WorksheetXmlMissing { sheet_name } => {
+        PackageError::WorksheetXmlMissing { sheet_name } => {
             assert_eq!(sheet_name, "Sheet1");
         }
         other => panic!("expected WorksheetXmlMissing, got {other:?}"),

@@ -1,16 +1,19 @@
-use excel_diff::{DiffOp, diff_workbooks, open_workbook};
-
 mod common;
-use common::{fixture_path, grid_from_numbers, sid, single_sheet_workbook};
+
+use common::{diff_fixture_pkgs, grid_from_numbers, sid, single_sheet_workbook};
+use excel_diff::{DiffConfig, DiffOp, DiffReport, Workbook, WorkbookPackage};
+
+fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
+}
 
 #[test]
 fn g12_rect_block_move_emits_single_blockmovedrect() {
-    let wb_a = open_workbook(fixture_path("rect_block_move_a.xlsx"))
-        .expect("failed to open fixture: rect_block_move_a.xlsx");
-    let wb_b = open_workbook(fixture_path("rect_block_move_b.xlsx"))
-        .expect("failed to open fixture: rect_block_move_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "rect_block_move_a.xlsx",
+        "rect_block_move_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     assert_eq!(report.ops.len(), 1, "expected a single diff op");
 
@@ -43,7 +46,7 @@ fn g12_rect_block_move_ambiguous_swap_does_not_emit_blockmovedrect() {
     let wb_a = single_sheet_workbook("Data", grid_a);
     let wb_b = single_sheet_workbook("Data", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     assert!(
         !report
@@ -64,7 +67,7 @@ fn g12_rect_block_move_with_internal_edit_falls_back() {
     let wb_a = single_sheet_workbook("Data", grid_a);
     let wb_b = single_sheet_workbook("Data", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     assert!(
         !report

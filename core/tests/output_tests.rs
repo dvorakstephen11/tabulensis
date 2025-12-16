@@ -1,6 +1,9 @@
+mod common;
+
+use common::{fixture_path, open_fixture_workbook};
 use excel_diff::{
-    CellAddress, CellSnapshot, CellValue, ContainerError, DiffOp, DiffReport, ExcelOpenError,
-    diff_workbooks, open_workbook,
+    CellAddress, CellSnapshot, CellValue, ContainerError, DiffConfig, DiffOp, DiffReport,
+    PackageError, WorkbookPackage,
     output::json::{
         CellDiff, diff_report_to_cell_diffs, diff_workbooks_to_json, serialize_cell_diffs,
         serialize_diff_report,
@@ -9,9 +12,6 @@ use excel_diff::{
 use serde_json::Value;
 #[cfg(feature = "perf-metrics")]
 use std::collections::BTreeSet;
-
-mod common;
-use common::fixture_path;
 
 fn sid_local(pool: &mut excel_diff::StringPool, value: &str) -> excel_diff::StringId {
     pool.intern(value)
@@ -265,7 +265,7 @@ fn test_json_format() {
 #[test]
 fn test_json_empty_diff() {
     let fixture = fixture_path("pg1_basic_two_sheets.xlsx");
-    let json = diff_workbooks_to_json(&fixture, &fixture, &excel_diff::DiffConfig::default())
+    let json = diff_workbooks_to_json(&fixture, &fixture, &DiffConfig::default())
         .expect("diffing identical files should succeed");
     let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
     assert!(
@@ -279,7 +279,7 @@ fn test_json_non_empty_diff() {
     let a = fixture_path("json_diff_single_cell_a.xlsx");
     let b = fixture_path("json_diff_single_cell_b.xlsx");
 
-    let json = diff_workbooks_to_json(&a, &b, &excel_diff::DiffConfig::default())
+    let json = diff_workbooks_to_json(&a, &b, &DiffConfig::default())
         .expect("diffing different files should succeed");
     let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
     assert_eq!(report.ops.len(), 1, "expected a single diff op");
@@ -298,7 +298,7 @@ fn test_json_non_empty_diff_bool() {
     let a = fixture_path("json_diff_bool_a.xlsx");
     let b = fixture_path("json_diff_bool_b.xlsx");
 
-    let json = diff_workbooks_to_json(&a, &b, &excel_diff::DiffConfig::default())
+    let json = diff_workbooks_to_json(&a, &b, &DiffConfig::default())
         .expect("diffing different files should succeed");
     let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
     assert_eq!(report.ops.len(), 1, "expected a single diff op");
@@ -317,7 +317,7 @@ fn test_json_diff_value_to_empty() {
     let a = fixture_path("json_diff_value_to_empty_a.xlsx");
     let b = fixture_path("json_diff_value_to_empty_b.xlsx");
 
-    let json = diff_workbooks_to_json(&a, &b, &excel_diff::DiffConfig::default())
+    let json = diff_workbooks_to_json(&a, &b, &DiffConfig::default())
         .expect("diffing different files should succeed");
     let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
     assert_eq!(report.ops.len(), 1, "expected a single diff op");
@@ -333,13 +333,10 @@ fn test_json_diff_value_to_empty() {
 
 #[test]
 fn json_diff_case_only_sheet_name_no_changes() {
-    let a = fixture_path("sheet_case_only_rename_a.xlsx");
-    let b = fixture_path("sheet_case_only_rename_b.xlsx");
+    let old = open_fixture_workbook("sheet_case_only_rename_a.xlsx");
+    let new = open_fixture_workbook("sheet_case_only_rename_b.xlsx");
 
-    let old = open_workbook(&a).expect("fixture A should open");
-    let new = open_workbook(&b).expect("fixture B should open");
-
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
     assert!(
         report.ops.is_empty(),
         "case-only sheet rename with identical content should produce no diff ops"
@@ -348,13 +345,10 @@ fn json_diff_case_only_sheet_name_no_changes() {
 
 #[test]
 fn json_diff_case_only_sheet_name_cell_edit() {
-    let a = fixture_path("sheet_case_only_rename_edit_a.xlsx");
-    let b = fixture_path("sheet_case_only_rename_edit_b.xlsx");
+    let old = open_fixture_workbook("sheet_case_only_rename_edit_a.xlsx");
+    let new = open_fixture_workbook("sheet_case_only_rename_edit_b.xlsx");
 
-    let old = open_workbook(&a).expect("fixture A should open");
-    let new = open_workbook(&b).expect("fixture B should open");
-
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
     assert_eq!(report.ops.len(), 1, "expected a single cell edit");
     match &report.ops[0] {
         DiffOp::CellEdited {
@@ -381,7 +375,7 @@ fn test_json_case_only_sheet_name_no_changes() {
     let a = fixture_path("sheet_case_only_rename_a.xlsx");
     let b = fixture_path("sheet_case_only_rename_b.xlsx");
 
-    let json = diff_workbooks_to_json(&a, &b, &excel_diff::DiffConfig::default())
+    let json = diff_workbooks_to_json(&a, &b, &DiffConfig::default())
         .expect("diffing case-only sheet rename should succeed");
     let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
     assert!(
@@ -395,7 +389,7 @@ fn test_json_case_only_sheet_name_cell_edit_via_helper() {
     let a = fixture_path("sheet_case_only_rename_edit_a.xlsx");
     let b = fixture_path("sheet_case_only_rename_edit_b.xlsx");
 
-    let json = diff_workbooks_to_json(&a, &b, &excel_diff::DiffConfig::default())
+    let json = diff_workbooks_to_json(&a, &b, &DiffConfig::default())
         .expect("diffing case-only sheet rename with cell edit should succeed");
     let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
     assert_eq!(report.ops.len(), 1, "expected a single cell edit");
@@ -423,13 +417,13 @@ fn test_json_case_only_sheet_name_cell_edit_via_helper() {
 #[test]
 fn test_diff_workbooks_to_json_reports_invalid_zip() {
     let path = fixture_path("not_a_zip.txt");
-    let err = diff_workbooks_to_json(&path, &path, &excel_diff::DiffConfig::default())
+    let err = diff_workbooks_to_json(&path, &path, &DiffConfig::default())
         .expect_err("diffing invalid containers should return an error");
 
     assert!(
         matches!(
             err,
-            ExcelOpenError::Container(ContainerError::NotZipContainer)
+            PackageError::Container(ContainerError::NotZipContainer)
         ),
         "expected container error, got {err}"
     );
@@ -441,10 +435,10 @@ fn serialize_diff_report_nan_maps_to_serialization_error() {
     let report = numeric_report(addr, f64::NAN, 1.0);
 
     let err = serialize_diff_report(&report).expect_err("NaN should fail to serialize");
-    let wrapped = ExcelOpenError::SerializationError(err.to_string());
+    let wrapped = PackageError::SerializationError(err.to_string());
 
     match wrapped {
-        ExcelOpenError::SerializationError(msg) => {
+        PackageError::SerializationError(msg) => {
             assert!(
                 msg.to_lowercase().contains("nan"),
                 "error message should mention NaN for clarity"
@@ -460,9 +454,9 @@ fn serialize_diff_report_infinity_maps_to_serialization_error() {
     let report = numeric_report(addr, f64::INFINITY, 1.0);
 
     let err = serialize_diff_report(&report).expect_err("Infinity should fail to serialize");
-    let wrapped = ExcelOpenError::SerializationError(err.to_string());
+    let wrapped = PackageError::SerializationError(err.to_string());
     match wrapped {
-        ExcelOpenError::SerializationError(msg) => {
+        PackageError::SerializationError(msg) => {
             assert!(
                 msg.to_lowercase().contains("infinity"),
                 "error message should mention infinity for clarity"
@@ -478,9 +472,9 @@ fn serialize_diff_report_neg_infinity_maps_to_serialization_error() {
     let report = numeric_report(addr, f64::NEG_INFINITY, 1.0);
 
     let err = serialize_diff_report(&report).expect_err("NEG_INFINITY should fail to serialize");
-    let wrapped = ExcelOpenError::SerializationError(err.to_string());
+    let wrapped = PackageError::SerializationError(err.to_string());
     match wrapped {
-        ExcelOpenError::SerializationError(msg) => {
+        PackageError::SerializationError(msg) => {
             assert!(
                 msg.to_lowercase().contains("infinity"),
                 "error message should mention infinity for clarity"

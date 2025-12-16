@@ -1,10 +1,20 @@
 mod common;
 
 use common::{sid, single_sheet_workbook};
-use excel_diff::config::{DiffConfig, LimitBehavior};
-use excel_diff::diff::{DiffError, DiffOp};
-use excel_diff::{diff_workbooks, try_diff_workbooks};
-use excel_diff::{CellValue, Grid};
+use excel_diff::{
+    CellValue, DiffConfig, DiffError, DiffOp, DiffReport, Grid, LimitBehavior, Workbook,
+    WorkbookPackage, try_diff_workbooks_with_pool, with_default_session,
+};
+
+fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
+}
+
+fn try_diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> Result<DiffReport, DiffError> {
+    with_default_session(|session| {
+        try_diff_workbooks_with_pool(old, new, &mut session.strings, config)
+    })
+}
 
 fn create_simple_grid(nrows: u32, ncols: u32, base_value: i32) -> Grid {
     let mut grid = Grid::new(nrows, ncols);

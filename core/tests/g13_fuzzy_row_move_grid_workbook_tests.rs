@@ -1,16 +1,19 @@
-use excel_diff::{DiffOp, diff_workbooks, open_workbook};
-
 mod common;
-use common::{fixture_path, grid_from_numbers, single_sheet_workbook};
+
+use common::{diff_fixture_pkgs, grid_from_numbers, single_sheet_workbook};
+use excel_diff::{DiffConfig, DiffOp, DiffReport, Workbook, WorkbookPackage};
+
+fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
+}
 
 #[test]
 fn g13_fuzzy_row_move_emits_blockmovedrows_and_celledited() {
-    let wb_a = open_workbook(fixture_path("grid_move_and_edit_a.xlsx"))
-        .expect("failed to open fixture: grid_move_and_edit_a.xlsx");
-    let wb_b = open_workbook(fixture_path("grid_move_and_edit_b.xlsx"))
-        .expect("failed to open fixture: grid_move_and_edit_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "grid_move_and_edit_a.xlsx",
+        "grid_move_and_edit_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     let block_moves: Vec<(u32, u32, u32, Option<u64>)> = report
         .ops
@@ -83,9 +86,9 @@ fn g13_fuzzy_row_move_can_be_disabled() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let disabled = excel_diff::DiffConfig {
+    let disabled = DiffConfig {
         enable_fuzzy_moves: false,
-        ..excel_diff::DiffConfig::default()
+        ..DiffConfig::default()
     };
     let report_disabled = diff_workbooks(&wb_a, &wb_b, &disabled);
     let disabled_moves = report_disabled
@@ -105,7 +108,7 @@ fn g13_fuzzy_row_move_can_be_disabled() {
         })
         .count();
 
-    let report_enabled = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report_enabled = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
     let enabled_moves = report_enabled
         .ops
         .iter()
@@ -151,7 +154,7 @@ fn g13_in_place_edits_do_not_emit_blockmovedrows() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     assert!(
         !report
@@ -187,7 +190,7 @@ fn g13_ambiguous_repeated_blocks_do_not_emit_blockmovedrows() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     assert!(
         !report
