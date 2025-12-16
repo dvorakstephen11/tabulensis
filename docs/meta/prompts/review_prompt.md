@@ -9,6 +9,7 @@
   .github/
     workflows/
       perf.yml
+      wasm.yml
   .gitignore
   benchmarks/
     README.md
@@ -62,6 +63,8 @@
         move_extraction.rs
         row_metadata.rs
         runs.rs
+      bin/
+        wasm_smoke.rs
       column_alignment.rs
       config.rs
       container.rs
@@ -132,6 +135,8 @@
       pg6_object_vs_grid_tests.rs
       signature_tests.rs
       sparse_grid_tests.rs
+      streaming_sink_tests.rs
+      string_pool_tests.rs
   fixtures/
     manifest.yaml
     pyproject.toml
@@ -201,6 +206,45 @@ jobs:
       - name: Check perf thresholds
         run: python scripts/check_perf_thresholds.py
 
+
+```
+
+---
+
+### File: `.github\workflows\wasm.yml`
+
+```yaml
+name: WASM Smoke
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  wasm-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Build wasm smoke binary
+        run: cargo build --release --target wasm32-unknown-unknown --no-default-features -p excel_diff --bin wasm_smoke
+        working-directory: core
+
+      - name: Enforce wasm size budget
+        run: |
+          SIZE=$(stat -c%s "core/target/wasm32-unknown-unknown/release/wasm_smoke.wasm")
+          echo "wasm_smoke.wasm size: $SIZE bytes"
+          if [ "$SIZE" -gt 5000000 ]; then
+            echo "WASM size $SIZE exceeds 5MB limit"
+            exit 1
+          fi
 
 ```
 
@@ -2682,6 +2726,59 @@ mod tests {
             );
             assert_eq!(run.count, 100, "each run should have 100 rows");
         }
+    }
+}
+
+```
+
+---
+
+### File: `core\src\bin\wasm_smoke.rs`
+
+```rust
+use excel_diff::{
+    CallbackSink, CellValue, DiffConfig, DiffSession, Grid, Sheet, SheetKind, Workbook,
+    try_diff_workbooks_streaming,
+};
+
+fn make_workbook(session: &mut DiffSession, value: f64) -> Workbook {
+    let mut grid = Grid::new(1, 1);
+    grid.insert_cell(0, 0, Some(CellValue::Number(value)), None);
+
+    let sheet_name = session.strings.intern("WasmSmoke");
+
+    Workbook {
+        sheets: vec![Sheet {
+            name: sheet_name,
+            kind: SheetKind::Worksheet,
+            grid,
+        }],
+    }
+}
+
+fn main() {
+    let mut session = DiffSession::new();
+    let wb_a = make_workbook(&mut session, 1.0);
+    let wb_b = make_workbook(&mut session, 2.0);
+
+    let mut op_count = 0usize;
+    {
+        let mut sink = CallbackSink::new(|_op| op_count += 1);
+        let summary = try_diff_workbooks_streaming(
+            &wb_a,
+            &wb_b,
+            &mut session.strings,
+            &DiffConfig::default(),
+            &mut sink,
+        )
+        .expect("smoke diff should succeed");
+
+        assert!(summary.complete, "smoke diff should be complete");
+        assert_eq!(
+            summary.op_count, op_count,
+            "sink count should match reported op count"
+        );
+        assert!(op_count > 0, "expected at least one diff op");
     }
 }
 
@@ -5624,14 +5721,12 @@ const DATABASE_MODE_SHEET_ID: &str = "<database>";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SheetKey {
-    id: SheetId,
     name_lower: String,
     kind: SheetKind,
 }
 
 fn make_sheet_key(sheet: &Sheet, pool: &StringPool) -> SheetKey {
     SheetKey {
-        id: sheet.name,
         name_lower: pool.resolve(sheet.name).to_lowercase(),
         kind: sheet.kind.clone(),
     }
@@ -10122,11 +10217,13 @@ fn strip_leading_bom(text: &str) -> &str {
 use crate::config::DiffConfig;
 use crate::diff::DiffReport;
 #[cfg(feature = "excel-open-xml")]
-use crate::engine::diff_workbooks as compute_diff;
-#[cfg(feature = "excel-open-xml")]
 use crate::excel_open_xml::{ExcelOpenError, open_workbook};
 use crate::session::DiffSession;
+#[cfg(feature = "excel-open-xml")]
+use crate::sink::VecSink;
 use crate::string_pool::StringId;
+#[cfg(feature = "excel-open-xml")]
+use crate::DiffSummary;
 use serde::Serialize;
 use serde::ser::Error as SerdeError;
 #[cfg(feature = "excel-open-xml")]
@@ -10164,12 +10261,17 @@ pub fn diff_workbooks(
     let mut session = DiffSession::new();
     let wb_a = open_workbook(path_a, session.strings_mut())?;
     let wb_b = open_workbook(path_b, session.strings_mut())?;
-    Ok(compute_diff(
+
+    let mut sink = VecSink::new();
+    let summary = crate::engine::try_diff_workbooks_streaming(
         &wb_a,
         &wb_b,
         session.strings_mut(),
         config,
-    ))
+        &mut sink,
+    )
+    .map_err(|e| ExcelOpenError::SerializationError(e.to_string()))?;
+    Ok(build_report_from_sink(sink, summary, session))
 }
 
 #[cfg(feature = "excel-open-xml")]
@@ -10219,6 +10321,19 @@ pub fn diff_report_to_cell_diffs(report: &DiffReport) -> Vec<CellDiff> {
             }
         })
         .collect()
+}
+
+#[cfg(feature = "excel-open-xml")]
+fn build_report_from_sink(sink: VecSink, summary: DiffSummary, session: DiffSession) -> DiffReport {
+    let mut report = DiffReport::new(sink.into_ops());
+    report.complete = summary.complete;
+    report.warnings = summary.warnings;
+    #[cfg(feature = "perf-metrics")]
+    {
+        report.metrics = summary.metrics;
+    }
+    report.strings = session.strings.into_strings();
+    report
 }
 
 fn contains_non_finite_numbers(report: &DiffReport) -> bool {
@@ -13680,26 +13795,34 @@ mod tests {
 ### File: `core\tests\addressing_pg2_tests.rs`
 
 ```rust
-use excel_diff::{CellValue, address_to_index, index_to_address, open_workbook};
+use excel_diff::{CellValue, address_to_index, index_to_address, open_workbook, with_default_session};
 
 mod common;
-use common::fixture_path;
+use common::{fixture_path, sid};
 
 #[test]
 fn pg2_addressing_matrix_consistency() {
     let workbook =
         open_workbook(fixture_path("pg2_addressing_matrix.xlsx")).expect("address fixture opens");
-    let sheet_names: Vec<String> = workbook.sheets.iter().map(|s| s.name.clone()).collect();
+    let sheet_names: Vec<String> = with_default_session(|session| {
+        workbook
+            .sheets
+            .iter()
+            .map(|s| session.strings.resolve(s.name).to_string())
+            .collect()
+    });
+    let addresses_id = sid("Addresses");
     let sheet = workbook
         .sheets
         .iter()
-        .find(|s| s.name == "Addresses")
+        .find(|s| s.name == addresses_id)
         .unwrap_or_else(|| panic!("Addresses sheet present; found {:?}", sheet_names));
 
-    for cell in sheet.grid.iter_cells() {
-        if let Some(CellValue::Text(text)) = &cell.value {
+    for cell in sheet.grid.iter_cell_refs() {
+        if let Some(CellValue::Text(text_id)) = cell.value {
+            let text = with_default_session(|session| session.strings.resolve(*text_id).to_string());
             assert_eq!(cell.address.to_a1(), text.as_str());
-            let (r, c) = address_to_index(text).expect("address strings should parse to indices");
+            let (r, c) = address_to_index(&text).expect("address strings should parse to indices");
             assert_eq!((r, c), (cell.row, cell.col));
             assert_eq!(index_to_address(cell.row, cell.col), cell.address.to_a1());
         }
@@ -13718,7 +13841,7 @@ mod common;
 use common::{grid_from_numbers, single_sheet_workbook};
 use excel_diff::config::DiffConfig;
 use excel_diff::diff::DiffOp;
-use excel_diff::engine::diff_workbooks;
+use excel_diff::diff_workbooks;
 
 fn count_ops(ops: &[DiffOp], predicate: impl Fn(&DiffOp) -> bool) -> usize {
     ops.iter().filter(|op| predicate(op)).count()
@@ -14064,18 +14187,31 @@ pub fn single_sheet_workbook(name: &str, grid: Grid) -> Workbook {
 
 ```rust
 use excel_diff::{
-    Cell, CellAddress, CellValue, DiffOp, Grid, Workbook, diff_grids_database_mode, diff_workbooks,
-    open_workbook,
+    CellValue, DiffOp, Grid, Workbook, diff_grids_database_mode, diff_workbooks, open_workbook,
+    with_default_session,
 };
 
 mod common;
-use common::{fixture_path, grid_from_numbers};
+use common::{fixture_path, grid_from_numbers, sid};
+
+fn diff_db(grid_a: &Grid, grid_b: &Grid, keys: &[u32]) -> excel_diff::DiffReport {
+    with_default_session(|session| {
+        diff_grids_database_mode(
+            grid_a,
+            grid_b,
+            keys,
+            &mut session.strings,
+            &excel_diff::DiffConfig::default(),
+        )
+    })
+}
 
 fn data_grid(workbook: &Workbook) -> &Grid {
+    let data_id = sid("Data");
     workbook
         .sheets
         .iter()
-        .find(|s| s.name == "Data")
+        .find(|s| s.name == data_id)
         .map(|s| &s.grid)
         .expect("Data sheet present")
 }
@@ -14087,13 +14223,7 @@ fn grid_from_float_rows(rows: &[&[f64]]) -> Grid {
 
     for (r_idx, row_vals) in rows.iter().enumerate() {
         for (c_idx, value) in row_vals.iter().enumerate() {
-            grid.insert(Cell {
-                row: r_idx as u32,
-                col: c_idx as u32,
-                address: CellAddress::from_indices(r_idx as u32, c_idx as u32),
-                value: Some(CellValue::Number(*value)),
-                formula: None,
-            });
+            grid.insert_cell(r_idx as u32, c_idx as u32, Some(CellValue::Number(*value)), None);
         }
     }
 
@@ -14105,7 +14235,7 @@ fn d1_equal_ordered_database_mode_empty_diff() {
     let workbook = open_workbook(fixture_path("db_equal_ordered_a.xlsx")).expect("fixture A opens");
     let grid = data_grid(&workbook);
 
-    let report = diff_grids_database_mode(grid, grid, &[0], &excel_diff::DiffConfig::default());
+    let report = diff_db(grid, grid, &[0]);
     assert!(
         report.ops.is_empty(),
         "database mode should ignore row order when keyed rows are identical"
@@ -14120,7 +14250,7 @@ fn d1_equal_reordered_database_mode_empty_diff() {
     let grid_a = data_grid(&wb_a);
     let grid_b = data_grid(&wb_b);
 
-    let report = diff_grids_database_mode(grid_a, grid_b, &[0], &excel_diff::DiffConfig::default());
+    let report = diff_db(grid_a, grid_b, &[0]);
     assert!(
         report.ops.is_empty(),
         "keyed alignment should match rows by key and ignore reordering"
@@ -14146,8 +14276,7 @@ fn d1_duplicate_keys_fallback_to_spreadsheet_mode() {
     let grid_a = grid_from_numbers(&[&[1, 10], &[1, 99]]);
     let grid_b = grid_from_numbers(&[&[1, 10]]);
 
-    let report =
-        diff_grids_database_mode(&grid_a, &grid_b, &[0], &excel_diff::DiffConfig::default());
+    let report = diff_db(&grid_a, &grid_b, &[0]);
 
     assert!(
         !report.ops.is_empty(),
@@ -14169,8 +14298,7 @@ fn d1_database_mode_row_added() {
     let grid_a = grid_from_numbers(&[&[1, 10], &[2, 20]]);
     let grid_b = grid_from_numbers(&[&[1, 10], &[2, 20], &[3, 30]]);
 
-    let report =
-        diff_grids_database_mode(&grid_a, &grid_b, &[0], &excel_diff::DiffConfig::default());
+    let report = diff_db(&grid_a, &grid_b, &[0]);
 
     let row_added_count = report
         .ops
@@ -14188,8 +14316,7 @@ fn d1_database_mode_row_removed() {
     let grid_a = grid_from_numbers(&[&[1, 10], &[2, 20], &[3, 30]]);
     let grid_b = grid_from_numbers(&[&[1, 10], &[2, 20]]);
 
-    let report =
-        diff_grids_database_mode(&grid_a, &grid_b, &[0], &excel_diff::DiffConfig::default());
+    let report = diff_db(&grid_a, &grid_b, &[0]);
 
     let row_removed_count = report
         .ops
@@ -14207,8 +14334,7 @@ fn d1_database_mode_cell_edited() {
     let grid_a = grid_from_numbers(&[&[1, 10], &[2, 20]]);
     let grid_b = grid_from_numbers(&[&[1, 99], &[2, 20]]);
 
-    let report =
-        diff_grids_database_mode(&grid_a, &grid_b, &[0], &excel_diff::DiffConfig::default());
+    let report = diff_db(&grid_a, &grid_b, &[0]);
 
     let cell_edited_count = report
         .ops
@@ -14226,8 +14352,7 @@ fn d1_database_mode_cell_edited_with_reorder() {
     let grid_a = grid_from_numbers(&[&[1, 10], &[2, 20], &[3, 30]]);
     let grid_b = grid_from_numbers(&[&[3, 30], &[2, 99], &[1, 10]]);
 
-    let report =
-        diff_grids_database_mode(&grid_a, &grid_b, &[0], &excel_diff::DiffConfig::default());
+    let report = diff_db(&grid_a, &grid_b, &[0]);
 
     let cell_edited_count = report
         .ops
@@ -14245,8 +14370,7 @@ fn d1_database_mode_treats_small_float_key_noise_as_equal() {
     let grid_a = grid_from_float_rows(&[&[1.0, 10.0], &[2.0, 20.0], &[3.0, 30.0]]);
     let grid_b = grid_from_float_rows(&[&[1.0000000000000002, 10.0], &[2.0, 20.0], &[3.0, 30.0]]);
 
-    let report =
-        diff_grids_database_mode(&grid_a, &grid_b, &[0], &excel_diff::DiffConfig::default());
+    let report = diff_db(&grid_a, &grid_b, &[0]);
     assert!(
         report.ops.is_empty(),
         "ULP-level noise in key column should not break row alignment"
@@ -14258,8 +14382,7 @@ fn d1_database_mode_detects_meaningful_float_key_change() {
     let grid_a = grid_from_float_rows(&[&[1.0, 10.0], &[2.0, 20.0], &[3.0, 30.0]]);
     let grid_b = grid_from_float_rows(&[&[1.0001, 10.0], &[2.0, 20.0], &[3.0, 30.0]]);
 
-    let report =
-        diff_grids_database_mode(&grid_a, &grid_b, &[0], &excel_diff::DiffConfig::default());
+    let report = diff_db(&grid_a, &grid_b, &[0]);
 
     let row_removed = report
         .ops
@@ -14287,12 +14410,7 @@ fn d5_composite_key_equal_reordered_database_mode_empty_diff() {
     let grid_a = grid_from_numbers(&[&[1, 10, 100], &[1, 20, 200], &[2, 10, 300]]);
     let grid_b = grid_from_numbers(&[&[2, 10, 300], &[1, 10, 100], &[1, 20, 200]]);
 
-    let report = diff_grids_database_mode(
-        &grid_a,
-        &grid_b,
-        &[0, 1],
-        &excel_diff::DiffConfig::default(),
-    );
+    let report = diff_db(&grid_a, &grid_b, &[0, 1]);
     assert!(
         report.ops.is_empty(),
         "composite keyed alignment should ignore row order differences"
@@ -14304,12 +14422,7 @@ fn d5_composite_key_row_added_and_cell_edited() {
     let grid_a = grid_from_numbers(&[&[1, 10, 100], &[1, 20, 200]]);
     let grid_b = grid_from_numbers(&[&[1, 10, 150], &[1, 20, 200], &[2, 30, 300]]);
 
-    let report = diff_grids_database_mode(
-        &grid_a,
-        &grid_b,
-        &[0, 1],
-        &excel_diff::DiffConfig::default(),
-    );
+    let report = diff_db(&grid_a, &grid_b, &[0, 1]);
 
     let row_added_count = report
         .ops
@@ -14358,12 +14471,7 @@ fn d5_composite_key_partial_key_mismatch_yields_add_and_remove() {
     let grid_a = grid_from_numbers(&[&[1, 10, 100]]);
     let grid_b = grid_from_numbers(&[&[1, 20, 100]]);
 
-    let report = diff_grids_database_mode(
-        &grid_a,
-        &grid_b,
-        &[0, 1],
-        &excel_diff::DiffConfig::default(),
-    );
+    let report = diff_db(&grid_a, &grid_b, &[0, 1]);
 
     let row_removed_count = report
         .ops
@@ -14401,12 +14509,7 @@ fn d5_composite_key_duplicate_keys_fallback_to_spreadsheet_mode() {
     let grid_a = grid_from_numbers(&[&[1, 10, 100], &[1, 10, 200]]);
     let grid_b = grid_from_numbers(&[&[1, 10, 100]]);
 
-    let report = diff_grids_database_mode(
-        &grid_a,
-        &grid_b,
-        &[0, 1],
-        &excel_diff::DiffConfig::default(),
-    );
+    let report = diff_db(&grid_a, &grid_b, &[0, 1]);
 
     assert!(
         !report.ops.is_empty(),
@@ -14428,12 +14531,7 @@ fn d5_non_contiguous_key_columns_equal_reordered_empty_diff() {
     let grid_a = grid_from_numbers(&[&[1, 999, 10, 100], &[1, 888, 20, 200], &[2, 777, 10, 300]]);
     let grid_b = grid_from_numbers(&[&[2, 777, 10, 300], &[1, 999, 10, 100], &[1, 888, 20, 200]]);
 
-    let report = diff_grids_database_mode(
-        &grid_a,
-        &grid_b,
-        &[0, 2],
-        &excel_diff::DiffConfig::default(),
-    );
+    let report = diff_db(&grid_a, &grid_b, &[0, 2]);
     assert!(
         report.ops.is_empty(),
         "non-contiguous key columns [0,2] should align correctly ignoring row order"
@@ -14445,12 +14543,7 @@ fn d5_non_contiguous_key_columns_detects_edits_in_skipped_column() {
     let grid_a = grid_from_numbers(&[&[1, 999, 10, 100], &[1, 888, 20, 200], &[2, 777, 10, 300]]);
     let grid_b = grid_from_numbers(&[&[2, 111, 10, 300], &[1, 222, 10, 100], &[1, 333, 20, 200]]);
 
-    let report = diff_grids_database_mode(
-        &grid_a,
-        &grid_b,
-        &[0, 2],
-        &excel_diff::DiffConfig::default(),
-    );
+    let report = diff_db(&grid_a, &grid_b, &[0, 2]);
 
     let cell_edited_ops: Vec<_> = report
         .ops
@@ -14497,12 +14590,7 @@ fn d5_non_contiguous_key_columns_row_added_and_cell_edited() {
     let grid_a = grid_from_numbers(&[&[1, 999, 10, 100], &[1, 888, 20, 200]]);
     let grid_b = grid_from_numbers(&[&[1, 999, 10, 150], &[1, 888, 20, 200], &[2, 777, 30, 300]]);
 
-    let report = diff_grids_database_mode(
-        &grid_a,
-        &grid_b,
-        &[0, 2],
-        &excel_diff::DiffConfig::default(),
-    );
+    let report = diff_db(&grid_a, &grid_b, &[0, 2]);
 
     let row_added_count = report
         .ops
@@ -14547,12 +14635,7 @@ fn d5_three_column_composite_key_equal_reordered_empty_diff() {
         &[1, 10, 100, 1000],
     ]);
 
-    let report = diff_grids_database_mode(
-        &grid_a,
-        &grid_b,
-        &[0, 1, 2],
-        &excel_diff::DiffConfig::default(),
-    );
+    let report = diff_db(&grid_a, &grid_b, &[0, 1, 2]);
     assert!(
         report.ops.is_empty(),
         "three-column composite key should align correctly ignoring row order"
@@ -14564,12 +14647,7 @@ fn d5_three_column_composite_key_partial_match_yields_add_and_remove() {
     let grid_a = grid_from_numbers(&[&[1, 10, 100, 1000]]);
     let grid_b = grid_from_numbers(&[&[1, 10, 200, 1000]]);
 
-    let report = diff_grids_database_mode(
-        &grid_a,
-        &grid_b,
-        &[0, 1, 2],
-        &excel_diff::DiffConfig::default(),
-    );
+    let report = diff_db(&grid_a, &grid_b, &[0, 1, 2]);
 
     let row_removed_count = report
         .ops
@@ -14872,6 +14950,9 @@ fn assemble_top_level_bytes(raw: &RawDataMashup) -> Vec<u8> {
 ### File: `core\tests\engine_tests.rs`
 
 ```rust
+mod common;
+
+use common::sid;
 use excel_diff::{
     Cell, CellAddress, CellSnapshot, CellValue, DiffOp, DiffReport, Grid, Sheet, SheetKind,
     Workbook, diff_workbooks,
@@ -14887,16 +14968,10 @@ fn make_workbook(sheets: Vec<SheetSpec<'_>>) -> Workbook {
             let max_col = cells.iter().map(|(_, c, _)| *c).max().unwrap_or(0);
             let mut grid = Grid::new(max_row + 1, max_col + 1);
             for (r, c, val) in cells {
-                grid.insert(Cell {
-                    row: r,
-                    col: c,
-                    address: CellAddress::from_indices(r, c),
-                    value: Some(CellValue::Number(val)),
-                    formula: None,
-                });
+                grid.insert_cell(r, c, Some(CellValue::Number(val)), None);
             }
             Sheet {
-                name: name.to_string(),
+                name: sid(name),
                 kind: SheetKind::Worksheet,
                 grid,
             }
@@ -14916,17 +14991,11 @@ fn make_sheet_with_kind(name: &str, kind: SheetKind, cells: Vec<(u32, u32, f64)>
 
     let mut grid = Grid::new(nrows, ncols);
     for (r, c, val) in cells {
-        grid.insert(Cell {
-            row: r,
-            col: c,
-            address: CellAddress::from_indices(r, c),
-            value: Some(CellValue::Number(val)),
-            formula: None,
-        });
+        grid.insert_cell(r, c, Some(CellValue::Number(val)), None);
     }
 
     Sheet {
-        name: name.to_string(),
+        name: sid(name),
         kind,
         grid,
     }
@@ -14951,7 +15020,7 @@ fn sheet_added_detected() {
         report
             .ops
             .iter()
-            .any(|op| matches!(op, DiffOp::SheetAdded { sheet } if sheet == "Sheet2"))
+            .any(|op| matches!(op, DiffOp::SheetAdded { sheet } if *sheet == sid("Sheet2")))
     );
 }
 
@@ -14967,7 +15036,7 @@ fn sheet_removed_detected() {
         report
             .ops
             .iter()
-            .any(|op| matches!(op, DiffOp::SheetRemoved { sheet } if sheet == "Sheet2"))
+            .any(|op| matches!(op, DiffOp::SheetRemoved { sheet } if *sheet == sid("Sheet2")))
     );
 }
 
@@ -14984,7 +15053,7 @@ fn cell_edited_detected() {
             from,
             to,
         } => {
-            assert_eq!(sheet, "Sheet1");
+            assert_eq!(*sheet, sid("Sheet1"));
             assert_eq!(addr.to_a1(), "A1");
             assert_eq!(from.value, Some(CellValue::Number(1.0)));
             assert_eq!(to.value, Some(CellValue::Number(2.0)));
@@ -15027,7 +15096,7 @@ fn sheet_name_case_insensitive_cell_edit() {
             from,
             to,
         } => {
-            assert_eq!(sheet, "Sheet1");
+            assert_eq!(*sheet, sid("Sheet1"));
             assert_eq!(addr.to_a1(), "A1");
             assert_eq!(from.value, Some(CellValue::Number(1.0)));
             assert_eq!(to.value, Some(CellValue::Number(2.0)));
@@ -15039,22 +15108,16 @@ fn sheet_name_case_insensitive_cell_edit() {
 #[test]
 fn sheet_identity_includes_kind() {
     let mut grid = Grid::new(1, 1);
-    grid.insert(Cell {
-        row: 0,
-        col: 0,
-        address: CellAddress::from_indices(0, 0),
-        value: Some(CellValue::Number(1.0)),
-        formula: None,
-    });
+    grid.insert_cell(0, 0, Some(CellValue::Number(1.0)), None);
 
     let worksheet = Sheet {
-        name: "Sheet1".to_string(),
+        name: sid("Sheet1"),
         kind: SheetKind::Worksheet,
         grid: grid.clone(),
     };
 
     let chart = Sheet {
-        name: "Sheet1".to_string(),
+        name: sid("Sheet1"),
         kind: SheetKind::Chart,
         grid,
     };
@@ -15072,8 +15135,8 @@ fn sheet_identity_includes_kind() {
     let mut removed = 0;
     for op in &report.ops {
         match op {
-            DiffOp::SheetAdded { sheet } if sheet == "Sheet1" => added += 1,
-            DiffOp::SheetRemoved { sheet } if sheet == "Sheet1" => removed += 1,
+            DiffOp::SheetAdded { sheet } if *sheet == sid("Sheet1") => added += 1,
+            DiffOp::SheetRemoved { sheet } if *sheet == sid("Sheet1") => removed += 1,
             _ => {}
         }
     }
@@ -15104,7 +15167,7 @@ fn deterministic_sheet_op_ordering() {
     let budget_addr = CellAddress::from_indices(0, 0);
     let expected = vec![
         DiffOp::cell_edited(
-            "Budget".into(),
+            sid("Budget"),
             budget_addr,
             CellSnapshot {
                 addr: budget_addr,
@@ -15118,13 +15181,13 @@ fn deterministic_sheet_op_ordering() {
             },
         ),
         DiffOp::SheetRemoved {
-            sheet: "Sheet1".into(),
+            sheet: sid("Sheet1"),
         },
         DiffOp::SheetAdded {
-            sheet: "sheet1".into(),
+            sheet: sid("sheet1"),
         },
         DiffOp::SheetAdded {
-            sheet: "Summary".into(),
+            sheet: sid("Summary"),
         },
     ];
 
@@ -15138,22 +15201,16 @@ fn deterministic_sheet_op_ordering() {
 #[test]
 fn sheet_identity_includes_kind_for_macro_and_other() {
     let mut grid = Grid::new(1, 1);
-    grid.insert(Cell {
-        row: 0,
-        col: 0,
-        address: CellAddress::from_indices(0, 0),
-        value: Some(CellValue::Number(1.0)),
-        formula: None,
-    });
+    grid.insert_cell(0, 0, Some(CellValue::Number(1.0)), None);
 
     let macro_sheet = Sheet {
-        name: "Code".to_string(),
+        name: sid("Code"),
         kind: SheetKind::Macro,
         grid: grid.clone(),
     };
 
     let other_sheet = Sheet {
-        name: "Code".to_string(),
+        name: sid("Code"),
         kind: SheetKind::Other,
         grid,
     };
@@ -15171,8 +15228,8 @@ fn sheet_identity_includes_kind_for_macro_and_other() {
     let mut removed = 0;
     for op in &report.ops {
         match op {
-            DiffOp::SheetAdded { sheet } if sheet == "Code" => added += 1,
-            DiffOp::SheetRemoved { sheet } if sheet == "Code" => removed += 1,
+            DiffOp::SheetAdded { sheet } if *sheet == sid("Code") => added += 1,
+            DiffOp::SheetRemoved { sheet } if *sheet == sid("Code") => removed += 1,
             _ => {}
         }
     }
@@ -15198,7 +15255,7 @@ fn duplicate_sheet_identity_last_writer_wins_release() {
 
     match &report.ops[0] {
         DiffOp::SheetRemoved { sheet } => assert_eq!(
-            sheet, "sheet1",
+            *sheet, sid("sheet1"),
             "duplicate identity should prefer the last sheet in release builds"
         ),
         other => panic!("expected SheetRemoved, got {other:?}"),
@@ -15220,15 +15277,8 @@ fn move_detection_respects_column_gate() {
     for r in 0..nrows {
         for c in 0..ncols {
             let base_value = Some(CellValue::Number((r * 1_000 + c) as f64));
-            let addr = CellAddress::from_indices(r, c);
 
-            grid_a.insert(Cell {
-                row: r,
-                col: c,
-                address: addr,
-                value: base_value.clone(),
-                formula: None,
-            });
+            grid_a.insert_cell(r, c, base_value.clone(), None);
 
             let in_src = src_rows.contains(&r) && src_cols.contains(&c);
             let in_dst = src_rows.contains(&r) && c >= dst_start_col && c < dst_end_col;
@@ -15237,35 +15287,23 @@ fn move_detection_respects_column_gate() {
                 let offset = c - dst_start_col;
                 let src_c = src_cols.start + offset;
                 let moved_value = Some(CellValue::Number((r * 1_000 + src_c) as f64));
-                grid_b.insert(Cell {
-                    row: r,
-                    col: c,
-                    address: addr,
-                    value: moved_value,
-                    formula: None,
-                });
+                grid_b.insert_cell(r, c, moved_value, None);
             } else if !in_src {
-                grid_b.insert(Cell {
-                    row: r,
-                    col: c,
-                    address: addr,
-                    value: base_value,
-                    formula: None,
-                });
+                grid_b.insert_cell(r, c, base_value, None);
             }
         }
     }
 
     let wb_a = Workbook {
         sheets: vec![Sheet {
-            name: "Sheet1".to_string(),
+            name: sid("Sheet1"),
             kind: SheetKind::Worksheet,
             grid: grid_a,
         }],
     };
     let wb_b = Workbook {
         sheets: vec![Sheet {
-            name: "Sheet1".to_string(),
+            name: sid("Sheet1"),
             kind: SheetKind::Worksheet,
             grid: grid_b,
         }],
@@ -15499,7 +15537,7 @@ fn missing_worksheet_xml_returns_worksheetxmlmissing() {
 use excel_diff::{DiffOp, diff_workbooks, open_workbook};
 
 mod common;
-use common::fixture_path;
+use common::{fixture_path, sid};
 
 #[test]
 fn g10_row_block_insert_middle_emits_four_rowadded_and_no_noise() {
@@ -15519,7 +15557,7 @@ fn g10_row_block_insert_middle_emits_four_rowadded_and_no_noise() {
                 row_idx,
                 row_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                assert_eq!(*sheet, sid("Sheet1"));
                 assert!(row_signature.is_none());
                 Some(*row_idx)
             }
@@ -15568,7 +15606,7 @@ fn g10_row_block_delete_middle_emits_four_rowremoved_and_no_noise() {
                 row_idx,
                 row_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                assert_eq!(*sheet, sid("Sheet1"));
                 assert!(row_signature.is_none());
                 Some(*row_idx)
             }
@@ -15621,6 +15659,7 @@ fn g11_row_block_move_emits_single_blockmovedrows() {
     let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     assert_eq!(report.ops.len(), 1, "expected a single diff op");
+    let strings = &report.strings;
 
     match &report.ops[0] {
         DiffOp::BlockMovedRows {
@@ -15630,7 +15669,10 @@ fn g11_row_block_move_emits_single_blockmovedrows() {
             dst_start_row,
             block_hash,
         } => {
-            assert_eq!(sheet, "Sheet1");
+            assert_eq!(
+                strings.get(sheet.0 as usize).map(String::as_str),
+                Some("Sheet1")
+            );
             assert_eq!(*src_start_row, 4);
             assert_eq!(*row_count, 4);
             assert_eq!(*dst_start_row, 12);
@@ -15902,7 +15944,7 @@ fn g12_column_swap_emits_blockmovedcolumns() {
 use excel_diff::{DiffOp, diff_workbooks, open_workbook};
 
 mod common;
-use common::{fixture_path, grid_from_numbers, single_sheet_workbook};
+use common::{fixture_path, grid_from_numbers, sid, single_sheet_workbook};
 
 #[test]
 fn g12_rect_block_move_emits_single_blockmovedrect() {
@@ -15926,7 +15968,7 @@ fn g12_rect_block_move_emits_single_blockmovedrect() {
             dst_start_col,
             block_hash: _,
         } => {
-            assert_eq!(sheet, "Data");
+            assert_eq!(*sheet, sid("Data"));
             assert_eq!(*src_start_row, 2);
             assert_eq!(*src_row_count, 3);
             assert_eq!(*src_start_col, 1);
@@ -17517,27 +17559,18 @@ fn g15_large_grid_column_insert_row_alignment_preserved() {
 ### File: `core\tests\g1_g2_grid_workbook_tests.rs`
 
 ```rust
-use excel_diff::{
-    Cell, CellAddress, CellValue, DiffOp, Grid, Sheet, SheetKind, Workbook, diff_workbooks,
-    open_workbook,
-};
+use excel_diff::{CellValue, DiffOp, Grid, Sheet, SheetKind, Workbook, diff_workbooks, open_workbook};
 
 mod common;
-use common::fixture_path;
+use common::{fixture_path, sid};
 
 fn workbook_with_number(value: f64) -> Workbook {
     let mut grid = Grid::new(1, 1);
-    grid.insert(Cell {
-        row: 0,
-        col: 0,
-        address: CellAddress::from_indices(0, 0),
-        value: Some(CellValue::Number(value)),
-        formula: None,
-    });
+    grid.insert_cell(0, 0, Some(CellValue::Number(value)), None);
 
     Workbook {
         sheets: vec![Sheet {
-            name: "Sheet1".to_string(),
+            name: sid("Sheet1"),
             kind: SheetKind::Worksheet,
             grid,
         }],
@@ -17581,7 +17614,7 @@ fn g2_single_cell_literal_change_produces_one_celledited() {
             from,
             to,
         } => {
-            assert_eq!(sheet, "Sheet1");
+            assert_eq!(*sheet, sid("Sheet1"));
             assert_eq!(addr.to_a1(), "C3");
             assert_eq!(from.value, Some(CellValue::Number(1.0)));
             assert_eq!(to.value, Some(CellValue::Number(2.0)));
@@ -17948,6 +17981,8 @@ fn single_row_insert_middle_produces_one_row_added() {
 
     let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
+    let strings = &report.strings;
+
     let rows_added: Vec<u32> = report
         .ops
         .iter()
@@ -17957,7 +17992,10 @@ fn single_row_insert_middle_produces_one_row_added() {
                 row_idx,
                 row_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                assert_eq!(
+                    strings.get(sheet.0 as usize).map(String::as_str),
+                    Some("Sheet1")
+                );
                 assert!(row_signature.is_none());
                 Some(*row_idx)
             }
@@ -17993,6 +18031,8 @@ fn single_row_delete_middle_produces_one_row_removed() {
 
     let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
+    let strings = &report.strings;
+
     let rows_removed: Vec<u32> = report
         .ops
         .iter()
@@ -18002,7 +18042,10 @@ fn single_row_delete_middle_produces_one_row_removed() {
                 row_idx,
                 row_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                assert_eq!(
+                    strings.get(sheet.0 as usize).map(String::as_str),
+                    Some("Sheet1")
+                );
                 assert!(row_signature.is_none());
                 Some(*row_idx)
             }
@@ -18089,7 +18132,7 @@ fn alignment_bails_out_when_additional_edits_present() {
 use excel_diff::{CellValue, DiffOp, Workbook, diff_workbooks, open_workbook};
 
 mod common;
-use common::fixture_path;
+use common::{fixture_path, sid};
 
 #[test]
 fn g9_col_insert_middle_emits_one_columnadded_and_no_noise() {
@@ -18109,7 +18152,7 @@ fn g9_col_insert_middle_emits_one_columnadded_and_no_noise() {
                 col_idx,
                 col_signature,
             } => {
-                assert_eq!(sheet, "Data");
+                assert_eq!(sheet, &sid("Data"));
                 assert!(col_signature.is_none());
                 Some(*col_idx)
             }
@@ -18158,7 +18201,7 @@ fn g9_col_delete_middle_emits_one_columnremoved_and_no_noise() {
                 col_idx,
                 col_signature,
             } => {
-                assert_eq!(sheet, "Data");
+                assert_eq!(sheet, &sid("Data"));
                 assert!(col_signature.is_none());
                 Some(*col_idx)
             }
@@ -18228,13 +18271,16 @@ fn g9_alignment_bails_out_when_additional_edits_present() {
 }
 
 fn find_header_col(workbook: &Workbook, header: &str) -> u32 {
+    let header_id = sid(header);
     workbook
         .sheets
         .iter()
         .flat_map(|sheet| sheet.grid.cells.iter())
-        .find_map(|((row, col), cell)| match &cell.value {
-            Some(CellValue::Text(text)) if *row == 0 && text == header => Some(*col),
-            _ => None,
+        .find_map(|((row, col), cell)| {
+            match &cell.value {
+                Some(CellValue::Text(text)) if *row == 0 && *text == header_id => Some(*col),
+                _ => None,
+            }
         })
         .expect("header column should exist in fixture")
 }
@@ -18411,7 +18457,7 @@ fn hashstats_from_col_meta_tracks_positions() {
 ### File: `core\tests\grid_view_tests.rs`
 
 ```rust
-use excel_diff::{Cell, CellValue, DiffConfig, Grid, GridView, with_default_session};
+use excel_diff::{CellValue, DiffConfig, Grid, GridView, with_default_session};
 
 mod common;
 use common::grid_from_numbers;
@@ -18443,7 +18489,7 @@ fn gridview_dense_3x3_layout_and_metadata() {
 
     for (row_idx, row_view) in view.rows.iter().enumerate() {
         assert_eq!(row_view.cells.len(), 3);
-        for (col_idx, (col, cell)) in row_view.cells.iter().enumerate() {
+        for (col_idx, (col, _cell)) in row_view.cells.iter().enumerate() {
             assert_eq!(*col as usize, col_idx);
         }
 
@@ -18649,25 +18695,24 @@ fn test_locate_fixture() {
 ```rust
 mod common;
 
-use common::single_sheet_workbook;
+use common::{sid, single_sheet_workbook};
 use excel_diff::config::{DiffConfig, LimitBehavior};
 use excel_diff::diff::{DiffError, DiffOp};
-use excel_diff::engine::{diff_workbooks, try_diff_workbooks};
-use excel_diff::{Cell, CellAddress, CellValue, Grid};
+use excel_diff::{diff_workbooks, try_diff_workbooks};
+use excel_diff::{CellValue, Grid};
 
 fn create_simple_grid(nrows: u32, ncols: u32, base_value: i32) -> Grid {
     let mut grid = Grid::new(nrows, ncols);
     for row in 0..nrows {
         for col in 0..ncols {
-            grid.insert(Cell {
+            grid.insert_cell(
                 row,
                 col,
-                address: CellAddress::from_indices(row, col),
-                value: Some(CellValue::Number(
+                Some(CellValue::Number(
                     (base_value as i64 + row as i64 * 1000 + col as i64) as f64,
                 )),
-                formula: None,
-            });
+                None,
+            );
         }
     }
     grid
@@ -18681,13 +18726,7 @@ fn count_ops(ops: &[DiffOp], predicate: impl Fn(&DiffOp) -> bool) -> usize {
 fn large_grid_completes_within_default_limits() {
     let grid_a = create_simple_grid(1000, 10, 0);
     let mut grid_b = create_simple_grid(1000, 10, 0);
-    grid_b.insert(Cell {
-        row: 500,
-        col: 5,
-        address: CellAddress::from_indices(500, 5),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(500, 5, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
@@ -18713,13 +18752,7 @@ fn large_grid_completes_within_default_limits() {
 fn limit_exceeded_fallback_to_positional() {
     let grid_a = create_simple_grid(100, 10, 0);
     let mut grid_b = create_simple_grid(100, 10, 0);
-    grid_b.insert(Cell {
-        row: 50,
-        col: 5,
-        address: CellAddress::from_indices(50, 5),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(50, 5, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
@@ -18750,13 +18783,7 @@ fn limit_exceeded_fallback_to_positional() {
 fn limit_exceeded_return_partial_result() {
     let grid_a = create_simple_grid(100, 10, 0);
     let mut grid_b = create_simple_grid(100, 10, 0);
-    grid_b.insert(Cell {
-        row: 50,
-        col: 5,
-        address: CellAddress::from_indices(50, 5),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(50, 5, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
@@ -18813,7 +18840,7 @@ fn limit_exceeded_return_error_returns_structured_error() {
             max_rows,
             max_cols,
         } => {
-            assert_eq!(sheet, "Sheet1");
+            assert_eq!(sheet, sid("Sheet1"));
             assert_eq!(rows, 100);
             assert_eq!(cols, 10);
             assert_eq!(max_rows, 50);
@@ -18845,13 +18872,7 @@ fn limit_exceeded_return_error_panics_via_legacy_api() {
 fn column_limit_exceeded() {
     let grid_a = create_simple_grid(10, 100, 0);
     let mut grid_b = create_simple_grid(10, 100, 0);
-    grid_b.insert(Cell {
-        row: 5,
-        col: 50,
-        address: CellAddress::from_indices(5, 50),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(5, 50, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
@@ -18878,13 +18899,7 @@ fn column_limit_exceeded() {
 fn within_limits_no_warning() {
     let grid_a = create_simple_grid(45, 10, 0);
     let mut grid_b = create_simple_grid(45, 10, 0);
-    grid_b.insert(Cell {
-        row: 20,
-        col: 5,
-        address: CellAddress::from_indices(20, 5),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(20, 5, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
@@ -18913,12 +18928,12 @@ fn multiple_sheets_limit_warning_includes_sheet_name() {
     let wb_a = excel_diff::Workbook {
         sheets: vec![
             excel_diff::Sheet {
-                name: "SmallSheet".to_string(),
+                name: sid("SmallSheet"),
                 kind: excel_diff::SheetKind::Worksheet,
                 grid: grid_small.clone(),
             },
             excel_diff::Sheet {
-                name: "LargeSheet".to_string(),
+                name: sid("LargeSheet"),
                 kind: excel_diff::SheetKind::Worksheet,
                 grid: grid_large_a,
             },
@@ -18928,12 +18943,12 @@ fn multiple_sheets_limit_warning_includes_sheet_name() {
     let wb_b = excel_diff::Workbook {
         sheets: vec![
             excel_diff::Sheet {
-                name: "SmallSheet".to_string(),
+                name: sid("SmallSheet"),
                 kind: excel_diff::SheetKind::Worksheet,
                 grid: grid_small,
             },
             excel_diff::Sheet {
-                name: "LargeSheet".to_string(),
+                name: sid("LargeSheet"),
                 kind: excel_diff::SheetKind::Worksheet,
                 grid: grid_large_b,
             },
@@ -18959,13 +18974,7 @@ fn multiple_sheets_limit_warning_includes_sheet_name() {
 fn large_grid_5k_rows_completes_within_default_limits() {
     let grid_a = create_simple_grid(5000, 10, 0);
     let mut grid_b = create_simple_grid(5000, 10, 0);
-    grid_b.insert(Cell {
-        row: 2500,
-        col: 5,
-        address: CellAddress::from_indices(2500, 5),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(2500, 5, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("LargeSheet", grid_a);
     let wb_b = single_sheet_workbook("LargeSheet", grid_b);
@@ -18991,13 +19000,7 @@ fn large_grid_5k_rows_completes_within_default_limits() {
 fn wide_grid_500_cols_completes_within_default_limits() {
     let grid_a = create_simple_grid(100, 500, 0);
     let mut grid_b = create_simple_grid(100, 500, 0);
-    grid_b.insert(Cell {
-        row: 50,
-        col: 250,
-        address: CellAddress::from_indices(50, 250),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(50, 250, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("WideSheet", grid_a);
     let wb_b = single_sheet_workbook("WideSheet", grid_b);
@@ -20684,11 +20687,22 @@ use std::collections::BTreeSet;
 mod common;
 use common::fixture_path;
 
-fn render_value(value: &Option<excel_diff::CellValue>) -> Option<String> {
+fn sid_local(pool: &mut excel_diff::StringPool, value: &str) -> excel_diff::StringId {
+    pool.intern(value)
+}
+
+fn attach_strings(mut report: DiffReport, pool: excel_diff::StringPool) -> DiffReport {
+    report.strings = pool.into_strings();
+    report
+}
+
+fn render_value(report: &DiffReport, value: &Option<excel_diff::CellValue>) -> Option<String> {
     match value {
         Some(excel_diff::CellValue::Number(n)) => Some(n.to_string()),
-        Some(excel_diff::CellValue::Text(s)) => Some(s.clone()),
+        Some(excel_diff::CellValue::Text(id)) => report.strings.get(id.0 as usize).cloned(),
         Some(excel_diff::CellValue::Bool(b)) => Some(b.to_string()),
+        Some(excel_diff::CellValue::Error(id)) => report.strings.get(id.0 as usize).cloned(),
+        Some(excel_diff::CellValue::Blank) => Some(String::new()),
         None => None,
     }
 }
@@ -20701,36 +20715,57 @@ fn make_cell_snapshot(addr: CellAddress, value: Option<CellValue>) -> CellSnapsh
     }
 }
 
+fn numeric_report(addr: CellAddress, from: f64, to: f64) -> DiffReport {
+    let mut pool = excel_diff::StringPool::new();
+    let sheet = sid_local(&mut pool, "Sheet1");
+    attach_strings(
+        DiffReport::new(vec![DiffOp::cell_edited(
+            sheet,
+            addr,
+            make_cell_snapshot(addr, Some(CellValue::Number(from))),
+            make_cell_snapshot(addr, Some(CellValue::Number(to))),
+        )]),
+        pool,
+    )
+}
+
 #[test]
 fn diff_report_to_cell_diffs_filters_non_cell_ops() {
+    let mut pool = excel_diff::StringPool::new();
+    let sheet_added = sid_local(&mut pool, "SheetAdded");
+    let sheet1 = sid_local(&mut pool, "Sheet1");
+    let sheet2 = sid_local(&mut pool, "Sheet2");
+    let old_sheet = sid_local(&mut pool, "OldSheet");
+    let old_text = sid_local(&mut pool, "old");
+    let new_text = sid_local(&mut pool, "new");
     let addr1 = CellAddress::from_indices(0, 0);
     let addr2 = CellAddress::from_indices(1, 1);
 
-    let report = DiffReport::new(vec![
+    let report = attach_strings(DiffReport::new(vec![
         DiffOp::SheetAdded {
-            sheet: "SheetAdded".into(),
+            sheet: sheet_added,
         },
         DiffOp::cell_edited(
-            "Sheet1".into(),
+            sheet1,
             addr1,
             make_cell_snapshot(addr1, Some(CellValue::Number(1.0))),
             make_cell_snapshot(addr1, Some(CellValue::Number(2.0))),
         ),
         DiffOp::RowAdded {
-            sheet: "Sheet1".into(),
+            sheet: sheet1,
             row_idx: 5,
             row_signature: None,
         },
         DiffOp::cell_edited(
-            "Sheet2".into(),
+            sheet2,
             addr2,
-            make_cell_snapshot(addr2, Some(CellValue::Text("old".into()))),
-            make_cell_snapshot(addr2, Some(CellValue::Text("new".into()))),
+            make_cell_snapshot(addr2, Some(CellValue::Text(old_text))),
+            make_cell_snapshot(addr2, Some(CellValue::Text(new_text))),
         ),
         DiffOp::SheetRemoved {
-            sheet: "OldSheet".into(),
+            sheet: old_sheet,
         },
-    ]);
+    ]), pool);
 
     let cell_diffs = diff_report_to_cell_diffs(&report);
     assert_eq!(
@@ -20750,31 +20785,33 @@ fn diff_report_to_cell_diffs_filters_non_cell_ops() {
 
 #[test]
 fn diff_report_to_cell_diffs_ignores_block_moved_rect() {
+    let mut pool = excel_diff::StringPool::new();
+    let sheet1 = sid_local(&mut pool, "Sheet1");
     let addr = CellAddress::from_indices(2, 2);
 
-    let report = DiffReport::new(vec![
-        DiffOp::block_moved_rect("Sheet1".into(), 2, 3, 1, 3, 9, 6, Some(0xCAFEBABE)),
+    let report = attach_strings(DiffReport::new(vec![
+        DiffOp::block_moved_rect(sheet1, 2, 3, 1, 3, 9, 6, Some(0xCAFEBABE)),
         DiffOp::cell_edited(
-            "Sheet1".into(),
+            sheet1,
             addr,
             make_cell_snapshot(addr, Some(CellValue::Number(10.0))),
             make_cell_snapshot(addr, Some(CellValue::Number(20.0))),
         ),
         DiffOp::BlockMovedRows {
-            sheet: "Sheet1".into(),
+            sheet: sheet1,
             src_start_row: 0,
             row_count: 2,
             dst_start_row: 5,
             block_hash: None,
         },
         DiffOp::BlockMovedColumns {
-            sheet: "Sheet1".into(),
+            sheet: sheet1,
             src_start_col: 0,
             col_count: 2,
             dst_start_col: 5,
             block_hash: None,
         },
-    ]);
+    ]), pool);
 
     let cell_diffs = diff_report_to_cell_diffs(&report);
     assert_eq!(
@@ -20790,23 +20827,25 @@ fn diff_report_to_cell_diffs_ignores_block_moved_rect() {
 
 #[test]
 fn diff_report_to_cell_diffs_maps_values_correctly() {
+    let mut pool = excel_diff::StringPool::new();
+    let sheet_id = sid_local(&mut pool, "SheetX");
     let addr_num = CellAddress::from_indices(2, 2); // C3
     let addr_bool = CellAddress::from_indices(3, 3); // D4
 
-    let report = DiffReport::new(vec![
+    let report = attach_strings(DiffReport::new(vec![
         DiffOp::cell_edited(
-            "SheetX".into(),
+            sheet_id,
             addr_num,
             make_cell_snapshot(addr_num, Some(CellValue::Number(42.5))),
             make_cell_snapshot(addr_num, Some(CellValue::Number(43.5))),
         ),
         DiffOp::cell_edited(
-            "SheetX".into(),
+            sheet_id,
             addr_bool,
             make_cell_snapshot(addr_bool, Some(CellValue::Bool(true))),
             make_cell_snapshot(addr_bool, Some(CellValue::Bool(false))),
         ),
-    ]);
+    ]), pool);
 
     let cell_diffs = diff_report_to_cell_diffs(&report);
     assert_eq!(cell_diffs.len(), 2);
@@ -20824,23 +20863,25 @@ fn diff_report_to_cell_diffs_maps_values_correctly() {
 
 #[test]
 fn diff_report_to_cell_diffs_filters_no_op_cell_edits() {
+    let mut pool = excel_diff::StringPool::new();
+    let sheet = sid_local(&mut pool, "Sheet1");
     let addr_a1 = CellAddress::from_indices(0, 0);
     let addr_a2 = CellAddress::from_indices(1, 0);
 
-    let report = DiffReport::new(vec![
+    let report = attach_strings(DiffReport::new(vec![
         DiffOp::cell_edited(
-            "Sheet1".to_string(),
+            sheet,
             addr_a1,
             make_cell_snapshot(addr_a1, Some(CellValue::Number(1.0))),
             make_cell_snapshot(addr_a1, Some(CellValue::Number(1.0))),
         ),
         DiffOp::cell_edited(
-            "Sheet1".to_string(),
+            sheet,
             addr_a2,
             make_cell_snapshot(addr_a2, Some(CellValue::Number(1.0))),
             make_cell_snapshot(addr_a2, Some(CellValue::Number(2.0))),
         ),
-    ]);
+    ]), pool);
 
     let diffs = diff_report_to_cell_diffs(&report);
 
@@ -20919,8 +20960,8 @@ fn test_json_non_empty_diff() {
     match &report.ops[0] {
         DiffOp::CellEdited { addr, from, to, .. } => {
             assert_eq!(addr.to_a1(), "C3");
-            assert_eq!(render_value(&from.value), Some("1".into()));
-            assert_eq!(render_value(&to.value), Some("2".into()));
+            assert_eq!(render_value(&report, &from.value), Some("1".into()));
+            assert_eq!(render_value(&report, &to.value), Some("2".into()));
         }
         other => panic!("expected CellEdited, got {other:?}"),
     }
@@ -20938,8 +20979,8 @@ fn test_json_non_empty_diff_bool() {
     match &report.ops[0] {
         DiffOp::CellEdited { addr, from, to, .. } => {
             assert_eq!(addr.to_a1(), "C3");
-            assert_eq!(render_value(&from.value), Some("true".into()));
-            assert_eq!(render_value(&to.value), Some("false".into()));
+            assert_eq!(render_value(&report, &from.value), Some("true".into()));
+            assert_eq!(render_value(&report, &to.value), Some("false".into()));
         }
         other => panic!("expected CellEdited, got {other:?}"),
     }
@@ -20957,8 +20998,8 @@ fn test_json_diff_value_to_empty() {
     match &report.ops[0] {
         DiffOp::CellEdited { addr, from, to, .. } => {
             assert_eq!(addr.to_a1(), "C3");
-            assert_eq!(render_value(&from.value), Some("1".into()));
-            assert_eq!(render_value(&to.value), None);
+            assert_eq!(render_value(&report, &from.value), Some("1".into()));
+            assert_eq!(render_value(&report, &to.value), None);
         }
         other => panic!("expected CellEdited, got {other:?}"),
     }
@@ -20997,10 +21038,13 @@ fn json_diff_case_only_sheet_name_cell_edit() {
             to,
             ..
         } => {
-            assert_eq!(sheet, "Sheet1");
+            assert_eq!(
+                report.strings.get(sheet.0 as usize),
+                Some(&"Sheet1".to_string())
+            );
             assert_eq!(addr.to_a1(), "A1");
-            assert_eq!(render_value(&from.value), Some("1".into()));
-            assert_eq!(render_value(&to.value), Some("2".into()));
+            assert_eq!(render_value(&report, &from.value), Some("1".into()));
+            assert_eq!(render_value(&report, &to.value), Some("2".into()));
         }
         other => panic!("expected CellEdited, got {other:?}"),
     }
@@ -21038,10 +21082,13 @@ fn test_json_case_only_sheet_name_cell_edit_via_helper() {
             to,
             ..
         } => {
-            assert_eq!(sheet, "Sheet1");
+            assert_eq!(
+                report.strings.get(sheet.0 as usize),
+                Some(&"Sheet1".to_string())
+            );
             assert_eq!(addr.to_a1(), "A1");
-            assert_eq!(render_value(&from.value), Some("1".into()));
-            assert_eq!(render_value(&to.value), Some("2".into()));
+            assert_eq!(render_value(&report, &from.value), Some("1".into()));
+            assert_eq!(render_value(&report, &to.value), Some("2".into()));
         }
         other => panic!("expected CellEdited, got {other:?}"),
     }
@@ -21065,12 +21112,7 @@ fn test_diff_workbooks_to_json_reports_invalid_zip() {
 #[test]
 fn serialize_diff_report_nan_maps_to_serialization_error() {
     let addr = CellAddress::from_indices(0, 0);
-    let report = DiffReport::new(vec![DiffOp::cell_edited(
-        "Sheet1".into(),
-        addr,
-        make_cell_snapshot(addr, Some(CellValue::Number(f64::NAN))),
-        make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
-    )]);
+    let report = numeric_report(addr, f64::NAN, 1.0);
 
     let err = serialize_diff_report(&report).expect_err("NaN should fail to serialize");
     let wrapped = ExcelOpenError::SerializationError(err.to_string());
@@ -21089,12 +21131,7 @@ fn serialize_diff_report_nan_maps_to_serialization_error() {
 #[test]
 fn serialize_diff_report_infinity_maps_to_serialization_error() {
     let addr = CellAddress::from_indices(0, 0);
-    let report = DiffReport::new(vec![DiffOp::cell_edited(
-        "Sheet1".into(),
-        addr,
-        make_cell_snapshot(addr, Some(CellValue::Number(f64::INFINITY))),
-        make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
-    )]);
+    let report = numeric_report(addr, f64::INFINITY, 1.0);
 
     let err = serialize_diff_report(&report).expect_err("Infinity should fail to serialize");
     let wrapped = ExcelOpenError::SerializationError(err.to_string());
@@ -21112,12 +21149,7 @@ fn serialize_diff_report_infinity_maps_to_serialization_error() {
 #[test]
 fn serialize_diff_report_neg_infinity_maps_to_serialization_error() {
     let addr = CellAddress::from_indices(0, 0);
-    let report = DiffReport::new(vec![DiffOp::cell_edited(
-        "Sheet1".into(),
-        addr,
-        make_cell_snapshot(addr, Some(CellValue::Number(f64::NEG_INFINITY))),
-        make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
-    )]);
+    let report = numeric_report(addr, f64::NEG_INFINITY, 1.0);
 
     let err = serialize_diff_report(&report).expect_err("NEG_INFINITY should fail to serialize");
     let wrapped = ExcelOpenError::SerializationError(err.to_string());
@@ -21135,12 +21167,7 @@ fn serialize_diff_report_neg_infinity_maps_to_serialization_error() {
 #[test]
 fn serialize_diff_report_with_finite_numbers_succeeds() {
     let addr = CellAddress::from_indices(1, 1);
-    let report = DiffReport::new(vec![DiffOp::cell_edited(
-        "Sheet1".into(),
-        addr,
-        make_cell_snapshot(addr, Some(CellValue::Number(2.5))),
-        make_cell_snapshot(addr, Some(CellValue::Number(3.5))),
-    )]);
+    let report = numeric_report(addr, 2.5, 3.5);
 
     let json = serialize_diff_report(&report).expect("finite values should serialize");
     let parsed: DiffReport = serde_json::from_str(&json).expect("json should parse");
@@ -21150,12 +21177,7 @@ fn serialize_diff_report_with_finite_numbers_succeeds() {
 #[test]
 fn serialize_full_diff_report_has_complete_true_and_no_warnings() {
     let addr = CellAddress::from_indices(0, 0);
-    let report = DiffReport::new(vec![DiffOp::cell_edited(
-        "Sheet1".into(),
-        addr,
-        make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
-        make_cell_snapshot(addr, Some(CellValue::Number(2.0))),
-    )]);
+    let report = numeric_report(addr, 1.0, 2.0);
 
     let json = serialize_diff_report(&report).expect("full report should serialize");
     let value: Value = serde_json::from_str(&json).expect("json should parse");
@@ -21180,15 +21202,20 @@ fn serialize_full_diff_report_has_complete_true_and_no_warnings() {
 #[test]
 fn serialize_partial_diff_report_includes_complete_false_and_warnings() {
     let addr = CellAddress::from_indices(0, 0);
+    let mut pool = excel_diff::StringPool::new();
+    let sheet = sid_local(&mut pool, "Sheet1");
     let ops = vec![DiffOp::cell_edited(
-        "Sheet1".into(),
+        sheet,
         addr,
         make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
         make_cell_snapshot(addr, Some(CellValue::Number(2.0))),
     )];
-    let report = DiffReport::with_partial_result(
-        ops,
-        "Sheet 'LargeSheet': alignment limits exceeded".to_string(),
+    let report = attach_strings(
+        DiffReport::with_partial_result(
+            ops,
+            "Sheet 'LargeSheet': alignment limits exceeded".to_string(),
+        ),
+        pool,
     );
 
     let json = serialize_diff_report(&report).expect("partial report should serialize");
@@ -21221,14 +21248,16 @@ fn serialize_diff_report_with_metrics_includes_metrics_object() {
     use excel_diff::perf::DiffMetrics;
 
     let addr = CellAddress::from_indices(0, 0);
+    let mut pool = excel_diff::StringPool::new();
+    let sheet = sid_local(&mut pool, "Sheet1");
     let ops = vec![DiffOp::cell_edited(
-        "Sheet1".into(),
+        sheet,
         addr,
         make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
         make_cell_snapshot(addr, Some(CellValue::Number(2.0))),
     )];
 
-    let mut report = DiffReport::new(ops);
+    let mut report = attach_strings(DiffReport::new(ops), pool);
     let mut metrics = DiffMetrics::default();
     metrics.move_detection_time_ms = 5;
     metrics.alignment_time_ms = 10;
@@ -21314,21 +21343,20 @@ use excel_diff::config::DiffConfig;
 use excel_diff::diff::DiffOp;
 use excel_diff::engine::diff_workbooks;
 use excel_diff::perf::DiffMetrics;
-use excel_diff::{Cell, CellAddress, CellValue, Grid};
+use excel_diff::{CellValue, Grid};
 
 fn create_large_grid(nrows: u32, ncols: u32, base_value: i32) -> Grid {
     let mut grid = Grid::new(nrows, ncols);
     for row in 0..nrows {
         for col in 0..ncols {
-            grid.insert(Cell {
+            grid.insert_cell(
                 row,
                 col,
-                address: CellAddress::from_indices(row, col),
-                value: Some(CellValue::Number(
+                Some(CellValue::Number(
                     (base_value as i64 + row as i64 * 1000 + col as i64) as f64,
                 )),
-                formula: None,
-            });
+                None,
+            );
         }
     }
     grid
@@ -21339,13 +21367,12 @@ fn create_repetitive_grid(nrows: u32, ncols: u32, pattern_length: u32) -> Grid {
     for row in 0..nrows {
         let pattern_idx = row % pattern_length;
         for col in 0..ncols {
-            grid.insert(Cell {
+            grid.insert_cell(
                 row,
                 col,
-                address: CellAddress::from_indices(row, col),
-                value: Some(CellValue::Number((pattern_idx * 1000 + col) as f64)),
-                formula: None,
-            });
+                Some(CellValue::Number((pattern_idx * 1000 + col) as f64)),
+                None,
+            );
         }
     }
     grid
@@ -21362,13 +21389,12 @@ fn create_sparse_grid(nrows: u32, ncols: u32, fill_percent: u32, seed: u64) -> G
             (row, col, seed).hash(&mut hasher);
             let hash = hasher.finish();
             if (hash % 100) < fill_percent as u64 {
-                grid.insert(Cell {
+                grid.insert_cell(
                     row,
                     col,
-                    address: CellAddress::from_indices(row, col),
-                    value: Some(CellValue::Number((row * 1000 + col) as f64)),
-                    formula: None,
-                });
+                    Some(CellValue::Number((row * 1000 + col) as f64)),
+                    None,
+                );
             }
         }
     }
@@ -21394,13 +21420,7 @@ fn log_perf_metric(name: &str, metrics: &DiffMetrics, tail: &str) {
 fn perf_p1_large_dense() {
     let grid_a = create_large_grid(1000, 20, 0);
     let mut grid_b = create_large_grid(1000, 20, 0);
-    grid_b.insert(Cell {
-        row: 500,
-        col: 10,
-        address: CellAddress::from_indices(500, 10),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(500, 10, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("Performance", grid_a);
     let wb_b = single_sheet_workbook("Performance", grid_b);
@@ -21455,13 +21475,7 @@ fn perf_p2_large_noise() {
 fn perf_p3_adversarial_repetitive() {
     let grid_a = create_repetitive_grid(1000, 50, 100);
     let mut grid_b = create_repetitive_grid(1000, 50, 100);
-    grid_b.insert(Cell {
-        row: 500,
-        col: 25,
-        address: CellAddress::from_indices(500, 25),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(500, 25, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("Performance", grid_a);
     let wb_b = single_sheet_workbook("Performance", grid_b);
@@ -21480,13 +21494,7 @@ fn perf_p3_adversarial_repetitive() {
 fn perf_p4_99_percent_blank() {
     let grid_a = create_sparse_grid(1000, 100, 1, 12345);
     let mut grid_b = create_sparse_grid(1000, 100, 1, 12345);
-    grid_b.insert(Cell {
-        row: 500,
-        col: 50,
-        address: CellAddress::from_indices(500, 50),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(500, 50, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("Performance", grid_a);
     let wb_b = single_sheet_workbook("Performance", grid_b);
@@ -21528,13 +21536,7 @@ fn perf_p5_identical() {
 fn perf_50k_dense_single_edit() {
     let grid_a = create_large_grid(50000, 100, 0);
     let mut grid_b = create_large_grid(50000, 100, 0);
-    grid_b.insert(Cell {
-        row: 25000,
-        col: 50,
-        address: CellAddress::from_indices(25000, 50),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(25000, 50, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("Performance", grid_a);
     let wb_b = single_sheet_workbook("Performance", grid_b);
@@ -21601,13 +21603,7 @@ fn perf_50k_completely_different() {
 fn perf_50k_adversarial_repetitive() {
     let grid_a = create_repetitive_grid(50000, 50, 100);
     let mut grid_b = create_repetitive_grid(50000, 50, 100);
-    grid_b.insert(Cell {
-        row: 25000,
-        col: 25,
-        address: CellAddress::from_indices(25000, 25),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(25000, 25, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("Performance", grid_a);
     let wb_b = single_sheet_workbook("Performance", grid_b);
@@ -21634,13 +21630,7 @@ fn perf_50k_adversarial_repetitive() {
 fn perf_50k_99_percent_blank() {
     let grid_a = create_sparse_grid(50000, 100, 1, 12345);
     let mut grid_b = create_sparse_grid(50000, 100, 1, 12345);
-    grid_b.insert(Cell {
-        row: 25000,
-        col: 50,
-        address: CellAddress::from_indices(25000, 50),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(25000, 50, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("Performance", grid_a);
     let wb_b = single_sheet_workbook("Performance", grid_b);
@@ -21766,7 +21756,11 @@ fn pg1_empty_and_mixed_sheets() {
     let values_only = sheet_by_name(&workbook, "ValuesOnly");
     assert_eq!(values_only.grid.nrows, 10);
     assert_eq!(values_only.grid.ncols, 10);
-    let values: Vec<_> = values_only.grid.iter_cells().collect();
+    let values: Vec<_> = values_only
+        .grid
+        .iter_cells()
+        .map(|(_, cell)| cell)
+        .collect();
     assert!(
         values
             .iter()
@@ -21796,7 +21790,10 @@ fn pg1_empty_and_mixed_sheets() {
         "Formulas should surface cached values when present"
     );
     assert!(
-        formulas.grid.iter_cells().all(|c| c.formula.is_some()),
+        formulas
+            .grid
+            .iter_cells()
+            .all(|(_, cell)| cell.formula.is_some()),
         "All cells should carry formulas in FormulasOnly"
     );
 }
@@ -21839,7 +21836,7 @@ use excel_diff::{
 };
 
 mod common;
-use common::fixture_path;
+use common::{fixture_path, sid};
 
 fn sheet_by_name<'a>(workbook: &'a Workbook, name: &str) -> &'a Sheet {
     with_default_session(|session| {
@@ -21962,7 +21959,7 @@ fn snapshot_json_roundtrip_detects_tampered_addr() {
     let snap = CellSnapshot {
         addr: "Z9".parse().expect("address should parse"),
         value: Some(CellValue::Number(1.0)),
-        formula: Some("A1+1".into()),
+        formula: Some(sid("A1+1")),
     };
 
     let mut value: serde_json::Value =
@@ -22021,8 +22018,12 @@ fn snapshot_json_rejects_invalid_addr_a0() {
 ### File: `core\tests\pg4_diffop_tests.rs`
 
 ```rust
+mod common;
+
+use common::sid;
 use excel_diff::{
     CellAddress, CellSnapshot, CellValue, ColSignature, DiffOp, DiffReport, RowSignature,
+    with_default_session,
 };
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -22031,17 +22032,21 @@ fn addr(a1: &str) -> CellAddress {
     a1.parse().expect("address should parse")
 }
 
+fn sid_json(s: &str) -> Value {
+    Value::Number(sid(s).0.into())
+}
+
 fn snapshot(a1: &str, value: Option<CellValue>, formula: Option<&str>) -> CellSnapshot {
     CellSnapshot {
         addr: addr(a1),
         value,
-        formula: formula.map(|s| s.to_string()),
+        formula: formula.map(|s| sid(s)),
     }
 }
 
 fn sample_cell_edited() -> DiffOp {
     DiffOp::CellEdited {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
         addr: addr("C3"),
         from: snapshot("C3", Some(CellValue::Number(1.0)), None),
         to: snapshot("C3", Some(CellValue::Number(2.0)), None),
@@ -22059,7 +22064,7 @@ fn assert_cell_edited_invariants(op: &DiffOp, expected_sheet: &str, expected_add
         to,
     } = op
     {
-        assert_eq!(sheet, expected_sheet);
+        assert_eq!(sheet, &sid(expected_sheet));
         assert_eq!(*addr, expected_addr_parsed);
         assert_eq!(from.addr, expected_addr_parsed);
         assert_eq!(to.addr, expected_addr_parsed);
@@ -22084,6 +22089,11 @@ fn op_kind(op: &DiffOp) -> &'static str {
     }
 }
 
+fn attach_strings(mut report: DiffReport) -> DiffReport {
+    report.strings = with_default_session(|session| session.strings.strings().to_vec());
+    report
+}
+
 fn json_keys(json: &Value) -> BTreeSet<String> {
     json.as_object()
         .expect("object json")
@@ -22105,42 +22115,42 @@ fn pg4_construct_cell_edited_diffop() {
 #[test]
 fn pg4_construct_row_and_column_diffops() {
     let row_added_with_sig = DiffOp::RowAdded {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
         row_idx: 10,
         row_signature: Some(RowSignature { hash: 0xDEADBEEF }),
     };
     let row_added_without_sig = DiffOp::RowAdded {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
         row_idx: 11,
         row_signature: None,
     };
     let row_removed_with_sig = DiffOp::RowRemoved {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
         row_idx: 9,
         row_signature: Some(RowSignature { hash: 0x1234 }),
     };
     let row_removed_without_sig = DiffOp::RowRemoved {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
         row_idx: 8,
         row_signature: None,
     };
     let col_added_with_sig = DiffOp::ColumnAdded {
-        sheet: "Sheet2".to_string(),
+        sheet: sid("Sheet2"),
         col_idx: 2,
         col_signature: Some(ColSignature { hash: 0xABCDEF }),
     };
     let col_added_without_sig = DiffOp::ColumnAdded {
-        sheet: "Sheet2".to_string(),
+        sheet: sid("Sheet2"),
         col_idx: 3,
         col_signature: None,
     };
     let col_removed_with_sig = DiffOp::ColumnRemoved {
-        sheet: "Sheet2".to_string(),
+        sheet: sid("Sheet2"),
         col_idx: 1,
         col_signature: Some(ColSignature { hash: 0x123456 }),
     };
     let col_removed_without_sig = DiffOp::ColumnRemoved {
-        sheet: "Sheet2".to_string(),
+        sheet: sid("Sheet2"),
         col_idx: 0,
         col_signature: None,
     };
@@ -22151,7 +22161,7 @@ fn pg4_construct_row_and_column_diffops() {
         row_signature,
     } = &row_added_with_sig
     {
-        assert_eq!(sheet, "Sheet1");
+        assert_eq!(sheet, &sid("Sheet1"));
         assert_eq!(*row_idx, 10);
         assert_eq!(row_signature.as_ref().unwrap().hash, 0xDEADBEEF);
     } else {
@@ -22164,7 +22174,7 @@ fn pg4_construct_row_and_column_diffops() {
         row_signature,
     } = &row_added_without_sig
     {
-        assert_eq!(sheet, "Sheet1");
+        assert_eq!(sheet, &sid("Sheet1"));
         assert_eq!(*row_idx, 11);
         assert!(row_signature.is_none());
     } else {
@@ -22177,7 +22187,7 @@ fn pg4_construct_row_and_column_diffops() {
         row_signature,
     } = &row_removed_with_sig
     {
-        assert_eq!(sheet, "Sheet1");
+        assert_eq!(sheet, &sid("Sheet1"));
         assert_eq!(*row_idx, 9);
         assert_eq!(row_signature.as_ref().unwrap().hash, 0x1234);
     } else {
@@ -22190,7 +22200,7 @@ fn pg4_construct_row_and_column_diffops() {
         row_signature,
     } = &row_removed_without_sig
     {
-        assert_eq!(sheet, "Sheet1");
+        assert_eq!(sheet, &sid("Sheet1"));
         assert_eq!(*row_idx, 8);
         assert!(row_signature.is_none());
     } else {
@@ -22203,7 +22213,7 @@ fn pg4_construct_row_and_column_diffops() {
         col_signature,
     } = &col_added_with_sig
     {
-        assert_eq!(sheet, "Sheet2");
+        assert_eq!(sheet, &sid("Sheet2"));
         assert_eq!(*col_idx, 2);
         assert_eq!(col_signature.as_ref().unwrap().hash, 0xABCDEF);
     } else {
@@ -22216,7 +22226,7 @@ fn pg4_construct_row_and_column_diffops() {
         col_signature,
     } = &col_added_without_sig
     {
-        assert_eq!(sheet, "Sheet2");
+        assert_eq!(sheet, &sid("Sheet2"));
         assert_eq!(*col_idx, 3);
         assert!(col_signature.is_none());
     } else {
@@ -22229,7 +22239,7 @@ fn pg4_construct_row_and_column_diffops() {
         col_signature,
     } = &col_removed_with_sig
     {
-        assert_eq!(sheet, "Sheet2");
+        assert_eq!(sheet, &sid("Sheet2"));
         assert_eq!(*col_idx, 1);
         assert_eq!(col_signature.as_ref().unwrap().hash, 0x123456);
     } else {
@@ -22242,7 +22252,7 @@ fn pg4_construct_row_and_column_diffops() {
         col_signature,
     } = &col_removed_without_sig
     {
-        assert_eq!(sheet, "Sheet2");
+        assert_eq!(sheet, &sid("Sheet2"));
         assert_eq!(*col_idx, 0);
         assert!(col_signature.is_none());
     } else {
@@ -22258,28 +22268,28 @@ fn pg4_construct_row_and_column_diffops() {
 #[test]
 fn pg4_construct_block_move_diffops() {
     let block_rows_with_hash = DiffOp::BlockMovedRows {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
         src_start_row: 10,
         row_count: 3,
         dst_start_row: 5,
         block_hash: Some(0x12345678),
     };
     let block_rows_without_hash = DiffOp::BlockMovedRows {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
         src_start_row: 20,
         row_count: 2,
         dst_start_row: 0,
         block_hash: None,
     };
     let block_cols_with_hash = DiffOp::BlockMovedColumns {
-        sheet: "Sheet2".to_string(),
+        sheet: sid("Sheet2"),
         src_start_col: 7,
         col_count: 2,
         dst_start_col: 3,
         block_hash: Some(0xCAFEBABE),
     };
     let block_cols_without_hash = DiffOp::BlockMovedColumns {
-        sheet: "Sheet2".to_string(),
+        sheet: sid("Sheet2"),
         src_start_col: 4,
         col_count: 1,
         dst_start_col: 9,
@@ -22294,7 +22304,7 @@ fn pg4_construct_block_move_diffops() {
         block_hash,
     } = &block_rows_with_hash
     {
-        assert_eq!(sheet, "Sheet1");
+        assert_eq!(sheet, &sid("Sheet1"));
         assert_eq!(*src_start_row, 10);
         assert_eq!(*row_count, 3);
         assert_eq!(*dst_start_row, 5);
@@ -22311,7 +22321,7 @@ fn pg4_construct_block_move_diffops() {
         block_hash,
     } = &block_rows_without_hash
     {
-        assert_eq!(sheet, "Sheet1");
+        assert_eq!(sheet, &sid("Sheet1"));
         assert_eq!(*src_start_row, 20);
         assert_eq!(*row_count, 2);
         assert_eq!(*dst_start_row, 0);
@@ -22328,7 +22338,7 @@ fn pg4_construct_block_move_diffops() {
         block_hash,
     } = &block_cols_with_hash
     {
-        assert_eq!(sheet, "Sheet2");
+        assert_eq!(sheet, &sid("Sheet2"));
         assert_eq!(*src_start_col, 7);
         assert_eq!(*col_count, 2);
         assert_eq!(*dst_start_col, 3);
@@ -22345,7 +22355,7 @@ fn pg4_construct_block_move_diffops() {
         block_hash,
     } = &block_cols_without_hash
     {
-        assert_eq!(sheet, "Sheet2");
+        assert_eq!(sheet, &sid("Sheet2"));
         assert_eq!(*src_start_col, 4);
         assert_eq!(*col_count, 1);
         assert_eq!(*dst_start_col, 9);
@@ -22361,7 +22371,7 @@ fn pg4_construct_block_move_diffops() {
 #[test]
 fn pg4_construct_block_rect_diffops() {
     let rect_with_hash = DiffOp::BlockMovedRect {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
         src_start_row: 5,
         src_row_count: 3,
         src_start_col: 2,
@@ -22371,7 +22381,7 @@ fn pg4_construct_block_rect_diffops() {
         block_hash: Some(0xCAFEBABE),
     };
     let rect_without_hash = DiffOp::BlockMovedRect {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
         src_start_row: 0,
         src_row_count: 1,
         src_start_col: 0,
@@ -22392,7 +22402,7 @@ fn pg4_construct_block_rect_diffops() {
         block_hash,
     } = &rect_with_hash
     {
-        assert_eq!(sheet, "Sheet1");
+        assert_eq!(sheet, &sid("Sheet1"));
         assert_eq!(*src_start_row, 5);
         assert_eq!(*src_row_count, 3);
         assert_eq!(*src_start_col, 2);
@@ -22415,7 +22425,7 @@ fn pg4_construct_block_rect_diffops() {
         block_hash,
     } = &rect_without_hash
     {
-        assert_eq!(sheet, "Sheet1");
+        assert_eq!(sheet, &sid("Sheet1"));
         assert_eq!(*src_start_row, 0);
         assert_eq!(*src_row_count, 1);
         assert_eq!(*src_start_col, 0);
@@ -22437,7 +22447,7 @@ fn pg4_cell_edited_json_shape() {
     assert_cell_edited_invariants(&op, "Sheet1", "C3");
 
     assert_eq!(json["kind"], "CellEdited");
-    assert_eq!(json["sheet"], "Sheet1");
+    assert_eq!(json["sheet"], sid_json("Sheet1"));
     assert_eq!(json["addr"], "C3");
     assert_eq!(json["from"]["addr"], "C3");
     assert_eq!(json["to"]["addr"], "C3");
@@ -22454,19 +22464,19 @@ fn pg4_cell_edited_json_shape() {
 #[test]
 fn pg4_row_added_json_optional_signature() {
     let op_without_sig = DiffOp::RowAdded {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
         row_idx: 10,
         row_signature: None,
     };
     let json_without = serde_json::to_value(&op_without_sig).expect("serialize without sig");
     let obj_without = json_without.as_object().expect("object json");
     assert_eq!(json_without["kind"], "RowAdded");
-    assert_eq!(json_without["sheet"], "Sheet1");
+    assert_eq!(json_without["sheet"], sid_json("Sheet1"));
     assert_eq!(json_without["row_idx"], 10);
     assert!(obj_without.get("row_signature").is_none());
 
     let op_with_sig = DiffOp::RowAdded {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
         row_idx: 10,
         row_signature: Some(RowSignature { hash: 123 }),
     };
@@ -22480,19 +22490,19 @@ fn pg4_row_added_json_optional_signature() {
 #[test]
 fn pg4_column_added_json_optional_signature() {
     let added_without_sig = DiffOp::ColumnAdded {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
         col_idx: 5,
         col_signature: None,
     };
     let json_added_without = serde_json::to_value(&added_without_sig).expect("serialize no sig");
     let obj_added_without = json_added_without.as_object().expect("object json");
     assert_eq!(json_added_without["kind"], "ColumnAdded");
-    assert_eq!(json_added_without["sheet"], "Sheet1");
+    assert_eq!(json_added_without["sheet"], sid_json("Sheet1"));
     assert_eq!(json_added_without["col_idx"], 5);
     assert!(obj_added_without.get("col_signature").is_none());
 
     let added_with_sig = DiffOp::ColumnAdded {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
         col_idx: 6,
         col_signature: Some(ColSignature { hash: 321 }),
     };
@@ -22503,7 +22513,7 @@ fn pg4_column_added_json_optional_signature() {
     );
 
     let removed_without_sig = DiffOp::ColumnRemoved {
-        sheet: "Sheet2".to_string(),
+        sheet: sid("Sheet2"),
         col_idx: 2,
         col_signature: None,
     };
@@ -22514,7 +22524,7 @@ fn pg4_column_added_json_optional_signature() {
     assert!(obj_removed_without.get("col_signature").is_none());
 
     let removed_with_sig = DiffOp::ColumnRemoved {
-        sheet: "Sheet2".to_string(),
+        sheet: sid("Sheet2"),
         col_idx: 1,
         col_signature: Some(ColSignature { hash: 654 }),
     };
@@ -22529,7 +22539,7 @@ fn pg4_column_added_json_optional_signature() {
 #[test]
 fn pg4_block_moved_rows_json_optional_hash() {
     let op_without_hash = DiffOp::BlockMovedRows {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
         src_start_row: 1,
         row_count: 2,
         dst_start_row: 5,
@@ -22541,7 +22551,7 @@ fn pg4_block_moved_rows_json_optional_hash() {
     assert!(obj_without.get("block_hash").is_none());
 
     let op_with_hash = DiffOp::BlockMovedRows {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
         src_start_row: 1,
         row_count: 2,
         dst_start_row: 5,
@@ -22554,7 +22564,7 @@ fn pg4_block_moved_rows_json_optional_hash() {
 #[test]
 fn pg4_block_moved_columns_json_optional_hash() {
     let op_without_hash = DiffOp::BlockMovedColumns {
-        sheet: "SheetX".to_string(),
+        sheet: sid("SheetX"),
         src_start_col: 2,
         col_count: 3,
         dst_start_col: 9,
@@ -22566,7 +22576,7 @@ fn pg4_block_moved_columns_json_optional_hash() {
     assert!(obj_without.get("block_hash").is_none());
 
     let op_with_hash = DiffOp::BlockMovedColumns {
-        sheet: "SheetX".to_string(),
+        sheet: sid("SheetX"),
         src_start_col: 2,
         col_count: 3,
         dst_start_col: 9,
@@ -22579,21 +22589,21 @@ fn pg4_block_moved_columns_json_optional_hash() {
 #[test]
 fn pg4_sheet_added_and_removed_json_shape() {
     let added = DiffOp::SheetAdded {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
     };
     let added_json = serde_json::to_value(&added).expect("serialize sheet added");
     assert_eq!(added_json["kind"], "SheetAdded");
-    assert_eq!(added_json["sheet"], "Sheet1");
+    assert_eq!(added_json["sheet"], sid_json("Sheet1"));
     let added_keys = json_keys(&added_json);
     let expected_keys: BTreeSet<String> = ["kind", "sheet"].into_iter().map(String::from).collect();
     assert_eq!(added_keys, expected_keys);
 
     let removed = DiffOp::SheetRemoved {
-        sheet: "SheetX".to_string(),
+        sheet: sid("SheetX"),
     };
     let removed_json = serde_json::to_value(&removed).expect("serialize sheet removed");
     assert_eq!(removed_json["kind"], "SheetRemoved");
-    assert_eq!(removed_json["sheet"], "SheetX");
+    assert_eq!(removed_json["sheet"], sid_json("SheetX"));
     let removed_keys = json_keys(&removed_json);
     assert_eq!(removed_keys, expected_keys);
 }
@@ -22618,43 +22628,43 @@ fn pg4_row_and_column_json_shape_keysets() {
         .collect();
 
     let row_added_with_sig = DiffOp::RowAdded {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
         row_idx: 10,
         row_signature: Some(RowSignature { hash: 0xDEADBEEF }),
     };
     let row_added_without_sig = DiffOp::RowAdded {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
         row_idx: 11,
         row_signature: None,
     };
     let row_removed_with_sig = DiffOp::RowRemoved {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
         row_idx: 9,
         row_signature: Some(RowSignature { hash: 0x1234 }),
     };
     let row_removed_without_sig = DiffOp::RowRemoved {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
         row_idx: 8,
         row_signature: None,
     };
 
     let col_added_with_sig = DiffOp::ColumnAdded {
-        sheet: "Sheet2".to_string(),
+        sheet: sid("Sheet2"),
         col_idx: 2,
         col_signature: Some(ColSignature { hash: 0xABCDEF }),
     };
     let col_added_without_sig = DiffOp::ColumnAdded {
-        sheet: "Sheet2".to_string(),
+        sheet: sid("Sheet2"),
         col_idx: 3,
         col_signature: None,
     };
     let col_removed_with_sig = DiffOp::ColumnRemoved {
-        sheet: "Sheet2".to_string(),
+        sheet: sid("Sheet2"),
         col_idx: 1,
         col_signature: Some(ColSignature { hash: 0x123456 }),
     };
     let col_removed_without_sig = DiffOp::ColumnRemoved {
-        sheet: "Sheet2".to_string(),
+        sheet: sid("Sheet2"),
         col_idx: 0,
         col_signature: None,
     };
@@ -22783,35 +22793,35 @@ fn pg4_block_move_json_shape_keysets() {
     .collect();
 
     let block_rows_with_hash = DiffOp::BlockMovedRows {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
         src_start_row: 10,
         row_count: 3,
         dst_start_row: 5,
         block_hash: Some(0x12345678),
     };
     let block_rows_without_hash = DiffOp::BlockMovedRows {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
         src_start_row: 20,
         row_count: 2,
         dst_start_row: 0,
         block_hash: None,
     };
     let block_cols_with_hash = DiffOp::BlockMovedColumns {
-        sheet: "Sheet2".to_string(),
+        sheet: sid("Sheet2"),
         src_start_col: 7,
         col_count: 2,
         dst_start_col: 3,
         block_hash: Some(0xCAFEBABE),
     };
     let block_cols_without_hash = DiffOp::BlockMovedColumns {
-        sheet: "Sheet2".to_string(),
+        sheet: sid("Sheet2"),
         src_start_col: 4,
         col_count: 1,
         dst_start_col: 9,
         block_hash: None,
     };
     let block_rect_with_hash = DiffOp::BlockMovedRect {
-        sheet: "SheetZ".to_string(),
+        sheet: sid("SheetZ"),
         src_start_row: 2,
         src_row_count: 2,
         src_start_col: 3,
@@ -22821,7 +22831,7 @@ fn pg4_block_move_json_shape_keysets() {
         block_hash: Some(0xAABBCCDD),
     };
     let block_rect_without_hash = DiffOp::BlockMovedRect {
-        sheet: "SheetZ".to_string(),
+        sheet: sid("SheetZ"),
         src_start_row: 5,
         src_row_count: 1,
         src_start_col: 0,
@@ -22875,7 +22885,7 @@ fn pg4_block_move_json_shape_keysets() {
 #[test]
 fn pg4_block_rect_json_shape_and_roundtrip() {
     let without_hash = DiffOp::BlockMovedRect {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
         src_start_row: 2,
         src_row_count: 3,
         src_start_col: 1,
@@ -22885,7 +22895,7 @@ fn pg4_block_rect_json_shape_and_roundtrip() {
         block_hash: None,
     };
     let with_hash = DiffOp::BlockMovedRect {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
         src_start_row: 4,
         src_row_count: 1,
         src_start_col: 0,
@@ -22903,7 +22913,7 @@ fn pg4_block_rect_json_shape_and_roundtrip() {
         .expect("ops should be array for report");
     assert_eq!(ops_json.len(), 2);
     assert_eq!(ops_json[0]["kind"], "BlockMovedRect");
-    assert_eq!(ops_json[0]["sheet"], "Sheet1");
+    assert_eq!(ops_json[0]["sheet"], sid_json("Sheet1"));
     assert_eq!(ops_json[0]["src_start_row"], 2);
     assert_eq!(ops_json[0]["src_row_count"], 3);
     assert_eq!(ops_json[0]["src_start_col"], 1);
@@ -22927,61 +22937,61 @@ fn pg4_block_rect_json_shape_and_roundtrip() {
 fn pg4_diffop_roundtrip_each_variant() {
     let ops = vec![
         DiffOp::SheetAdded {
-            sheet: "SheetA".to_string(),
+            sheet: sid("SheetA"),
         },
         DiffOp::SheetRemoved {
-            sheet: "SheetB".to_string(),
+            sheet: sid("SheetB"),
         },
         DiffOp::RowAdded {
-            sheet: "Sheet1".to_string(),
+            sheet: sid("Sheet1"),
             row_idx: 1,
             row_signature: Some(RowSignature { hash: 42 }),
         },
         DiffOp::RowRemoved {
-            sheet: "Sheet1".to_string(),
+            sheet: sid("Sheet1"),
             row_idx: 0,
             row_signature: None,
         },
         DiffOp::ColumnAdded {
-            sheet: "Sheet1".to_string(),
+            sheet: sid("Sheet1"),
             col_idx: 2,
             col_signature: None,
         },
         DiffOp::ColumnRemoved {
-            sheet: "Sheet1".to_string(),
+            sheet: sid("Sheet1"),
             col_idx: 3,
             col_signature: Some(ColSignature { hash: 99 }),
         },
         DiffOp::BlockMovedRows {
-            sheet: "Sheet1".to_string(),
+            sheet: sid("Sheet1"),
             src_start_row: 5,
             row_count: 2,
             dst_start_row: 10,
             block_hash: Some(1234),
         },
         DiffOp::BlockMovedRows {
-            sheet: "Sheet1".to_string(),
+            sheet: sid("Sheet1"),
             src_start_row: 5,
             row_count: 2,
             dst_start_row: 10,
             block_hash: None,
         },
         DiffOp::BlockMovedColumns {
-            sheet: "Sheet2".to_string(),
+            sheet: sid("Sheet2"),
             src_start_col: 4,
             col_count: 1,
             dst_start_col: 6,
             block_hash: Some(888),
         },
         DiffOp::BlockMovedColumns {
-            sheet: "Sheet2".to_string(),
+            sheet: sid("Sheet2"),
             src_start_col: 4,
             col_count: 1,
             dst_start_col: 6,
             block_hash: None,
         },
         DiffOp::BlockMovedRect {
-            sheet: "Sheet3".to_string(),
+            sheet: sid("Sheet3"),
             src_start_row: 1,
             src_row_count: 2,
             src_start_col: 3,
@@ -22991,7 +23001,7 @@ fn pg4_diffop_roundtrip_each_variant() {
             block_hash: Some(0xABCD),
         },
         DiffOp::BlockMovedRect {
-            sheet: "Sheet3".to_string(),
+            sheet: sid("Sheet3"),
             src_start_row: 1,
             src_row_count: 2,
             src_start_col: 3,
@@ -23026,10 +23036,10 @@ fn pg4_cell_edited_roundtrip_preserves_snapshot_addrs() {
 #[test]
 fn pg4_diff_report_roundtrip_preserves_order() {
     let op1 = DiffOp::SheetAdded {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
     };
     let op2 = DiffOp::RowAdded {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
         row_idx: 10,
         row_signature: None,
     };
@@ -23052,10 +23062,10 @@ fn pg4_diff_report_roundtrip_preserves_order() {
 fn pg4_diff_report_json_shape() {
     let ops = vec![
         DiffOp::SheetRemoved {
-            sheet: "SheetX".to_string(),
+            sheet: sid("SheetX"),
         },
         DiffOp::RowRemoved {
-            sheet: "SheetX".to_string(),
+            sheet: sid("SheetX"),
             row_idx: 3,
             row_signature: Some(RowSignature { hash: 7 }),
         },
@@ -23065,7 +23075,7 @@ fn pg4_diff_report_json_shape() {
 
     let obj = json.as_object().expect("report json object");
     let keys: BTreeSet<String> = obj.keys().cloned().collect();
-    let expected: BTreeSet<String> = ["complete", "ops", "version"]
+    let expected: BTreeSet<String> = ["complete", "ops", "strings", "version"]
         .into_iter()
         .map(String::from)
         .collect();
@@ -23084,15 +23094,18 @@ fn pg4_diff_report_json_shape() {
 
 #[test]
 fn pg4_diffop_cell_edited_rejects_invalid_top_level_addr() {
-    let json = r#"{
+    let sheet_id = sid("Sheet1").0;
+    let json = format!(
+        r#"{{
         "kind": "CellEdited",
-        "sheet": "Sheet1",
+        "sheet": {sheet_id},
         "addr": "1A",
-        "from": { "addr": "C3", "value": null, "formula": null },
-        "to":   { "addr": "C3", "value": null, "formula": null }
-    }"#;
+        "from": {{ "addr": "C3", "value": null, "formula": null }},
+        "to":   {{ "addr": "C3", "value": null, "formula": null }}
+    }}"#
+    );
 
-    let err = serde_json::from_str::<DiffOp>(json)
+    let err = serde_json::from_str::<DiffOp>(&json)
         .expect_err("invalid top-level addr should fail to deserialize");
     let msg = err.to_string();
     assert!(
@@ -23103,15 +23116,18 @@ fn pg4_diffop_cell_edited_rejects_invalid_top_level_addr() {
 
 #[test]
 fn pg4_diffop_cell_edited_rejects_invalid_snapshot_addrs() {
-    let json = r#"{
+    let sheet_id = sid("Sheet1").0;
+    let json = format!(
+        r#"{{
         "kind": "CellEdited",
-        "sheet": "Sheet1",
+        "sheet": {sheet_id},
         "addr": "C3",
-        "from": { "addr": "A0", "value": null, "formula": null },
-        "to":   { "addr": "C3", "value": null, "formula": null }
-    }"#;
+        "from": {{ "addr": "A0", "value": null, "formula": null }},
+        "to":   {{ "addr": "C3", "value": null, "formula": null }}
+    }}"#
+    );
 
-    let err = serde_json::from_str::<DiffOp>(json)
+    let err = serde_json::from_str::<DiffOp>(&json)
         .expect_err("invalid snapshot addr should fail to deserialize");
     let msg = err.to_string();
     assert!(
@@ -23122,18 +23138,22 @@ fn pg4_diffop_cell_edited_rejects_invalid_snapshot_addrs() {
 
 #[test]
 fn pg4_diff_report_rejects_invalid_nested_addr() {
-    let json = r#"{
+    let sheet_id = sid("Sheet1").0;
+    let json = format!(
+        r#"{{
         "version": "1",
-        "ops": [{
+        "strings": [],
+        "ops": [{{
             "kind": "CellEdited",
-            "sheet": "Sheet1",
+            "sheet": {sheet_id},
             "addr": "1A",
-            "from": { "addr": "C3", "value": null, "formula": null },
-            "to":   { "addr": "C3", "value": null, "formula": null }
-        }]
-    }"#;
+            "from": {{ "addr": "C3", "value": null, "formula": null }},
+            "to":   {{ "addr": "C3", "value": null, "formula": null }}
+        }}]
+    }}"#
+    );
 
-    let err = serde_json::from_str::<DiffReport>(json)
+    let err = serde_json::from_str::<DiffReport>(&json)
         .expect_err("invalid nested addr should fail to deserialize");
     let msg = err.to_string();
     assert!(
@@ -23146,7 +23166,7 @@ fn pg4_diff_report_rejects_invalid_nested_addr() {
 #[should_panic]
 fn pg4_cell_edited_invariant_helper_rejects_mismatched_snapshot_addr() {
     let op = DiffOp::CellEdited {
-        sheet: "Sheet1".to_string(),
+        sheet: sid("Sheet1"),
         addr: addr("C3"),
         from: snapshot("D4", Some(CellValue::Number(1.0)), None),
         to: snapshot("C3", Some(CellValue::Number(2.0)), None),
@@ -23369,7 +23389,7 @@ fn pg5_6_grid_diff_degenerate_grids() {
                 row_idx,
                 row_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                assert_eq!(sheet_name(&report, sheet), "Sheet1");
                 assert_eq!(*row_idx, 0);
                 assert!(row_signature.is_none());
                 row_added += 1;
@@ -23727,8 +23747,8 @@ fn identical_rows_have_same_signature() {
     let mut grid2 = Grid::new(1, 3);
     for c in 0..3 {
         let cell = make_cell(0, c, Some(CellValue::Number(c as f64)), None);
-        grid1.insert(cell.clone());
-        grid2.insert(cell);
+        grid1.insert_test(cell.clone());
+        grid2.insert_test(cell);
     }
     let sig1 = grid1.compute_row_signature(0);
     let sig2 = grid2.compute_row_signature(0);
@@ -24365,6 +24385,243 @@ fn compute_all_signatures_matches_direct_computation() {
     assert_eq!(grid.compute_col_signature(0).hash, col_sigs[0].hash);
     assert_eq!(grid.compute_col_signature(2).hash, col_sigs[2].hash);
 }
+
+```
+
+---
+
+### File: `core\tests\streaming_sink_tests.rs`
+
+```rust
+use excel_diff::{
+    CallbackSink, CellValue, DiffConfig, DiffOp, DiffSession, Grid, Sheet, SheetKind, VecSink,
+    Workbook, try_diff_workbooks_streaming,
+};
+
+fn make_test_workbook(session: &mut DiffSession, values: &[f64]) -> Workbook {
+    let mut grid = Grid::new(values.len() as u32, 1);
+    for (i, &val) in values.iter().enumerate() {
+        grid.insert_cell(i as u32, 0, Some(CellValue::Number(val)), None);
+    }
+
+    let sheet_name = session.strings.intern("TestSheet");
+
+    Workbook {
+        sheets: vec![Sheet {
+            name: sheet_name,
+            kind: SheetKind::Worksheet,
+            grid,
+        }],
+    }
+}
+
+#[test]
+fn vec_sink_and_callback_sink_produce_identical_ops() {
+    let mut session = DiffSession::new();
+
+    let wb_a = make_test_workbook(&mut session, &[1.0, 2.0, 3.0]);
+    let wb_b = make_test_workbook(&mut session, &[1.0, 5.0, 3.0, 4.0]);
+
+    let config = DiffConfig::default();
+
+    let mut vec_sink = VecSink::new();
+    let summary_vec = try_diff_workbooks_streaming(
+        &wb_a,
+        &wb_b,
+        &mut session.strings,
+        &config,
+        &mut vec_sink,
+    )
+    .expect("VecSink diff should succeed");
+    let vec_ops = vec_sink.into_ops();
+
+    let mut callback_ops: Vec<DiffOp> = Vec::new();
+    {
+        let mut callback_sink = CallbackSink::new(|op| callback_ops.push(op));
+        let summary_callback = try_diff_workbooks_streaming(
+            &wb_a,
+            &wb_b,
+            &mut session.strings,
+            &config,
+            &mut callback_sink,
+        )
+        .expect("CallbackSink diff should succeed");
+
+        assert_eq!(
+            summary_vec.op_count, summary_callback.op_count,
+            "summaries should report same op count"
+        );
+        assert_eq!(
+            summary_vec.complete, summary_callback.complete,
+            "summaries should report same complete status"
+        );
+    }
+
+    assert_eq!(
+        vec_ops.len(),
+        callback_ops.len(),
+        "both sinks should collect same number of ops"
+    );
+
+    for (i, (vec_op, cb_op)) in vec_ops.iter().zip(callback_ops.iter()).enumerate() {
+        assert_eq!(
+            vec_op, cb_op,
+            "op at index {} should be identical between VecSink and CallbackSink",
+            i
+        );
+    }
+
+    assert!(
+        !vec_ops.is_empty(),
+        "expected at least one diff op for the test workbooks"
+    );
+}
+
+#[test]
+fn streaming_produces_ops_in_consistent_order() {
+    let mut session = DiffSession::new();
+
+    let wb_a = make_test_workbook(&mut session, &[1.0, 2.0]);
+    let wb_b = make_test_workbook(&mut session, &[3.0, 4.0]);
+
+    let config = DiffConfig::default();
+
+    let mut first_run_ops: Vec<DiffOp> = Vec::new();
+    {
+        let mut sink = CallbackSink::new(|op| first_run_ops.push(op));
+        try_diff_workbooks_streaming(&wb_a, &wb_b, &mut session.strings, &config, &mut sink)
+            .expect("first run should succeed");
+    }
+
+    let mut second_run_ops: Vec<DiffOp> = Vec::new();
+    {
+        let mut sink = CallbackSink::new(|op| second_run_ops.push(op));
+        try_diff_workbooks_streaming(&wb_a, &wb_b, &mut session.strings, &config, &mut sink)
+            .expect("second run should succeed");
+    }
+
+    assert_eq!(
+        first_run_ops, second_run_ops,
+        "streaming output should be deterministic across runs"
+    );
+}
+
+#[test]
+fn streaming_summary_matches_collected_ops() {
+    let mut session = DiffSession::new();
+
+    let wb_a = make_test_workbook(&mut session, &[1.0]);
+    let wb_b = make_test_workbook(&mut session, &[2.0, 3.0]);
+
+    let config = DiffConfig::default();
+
+    let mut op_count = 0usize;
+    let summary = {
+        let mut sink = CallbackSink::new(|_op| op_count += 1);
+        try_diff_workbooks_streaming(&wb_a, &wb_b, &mut session.strings, &config, &mut sink)
+            .expect("streaming should succeed")
+    };
+
+    assert_eq!(
+        summary.op_count, op_count,
+        "summary.op_count should match actual ops emitted"
+    );
+    assert!(summary.complete, "diff should be complete");
+}
+
+
+```
+
+---
+
+### File: `core\tests\string_pool_tests.rs`
+
+```rust
+use excel_diff::StringPool;
+
+#[test]
+fn intern_50k_identical_strings_returns_same_id() {
+    let mut pool = StringPool::new();
+    let first_id = pool.intern("repeated_string");
+
+    for _ in 1..50_000 {
+        let id = pool.intern("repeated_string");
+        assert_eq!(id, first_id, "interning same string must return same id");
+    }
+
+    assert!(
+        pool.len() >= 2,
+        "pool should have at least 2 entries (empty string + our string)"
+    );
+    assert!(
+        pool.len() <= 3,
+        "pool should not grow beyond initial strings"
+    );
+
+    assert_eq!(pool.resolve(first_id), "repeated_string");
+}
+
+#[test]
+fn intern_distinct_strings_returns_different_ids() {
+    let mut pool = StringPool::new();
+
+    let id_a = pool.intern("alpha");
+    let id_b = pool.intern("beta");
+    let id_c = pool.intern("gamma");
+
+    assert_ne!(id_a, id_b);
+    assert_ne!(id_b, id_c);
+    assert_ne!(id_a, id_c);
+
+    assert_eq!(pool.resolve(id_a), "alpha");
+    assert_eq!(pool.resolve(id_b), "beta");
+    assert_eq!(pool.resolve(id_c), "gamma");
+}
+
+#[test]
+fn empty_string_is_pre_interned() {
+    let pool = StringPool::new();
+
+    assert!(pool.len() >= 1, "pool should have at least empty string");
+    assert_eq!(pool.resolve(excel_diff::StringId(0)), "");
+}
+
+#[test]
+fn resolve_returns_original_string() {
+    let mut pool = StringPool::new();
+
+    let test_cases = vec![
+        "hello",
+        "world",
+        "with spaces",
+        "with\nnewline",
+        "unicode: 日本語",
+        "",
+    ];
+
+    for s in &test_cases {
+        let id = pool.intern(s);
+        assert_eq!(pool.resolve(id), *s);
+    }
+}
+
+#[test]
+fn into_strings_returns_all_interned() {
+    let mut pool = StringPool::new();
+
+    pool.intern("first");
+    pool.intern("second");
+    pool.intern("third");
+
+    let strings = pool.into_strings();
+
+    assert!(strings.contains(&"".to_string()));
+    assert!(strings.contains(&"first".to_string()));
+    assert!(strings.contains(&"second".to_string()));
+    assert!(strings.contains(&"third".to_string()));
+    assert_eq!(strings.len(), 4);
+}
+
 
 ```
 

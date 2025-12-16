@@ -214,6 +214,19 @@ class ProjectContext:
         except subprocess.CalledProcessError:
             return None
 
+    def current_commit(self) -> str | None:
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=True,
+                cwd=self.root,
+            )
+            return result.stdout.strip()
+        except subprocess.CalledProcessError:
+            return None
+
     def _load_git_files(self) -> list[Path] | None:
         try:
             result = subprocess.run(
@@ -296,6 +309,25 @@ class ContextBuilder:
         if copy_prompt:
             copy_to_clipboard(content, backup_dir=self.out_dir)
         return out_path
+
+    def add_benchmark_file(self, benchmark_path: Path, dest_name: str = "benchmark_results.json") -> Path | None:
+        if not benchmark_path.exists():
+            return None
+        try:
+            data = json.loads(benchmark_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return self.add_file(benchmark_path, dest_name=dest_name)
+        commit = self.context.current_commit()
+        branch = self.context.branch
+        if commit:
+            data["git_commit"] = commit
+        if branch:
+            data["git_branch"] = branch
+        destination = self.out_dir / dest_name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        self.manifest.append(destination)
+        return destination
 
     def write_manifest(self, filename: str = "manifest.txt") -> Path:
         lines = [
@@ -826,7 +858,7 @@ def collate_post_implementation_review(
     )
     builder.add_content("cycle_summary.txt", "\n".join(summary_lines) + "\n")
     if benchmark_path and benchmark_path.exists():
-        builder.add_file(benchmark_path, dest_name="benchmark_results.json")
+        builder.add_benchmark_file(benchmark_path)
     combined_csv = get_combined_benchmarks_csv(ctx)
     if combined_csv:
         builder.add_file(combined_csv, dest_name="combined_benchmark_results.csv")
@@ -873,7 +905,7 @@ def collate_percent_completion(ctx: ProjectContext, downloads_dir: Path | None =
     benchmark_path = get_latest_benchmark_result(ctx)
     builder.add_content("benchmark_results.txt", render_benchmark_results(benchmark_path))
     if benchmark_path and benchmark_path.exists():
-        builder.add_file(benchmark_path, dest_name="benchmark_results.json")
+        builder.add_benchmark_file(benchmark_path)
     combined_csv = get_combined_benchmarks_csv(ctx)
     if combined_csv:
         builder.add_file(combined_csv, dest_name="combined_benchmark_results.csv")
@@ -903,7 +935,7 @@ def collate_planner(ctx: ProjectContext, downloads_dir: Path | None = None) -> P
     benchmark_path = get_latest_benchmark_result(ctx)
     builder.add_content("benchmark_results.txt", render_benchmark_results(benchmark_path))
     if benchmark_path and benchmark_path.exists():
-        builder.add_file(benchmark_path, dest_name="benchmark_results.json")
+        builder.add_benchmark_file(benchmark_path)
     combined_csv = get_combined_benchmarks_csv(ctx)
     if combined_csv:
         builder.add_file(combined_csv, dest_name="combined_benchmark_results.csv")
@@ -1044,7 +1076,7 @@ def collate_design_evaluation(ctx: ProjectContext, downloads_dir: Path | None = 
     benchmark_path = get_latest_benchmark_result(ctx)
     builder.add_content("benchmark_results.txt", render_benchmark_results(benchmark_path))
     if benchmark_path and benchmark_path.exists():
-        builder.add_file(benchmark_path, dest_name="benchmark_results.json")
+        builder.add_benchmark_file(benchmark_path)
     combined_csv = get_combined_benchmarks_csv(ctx)
     if combined_csv:
         builder.add_file(combined_csv, dest_name="combined_benchmark_results.csv")

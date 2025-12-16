@@ -12,6 +12,10 @@ fn addr(a1: &str) -> CellAddress {
     a1.parse().expect("address should parse")
 }
 
+fn sid_json(s: &str) -> Value {
+    Value::Number(sid(s).0.into())
+}
+
 fn snapshot(a1: &str, value: Option<CellValue>, formula: Option<&str>) -> CellSnapshot {
     CellSnapshot {
         addr: addr(a1),
@@ -423,7 +427,7 @@ fn pg4_cell_edited_json_shape() {
     assert_cell_edited_invariants(&op, "Sheet1", "C3");
 
     assert_eq!(json["kind"], "CellEdited");
-    assert_eq!(json["sheet"], "Sheet1");
+    assert_eq!(json["sheet"], sid_json("Sheet1"));
     assert_eq!(json["addr"], "C3");
     assert_eq!(json["from"]["addr"], "C3");
     assert_eq!(json["to"]["addr"], "C3");
@@ -447,7 +451,7 @@ fn pg4_row_added_json_optional_signature() {
     let json_without = serde_json::to_value(&op_without_sig).expect("serialize without sig");
     let obj_without = json_without.as_object().expect("object json");
     assert_eq!(json_without["kind"], "RowAdded");
-    assert_eq!(json_without["sheet"], "Sheet1");
+    assert_eq!(json_without["sheet"], sid_json("Sheet1"));
     assert_eq!(json_without["row_idx"], 10);
     assert!(obj_without.get("row_signature").is_none());
 
@@ -473,7 +477,7 @@ fn pg4_column_added_json_optional_signature() {
     let json_added_without = serde_json::to_value(&added_without_sig).expect("serialize no sig");
     let obj_added_without = json_added_without.as_object().expect("object json");
     assert_eq!(json_added_without["kind"], "ColumnAdded");
-    assert_eq!(json_added_without["sheet"], "Sheet1");
+    assert_eq!(json_added_without["sheet"], sid_json("Sheet1"));
     assert_eq!(json_added_without["col_idx"], 5);
     assert!(obj_added_without.get("col_signature").is_none());
 
@@ -569,7 +573,7 @@ fn pg4_sheet_added_and_removed_json_shape() {
     };
     let added_json = serde_json::to_value(&added).expect("serialize sheet added");
     assert_eq!(added_json["kind"], "SheetAdded");
-    assert_eq!(added_json["sheet"], "Sheet1");
+    assert_eq!(added_json["sheet"], sid_json("Sheet1"));
     let added_keys = json_keys(&added_json);
     let expected_keys: BTreeSet<String> = ["kind", "sheet"].into_iter().map(String::from).collect();
     assert_eq!(added_keys, expected_keys);
@@ -579,7 +583,7 @@ fn pg4_sheet_added_and_removed_json_shape() {
     };
     let removed_json = serde_json::to_value(&removed).expect("serialize sheet removed");
     assert_eq!(removed_json["kind"], "SheetRemoved");
-    assert_eq!(removed_json["sheet"], "SheetX");
+    assert_eq!(removed_json["sheet"], sid_json("SheetX"));
     let removed_keys = json_keys(&removed_json);
     assert_eq!(removed_keys, expected_keys);
 }
@@ -889,7 +893,7 @@ fn pg4_block_rect_json_shape_and_roundtrip() {
         .expect("ops should be array for report");
     assert_eq!(ops_json.len(), 2);
     assert_eq!(ops_json[0]["kind"], "BlockMovedRect");
-    assert_eq!(ops_json[0]["sheet"], "Sheet1");
+    assert_eq!(ops_json[0]["sheet"], sid_json("Sheet1"));
     assert_eq!(ops_json[0]["src_start_row"], 2);
     assert_eq!(ops_json[0]["src_row_count"], 3);
     assert_eq!(ops_json[0]["src_start_col"], 1);
@@ -1051,7 +1055,7 @@ fn pg4_diff_report_json_shape() {
 
     let obj = json.as_object().expect("report json object");
     let keys: BTreeSet<String> = obj.keys().cloned().collect();
-    let expected: BTreeSet<String> = ["complete", "ops", "version"]
+    let expected: BTreeSet<String> = ["complete", "ops", "strings", "version"]
         .into_iter()
         .map(String::from)
         .collect();
@@ -1070,15 +1074,18 @@ fn pg4_diff_report_json_shape() {
 
 #[test]
 fn pg4_diffop_cell_edited_rejects_invalid_top_level_addr() {
-    let json = r#"{
+    let sheet_id = sid("Sheet1").0;
+    let json = format!(
+        r#"{{
         "kind": "CellEdited",
-        "sheet": "Sheet1",
+        "sheet": {sheet_id},
         "addr": "1A",
-        "from": { "addr": "C3", "value": null, "formula": null },
-        "to":   { "addr": "C3", "value": null, "formula": null }
-    }"#;
+        "from": {{ "addr": "C3", "value": null, "formula": null }},
+        "to":   {{ "addr": "C3", "value": null, "formula": null }}
+    }}"#
+    );
 
-    let err = serde_json::from_str::<DiffOp>(json)
+    let err = serde_json::from_str::<DiffOp>(&json)
         .expect_err("invalid top-level addr should fail to deserialize");
     let msg = err.to_string();
     assert!(
@@ -1089,15 +1096,18 @@ fn pg4_diffop_cell_edited_rejects_invalid_top_level_addr() {
 
 #[test]
 fn pg4_diffop_cell_edited_rejects_invalid_snapshot_addrs() {
-    let json = r#"{
+    let sheet_id = sid("Sheet1").0;
+    let json = format!(
+        r#"{{
         "kind": "CellEdited",
-        "sheet": "Sheet1",
+        "sheet": {sheet_id},
         "addr": "C3",
-        "from": { "addr": "A0", "value": null, "formula": null },
-        "to":   { "addr": "C3", "value": null, "formula": null }
-    }"#;
+        "from": {{ "addr": "A0", "value": null, "formula": null }},
+        "to":   {{ "addr": "C3", "value": null, "formula": null }}
+    }}"#
+    );
 
-    let err = serde_json::from_str::<DiffOp>(json)
+    let err = serde_json::from_str::<DiffOp>(&json)
         .expect_err("invalid snapshot addr should fail to deserialize");
     let msg = err.to_string();
     assert!(
@@ -1108,18 +1118,22 @@ fn pg4_diffop_cell_edited_rejects_invalid_snapshot_addrs() {
 
 #[test]
 fn pg4_diff_report_rejects_invalid_nested_addr() {
-    let json = r#"{
+    let sheet_id = sid("Sheet1").0;
+    let json = format!(
+        r#"{{
         "version": "1",
-        "ops": [{
+        "strings": [],
+        "ops": [{{
             "kind": "CellEdited",
-            "sheet": "Sheet1",
+            "sheet": {sheet_id},
             "addr": "1A",
-            "from": { "addr": "C3", "value": null, "formula": null },
-            "to":   { "addr": "C3", "value": null, "formula": null }
-        }]
-    }"#;
+            "from": {{ "addr": "C3", "value": null, "formula": null }},
+            "to":   {{ "addr": "C3", "value": null, "formula": null }}
+        }}]
+    }}"#
+    );
 
-    let err = serde_json::from_str::<DiffReport>(json)
+    let err = serde_json::from_str::<DiffReport>(&json)
         .expect_err("invalid nested addr should fail to deserialize");
     let msg = err.to_string();
     assert!(
