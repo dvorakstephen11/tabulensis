@@ -73,7 +73,11 @@ fn pg1_empty_and_mixed_sheets() {
     let values_only = sheet_by_name(&workbook, "ValuesOnly");
     assert_eq!(values_only.grid.nrows, 10);
     assert_eq!(values_only.grid.ncols, 10);
-    let values: Vec<_> = values_only.grid.iter_cells().collect();
+    let values: Vec<_> = values_only
+        .grid
+        .iter_cells()
+        .map(|(_, cell)| cell)
+        .collect();
     assert!(
         values
             .iter()
@@ -103,7 +107,10 @@ fn pg1_empty_and_mixed_sheets() {
         "Formulas should surface cached values when present"
     );
     assert!(
-        formulas.grid.iter_cells().all(|c| c.formula.is_some()),
+        formulas
+            .grid
+            .iter_cells()
+            .all(|(_, cell)| cell.formula.is_some()),
         "All cells should carry formulas in FormulasOnly"
     );
 }

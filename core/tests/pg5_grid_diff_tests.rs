@@ -142,7 +142,7 @@ fn pg5_6_grid_diff_degenerate_grids() {
                 row_idx,
                 row_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                assert_eq!(sheet_name(&report, sheet), "Sheet1");
                 assert_eq!(*row_idx, 0);
                 assert!(row_signature.is_none());
                 row_added += 1;

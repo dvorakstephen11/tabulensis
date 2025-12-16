@@ -1,7 +1,7 @@
 use excel_diff::{DiffOp, diff_workbooks, open_workbook};
 
 mod common;
-use common::fixture_path;
+use common::{fixture_path, sid};
 
 #[test]
 fn g10_row_block_insert_middle_emits_four_rowadded_and_no_noise() {
@@ -21,7 +21,7 @@ fn g10_row_block_insert_middle_emits_four_rowadded_and_no_noise() {
                 row_idx,
                 row_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                assert_eq!(*sheet, sid("Sheet1"));
                 assert!(row_signature.is_none());
                 Some(*row_idx)
             }
@@ -70,7 +70,7 @@ fn g10_row_block_delete_middle_emits_four_rowremoved_and_no_noise() {
                 row_idx,
                 row_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                assert_eq!(*sheet, sid("Sheet1"));
                 assert!(row_signature.is_none());
                 Some(*row_idx)
             }

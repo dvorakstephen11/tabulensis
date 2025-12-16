@@ -1,16 +1,29 @@
 use excel_diff::{
-    Cell, CellAddress, CellValue, DiffOp, Grid, Workbook, diff_grids_database_mode, diff_workbooks,
-    open_workbook,
+    CellValue, DiffOp, Grid, Workbook, diff_grids_database_mode, diff_workbooks, open_workbook,
+    with_default_session,
 };
 
 mod common;
-use common::{fixture_path, grid_from_numbers};
+use common::{fixture_path, grid_from_numbers, sid};
+
+fn diff_db(grid_a: &Grid, grid_b: &Grid, keys: &[u32]) -> excel_diff::DiffReport {
+    with_default_session(|session| {
+        diff_grids_database_mode(
+            grid_a,
+            grid_b,
+            keys,
+            &mut session.strings,
+            &excel_diff::DiffConfig::default(),
+        )
+    })
+}
 
 fn data_grid(workbook: &Workbook) -> &Grid {
+    let data_id = sid("Data");
     workbook
         .sheets
         .iter()
-        .find(|s| s.name == "Data")
+        .find(|s| s.name == data_id)
         .map(|s| &s.grid)
         .expect("Data sheet present")
 }
@@ -22,13 +35,7 @@ fn grid_from_float_rows(rows: &[&[f64]]) -> Grid {
 
     for (r_idx, row_vals) in rows.iter().enumerate() {
         for (c_idx, value) in row_vals.iter().enumerate() {
-            grid.insert(Cell {
-                row: r_idx as u32,
-                col: c_idx as u32,
-                address: CellAddress::from_indices(r_idx as u32, c_idx as u32),
-                value: Some(CellValue::Number(*value)),
-                formula: None,
-            });
+            grid.insert_cell(r_idx as u32, c_idx as u32, Some(CellValue::Number(*value)), None);
         }
     }
 
@@ -40,7 +47,7 @@ fn d1_equal_ordered_database_mode_empty_diff() {
     let workbook = open_workbook(fixture_path("db_equal_ordered_a.xlsx")).expect("fixture A opens");
     let grid = data_grid(&workbook);
 
-    let report = diff_grids_database_mode(grid, grid, &[0], &excel_diff::DiffConfig::default());
+    let report = diff_db(grid, grid, &[0]);
     assert!(
         report.ops.is_empty(),
         "database mode should ignore row order when keyed rows are identical"
@@ -55,7 +62,7 @@ fn d1_equal_reordered_database_mode_empty_diff() {
     let grid_a = data_grid(&wb_a);
     let grid_b = data_grid(&wb_b);
 
-    let report = diff_grids_database_mode(grid_a, grid_b, &[0], &excel_diff::DiffConfig::default());
+    let report = diff_db(grid_a, grid_b, &[0]);
     assert!(
         report.ops.is_empty(),
         "keyed alignment should match rows by key and ignore reordering"
@@ -81,8 +88,7 @@ fn d1_duplicate_keys_fallback_to_spreadsheet_mode() {
     let grid_a = grid_from_numbers(&[&[1, 10], &[1, 99]]);
     let grid_b = grid_from_numbers(&[&[1, 10]]);
 
-    let report =
-        diff_grids_database_mode(&grid_a, &grid_b, &[0], &excel_diff::DiffConfig::default());
+    let report = diff_db(&grid_a, &grid_b, &[0]);
 
     assert!(
         !report.ops.is_empty(),
@@ -104,8 +110,7 @@ fn d1_database_mode_row_added() {
     let grid_a = grid_from_numbers(&[&[1, 10], &[2, 20]]);
     let grid_b = grid_from_numbers(&[&[1, 10], &[2, 20], &[3, 30]]);
 
-    let report =
-        diff_grids_database_mode(&grid_a, &grid_b, &[0], &excel_diff::DiffConfig::default());
+    let report = diff_db(&grid_a, &grid_b, &[0]);
 
     let row_added_count = report
         .ops
@@ -123,8 +128,7 @@ fn d1_database_mode_row_removed() {
     let grid_a = grid_from_numbers(&[&[1, 10], &[2, 20], &[3, 30]]);
     let grid_b = grid_from_numbers(&[&[1, 10], &[2, 20]]);
 
-    let report =
-        diff_grids_database_mode(&grid_a, &grid_b, &[0], &excel_diff::DiffConfig::default());
+    let report = diff_db(&grid_a, &grid_b, &[0]);
 
     let row_removed_count = report
         .ops
@@ -142,8 +146,7 @@ fn d1_database_mode_cell_edited() {
     let grid_a = grid_from_numbers(&[&[1, 10], &[2, 20]]);
     let grid_b = grid_from_numbers(&[&[1, 99], &[2, 20]]);
 
-    let report =
-        diff_grids_database_mode(&grid_a, &grid_b, &[0], &excel_diff::DiffConfig::default());
+    let report = diff_db(&grid_a, &grid_b, &[0]);
 
     let cell_edited_count = report
         .ops
@@ -161,8 +164,7 @@ fn d1_database_mode_cell_edited_with_reorder() {
     let grid_a = grid_from_numbers(&[&[1, 10], &[2, 20], &[3, 30]]);
     let grid_b = grid_from_numbers(&[&[3, 30], &[2, 99], &[1, 10]]);
 
-    let report =
-        diff_grids_database_mode(&grid_a, &grid_b, &[0], &excel_diff::DiffConfig::default());
+    let report = diff_db(&grid_a, &grid_b, &[0]);
 
     let cell_edited_count = report
         .ops
@@ -180,8 +182,7 @@ fn d1_database_mode_treats_small_float_key_noise_as_equal() {
     let grid_a = grid_from_float_rows(&[&[1.0, 10.0], &[2.0, 20.0], &[3.0, 30.0]]);
     let grid_b = grid_from_float_rows(&[&[1.0000000000000002, 10.0], &[2.0, 20.0], &[3.0, 30.0]]);
 
-    let report =
-        diff_grids_database_mode(&grid_a, &grid_b, &[0], &excel_diff::DiffConfig::default());
+    let report = diff_db(&grid_a, &grid_b, &[0]);
     assert!(
         report.ops.is_empty(),
         "ULP-level noise in key column should not break row alignment"
@@ -193,8 +194,7 @@ fn d1_database_mode_detects_meaningful_float_key_change() {
     let grid_a = grid_from_float_rows(&[&[1.0, 10.0], &[2.0, 20.0], &[3.0, 30.0]]);
     let grid_b = grid_from_float_rows(&[&[1.0001, 10.0], &[2.0, 20.0], &[3.0, 30.0]]);
 
-    let report =
-        diff_grids_database_mode(&grid_a, &grid_b, &[0], &excel_diff::DiffConfig::default());
+    let report = diff_db(&grid_a, &grid_b, &[0]);
 
     let row_removed = report
         .ops
@@ -222,12 +222,7 @@ fn d5_composite_key_equal_reordered_database_mode_empty_diff() {
     let grid_a = grid_from_numbers(&[&[1, 10, 100], &[1, 20, 200], &[2, 10, 300]]);
     let grid_b = grid_from_numbers(&[&[2, 10, 300], &[1, 10, 100], &[1, 20, 200]]);
 
-    let report = diff_grids_database_mode(
-        &grid_a,
-        &grid_b,
-        &[0, 1],
-        &excel_diff::DiffConfig::default(),
-    );
+    let report = diff_db(&grid_a, &grid_b, &[0, 1]);
     assert!(
         report.ops.is_empty(),
         "composite keyed alignment should ignore row order differences"
@@ -239,12 +234,7 @@ fn d5_composite_key_row_added_and_cell_edited() {
     let grid_a = grid_from_numbers(&[&[1, 10, 100], &[1, 20, 200]]);
     let grid_b = grid_from_numbers(&[&[1, 10, 150], &[1, 20, 200], &[2, 30, 300]]);
 
-    let report = diff_grids_database_mode(
-        &grid_a,
-        &grid_b,
-        &[0, 1],
-        &excel_diff::DiffConfig::default(),
-    );
+    let report = diff_db(&grid_a, &grid_b, &[0, 1]);
 
     let row_added_count = report
         .ops
@@ -293,12 +283,7 @@ fn d5_composite_key_partial_key_mismatch_yields_add_and_remove() {
     let grid_a = grid_from_numbers(&[&[1, 10, 100]]);
     let grid_b = grid_from_numbers(&[&[1, 20, 100]]);
 
-    let report = diff_grids_database_mode(
-        &grid_a,
-        &grid_b,
-        &[0, 1],
-        &excel_diff::DiffConfig::default(),
-    );
+    let report = diff_db(&grid_a, &grid_b, &[0, 1]);
 
     let row_removed_count = report
         .ops
@@ -336,12 +321,7 @@ fn d5_composite_key_duplicate_keys_fallback_to_spreadsheet_mode() {
     let grid_a = grid_from_numbers(&[&[1, 10, 100], &[1, 10, 200]]);
     let grid_b = grid_from_numbers(&[&[1, 10, 100]]);
 
-    let report = diff_grids_database_mode(
-        &grid_a,
-        &grid_b,
-        &[0, 1],
-        &excel_diff::DiffConfig::default(),
-    );
+    let report = diff_db(&grid_a, &grid_b, &[0, 1]);
 
     assert!(
         !report.ops.is_empty(),
@@ -363,12 +343,7 @@ fn d5_non_contiguous_key_columns_equal_reordered_empty_diff() {
     let grid_a = grid_from_numbers(&[&[1, 999, 10, 100], &[1, 888, 20, 200], &[2, 777, 10, 300]]);
     let grid_b = grid_from_numbers(&[&[2, 777, 10, 300], &[1, 999, 10, 100], &[1, 888, 20, 200]]);
 
-    let report = diff_grids_database_mode(
-        &grid_a,
-        &grid_b,
-        &[0, 2],
-        &excel_diff::DiffConfig::default(),
-    );
+    let report = diff_db(&grid_a, &grid_b, &[0, 2]);
     assert!(
         report.ops.is_empty(),
         "non-contiguous key columns [0,2] should align correctly ignoring row order"
@@ -380,12 +355,7 @@ fn d5_non_contiguous_key_columns_detects_edits_in_skipped_column() {
     let grid_a = grid_from_numbers(&[&[1, 999, 10, 100], &[1, 888, 20, 200], &[2, 777, 10, 300]]);
     let grid_b = grid_from_numbers(&[&[2, 111, 10, 300], &[1, 222, 10, 100], &[1, 333, 20, 200]]);
 
-    let report = diff_grids_database_mode(
-        &grid_a,
-        &grid_b,
-        &[0, 2],
-        &excel_diff::DiffConfig::default(),
-    );
+    let report = diff_db(&grid_a, &grid_b, &[0, 2]);
 
     let cell_edited_ops: Vec<_> = report
         .ops
@@ -432,12 +402,7 @@ fn d5_non_contiguous_key_columns_row_added_and_cell_edited() {
     let grid_a = grid_from_numbers(&[&[1, 999, 10, 100], &[1, 888, 20, 200]]);
     let grid_b = grid_from_numbers(&[&[1, 999, 10, 150], &[1, 888, 20, 200], &[2, 777, 30, 300]]);
 
-    let report = diff_grids_database_mode(
-        &grid_a,
-        &grid_b,
-        &[0, 2],
-        &excel_diff::DiffConfig::default(),
-    );
+    let report = diff_db(&grid_a, &grid_b, &[0, 2]);
 
     let row_added_count = report
         .ops
@@ -482,12 +447,7 @@ fn d5_three_column_composite_key_equal_reordered_empty_diff() {
         &[1, 10, 100, 1000],
     ]);
 
-    let report = diff_grids_database_mode(
-        &grid_a,
-        &grid_b,
-        &[0, 1, 2],
-        &excel_diff::DiffConfig::default(),
-    );
+    let report = diff_db(&grid_a, &grid_b, &[0, 1, 2]);
     assert!(
         report.ops.is_empty(),
         "three-column composite key should align correctly ignoring row order"
@@ -499,12 +459,7 @@ fn d5_three_column_composite_key_partial_match_yields_add_and_remove() {
     let grid_a = grid_from_numbers(&[&[1, 10, 100, 1000]]);
     let grid_b = grid_from_numbers(&[&[1, 10, 200, 1000]]);
 
-    let report = diff_grids_database_mode(
-        &grid_a,
-        &grid_b,
-        &[0, 1, 2],
-        &excel_diff::DiffConfig::default(),
-    );
+    let report = diff_db(&grid_a, &grid_b, &[0, 1, 2]);
 
     let row_removed_count = report
         .ops

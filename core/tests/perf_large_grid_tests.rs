@@ -7,21 +7,20 @@ use excel_diff::config::DiffConfig;
 use excel_diff::diff::DiffOp;
 use excel_diff::engine::diff_workbooks;
 use excel_diff::perf::DiffMetrics;
-use excel_diff::{Cell, CellAddress, CellValue, Grid};
+use excel_diff::{CellValue, Grid};
 
 fn create_large_grid(nrows: u32, ncols: u32, base_value: i32) -> Grid {
     let mut grid = Grid::new(nrows, ncols);
     for row in 0..nrows {
         for col in 0..ncols {
-            grid.insert(Cell {
+            grid.insert_cell(
                 row,
                 col,
-                address: CellAddress::from_indices(row, col),
-                value: Some(CellValue::Number(
+                Some(CellValue::Number(
                     (base_value as i64 + row as i64 * 1000 + col as i64) as f64,
                 )),
-                formula: None,
-            });
+                None,
+            );
         }
     }
     grid
@@ -32,13 +31,12 @@ fn create_repetitive_grid(nrows: u32, ncols: u32, pattern_length: u32) -> Grid {
     for row in 0..nrows {
         let pattern_idx = row % pattern_length;
         for col in 0..ncols {
-            grid.insert(Cell {
+            grid.insert_cell(
                 row,
                 col,
-                address: CellAddress::from_indices(row, col),
-                value: Some(CellValue::Number((pattern_idx * 1000 + col) as f64)),
-                formula: None,
-            });
+                Some(CellValue::Number((pattern_idx * 1000 + col) as f64)),
+                None,
+            );
         }
     }
     grid
@@ -55,13 +53,12 @@ fn create_sparse_grid(nrows: u32, ncols: u32, fill_percent: u32, seed: u64) -> G
             (row, col, seed).hash(&mut hasher);
             let hash = hasher.finish();
             if (hash % 100) < fill_percent as u64 {
-                grid.insert(Cell {
+                grid.insert_cell(
                     row,
                     col,
-                    address: CellAddress::from_indices(row, col),
-                    value: Some(CellValue::Number((row * 1000 + col) as f64)),
-                    formula: None,
-                });
+                    Some(CellValue::Number((row * 1000 + col) as f64)),
+                    None,
+                );
             }
         }
     }
@@ -87,13 +84,7 @@ fn log_perf_metric(name: &str, metrics: &DiffMetrics, tail: &str) {
 fn perf_p1_large_dense() {
     let grid_a = create_large_grid(1000, 20, 0);
     let mut grid_b = create_large_grid(1000, 20, 0);
-    grid_b.insert(Cell {
-        row: 500,
-        col: 10,
-        address: CellAddress::from_indices(500, 10),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(500, 10, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("Performance", grid_a);
     let wb_b = single_sheet_workbook("Performance", grid_b);
@@ -148,13 +139,7 @@ fn perf_p2_large_noise() {
 fn perf_p3_adversarial_repetitive() {
     let grid_a = create_repetitive_grid(1000, 50, 100);
     let mut grid_b = create_repetitive_grid(1000, 50, 100);
-    grid_b.insert(Cell {
-        row: 500,
-        col: 25,
-        address: CellAddress::from_indices(500, 25),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(500, 25, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("Performance", grid_a);
     let wb_b = single_sheet_workbook("Performance", grid_b);
@@ -173,13 +158,7 @@ fn perf_p3_adversarial_repetitive() {
 fn perf_p4_99_percent_blank() {
     let grid_a = create_sparse_grid(1000, 100, 1, 12345);
     let mut grid_b = create_sparse_grid(1000, 100, 1, 12345);
-    grid_b.insert(Cell {
-        row: 500,
-        col: 50,
-        address: CellAddress::from_indices(500, 50),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(500, 50, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("Performance", grid_a);
     let wb_b = single_sheet_workbook("Performance", grid_b);
@@ -221,13 +200,7 @@ fn perf_p5_identical() {
 fn perf_50k_dense_single_edit() {
     let grid_a = create_large_grid(50000, 100, 0);
     let mut grid_b = create_large_grid(50000, 100, 0);
-    grid_b.insert(Cell {
-        row: 25000,
-        col: 50,
-        address: CellAddress::from_indices(25000, 50),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(25000, 50, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("Performance", grid_a);
     let wb_b = single_sheet_workbook("Performance", grid_b);
@@ -294,13 +267,7 @@ fn perf_50k_completely_different() {
 fn perf_50k_adversarial_repetitive() {
     let grid_a = create_repetitive_grid(50000, 50, 100);
     let mut grid_b = create_repetitive_grid(50000, 50, 100);
-    grid_b.insert(Cell {
-        row: 25000,
-        col: 25,
-        address: CellAddress::from_indices(25000, 25),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(25000, 25, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("Performance", grid_a);
     let wb_b = single_sheet_workbook("Performance", grid_b);
@@ -327,13 +294,7 @@ fn perf_50k_adversarial_repetitive() {
 fn perf_50k_99_percent_blank() {
     let grid_a = create_sparse_grid(50000, 100, 1, 12345);
     let mut grid_b = create_sparse_grid(50000, 100, 1, 12345);
-    grid_b.insert(Cell {
-        row: 25000,
-        col: 50,
-        address: CellAddress::from_indices(25000, 50),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(25000, 50, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("Performance", grid_a);
     let wb_b = single_sheet_workbook("Performance", grid_b);

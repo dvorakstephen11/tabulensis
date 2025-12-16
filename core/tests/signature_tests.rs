@@ -36,8 +36,8 @@ fn identical_rows_have_same_signature() {
     let mut grid2 = Grid::new(1, 3);
     for c in 0..3 {
         let cell = make_cell(0, c, Some(CellValue::Number(c as f64)), None);
-        grid1.insert(cell.clone());
-        grid2.insert(cell);
+        grid1.insert_test(cell.clone());
+        grid2.insert_test(cell);
     }
     let sig1 = grid1.compute_row_signature(0);
     let sig2 = grid2.compute_row_signature(0);

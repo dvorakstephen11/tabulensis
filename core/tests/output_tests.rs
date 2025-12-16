@@ -13,11 +13,22 @@ use std::collections::BTreeSet;
 mod common;
 use common::fixture_path;
 
-fn render_value(value: &Option<excel_diff::CellValue>) -> Option<String> {
+fn sid_local(pool: &mut excel_diff::StringPool, value: &str) -> excel_diff::StringId {
+    pool.intern(value)
+}
+
+fn attach_strings(mut report: DiffReport, pool: excel_diff::StringPool) -> DiffReport {
+    report.strings = pool.into_strings();
+    report
+}
+
+fn render_value(report: &DiffReport, value: &Option<excel_diff::CellValue>) -> Option<String> {
     match value {
         Some(excel_diff::CellValue::Number(n)) => Some(n.to_string()),
-        Some(excel_diff::CellValue::Text(s)) => Some(s.clone()),
+        Some(excel_diff::CellValue::Text(id)) => report.strings.get(id.0 as usize).cloned(),
         Some(excel_diff::CellValue::Bool(b)) => Some(b.to_string()),
+        Some(excel_diff::CellValue::Error(id)) => report.strings.get(id.0 as usize).cloned(),
+        Some(excel_diff::CellValue::Blank) => Some(String::new()),
         None => None,
     }
 }
@@ -30,36 +41,57 @@ fn make_cell_snapshot(addr: CellAddress, value: Option<CellValue>) -> CellSnapsh
     }
 }
 
+fn numeric_report(addr: CellAddress, from: f64, to: f64) -> DiffReport {
+    let mut pool = excel_diff::StringPool::new();
+    let sheet = sid_local(&mut pool, "Sheet1");
+    attach_strings(
+        DiffReport::new(vec![DiffOp::cell_edited(
+            sheet,
+            addr,
+            make_cell_snapshot(addr, Some(CellValue::Number(from))),
+            make_cell_snapshot(addr, Some(CellValue::Number(to))),
+        )]),
+        pool,
+    )
+}
+
 #[test]
 fn diff_report_to_cell_diffs_filters_non_cell_ops() {
+    let mut pool = excel_diff::StringPool::new();
+    let sheet_added = sid_local(&mut pool, "SheetAdded");
+    let sheet1 = sid_local(&mut pool, "Sheet1");
+    let sheet2 = sid_local(&mut pool, "Sheet2");
+    let old_sheet = sid_local(&mut pool, "OldSheet");
+    let old_text = sid_local(&mut pool, "old");
+    let new_text = sid_local(&mut pool, "new");
     let addr1 = CellAddress::from_indices(0, 0);
     let addr2 = CellAddress::from_indices(1, 1);
 
-    let report = DiffReport::new(vec![
+    let report = attach_strings(DiffReport::new(vec![
         DiffOp::SheetAdded {
-            sheet: "SheetAdded".into(),
+            sheet: sheet_added,
         },
         DiffOp::cell_edited(
-            "Sheet1".into(),
+            sheet1,
             addr1,
             make_cell_snapshot(addr1, Some(CellValue::Number(1.0))),
             make_cell_snapshot(addr1, Some(CellValue::Number(2.0))),
         ),
         DiffOp::RowAdded {
-            sheet: "Sheet1".into(),
+            sheet: sheet1,
             row_idx: 5,
             row_signature: None,
         },
         DiffOp::cell_edited(
-            "Sheet2".into(),
+            sheet2,
             addr2,
-            make_cell_snapshot(addr2, Some(CellValue::Text("old".into()))),
-            make_cell_snapshot(addr2, Some(CellValue::Text("new".into()))),
+            make_cell_snapshot(addr2, Some(CellValue::Text(old_text))),
+            make_cell_snapshot(addr2, Some(CellValue::Text(new_text))),
         ),
         DiffOp::SheetRemoved {
-            sheet: "OldSheet".into(),
+            sheet: old_sheet,
         },
-    ]);
+    ]), pool);
 
     let cell_diffs = diff_report_to_cell_diffs(&report);
     assert_eq!(
@@ -79,31 +111,33 @@ fn diff_report_to_cell_diffs_filters_non_cell_ops() {
 
 #[test]
 fn diff_report_to_cell_diffs_ignores_block_moved_rect() {
+    let mut pool = excel_diff::StringPool::new();
+    let sheet1 = sid_local(&mut pool, "Sheet1");
     let addr = CellAddress::from_indices(2, 2);
 
-    let report = DiffReport::new(vec![
-        DiffOp::block_moved_rect("Sheet1".into(), 2, 3, 1, 3, 9, 6, Some(0xCAFEBABE)),
+    let report = attach_strings(DiffReport::new(vec![
+        DiffOp::block_moved_rect(sheet1, 2, 3, 1, 3, 9, 6, Some(0xCAFEBABE)),
         DiffOp::cell_edited(
-            "Sheet1".into(),
+            sheet1,
             addr,
             make_cell_snapshot(addr, Some(CellValue::Number(10.0))),
             make_cell_snapshot(addr, Some(CellValue::Number(20.0))),
         ),
         DiffOp::BlockMovedRows {
-            sheet: "Sheet1".into(),
+            sheet: sheet1,
             src_start_row: 0,
             row_count: 2,
             dst_start_row: 5,
             block_hash: None,
         },
         DiffOp::BlockMovedColumns {
-            sheet: "Sheet1".into(),
+            sheet: sheet1,
             src_start_col: 0,
             col_count: 2,
             dst_start_col: 5,
             block_hash: None,
         },
-    ]);
+    ]), pool);
 
     let cell_diffs = diff_report_to_cell_diffs(&report);
     assert_eq!(
@@ -119,23 +153,25 @@ fn diff_report_to_cell_diffs_ignores_block_moved_rect() {
 
 #[test]
 fn diff_report_to_cell_diffs_maps_values_correctly() {
+    let mut pool = excel_diff::StringPool::new();
+    let sheet_id = sid_local(&mut pool, "SheetX");
     let addr_num = CellAddress::from_indices(2, 2); // C3
     let addr_bool = CellAddress::from_indices(3, 3); // D4
 
-    let report = DiffReport::new(vec![
+    let report = attach_strings(DiffReport::new(vec![
         DiffOp::cell_edited(
-            "SheetX".into(),
+            sheet_id,
             addr_num,
             make_cell_snapshot(addr_num, Some(CellValue::Number(42.5))),
             make_cell_snapshot(addr_num, Some(CellValue::Number(43.5))),
         ),
         DiffOp::cell_edited(
-            "SheetX".into(),
+            sheet_id,
             addr_bool,
             make_cell_snapshot(addr_bool, Some(CellValue::Bool(true))),
             make_cell_snapshot(addr_bool, Some(CellValue::Bool(false))),
         ),
-    ]);
+    ]), pool);
 
     let cell_diffs = diff_report_to_cell_diffs(&report);
     assert_eq!(cell_diffs.len(), 2);
@@ -153,23 +189,25 @@ fn diff_report_to_cell_diffs_maps_values_correctly() {
 
 #[test]
 fn diff_report_to_cell_diffs_filters_no_op_cell_edits() {
+    let mut pool = excel_diff::StringPool::new();
+    let sheet = sid_local(&mut pool, "Sheet1");
     let addr_a1 = CellAddress::from_indices(0, 0);
     let addr_a2 = CellAddress::from_indices(1, 0);
 
-    let report = DiffReport::new(vec![
+    let report = attach_strings(DiffReport::new(vec![
         DiffOp::cell_edited(
-            "Sheet1".to_string(),
+            sheet,
             addr_a1,
             make_cell_snapshot(addr_a1, Some(CellValue::Number(1.0))),
             make_cell_snapshot(addr_a1, Some(CellValue::Number(1.0))),
         ),
         DiffOp::cell_edited(
-            "Sheet1".to_string(),
+            sheet,
             addr_a2,
             make_cell_snapshot(addr_a2, Some(CellValue::Number(1.0))),
             make_cell_snapshot(addr_a2, Some(CellValue::Number(2.0))),
         ),
-    ]);
+    ]), pool);
 
     let diffs = diff_report_to_cell_diffs(&report);
 
@@ -248,8 +286,8 @@ fn test_json_non_empty_diff() {
     match &report.ops[0] {
         DiffOp::CellEdited { addr, from, to, .. } => {
             assert_eq!(addr.to_a1(), "C3");
-            assert_eq!(render_value(&from.value), Some("1".into()));
-            assert_eq!(render_value(&to.value), Some("2".into()));
+            assert_eq!(render_value(&report, &from.value), Some("1".into()));
+            assert_eq!(render_value(&report, &to.value), Some("2".into()));
         }
         other => panic!("expected CellEdited, got {other:?}"),
     }
@@ -267,8 +305,8 @@ fn test_json_non_empty_diff_bool() {
     match &report.ops[0] {
         DiffOp::CellEdited { addr, from, to, .. } => {
             assert_eq!(addr.to_a1(), "C3");
-            assert_eq!(render_value(&from.value), Some("true".into()));
-            assert_eq!(render_value(&to.value), Some("false".into()));
+            assert_eq!(render_value(&report, &from.value), Some("true".into()));
+            assert_eq!(render_value(&report, &to.value), Some("false".into()));
         }
         other => panic!("expected CellEdited, got {other:?}"),
     }
@@ -286,8 +324,8 @@ fn test_json_diff_value_to_empty() {
     match &report.ops[0] {
         DiffOp::CellEdited { addr, from, to, .. } => {
             assert_eq!(addr.to_a1(), "C3");
-            assert_eq!(render_value(&from.value), Some("1".into()));
-            assert_eq!(render_value(&to.value), None);
+            assert_eq!(render_value(&report, &from.value), Some("1".into()));
+            assert_eq!(render_value(&report, &to.value), None);
         }
         other => panic!("expected CellEdited, got {other:?}"),
     }
@@ -326,10 +364,13 @@ fn json_diff_case_only_sheet_name_cell_edit() {
             to,
             ..
         } => {
-            assert_eq!(sheet, "Sheet1");
+            assert_eq!(
+                report.strings.get(sheet.0 as usize),
+                Some(&"Sheet1".to_string())
+            );
             assert_eq!(addr.to_a1(), "A1");
-            assert_eq!(render_value(&from.value), Some("1".into()));
-            assert_eq!(render_value(&to.value), Some("2".into()));
+            assert_eq!(render_value(&report, &from.value), Some("1".into()));
+            assert_eq!(render_value(&report, &to.value), Some("2".into()));
         }
         other => panic!("expected CellEdited, got {other:?}"),
     }
@@ -367,10 +408,13 @@ fn test_json_case_only_sheet_name_cell_edit_via_helper() {
             to,
             ..
         } => {
-            assert_eq!(sheet, "Sheet1");
+            assert_eq!(
+                report.strings.get(sheet.0 as usize),
+                Some(&"Sheet1".to_string())
+            );
             assert_eq!(addr.to_a1(), "A1");
-            assert_eq!(render_value(&from.value), Some("1".into()));
-            assert_eq!(render_value(&to.value), Some("2".into()));
+            assert_eq!(render_value(&report, &from.value), Some("1".into()));
+            assert_eq!(render_value(&report, &to.value), Some("2".into()));
         }
         other => panic!("expected CellEdited, got {other:?}"),
     }
@@ -394,12 +438,7 @@ fn test_diff_workbooks_to_json_reports_invalid_zip() {
 #[test]
 fn serialize_diff_report_nan_maps_to_serialization_error() {
     let addr = CellAddress::from_indices(0, 0);
-    let report = DiffReport::new(vec![DiffOp::cell_edited(
-        "Sheet1".into(),
-        addr,
-        make_cell_snapshot(addr, Some(CellValue::Number(f64::NAN))),
-        make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
-    )]);
+    let report = numeric_report(addr, f64::NAN, 1.0);
 
     let err = serialize_diff_report(&report).expect_err("NaN should fail to serialize");
     let wrapped = ExcelOpenError::SerializationError(err.to_string());
@@ -418,12 +457,7 @@ fn serialize_diff_report_nan_maps_to_serialization_error() {
 #[test]
 fn serialize_diff_report_infinity_maps_to_serialization_error() {
     let addr = CellAddress::from_indices(0, 0);
-    let report = DiffReport::new(vec![DiffOp::cell_edited(
-        "Sheet1".into(),
-        addr,
-        make_cell_snapshot(addr, Some(CellValue::Number(f64::INFINITY))),
-        make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
-    )]);
+    let report = numeric_report(addr, f64::INFINITY, 1.0);
 
     let err = serialize_diff_report(&report).expect_err("Infinity should fail to serialize");
     let wrapped = ExcelOpenError::SerializationError(err.to_string());
@@ -441,12 +475,7 @@ fn serialize_diff_report_infinity_maps_to_serialization_error() {
 #[test]
 fn serialize_diff_report_neg_infinity_maps_to_serialization_error() {
     let addr = CellAddress::from_indices(0, 0);
-    let report = DiffReport::new(vec![DiffOp::cell_edited(
-        "Sheet1".into(),
-        addr,
-        make_cell_snapshot(addr, Some(CellValue::Number(f64::NEG_INFINITY))),
-        make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
-    )]);
+    let report = numeric_report(addr, f64::NEG_INFINITY, 1.0);
 
     let err = serialize_diff_report(&report).expect_err("NEG_INFINITY should fail to serialize");
     let wrapped = ExcelOpenError::SerializationError(err.to_string());
@@ -464,12 +493,7 @@ fn serialize_diff_report_neg_infinity_maps_to_serialization_error() {
 #[test]
 fn serialize_diff_report_with_finite_numbers_succeeds() {
     let addr = CellAddress::from_indices(1, 1);
-    let report = DiffReport::new(vec![DiffOp::cell_edited(
-        "Sheet1".into(),
-        addr,
-        make_cell_snapshot(addr, Some(CellValue::Number(2.5))),
-        make_cell_snapshot(addr, Some(CellValue::Number(3.5))),
-    )]);
+    let report = numeric_report(addr, 2.5, 3.5);
 
     let json = serialize_diff_report(&report).expect("finite values should serialize");
     let parsed: DiffReport = serde_json::from_str(&json).expect("json should parse");
@@ -479,12 +503,7 @@ fn serialize_diff_report_with_finite_numbers_succeeds() {
 #[test]
 fn serialize_full_diff_report_has_complete_true_and_no_warnings() {
     let addr = CellAddress::from_indices(0, 0);
-    let report = DiffReport::new(vec![DiffOp::cell_edited(
-        "Sheet1".into(),
-        addr,
-        make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
-        make_cell_snapshot(addr, Some(CellValue::Number(2.0))),
-    )]);
+    let report = numeric_report(addr, 1.0, 2.0);
 
     let json = serialize_diff_report(&report).expect("full report should serialize");
     let value: Value = serde_json::from_str(&json).expect("json should parse");
@@ -509,15 +528,20 @@ fn serialize_full_diff_report_has_complete_true_and_no_warnings() {
 #[test]
 fn serialize_partial_diff_report_includes_complete_false_and_warnings() {
     let addr = CellAddress::from_indices(0, 0);
+    let mut pool = excel_diff::StringPool::new();
+    let sheet = sid_local(&mut pool, "Sheet1");
     let ops = vec![DiffOp::cell_edited(
-        "Sheet1".into(),
+        sheet,
         addr,
         make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
         make_cell_snapshot(addr, Some(CellValue::Number(2.0))),
     )];
-    let report = DiffReport::with_partial_result(
-        ops,
-        "Sheet 'LargeSheet': alignment limits exceeded".to_string(),
+    let report = attach_strings(
+        DiffReport::with_partial_result(
+            ops,
+            "Sheet 'LargeSheet': alignment limits exceeded".to_string(),
+        ),
+        pool,
     );
 
     let json = serialize_diff_report(&report).expect("partial report should serialize");
@@ -550,14 +574,16 @@ fn serialize_diff_report_with_metrics_includes_metrics_object() {
     use excel_diff::perf::DiffMetrics;
 
     let addr = CellAddress::from_indices(0, 0);
+    let mut pool = excel_diff::StringPool::new();
+    let sheet = sid_local(&mut pool, "Sheet1");
     let ops = vec![DiffOp::cell_edited(
-        "Sheet1".into(),
+        sheet,
         addr,
         make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
         make_cell_snapshot(addr, Some(CellValue::Number(2.0))),
     )];
 
-    let mut report = DiffReport::new(ops);
+    let mut report = attach_strings(DiffReport::new(ops), pool);
     let mut metrics = DiffMetrics::default();
     metrics.move_detection_time_ms = 5;
     metrics.alignment_time_ms = 10;

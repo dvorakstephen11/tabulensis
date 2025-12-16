@@ -1,7 +1,7 @@
 use excel_diff::{DiffOp, diff_workbooks, open_workbook};
 
 mod common;
-use common::{fixture_path, grid_from_numbers, single_sheet_workbook};
+use common::{fixture_path, grid_from_numbers, sid, single_sheet_workbook};
 
 #[test]
 fn g12_rect_block_move_emits_single_blockmovedrect() {
@@ -25,7 +25,7 @@ fn g12_rect_block_move_emits_single_blockmovedrect() {
             dst_start_col,
             block_hash: _,
         } => {
-            assert_eq!(sheet, "Data");
+            assert_eq!(*sheet, sid("Data"));
             assert_eq!(*src_start_row, 2);
             assert_eq!(*src_row_count, 3);
             assert_eq!(*src_start_col, 1);

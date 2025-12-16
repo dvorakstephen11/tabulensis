@@ -13,6 +13,7 @@ fn g11_row_block_move_emits_single_blockmovedrows() {
     let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
     assert_eq!(report.ops.len(), 1, "expected a single diff op");
+    let strings = &report.strings;
 
     match &report.ops[0] {
         DiffOp::BlockMovedRows {
@@ -22,7 +23,10 @@ fn g11_row_block_move_emits_single_blockmovedrows() {
             dst_start_row,
             block_hash,
         } => {
-            assert_eq!(sheet, "Sheet1");
+            assert_eq!(
+                strings.get(sheet.0 as usize).map(String::as_str),
+                Some("Sheet1")
+            );
             assert_eq!(*src_start_row, 4);
             assert_eq!(*row_count, 4);
             assert_eq!(*dst_start_row, 12);

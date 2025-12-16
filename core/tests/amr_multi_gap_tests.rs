@@ -3,7 +3,7 @@ mod common;
 use common::{grid_from_numbers, single_sheet_workbook};
 use excel_diff::config::DiffConfig;
 use excel_diff::diff::DiffOp;
-use excel_diff::engine::diff_workbooks;
+use excel_diff::diff_workbooks;
 
 fn count_ops(ops: &[DiffOp], predicate: impl Fn(&DiffOp) -> bool) -> usize {
     ops.iter().filter(|op| predicate(op)).count()

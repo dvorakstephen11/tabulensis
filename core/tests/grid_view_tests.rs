@@ -1,4 +1,4 @@
-use excel_diff::{Cell, CellValue, DiffConfig, Grid, GridView, with_default_session};
+use excel_diff::{CellValue, DiffConfig, Grid, GridView, with_default_session};
 
 mod common;
 use common::grid_from_numbers;
@@ -30,7 +30,7 @@ fn gridview_dense_3x3_layout_and_metadata() {
 
     for (row_idx, row_view) in view.rows.iter().enumerate() {
         assert_eq!(row_view.cells.len(), 3);
-        for (col_idx, (col, cell)) in row_view.cells.iter().enumerate() {
+        for (col_idx, (col, _cell)) in row_view.cells.iter().enumerate() {
             assert_eq!(*col as usize, col_idx);
         }
 

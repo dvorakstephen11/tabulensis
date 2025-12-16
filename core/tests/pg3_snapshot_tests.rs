@@ -4,7 +4,7 @@ use excel_diff::{
 };
 
 mod common;
-use common::fixture_path;
+use common::{fixture_path, sid};
 
 fn sheet_by_name<'a>(workbook: &'a Workbook, name: &str) -> &'a Sheet {
     with_default_session(|session| {
@@ -127,7 +127,7 @@ fn snapshot_json_roundtrip_detects_tampered_addr() {
     let snap = CellSnapshot {
         addr: "Z9".parse().expect("address should parse"),
         value: Some(CellValue::Number(1.0)),
-        formula: Some("A1+1".into()),
+        formula: Some(sid("A1+1")),
     };
 
     let mut value: serde_json::Value =

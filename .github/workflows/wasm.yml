@@ -1,0 +1,31 @@
+name: WASM Smoke
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  wasm-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Build wasm smoke binary
+        run: cargo build --release --target wasm32-unknown-unknown --no-default-features -p excel_diff --bin wasm_smoke
+        working-directory: core
+
+      - name: Enforce wasm size budget
+        run: |
+          SIZE=$(stat -c%s "core/target/wasm32-unknown-unknown/release/wasm_smoke.wasm")
+          echo "wasm_smoke.wasm size: $SIZE bytes"
+          if [ "$SIZE" -gt 5000000 ]; then
+            echo "WASM size $SIZE exceeds 5MB limit"
+            exit 1
+          fi

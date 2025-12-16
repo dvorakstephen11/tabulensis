@@ -1,24 +1,23 @@
 mod common;
 
-use common::single_sheet_workbook;
+use common::{sid, single_sheet_workbook};
 use excel_diff::config::{DiffConfig, LimitBehavior};
 use excel_diff::diff::{DiffError, DiffOp};
-use excel_diff::engine::{diff_workbooks, try_diff_workbooks};
-use excel_diff::{Cell, CellAddress, CellValue, Grid};
+use excel_diff::{diff_workbooks, try_diff_workbooks};
+use excel_diff::{CellValue, Grid};
 
 fn create_simple_grid(nrows: u32, ncols: u32, base_value: i32) -> Grid {
     let mut grid = Grid::new(nrows, ncols);
     for row in 0..nrows {
         for col in 0..ncols {
-            grid.insert(Cell {
+            grid.insert_cell(
                 row,
                 col,
-                address: CellAddress::from_indices(row, col),
-                value: Some(CellValue::Number(
+                Some(CellValue::Number(
                     (base_value as i64 + row as i64 * 1000 + col as i64) as f64,
                 )),
-                formula: None,
-            });
+                None,
+            );
         }
     }
     grid
@@ -32,13 +31,7 @@ fn count_ops(ops: &[DiffOp], predicate: impl Fn(&DiffOp) -> bool) -> usize {
 fn large_grid_completes_within_default_limits() {
     let grid_a = create_simple_grid(1000, 10, 0);
     let mut grid_b = create_simple_grid(1000, 10, 0);
-    grid_b.insert(Cell {
-        row: 500,
-        col: 5,
-        address: CellAddress::from_indices(500, 5),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(500, 5, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
@@ -64,13 +57,7 @@ fn large_grid_completes_within_default_limits() {
 fn limit_exceeded_fallback_to_positional() {
     let grid_a = create_simple_grid(100, 10, 0);
     let mut grid_b = create_simple_grid(100, 10, 0);
-    grid_b.insert(Cell {
-        row: 50,
-        col: 5,
-        address: CellAddress::from_indices(50, 5),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(50, 5, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
@@ -101,13 +88,7 @@ fn limit_exceeded_fallback_to_positional() {
 fn limit_exceeded_return_partial_result() {
     let grid_a = create_simple_grid(100, 10, 0);
     let mut grid_b = create_simple_grid(100, 10, 0);
-    grid_b.insert(Cell {
-        row: 50,
-        col: 5,
-        address: CellAddress::from_indices(50, 5),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(50, 5, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
@@ -164,7 +145,7 @@ fn limit_exceeded_return_error_returns_structured_error() {
             max_rows,
             max_cols,
         } => {
-            assert_eq!(sheet, "Sheet1");
+            assert_eq!(sheet, sid("Sheet1"));
             assert_eq!(rows, 100);
             assert_eq!(cols, 10);
             assert_eq!(max_rows, 50);
@@ -196,13 +177,7 @@ fn limit_exceeded_return_error_panics_via_legacy_api() {
 fn column_limit_exceeded() {
     let grid_a = create_simple_grid(10, 100, 0);
     let mut grid_b = create_simple_grid(10, 100, 0);
-    grid_b.insert(Cell {
-        row: 5,
-        col: 50,
-        address: CellAddress::from_indices(5, 50),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(5, 50, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
@@ -229,13 +204,7 @@ fn column_limit_exceeded() {
 fn within_limits_no_warning() {
     let grid_a = create_simple_grid(45, 10, 0);
     let mut grid_b = create_simple_grid(45, 10, 0);
-    grid_b.insert(Cell {
-        row: 20,
-        col: 5,
-        address: CellAddress::from_indices(20, 5),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(20, 5, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
@@ -264,12 +233,12 @@ fn multiple_sheets_limit_warning_includes_sheet_name() {
     let wb_a = excel_diff::Workbook {
         sheets: vec![
             excel_diff::Sheet {
-                name: "SmallSheet".to_string(),
+                name: sid("SmallSheet"),
                 kind: excel_diff::SheetKind::Worksheet,
                 grid: grid_small.clone(),
             },
             excel_diff::Sheet {
-                name: "LargeSheet".to_string(),
+                name: sid("LargeSheet"),
                 kind: excel_diff::SheetKind::Worksheet,
                 grid: grid_large_a,
             },
@@ -279,12 +248,12 @@ fn multiple_sheets_limit_warning_includes_sheet_name() {
     let wb_b = excel_diff::Workbook {
         sheets: vec![
             excel_diff::Sheet {
-                name: "SmallSheet".to_string(),
+                name: sid("SmallSheet"),
                 kind: excel_diff::SheetKind::Worksheet,
                 grid: grid_small,
             },
             excel_diff::Sheet {
-                name: "LargeSheet".to_string(),
+                name: sid("LargeSheet"),
                 kind: excel_diff::SheetKind::Worksheet,
                 grid: grid_large_b,
             },
@@ -310,13 +279,7 @@ fn multiple_sheets_limit_warning_includes_sheet_name() {
 fn large_grid_5k_rows_completes_within_default_limits() {
     let grid_a = create_simple_grid(5000, 10, 0);
     let mut grid_b = create_simple_grid(5000, 10, 0);
-    grid_b.insert(Cell {
-        row: 2500,
-        col: 5,
-        address: CellAddress::from_indices(2500, 5),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(2500, 5, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("LargeSheet", grid_a);
     let wb_b = single_sheet_workbook("LargeSheet", grid_b);
@@ -342,13 +305,7 @@ fn large_grid_5k_rows_completes_within_default_limits() {
 fn wide_grid_500_cols_completes_within_default_limits() {
     let grid_a = create_simple_grid(100, 500, 0);
     let mut grid_b = create_simple_grid(100, 500, 0);
-    grid_b.insert(Cell {
-        row: 50,
-        col: 250,
-        address: CellAddress::from_indices(50, 250),
-        value: Some(CellValue::Number(999999.0)),
-        formula: None,
-    });
+    grid_b.insert_cell(50, 250, Some(CellValue::Number(999999.0)), None);
 
     let wb_a = single_sheet_workbook("WideSheet", grid_a);
     let wb_b = single_sheet_workbook("WideSheet", grid_b);

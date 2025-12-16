@@ -2,11 +2,13 @@
 use crate::config::DiffConfig;
 use crate::diff::DiffReport;
 #[cfg(feature = "excel-open-xml")]
-use crate::engine::diff_workbooks as compute_diff;
-#[cfg(feature = "excel-open-xml")]
 use crate::excel_open_xml::{ExcelOpenError, open_workbook};
 use crate::session::DiffSession;
+#[cfg(feature = "excel-open-xml")]
+use crate::sink::VecSink;
 use crate::string_pool::StringId;
+#[cfg(feature = "excel-open-xml")]
+use crate::DiffSummary;
 use serde::Serialize;
 use serde::ser::Error as SerdeError;
 #[cfg(feature = "excel-open-xml")]
@@ -44,12 +46,17 @@ pub fn diff_workbooks(
     let mut session = DiffSession::new();
     let wb_a = open_workbook(path_a, session.strings_mut())?;
     let wb_b = open_workbook(path_b, session.strings_mut())?;
-    Ok(compute_diff(
+
+    let mut sink = VecSink::new();
+    let summary = crate::engine::try_diff_workbooks_streaming(
         &wb_a,
         &wb_b,
         session.strings_mut(),
         config,
-    ))
+        &mut sink,
+    )
+    .map_err(|e| ExcelOpenError::SerializationError(e.to_string()))?;
+    Ok(build_report_from_sink(sink, summary, session))
 }
 
 #[cfg(feature = "excel-open-xml")]
@@ -99,6 +106,19 @@ pub fn diff_report_to_cell_diffs(report: &DiffReport) -> Vec<CellDiff> {
             }
         })
         .collect()
+}
+
+#[cfg(feature = "excel-open-xml")]
+fn build_report_from_sink(sink: VecSink, summary: DiffSummary, session: DiffSession) -> DiffReport {
+    let mut report = DiffReport::new(sink.into_ops());
+    report.complete = summary.complete;
+    report.warnings = summary.warnings;
+    #[cfg(feature = "perf-metrics")]
+    {
+        report.metrics = summary.metrics;
+    }
+    report.strings = session.strings.into_strings();
+    report
 }
 
 fn contains_non_finite_numbers(report: &DiffReport) -> bool {

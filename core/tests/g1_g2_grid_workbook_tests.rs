@@ -1,24 +1,15 @@
-use excel_diff::{
-    Cell, CellAddress, CellValue, DiffOp, Grid, Sheet, SheetKind, Workbook, diff_workbooks,
-    open_workbook,
-};
+use excel_diff::{CellValue, DiffOp, Grid, Sheet, SheetKind, Workbook, diff_workbooks, open_workbook};
 
 mod common;
-use common::fixture_path;
+use common::{fixture_path, sid};
 
 fn workbook_with_number(value: f64) -> Workbook {
     let mut grid = Grid::new(1, 1);
-    grid.insert(Cell {
-        row: 0,
-        col: 0,
-        address: CellAddress::from_indices(0, 0),
-        value: Some(CellValue::Number(value)),
-        formula: None,
-    });
+    grid.insert_cell(0, 0, Some(CellValue::Number(value)), None);
 
     Workbook {
         sheets: vec![Sheet {
-            name: "Sheet1".to_string(),
+            name: sid("Sheet1"),
             kind: SheetKind::Worksheet,
             grid,
         }],
@@ -62,7 +53,7 @@ fn g2_single_cell_literal_change_produces_one_celledited() {
             from,
             to,
         } => {
-            assert_eq!(sheet, "Sheet1");
+            assert_eq!(*sheet, sid("Sheet1"));
             assert_eq!(addr.to_a1(), "C3");
             assert_eq!(from.value, Some(CellValue::Number(1.0)));
             assert_eq!(to.value, Some(CellValue::Number(2.0)));

@@ -12,6 +12,8 @@ fn single_row_insert_middle_produces_one_row_added() {
 
     let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
+    let strings = &report.strings;
+
     let rows_added: Vec<u32> = report
         .ops
         .iter()
@@ -21,7 +23,10 @@ fn single_row_insert_middle_produces_one_row_added() {
                 row_idx,
                 row_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                assert_eq!(
+                    strings.get(sheet.0 as usize).map(String::as_str),
+                    Some("Sheet1")
+                );
                 assert!(row_signature.is_none());
                 Some(*row_idx)
             }
@@ -57,6 +62,8 @@ fn single_row_delete_middle_produces_one_row_removed() {
 
     let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
+    let strings = &report.strings;
+
     let rows_removed: Vec<u32> = report
         .ops
         .iter()
@@ -66,7 +73,10 @@ fn single_row_delete_middle_produces_one_row_removed() {
                 row_idx,
                 row_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                assert_eq!(
+                    strings.get(sheet.0 as usize).map(String::as_str),
+                    Some("Sheet1")
+                );
                 assert!(row_signature.is_none());
                 Some(*row_idx)
             }

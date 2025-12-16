@@ -1,7 +1,7 @@
 use excel_diff::{CellValue, DiffOp, Workbook, diff_workbooks, open_workbook};
 
 mod common;
-use common::fixture_path;
+use common::{fixture_path, sid};
 
 #[test]
 fn g9_col_insert_middle_emits_one_columnadded_and_no_noise() {
@@ -21,7 +21,7 @@ fn g9_col_insert_middle_emits_one_columnadded_and_no_noise() {
                 col_idx,
                 col_signature,
             } => {
-                assert_eq!(sheet, "Data");
+                assert_eq!(sheet, &sid("Data"));
                 assert!(col_signature.is_none());
                 Some(*col_idx)
             }
@@ -70,7 +70,7 @@ fn g9_col_delete_middle_emits_one_columnremoved_and_no_noise() {
                 col_idx,
                 col_signature,
             } => {
-                assert_eq!(sheet, "Data");
+                assert_eq!(sheet, &sid("Data"));
                 assert!(col_signature.is_none());
                 Some(*col_idx)
             }
@@ -140,13 +140,16 @@ fn g9_alignment_bails_out_when_additional_edits_present() {
 }
 
 fn find_header_col(workbook: &Workbook, header: &str) -> u32 {
+    let header_id = sid(header);
     workbook
         .sheets
         .iter()
         .flat_map(|sheet| sheet.grid.cells.iter())
-        .find_map(|((row, col), cell)| match &cell.value {
-            Some(CellValue::Text(text)) if *row == 0 && text == header => Some(*col),
-            _ => None,
+        .find_map(|((row, col), cell)| {
+            match &cell.value {
+                Some(CellValue::Text(text)) if *row == 0 && *text == header_id => Some(*col),
+                _ => None,
+            }
         })
         .expect("header column should exist in fixture")
 }
