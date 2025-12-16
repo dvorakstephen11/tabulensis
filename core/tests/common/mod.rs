@@ -2,7 +2,9 @@
 
 #![allow(dead_code)]
 
-use excel_diff::{CellValue, Grid, Sheet, SheetKind, Workbook, with_default_session};
+use excel_diff::{
+    CellValue, Grid, Sheet, SheetKind, StringId, Workbook, with_default_session,
+};
 use std::path::PathBuf;
 
 pub fn fixture_path(filename: &str) -> PathBuf {
@@ -28,6 +30,10 @@ pub fn grid_from_numbers(values: &[&[i32]]) -> Grid {
     }
 
     grid
+}
+
+pub fn sid(s: &str) -> StringId {
+    with_default_session(|session| session.strings.intern(s))
 }
 
 pub fn single_sheet_workbook(name: &str, grid: Grid) -> Workbook {

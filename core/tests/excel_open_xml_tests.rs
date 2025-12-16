@@ -3,12 +3,12 @@ use std::io::{ErrorKind, Write};
 use std::path::Path;
 use std::time::SystemTime;
 
-use excel_diff::{ContainerError, ExcelOpenError, SheetKind, open_workbook};
+use excel_diff::{CellAddress, ContainerError, ExcelOpenError, SheetKind, open_workbook};
 use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
 mod common;
-use common::fixture_path;
+use common::{fixture_path, sid};
 
 fn temp_xlsx_path(prefix: &str) -> std::path::PathBuf {
     let mut path = std::env::temp_dir();
@@ -42,13 +42,13 @@ fn open_minimal_workbook_succeeds() {
     assert_eq!(workbook.sheets.len(), 1);
 
     let sheet = &workbook.sheets[0];
-    assert_eq!(sheet.name, "Sheet1");
+    assert_eq!(sheet.name, sid("Sheet1"));
     assert!(matches!(sheet.kind, SheetKind::Worksheet));
     assert_eq!(sheet.grid.nrows, 1);
     assert_eq!(sheet.grid.ncols, 1);
 
     let cell = sheet.grid.get(0, 0).expect("A1 should be present");
-    assert_eq!(cell.address.to_a1(), "A1");
+    assert_eq!(CellAddress::from_coords(0, 0).to_a1(), "A1");
     assert!(cell.value.is_some());
 }
 

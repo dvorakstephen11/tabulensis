@@ -1,0 +1,4155 @@
+   Compiling excel_diff v0.1.0 (C:\Users\dvora\repo\excel_diff\core)
+error[E0308]: mismatched types
+  --> core\tests\pg4_diffop_tests.rs:15:18
+   |
+15 |         formula: formula.map(|s| s.to_string()),
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Option<StringId>`, found `Option<String>`
+   |
+   = note: expected enum `Option<StringId>`
+              found enum `Option<std::string::String>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\g1_g2_grid_workbook_tests.rs:11:10
+    |
+ 11 |     grid.insert(Cell {
+    |     -----^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+ 11 |     grid.cells.insert(Cell {
+    |          ++++++
+ 11 |     grid.col_signatures.insert(Cell {
+    |          +++++++++++++++
+ 11 |     grid.row_signatures.insert(Cell {
+    |          +++++++++++++++
+
+error[E0560]: struct `CellContent` has no field named `row`
+  --> core\tests\g1_g2_grid_workbook_tests.rs:12:9
+   |
+12 |         row: 0,
+   |         ^^^ `CellContent` does not have this field
+   |
+   = note: all struct fields are already assigned
+
+error[E0560]: struct `CellContent` has no field named `col`
+  --> core\tests\g1_g2_grid_workbook_tests.rs:13:9
+   |
+13 |         col: 0,
+   |         ^^^ `CellContent` does not have this field
+   |
+   = note: all struct fields are already assigned
+
+error[E0560]: struct `CellContent` has no field named `address`
+  --> core\tests\g1_g2_grid_workbook_tests.rs:14:9
+   |
+14 |         address: CellAddress::from_indices(0, 0),
+   |         ^^^^^^^ `CellContent` does not have this field
+   |
+   = note: all struct fields are already assigned
+
+error[E0308]: mismatched types
+  --> core\tests\pg4_diffop_tests.rs:21:16
+   |
+21 |         sheet: "Sheet1".to_string(),
+   |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0277]: can't compare `StringId` with `str`
+  --> core\tests\pg4_diffop_tests.rs:39:9
+   |
+39 |         assert_eq!(sheet, expected_sheet);
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `StringId == str`
+   |
+   = help: the trait `PartialEq<str>` is not implemented for `StringId`
+           but trait `PartialEq<StringId>` is implemented for it
+   = help: for that trait implementation, expected `StringId`, found `str`
+   = note: required for `&StringId` to implement `PartialEq<&str>`
+   = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+  --> core\tests\g1_g2_grid_workbook_tests.rs:21:19
+   |
+21 |             name: "Sheet1".to_string(),
+   |                   ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+warning: unused import: `Cell`
+ --> core\tests\grid_view_tests.rs:1:18
+  |
+1 | use excel_diff::{Cell, CellValue, DiffConfig, Grid, GridView, with_default_session};
+  |                  ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0308]: mismatched types
+  --> core\tests\pg3_snapshot_tests.rs:12:29
+   |
+12 |         .find(|s| s.name == name)
+   |                   ------    ^^^^ expected `StringId`, found `&str`
+   |                   |
+   |                   expected because this is `StringId`
+
+error[E0061]: this function takes 3 arguments but 1 argument was supplied
+  --> core\tests\pg3_snapshot_tests.rs:23:9
+   |
+23 |         CellSnapshot::from_cell(cell)
+   |         ^^^^^^^^^^^^^^^^^^^^^^^------ two arguments of type `u32` and `u32` are missing
+   |
+note: associated function defined here
+  --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:30:12
+   |
+30 |     pub fn from_cell(row: u32, col: u32, cell: &CellContent) -> CellSnapshot {
+   |            ^^^^^^^^^
+help: provide the arguments
+   |
+23 |         CellSnapshot::from_cell(/* u32 */, /* u32 */, cell)
+   |                                 +++++++++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+  --> core\tests\pg3_snapshot_tests.rs:46:55
+   |
+46 |     assert_eq!(a2.value, Some(CellValue::Text("hello".into())));
+   |                                                       ^^^^ the trait `From<&str>` is not implemented for `StringId`
+   |
+   = note: required for `&str` to implement `Into<StringId>`
+
+error[E0277]: can't compare `StringId` with `str`
+  --> core\tests\g1_g2_grid_workbook_tests.rs:65:13
+   |
+65 |             assert_eq!(sheet, "Sheet1");
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `StringId == str`
+   |
+   = help: the trait `PartialEq<str>` is not implemented for `StringId`
+           but trait `PartialEq<StringId>` is implemented for it
+   = help: for that trait implementation, expected `StringId`, found `str`
+   = note: required for `&StringId` to implement `PartialEq<&str>`
+   = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `as_deref` exists for enum `Option<StringId>`, but its trait bounds were not satisfied
+  --> core\tests\pg3_snapshot_tests.rs:63:33
+   |
+63 |     let b1_formula = b1.formula.as_deref().expect("B1 should have a formula");
+   |                                 ^^^^^^^^
+   |
+  ::: C:\Users\dvora\repo\excel_diff\core\src\string_pool.rs:6:1
+   |
+ 6 | pub struct StringId(pub u32);
+   | ------------------- doesn't satisfy `StringId: Deref`
+   |
+   = note: the following trait bounds were not satisfied:
+           `StringId: Deref`
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+  --> core\tests\pg3_snapshot_tests.rs:67:61
+   |
+67 |     assert_eq!(b2.value, Some(CellValue::Text("hello world".into())));
+   |                                                             ^^^^ the trait `From<&str>` is not implemented for `StringId`
+   |
+   = note: required for `&str` to implement `Into<StringId>`
+
+error[E0560]: struct `CellContent` has no field named `row`
+ --> core\tests\signature_tests.rs:5:9
+  |
+5 |         row,
+  |         ^^^ `CellContent` does not have this field
+  |
+  = note: all struct fields are already assigned
+
+error[E0599]: the method `as_deref` exists for enum `Option<StringId>`, but its trait bounds were not satisfied
+  --> core\tests\pg3_snapshot_tests.rs:69:33
+   |
+69 |     let b2_formula = b2.formula.as_deref().expect("B2 should have a formula");
+   |                                 ^^^^^^^^
+   |
+  ::: C:\Users\dvora\repo\excel_diff\core\src\string_pool.rs:6:1
+   |
+ 6 | pub struct StringId(pub u32);
+   | ------------------- doesn't satisfy `StringId: Deref`
+   |
+   = note: the following trait bounds were not satisfied:
+           `StringId: Deref`
+
+error[E0560]: struct `CellContent` has no field named `col`
+ --> core\tests\signature_tests.rs:6:9
+  |
+6 |         col,
+  |         ^^^ `CellContent` does not have this field
+  |
+  = note: all struct fields are already assigned
+
+error[E0560]: struct `CellContent` has no field named `address`
+ --> core\tests\signature_tests.rs:7:9
+  |
+7 |         address: CellAddress::from_indices(row, col),
+  |         ^^^^^^^ `CellContent` does not have this field
+  |
+  = note: all struct fields are already assigned
+
+error[E0599]: the method `as_deref` exists for enum `Option<StringId>`, but its trait bounds were not satisfied
+  --> core\tests\pg3_snapshot_tests.rs:76:33
+   |
+76 |     let b3_formula = b3.formula.as_deref().expect("B3 should have a formula");
+   |                                 ^^^^^^^^
+   |
+  ::: C:\Users\dvora\repo\excel_diff\core\src\string_pool.rs:6:1
+   |
+ 6 | pub struct StringId(pub u32);
+   | ------------------- doesn't satisfy `StringId: Deref`
+   |
+   = note: the following trait bounds were not satisfied:
+           `StringId: Deref`
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\pg3_snapshot_tests.rs:114:30
+    |
+114 |         formula: Some("A1+1".into()),
+    |                              ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0308]: mismatched types
+  --> core\tests\pg4_diffop_tests.rs:85:16
+   |
+85 |         sheet: "Sheet1".to_string(),
+   |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0277]: can't compare `StringId` with `str`
+  --> core\tests\g12_rect_block_move_grid_workbook_tests.rs:28:13
+   |
+28 |             assert_eq!(sheet, "Data");
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `StringId == str`
+   |
+   = help: the trait `PartialEq<str>` is not implemented for `StringId`
+           but trait `PartialEq<StringId>` is implemented for it
+   = help: for that trait implementation, expected `StringId`, found `str`
+   = note: required for `&StringId` to implement `PartialEq<&str>`
+   = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+ --> core\tests\signature_tests.rs:9:18
+  |
+9 |         formula: formula.map(|s| s.to_string()),
+  |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Option<StringId>`, found `Option<String>`
+  |
+  = note: expected enum `Option<StringId>`
+             found enum `Option<String>`
+
+Some errors have detailed explanations: E0277, E0308, E0560, E0599.
+For more information about an error, try `rustc --explain E0277`.
+error[E0308]: mismatched types
+  --> core\tests\d1_database_mode_tests.rs:13:29
+   |
+13 |         .find(|s| s.name == "Data")
+   |                   ------    ^^^^^^ expected `StringId`, found `&str`
+   |                   |
+   |                   expected because this is `StringId`
+
+error[E0277]: can't compare `StringId` with `str`
+  --> core\tests\g11_row_block_move_grid_workbook_tests.rs:25:13
+   |
+25 |             assert_eq!(sheet, "Sheet1");
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `StringId == str`
+   |
+   = help: the trait `PartialEq<str>` is not implemented for `StringId`
+           but trait `PartialEq<StringId>` is implemented for it
+   = help: for that trait implementation, expected `StringId`, found `str`
+   = note: required for `&StringId` to implement `PartialEq<&str>`
+   = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: unused variable: `cell`
+  --> core\tests\grid_view_tests.rs:33:29
+   |
+33 |         for (col_idx, (col, cell)) in row_view.cells.iter().enumerate() {
+   |                             ^^^^ help: if this is intentional, prefix it with an underscore: `_cell`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\limit_behavior_tests.rs:13:18
+    |
+ 13 |             grid.insert(Cell {
+    |             -----^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+ 13 |             grid.cells.insert(Cell {
+    |                  ++++++
+ 13 |             grid.col_signatures.insert(Cell {
+    |                  +++++++++++++++
+ 13 |             grid.row_signatures.insert(Cell {
+    |                  +++++++++++++++
+
+error[E0560]: struct `CellContent` has no field named `row`
+  --> core\tests\limit_behavior_tests.rs:14:17
+   |
+14 |                 row,
+   |                 ^^^ `CellContent` does not have this field
+   |
+   = note: all struct fields are already assigned
+
+error[E0560]: struct `CellContent` has no field named `col`
+  --> core\tests\limit_behavior_tests.rs:15:17
+   |
+15 |                 col,
+   |                 ^^^ `CellContent` does not have this field
+   |
+   = note: all struct fields are already assigned
+
+error[E0560]: struct `CellContent` has no field named `address`
+  --> core\tests\limit_behavior_tests.rs:16:17
+   |
+16 |                 address: CellAddress::from_indices(row, col),
+   |                 ^^^^^^^ `CellContent` does not have this field
+   |
+   = note: all struct fields are already assigned
+
+Some errors have detailed explanations: E0061, E0277, E0308, E0599.
+For more information about an error, try `rustc --explain E0061`.
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:19:15
+    |
+ 19 |         grid1.insert(cell.clone());
+    |               ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+ 19 |         grid1.cells.insert(cell.clone());
+    |               ++++++
+ 19 |         grid1.col_signatures.insert(cell.clone());
+    |               +++++++++++++++
+ 19 |         grid1.row_signatures.insert(cell.clone());
+    |               +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\d1_database_mode_tests.rs:25:18
+    |
+ 25 |             grid.insert(Cell {
+    |             -----^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+ 25 |             grid.cells.insert(Cell {
+    |                  ++++++
+ 25 |             grid.col_signatures.insert(Cell {
+    |                  +++++++++++++++
+ 25 |             grid.row_signatures.insert(Cell {
+    |                  +++++++++++++++
+
+error[E0560]: struct `CellContent` has no field named `row`
+  --> core\tests\d1_database_mode_tests.rs:26:17
+   |
+26 |                 row: r_idx as u32,
+   |                 ^^^ `CellContent` does not have this field
+   |
+   = note: all struct fields are already assigned
+
+error[E0560]: struct `CellContent` has no field named `col`
+  --> core\tests\d1_database_mode_tests.rs:27:17
+   |
+27 |                 col: c_idx as u32,
+   |                 ^^^ `CellContent` does not have this field
+   |
+   = note: all struct fields are already assigned
+
+error[E0560]: struct `CellContent` has no field named `address`
+  --> core\tests\d1_database_mode_tests.rs:28:17
+   |
+28 |                 address: CellAddress::from_indices(r_idx as u32, c_idx as u32),
+   |                 ^^^^^^^ `CellContent` does not have this field
+   |
+   = note: all struct fields are already assigned
+
+error[E0308]: mismatched types
+  --> core\tests\pg4_diffop_tests.rs:90:16
+   |
+90 |         sheet: "Sheet1".to_string(),
+   |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:20:15
+    |
+ 20 |         grid2.insert(cell);
+    |               ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+ 20 |         grid2.cells.insert(cell);
+    |               ++++++
+ 20 |         grid2.col_signatures.insert(cell);
+    |               +++++++++++++++
+ 20 |         grid2.row_signatures.insert(cell);
+    |               +++++++++++++++
+
+error[E0308]: mismatched types
+  --> core\tests\pg4_diffop_tests.rs:95:16
+   |
+95 |         sheet: "Sheet1".to_string(),
+   |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\limit_behavior_tests.rs:35:12
+    |
+ 35 |     grid_b.insert(Cell {
+    |     -------^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+ 35 |     grid_b.cells.insert(Cell {
+    |            ++++++
+ 35 |     grid_b.col_signatures.insert(Cell {
+    |            +++++++++++++++
+ 35 |     grid_b.row_signatures.insert(Cell {
+    |            +++++++++++++++
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:100:16
+    |
+100 |         sheet: "Sheet1".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0560]: struct `CellContent` has no field named `row`
+  --> core\tests\limit_behavior_tests.rs:36:9
+   |
+36 |         row: 500,
+   |         ^^^ `CellContent` does not have this field
+   |
+   = note: all struct fields are already assigned
+
+error[E0560]: struct `CellContent` has no field named `col`
+  --> core\tests\limit_behavior_tests.rs:37:9
+   |
+37 |         col: 5,
+   |         ^^^ `CellContent` does not have this field
+   |
+   = note: all struct fields are already assigned
+
+error[E0560]: struct `CellContent` has no field named `address`
+  --> core\tests\limit_behavior_tests.rs:38:9
+   |
+38 |         address: CellAddress::from_indices(500, 5),
+   |         ^^^^^^^ `CellContent` does not have this field
+   |
+   = note: all struct fields are already assigned
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:105:16
+    |
+105 |         sheet: "Sheet2".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:110:16
+    |
+110 |         sheet: "Sheet2".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:115:16
+    |
+115 |         sheet: "Sheet2".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:120:16
+    |
+120 |         sheet: "Sheet2".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0277]: can't compare `StringId` with `str`
+   --> core\tests\pg4_diffop_tests.rs:131:9
+    |
+131 |         assert_eq!(sheet, "Sheet1");
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `StringId == str`
+    |
+    = help: the trait `PartialEq<str>` is not implemented for `StringId`
+            but trait `PartialEq<StringId>` is implemented for it
+    = help: for that trait implementation, expected `StringId`, found `str`
+    = note: required for `&StringId` to implement `PartialEq<&str>`
+    = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0061]: this function takes 5 arguments but 4 arguments were supplied
+   --> core\tests\d1_database_mode_tests.rs:43:18
+    |
+ 43 |     let report = diff_grids_database_mode(grid, grid, &[0], &excel_diff::DiffConfig::default());
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^                   ---------------------------------- argument #4 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:164:8
+    |
+164 | pub fn diff_grids_database_mode(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+    |
+ 43 |     let report = diff_grids_database_mode(grid, grid, &[0], /* &mut StringPool */, &excel_diff::DiffConfig::default());
+    |                                                             ++++++++++++++++++++++
+
+error[E0277]: can't compare `StringId` with `str`
+   --> core\tests\pg4_diffop_tests.rs:144:9
+    |
+144 |         assert_eq!(sheet, "Sheet1");
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `StringId == str`
+    |
+    = help: the trait `PartialEq<str>` is not implemented for `StringId`
+            but trait `PartialEq<StringId>` is implemented for it
+    = help: for that trait implementation, expected `StringId`, found `str`
+    = note: required for `&StringId` to implement `PartialEq<&str>`
+    = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: can't compare `StringId` with `str`
+  --> core\tests\pg6_object_vs_grid_tests.rs:16:51
+   |
+16 |             DiffOp::SheetAdded { sheet } if sheet == "NewSheet" => sheet_added += 1,
+   |                                                   ^^ no implementation for `StringId == str`
+   |
+   = help: the trait `PartialEq<str>` is not implemented for `StringId`
+           but trait `PartialEq<StringId>` is implemented for it
+   = help: for that trait implementation, expected `StringId`, found `str`
+   = note: required for `&StringId` to implement `PartialEq<&str>`
+
+error[E0061]: this function takes 5 arguments but 4 arguments were supplied
+   --> core\tests\d1_database_mode_tests.rs:58:18
+    |
+ 58 |     let report = diff_grids_database_mode(grid_a, grid_b, &[0], &excel_diff::DiffConfig::default());
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^                       ---------------------------------- argument #4 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:164:8
+    |
+164 | pub fn diff_grids_database_mode(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+    |
+ 58 |     let report = diff_grids_database_mode(grid_a, grid_b, &[0], /* &mut StringPool */, &excel_diff::DiffConfig::default());
+    |                                                                 ++++++++++++++++++++++
+
+error[E0277]: can't compare `StringId` with `str`
+   --> core\tests\pg4_diffop_tests.rs:157:9
+    |
+157 |         assert_eq!(sheet, "Sheet1");
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `StringId == str`
+    |
+    = help: the trait `PartialEq<str>` is not implemented for `StringId`
+            but trait `PartialEq<StringId>` is implemented for it
+    = help: for that trait implementation, expected `StringId`, found `str`
+    = note: required for `&StringId` to implement `PartialEq<&str>`
+    = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: can't compare `StringId` with `str`
+  --> core\tests\pg6_object_vs_grid_tests.rs:22:26
+   |
+22 |                 if sheet == "Main" =>
+   |                          ^^ no implementation for `StringId == str`
+   |
+   = help: the trait `PartialEq<str>` is not implemented for `StringId`
+           but trait `PartialEq<StringId>` is implemented for it
+   = help: for that trait implementation, expected `StringId`, found `str`
+   = note: required for `&StringId` to implement `PartialEq<&str>`
+
+error[E0277]: can't compare `StringId` with `str`
+   --> core\tests\pg4_diffop_tests.rs:170:9
+    |
+170 |         assert_eq!(sheet, "Sheet1");
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `StringId == str`
+    |
+    = help: the trait `PartialEq<str>` is not implemented for `StringId`
+            but trait `PartialEq<StringId>` is implemented for it
+    = help: for that trait implementation, expected `StringId`, found `str`
+    = note: required for `&StringId` to implement `PartialEq<&str>`
+    = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: can't compare `StringId` with `str`
+   --> core\tests\pg4_diffop_tests.rs:183:9
+    |
+183 |         assert_eq!(sheet, "Sheet2");
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `StringId == str`
+    |
+    = help: the trait `PartialEq<str>` is not implemented for `StringId`
+            but trait `PartialEq<StringId>` is implemented for it
+    = help: for that trait implementation, expected `StringId`, found `str`
+    = note: required for `&StringId` to implement `PartialEq<&str>`
+    = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:32:15
+    |
+ 32 |         grid1.insert(make_cell(0, c, Some(CellValue::Number(c as f64)), None));
+    |               ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+ 32 |         grid1.cells.insert(make_cell(0, c, Some(CellValue::Number(c as f64)), None));
+    |               ++++++
+ 32 |         grid1.col_signatures.insert(make_cell(0, c, Some(CellValue::Number(c as f64)), None));
+    |               +++++++++++++++
+ 32 |         grid1.row_signatures.insert(make_cell(0, c, Some(CellValue::Number(c as f64)), None));
+    |               +++++++++++++++
+
+error[E0061]: this function takes 5 arguments but 4 arguments were supplied
+   --> core\tests\d1_database_mode_tests.rs:85:9
+    |
+ 85 |         diff_grids_database_mode(&grid_a, &grid_b, &[0], &excel_diff::DiffConfig::default());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^                         ---------------------------------- argument #4 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:164:8
+    |
+164 | pub fn diff_grids_database_mode(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+    |
+ 85 |         diff_grids_database_mode(&grid_a, &grid_b, &[0], /* &mut StringPool */, &excel_diff::DiffConfig::default());
+    |                                                          ++++++++++++++++++++++
+
+error[E0277]: can't compare `StringId` with `str`
+   --> core\tests\pg4_diffop_tests.rs:196:9
+    |
+196 |         assert_eq!(sheet, "Sheet2");
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `StringId == str`
+    |
+    = help: the trait `PartialEq<str>` is not implemented for `StringId`
+            but trait `PartialEq<StringId>` is implemented for it
+    = help: for that trait implementation, expected `StringId`, found `str`
+    = note: required for `&StringId` to implement `PartialEq<&str>`
+    = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: can't compare `StringId` with `str`
+   --> core\tests\pg4_diffop_tests.rs:209:9
+    |
+209 |         assert_eq!(sheet, "Sheet2");
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `StringId == str`
+    |
+    = help: the trait `PartialEq<str>` is not implemented for `StringId`
+            but trait `PartialEq<StringId>` is implemented for it
+    = help: for that trait implementation, expected `StringId`, found `str`
+    = note: required for `&StringId` to implement `PartialEq<&str>`
+    = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0061]: this function takes 5 arguments but 4 arguments were supplied
+   --> core\tests\d1_database_mode_tests.rs:108:9
+    |
+108 |         diff_grids_database_mode(&grid_a, &grid_b, &[0], &excel_diff::DiffConfig::default());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^                         ---------------------------------- argument #4 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:164:8
+    |
+164 | pub fn diff_grids_database_mode(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+    |
+108 |         diff_grids_database_mode(&grid_a, &grid_b, &[0], /* &mut StringPool */, &excel_diff::DiffConfig::default());
+    |                                                          ++++++++++++++++++++++
+
+error[E0277]: can't compare `StringId` with `str`
+   --> core\tests\pg4_diffop_tests.rs:222:9
+    |
+222 |         assert_eq!(sheet, "Sheet2");
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `StringId == str`
+    |
+    = help: the trait `PartialEq<str>` is not implemented for `StringId`
+            but trait `PartialEq<StringId>` is implemented for it
+    = help: for that trait implementation, expected `StringId`, found `str`
+    = note: required for `&StringId` to implement `PartialEq<&str>`
+    = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0061]: this function takes 5 arguments but 4 arguments were supplied
+   --> core\tests\d1_database_mode_tests.rs:127:9
+    |
+127 |         diff_grids_database_mode(&grid_a, &grid_b, &[0], &excel_diff::DiffConfig::default());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^                         ---------------------------------- argument #4 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:164:8
+    |
+164 | pub fn diff_grids_database_mode(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+    |
+127 |         diff_grids_database_mode(&grid_a, &grid_b, &[0], /* &mut StringPool */, &excel_diff::DiffConfig::default());
+    |                                                          ++++++++++++++++++++++
+
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+  --> core\tests\limit_behavior_tests.rs:47:18
+   |
+47 |     let report = diff_workbooks(&wb_a, &wb_b, &config);
+   |                  ^^^^^^^^^^^^^^               ------- argument #3 of type `&mut StringPool` is missing
+   |
+note: function defined here
+  --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:59:8
+   |
+59 | pub fn diff_workbooks(
+   |        ^^^^^^^^^^^^^^
+help: provide the argument
+   |
+47 |     let report = diff_workbooks(&wb_a, &wb_b, /* &mut StringPool */, &config);
+   |                                               ++++++++++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:33:15
+    |
+ 33 |         grid2.insert(make_cell(
+    |         ------^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+ 33 |         grid2.cells.insert(make_cell(
+    |               ++++++
+ 33 |         grid2.col_signatures.insert(make_cell(
+    |               +++++++++++++++
+ 33 |         grid2.row_signatures.insert(make_cell(
+    |               +++++++++++++++
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:238:16
+    |
+238 |         sheet: "Sheet1".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0061]: this function takes 5 arguments but 4 arguments were supplied
+   --> core\tests\d1_database_mode_tests.rs:146:9
+    |
+146 |         diff_grids_database_mode(&grid_a, &grid_b, &[0], &excel_diff::DiffConfig::default());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^                         ---------------------------------- argument #4 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:164:8
+    |
+164 | pub fn diff_grids_database_mode(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+    |
+146 |         diff_grids_database_mode(&grid_a, &grid_b, &[0], /* &mut StringPool */, &excel_diff::DiffConfig::default());
+    |                                                          ++++++++++++++++++++++
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:245:16
+    |
+245 |         sheet: "Sheet1".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:252:16
+    |
+252 |         sheet: "Sheet2".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:259:16
+    |
+259 |         sheet: "Sheet2".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0061]: this function takes 5 arguments but 4 arguments were supplied
+   --> core\tests\d1_database_mode_tests.rs:165:9
+    |
+165 |         diff_grids_database_mode(&grid_a, &grid_b, &[0], &excel_diff::DiffConfig::default());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^                         ---------------------------------- argument #4 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:164:8
+    |
+164 | pub fn diff_grids_database_mode(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+    |
+165 |         diff_grids_database_mode(&grid_a, &grid_b, &[0], /* &mut StringPool */, &excel_diff::DiffConfig::default());
+    |                                                          ++++++++++++++++++++++
+
+error[E0277]: can't compare `StringId` with `str`
+   --> core\tests\pg4_diffop_tests.rs:274:9
+    |
+274 |         assert_eq!(sheet, "Sheet1");
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `StringId == str`
+    |
+    = help: the trait `PartialEq<str>` is not implemented for `StringId`
+            but trait `PartialEq<StringId>` is implemented for it
+    = help: for that trait implementation, expected `StringId`, found `str`
+    = note: required for `&StringId` to implement `PartialEq<&str>`
+    = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: can't compare `StringId` with `str`
+  --> core\tests\pg6_object_vs_grid_tests.rs:53:53
+   |
+53 |             DiffOp::SheetRemoved { sheet } if sheet == "OldSheet" => sheet_removed += 1,
+   |                                                     ^^ no implementation for `StringId == str`
+   |
+   = help: the trait `PartialEq<str>` is not implemented for `StringId`
+           but trait `PartialEq<StringId>` is implemented for it
+   = help: for that trait implementation, expected `StringId`, found `str`
+   = note: required for `&StringId` to implement `PartialEq<&str>`
+
+error[E0061]: this function takes 5 arguments but 4 arguments were supplied
+   --> core\tests\d1_database_mode_tests.rs:184:9
+    |
+184 |         diff_grids_database_mode(&grid_a, &grid_b, &[0], &excel_diff::DiffConfig::default());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^                         ---------------------------------- argument #4 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:164:8
+    |
+164 | pub fn diff_grids_database_mode(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+    |
+184 |         diff_grids_database_mode(&grid_a, &grid_b, &[0], /* &mut StringPool */, &excel_diff::DiffConfig::default());
+    |                                                          ++++++++++++++++++++++
+
+error[E0277]: can't compare `StringId` with `str`
+  --> core\tests\pg6_object_vs_grid_tests.rs:59:26
+   |
+59 |                 if sheet == "Main" =>
+   |                          ^^ no implementation for `StringId == str`
+   |
+   = help: the trait `PartialEq<str>` is not implemented for `StringId`
+           but trait `PartialEq<StringId>` is implemented for it
+   = help: for that trait implementation, expected `StringId`, found `str`
+   = note: required for `&StringId` to implement `PartialEq<&str>`
+
+error[E0061]: this function takes 5 arguments but 4 arguments were supplied
+   --> core\tests\d1_database_mode_tests.rs:197:9
+    |
+197 |         diff_grids_database_mode(&grid_a, &grid_b, &[0], &excel_diff::DiffConfig::default());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^                         ---------------------------------- argument #4 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:164:8
+    |
+164 | pub fn diff_grids_database_mode(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+    |
+197 |         diff_grids_database_mode(&grid_a, &grid_b, &[0], /* &mut StringPool */, &excel_diff::DiffConfig::default());
+    |                                                          ++++++++++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\limit_behavior_tests.rs:67:12
+    |
+ 67 |     grid_b.insert(Cell {
+    |     -------^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+ 67 |     grid_b.cells.insert(Cell {
+    |            ++++++
+ 67 |     grid_b.col_signatures.insert(Cell {
+    |            +++++++++++++++
+ 67 |     grid_b.row_signatures.insert(Cell {
+    |            +++++++++++++++
+
+error[E0560]: struct `CellContent` has no field named `row`
+  --> core\tests\limit_behavior_tests.rs:68:9
+   |
+68 |         row: 50,
+   |         ^^^ `CellContent` does not have this field
+   |
+   = note: all struct fields are already assigned
+
+error[E0560]: struct `CellContent` has no field named `col`
+  --> core\tests\limit_behavior_tests.rs:69:9
+   |
+69 |         col: 5,
+   |         ^^^ `CellContent` does not have this field
+   |
+   = note: all struct fields are already assigned
+
+error[E0560]: struct `CellContent` has no field named `address`
+  --> core\tests\limit_behavior_tests.rs:70:9
+   |
+70 |         address: CellAddress::from_indices(50, 5),
+   |         ^^^^^^^ `CellContent` does not have this field
+   |
+   = note: all struct fields are already assigned
+
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+  --> core\tests\limit_behavior_tests.rs:84:18
+   |
+84 |     let report = diff_workbooks(&wb_a, &wb_b, &config);
+   |                  ^^^^^^^^^^^^^^               ------- argument #3 of type `&mut StringPool` is missing
+   |
+note: function defined here
+  --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:59:8
+   |
+59 | pub fn diff_workbooks(
+   |        ^^^^^^^^^^^^^^
+help: provide the argument
+   |
+84 |     let report = diff_workbooks(&wb_a, &wb_b, /* &mut StringPool */, &config);
+   |                                               ++++++++++++++++++++++
+
+error[E0277]: can't compare `StringId` with `str`
+  --> core\tests\pg6_object_vs_grid_tests.rs:92:51
+   |
+92 |             DiffOp::SheetAdded { sheet } if sheet == "NewName" => added += 1,
+   |                                                   ^^ no implementation for `StringId == str`
+   |
+   = help: the trait `PartialEq<str>` is not implemented for `StringId`
+           but trait `PartialEq<StringId>` is implemented for it
+   = help: for that trait implementation, expected `StringId`, found `str`
+   = note: required for `&StringId` to implement `PartialEq<&str>`
+
+error[E0277]: can't compare `StringId` with `str`
+  --> core\tests\pg6_object_vs_grid_tests.rs:93:53
+   |
+93 |             DiffOp::SheetRemoved { sheet } if sheet == "OldName" => removed += 1,
+   |                                                     ^^ no implementation for `StringId == str`
+   |
+   = help: the trait `PartialEq<str>` is not implemented for `StringId`
+           but trait `PartialEq<StringId>` is implemented for it
+   = help: for that trait implementation, expected `StringId`, found `str`
+   = note: required for `&StringId` to implement `PartialEq<&str>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:48:10
+    |
+ 48 |     grid.insert(make_cell(
+    |     -----^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+ 48 |     grid.cells.insert(make_cell(
+    |          ++++++
+ 48 |     grid.col_signatures.insert(make_cell(
+    |          +++++++++++++++
+ 48 |     grid.row_signatures.insert(make_cell(
+    |          +++++++++++++++
+
+error[E0061]: this function takes 5 arguments but 4 arguments were supplied
+   --> core\tests\d1_database_mode_tests.rs:225:18
+    |
+225 |     let report = diff_grids_database_mode(
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+229 |         &excel_diff::DiffConfig::default(),
+    |         ---------------------------------- argument #4 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:164:8
+    |
+164 | pub fn diff_grids_database_mode(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+    |
+229 |     let report = diff_grids_database_mode(
+...
+232 |         &[0, 1],
+233 ~         /* &mut StringPool */,
+234 ~         &excel_diff::DiffConfig::default(),
+    |
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `excel_diff` (test "g1_g2_grid_workbook_tests") due to 6 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0061]: this function takes 5 arguments but 4 arguments were supplied
+   --> core\tests\d1_database_mode_tests.rs:242:18
+    |
+242 |     let report = diff_grids_database_mode(
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+246 |         &excel_diff::DiffConfig::default(),
+    |         ---------------------------------- argument #4 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:164:8
+    |
+164 | pub fn diff_grids_database_mode(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+    |
+246 |     let report = diff_grids_database_mode(
+...
+249 |         &[0, 1],
+250 ~         /* &mut StringPool */,
+251 ~         &excel_diff::DiffConfig::default(),
+    |
+
+error[E0277]: can't compare `StringId` with `str`
+   --> core\tests\pg6_object_vs_grid_tests.rs:132:51
+    |
+132 |             DiffOp::SheetAdded { sheet } if sheet == "Scratch" => scratch_added += 1,
+    |                                                   ^^ no implementation for `StringId == str`
+    |
+    = help: the trait `PartialEq<str>` is not implemented for `StringId`
+            but trait `PartialEq<StringId>` is implemented for it
+    = help: for that trait implementation, expected `StringId`, found `str`
+    = note: required for `&StringId` to implement `PartialEq<&str>`
+
+error[E0277]: can't compare `StringId` with `str`
+  --> core\tests\g12_column_block_move_grid_workbook_tests.rs:25:13
+   |
+25 |             assert_eq!(sheet, "Data");
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `StringId == str`
+   |
+   = help: the trait `PartialEq<str>` is not implemented for `StringId`
+           but trait `PartialEq<StringId>` is implemented for it
+   = help: for that trait implementation, expected `StringId`, found `str`
+   = note: required for `&StringId` to implement `PartialEq<&str>`
+   = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+  --> core\tests\signature_tests.rs:51:39
+   |
+51 |         Some(CellValue::Text("center".into())),
+   |                                       ^^^^ the trait `From<&str>` is not implemented for `StringId`
+   |
+   = note: required for `&str` to implement `Into<StringId>`
+
+error[E0277]: can't compare `StringId` with `str`
+   --> core\tests\pg6_object_vs_grid_tests.rs:134:17
+    |
+134 |                 assert_eq!(sheet, "Main", "only Main should have cell edits");
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `StringId == str`
+    |
+    = help: the trait `PartialEq<str>` is not implemented for `StringId`
+            but trait `PartialEq<StringId>` is implemented for it
+    = help: for that trait implementation, expected `StringId`, found `str`
+    = note: required for `&StringId` to implement `PartialEq<&str>`
+    = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\limit_behavior_tests.rs:104:12
+    |
+104 |     grid_b.insert(Cell {
+    |     -------^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+104 |     grid_b.cells.insert(Cell {
+    |            ++++++
+104 |     grid_b.col_signatures.insert(Cell {
+    |            +++++++++++++++
+104 |     grid_b.row_signatures.insert(Cell {
+    |            +++++++++++++++
+
+error[E0560]: struct `CellContent` has no field named `row`
+   --> core\tests\limit_behavior_tests.rs:105:9
+    |
+105 |         row: 50,
+    |         ^^^ `CellContent` does not have this field
+    |
+    = note: all struct fields are already assigned
+
+error[E0560]: struct `CellContent` has no field named `col`
+   --> core\tests\limit_behavior_tests.rs:106:9
+    |
+106 |         col: 5,
+    |         ^^^ `CellContent` does not have this field
+    |
+    = note: all struct fields are already assigned
+
+error[E0560]: struct `CellContent` has no field named `address`
+   --> core\tests\limit_behavior_tests.rs:107:9
+    |
+107 |         address: CellAddress::from_indices(50, 5),
+    |         ^^^^^^^ `CellContent` does not have this field
+    |
+    = note: all struct fields are already assigned
+
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+   --> core\tests\limit_behavior_tests.rs:121:18
+    |
+121 |     let report = diff_workbooks(&wb_a, &wb_b, &config);
+    |                  ^^^^^^^^^^^^^^               ------- argument #3 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:59:8
+    |
+ 59 | pub fn diff_workbooks(
+    |        ^^^^^^^^^^^^^^
+help: provide the argument
+    |
+121 |     let report = diff_workbooks(&wb_a, &wb_b, /* &mut StringPool */, &config);
+    |                                               ++++++++++++++++++++++
+
+error[E0061]: this function takes 5 arguments but 4 arguments were supplied
+   --> core\tests\d1_database_mode_tests.rs:296:18
+    |
+296 |     let report = diff_grids_database_mode(
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+300 |         &excel_diff::DiffConfig::default(),
+    |         ---------------------------------- argument #4 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:164:8
+    |
+164 | pub fn diff_grids_database_mode(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+    |
+300 |     let report = diff_grids_database_mode(
+...
+303 |         &[0, 1],
+304 ~         /* &mut StringPool */,
+305 ~         &excel_diff::DiffConfig::default(),
+    |
+
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+   --> core\tests\limit_behavior_tests.rs:155:18
+    |
+155 |     let result = try_diff_workbooks(&wb_a, &wb_b, &config);
+    |                  ^^^^^^^^^^^^^^^^^^               ------- argument #3 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:71:8
+    |
+ 71 | pub fn try_diff_workbooks(
+    |        ^^^^^^^^^^^^^^^^^^
+help: provide the argument
+    |
+155 |     let result = try_diff_workbooks(&wb_a, &wb_b, /* &mut StringPool */, &config);
+    |                                                   ++++++++++++++++++++++
+
+error: could not compile `excel_diff` (test "pg3_snapshot_tests") due to 8 previous errors
+error[E0061]: this function takes 5 arguments but 4 arguments were supplied
+   --> core\tests\d1_database_mode_tests.rs:339:18
+    |
+339 |     let report = diff_grids_database_mode(
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+343 |         &excel_diff::DiffConfig::default(),
+    |         ---------------------------------- argument #4 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:164:8
+    |
+164 | pub fn diff_grids_database_mode(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+    |
+343 |     let report = diff_grids_database_mode(
+...
+346 |         &[0, 1],
+347 ~         /* &mut StringPool */,
+348 ~         &excel_diff::DiffConfig::default(),
+    |
+
+error[E0061]: this function takes 5 arguments but 4 arguments were supplied
+   --> core\tests\d1_database_mode_tests.rs:366:18
+    |
+366 |     let report = diff_grids_database_mode(
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+370 |         &excel_diff::DiffConfig::default(),
+    |         ---------------------------------- argument #4 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:164:8
+    |
+164 | pub fn diff_grids_database_mode(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+    |
+370 |     let report = diff_grids_database_mode(
+...
+373 |         &[0, 2],
+374 ~         /* &mut StringPool */,
+375 ~         &excel_diff::DiffConfig::default(),
+    |
+
+error[E0308]: mismatched types
+   --> core\tests\limit_behavior_tests.rs:167:31
+    |
+167 |             assert_eq!(sheet, "Sheet1");
+    |                               ^^^^^^^^ expected `StringId`, found `&str`
+
+error[E0277]: can't compare `StringId` with `str`
+   --> core\tests\pg4_diffop_tests.rs:291:9
+    |
+291 |         assert_eq!(sheet, "Sheet1");
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `StringId == str`
+    |
+    = help: the trait `PartialEq<str>` is not implemented for `StringId`
+            but trait `PartialEq<StringId>` is implemented for it
+    = help: for that trait implementation, expected `StringId`, found `str`
+    = note: required for `&StringId` to implement `PartialEq<&str>`
+    = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0061]: this function takes 5 arguments but 4 arguments were supplied
+   --> core\tests\d1_database_mode_tests.rs:383:18
+    |
+383 |     let report = diff_grids_database_mode(
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+387 |         &excel_diff::DiffConfig::default(),
+    |         ---------------------------------- argument #4 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:164:8
+    |
+164 | pub fn diff_grids_database_mode(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+    |
+387 |     let report = diff_grids_database_mode(
+...
+390 |         &[0, 2],
+391 ~         /* &mut StringPool */,
+392 ~         &excel_diff::DiffConfig::default(),
+    |
+
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+   --> core\tests\limit_behavior_tests.rs:192:13
+    |
+192 |     let _ = diff_workbooks(&wb_a, &wb_b, &config);
+    |             ^^^^^^^^^^^^^^               ------- argument #3 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:59:8
+    |
+ 59 | pub fn diff_workbooks(
+    |        ^^^^^^^^^^^^^^
+help: provide the argument
+    |
+192 |     let _ = diff_workbooks(&wb_a, &wb_b, /* &mut StringPool */, &config);
+    |                                          ++++++++++++++++++++++
+
+error[E0277]: can't compare `StringId` with `str`
+   --> core\tests\pg4_diffop_tests.rs:308:9
+    |
+308 |         assert_eq!(sheet, "Sheet2");
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `StringId == str`
+    |
+    = help: the trait `PartialEq<str>` is not implemented for `StringId`
+            but trait `PartialEq<StringId>` is implemented for it
+    = help: for that trait implementation, expected `StringId`, found `str`
+    = note: required for `&StringId` to implement `PartialEq<&str>`
+    = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: can't compare `StringId` with `str`
+   --> core\tests\pg4_diffop_tests.rs:325:9
+    |
+325 |         assert_eq!(sheet, "Sheet2");
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `StringId == str`
+    |
+    = help: the trait `PartialEq<str>` is not implemented for `StringId`
+            but trait `PartialEq<StringId>` is implemented for it
+    = help: for that trait implementation, expected `StringId`, found `str`
+    = note: required for `&StringId` to implement `PartialEq<&str>`
+    = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0061]: this function takes 5 arguments but 4 arguments were supplied
+   --> core\tests\d1_database_mode_tests.rs:435:18
+    |
+435 |     let report = diff_grids_database_mode(
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+439 |         &excel_diff::DiffConfig::default(),
+    |         ---------------------------------- argument #4 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:164:8
+    |
+164 | pub fn diff_grids_database_mode(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+    |
+439 |     let report = diff_grids_database_mode(
+...
+442 |         &[0, 2],
+443 ~         /* &mut StringPool */,
+444 ~         &excel_diff::DiffConfig::default(),
+    |
+
+error[E0308]: mismatched types
+   --> core\tests\output_tests.rs:19:54
+    |
+ 19 |         Some(excel_diff::CellValue::Text(s)) => Some(s.clone()),
+    |                                                 ---- ^^^^^^^^^ expected `String`, found `StringId`
+    |                                                 |
+    |                                                 arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `StringId` due to the type of the argument passed
+   --> core\tests\output_tests.rs:19:49
+    |
+ 19 |         Some(excel_diff::CellValue::Text(s)) => Some(s.clone()),
+    |                                                 ^^^^^---------^
+    |                                                      |
+    |                                                      this argument influences the type of `Some`
+note: tuple variant defined here
+   --> C:\Users\dvora\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\option.rs:602:5
+    |
+602 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: try using a conversion method
+    |
+ 19 -         Some(excel_diff::CellValue::Text(s)) => Some(s.clone()),
+ 19 +         Some(excel_diff::CellValue::Text(s)) => Some(s.to_string()),
+    |
+
+error[E0277]: can't compare `StringId` with `str`
+   --> core\tests\g12_column_block_move_grid_workbook_tests.rs:124:13
+    |
+124 |             assert_eq!(sheet, "Data");
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `StringId == str`
+    |
+    = help: the trait `PartialEq<str>` is not implemented for `StringId`
+            but trait `PartialEq<StringId>` is implemented for it
+    = help: for that trait implementation, expected `StringId`, found `str`
+    = note: required for `&StringId` to implement `PartialEq<&str>`
+    = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0061]: this function takes 5 arguments but 4 arguments were supplied
+   --> core\tests\d1_database_mode_tests.rs:485:18
+    |
+485 |     let report = diff_grids_database_mode(
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+489 |         &excel_diff::DiffConfig::default(),
+    |         ---------------------------------- argument #4 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:164:8
+    |
+164 | pub fn diff_grids_database_mode(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+    |
+489 |     let report = diff_grids_database_mode(
+...
+492 |         &[0, 1, 2],
+493 ~         /* &mut StringPool */,
+494 ~         &excel_diff::DiffConfig::default(),
+    |
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\limit_behavior_tests.rs:199:12
+    |
+199 |     grid_b.insert(Cell {
+    |     -------^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+199 |     grid_b.cells.insert(Cell {
+    |            ++++++
+199 |     grid_b.col_signatures.insert(Cell {
+    |            +++++++++++++++
+199 |     grid_b.row_signatures.insert(Cell {
+    |            +++++++++++++++
+
+error[E0560]: struct `CellContent` has no field named `row`
+   --> core\tests\limit_behavior_tests.rs:200:9
+    |
+200 |         row: 5,
+    |         ^^^ `CellContent` does not have this field
+    |
+    = note: all struct fields are already assigned
+
+error[E0560]: struct `CellContent` has no field named `col`
+   --> core\tests\limit_behavior_tests.rs:201:9
+    |
+201 |         col: 50,
+    |         ^^^ `CellContent` does not have this field
+    |
+    = note: all struct fields are already assigned
+
+error[E0560]: struct `CellContent` has no field named `address`
+   --> core\tests\limit_behavior_tests.rs:202:9
+    |
+202 |         address: CellAddress::from_indices(5, 50),
+    |         ^^^^^^^ `CellContent` does not have this field
+    |
+    = note: all struct fields are already assigned
+
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+   --> core\tests\limit_behavior_tests.rs:216:18
+    |
+216 |     let report = diff_workbooks(&wb_a, &wb_b, &config);
+    |                  ^^^^^^^^^^^^^^               ------- argument #3 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:59:8
+    |
+ 59 | pub fn diff_workbooks(
+    |        ^^^^^^^^^^^^^^
+help: provide the argument
+    |
+216 |     let report = diff_workbooks(&wb_a, &wb_b, /* &mut StringPool */, &config);
+    |                                               ++++++++++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:103:10
+    |
+103 |     grid.insert(make_cell(
+    |     -----^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+103 |     grid.cells.insert(make_cell(
+    |          ++++++
+103 |     grid.col_signatures.insert(make_cell(
+    |          +++++++++++++++
+103 |     grid.row_signatures.insert(make_cell(
+    |          +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+  --> core\tests\output_tests.rs:40:33
+   |
+40 |             sheet: "SheetAdded".into(),
+   |                                 ^^^^ the trait `From<&str>` is not implemented for `StringId`
+   |
+   = note: required for `&str` to implement `Into<StringId>`
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+  --> core\tests\output_tests.rs:43:22
+   |
+43 |             "Sheet1".into(),
+   |                      ^^^^ the trait `From<&str>` is not implemented for `StringId`
+   |
+   = note: required for `&str` to implement `Into<StringId>`
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+  --> core\tests\output_tests.rs:49:29
+   |
+49 |             sheet: "Sheet1".into(),
+   |                             ^^^^ the trait `From<&str>` is not implemented for `StringId`
+   |
+   = note: required for `&str` to implement `Into<StringId>`
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+  --> core\tests\output_tests.rs:54:22
+   |
+54 |             "Sheet2".into(),
+   |                      ^^^^ the trait `From<&str>` is not implemented for `StringId`
+   |
+   = note: required for `&str` to implement `Into<StringId>`
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+  --> core\tests\output_tests.rs:56:66
+   |
+56 |             make_cell_snapshot(addr2, Some(CellValue::Text("old".into()))),
+   |                                                                  ^^^^ the trait `From<&str>` is not implemented for `StringId`
+   |
+   = note: required for `&str` to implement `Into<StringId>`
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+  --> core\tests\output_tests.rs:57:66
+   |
+57 |             make_cell_snapshot(addr2, Some(CellValue::Text("new".into()))),
+   |                                                                  ^^^^ the trait `From<&str>` is not implemented for `StringId`
+   |
+   = note: required for `&str` to implement `Into<StringId>`
+
+error[E0061]: this function takes 5 arguments but 4 arguments were supplied
+   --> core\tests\d1_database_mode_tests.rs:502:18
+    |
+502 |     let report = diff_grids_database_mode(
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+506 |         &excel_diff::DiffConfig::default(),
+    |         ---------------------------------- argument #4 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:164:8
+    |
+164 | pub fn diff_grids_database_mode(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+    |
+506 |     let report = diff_grids_database_mode(
+...
+509 |         &[0, 1, 2],
+510 ~         /* &mut StringPool */,
+511 ~         &excel_diff::DiffConfig::default(),
+    |
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+  --> core\tests\output_tests.rs:60:31
+   |
+60 |             sheet: "OldSheet".into(),
+   |                               ^^^^ the trait `From<&str>` is not implemented for `StringId`
+   |
+   = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\limit_behavior_tests.rs:232:12
+    |
+232 |     grid_b.insert(Cell {
+    |     -------^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+232 |     grid_b.cells.insert(Cell {
+    |            ++++++
+232 |     grid_b.col_signatures.insert(Cell {
+    |            +++++++++++++++
+232 |     grid_b.row_signatures.insert(Cell {
+    |            +++++++++++++++
+
+error[E0560]: struct `CellContent` has no field named `row`
+   --> core\tests\limit_behavior_tests.rs:233:9
+    |
+233 |         row: 20,
+    |         ^^^ `CellContent` does not have this field
+    |
+    = note: all struct fields are already assigned
+
+error[E0560]: struct `CellContent` has no field named `col`
+   --> core\tests\limit_behavior_tests.rs:234:9
+    |
+234 |         col: 5,
+    |         ^^^ `CellContent` does not have this field
+    |
+    = note: all struct fields are already assigned
+
+error[E0560]: struct `CellContent` has no field named `address`
+   --> core\tests\limit_behavior_tests.rs:235:9
+    |
+235 |         address: CellAddress::from_indices(20, 5),
+    |         ^^^^^^^ `CellContent` does not have this field
+    |
+    = note: all struct fields are already assigned
+
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+   --> core\tests\limit_behavior_tests.rs:249:18
+    |
+249 |     let report = diff_workbooks(&wb_a, &wb_b, &config);
+    |                  ^^^^^^^^^^^^^^               ------- argument #3 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:59:8
+    |
+ 59 | pub fn diff_workbooks(
+    |        ^^^^^^^^^^^^^^
+help: provide the argument
+    |
+249 |     let report = diff_workbooks(&wb_a, &wb_b, /* &mut StringPool */, &config);
+    |                                               ++++++++++++++++++++++
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:341:16
+    |
+341 |         sheet: "Sheet1".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0277]: can't compare `StringId` with `str`
+   --> core\tests\g12_column_block_move_grid_workbook_tests.rs:184:13
+    |
+184 |             assert_eq!(sheet, "Data");
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `StringId == str`
+    |
+    = help: the trait `PartialEq<str>` is not implemented for `StringId`
+            but trait `PartialEq<StringId>` is implemented for it
+    = help: for that trait implementation, expected `StringId`, found `str`
+    = note: required for `&StringId` to implement `PartialEq<&str>`
+    = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+   --> core\tests\limit_behavior_tests.rs:267:23
+    |
+267 |                 name: "SmallSheet".to_string(),
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+  --> core\tests\output_tests.rs:85:43
+   |
+85 |         DiffOp::block_moved_rect("Sheet1".into(), 2, 3, 1, 3, 9, 6, Some(0xCAFEBABE)),
+   |                                           ^^^^ the trait `From<&str>` is not implemented for `StringId`
+   |
+   = note: required for `&str` to implement `Into<StringId>`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:351:16
+    |
+351 |         sheet: "Sheet1".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+  --> core\tests\output_tests.rs:87:22
+   |
+87 |             "Sheet1".into(),
+   |                      ^^^^ the trait `From<&str>` is not implemented for `StringId`
+   |
+   = note: required for `&str` to implement `Into<StringId>`
+
+error[E0308]: mismatched types
+   --> core\tests\limit_behavior_tests.rs:272:23
+    |
+272 |                 name: "LargeSheet".to_string(),
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+  --> core\tests\output_tests.rs:93:29
+   |
+93 |             sheet: "Sheet1".into(),
+   |                             ^^^^ the trait `From<&str>` is not implemented for `StringId`
+   |
+   = note: required for `&str` to implement `Into<StringId>`
+
+error[E0308]: mismatched types
+   --> core\tests\limit_behavior_tests.rs:282:23
+    |
+282 |                 name: "SmallSheet".to_string(),
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\output_tests.rs:100:29
+    |
+100 |             sheet: "Sheet1".into(),
+    |                             ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0308]: mismatched types
+   --> core\tests\limit_behavior_tests.rs:287:23
+    |
+287 |                 name: "LargeSheet".to_string(),
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+   --> core\tests\limit_behavior_tests.rs:300:18
+    |
+300 |     let report = diff_workbooks(&wb_a, &wb_b, &config);
+    |                  ^^^^^^^^^^^^^^               ------- argument #3 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:59:8
+    |
+ 59 | pub fn diff_workbooks(
+    |        ^^^^^^^^^^^^^^
+help: provide the argument
+    |
+300 |     let report = diff_workbooks(&wb_a, &wb_b, /* &mut StringPool */, &config);
+    |                                               ++++++++++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:109:10
+    |
+109 |     grid.insert(make_cell(1, 1, Some(CellValue::Text("text".into())), None));
+    |          ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+109 |     grid.cells.insert(make_cell(1, 1, Some(CellValue::Text("text".into())), None));
+    |          ++++++
+109 |     grid.col_signatures.insert(make_cell(1, 1, Some(CellValue::Text("text".into())), None));
+    |          +++++++++++++++
+109 |     grid.row_signatures.insert(make_cell(1, 1, Some(CellValue::Text("text".into())), None));
+    |          +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\output_tests.rs:127:22
+    |
+127 |             "SheetX".into(),
+    |                      ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\output_tests.rs:133:22
+    |
+133 |             "SheetX".into(),
+    |                      ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:109:61
+    |
+109 |     grid.insert(make_cell(1, 1, Some(CellValue::Text("text".into())), None));
+    |                                                             ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error: could not compile `excel_diff` (test "g11_row_block_move_grid_workbook_tests") due to 1 previous error
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\limit_behavior_tests.rs:313:12
+    |
+313 |     grid_b.insert(Cell {
+    |     -------^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+313 |     grid_b.cells.insert(Cell {
+    |            ++++++
+313 |     grid_b.col_signatures.insert(Cell {
+    |            +++++++++++++++
+313 |     grid_b.row_signatures.insert(Cell {
+    |            +++++++++++++++
+
+error[E0308]: mismatched types
+   --> core\tests\output_tests.rs:161:13
+    |
+160 |         DiffOp::cell_edited(
+    |         ------------------- arguments to this function are incorrect
+161 |             "Sheet1".to_string(),
+    |             ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+    |
+note: associated function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\diff.rs:174:12
+    |
+174 |     pub fn cell_edited(
+    |            ^^^^^^^^^^^
+
+error[E0560]: struct `CellContent` has no field named `row`
+   --> core\tests\limit_behavior_tests.rs:314:9
+    |
+314 |         row: 2500,
+    |         ^^^ `CellContent` does not have this field
+    |
+    = note: all struct fields are already assigned
+
+error[E0560]: struct `CellContent` has no field named `col`
+   --> core\tests\limit_behavior_tests.rs:315:9
+    |
+315 |         col: 5,
+    |         ^^^ `CellContent` does not have this field
+    |
+    = note: all struct fields are already assigned
+
+error[E0560]: struct `CellContent` has no field named `address`
+   --> core\tests\limit_behavior_tests.rs:316:9
+    |
+316 |         address: CellAddress::from_indices(2500, 5),
+    |         ^^^^^^^ `CellContent` does not have this field
+    |
+    = note: all struct fields are already assigned
+
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+   --> core\tests\limit_behavior_tests.rs:325:18
+    |
+325 |     let report = diff_workbooks(&wb_a, &wb_b, &config);
+    |                  ^^^^^^^^^^^^^^               ------- argument #3 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:59:8
+    |
+ 59 | pub fn diff_workbooks(
+    |        ^^^^^^^^^^^^^^
+help: provide the argument
+    |
+325 |     let report = diff_workbooks(&wb_a, &wb_b, /* &mut StringPool */, &config);
+    |                                               ++++++++++++++++++++++
+
+error[E0308]: mismatched types
+   --> core\tests\output_tests.rs:167:13
+    |
+166 |         DiffOp::cell_edited(
+    |         ------------------- arguments to this function are incorrect
+167 |             "Sheet1".to_string(),
+    |             ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+    |
+note: associated function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\diff.rs:174:12
+    |
+174 |     pub fn cell_edited(
+    |            ^^^^^^^^^^^
+
+error: could not compile `excel_diff` (test "pg6_object_vs_grid_tests") due to 8 previous errors
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:110:10
+    |
+110 |     grid.insert(make_cell(2, 0, Some(CellValue::Bool(true)), Some("=A1")));
+    |          ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+110 |     grid.cells.insert(make_cell(2, 0, Some(CellValue::Bool(true)), Some("=A1")));
+    |          ++++++
+110 |     grid.col_signatures.insert(make_cell(2, 0, Some(CellValue::Bool(true)), Some("=A1")));
+    |          +++++++++++++++
+110 |     grid.row_signatures.insert(make_cell(2, 0, Some(CellValue::Bool(true)), Some("=A1")));
+    |          +++++++++++++++
+
+Some errors have detailed explanations: E0061, E0308, E0560, E0599.
+error[E0277]: can't compare `StringId` with `str`
+   --> core\tests\pg4_diffop_tests.rs:372:9
+    |
+372 |         assert_eq!(sheet, "Sheet1");
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `StringId == str`
+    |
+    = help: the trait `PartialEq<str>` is not implemented for `StringId`
+            but trait `PartialEq<StringId>` is implemented for it
+    = help: for that trait implementation, expected `StringId`, found `str`
+    = note: required for `&StringId` to implement `PartialEq<&str>`
+    = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: can't compare `StringId` with `str`
+   --> core\tests\pg4_diffop_tests.rs:395:9
+    |
+395 |         assert_eq!(sheet, "Sheet1");
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `StringId == str`
+    |
+    = help: the trait `PartialEq<str>` is not implemented for `StringId`
+            but trait `PartialEq<StringId>` is implemented for it
+    = help: for that trait implementation, expected `StringId`, found `str`
+    = note: required for `&StringId` to implement `PartialEq<&str>`
+    = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:140:10
+    |
+140 |     grid.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |          ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+140 |     grid.cells.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |          ++++++
+140 |     grid.col_signatures.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |          +++++++++++++++
+140 |     grid.row_signatures.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |          +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\limit_behavior_tests.rs:345:12
+    |
+345 |     grid_b.insert(Cell {
+    |     -------^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+345 |     grid_b.cells.insert(Cell {
+    |            ++++++
+345 |     grid_b.col_signatures.insert(Cell {
+    |            +++++++++++++++
+345 |     grid_b.row_signatures.insert(Cell {
+    |            +++++++++++++++
+
+error[E0560]: struct `CellContent` has no field named `row`
+   --> core\tests\limit_behavior_tests.rs:346:9
+    |
+346 |         row: 50,
+    |         ^^^ `CellContent` does not have this field
+    |
+    = note: all struct fields are already assigned
+
+error[E0560]: struct `CellContent` has no field named `col`
+   --> core\tests\limit_behavior_tests.rs:347:9
+    |
+347 |         col: 250,
+    |         ^^^ `CellContent` does not have this field
+    |
+    = note: all struct fields are already assigned
+
+error[E0560]: struct `CellContent` has no field named `address`
+   --> core\tests\limit_behavior_tests.rs:348:9
+    |
+348 |         address: CellAddress::from_indices(50, 250),
+    |         ^^^^^^^ `CellContent` does not have this field
+    |
+    = note: all struct fields are already assigned
+
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+   --> core\tests\limit_behavior_tests.rs:357:18
+    |
+357 |     let report = diff_workbooks(&wb_a, &wb_b, &config);
+    |                  ^^^^^^^^^^^^^^               ------- argument #3 of type `&mut StringPool` is missing
+    |
+note: function defined here
+   --> C:\Users\dvora\repo\excel_diff\core\src\engine.rs:59:8
+    |
+ 59 | pub fn diff_workbooks(
+    |        ^^^^^^^^^^^^^^
+help: provide the argument
+    |
+357 |     let report = diff_workbooks(&wb_a, &wb_b, /* &mut StringPool */, &config);
+    |                                               ++++++++++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:141:10
+    |
+141 |     grid.insert(make_cell(1, 1, Some(CellValue::Text("x".into())), None));
+    |          ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+141 |     grid.cells.insert(make_cell(1, 1, Some(CellValue::Text("x".into())), None));
+    |          ++++++
+141 |     grid.col_signatures.insert(make_cell(1, 1, Some(CellValue::Text("x".into())), None));
+    |          +++++++++++++++
+141 |     grid.row_signatures.insert(make_cell(1, 1, Some(CellValue::Text("x".into())), None));
+    |          +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:141:58
+    |
+141 |     grid.insert(make_cell(1, 1, Some(CellValue::Text("x".into())), None));
+    |                                                          ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0277]: can't compare `StringId` with `str`
+   --> core\tests\output_tests.rs:329:13
+    |
+329 |             assert_eq!(sheet, "Sheet1");
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `StringId == str`
+    |
+    = help: the trait `PartialEq<str>` is not implemented for `StringId`
+            but trait `PartialEq<StringId>` is implemented for it
+    = help: for that trait implementation, expected `StringId`, found `str`
+    = note: required for `&StringId` to implement `PartialEq<&str>`
+    = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:147:10
+    |
+147 |     grid.insert(make_cell(1, 1, Some(CellValue::Text("y".into())), None));
+    |          ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+147 |     grid.cells.insert(make_cell(1, 1, Some(CellValue::Text("y".into())), None));
+    |          ++++++
+147 |     grid.col_signatures.insert(make_cell(1, 1, Some(CellValue::Text("y".into())), None));
+    |          +++++++++++++++
+147 |     grid.row_signatures.insert(make_cell(1, 1, Some(CellValue::Text("y".into())), None));
+    |          +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:147:58
+    |
+147 |     grid.insert(make_cell(1, 1, Some(CellValue::Text("y".into())), None));
+    |                                                          ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error: could not compile `excel_diff` (test "g12_rect_block_move_grid_workbook_tests") due to 1 previous error
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:434:16
+    |
+434 |         sheet: "Sheet1".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0277]: can't compare `StringId` with `str`
+   --> core\tests\output_tests.rs:370:13
+    |
+370 |             assert_eq!(sheet, "Sheet1");
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `StringId == str`
+    |
+    = help: the trait `PartialEq<str>` is not implemented for `StringId`
+            but trait `PartialEq<StringId>` is implemented for it
+    = help: for that trait implementation, expected `StringId`, found `str`
+    = note: required for `&StringId` to implement `PartialEq<&str>`
+    = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:148:10
+    |
+148 |     grid.insert(make_cell(2, 2, Some(CellValue::Bool(true)), None));
+    |          ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+148 |     grid.cells.insert(make_cell(2, 2, Some(CellValue::Bool(true)), None));
+    |          ++++++
+148 |     grid.col_signatures.insert(make_cell(2, 2, Some(CellValue::Bool(true)), None));
+    |          +++++++++++++++
+148 |     grid.row_signatures.insert(make_cell(2, 2, Some(CellValue::Bool(true)), None));
+    |          +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\output_tests.rs:398:18
+    |
+398 |         "Sheet1".into(),
+    |                  ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\output_tests.rs:422:18
+    |
+422 |         "Sheet1".into(),
+    |                  ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\output_tests.rs:445:18
+    |
+445 |         "Sheet1".into(),
+    |                  ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\output_tests.rs:468:18
+    |
+468 |         "Sheet1".into(),
+    |                  ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:161:11
+    |
+161 |     grid1.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+161 |     grid1.cells.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |           ++++++
+161 |     grid1.col_signatures.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |           +++++++++++++++
+161 |     grid1.row_signatures.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |           +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\output_tests.rs:483:18
+    |
+483 |         "Sheet1".into(),
+    |                  ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:446:16
+    |
+446 |         sheet: "Sheet1".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:460:16
+    |
+460 |         sheet: "Sheet1".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:162:11
+    |
+162 |     grid1.insert(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+162 |     grid1.cells.insert(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
+    |           ++++++
+162 |     grid1.col_signatures.insert(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
+    |           +++++++++++++++
+162 |     grid1.row_signatures.insert(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
+    |           +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\output_tests.rs:513:18
+    |
+513 |         "Sheet1".into(),
+    |                  ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:472:16
+    |
+472 |         sheet: "Sheet1".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:483:16
+    |
+483 |         sheet: "Sheet2".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:494:16
+    |
+494 |         sheet: "Sheet2".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:509:16
+    |
+509 |         sheet: "Sheet1".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:165:11
+    |
+165 |     grid2.insert(make_cell(0, 0, Some(CellValue::Number(2.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+165 |     grid2.cells.insert(make_cell(0, 0, Some(CellValue::Number(2.0)), None));
+    |           ++++++
+165 |     grid2.col_signatures.insert(make_cell(0, 0, Some(CellValue::Number(2.0)), None));
+    |           +++++++++++++++
+165 |     grid2.row_signatures.insert(make_cell(0, 0, Some(CellValue::Number(2.0)), None));
+    |           +++++++++++++++
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:521:16
+    |
+521 |         sheet: "Sheet1".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:534:16
+    |
+534 |         sheet: "SheetX".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:546:16
+    |
+546 |         sheet: "SheetX".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:166:11
+    |
+166 |     grid2.insert(make_cell(0, 1, Some(CellValue::Number(1.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+166 |     grid2.cells.insert(make_cell(0, 1, Some(CellValue::Number(1.0)), None));
+    |           ++++++
+166 |     grid2.col_signatures.insert(make_cell(0, 1, Some(CellValue::Number(1.0)), None));
+    |           +++++++++++++++
+166 |     grid2.row_signatures.insert(make_cell(0, 1, Some(CellValue::Number(1.0)), None));
+    |           +++++++++++++++
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:559:16
+    |
+559 |         sheet: "Sheet1".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error: could not compile `excel_diff` (test "limit_behavior_tests") due to 47 previous errors
+error: could not compile `excel_diff` (test "g12_column_block_move_grid_workbook_tests") due to 3 previous errors
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:176:11
+    |
+176 |     grid1.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+176 |     grid1.cells.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |           ++++++
+176 |     grid1.col_signatures.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |           +++++++++++++++
+176 |     grid1.row_signatures.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:177:11
+    |
+177 |     grid1.insert(make_cell(1, 0, Some(CellValue::Number(2.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+177 |     grid1.cells.insert(make_cell(1, 0, Some(CellValue::Number(2.0)), None));
+    |           ++++++
+177 |     grid1.col_signatures.insert(make_cell(1, 0, Some(CellValue::Number(2.0)), None));
+    |           +++++++++++++++
+177 |     grid1.row_signatures.insert(make_cell(1, 0, Some(CellValue::Number(2.0)), None));
+    |           +++++++++++++++
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:569:16
+    |
+569 |         sheet: "SheetX".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:180:11
+    |
+180 |     grid2.insert(make_cell(0, 0, Some(CellValue::Number(2.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+180 |     grid2.cells.insert(make_cell(0, 0, Some(CellValue::Number(2.0)), None));
+    |           ++++++
+180 |     grid2.col_signatures.insert(make_cell(0, 0, Some(CellValue::Number(2.0)), None));
+    |           +++++++++++++++
+180 |     grid2.row_signatures.insert(make_cell(0, 0, Some(CellValue::Number(2.0)), None));
+    |           +++++++++++++++
+
+error: could not compile `excel_diff` (test "d1_database_mode_tests") due to 23 previous errors
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:181:11
+    |
+181 |     grid2.insert(make_cell(1, 0, Some(CellValue::Number(1.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+181 |     grid2.cells.insert(make_cell(1, 0, Some(CellValue::Number(1.0)), None));
+    |           ++++++
+181 |     grid2.col_signatures.insert(make_cell(1, 0, Some(CellValue::Number(1.0)), None));
+    |           +++++++++++++++
+181 |     grid2.row_signatures.insert(make_cell(1, 0, Some(CellValue::Number(1.0)), None));
+    |           +++++++++++++++
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:598:16
+    |
+598 |         sheet: "Sheet1".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:603:16
+    |
+603 |         sheet: "Sheet1".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:608:16
+    |
+608 |         sheet: "Sheet1".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:613:16
+    |
+613 |         sheet: "Sheet1".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:619:16
+    |
+619 |         sheet: "Sheet2".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+Some errors have detailed explanations: E0277, E0308.
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:624:16
+    |
+624 |         sheet: "Sheet2".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:629:16
+    |
+629 |         sheet: "Sheet2".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:634:16
+    |
+634 |         sheet: "Sheet2".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:191:11
+    |
+191 |     grid1.insert(make_cell(
+    |     ------^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+191 |     grid1.cells.insert(make_cell(
+    |           ++++++
+191 |     grid1.col_signatures.insert(make_cell(
+    |           +++++++++++++++
+191 |     grid1.row_signatures.insert(make_cell(
+    |           +++++++++++++++
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:763:16
+    |
+763 |         sheet: "Sheet1".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:770:16
+    |
+770 |         sheet: "Sheet1".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:777:16
+    |
+777 |         sheet: "Sheet2".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:784:16
+    |
+784 |         sheet: "Sheet2".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:791:16
+    |
+791 |         sheet: "SheetZ".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:801:16
+    |
+801 |         sheet: "SheetZ".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:855:16
+    |
+855 |         sheet: "Sheet1".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:197:11
+    |
+197 |     grid1.insert(make_cell(0, 1, Some(CellValue::Text("mix".into())), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+197 |     grid1.cells.insert(make_cell(0, 1, Some(CellValue::Text("mix".into())), None));
+    |           ++++++
+197 |     grid1.col_signatures.insert(make_cell(0, 1, Some(CellValue::Text("mix".into())), None));
+    |           +++++++++++++++
+197 |     grid1.row_signatures.insert(make_cell(0, 1, Some(CellValue::Text("mix".into())), None));
+    |           +++++++++++++++
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:865:16
+    |
+865 |         sheet: "Sheet1".to_string(),
+    |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:197:61
+    |
+197 |     grid1.insert(make_cell(0, 1, Some(CellValue::Text("mix".into())), None));
+    |                                                             ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error: could not compile `excel_diff` (test "output_tests") due to 24 previous errors
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:198:11
+    |
+198 |     grid1.insert(make_cell(0, 2, Some(CellValue::Bool(true)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+198 |     grid1.cells.insert(make_cell(0, 2, Some(CellValue::Bool(true)), None));
+    |           ++++++
+198 |     grid1.col_signatures.insert(make_cell(0, 2, Some(CellValue::Bool(true)), None));
+    |           +++++++++++++++
+198 |     grid1.row_signatures.insert(make_cell(0, 2, Some(CellValue::Bool(true)), None));
+    |           +++++++++++++++
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:907:20
+    |
+907 |             sheet: "SheetA".to_string(),
+    |                    ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:910:20
+    |
+910 |             sheet: "SheetB".to_string(),
+    |                    ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:913:20
+    |
+913 |             sheet: "Sheet1".to_string(),
+    |                    ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:918:20
+    |
+918 |             sheet: "Sheet1".to_string(),
+    |                    ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:923:20
+    |
+923 |             sheet: "Sheet1".to_string(),
+    |                    ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:928:20
+    |
+928 |             sheet: "Sheet1".to_string(),
+    |                    ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:933:20
+    |
+933 |             sheet: "Sheet1".to_string(),
+    |                    ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:940:20
+    |
+940 |             sheet: "Sheet1".to_string(),
+    |                    ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:947:20
+    |
+947 |             sheet: "Sheet2".to_string(),
+    |                    ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:954:20
+    |
+954 |             sheet: "Sheet2".to_string(),
+    |                    ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:201:11
+    |
+201 |     grid2.insert(make_cell(0, 2, Some(CellValue::Bool(true)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+201 |     grid2.cells.insert(make_cell(0, 2, Some(CellValue::Bool(true)), None));
+    |           ++++++
+201 |     grid2.col_signatures.insert(make_cell(0, 2, Some(CellValue::Bool(true)), None));
+    |           +++++++++++++++
+201 |     grid2.row_signatures.insert(make_cell(0, 2, Some(CellValue::Bool(true)), None));
+    |           +++++++++++++++
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:961:20
+    |
+961 |             sheet: "Sheet3".to_string(),
+    |                    ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+   --> core\tests\pg4_diffop_tests.rs:971:20
+    |
+971 |             sheet: "Sheet3".to_string(),
+    |                    ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+    --> core\tests\pg4_diffop_tests.rs:1006:16
+     |
+1006 |         sheet: "Sheet1".to_string(),
+     |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+    --> core\tests\pg4_diffop_tests.rs:1009:16
+     |
+1009 |         sheet: "Sheet1".to_string(),
+     |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:202:11
+    |
+202 |     grid2.insert(make_cell(
+    |     ------^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+202 |     grid2.cells.insert(make_cell(
+    |           ++++++
+202 |     grid2.col_signatures.insert(make_cell(
+    |           +++++++++++++++
+202 |     grid2.row_signatures.insert(make_cell(
+    |           +++++++++++++++
+
+error[E0308]: mismatched types
+    --> core\tests\pg4_diffop_tests.rs:1032:20
+     |
+1032 |             sheet: "SheetX".to_string(),
+     |                    ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0308]: mismatched types
+    --> core\tests\pg4_diffop_tests.rs:1035:20
+     |
+1035 |             sheet: "SheetX".to_string(),
+     |                    ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:208:11
+    |
+208 |     grid2.insert(make_cell(0, 1, Some(CellValue::Text("mix".into())), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+208 |     grid2.cells.insert(make_cell(0, 1, Some(CellValue::Text("mix".into())), None));
+    |           ++++++
+208 |     grid2.col_signatures.insert(make_cell(0, 1, Some(CellValue::Text("mix".into())), None));
+    |           +++++++++++++++
+208 |     grid2.row_signatures.insert(make_cell(0, 1, Some(CellValue::Text("mix".into())), None));
+    |           +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:208:61
+    |
+208 |     grid2.insert(make_cell(0, 1, Some(CellValue::Text("mix".into())), None));
+    |                                                             ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:225:11
+    |
+225 |     grid1.insert(make_cell(
+    |     ------^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+225 |     grid1.cells.insert(make_cell(
+    |           ++++++
+225 |     grid1.col_signatures.insert(make_cell(
+    |           +++++++++++++++
+225 |     grid1.row_signatures.insert(make_cell(
+    |           +++++++++++++++
+
+error[E0308]: mismatched types
+    --> core\tests\pg4_diffop_tests.rs:1126:16
+     |
+1126 |         sheet: "Sheet1".to_string(),
+     |                ^^^^^^^^^^^^^^^^^^^^ expected `StringId`, found `String`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:231:11
+    |
+231 |     grid1.insert(make_cell(1, 0, Some(CellValue::Text("col".into())), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+231 |     grid1.cells.insert(make_cell(1, 0, Some(CellValue::Text("col".into())), None));
+    |           ++++++
+231 |     grid1.col_signatures.insert(make_cell(1, 0, Some(CellValue::Text("col".into())), None));
+    |           +++++++++++++++
+231 |     grid1.row_signatures.insert(make_cell(1, 0, Some(CellValue::Text("col".into())), None));
+    |           +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:231:61
+    |
+231 |     grid1.insert(make_cell(1, 0, Some(CellValue::Text("col".into())), None));
+    |                                                             ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:232:11
+    |
+232 |     grid1.insert(make_cell(2, 0, Some(CellValue::Bool(false)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+232 |     grid1.cells.insert(make_cell(2, 0, Some(CellValue::Bool(false)), None));
+    |           ++++++
+232 |     grid1.col_signatures.insert(make_cell(2, 0, Some(CellValue::Bool(false)), None));
+    |           +++++++++++++++
+232 |     grid1.row_signatures.insert(make_cell(2, 0, Some(CellValue::Bool(false)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:235:11
+    |
+235 |     grid2.insert(make_cell(2, 0, Some(CellValue::Bool(false)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+235 |     grid2.cells.insert(make_cell(2, 0, Some(CellValue::Bool(false)), None));
+    |           ++++++
+235 |     grid2.col_signatures.insert(make_cell(2, 0, Some(CellValue::Bool(false)), None));
+    |           +++++++++++++++
+235 |     grid2.row_signatures.insert(make_cell(2, 0, Some(CellValue::Bool(false)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:236:11
+    |
+236 |     grid2.insert(make_cell(
+    |     ------^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+236 |     grid2.cells.insert(make_cell(
+    |           ++++++
+236 |     grid2.col_signatures.insert(make_cell(
+    |           +++++++++++++++
+236 |     grid2.row_signatures.insert(make_cell(
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:242:11
+    |
+242 |     grid2.insert(make_cell(1, 0, Some(CellValue::Text("col".into())), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+242 |     grid2.cells.insert(make_cell(1, 0, Some(CellValue::Text("col".into())), None));
+    |           ++++++
+242 |     grid2.col_signatures.insert(make_cell(1, 0, Some(CellValue::Text("col".into())), None));
+    |           +++++++++++++++
+242 |     grid2.row_signatures.insert(make_cell(1, 0, Some(CellValue::Text("col".into())), None));
+    |           +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:242:61
+    |
+242 |     grid2.insert(make_cell(1, 0, Some(CellValue::Text("col".into())), None));
+    |                                                             ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error: could not compile `excel_diff` (test "pg4_diffop_tests") due to 76 previous errors
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:259:14
+    |
+259 |     grid_num.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |              ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+259 |     grid_num.cells.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |              ++++++
+259 |     grid_num.col_signatures.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |              +++++++++++++++
+259 |     grid_num.row_signatures.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |              +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:262:15
+    |
+262 |     grid_text.insert(make_cell(0, 0, Some(CellValue::Text("1".into())), None));
+    |               ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+262 |     grid_text.cells.insert(make_cell(0, 0, Some(CellValue::Text("1".into())), None));
+    |               ++++++
+262 |     grid_text.col_signatures.insert(make_cell(0, 0, Some(CellValue::Text("1".into())), None));
+    |               +++++++++++++++
+262 |     grid_text.row_signatures.insert(make_cell(0, 0, Some(CellValue::Text("1".into())), None));
+    |               +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:262:63
+    |
+262 |     grid_text.insert(make_cell(0, 0, Some(CellValue::Text("1".into())), None));
+    |                                                               ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:265:15
+    |
+265 |     grid_bool.insert(make_cell(0, 0, Some(CellValue::Bool(true)), None));
+    |               ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+265 |     grid_bool.cells.insert(make_cell(0, 0, Some(CellValue::Bool(true)), None));
+    |               ++++++
+265 |     grid_bool.col_signatures.insert(make_cell(0, 0, Some(CellValue::Bool(true)), None));
+    |               +++++++++++++++
+265 |     grid_bool.row_signatures.insert(make_cell(0, 0, Some(CellValue::Bool(true)), None));
+    |               +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:279:14
+    |
+279 |     grid_num.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |              ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+279 |     grid_num.cells.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |              ++++++
+279 |     grid_num.col_signatures.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |              +++++++++++++++
+279 |     grid_num.row_signatures.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |              +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:282:15
+    |
+282 |     grid_text.insert(make_cell(0, 0, Some(CellValue::Text("1".into())), None));
+    |               ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+282 |     grid_text.cells.insert(make_cell(0, 0, Some(CellValue::Text("1".into())), None));
+    |               ++++++
+282 |     grid_text.col_signatures.insert(make_cell(0, 0, Some(CellValue::Text("1".into())), None));
+    |               +++++++++++++++
+282 |     grid_text.row_signatures.insert(make_cell(0, 0, Some(CellValue::Text("1".into())), None));
+    |               +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:282:63
+    |
+282 |     grid_text.insert(make_cell(0, 0, Some(CellValue::Text("1".into())), None));
+    |                                                               ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:285:15
+    |
+285 |     grid_bool.insert(make_cell(0, 0, Some(CellValue::Bool(true)), None));
+    |               ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+285 |     grid_bool.cells.insert(make_cell(0, 0, Some(CellValue::Bool(true)), None));
+    |               ++++++
+285 |     grid_bool.col_signatures.insert(make_cell(0, 0, Some(CellValue::Bool(true)), None));
+    |               +++++++++++++++
+285 |     grid_bool.row_signatures.insert(make_cell(0, 0, Some(CellValue::Bool(true)), None));
+    |               +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:299:11
+    |
+299 |     grid1.insert(make_cell(0, 0, Some(CellValue::Number(42.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+299 |     grid1.cells.insert(make_cell(0, 0, Some(CellValue::Number(42.0)), None));
+    |           ++++++
+299 |     grid1.col_signatures.insert(make_cell(0, 0, Some(CellValue::Number(42.0)), None));
+    |           +++++++++++++++
+299 |     grid1.row_signatures.insert(make_cell(0, 0, Some(CellValue::Number(42.0)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:302:11
+    |
+302 |     grid2.insert(make_cell(0, 0, Some(CellValue::Number(42.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+302 |     grid2.cells.insert(make_cell(0, 0, Some(CellValue::Number(42.0)), None));
+    |           ++++++
+302 |     grid2.col_signatures.insert(make_cell(0, 0, Some(CellValue::Number(42.0)), None));
+    |           +++++++++++++++
+302 |     grid2.row_signatures.insert(make_cell(0, 0, Some(CellValue::Number(42.0)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:312:11
+    |
+312 |     grid1.insert(make_cell(0, 0, Some(CellValue::Number(42.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+312 |     grid1.cells.insert(make_cell(0, 0, Some(CellValue::Number(42.0)), None));
+    |           ++++++
+312 |     grid1.col_signatures.insert(make_cell(0, 0, Some(CellValue::Number(42.0)), None));
+    |           +++++++++++++++
+312 |     grid1.row_signatures.insert(make_cell(0, 0, Some(CellValue::Number(42.0)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:315:11
+    |
+315 |     grid2.insert(make_cell(0, 0, Some(CellValue::Number(42.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+315 |     grid2.cells.insert(make_cell(0, 0, Some(CellValue::Number(42.0)), None));
+    |           ++++++
+315 |     grid2.col_signatures.insert(make_cell(0, 0, Some(CellValue::Number(42.0)), None));
+    |           +++++++++++++++
+315 |     grid2.row_signatures.insert(make_cell(0, 0, Some(CellValue::Number(42.0)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:325:18
+    |
+325 |     with_formula.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), Some("=5+5")));
+    |                  ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+325 |     with_formula.cells.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), Some("=5+5")));
+    |                  ++++++
+325 |     with_formula.col_signatures.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), Some("=5+5")));
+    |                  +++++++++++++++
+325 |     with_formula.row_signatures.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), Some("=5+5")));
+    |                  +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:328:21
+    |
+328 |     without_formula.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), None));
+    |                     ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+328 |     without_formula.cells.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), None));
+    |                     ++++++
+328 |     without_formula.col_signatures.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), None));
+    |                     +++++++++++++++
+328 |     without_formula.row_signatures.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), None));
+    |                     +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:338:19
+    |
+338 |     formula_short.insert(make_cell(
+    |     --------------^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+338 |     formula_short.cells.insert(make_cell(
+    |                   ++++++
+338 |     formula_short.col_signatures.insert(make_cell(
+    |                   +++++++++++++++
+338 |     formula_short.row_signatures.insert(make_cell(
+    |                   +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:341:36
+    |
+341 |         Some(CellValue::Text("foo".into())),
+    |                                    ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:346:18
+    |
+346 |     formula_tall.insert(make_cell(
+    |     -------------^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+346 |     formula_tall.cells.insert(make_cell(
+    |                  ++++++
+346 |     formula_tall.col_signatures.insert(make_cell(
+    |                  +++++++++++++++
+346 |     formula_tall.row_signatures.insert(make_cell(
+    |                  +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:349:36
+    |
+349 |         Some(CellValue::Text("foo".into())),
+    |                                    ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:354:16
+    |
+354 |     value_only.insert(make_cell(0, 0, Some(CellValue::Text("foo".into())), None));
+    |                ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+354 |     value_only.cells.insert(make_cell(0, 0, Some(CellValue::Text("foo".into())), None));
+    |                ++++++
+354 |     value_only.col_signatures.insert(make_cell(0, 0, Some(CellValue::Text("foo".into())), None));
+    |                +++++++++++++++
+354 |     value_only.row_signatures.insert(make_cell(0, 0, Some(CellValue::Text("foo".into())), None));
+    |                +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:354:66
+    |
+354 |     value_only.insert(make_cell(0, 0, Some(CellValue::Text("foo".into())), None));
+    |                                                                  ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:367:23
+    |
+367 |     grid_with_formula.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), Some("=5+5")));
+    |                       ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+367 |     grid_with_formula.cells.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), Some("=5+5")));
+    |                       ++++++
+367 |     grid_with_formula.col_signatures.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), Some("=5+5")));
+    |                       +++++++++++++++
+367 |     grid_with_formula.row_signatures.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), Some("=5+5")));
+    |                       +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:370:26
+    |
+370 |     grid_without_formula.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), None));
+    |                          ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+370 |     grid_without_formula.cells.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), None));
+    |                          ++++++
+370 |     grid_without_formula.col_signatures.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), None));
+    |                          +++++++++++++++
+370 |     grid_without_formula.row_signatures.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), None));
+    |                          +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:380:10
+    |
+380 |     grid.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |          ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+380 |     grid.cells.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |          ++++++
+380 |     grid.col_signatures.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |          +++++++++++++++
+380 |     grid.row_signatures.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |          +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:381:10
+    |
+381 |     grid.insert(make_cell(0, 1, Some(CellValue::Text("x".into())), None));
+    |          ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+381 |     grid.cells.insert(make_cell(0, 1, Some(CellValue::Text("x".into())), None));
+    |          ++++++
+381 |     grid.col_signatures.insert(make_cell(0, 1, Some(CellValue::Text("x".into())), None));
+    |          +++++++++++++++
+381 |     grid.row_signatures.insert(make_cell(0, 1, Some(CellValue::Text("x".into())), None));
+    |          +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:381:58
+    |
+381 |     grid.insert(make_cell(0, 1, Some(CellValue::Text("x".into())), None));
+    |                                                          ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:382:10
+    |
+382 |     grid.insert(make_cell(0, 2, Some(CellValue::Bool(false)), None));
+    |          ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+382 |     grid.cells.insert(make_cell(0, 2, Some(CellValue::Bool(false)), None));
+    |          ++++++
+382 |     grid.col_signatures.insert(make_cell(0, 2, Some(CellValue::Bool(false)), None));
+    |          +++++++++++++++
+382 |     grid.row_signatures.insert(make_cell(0, 2, Some(CellValue::Bool(false)), None));
+    |          +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:393:10
+    |
+393 |     grid.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), Some("=5+5")));
+    |          ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+393 |     grid.cells.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), Some("=5+5")));
+    |          ++++++
+393 |     grid.col_signatures.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), Some("=5+5")));
+    |          +++++++++++++++
+393 |     grid.row_signatures.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), Some("=5+5")));
+    |          +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:394:10
+    |
+394 |     grid.insert(make_cell(0, 1, Some(CellValue::Text("bar".into())), None));
+    |          ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+394 |     grid.cells.insert(make_cell(0, 1, Some(CellValue::Text("bar".into())), None));
+    |          ++++++
+394 |     grid.col_signatures.insert(make_cell(0, 1, Some(CellValue::Text("bar".into())), None));
+    |          +++++++++++++++
+394 |     grid.row_signatures.insert(make_cell(0, 1, Some(CellValue::Text("bar".into())), None));
+    |          +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:394:60
+    |
+394 |     grid.insert(make_cell(0, 1, Some(CellValue::Text("bar".into())), None));
+    |                                                            ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:405:10
+    |
+405 |     grid.insert(make_cell(
+    |     -----^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+405 |     grid.cells.insert(make_cell(
+    |          ++++++
+405 |     grid.col_signatures.insert(make_cell(
+    |          +++++++++++++++
+405 |     grid.row_signatures.insert(make_cell(
+    |          +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:411:10
+    |
+411 |     grid.insert(make_cell(1, 1, Some(CellValue::Text("text".into())), None));
+    |          ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+411 |     grid.cells.insert(make_cell(1, 1, Some(CellValue::Text("text".into())), None));
+    |          ++++++
+411 |     grid.col_signatures.insert(make_cell(1, 1, Some(CellValue::Text("text".into())), None));
+    |          +++++++++++++++
+411 |     grid.row_signatures.insert(make_cell(1, 1, Some(CellValue::Text("text".into())), None));
+    |          +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:411:61
+    |
+411 |     grid.insert(make_cell(1, 1, Some(CellValue::Text("text".into())), None));
+    |                                                             ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:412:10
+    |
+412 |     grid.insert(make_cell(2, 0, Some(CellValue::Bool(true)), Some("=A1")));
+    |          ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+412 |     grid.cells.insert(make_cell(2, 0, Some(CellValue::Bool(true)), Some("=A1")));
+    |          ++++++
+412 |     grid.col_signatures.insert(make_cell(2, 0, Some(CellValue::Bool(true)), Some("=A1")));
+    |          +++++++++++++++
+412 |     grid.row_signatures.insert(make_cell(2, 0, Some(CellValue::Bool(true)), Some("=A1")));
+    |          +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:441:11
+    |
+441 |     grid1.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+441 |     grid1.cells.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |           ++++++
+441 |     grid1.col_signatures.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |           +++++++++++++++
+441 |     grid1.row_signatures.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:442:11
+    |
+442 |     grid1.insert(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+442 |     grid1.cells.insert(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
+    |           ++++++
+442 |     grid1.col_signatures.insert(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
+    |           +++++++++++++++
+442 |     grid1.row_signatures.insert(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:443:11
+    |
+443 |     grid1.insert(make_cell(0, 2, Some(CellValue::Number(3.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+443 |     grid1.cells.insert(make_cell(0, 2, Some(CellValue::Number(3.0)), None));
+    |           ++++++
+443 |     grid1.col_signatures.insert(make_cell(0, 2, Some(CellValue::Number(3.0)), None));
+    |           +++++++++++++++
+443 |     grid1.row_signatures.insert(make_cell(0, 2, Some(CellValue::Number(3.0)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:444:11
+    |
+444 |     grid1.insert(make_cell(1, 0, Some(CellValue::Text("a".into())), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+444 |     grid1.cells.insert(make_cell(1, 0, Some(CellValue::Text("a".into())), None));
+    |           ++++++
+444 |     grid1.col_signatures.insert(make_cell(1, 0, Some(CellValue::Text("a".into())), None));
+    |           +++++++++++++++
+444 |     grid1.row_signatures.insert(make_cell(1, 0, Some(CellValue::Text("a".into())), None));
+    |           +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:444:59
+    |
+444 |     grid1.insert(make_cell(1, 0, Some(CellValue::Text("a".into())), None));
+    |                                                           ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:445:11
+    |
+445 |     grid1.insert(make_cell(1, 1, Some(CellValue::Text("b".into())), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+445 |     grid1.cells.insert(make_cell(1, 1, Some(CellValue::Text("b".into())), None));
+    |           ++++++
+445 |     grid1.col_signatures.insert(make_cell(1, 1, Some(CellValue::Text("b".into())), None));
+    |           +++++++++++++++
+445 |     grid1.row_signatures.insert(make_cell(1, 1, Some(CellValue::Text("b".into())), None));
+    |           +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:445:59
+    |
+445 |     grid1.insert(make_cell(1, 1, Some(CellValue::Text("b".into())), None));
+    |                                                           ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:446:11
+    |
+446 |     grid1.insert(make_cell(1, 2, Some(CellValue::Text("c".into())), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+446 |     grid1.cells.insert(make_cell(1, 2, Some(CellValue::Text("c".into())), None));
+    |           ++++++
+446 |     grid1.col_signatures.insert(make_cell(1, 2, Some(CellValue::Text("c".into())), None));
+    |           +++++++++++++++
+446 |     grid1.row_signatures.insert(make_cell(1, 2, Some(CellValue::Text("c".into())), None));
+    |           +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:446:59
+    |
+446 |     grid1.insert(make_cell(1, 2, Some(CellValue::Text("c".into())), None));
+    |                                                           ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:449:11
+    |
+449 |     grid2.insert(make_cell(0, 0, Some(CellValue::Number(99.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+449 |     grid2.cells.insert(make_cell(0, 0, Some(CellValue::Number(99.0)), None));
+    |           ++++++
+449 |     grid2.col_signatures.insert(make_cell(0, 0, Some(CellValue::Number(99.0)), None));
+    |           +++++++++++++++
+449 |     grid2.row_signatures.insert(make_cell(0, 0, Some(CellValue::Number(99.0)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:450:11
+    |
+450 |     grid2.insert(make_cell(0, 1, Some(CellValue::Number(1.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+450 |     grid2.cells.insert(make_cell(0, 1, Some(CellValue::Number(1.0)), None));
+    |           ++++++
+450 |     grid2.col_signatures.insert(make_cell(0, 1, Some(CellValue::Number(1.0)), None));
+    |           +++++++++++++++
+450 |     grid2.row_signatures.insert(make_cell(0, 1, Some(CellValue::Number(1.0)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:451:11
+    |
+451 |     grid2.insert(make_cell(0, 2, Some(CellValue::Number(2.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+451 |     grid2.cells.insert(make_cell(0, 2, Some(CellValue::Number(2.0)), None));
+    |           ++++++
+451 |     grid2.col_signatures.insert(make_cell(0, 2, Some(CellValue::Number(2.0)), None));
+    |           +++++++++++++++
+451 |     grid2.row_signatures.insert(make_cell(0, 2, Some(CellValue::Number(2.0)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:452:11
+    |
+452 |     grid2.insert(make_cell(0, 3, Some(CellValue::Number(3.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+452 |     grid2.cells.insert(make_cell(0, 3, Some(CellValue::Number(3.0)), None));
+    |           ++++++
+452 |     grid2.col_signatures.insert(make_cell(0, 3, Some(CellValue::Number(3.0)), None));
+    |           +++++++++++++++
+452 |     grid2.row_signatures.insert(make_cell(0, 3, Some(CellValue::Number(3.0)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:453:11
+    |
+453 |     grid2.insert(make_cell(1, 0, Some(CellValue::Text("z".into())), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+453 |     grid2.cells.insert(make_cell(1, 0, Some(CellValue::Text("z".into())), None));
+    |           ++++++
+453 |     grid2.col_signatures.insert(make_cell(1, 0, Some(CellValue::Text("z".into())), None));
+    |           +++++++++++++++
+453 |     grid2.row_signatures.insert(make_cell(1, 0, Some(CellValue::Text("z".into())), None));
+    |           +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:453:59
+    |
+453 |     grid2.insert(make_cell(1, 0, Some(CellValue::Text("z".into())), None));
+    |                                                           ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:454:11
+    |
+454 |     grid2.insert(make_cell(1, 1, Some(CellValue::Text("a".into())), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+454 |     grid2.cells.insert(make_cell(1, 1, Some(CellValue::Text("a".into())), None));
+    |           ++++++
+454 |     grid2.col_signatures.insert(make_cell(1, 1, Some(CellValue::Text("a".into())), None));
+    |           +++++++++++++++
+454 |     grid2.row_signatures.insert(make_cell(1, 1, Some(CellValue::Text("a".into())), None));
+    |           +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:454:59
+    |
+454 |     grid2.insert(make_cell(1, 1, Some(CellValue::Text("a".into())), None));
+    |                                                           ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:455:11
+    |
+455 |     grid2.insert(make_cell(1, 2, Some(CellValue::Text("b".into())), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+455 |     grid2.cells.insert(make_cell(1, 2, Some(CellValue::Text("b".into())), None));
+    |           ++++++
+455 |     grid2.col_signatures.insert(make_cell(1, 2, Some(CellValue::Text("b".into())), None));
+    |           +++++++++++++++
+455 |     grid2.row_signatures.insert(make_cell(1, 2, Some(CellValue::Text("b".into())), None));
+    |           +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:455:59
+    |
+455 |     grid2.insert(make_cell(1, 2, Some(CellValue::Text("b".into())), None));
+    |                                                           ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:456:11
+    |
+456 |     grid2.insert(make_cell(1, 3, Some(CellValue::Text("c".into())), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+456 |     grid2.cells.insert(make_cell(1, 3, Some(CellValue::Text("c".into())), None));
+    |           ++++++
+456 |     grid2.col_signatures.insert(make_cell(1, 3, Some(CellValue::Text("c".into())), None));
+    |           +++++++++++++++
+456 |     grid2.row_signatures.insert(make_cell(1, 3, Some(CellValue::Text("c".into())), None));
+    |           +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:456:59
+    |
+456 |     grid2.insert(make_cell(1, 3, Some(CellValue::Text("c".into())), None));
+    |                                                           ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:468:11
+    |
+468 |     grid1.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+468 |     grid1.cells.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |           ++++++
+468 |     grid1.col_signatures.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |           +++++++++++++++
+468 |     grid1.row_signatures.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:469:11
+    |
+469 |     grid1.insert(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+469 |     grid1.cells.insert(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
+    |           ++++++
+469 |     grid1.col_signatures.insert(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
+    |           +++++++++++++++
+469 |     grid1.row_signatures.insert(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:470:11
+    |
+470 |     grid1.insert(make_cell(0, 2, Some(CellValue::Number(3.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+470 |     grid1.cells.insert(make_cell(0, 2, Some(CellValue::Number(3.0)), None));
+    |           ++++++
+470 |     grid1.col_signatures.insert(make_cell(0, 2, Some(CellValue::Number(3.0)), None));
+    |           +++++++++++++++
+470 |     grid1.row_signatures.insert(make_cell(0, 2, Some(CellValue::Number(3.0)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:471:11
+    |
+471 |     grid1.insert(make_cell(0, 3, Some(CellValue::Number(4.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+471 |     grid1.cells.insert(make_cell(0, 3, Some(CellValue::Number(4.0)), None));
+    |           ++++++
+471 |     grid1.col_signatures.insert(make_cell(0, 3, Some(CellValue::Number(4.0)), None));
+    |           +++++++++++++++
+471 |     grid1.row_signatures.insert(make_cell(0, 3, Some(CellValue::Number(4.0)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:472:11
+    |
+472 |     grid1.insert(make_cell(1, 0, Some(CellValue::Text("a".into())), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+472 |     grid1.cells.insert(make_cell(1, 0, Some(CellValue::Text("a".into())), None));
+    |           ++++++
+472 |     grid1.col_signatures.insert(make_cell(1, 0, Some(CellValue::Text("a".into())), None));
+    |           +++++++++++++++
+472 |     grid1.row_signatures.insert(make_cell(1, 0, Some(CellValue::Text("a".into())), None));
+    |           +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:472:59
+    |
+472 |     grid1.insert(make_cell(1, 0, Some(CellValue::Text("a".into())), None));
+    |                                                           ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:473:11
+    |
+473 |     grid1.insert(make_cell(1, 1, Some(CellValue::Text("b".into())), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+473 |     grid1.cells.insert(make_cell(1, 1, Some(CellValue::Text("b".into())), None));
+    |           ++++++
+473 |     grid1.col_signatures.insert(make_cell(1, 1, Some(CellValue::Text("b".into())), None));
+    |           +++++++++++++++
+473 |     grid1.row_signatures.insert(make_cell(1, 1, Some(CellValue::Text("b".into())), None));
+    |           +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:473:59
+    |
+473 |     grid1.insert(make_cell(1, 1, Some(CellValue::Text("b".into())), None));
+    |                                                           ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:474:11
+    |
+474 |     grid1.insert(make_cell(1, 2, Some(CellValue::Text("c".into())), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+474 |     grid1.cells.insert(make_cell(1, 2, Some(CellValue::Text("c".into())), None));
+    |           ++++++
+474 |     grid1.col_signatures.insert(make_cell(1, 2, Some(CellValue::Text("c".into())), None));
+    |           +++++++++++++++
+474 |     grid1.row_signatures.insert(make_cell(1, 2, Some(CellValue::Text("c".into())), None));
+    |           +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:474:59
+    |
+474 |     grid1.insert(make_cell(1, 2, Some(CellValue::Text("c".into())), None));
+    |                                                           ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:475:11
+    |
+475 |     grid1.insert(make_cell(1, 3, Some(CellValue::Text("d".into())), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+475 |     grid1.cells.insert(make_cell(1, 3, Some(CellValue::Text("d".into())), None));
+    |           ++++++
+475 |     grid1.col_signatures.insert(make_cell(1, 3, Some(CellValue::Text("d".into())), None));
+    |           +++++++++++++++
+475 |     grid1.row_signatures.insert(make_cell(1, 3, Some(CellValue::Text("d".into())), None));
+    |           +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:475:59
+    |
+475 |     grid1.insert(make_cell(1, 3, Some(CellValue::Text("d".into())), None));
+    |                                                           ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:478:11
+    |
+478 |     grid2.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+478 |     grid2.cells.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |           ++++++
+478 |     grid2.col_signatures.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |           +++++++++++++++
+478 |     grid2.row_signatures.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:479:11
+    |
+479 |     grid2.insert(make_cell(0, 1, Some(CellValue::Number(3.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+479 |     grid2.cells.insert(make_cell(0, 1, Some(CellValue::Number(3.0)), None));
+    |           ++++++
+479 |     grid2.col_signatures.insert(make_cell(0, 1, Some(CellValue::Number(3.0)), None));
+    |           +++++++++++++++
+479 |     grid2.row_signatures.insert(make_cell(0, 1, Some(CellValue::Number(3.0)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:480:11
+    |
+480 |     grid2.insert(make_cell(0, 2, Some(CellValue::Number(4.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+480 |     grid2.cells.insert(make_cell(0, 2, Some(CellValue::Number(4.0)), None));
+    |           ++++++
+480 |     grid2.col_signatures.insert(make_cell(0, 2, Some(CellValue::Number(4.0)), None));
+    |           +++++++++++++++
+480 |     grid2.row_signatures.insert(make_cell(0, 2, Some(CellValue::Number(4.0)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:481:11
+    |
+481 |     grid2.insert(make_cell(1, 0, Some(CellValue::Text("a".into())), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+481 |     grid2.cells.insert(make_cell(1, 0, Some(CellValue::Text("a".into())), None));
+    |           ++++++
+481 |     grid2.col_signatures.insert(make_cell(1, 0, Some(CellValue::Text("a".into())), None));
+    |           +++++++++++++++
+481 |     grid2.row_signatures.insert(make_cell(1, 0, Some(CellValue::Text("a".into())), None));
+    |           +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:481:59
+    |
+481 |     grid2.insert(make_cell(1, 0, Some(CellValue::Text("a".into())), None));
+    |                                                           ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:482:11
+    |
+482 |     grid2.insert(make_cell(1, 1, Some(CellValue::Text("c".into())), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+482 |     grid2.cells.insert(make_cell(1, 1, Some(CellValue::Text("c".into())), None));
+    |           ++++++
+482 |     grid2.col_signatures.insert(make_cell(1, 1, Some(CellValue::Text("c".into())), None));
+    |           +++++++++++++++
+482 |     grid2.row_signatures.insert(make_cell(1, 1, Some(CellValue::Text("c".into())), None));
+    |           +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:482:59
+    |
+482 |     grid2.insert(make_cell(1, 1, Some(CellValue::Text("c".into())), None));
+    |                                                           ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:483:11
+    |
+483 |     grid2.insert(make_cell(1, 2, Some(CellValue::Text("d".into())), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+483 |     grid2.cells.insert(make_cell(1, 2, Some(CellValue::Text("d".into())), None));
+    |           ++++++
+483 |     grid2.col_signatures.insert(make_cell(1, 2, Some(CellValue::Text("d".into())), None));
+    |           +++++++++++++++
+483 |     grid2.row_signatures.insert(make_cell(1, 2, Some(CellValue::Text("d".into())), None));
+    |           +++++++++++++++
+
+error[E0277]: the trait bound `StringId: From<&str>` is not satisfied
+   --> core\tests\signature_tests.rs:483:59
+    |
+483 |     grid2.insert(make_cell(1, 2, Some(CellValue::Text("d".into())), None));
+    |                                                           ^^^^ the trait `From<&str>` is not implemented for `StringId`
+    |
+    = note: required for `&str` to implement `Into<StringId>`
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:495:11
+    |
+495 |     grid1.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+495 |     grid1.cells.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |           ++++++
+495 |     grid1.col_signatures.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |           +++++++++++++++
+495 |     grid1.row_signatures.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:496:11
+    |
+496 |     grid1.insert(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+496 |     grid1.cells.insert(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
+    |           ++++++
+496 |     grid1.col_signatures.insert(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
+    |           +++++++++++++++
+496 |     grid1.row_signatures.insert(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:497:11
+    |
+497 |     grid1.insert(make_cell(0, 2, Some(CellValue::Number(3.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+497 |     grid1.cells.insert(make_cell(0, 2, Some(CellValue::Number(3.0)), None));
+    |           ++++++
+497 |     grid1.col_signatures.insert(make_cell(0, 2, Some(CellValue::Number(3.0)), None));
+    |           +++++++++++++++
+497 |     grid1.row_signatures.insert(make_cell(0, 2, Some(CellValue::Number(3.0)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:500:11
+    |
+500 |     grid2.insert(make_cell(0, 1, Some(CellValue::Number(1.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+500 |     grid2.cells.insert(make_cell(0, 1, Some(CellValue::Number(1.0)), None));
+    |           ++++++
+500 |     grid2.col_signatures.insert(make_cell(0, 1, Some(CellValue::Number(1.0)), None));
+    |           +++++++++++++++
+500 |     grid2.row_signatures.insert(make_cell(0, 1, Some(CellValue::Number(1.0)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:501:11
+    |
+501 |     grid2.insert(make_cell(0, 2, Some(CellValue::Number(2.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+501 |     grid2.cells.insert(make_cell(0, 2, Some(CellValue::Number(2.0)), None));
+    |           ++++++
+501 |     grid2.col_signatures.insert(make_cell(0, 2, Some(CellValue::Number(2.0)), None));
+    |           +++++++++++++++
+501 |     grid2.row_signatures.insert(make_cell(0, 2, Some(CellValue::Number(2.0)), None));
+    |           +++++++++++++++
+
+error[E0599]: no method named `insert` found for struct `Grid` in the current scope
+   --> core\tests\signature_tests.rs:502:11
+    |
+502 |     grid2.insert(make_cell(0, 3, Some(CellValue::Number(3.0)), None));
+    |           ^^^^^^
+    |
+help: there is a method `insert_cell` with a similar name, but with different arguments
+   --> C:\Users\dvora\repo\excel_diff\core\src\workbook.rs:349:5
+    |
+349 |     pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: some of the expressions' fields have a method of the same name
+    |
+502 |     grid2.cells.insert(make_cell(0, 3, Some(CellValue::Number(3.0)), None));
+    |           ++++++
+502 |     grid2.col_signatures.insert(make_cell(0, 3, Some(CellValue::Number(3.0)), None));
+    |           +++++++++++++++
+502 |     grid2.row_signatures.insert(make_cell(0, 3, Some(CellValue::Number(3.0)), None));
+    |           +++++++++++++++
+
+error: could not compile `excel_diff` (test "signature_tests") due to 125 previous errors
+warning: `excel_diff` (test "grid_view_tests") generated 2 warnings (run `cargo fix --test "grid_view_tests"` to apply 1 suggestion)

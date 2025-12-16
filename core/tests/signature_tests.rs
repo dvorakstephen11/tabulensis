@@ -1,12 +1,32 @@
-use excel_diff::{Cell, CellAddress, CellValue, Grid, GridView};
+mod common;
 
-fn make_cell(row: u32, col: u32, value: Option<CellValue>, formula: Option<&str>) -> Cell {
-    Cell {
+use common::sid;
+use excel_diff::{CellValue, Grid, GridView, StringId};
+
+#[derive(Clone)]
+struct TestCell {
+    row: u32,
+    col: u32,
+    value: Option<CellValue>,
+    formula: Option<StringId>,
+}
+
+trait GridTestInsert {
+    fn insert_test(&mut self, cell: TestCell);
+}
+
+impl GridTestInsert for Grid {
+    fn insert_test(&mut self, cell: TestCell) {
+        self.insert_cell(cell.row, cell.col, cell.value, cell.formula);
+    }
+}
+
+fn make_cell(row: u32, col: u32, value: Option<CellValue>, formula: Option<&str>) -> TestCell {
+    TestCell {
         row,
         col,
-        address: CellAddress::from_indices(row, col),
         value,
-        formula: formula.map(|s| s.to_string()),
+        formula: formula.map(sid),
     }
 }
 
@@ -29,8 +49,8 @@ fn different_rows_have_different_signatures() {
     let mut grid1 = Grid::new(1, 3);
     let mut grid2 = Grid::new(1, 3);
     for c in 0..3 {
-        grid1.insert(make_cell(0, c, Some(CellValue::Number(c as f64)), None));
-        grid2.insert(make_cell(
+        grid1.insert_test(make_cell(0, c, Some(CellValue::Number(c as f64)), None));
+        grid2.insert_test(make_cell(
             0,
             c,
             Some(CellValue::Number((c + 1) as f64)),
@@ -45,10 +65,10 @@ fn different_rows_have_different_signatures() {
 #[test]
 fn compute_all_signatures_populates_fields() {
     let mut grid = Grid::new(5, 5);
-    grid.insert(make_cell(
+    grid.insert_test(make_cell(
         2,
         2,
-        Some(CellValue::Text("center".into())),
+        Some(CellValue::Text(sid("center"))),
         None,
     ));
     assert!(grid.row_signatures.is_none());
@@ -100,14 +120,14 @@ fn compute_all_signatures_with_all_empty_rows_and_cols_is_stable() {
 #[test]
 fn row_and_col_signatures_match_bulk_computation() {
     let mut grid = Grid::new(3, 2);
-    grid.insert(make_cell(
+    grid.insert_test(make_cell(
         0,
         0,
         Some(CellValue::Number(std::f64::consts::PI)),
         Some("=PI()"),
     ));
-    grid.insert(make_cell(1, 1, Some(CellValue::Text("text".into())), None));
-    grid.insert(make_cell(2, 0, Some(CellValue::Bool(true)), Some("=A1")));
+    grid.insert_test(make_cell(1, 1, Some(CellValue::Text(sid("text"))), None));
+    grid.insert_test(make_cell(2, 0, Some(CellValue::Bool(true)), Some("=A1")));
 
     grid.compute_all_signatures();
 
@@ -137,15 +157,15 @@ fn row_and_col_signatures_match_bulk_computation() {
 #[test]
 fn compute_all_signatures_recomputes_after_mutation() {
     let mut grid = Grid::new(3, 3);
-    grid.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
-    grid.insert(make_cell(1, 1, Some(CellValue::Text("x".into())), None));
+    grid.insert_test(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    grid.insert_test(make_cell(1, 1, Some(CellValue::Text(sid("x"))), None));
 
     grid.compute_all_signatures();
     let first_rows = grid.row_signatures.as_ref().unwrap().clone();
     let first_cols = grid.col_signatures.as_ref().unwrap().clone();
 
-    grid.insert(make_cell(1, 1, Some(CellValue::Text("y".into())), None));
-    grid.insert(make_cell(2, 2, Some(CellValue::Bool(true)), None));
+    grid.insert_test(make_cell(1, 1, Some(CellValue::Text(sid("y"))), None));
+    grid.insert_test(make_cell(2, 2, Some(CellValue::Bool(true)), None));
 
     grid.compute_all_signatures();
     let second_rows = grid.row_signatures.as_ref().unwrap();
@@ -158,12 +178,12 @@ fn compute_all_signatures_recomputes_after_mutation() {
 #[test]
 fn row_signatures_distinguish_column_positions() {
     let mut grid1 = Grid::new(1, 2);
-    grid1.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
-    grid1.insert(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
+    grid1.insert_test(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    grid1.insert_test(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
 
     let mut grid2 = Grid::new(1, 2);
-    grid2.insert(make_cell(0, 0, Some(CellValue::Number(2.0)), None));
-    grid2.insert(make_cell(0, 1, Some(CellValue::Number(1.0)), None));
+    grid2.insert_test(make_cell(0, 0, Some(CellValue::Number(2.0)), None));
+    grid2.insert_test(make_cell(0, 1, Some(CellValue::Number(1.0)), None));
 
     let sig1 = grid1.compute_row_signature(0);
     let sig2 = grid2.compute_row_signature(0);
@@ -173,12 +193,12 @@ fn row_signatures_distinguish_column_positions() {
 #[test]
 fn col_signatures_distinguish_row_positions() {
     let mut grid1 = Grid::new(2, 1);
-    grid1.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
-    grid1.insert(make_cell(1, 0, Some(CellValue::Number(2.0)), None));
+    grid1.insert_test(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    grid1.insert_test(make_cell(1, 0, Some(CellValue::Number(2.0)), None));
 
     let mut grid2 = Grid::new(2, 1);
-    grid2.insert(make_cell(0, 0, Some(CellValue::Number(2.0)), None));
-    grid2.insert(make_cell(1, 0, Some(CellValue::Number(1.0)), None));
+    grid2.insert_test(make_cell(0, 0, Some(CellValue::Number(2.0)), None));
+    grid2.insert_test(make_cell(1, 0, Some(CellValue::Number(1.0)), None));
 
     let sig1 = grid1.compute_col_signature(0);
     let sig2 = grid2.compute_col_signature(0);
@@ -188,24 +208,24 @@ fn col_signatures_distinguish_row_positions() {
 #[test]
 fn row_signature_independent_of_insertion_order() {
     let mut grid1 = Grid::new(1, 3);
-    grid1.insert(make_cell(
+    grid1.insert_test(make_cell(
         0,
         0,
         Some(CellValue::Number(10.0)),
         Some("=A1*2"),
     ));
-    grid1.insert(make_cell(0, 1, Some(CellValue::Text("mix".into())), None));
-    grid1.insert(make_cell(0, 2, Some(CellValue::Bool(true)), None));
+    grid1.insert_test(make_cell(0, 1, Some(CellValue::Text(sid("mix"))), None));
+    grid1.insert_test(make_cell(0, 2, Some(CellValue::Bool(true)), None));
 
     let mut grid2 = Grid::new(1, 3);
-    grid2.insert(make_cell(0, 2, Some(CellValue::Bool(true)), None));
-    grid2.insert(make_cell(
+    grid2.insert_test(make_cell(0, 2, Some(CellValue::Bool(true)), None));
+    grid2.insert_test(make_cell(
         0,
         0,
         Some(CellValue::Number(10.0)),
         Some("=A1*2"),
     ));
-    grid2.insert(make_cell(0, 1, Some(CellValue::Text("mix".into())), None));
+    grid2.insert_test(make_cell(0, 1, Some(CellValue::Text(sid("mix"))), None));
 
     let sig1 = grid1.compute_row_signature(0).hash;
     let sig2 = grid2.compute_row_signature(0).hash;
@@ -222,24 +242,24 @@ fn row_signature_independent_of_insertion_order() {
 #[test]
 fn col_signature_independent_of_insertion_order() {
     let mut grid1 = Grid::new(3, 1);
-    grid1.insert(make_cell(
+    grid1.insert_test(make_cell(
         0,
         0,
         Some(CellValue::Number(std::f64::consts::E)),
         Some("=EXP(1)"),
     ));
-    grid1.insert(make_cell(1, 0, Some(CellValue::Text("col".into())), None));
-    grid1.insert(make_cell(2, 0, Some(CellValue::Bool(false)), None));
+    grid1.insert_test(make_cell(1, 0, Some(CellValue::Text(sid("col"))), None));
+    grid1.insert_test(make_cell(2, 0, Some(CellValue::Bool(false)), None));
 
     let mut grid2 = Grid::new(3, 1);
-    grid2.insert(make_cell(2, 0, Some(CellValue::Bool(false)), None));
-    grid2.insert(make_cell(
+    grid2.insert_test(make_cell(2, 0, Some(CellValue::Bool(false)), None));
+    grid2.insert_test(make_cell(
         0,
         0,
         Some(CellValue::Number(std::f64::consts::E)),
         Some("=EXP(1)"),
     ));
-    grid2.insert(make_cell(1, 0, Some(CellValue::Text("col".into())), None));
+    grid2.insert_test(make_cell(1, 0, Some(CellValue::Text(sid("col"))), None));
 
     let sig1 = grid1.compute_col_signature(0).hash;
     let sig2 = grid2.compute_col_signature(0).hash;
@@ -256,13 +276,13 @@ fn col_signature_independent_of_insertion_order() {
 #[test]
 fn col_signature_distinguishes_numeric_text_bool() {
     let mut grid_num = Grid::new(3, 1);
-    grid_num.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    grid_num.insert_test(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
 
     let mut grid_text = Grid::new(3, 1);
-    grid_text.insert(make_cell(0, 0, Some(CellValue::Text("1".into())), None));
+    grid_text.insert_test(make_cell(0, 0, Some(CellValue::Text(sid("1"))), None));
 
     let mut grid_bool = Grid::new(3, 1);
-    grid_bool.insert(make_cell(0, 0, Some(CellValue::Bool(true)), None));
+    grid_bool.insert_test(make_cell(0, 0, Some(CellValue::Bool(true)), None));
 
     let num = grid_num.compute_col_signature(0).hash;
     let txt = grid_text.compute_col_signature(0).hash;
@@ -276,13 +296,13 @@ fn col_signature_distinguishes_numeric_text_bool() {
 #[test]
 fn row_signature_distinguishes_numeric_text_bool() {
     let mut grid_num = Grid::new(1, 1);
-    grid_num.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    grid_num.insert_test(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
 
     let mut grid_text = Grid::new(1, 1);
-    grid_text.insert(make_cell(0, 0, Some(CellValue::Text("1".into())), None));
+    grid_text.insert_test(make_cell(0, 0, Some(CellValue::Text(sid("1"))), None));
 
     let mut grid_bool = Grid::new(1, 1);
-    grid_bool.insert(make_cell(0, 0, Some(CellValue::Bool(true)), None));
+    grid_bool.insert_test(make_cell(0, 0, Some(CellValue::Bool(true)), None));
 
     let num = grid_num.compute_row_signature(0).hash;
     let txt = grid_text.compute_row_signature(0).hash;
@@ -296,10 +316,10 @@ fn row_signature_distinguishes_numeric_text_bool() {
 #[test]
 fn row_signature_ignores_empty_trailing_cells() {
     let mut grid1 = Grid::new(1, 3);
-    grid1.insert(make_cell(0, 0, Some(CellValue::Number(42.0)), None));
+    grid1.insert_test(make_cell(0, 0, Some(CellValue::Number(42.0)), None));
 
     let mut grid2 = Grid::new(1, 10);
-    grid2.insert(make_cell(0, 0, Some(CellValue::Number(42.0)), None));
+    grid2.insert_test(make_cell(0, 0, Some(CellValue::Number(42.0)), None));
 
     let sig1 = grid1.compute_row_signature(0).hash;
     let sig2 = grid2.compute_row_signature(0).hash;
@@ -309,10 +329,10 @@ fn row_signature_ignores_empty_trailing_cells() {
 #[test]
 fn col_signature_ignores_empty_trailing_rows() {
     let mut grid1 = Grid::new(3, 1);
-    grid1.insert(make_cell(0, 0, Some(CellValue::Number(42.0)), None));
+    grid1.insert_test(make_cell(0, 0, Some(CellValue::Number(42.0)), None));
 
     let mut grid2 = Grid::new(10, 1);
-    grid2.insert(make_cell(0, 0, Some(CellValue::Number(42.0)), None));
+    grid2.insert_test(make_cell(0, 0, Some(CellValue::Number(42.0)), None));
 
     let sig1 = grid1.compute_col_signature(0).hash;
     let sig2 = grid2.compute_col_signature(0).hash;
@@ -322,10 +342,10 @@ fn col_signature_ignores_empty_trailing_rows() {
 #[test]
 fn col_signature_includes_formulas_by_default() {
     let mut with_formula = Grid::new(2, 1);
-    with_formula.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), Some("=5+5")));
+    with_formula.insert_test(make_cell(0, 0, Some(CellValue::Number(10.0)), Some("=5+5")));
 
     let mut without_formula = Grid::new(2, 1);
-    without_formula.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), None));
+    without_formula.insert_test(make_cell(0, 0, Some(CellValue::Number(10.0)), None));
 
     let sig_with = with_formula.compute_col_signature(0).hash;
     let sig_without = without_formula.compute_col_signature(0).hash;
@@ -335,23 +355,23 @@ fn col_signature_includes_formulas_by_default() {
 #[test]
 fn col_signature_includes_formulas_sparse() {
     let mut formula_short = Grid::new(5, 1);
-    formula_short.insert(make_cell(
+    formula_short.insert_test(make_cell(
         0,
         0,
-        Some(CellValue::Text("foo".into())),
+        Some(CellValue::Text(sid("foo"))),
         Some("=A2"),
     ));
 
     let mut formula_tall = Grid::new(10, 1);
-    formula_tall.insert(make_cell(
+    formula_tall.insert_test(make_cell(
         0,
         0,
-        Some(CellValue::Text("foo".into())),
+        Some(CellValue::Text(sid("foo"))),
         Some("=A2"),
     ));
 
     let mut value_only = Grid::new(10, 1);
-    value_only.insert(make_cell(0, 0, Some(CellValue::Text("foo".into())), None));
+    value_only.insert_test(make_cell(0, 0, Some(CellValue::Text(sid("foo"))), None));
 
     let sig_formula_short = formula_short.compute_col_signature(0).hash;
     let sig_formula_tall = formula_tall.compute_col_signature(0).hash;
@@ -364,10 +384,10 @@ fn col_signature_includes_formulas_sparse() {
 #[test]
 fn row_signature_includes_formulas_by_default() {
     let mut grid_with_formula = Grid::new(1, 1);
-    grid_with_formula.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), Some("=5+5")));
+    grid_with_formula.insert_test(make_cell(0, 0, Some(CellValue::Number(10.0)), Some("=5+5")));
 
     let mut grid_without_formula = Grid::new(1, 1);
-    grid_without_formula.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), None));
+    grid_without_formula.insert_test(make_cell(0, 0, Some(CellValue::Number(10.0)), None));
 
     let sig_with = grid_with_formula.compute_row_signature(0).hash;
     let sig_without = grid_without_formula.compute_row_signature(0).hash;
@@ -377,9 +397,9 @@ fn row_signature_includes_formulas_by_default() {
 #[test]
 fn row_signature_is_stable_across_computations() {
     let mut grid = Grid::new(1, 3);
-    grid.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
-    grid.insert(make_cell(0, 1, Some(CellValue::Text("x".into())), None));
-    grid.insert(make_cell(0, 2, Some(CellValue::Bool(false)), None));
+    grid.insert_test(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    grid.insert_test(make_cell(0, 1, Some(CellValue::Text(sid("x"))), None));
+    grid.insert_test(make_cell(0, 2, Some(CellValue::Bool(false)), None));
 
     let sig1 = grid.compute_row_signature(0);
     let sig2 = grid.compute_row_signature(0);
@@ -390,8 +410,8 @@ fn row_signature_is_stable_across_computations() {
 #[test]
 fn row_signature_with_formula_is_stable() {
     let mut grid = Grid::new(1, 2);
-    grid.insert(make_cell(0, 0, Some(CellValue::Number(10.0)), Some("=5+5")));
-    grid.insert(make_cell(0, 1, Some(CellValue::Text("bar".into())), None));
+    grid.insert_test(make_cell(0, 0, Some(CellValue::Number(10.0)), Some("=5+5")));
+    grid.insert_test(make_cell(0, 1, Some(CellValue::Text(sid("bar"))), None));
 
     let sig1 = grid.compute_row_signature(0);
     let sig2 = grid.compute_row_signature(0);
@@ -402,14 +422,14 @@ fn row_signature_with_formula_is_stable() {
 #[test]
 fn gridview_rowmeta_hash_matches_compute_all_signatures() {
     let mut grid = Grid::new(3, 2);
-    grid.insert(make_cell(
+    grid.insert_test(make_cell(
         0,
         0,
         Some(CellValue::Number(std::f64::consts::PI)),
         Some("=PI()"),
     ));
-    grid.insert(make_cell(1, 1, Some(CellValue::Text("text".into())), None));
-    grid.insert(make_cell(2, 0, Some(CellValue::Bool(true)), Some("=A1")));
+    grid.insert_test(make_cell(1, 1, Some(CellValue::Text(sid("text"))), None));
+    grid.insert_test(make_cell(2, 0, Some(CellValue::Bool(true)), Some("=A1")));
 
     grid.compute_all_signatures();
 
@@ -438,22 +458,22 @@ fn gridview_rowmeta_hash_matches_compute_all_signatures() {
 #[test]
 fn row_signature_unchanged_after_column_insert_at_position_zero() {
     let mut grid1 = Grid::new(2, 3);
-    grid1.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
-    grid1.insert(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
-    grid1.insert(make_cell(0, 2, Some(CellValue::Number(3.0)), None));
-    grid1.insert(make_cell(1, 0, Some(CellValue::Text("a".into())), None));
-    grid1.insert(make_cell(1, 1, Some(CellValue::Text("b".into())), None));
-    grid1.insert(make_cell(1, 2, Some(CellValue::Text("c".into())), None));
+    grid1.insert_test(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    grid1.insert_test(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
+    grid1.insert_test(make_cell(0, 2, Some(CellValue::Number(3.0)), None));
+    grid1.insert_test(make_cell(1, 0, Some(CellValue::Text(sid("a"))), None));
+    grid1.insert_test(make_cell(1, 1, Some(CellValue::Text(sid("b"))), None));
+    grid1.insert_test(make_cell(1, 2, Some(CellValue::Text(sid("c"))), None));
 
     let mut grid2 = Grid::new(2, 4);
-    grid2.insert(make_cell(0, 0, Some(CellValue::Number(99.0)), None));
-    grid2.insert(make_cell(0, 1, Some(CellValue::Number(1.0)), None));
-    grid2.insert(make_cell(0, 2, Some(CellValue::Number(2.0)), None));
-    grid2.insert(make_cell(0, 3, Some(CellValue::Number(3.0)), None));
-    grid2.insert(make_cell(1, 0, Some(CellValue::Text("z".into())), None));
-    grid2.insert(make_cell(1, 1, Some(CellValue::Text("a".into())), None));
-    grid2.insert(make_cell(1, 2, Some(CellValue::Text("b".into())), None));
-    grid2.insert(make_cell(1, 3, Some(CellValue::Text("c".into())), None));
+    grid2.insert_test(make_cell(0, 0, Some(CellValue::Number(99.0)), None));
+    grid2.insert_test(make_cell(0, 1, Some(CellValue::Number(1.0)), None));
+    grid2.insert_test(make_cell(0, 2, Some(CellValue::Number(2.0)), None));
+    grid2.insert_test(make_cell(0, 3, Some(CellValue::Number(3.0)), None));
+    grid2.insert_test(make_cell(1, 0, Some(CellValue::Text(sid("z"))), None));
+    grid2.insert_test(make_cell(1, 1, Some(CellValue::Text(sid("a"))), None));
+    grid2.insert_test(make_cell(1, 2, Some(CellValue::Text(sid("b"))), None));
+    grid2.insert_test(make_cell(1, 3, Some(CellValue::Text(sid("c"))), None));
 
     let view1 = GridView::from_grid(&grid1);
     let view2 = GridView::from_grid(&grid2);
@@ -465,22 +485,22 @@ fn row_signature_unchanged_after_column_insert_at_position_zero() {
 #[test]
 fn row_signature_unchanged_after_column_delete_from_middle() {
     let mut grid1 = Grid::new(2, 4);
-    grid1.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
-    grid1.insert(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
-    grid1.insert(make_cell(0, 2, Some(CellValue::Number(3.0)), None));
-    grid1.insert(make_cell(0, 3, Some(CellValue::Number(4.0)), None));
-    grid1.insert(make_cell(1, 0, Some(CellValue::Text("a".into())), None));
-    grid1.insert(make_cell(1, 1, Some(CellValue::Text("b".into())), None));
-    grid1.insert(make_cell(1, 2, Some(CellValue::Text("c".into())), None));
-    grid1.insert(make_cell(1, 3, Some(CellValue::Text("d".into())), None));
+    grid1.insert_test(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    grid1.insert_test(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
+    grid1.insert_test(make_cell(0, 2, Some(CellValue::Number(3.0)), None));
+    grid1.insert_test(make_cell(0, 3, Some(CellValue::Number(4.0)), None));
+    grid1.insert_test(make_cell(1, 0, Some(CellValue::Text(sid("a"))), None));
+    grid1.insert_test(make_cell(1, 1, Some(CellValue::Text(sid("b"))), None));
+    grid1.insert_test(make_cell(1, 2, Some(CellValue::Text(sid("c"))), None));
+    grid1.insert_test(make_cell(1, 3, Some(CellValue::Text(sid("d"))), None));
 
     let mut grid2 = Grid::new(2, 3);
-    grid2.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
-    grid2.insert(make_cell(0, 1, Some(CellValue::Number(3.0)), None));
-    grid2.insert(make_cell(0, 2, Some(CellValue::Number(4.0)), None));
-    grid2.insert(make_cell(1, 0, Some(CellValue::Text("a".into())), None));
-    grid2.insert(make_cell(1, 1, Some(CellValue::Text("c".into())), None));
-    grid2.insert(make_cell(1, 2, Some(CellValue::Text("d".into())), None));
+    grid2.insert_test(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    grid2.insert_test(make_cell(0, 1, Some(CellValue::Number(3.0)), None));
+    grid2.insert_test(make_cell(0, 2, Some(CellValue::Number(4.0)), None));
+    grid2.insert_test(make_cell(1, 0, Some(CellValue::Text(sid("a"))), None));
+    grid2.insert_test(make_cell(1, 1, Some(CellValue::Text(sid("c"))), None));
+    grid2.insert_test(make_cell(1, 2, Some(CellValue::Text(sid("d"))), None));
 
     let view1 = GridView::from_grid(&grid1);
     let view2 = GridView::from_grid(&grid2);
@@ -492,14 +512,14 @@ fn row_signature_unchanged_after_column_delete_from_middle() {
 #[test]
 fn row_signature_consistent_for_same_content_different_column_indices() {
     let mut grid1 = Grid::new(1, 3);
-    grid1.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
-    grid1.insert(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
-    grid1.insert(make_cell(0, 2, Some(CellValue::Number(3.0)), None));
+    grid1.insert_test(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    grid1.insert_test(make_cell(0, 1, Some(CellValue::Number(2.0)), None));
+    grid1.insert_test(make_cell(0, 2, Some(CellValue::Number(3.0)), None));
 
     let mut grid2 = Grid::new(1, 5);
-    grid2.insert(make_cell(0, 1, Some(CellValue::Number(1.0)), None));
-    grid2.insert(make_cell(0, 2, Some(CellValue::Number(2.0)), None));
-    grid2.insert(make_cell(0, 3, Some(CellValue::Number(3.0)), None));
+    grid2.insert_test(make_cell(0, 1, Some(CellValue::Number(1.0)), None));
+    grid2.insert_test(make_cell(0, 2, Some(CellValue::Number(2.0)), None));
+    grid2.insert_test(make_cell(0, 3, Some(CellValue::Number(3.0)), None));
 
     let view1 = GridView::from_grid(&grid1);
     let view2 = GridView::from_grid(&grid2);

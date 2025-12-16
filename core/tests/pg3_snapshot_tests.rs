@@ -1,16 +1,20 @@
 use excel_diff::{
     Cell, CellAddress, CellSnapshot, CellValue, Sheet, Workbook, address_to_index, open_workbook,
+    with_default_session,
 };
 
 mod common;
 use common::fixture_path;
 
 fn sheet_by_name<'a>(workbook: &'a Workbook, name: &str) -> &'a Sheet {
-    workbook
-        .sheets
-        .iter()
-        .find(|s| s.name == name)
-        .expect("sheet should exist")
+    with_default_session(|session| {
+        let id = session.strings.intern(name);
+        workbook
+            .sheets
+            .iter()
+            .find(|s| s.name == id)
+            .expect("sheet should exist")
+    })
 }
 
 fn find_cell<'a>(sheet: &'a Sheet, addr: &str) -> Option<&'a Cell> {
@@ -19,16 +23,20 @@ fn find_cell<'a>(sheet: &'a Sheet, addr: &str) -> Option<&'a Cell> {
 }
 
 fn snapshot(sheet: &Sheet, addr: &str) -> CellSnapshot {
+    let (row, col) = address_to_index(addr).expect("address should parse");
     if let Some(cell) = find_cell(sheet, addr) {
-        CellSnapshot::from_cell(cell)
+        CellSnapshot::from_cell(row, col, cell)
     } else {
-        let (row, col) = address_to_index(addr).expect("address should parse");
         CellSnapshot {
             addr: CellAddress::from_indices(row, col),
             value: None,
             formula: None,
         }
     }
+}
+
+fn resolve_text(id: excel_diff::StringId) -> String {
+    with_default_session(|session| session.strings.resolve(id).to_string())
 }
 
 #[test]
@@ -43,7 +51,11 @@ fn pg3_value_and_formula_cells_snapshot_from_excel() {
     assert!(a1.formula.is_none());
 
     let a2 = snapshot(sheet, "A2");
-    assert_eq!(a2.value, Some(CellValue::Text("hello".into())));
+    let a2_text = match a2.value {
+        Some(CellValue::Text(id)) => resolve_text(id),
+        other => panic!("expected text cell, got {:?}", other),
+    };
+    assert_eq!(a2_text, "hello");
     assert!(a2.formula.is_none());
 
     let a3 = snapshot(sheet, "A3");
@@ -60,20 +72,24 @@ fn pg3_value_and_formula_cells_snapshot_from_excel() {
         Some(CellValue::Number(n)) if (n - 43.0).abs() < 1e-6
     ));
     assert_eq!(b1.addr.to_string(), "B1");
-    let b1_formula = b1.formula.as_deref().expect("B1 should have a formula");
+    let b1_formula = b1.formula.map(resolve_text).expect("B1 should have a formula");
     assert!(b1_formula.contains("A1+1"));
 
     let b2 = snapshot(sheet, "B2");
-    assert_eq!(b2.value, Some(CellValue::Text("hello world".into())));
+    let b2_text = match b2.value {
+        Some(CellValue::Text(id)) => resolve_text(id),
+        other => panic!("expected text cell, got {:?}", other),
+    };
+    assert_eq!(b2_text, "hello world");
     assert_eq!(b2.addr.to_string(), "B2");
-    let b2_formula = b2.formula.as_deref().expect("B2 should have a formula");
+    let b2_formula = b2.formula.map(resolve_text).expect("B2 should have a formula");
     assert!(b2_formula.contains("hello"));
     assert!(b2_formula.contains("world"));
 
     let b3 = snapshot(sheet, "B3");
     assert_eq!(b3.value, Some(CellValue::Bool(true)));
     assert_eq!(b3.addr.to_string(), "B3");
-    let b3_formula = b3.formula.as_deref().expect("B3 should have a formula");
+    let b3_formula = b3.formula.map(resolve_text).expect("B3 should have a formula");
     assert!(
         b3_formula.contains(">0"),
         "B3 formula should include comparison: {b3_formula:?}"

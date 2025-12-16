@@ -1,7 +1,7 @@
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use excel_diff::config::DiffConfig;
-use excel_diff::engine::diff_workbooks;
-use excel_diff::{Cell, CellAddress, CellValue, Grid, Sheet, SheetKind, Workbook};
+use excel_diff::diff_workbooks;
+use excel_diff::{CellValue, Grid, Sheet, SheetKind, Workbook, with_default_session};
 use std::time::Duration;
 
 const MAX_BENCH_TIME_SECS: u64 = 30;
@@ -12,15 +12,14 @@ fn create_large_grid(nrows: u32, ncols: u32, base_value: i32) -> Grid {
     let mut grid = Grid::new(nrows, ncols);
     for row in 0..nrows {
         for col in 0..ncols {
-            grid.insert(Cell {
+            grid.insert_cell(
                 row,
                 col,
-                address: CellAddress::from_indices(row, col),
-                value: Some(CellValue::Number(
+                Some(CellValue::Number(
                     (base_value as i64 + row as i64 * 1000 + col as i64) as f64,
                 )),
-                formula: None,
-            });
+                None,
+            );
         }
     }
     grid
@@ -31,13 +30,12 @@ fn create_repetitive_grid(nrows: u32, ncols: u32, pattern_length: u32) -> Grid {
     for row in 0..nrows {
         let pattern_idx = row % pattern_length;
         for col in 0..ncols {
-            grid.insert(Cell {
+            grid.insert_cell(
                 row,
                 col,
-                address: CellAddress::from_indices(row, col),
-                value: Some(CellValue::Number((pattern_idx * 1000 + col) as f64)),
-                formula: None,
-            });
+                Some(CellValue::Number((pattern_idx * 1000 + col) as f64)),
+                None,
+            );
         }
     }
     grid
@@ -54,13 +52,12 @@ fn create_sparse_grid(nrows: u32, ncols: u32, fill_percent: u32, seed: u64) -> G
             (row, col, seed).hash(&mut hasher);
             let hash = hasher.finish();
             if (hash % 100) < fill_percent as u64 {
-                grid.insert(Cell {
+                grid.insert_cell(
                     row,
                     col,
-                    address: CellAddress::from_indices(row, col),
-                    value: Some(CellValue::Number((row * 1000 + col) as f64)),
-                    formula: None,
-                });
+                    Some(CellValue::Number((row * 1000 + col) as f64)),
+                    None,
+                );
             }
         }
     }
@@ -68,13 +65,13 @@ fn create_sparse_grid(nrows: u32, ncols: u32, fill_percent: u32, seed: u64) -> G
 }
 
 fn single_sheet_workbook(name: &str, grid: Grid) -> Workbook {
-    Workbook {
+    with_default_session(|session| Workbook {
         sheets: vec![Sheet {
-            name: name.to_string(),
+            name: session.strings.intern(name),
             kind: SheetKind::Worksheet,
             grid,
         }],
-    }
+    })
 }
 
 fn bench_identical_grids(c: &mut Criterion) {
@@ -107,13 +104,7 @@ fn bench_single_cell_edit(c: &mut Criterion) {
     for size in [500u32, 1000, 2000, 5000].iter() {
         let grid_a = create_large_grid(*size, 50, 0);
         let mut grid_b = create_large_grid(*size, 50, 0);
-        grid_b.insert(Cell {
-            row: size / 2,
-            col: 25,
-            address: CellAddress::from_indices(size / 2, 25),
-            value: Some(CellValue::Number(999999.0)),
-            formula: None,
-        });
+        grid_b.insert_cell(size / 2, 25, Some(CellValue::Number(999999.0)), None);
         let wb_a = single_sheet_workbook("Bench", grid_a);
         let wb_b = single_sheet_workbook("Bench", grid_b);
         let config = DiffConfig::default();
@@ -156,13 +147,7 @@ fn bench_adversarial_repetitive(c: &mut Criterion) {
     for size in [500u32, 1000, 2000].iter() {
         let grid_a = create_repetitive_grid(*size, 50, 100);
         let mut grid_b = create_repetitive_grid(*size, 50, 100);
-        grid_b.insert(Cell {
-            row: size / 2,
-            col: 25,
-            address: CellAddress::from_indices(size / 2, 25),
-            value: Some(CellValue::Number(999999.0)),
-            formula: None,
-        });
+        grid_b.insert_cell(size / 2, 25, Some(CellValue::Number(999999.0)), None);
         let wb_a = single_sheet_workbook("Bench", grid_a);
         let wb_b = single_sheet_workbook("Bench", grid_b);
         let config = DiffConfig::default();
@@ -184,13 +169,7 @@ fn bench_sparse_grid(c: &mut Criterion) {
     for size in [500u32, 1000, 2000, 5000].iter() {
         let grid_a = create_sparse_grid(*size, 100, 1, 12345);
         let mut grid_b = create_sparse_grid(*size, 100, 1, 12345);
-        grid_b.insert(Cell {
-            row: size / 2,
-            col: 50,
-            address: CellAddress::from_indices(size / 2, 50),
-            value: Some(CellValue::Number(999999.0)),
-            formula: None,
-        });
+        grid_b.insert_cell(size / 2, 50, Some(CellValue::Number(999999.0)), None);
         let wb_a = single_sheet_workbook("Bench", grid_a);
         let wb_b = single_sheet_workbook("Bench", grid_b);
         let config = DiffConfig::default();
@@ -214,37 +193,30 @@ fn bench_row_insertion(c: &mut Criterion) {
         let mut grid_b = Grid::new(size + 100, 50);
         for row in 0..(size / 2) {
             for col in 0..50 {
-                grid_b.insert(Cell {
+                grid_b.insert_cell(
                     row,
                     col,
-                    address: CellAddress::from_indices(row, col),
-                    value: Some(CellValue::Number((row as i64 * 1000 + col as i64) as f64)),
-                    formula: None,
-                });
+                    Some(CellValue::Number((row as i64 * 1000 + col as i64) as f64)),
+                    None,
+                );
             }
         }
         for col in 0..50 {
             for i in 0..100 {
                 let row = size / 2 + i;
-                grid_b.insert(Cell {
-                    row,
-                    col,
-                    address: CellAddress::from_indices(row, col),
-                    value: Some(CellValue::Text(format!("NEW_ROW_{}", i))),
-                    formula: None,
-                });
+                let marker = 1_000_000.0 + i as f64 * 10.0 + col as f64;
+                grid_b.insert_cell(row, col, Some(CellValue::Number(marker)), None);
             }
         }
         for row in (size / 2)..*size {
             for col in 0..50 {
                 let new_row = row + 100;
-                grid_b.insert(Cell {
-                    row: new_row,
+                grid_b.insert_cell(
+                    new_row,
                     col,
-                    address: CellAddress::from_indices(new_row, col),
-                    value: Some(CellValue::Number((row as i64 * 1000 + col as i64) as f64)),
-                    formula: None,
-                });
+                    Some(CellValue::Number((row as i64 * 1000 + col as i64) as f64)),
+                    None,
+                );
             }
         }
         let wb_a = single_sheet_workbook("Bench", grid_a);

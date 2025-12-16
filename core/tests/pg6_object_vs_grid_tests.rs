@@ -1,7 +1,7 @@
 use excel_diff::{DiffOp, diff_workbooks, open_workbook};
 
 mod common;
-use common::fixture_path;
+use common::{fixture_path, sid};
 
 #[test]
 fn pg6_1_sheet_added_no_grid_ops_on_main() {
@@ -13,13 +13,13 @@ fn pg6_1_sheet_added_no_grid_ops_on_main() {
     let mut sheet_added = 0;
     for op in &report.ops {
         match op {
-            DiffOp::SheetAdded { sheet } if sheet == "NewSheet" => sheet_added += 1,
+            DiffOp::SheetAdded { sheet } if *sheet == sid("NewSheet") => sheet_added += 1,
             DiffOp::RowAdded { sheet, .. }
             | DiffOp::RowRemoved { sheet, .. }
             | DiffOp::ColumnAdded { sheet, .. }
             | DiffOp::ColumnRemoved { sheet, .. }
             | DiffOp::CellEdited { sheet, .. }
-                if sheet == "Main" =>
+                if *sheet == sid("Main") =>
             {
                 panic!("unexpected grid op on Main: {op:?}");
             }
@@ -50,13 +50,13 @@ fn pg6_2_sheet_removed_no_grid_ops_on_main() {
     let mut sheet_removed = 0;
     for op in &report.ops {
         match op {
-            DiffOp::SheetRemoved { sheet } if sheet == "OldSheet" => sheet_removed += 1,
+            DiffOp::SheetRemoved { sheet } if *sheet == sid("OldSheet") => sheet_removed += 1,
             DiffOp::RowAdded { sheet, .. }
             | DiffOp::RowRemoved { sheet, .. }
             | DiffOp::ColumnAdded { sheet, .. }
             | DiffOp::ColumnRemoved { sheet, .. }
             | DiffOp::CellEdited { sheet, .. }
-                if sheet == "Main" =>
+                if *sheet == sid("Main") =>
             {
                 panic!("unexpected grid op on Main: {op:?}");
             }
@@ -89,8 +89,8 @@ fn pg6_3_rename_as_remove_plus_add_no_grid_ops() {
 
     for op in &report.ops {
         match op {
-            DiffOp::SheetAdded { sheet } if sheet == "NewName" => added += 1,
-            DiffOp::SheetRemoved { sheet } if sheet == "OldName" => removed += 1,
+            DiffOp::SheetAdded { sheet } if *sheet == sid("NewName") => added += 1,
+            DiffOp::SheetRemoved { sheet } if *sheet == sid("OldName") => removed += 1,
             DiffOp::SheetAdded { sheet } => panic!("unexpected sheet added: {sheet}"),
             DiffOp::SheetRemoved { sheet } => panic!("unexpected sheet removed: {sheet}"),
             DiffOp::RowAdded { .. }
@@ -129,9 +129,9 @@ fn pg6_4_sheet_and_grid_change_composed_cleanly() {
 
     for op in &report.ops {
         match op {
-            DiffOp::SheetAdded { sheet } if sheet == "Scratch" => scratch_added += 1,
+            DiffOp::SheetAdded { sheet } if *sheet == sid("Scratch") => scratch_added += 1,
             DiffOp::CellEdited { sheet, .. } => {
-                assert_eq!(sheet, "Main", "only Main should have cell edits");
+                assert_eq!(sheet, &sid("Main"), "only Main should have cell edits");
                 main_cell_edits += 1;
             }
             DiffOp::SheetRemoved { .. } => {

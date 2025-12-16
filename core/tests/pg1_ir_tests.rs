@@ -1,39 +1,44 @@
-use excel_diff::{CellValue, Sheet, SheetKind, open_workbook};
+use excel_diff::{CellAddress, CellValue, Sheet, SheetKind, open_workbook, with_default_session};
 
 mod common;
-use common::fixture_path;
+use common::{fixture_path, sid};
 
 #[test]
 fn pg1_basic_two_sheets_structure() {
     let workbook = open_workbook(fixture_path("pg1_basic_two_sheets.xlsx"))
         .expect("pg1 basic fixture should open");
     assert_eq!(workbook.sheets.len(), 2);
-    assert_eq!(workbook.sheets[0].name, "Sheet1");
-    assert_eq!(workbook.sheets[1].name, "Sheet2");
+    assert_eq!(workbook.sheets[0].name, sid("Sheet1"));
+    assert_eq!(workbook.sheets[1].name, sid("Sheet2"));
     assert!(matches!(workbook.sheets[0].kind, SheetKind::Worksheet));
     assert!(matches!(workbook.sheets[1].kind, SheetKind::Worksheet));
 
     let sheet1 = &workbook.sheets[0];
     assert_eq!(sheet1.grid.nrows, 3);
     assert_eq!(sheet1.grid.ncols, 3);
-    assert_eq!(
-        sheet1
-            .grid
-            .get(0, 0)
-            .and_then(|cell| cell.value.as_ref().and_then(CellValue::as_text)),
-        Some("R1C1")
-    );
+    with_default_session(|session| {
+        assert_eq!(
+            sheet1
+                .grid
+                .get(0, 0)
+                .and_then(|cell| cell.value.as_ref().and_then(|v| v.as_text(session.strings()))),
+            Some("R1C1")
+        );
+    });
 
     let sheet2 = &workbook.sheets[1];
     assert_eq!(sheet2.grid.nrows, 5);
     assert_eq!(sheet2.grid.ncols, 2);
-    assert_eq!(
-        sheet2
-            .grid
-            .get(0, 0)
-            .and_then(|cell| cell.value.as_ref().and_then(CellValue::as_text)),
-        Some("S2_R1C1")
-    );
+    with_default_session(|session| {
+        assert_eq!(
+            sheet2.grid.get(0, 0).and_then(|cell| {
+                cell.value
+                    .as_ref()
+                    .and_then(|v| v.as_text(session.strings()))
+            }),
+            Some("S2_R1C1")
+        );
+    });
 }
 
 #[test]
@@ -43,7 +48,7 @@ fn pg1_sparse_used_range_extents() {
     let sheet = workbook
         .sheets
         .iter()
-        .find(|s| s.name == "Sparse")
+        .find(|s| s.name == sid("Sparse"))
         .expect("Sparse sheet present");
 
     assert_eq!(sheet.grid.nrows, 10);
@@ -87,7 +92,12 @@ fn pg1_empty_and_mixed_sheets() {
     assert_eq!(formulas.grid.nrows, 10);
     assert_eq!(formulas.grid.ncols, 10);
     let first = formulas.grid.get(0, 0).expect("A1 should exist");
-    assert_eq!(first.formula.as_deref(), Some("ValuesOnly!A1"));
+    with_default_session(|session| {
+        assert_eq!(
+            first.formula.map(|id| session.strings.resolve(id)),
+            Some("ValuesOnly!A1")
+        );
+    });
     assert!(
         first.value.is_some(),
         "Formulas should surface cached values when present"
@@ -102,7 +112,7 @@ fn sheet_by_name<'a>(workbook: &'a excel_diff::Workbook, name: &str) -> &'a Shee
     workbook
         .sheets
         .iter()
-        .find(|s| s.name == name)
+        .find(|s| s.name == sid(name))
         .unwrap_or_else(|| panic!("sheet {name} not found"))
 }
 
@@ -111,12 +121,14 @@ fn assert_cell_text(sheet: &Sheet, row: u32, col: u32, expected: &str) {
         .grid
         .get(row, col)
         .unwrap_or_else(|| panic!("cell {expected} should exist"));
-    assert_eq!(cell.address.to_a1(), expected);
-    assert_eq!(
-        cell.value
-            .as_ref()
-            .and_then(CellValue::as_text)
-            .unwrap_or(""),
-        expected
-    );
+    assert_eq!(CellAddress::from_coords(row, col).to_a1(), expected);
+    with_default_session(|session| {
+        assert_eq!(
+            cell.value
+                .as_ref()
+                .and_then(|v| v.as_text(session.strings()))
+                .unwrap_or(""),
+            expected
+        );
+    });
 }

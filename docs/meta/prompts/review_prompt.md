@@ -4,6 +4,8 @@
 
 ```text
 /
+  .cursorignore
+  .cursorindexingignore
   .github/
     workflows/
       perf.yml
@@ -32,6 +34,7 @@
       2025-12-14_005407_fullscale.json
       2025-12-14_202417_fullscale.json
       2025-12-15_183914.json
+      2025-12-15_191921_fullscale.json
       combined_results.csv
       plots/
         commit_comparison.png
@@ -83,6 +86,8 @@
       rect_block_move.rs
       region_mask.rs
       row_alignment.rs
+      session.rs
+      string_pool.rs
       workbook.rs
     tests/
       addressing_pg2_tests.rs
@@ -532,8 +537,9 @@ name = "excel_diff"
 path = "src/lib.rs"
 
 [features]
-default = ["excel-open-xml"]
+default = ["excel-open-xml", "std-fs"]
 excel-open-xml = []
+std-fs = []
 perf-metrics = []
 
 [dependencies]
@@ -1763,7 +1769,7 @@ where
 mod tests {
     use super::*;
     use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
-    use crate::workbook::{Cell, CellAddress, CellValue};
+    use crate::workbook::CellValue;
 
     fn grid_from_run_lengths(pattern: &[(i32, u32)]) -> Grid {
         let total_rows: u32 = pattern.iter().map(|(_, count)| *count).sum();
@@ -1771,13 +1777,7 @@ mod tests {
         let mut row_idx = 0u32;
         for (val, count) in pattern {
             for _ in 0..*count {
-                grid.insert(Cell {
-                    row: row_idx,
-                    col: 0,
-                    address: CellAddress::from_indices(row_idx, 0),
-                    value: Some(CellValue::Number(*val as f64)),
-                    formula: None,
-                });
+                grid.insert_cell(row_idx, 0, Some(CellValue::Number(*val as f64)), None);
                 row_idx = row_idx.saturating_add(1);
             }
         }
@@ -1788,13 +1788,7 @@ mod tests {
         let nrows = rows.len() as u32;
         let mut grid = Grid::new(nrows, 1);
         for (r, &val) in rows.iter().enumerate() {
-            grid.insert(Cell {
-                row: r as u32,
-                col: 0,
-                address: CellAddress::from_indices(r as u32, 0),
-                value: Some(CellValue::Number(val as f64)),
-                formula: None,
-            });
+            grid.insert_cell(r as u32, 0, Some(CellValue::Number(val as f64)), None);
         }
         grid
     }
@@ -2745,9 +2739,11 @@ pub(crate) struct ColumnBlockMove {
 
 fn unordered_col_hashes(grid: &Grid) -> Vec<ColHash> {
     let mut col_cells: Vec<Vec<&crate::workbook::Cell>> = vec![Vec::new(); grid.ncols as usize];
-    for cell in grid.cells.values() {
-        let idx = cell.col as usize;
-        col_cells[idx].push(cell);
+    for ((_, col), cell) in grid.iter_cells() {
+        let idx = col as usize;
+        if idx < col_cells.len() {
+            col_cells[idx].push(cell);
+        }
     }
     col_cells
         .iter()
@@ -3110,7 +3106,7 @@ fn blank_dominated(view: &GridView<'_>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workbook::{Cell, CellAddress, CellValue};
+    use crate::workbook::CellValue;
 
     fn grid_from_numbers(rows: &[&[i32]]) -> Grid {
         let nrows = rows.len() as u32;
@@ -3119,13 +3115,12 @@ mod tests {
 
         for (r_idx, row_vals) in rows.iter().enumerate() {
             for (c_idx, value) in row_vals.iter().enumerate() {
-                grid.insert(Cell {
-                    row: r_idx as u32,
-                    col: c_idx as u32,
-                    address: CellAddress::from_indices(r_idx as u32, c_idx as u32),
-                    value: Some(CellValue::Number(*value as f64)),
-                    formula: None,
-                });
+                grid.insert_cell(
+                    r_idx as u32,
+                    c_idx as u32,
+                    Some(CellValue::Number(*value as f64)),
+                    None,
+                );
             }
         }
 
@@ -3319,6 +3314,8 @@ pub enum LimitBehavior {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DiffConfig {
+    /// Maximum number of masked move-detection iterations per sheet.
+    /// Set to 0 to disable move detection and represent moves as insert/delete.
     pub max_move_iterations: u32,
     pub max_align_rows: u32,
     pub max_align_cols: u32,
@@ -3330,6 +3327,7 @@ pub struct DiffConfig {
     pub rare_threshold: u32,
     #[serde(alias = "low_info_cell_threshold")]
     pub low_info_threshold: u32,
+    /// Row-count threshold for recursive gap alignment. Does not gate masked move detection.
     #[serde(alias = "recursive_threshold")]
     pub recursive_align_threshold: u32,
     pub small_gap_threshold: u32,
@@ -3349,7 +3347,9 @@ pub struct DiffConfig {
     pub move_extraction_max_candidates_per_sig: u32,
     pub context_anchor_k1: u32,
     pub context_anchor_k2: u32,
+    /// Masked move detection runs only when max(old.nrows, new.nrows) <= this.
     pub max_move_detection_rows: u32,
+    /// Masked move detection runs only when max(old.ncols, new.ncols) <= this.
     pub max_move_detection_cols: u32,
 }
 
@@ -3746,9 +3746,7 @@ mod tests {
 //! Provides abstraction over ZIP-based Office Open XML packages, validating
 //! that required structural elements like `[Content_Types].xml` are present.
 
-use std::fs::File;
-use std::io::Read;
-use std::path::Path;
+use std::io::{Read, Seek};
 use thiserror::Error;
 use zip::ZipArchive;
 use zip::result::ZipError;
@@ -3767,14 +3765,19 @@ pub enum ContainerError {
     NotOpcPackage,
 }
 
+pub(crate) trait ReadSeek: Read + Seek {}
+impl<T: Read + Seek> ReadSeek for T {}
+
 pub struct OpcContainer {
-    pub(crate) archive: ZipArchive<File>,
+    pub(crate) archive: ZipArchive<Box<dyn ReadSeek>>,
 }
 
 impl OpcContainer {
-    pub fn open(path: impl AsRef<Path>) -> Result<OpcContainer, ContainerError> {
-        let file = File::open(path)?;
-        let archive = ZipArchive::new(file).map_err(|err| match err {
+    pub fn open_from_reader<R: Read + Seek + 'static>(
+        reader: R,
+    ) -> Result<OpcContainer, ContainerError> {
+        let reader: Box<dyn ReadSeek> = Box::new(reader);
+        let archive = ZipArchive::new(reader).map_err(|err| match err {
             ZipError::InvalidArchive(_) | ZipError::UnsupportedArchive(_) => {
                 ContainerError::NotZipContainer
             }
@@ -3791,6 +3794,17 @@ impl OpcContainer {
         }
 
         Ok(container)
+    }
+
+    #[cfg(feature = "std-fs")]
+    pub fn open_from_path(path: impl AsRef<std::path::Path>) -> Result<OpcContainer, ContainerError> {
+        let file = std::fs::File::open(path)?;
+        Self::open_from_reader(file)
+    }
+
+    #[cfg(feature = "std-fs")]
+    pub fn open(path: impl AsRef<std::path::Path>) -> Result<OpcContainer, ContainerError> {
+        Self::open_from_path(path)
     }
 
     pub fn read_file(&mut self, name: &str) -> Result<Vec<u8>, ZipError> {
@@ -3833,6 +3847,7 @@ impl OpcContainer {
 
 ```rust
 use crate::hashing::normalize_float_for_hash;
+use crate::string_pool::StringId;
 use crate::workbook::{CellValue, Grid};
 use std::collections::{HashMap, HashSet};
 
@@ -3855,7 +3870,7 @@ impl KeyColumnSpec {
 pub(crate) enum KeyValueRepr {
     None,
     Number(u64),
-    Text(String),
+    Text(StringId),
     Bool(bool),
 }
 
@@ -3863,8 +3878,10 @@ impl KeyValueRepr {
     fn from_cell_value(value: Option<&CellValue>) -> KeyValueRepr {
         match value {
             Some(CellValue::Number(n)) => KeyValueRepr::Number(normalize_float_for_hash(*n)),
-            Some(CellValue::Text(s)) => KeyValueRepr::Text(s.clone()),
+            Some(CellValue::Text(id)) => KeyValueRepr::Text(*id),
             Some(CellValue::Bool(b)) => KeyValueRepr::Bool(*b),
+            Some(CellValue::Blank) => KeyValueRepr::None,
+            Some(CellValue::Error(id)) => KeyValueRepr::Text(*id),
             None => KeyValueRepr::None,
         }
     }
@@ -3873,7 +3890,7 @@ impl KeyValueRepr {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct KeyComponent {
     pub value: KeyValueRepr,
-    pub formula: Option<String>,
+    pub formula: Option<StringId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -3989,7 +4006,7 @@ fn extract_key(grid: &Grid, row_idx: u32, spec: &KeyColumnSpec) -> KeyValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workbook::{Cell, CellAddress};
+    use crate::workbook::CellValue;
 
     fn grid_from_rows(rows: &[&[i32]]) -> Grid {
         let nrows = rows.len() as u32;
@@ -3998,13 +4015,12 @@ mod tests {
 
         for (r_idx, row_vals) in rows.iter().enumerate() {
             for (c_idx, value) in row_vals.iter().enumerate() {
-                grid.insert(Cell {
-                    row: r_idx as u32,
-                    col: c_idx as u32,
-                    address: CellAddress::from_indices(r_idx as u32, c_idx as u32),
-                    value: Some(CellValue::Number(*value as f64)),
-                    formula: None,
-                });
+                grid.insert_cell(
+                    r_idx as u32,
+                    c_idx as u32,
+                    Some(CellValue::Number(*value as f64)),
+                    None,
+                );
             }
         }
 
@@ -5295,6 +5311,7 @@ fn strip_leading_bom(text: String) -> String {
 //! - [`DiffReport`]: A versioned collection of diff operations
 //! - [`DiffError`]: Errors that can occur during the diff process
 
+use crate::string_pool::StringId;
 use crate::workbook::{CellAddress, CellSnapshot, ColSignature, RowSignature};
 use thiserror::Error;
 
@@ -5305,7 +5322,7 @@ pub enum DiffError {
         "alignment limits exceeded for sheet '{sheet}': rows={rows}, cols={cols} (limits: rows={max_rows}, cols={max_cols})"
     )]
     LimitsExceeded {
-        sheet: String,
+        sheet: StringId,
         rows: u32,
         cols: u32,
         max_rows: u32,
@@ -5313,7 +5330,7 @@ pub enum DiffError {
     },
 }
 
-pub type SheetId = String;
+pub type SheetId = StringId;
 
 /// A single diff operation representing one logical change between workbooks.
 ///
@@ -5404,6 +5421,9 @@ pub enum DiffOp {
 pub struct DiffReport {
     /// Schema version (currently "1").
     pub version: String,
+    /// Interned string table used by ids referenced in this report.
+    #[serde(default)]
+    pub strings: Vec<String>,
     /// The list of diff operations.
     pub ops: Vec<DiffOp>,
     /// Whether the diff result is complete. When `false`, some operations may be missing
@@ -5429,6 +5449,7 @@ impl DiffReport {
     pub fn new(ops: Vec<DiffOp>) -> DiffReport {
         DiffReport {
             version: Self::SCHEMA_VERSION.to_string(),
+            strings: Vec::new(),
             ops,
             complete: true,
             warnings: Vec::new(),
@@ -5440,6 +5461,7 @@ impl DiffReport {
     pub fn with_partial_result(ops: Vec<DiffOp>, warning: String) -> DiffReport {
         DiffReport {
             version: Self::SCHEMA_VERSION.to_string(),
+            strings: Vec::new(),
             ops,
             complete: false,
             warnings: vec![warning],
@@ -5601,9 +5623,8 @@ use crate::row_alignment::{
     RowAlignment as LegacyRowAlignment, RowBlockMove as LegacyRowBlockMove,
     align_row_changes_from_views, detect_exact_row_block_move, detect_fuzzy_row_block_move,
 };
-use crate::workbook::{
-    Cell, CellAddress, CellSnapshot, ColSignature, Grid, RowSignature, Sheet, SheetKind, Workbook,
-};
+use crate::string_pool::StringPool;
+use crate::workbook::{Cell, CellAddress, CellSnapshot, ColSignature, Grid, RowSignature, Sheet, SheetKind, Workbook};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug, Default)]
@@ -5615,13 +5636,15 @@ const DATABASE_MODE_SHEET_ID: &str = "<database>";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SheetKey {
+    id: SheetId,
     name_lower: String,
     kind: SheetKind,
 }
 
-fn make_sheet_key(sheet: &Sheet) -> SheetKey {
+fn make_sheet_key(sheet: &Sheet, pool: &StringPool) -> SheetKey {
     SheetKey {
-        name_lower: sheet.name.to_lowercase(),
+        id: sheet.name,
+        name_lower: pool.resolve(sheet.name).to_lowercase(),
         kind: sheet.kind.clone(),
     }
 }
@@ -5635,8 +5658,13 @@ fn sheet_kind_order(kind: &SheetKind) -> u8 {
     }
 }
 
-pub fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
-    match try_diff_workbooks(old, new, config) {
+pub fn diff_workbooks(
+    old: &Workbook,
+    new: &Workbook,
+    pool: &mut StringPool,
+    config: &DiffConfig,
+) -> DiffReport {
+    match try_diff_workbooks(old, new, pool, config) {
         Ok(report) => report,
         Err(e) => panic!("{}", e),
     }
@@ -5645,6 +5673,7 @@ pub fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> Di
 pub fn try_diff_workbooks(
     old: &Workbook,
     new: &Workbook,
+    pool: &mut StringPool,
     config: &DiffConfig,
 ) -> Result<DiffReport, DiffError> {
     let mut ops = Vec::new();
@@ -5658,7 +5687,7 @@ pub fn try_diff_workbooks(
 
     let mut old_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
     for sheet in &old.sheets {
-        let key = make_sheet_key(sheet);
+        let key = make_sheet_key(sheet, pool);
         let was_unique = old_sheets.insert(key.clone(), sheet).is_none();
         debug_assert!(
             was_unique,
@@ -5669,7 +5698,7 @@ pub fn try_diff_workbooks(
 
     let mut new_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
     for sheet in &new.sheets {
-        let key = make_sheet_key(sheet);
+        let key = make_sheet_key(sheet, pool);
         let was_unique = new_sheets.insert(key.clone(), sheet).is_none();
         debug_assert!(
             was_unique,
@@ -5702,12 +5731,13 @@ pub fn try_diff_workbooks(
                 });
             }
             (Some(old_sheet), Some(new_sheet)) => {
-                let sheet_id: SheetId = old_sheet.name.clone();
+                let sheet_id: SheetId = old_sheet.name;
                 try_diff_grids(
                     &sheet_id,
                     &old_sheet.grid,
                     &new_sheet.grid,
                     config,
+                    pool,
                     &mut ops,
                     &mut ctx,
                     #[cfg(feature = "perf-metrics")]
@@ -5729,6 +5759,7 @@ pub fn try_diff_workbooks(
         metrics.end_phase(Phase::Total);
         report.metrics = Some(metrics);
     }
+    report.strings = pool.strings().to_vec();
     Ok(report)
 }
 
@@ -5736,6 +5767,7 @@ pub fn diff_grids_database_mode(
     old: &Grid,
     new: &Grid,
     key_columns: &[u32],
+    pool: &mut StringPool,
     config: &DiffConfig,
 ) -> DiffReport {
     let spec = KeyColumnSpec::new(key_columns.to_vec());
@@ -5743,14 +5775,16 @@ pub fn diff_grids_database_mode(
         Ok(alignment) => alignment,
         Err(_) => {
             let mut ops = Vec::new();
-            let sheet_id: SheetId = DATABASE_MODE_SHEET_ID.to_string();
-            diff_grids(&sheet_id, old, new, config, &mut ops);
-            return DiffReport::new(ops);
+            let sheet_id: SheetId = pool.intern(DATABASE_MODE_SHEET_ID);
+            diff_grids(&sheet_id, old, new, config, pool, &mut ops);
+            let mut report = DiffReport::new(ops);
+            report.strings = pool.strings().to_vec();
+            return report;
         }
     };
 
     let mut ops = Vec::new();
-    let sheet_id: SheetId = DATABASE_MODE_SHEET_ID.to_string();
+    let sheet_id: SheetId = pool.intern(DATABASE_MODE_SHEET_ID);
     let max_cols = old.ncols.max(new.ncols);
 
     for row_idx in &alignment.left_only_rows {
@@ -5782,7 +5816,9 @@ pub fn diff_grids_database_mode(
         }
     }
 
-    DiffReport::new(ops)
+    let mut report = DiffReport::new(ops);
+    report.strings = pool.strings().to_vec();
+    report
 }
 
 fn diff_grids(
@@ -5790,6 +5826,7 @@ fn diff_grids(
     old: &Grid,
     new: &Grid,
     config: &DiffConfig,
+    pool: &StringPool,
     ops: &mut Vec<DiffOp>,
 ) {
     let mut ctx = DiffContext::default();
@@ -5798,6 +5835,7 @@ fn diff_grids(
         old,
         new,
         config,
+        pool,
         ops,
         &mut ctx,
         #[cfg(feature = "perf-metrics")]
@@ -5810,6 +5848,7 @@ fn try_diff_grids(
     old: &Grid,
     new: &Grid,
     config: &DiffConfig,
+    pool: &StringPool,
     ops: &mut Vec<DiffOp>,
     ctx: &mut DiffContext,
     #[cfg(feature = "perf-metrics")] mut metrics: Option<&mut DiffMetrics>,
@@ -5836,7 +5875,7 @@ fn try_diff_grids(
         }
         let warning = format!(
             "Sheet '{}': alignment limits exceeded (rows={}, cols={}; limits: rows={}, cols={})",
-            sheet_id,
+            pool.resolve(*sheet_id),
             old.nrows.max(new.nrows),
             old.ncols.max(new.ncols),
             config.max_align_rows,
@@ -6581,23 +6620,18 @@ fn build_projected_grid_from_maps(
 
     let mut projected = Grid::new(nrows, ncols);
 
-    for cell in source.cells.values() {
-        if !mask.is_cell_active(cell.row, cell.col) {
+    for ((row, col), cell) in source.iter_cells() {
+        if !mask.is_cell_active(row, col) {
             continue;
         }
-        let Some(new_row) = row_lookup.get(cell.row as usize).and_then(|v| *v) else {
+        let Some(new_row) = row_lookup.get(row as usize).and_then(|v| *v) else {
             continue;
         };
-        let Some(new_col) = col_lookup.get(cell.col as usize).and_then(|v| *v) else {
+        let Some(new_col) = col_lookup.get(col as usize).and_then(|v| *v) else {
             continue;
         };
 
-        let mut new_cell = cell.clone();
-        new_cell.row = new_row;
-        new_cell.col = new_col;
-        new_cell.address = CellAddress::from_indices(new_row, new_col);
-
-        projected.cells.insert((new_row, new_col), new_cell);
+        projected.insert_cell(new_row, new_col, cell.value.clone(), cell.formula);
     }
 
     (projected, row_map.to_vec(), col_map.to_vec())
@@ -6622,24 +6656,19 @@ fn build_masked_grid(source: &Grid, mask: &RegionMask) -> (Grid, Vec<u32>, Vec<u
 
     let mut projected = Grid::new(nrows, ncols);
 
-    for cell in source.cells.values() {
-        if !mask.is_cell_active(cell.row, cell.col) {
+    for ((row, col), cell) in source.iter_cells() {
+        if !mask.is_cell_active(row, col) {
             continue;
         }
 
-        let Some(new_row) = row_lookup.get(cell.row as usize).and_then(|v| *v) else {
+        let Some(new_row) = row_lookup.get(row as usize).and_then(|v| *v) else {
             continue;
         };
-        let Some(new_col) = col_lookup.get(cell.col as usize).and_then(|v| *v) else {
+        let Some(new_col) = col_lookup.get(col as usize).and_then(|v| *v) else {
             continue;
         };
 
-        let mut new_cell = cell.clone();
-        new_cell.row = new_row;
-        new_cell.col = new_col;
-        new_cell.address = CellAddress::from_indices(new_row, new_col);
-
-        projected.cells.insert((new_row, new_col), new_cell);
+        projected.insert_cell(new_row, new_col, cell.value.clone(), cell.formula);
     }
 
     (projected, row_map, col_map)
@@ -7521,13 +7550,11 @@ fn snapshot_with_addr(cell: Option<&Cell>, addr: CellAddress) -> CellSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::string_pool::StringPool;
     use crate::workbook::CellValue;
 
-    fn numbered_cell(row: u32, col: u32, value: f64) -> Cell {
+    fn numbered_cell(value: f64) -> Cell {
         Cell {
-            row,
-            col,
-            address: CellAddress::from_indices(row, col),
             value: Some(CellValue::Number(value)),
             formula: None,
         }
@@ -7543,13 +7570,7 @@ mod tests {
         let mut grid = Grid::new(nrows, ncols);
         for (r, row) in values.iter().enumerate() {
             for (c, val) in row.iter().enumerate() {
-                grid.insert(Cell {
-                    row: r as u32,
-                    col: c as u32,
-                    address: CellAddress::from_indices(r as u32, c as u32),
-                    value: Some(CellValue::Number(*val as f64)),
-                    formula: None,
-                });
+                grid.insert_cell(r as u32, c as u32, Some(CellValue::Number(*val as f64)), None);
             }
         }
         grid
@@ -7574,63 +7595,56 @@ mod tests {
     #[test]
     fn grids_non_blank_cells_equal_requires_matching_entries() {
         let base_cell = Cell {
-            row: 0,
-            col: 0,
-            address: CellAddress::from_indices(0, 0),
             value: Some(CellValue::Number(1.0)),
             formula: None,
         };
 
         let mut grid_a = Grid::new(2, 2);
         let mut grid_b = Grid::new(2, 2);
-        grid_a.insert(base_cell.clone());
-        grid_b.insert(base_cell.clone());
+        grid_a.insert_cell(0, 0, base_cell.value.clone(), base_cell.formula);
+        grid_b.insert_cell(0, 0, base_cell.value.clone(), base_cell.formula);
 
         assert!(grids_non_blank_cells_equal(&grid_a, &grid_b));
 
         let mut grid_b_changed = grid_b.clone();
         let mut changed_cell = base_cell.clone();
         changed_cell.value = Some(CellValue::Number(2.0));
-        grid_b_changed.insert(changed_cell);
+        grid_b_changed.insert_cell(0, 0, changed_cell.value.clone(), changed_cell.formula);
 
         assert!(!grids_non_blank_cells_equal(&grid_a, &grid_b_changed));
 
-        let blank = Cell {
-            row: 1,
-            col: 1,
-            address: CellAddress::from_indices(1, 1),
-            value: None,
-            formula: None,
-        };
-        grid_a.insert(blank);
+        grid_a.insert_cell(1, 1, None, None);
 
         assert!(!grids_non_blank_cells_equal(&grid_a, &grid_b));
     }
 
     #[test]
     fn diff_row_pair_sparse_counts_union_columns_not_sum_lengths() {
-        let sheet_id: SheetId = "Sheet1".to_string();
+        let mut pool = StringPool::new();
+        let sheet_id: SheetId = pool.intern("Sheet1");
         let config = DiffConfig::default();
         let mut ops = Vec::new();
 
         let old_cells_storage = [
-            numbered_cell(0, 0, 1.0),
-            numbered_cell(0, 1, 2.0),
-            numbered_cell(0, 2, 3.0),
+            numbered_cell(1.0),
+            numbered_cell(2.0),
+            numbered_cell(3.0),
         ];
         let new_cells_storage = [
-            numbered_cell(0, 0, 1.0),
-            numbered_cell(0, 1, 2.0),
-            numbered_cell(0, 2, 4.0),
+            numbered_cell(1.0),
+            numbered_cell(2.0),
+            numbered_cell(4.0),
         ];
 
         let old_cells: Vec<(u32, &Cell)> = old_cells_storage
             .iter()
-            .map(|cell| (cell.col, cell))
+            .enumerate()
+            .map(|(idx, cell)| (idx as u32, cell))
             .collect();
         let new_cells: Vec<(u32, &Cell)> = new_cells_storage
             .iter()
-            .map(|cell| (cell.col, cell))
+            .enumerate()
+            .map(|(idx, cell)| (idx as u32, cell))
             .collect();
 
         let compared =
@@ -7641,21 +7655,16 @@ mod tests {
 
     #[test]
     fn diff_row_pair_sparse_counts_union_for_sparse_columns() {
-        let sheet_id: SheetId = "Sheet1".to_string();
+        let mut pool = StringPool::new();
+        let sheet_id: SheetId = pool.intern("Sheet1");
         let config = DiffConfig::default();
         let mut ops = Vec::new();
 
-        let old_cells_storage = [numbered_cell(0, 0, 1.0)];
-        let new_cells_storage = [numbered_cell(0, 2, 2.0)];
+        let old_cells_storage = [numbered_cell(1.0)];
+        let new_cells_storage = [numbered_cell(2.0)];
 
-        let old_cells: Vec<(u32, &Cell)> = old_cells_storage
-            .iter()
-            .map(|cell| (cell.col, cell))
-            .collect();
-        let new_cells: Vec<(u32, &Cell)> = new_cells_storage
-            .iter()
-            .map(|cell| (cell.col, cell))
-            .collect();
+        let old_cells: Vec<(u32, &Cell)> = vec![(0, &old_cells_storage[0])];
+        let new_cells: Vec<(u32, &Cell)> = vec![(2, &new_cells_storage[0])];
 
         let compared =
             diff_row_pair_sparse(&sheet_id, 0, 3, &old_cells, &new_cells, &mut ops, &config);
@@ -7741,6 +7750,7 @@ use crate::grid_parser::{
     GridParseError, parse_relationships, parse_shared_strings, parse_sheet_xml, parse_workbook_xml,
     resolve_sheet_target,
 };
+use crate::string_pool::StringPool;
 use crate::workbook::{Sheet, SheetKind, Workbook};
 use std::collections::HashMap;
 use std::path::Path;
@@ -7763,14 +7773,17 @@ pub enum ExcelOpenError {
     SerializationError(String),
 }
 
-pub fn open_workbook(path: impl AsRef<Path>) -> Result<Workbook, ExcelOpenError> {
-    let mut container = OpcContainer::open(path.as_ref())?;
+pub fn open_workbook(
+    path: impl AsRef<Path>,
+    pool: &mut StringPool,
+) -> Result<Workbook, ExcelOpenError> {
+    let mut container = OpcContainer::open_from_path(path.as_ref())?;
 
     let shared_strings = match container
         .read_file_optional("xl/sharedStrings.xml")
         .map_err(ContainerError::from)?
     {
-        Some(bytes) => parse_shared_strings(&bytes)?,
+        Some(bytes) => parse_shared_strings(&bytes, pool)?,
         None => Vec::new(),
     };
 
@@ -7797,9 +7810,9 @@ pub fn open_workbook(path: impl AsRef<Path>) -> Result<Workbook, ExcelOpenError>
                 .map_err(|_| ExcelOpenError::WorksheetXmlMissing {
                     sheet_name: sheet.name.clone(),
                 })?;
-        let grid = parse_sheet_xml(&sheet_bytes, &shared_strings)?;
+        let grid = parse_sheet_xml(&sheet_bytes, &shared_strings, pool)?;
         sheet_ir.push(Sheet {
-            name: sheet.name.clone(),
+            name: pool.intern(&sheet.name),
             kind: SheetKind::Worksheet,
             grid,
         });
@@ -7809,7 +7822,7 @@ pub fn open_workbook(path: impl AsRef<Path>) -> Result<Workbook, ExcelOpenError>
 }
 
 pub fn open_data_mashup(path: impl AsRef<Path>) -> Result<Option<RawDataMashup>, ExcelOpenError> {
-    let mut container = OpcContainer::open(path.as_ref())?;
+    let mut container = OpcContainer::open_from_path(path.as_ref())?;
     let mut found: Option<RawDataMashup> = None;
 
     for i in 0..container.len() {
@@ -7854,7 +7867,8 @@ pub fn open_data_mashup(path: impl AsRef<Path>) -> Result<Option<RawDataMashup>,
 //! relationship files to construct [`Grid`] representations of sheet data.
 
 use crate::addressing::address_to_index;
-use crate::workbook::{Cell, CellAddress, CellValue, Grid};
+use crate::string_pool::{StringId, StringPool};
+use crate::workbook::{CellValue, Grid};
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 use std::collections::HashMap;
@@ -7877,7 +7891,10 @@ pub struct SheetDescriptor {
     pub sheet_id: Option<u32>,
 }
 
-pub fn parse_shared_strings(xml: &[u8]) -> Result<Vec<String>, GridParseError> {
+pub fn parse_shared_strings(
+    xml: &[u8],
+    pool: &mut StringPool,
+) -> Result<Vec<StringId>, GridParseError> {
     let mut reader = Reader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
@@ -7899,7 +7916,8 @@ pub fn parse_shared_strings(xml: &[u8]) -> Result<Vec<String>, GridParseError> {
                 current.push_str(&text);
             }
             Ok(Event::End(e)) if e.name().as_ref() == b"si" => {
-                strings.push(current.clone());
+                let id = pool.intern(&current);
+                strings.push(id);
                 in_si = false;
             }
             Ok(Event::Eof) => break,
@@ -8027,7 +8045,11 @@ fn normalize_target(target: &str) -> String {
     }
 }
 
-pub fn parse_sheet_xml(xml: &[u8], shared_strings: &[String]) -> Result<Grid, GridParseError> {
+pub fn parse_sheet_xml(
+    xml: &[u8],
+    shared_strings: &[StringId],
+    pool: &mut StringPool,
+) -> Result<Grid, GridParseError> {
     let mut reader = Reader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
@@ -8045,7 +8067,7 @@ pub fn parse_sheet_xml(xml: &[u8], shared_strings: &[String]) -> Result<Grid, Gr
                 }
             }
             Ok(Event::Start(e)) if e.name().as_ref() == b"c" => {
-                let cell = parse_cell(&mut reader, e, shared_strings)?;
+                let cell = parse_cell(&mut reader, e, shared_strings, pool)?;
                 max_row = Some(max_row.map_or(cell.row, |r| r.max(cell.row)));
                 max_col = Some(max_col.map_or(cell.col, |c| c.max(cell.col)));
                 parsed_cells.push(cell);
@@ -8077,7 +8099,8 @@ pub fn parse_sheet_xml(xml: &[u8], shared_strings: &[String]) -> Result<Grid, Gr
 fn parse_cell(
     reader: &mut Reader<&[u8]>,
     start: BytesStart,
-    shared_strings: &[String],
+    shared_strings: &[StringId],
+    pool: &mut StringPool,
 ) -> Result<ParsedCell, GridParseError> {
     let address_raw = get_attr_value(&start, b"r")?
         .ok_or_else(|| GridParseError::XmlError("cell missing address".into()))?;
@@ -8126,15 +8149,20 @@ fn parse_cell(
     }
 
     let value = match inline_text {
-        Some(text) => Some(CellValue::Text(text)),
-        None => convert_value(value_text.as_deref(), cell_type.as_deref(), shared_strings)?,
+        Some(text) => Some(CellValue::Text(pool.intern(&text))),
+        None => convert_value(
+            value_text.as_deref(),
+            cell_type.as_deref(),
+            shared_strings,
+            pool,
+        )?,
     };
 
     Ok(ParsedCell {
         row,
         col,
         value,
-        formula: formula_text,
+        formula: formula_text.map(|f| pool.intern(&f)),
     })
 }
 
@@ -8167,7 +8195,8 @@ fn read_inline_string(reader: &mut Reader<&[u8]>) -> Result<String, GridParseErr
 fn convert_value(
     value_text: Option<&str>,
     cell_type: Option<&str>,
-    shared_strings: &[String],
+    shared_strings: &[StringId],
+    pool: &mut StringPool,
 ) -> Result<Option<CellValue>, GridParseError> {
     let raw = match value_text {
         Some(t) => t,
@@ -8176,7 +8205,7 @@ fn convert_value(
 
     let trimmed = raw.trim();
     if raw.is_empty() || trimmed.is_empty() {
-        return Ok(Some(CellValue::Text(String::new())));
+        return Ok(Some(CellValue::Text(pool.intern(""))));
     }
 
     match cell_type {
@@ -8184,22 +8213,23 @@ fn convert_value(
             let idx = trimmed
                 .parse::<usize>()
                 .map_err(|e| GridParseError::XmlError(e.to_string()))?;
-            let text = shared_strings
+            let text_id = *shared_strings
                 .get(idx)
                 .ok_or(GridParseError::SharedStringOutOfBounds(idx))?;
-            Ok(Some(CellValue::Text(text.clone())))
+            Ok(Some(CellValue::Text(text_id)))
         }
         Some("b") => Ok(match trimmed {
             "1" => Some(CellValue::Bool(true)),
             "0" => Some(CellValue::Bool(false)),
             _ => None,
         }),
-        Some("str") | Some("inlineStr") => Ok(Some(CellValue::Text(raw.to_string()))),
+        Some("e") => Ok(Some(CellValue::Error(pool.intern(trimmed)))),
+        Some("str") | Some("inlineStr") => Ok(Some(CellValue::Text(pool.intern(raw)))),
         _ => {
             if let Ok(n) = trimmed.parse::<f64>() {
                 Ok(Some(CellValue::Number(n)))
             } else {
-                Ok(Some(CellValue::Text(trimmed.to_string())))
+                Ok(Some(CellValue::Text(pool.intern(trimmed))))
             }
         }
     }
@@ -8220,14 +8250,7 @@ fn build_grid(nrows: u32, ncols: u32, cells: Vec<ParsedCell>) -> Result<Grid, Gr
     let mut grid = Grid::new(nrows, ncols);
 
     for parsed in cells {
-        let cell = Cell {
-            row: parsed.row,
-            col: parsed.col,
-            address: CellAddress::from_indices(parsed.row, parsed.col),
-            value: parsed.value,
-            formula: parsed.formula,
-        };
-        grid.insert(cell);
+        grid.insert_cell(parsed.row, parsed.col, parsed.value, parsed.formula);
     }
 
     Ok(grid)
@@ -8253,12 +8276,13 @@ struct ParsedCell {
     row: u32,
     col: u32,
     value: Option<CellValue>,
-    formula: Option<String>,
+    formula: Option<StringId>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::{GridParseError, convert_value, parse_shared_strings, read_inline_string};
+    use crate::string_pool::StringPool;
     use crate::workbook::CellValue;
     use quick_xml::Reader;
 
@@ -8271,8 +8295,10 @@ mod tests {
     <r><t xml:space="preserve"> World</t></r>
   </si>
 </sst>"#;
-        let strings = parse_shared_strings(xml).expect("shared strings should parse");
-        assert_eq!(strings.first(), Some(&"Hello World".to_string()));
+        let mut pool = StringPool::new();
+        let strings = parse_shared_strings(xml, &mut pool).expect("shared strings should parse");
+        let first = strings.first().copied().unwrap();
+        assert_eq!(pool.resolve(first), "Hello World");
     }
 
     #[test]
@@ -8283,38 +8309,51 @@ mod tests {
         let value = read_inline_string(&mut reader).expect("inline string should parse");
         assert_eq!(value, " hello");
 
-        let converted = convert_value(Some(value.as_str()), Some("inlineStr"), &[])
+        let mut pool = StringPool::new();
+        let converted = convert_value(Some(value.as_str()), Some("inlineStr"), &[], &mut pool)
             .expect("inlineStr conversion should succeed");
-        assert_eq!(converted, Some(CellValue::Text(" hello".into())));
+        let text_id = converted
+            .as_ref()
+            .and_then(CellValue::as_text_id)
+            .expect("text id");
+        assert_eq!(pool.resolve(text_id), " hello");
     }
 
     #[test]
     fn convert_value_bool_0_1_and_other() {
-        let false_val =
-            convert_value(Some("0"), Some("b"), &[]).expect("bool cell conversion should succeed");
+        let mut pool = StringPool::new();
+        let false_val = convert_value(Some("0"), Some("b"), &[], &mut pool)
+            .expect("bool cell conversion should succeed");
         assert_eq!(false_val, Some(CellValue::Bool(false)));
 
-        let true_val =
-            convert_value(Some("1"), Some("b"), &[]).expect("bool cell conversion should succeed");
+        let mut pool = StringPool::new();
+        let true_val = convert_value(Some("1"), Some("b"), &[], &mut pool)
+            .expect("bool cell conversion should succeed");
         assert_eq!(true_val, Some(CellValue::Bool(true)));
 
-        let none_val = convert_value(Some("2"), Some("b"), &[])
+        let none_val = convert_value(Some("2"), Some("b"), &[], &mut pool)
             .expect("unexpected bool tokens should still parse");
         assert!(none_val.is_none());
     }
 
     #[test]
     fn convert_value_shared_string_index_out_of_bounds_errors() {
-        let err = convert_value(Some("5"), Some("s"), &["only".into()])
+        let mut pool = StringPool::new();
+        let only_id = pool.intern("only");
+        let err = convert_value(Some("5"), Some("s"), &[only_id], &mut pool)
             .expect_err("invalid shared string index should error");
         assert!(matches!(err, GridParseError::SharedStringOutOfBounds(5)));
     }
 
     #[test]
     fn convert_value_error_cell_as_text() {
-        let value =
-            convert_value(Some("#DIV/0!"), Some("e"), &[]).expect("error cell should convert");
-        assert_eq!(value, Some(CellValue::Text("#DIV/0!".into())));
+        let mut pool = StringPool::new();
+        let value = convert_value(Some("#DIV/0!"), Some("e"), &[], &mut pool)
+            .expect("error cell should convert");
+        let err_id = value
+            .and_then(|v| if let CellValue::Error(id) = v { Some(id) } else { None })
+            .expect("error id");
+        assert_eq!(pool.resolve(err_id), "#DIV/0!");
     }
 }
 
@@ -8376,7 +8415,7 @@ impl<'a> GridView<'a> {
         let mut row_counts = vec![0u32; nrows];
         let mut row_first_non_blank: Vec<Option<u32>> = vec![None; nrows];
 
-        let mut col_counts = vec![0u32; ncols];
+            let mut col_counts = vec![0u32; ncols];
         let mut col_first_non_blank: Vec<Option<u32>> = vec![None; ncols];
 
         for ((row, col), cell) in &grid.cells {
@@ -8583,9 +8622,11 @@ fn compute_is_low_info(non_blank_count: u16, row_view: &RowView<'_>) -> bool {
         None => true,
         Some(cell) => match (&cell.value, &cell.formula) {
             (_, Some(_)) => false,
-            (Some(CellValue::Text(s)), None) => s.trim().is_empty(),
+            (Some(CellValue::Text(id)), None) => id.0 == 0,
             (Some(CellValue::Number(_)), _) => false,
             (Some(CellValue::Bool(_)), _) => false,
+            (Some(CellValue::Error(_)), _) => false,
+            (Some(CellValue::Blank), _) => true,
             (None, None) => true,
         },
     }
@@ -8625,7 +8666,7 @@ use std::hash::{Hash, Hasher};
 use xxhash_rust::xxh3::Xxh3;
 use xxhash_rust::xxh64::Xxh64;
 
-use crate::workbook::{Cell, CellValue, ColSignature, RowSignature};
+use crate::workbook::{CellContent, CellValue, ColSignature, RowSignature};
 
 #[allow(dead_code)]
 pub(crate) const XXH64_SEED: u64 = 0;
@@ -8650,6 +8691,9 @@ pub(crate) fn hash_cell_value<H: Hasher>(value: &Option<CellValue>, state: &mut 
         None => {
             3u8.hash(state);
         }
+        Some(CellValue::Blank) => {
+            4u8.hash(state);
+        }
         Some(CellValue::Number(n)) => {
             0u8.hash(state);
             normalize_float_for_hash(*n).hash(state);
@@ -8662,11 +8706,15 @@ pub(crate) fn hash_cell_value<H: Hasher>(value: &Option<CellValue>, state: &mut 
             2u8.hash(state);
             b.hash(state);
         }
+        Some(CellValue::Error(id)) => {
+            5u8.hash(state);
+            id.hash(state);
+        }
     }
 }
 
 #[allow(dead_code)]
-pub(crate) fn hash_cell_content(cell: &Cell) -> u64 {
+pub(crate) fn hash_cell_content(cell: &CellContent) -> u64 {
     let mut hasher = Xxh64::new(XXH64_SEED);
     hash_cell_value(&cell.value, &mut hasher);
     cell.formula.hash(&mut hasher);
@@ -8674,14 +8722,14 @@ pub(crate) fn hash_cell_content(cell: &Cell) -> u64 {
 }
 
 #[allow(dead_code)]
-pub(crate) fn hash_cell_content_128(cell: &Cell) -> u128 {
+pub(crate) fn hash_cell_content_128(cell: &CellContent) -> u128 {
     let mut hasher = Xxh3::new();
     hash_cell_value(&cell.value, &mut hasher);
     cell.formula.hash(&mut hasher);
     hasher.digest128()
 }
 
-pub(crate) fn hash_row_content_128(cells: &[(u32, &Cell)]) -> u128 {
+pub(crate) fn hash_row_content_128(cells: &[(u32, &CellContent)]) -> u128 {
     let mut hasher = Xxh3::new();
     for (_, cell) in cells.iter() {
         hash_cell_value(&cell.value, &mut hasher);
@@ -8690,7 +8738,7 @@ pub(crate) fn hash_row_content_128(cells: &[(u32, &Cell)]) -> u128 {
     hasher.digest128()
 }
 
-pub(crate) fn hash_col_content_128(cells: &[&Cell]) -> u128 {
+pub(crate) fn hash_col_content_128(cells: &[&CellContent]) -> u128 {
     let mut hasher = Xxh3::new();
     for cell in cells.iter() {
         hash_cell_value(&cell.value, &mut hasher);
@@ -8699,7 +8747,7 @@ pub(crate) fn hash_col_content_128(cells: &[&Cell]) -> u128 {
     hasher.digest128()
 }
 
-pub(crate) fn hash_col_content_unordered_128(cells: &[&Cell]) -> u128 {
+pub(crate) fn hash_col_content_unordered_128(cells: &[&CellContent]) -> u128 {
     if cells.is_empty() {
         return Xxh3::new().digest128();
     }
@@ -8745,10 +8793,12 @@ pub(crate) fn combine_hashes_128(current: u128, contribution: u128) -> u128 {
 
 #[allow(dead_code)]
 pub(crate) fn compute_row_signature<'a>(
-    cells: impl Iterator<Item = (u32, &'a Cell)>,
+    cells: impl Iterator<Item = ((u32, u32), &'a CellContent)>,
     row: u32,
 ) -> RowSignature {
-    let mut row_cells: Vec<_> = cells.filter(|(_, cell)| cell.row == row).collect();
+    let mut row_cells: Vec<(u32, &CellContent)> = cells
+        .filter_map(|((r, c), cell)| (r == row).then_some((c, cell)))
+        .collect();
     row_cells.sort_by_key(|(col, _)| *col);
 
     let hash = hash_row_content_128(&row_cells);
@@ -8757,17 +8807,15 @@ pub(crate) fn compute_row_signature<'a>(
 
 #[allow(dead_code)]
 pub(crate) fn compute_col_signature<'a>(
-    cells: impl Iterator<Item = (u32, &'a Cell)>,
+    cells: impl Iterator<Item = ((u32, u32), &'a CellContent)>,
     col: u32,
 ) -> ColSignature {
-    let col_cells: Vec<_> = cells
-        .filter(|(_, cell)| cell.col == col)
-        .map(|(_, cell)| cell)
+    let mut col_cells: Vec<(u32, &CellContent)> = cells
+        .filter_map(|((r, c), cell)| (c == col).then_some((r, cell)))
         .collect();
-    let mut sorted_cells = col_cells;
-    sorted_cells.sort_by_key(|cell| cell.row);
-
-    let hash = hash_col_content_128(&sorted_cells);
+    col_cells.sort_by_key(|(r, _)| *r);
+    let ordered: Vec<&CellContent> = col_cells.into_iter().map(|(_, cell)| cell).collect();
+    let hash = hash_col_content_128(&ordered);
     ColSignature { hash }
 }
 
@@ -8853,6 +8901,8 @@ mod tests {
 //! }
 //! ```
 
+use std::cell::RefCell;
+
 pub mod addressing;
 pub(crate) mod alignment;
 pub(crate) mod column_alignment;
@@ -8878,7 +8928,46 @@ pub mod perf;
 pub(crate) mod rect_block_move;
 pub(crate) mod region_mask;
 pub(crate) mod row_alignment;
+pub mod session;
+pub mod string_pool;
 pub mod workbook;
+
+thread_local! {
+    static DEFAULT_SESSION: RefCell<DiffSession> = RefCell::new(DiffSession::new());
+}
+
+pub fn with_default_session<T>(f: impl FnOnce(&mut DiffSession) -> T) -> T {
+    DEFAULT_SESSION.with(|session| {
+        let mut session = session.borrow_mut();
+        f(&mut session)
+    })
+}
+
+pub fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    DEFAULT_SESSION.with(|session| {
+        let mut session = session.borrow_mut();
+        engine::diff_workbooks(old, new, &mut session.strings, config)
+    })
+}
+
+pub fn try_diff_workbooks(
+    old: &Workbook,
+    new: &Workbook,
+    config: &DiffConfig,
+) -> Result<DiffReport, DiffError> {
+    DEFAULT_SESSION.with(|session| {
+        let mut session = session.borrow_mut();
+        engine::try_diff_workbooks(old, new, &mut session.strings, config)
+    })
+}
+
+#[cfg(feature = "excel-open-xml")]
+pub fn open_workbook(path: impl AsRef<std::path::Path>) -> Result<Workbook, ExcelOpenError> {
+    DEFAULT_SESSION.with(|session| {
+        let mut session = session.borrow_mut();
+        excel_open_xml::open_workbook(path, &mut session.strings)
+    })
+}
 
 pub use addressing::{AddressParseError, address_to_index, index_to_address};
 pub use config::DiffConfig;
@@ -8891,9 +8980,13 @@ pub use datamashup_package::{
     EmbeddedContent, PackageParts, PackageXml, SectionDocument, parse_package_parts,
 };
 pub use diff::{DiffError, DiffOp, DiffReport, SheetId};
-pub use engine::{diff_grids_database_mode, diff_workbooks, try_diff_workbooks};
+pub use engine::{
+    diff_grids_database_mode,
+    diff_workbooks as diff_workbooks_with_pool,
+    try_diff_workbooks as try_diff_workbooks_with_pool,
+};
 #[cfg(feature = "excel-open-xml")]
-pub use excel_open_xml::{ExcelOpenError, open_data_mashup, open_workbook};
+pub use excel_open_xml::{ExcelOpenError, open_data_mashup, open_workbook as open_workbook_with_pool};
 pub use grid_parser::{GridParseError, SheetDescriptor};
 pub use grid_view::{ColHash, ColMeta, GridView, HashStats, RowHash, RowMeta, RowView};
 pub use m_ast::{
@@ -8904,6 +8997,8 @@ pub use m_section::{SectionMember, SectionParseError, parse_section_members};
 #[cfg(feature = "excel-open-xml")]
 pub use output::json::diff_workbooks_to_json;
 pub use output::json::{CellDiff, serialize_cell_diffs, serialize_diff_report};
+pub use session::DiffSession;
+pub use string_pool::{StringId, StringPool};
 pub use workbook::{
     Cell, CellAddress, CellSnapshot, CellValue, ColSignature, Grid, RowSignature, Sheet, SheetKind,
     Workbook,
@@ -9715,6 +9810,8 @@ use crate::diff::DiffReport;
 use crate::engine::diff_workbooks as compute_diff;
 #[cfg(feature = "excel-open-xml")]
 use crate::excel_open_xml::{ExcelOpenError, open_workbook};
+use crate::session::DiffSession;
+use crate::string_pool::StringId;
 use serde::Serialize;
 use serde::ser::Error as SerdeError;
 #[cfg(feature = "excel-open-xml")]
@@ -9749,9 +9846,15 @@ pub fn diff_workbooks(
     path_b: impl AsRef<Path>,
     config: &DiffConfig,
 ) -> Result<DiffReport, ExcelOpenError> {
-    let wb_a = open_workbook(path_a)?;
-    let wb_b = open_workbook(path_b)?;
-    Ok(compute_diff(&wb_a, &wb_b, config))
+    let mut session = DiffSession::new();
+    let wb_a = open_workbook(path_a, session.strings_mut())?;
+    let wb_b = open_workbook(path_b, session.strings_mut())?;
+    Ok(compute_diff(
+        &wb_a,
+        &wb_b,
+        session.strings_mut(),
+        config,
+    ))
 }
 
 #[cfg(feature = "excel-open-xml")]
@@ -9768,11 +9871,17 @@ pub fn diff_report_to_cell_diffs(report: &DiffReport) -> Vec<CellDiff> {
     use crate::diff::DiffOp;
     use crate::workbook::CellValue;
 
-    fn render_value(value: &Option<CellValue>) -> Option<String> {
+    fn resolve_string<'a>(report: &'a DiffReport, id: StringId) -> Option<&'a str> {
+        report.strings.get(id.0 as usize).map(|s| s.as_str())
+    }
+
+    fn render_value(report: &DiffReport, value: &Option<CellValue>) -> Option<String> {
         match value {
             Some(CellValue::Number(n)) => Some(n.to_string()),
-            Some(CellValue::Text(s)) => Some(s.clone()),
+            Some(CellValue::Text(id)) => resolve_string(report, *id).map(|s| s.to_string()),
             Some(CellValue::Bool(b)) => Some(b.to_string()),
+            Some(CellValue::Error(id)) => resolve_string(report, *id).map(|s| s.to_string()),
+            Some(CellValue::Blank) => Some(String::new()),
             None => None,
         }
     }
@@ -9787,8 +9896,8 @@ pub fn diff_report_to_cell_diffs(report: &DiffReport) -> Vec<CellDiff> {
                 }
                 Some(CellDiff {
                     coords: addr.to_a1(),
-                    value_file1: render_value(&from.value),
-                    value_file2: render_value(&to.value),
+                    value_file1: render_value(report, &from.value),
+                    value_file2: render_value(report, &to.value),
                 })
             } else {
                 None
@@ -10272,7 +10381,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workbook::{CellAddress, CellValue};
+    use crate::workbook::CellValue;
 
     fn grid_from_numbers(values: &[&[i32]]) -> Grid {
         let nrows = values.len() as u32;
@@ -10285,13 +10394,12 @@ mod tests {
         let mut grid = Grid::new(nrows, ncols);
         for (r, row_vals) in values.iter().enumerate() {
             for (c, v) in row_vals.iter().enumerate() {
-                grid.insert(Cell {
-                    row: r as u32,
-                    col: c as u32,
-                    address: CellAddress::from_indices(r as u32, c as u32),
-                    value: Some(CellValue::Number(*v as f64)),
-                    formula: None,
-                });
+                grid.insert_cell(
+                    r as u32,
+                    c as u32,
+                    Some(CellValue::Number(*v as f64)),
+                    None,
+                );
             }
         }
 
@@ -11584,7 +11692,7 @@ fn block_similarity(slice_a: &[RowMeta], slice_b: &[RowMeta]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workbook::{Cell, CellAddress, CellValue};
+    use crate::workbook::CellValue;
 
     fn grid_from_rows(rows: &[&[i32]]) -> Grid {
         let nrows = rows.len() as u32;
@@ -11593,13 +11701,12 @@ mod tests {
 
         for (r_idx, row_vals) in rows.iter().enumerate() {
             for (c_idx, value) in row_vals.iter().enumerate() {
-                grid.insert(Cell {
-                    row: r_idx as u32,
-                    col: c_idx as u32,
-                    address: CellAddress::from_indices(r_idx as u32, c_idx as u32),
-                    value: Some(CellValue::Number(*value as f64)),
-                    formula: None,
-                });
+                grid.insert_cell(
+                    r_idx as u32,
+                    c_idx as u32,
+                    Some(CellValue::Number(*value as f64)),
+                    None,
+                );
             }
         }
 
@@ -12205,6 +12312,98 @@ mod tests {
 
 ---
 
+### File: `core\src\session.rs`
+
+```rust
+use crate::string_pool::StringPool;
+
+/// Holds shared diffing state such as the string pool.
+pub struct DiffSession {
+    pub strings: StringPool,
+}
+
+impl DiffSession {
+    pub fn new() -> Self {
+        Self {
+            strings: StringPool::new(),
+        }
+    }
+
+    pub fn strings(&self) -> &StringPool {
+        &self.strings
+    }
+
+    pub fn strings_mut(&mut self) -> &mut StringPool {
+        &mut self.strings
+    }
+}
+
+```
+
+---
+
+### File: `core\src\string_pool.rs`
+
+```rust
+use rustc_hash::FxHashMap;
+use serde::{Deserialize, Serialize};
+
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct StringId(pub u32);
+
+impl std::fmt::Display for StringId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct StringPool {
+    strings: Vec<String>,
+    index: FxHashMap<String, StringId>,
+}
+
+impl StringPool {
+    pub fn new() -> Self {
+        let mut pool = Self::default();
+        pool.intern("");
+        pool
+    }
+
+    pub fn intern(&mut self, s: &str) -> StringId {
+        if let Some(&id) = self.index.get(s) {
+            return id;
+        }
+
+        let id = StringId(self.strings.len() as u32);
+        let owned = s.to_owned();
+        self.strings.push(owned.clone());
+        self.index.insert(owned, id);
+        id
+    }
+
+    pub fn resolve(&self, id: StringId) -> &str {
+        &self.strings[id.0 as usize]
+    }
+
+    pub fn strings(&self) -> &[String] {
+        &self.strings
+    }
+
+    pub fn into_strings(self) -> Vec<String> {
+        self.strings
+    }
+
+    pub fn len(&self) -> usize {
+        self.strings.len()
+    }
+}
+
+```
+
+---
+
 ### File: `core\src\workbook.rs`
 
 ```rust
@@ -12213,11 +12412,12 @@ mod tests {
 //! This module defines the core intermediate representation (IR) for Excel workbooks:
 //! - [`Workbook`]: A collection of sheets
 //! - [`Sheet`]: A named sheet with a grid of cells
-//! - [`Grid`]: A sparse 2D grid of cells with optional row/column signatures
-//! - [`Cell`]: Individual cell with address, value, and optional formula
+//! - [`Grid`]: A sparse 2D grid of cell content with optional row/column signatures
+//! - [`CellContent`]: Value + formula for a single cell (coordinates stored in the grid key)
 
 use crate::addressing::{AddressParseError, address_to_index, index_to_address};
 use crate::hashing::normalize_float_for_hash;
+use crate::string_pool::{StringId, StringPool};
 use rustc_hash::FxHashMap;
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -12232,15 +12432,15 @@ use std::str::FromStr;
 pub struct CellSnapshot {
     pub addr: CellAddress,
     pub value: Option<CellValue>,
-    pub formula: Option<String>,
+    pub formula: Option<StringId>,
 }
 
 impl CellSnapshot {
-    pub fn from_cell(cell: &Cell) -> CellSnapshot {
+    pub fn from_cell(row: u32, col: u32, cell: &CellContent) -> CellSnapshot {
         CellSnapshot {
-            addr: cell.address,
+            addr: CellAddress::from_indices(row, col),
             value: cell.value.clone(),
-            formula: cell.formula.clone(),
+            formula: cell.formula,
         }
     }
 
@@ -12263,7 +12463,7 @@ pub struct Workbook {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Sheet {
     /// The display name of the sheet (e.g., "Sheet1", "Data").
-    pub name: String,
+    pub name: StringId,
     /// The type of sheet (worksheet, chart, macro, etc.).
     pub kind: SheetKind,
     /// The grid of cell data.
@@ -12291,26 +12491,32 @@ pub struct Grid {
     /// Number of columns in the grid's bounding rectangle.
     pub ncols: u32,
     /// Sparse storage of non-empty cells, keyed by (row, col).
-    pub cells: FxHashMap<(u32, u32), Cell>,
+    pub cells: FxHashMap<(u32, u32), CellContent>,
     /// Optional precomputed row signatures for alignment.
     pub row_signatures: Option<Vec<RowSignature>>,
     /// Optional precomputed column signatures for alignment.
     pub col_signatures: Option<Vec<ColSignature>>,
 }
 
-/// A single cell within a grid.
+/// A single cell's logical content (coordinates live in the `Grid` key).
 #[derive(Debug, Clone, PartialEq)]
-pub struct Cell {
-    /// Zero-based row index.
-    pub row: u32,
-    /// Zero-based column index.
-    pub col: u32,
-    /// The cell's A1-style address (e.g., "B2").
-    pub address: CellAddress,
+pub struct CellContent {
     /// The cell's value, if any.
     pub value: Option<CellValue>,
     /// The cell's formula text (without leading '='), if any.
-    pub formula: Option<String>,
+    pub formula: Option<StringId>,
+}
+
+pub type Cell = CellContent;
+
+/// A view of a cell's content together with its coordinates.
+#[derive(Debug, Clone, Copy)]
+pub struct CellRef<'a> {
+    pub row: u32,
+    pub col: u32,
+    pub address: CellAddress,
+    pub value: &'a Option<CellValue>,
+    pub formula: &'a Option<StringId>,
 }
 
 /// A cell address representing a position in a grid.
@@ -12327,6 +12533,10 @@ pub struct CellAddress {
 impl CellAddress {
     pub fn from_indices(row: u32, col: u32) -> CellAddress {
         CellAddress { row, col }
+    }
+
+    pub fn from_coords(row: u32, col: u32) -> CellAddress {
+        Self::from_indices(row, col)
     }
 
     pub fn to_a1(&self) -> String {
@@ -12370,21 +12580,25 @@ impl<'de> Deserialize<'de> for CellAddress {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum CellValue {
+    Blank,
     Number(f64),
-    Text(String),
+    Text(StringId),
     Bool(bool),
+    Error(StringId),
 }
 
 impl PartialEq for CellValue {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
+            (CellValue::Blank, CellValue::Blank) => true,
             (CellValue::Number(a), CellValue::Number(b)) => {
                 normalize_float_for_hash(*a) == normalize_float_for_hash(*b)
             }
             (CellValue::Text(a), CellValue::Text(b)) => a == b,
             (CellValue::Bool(a), CellValue::Bool(b)) => a == b,
+            (CellValue::Error(a), CellValue::Error(b)) => a == b,
             _ => false,
         }
     }
@@ -12395,17 +12609,24 @@ impl Eq for CellValue {}
 impl Hash for CellValue {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
+            CellValue::Blank => {
+                3u8.hash(state);
+            }
             CellValue::Number(n) => {
                 0u8.hash(state);
                 normalize_float_for_hash(*n).hash(state);
             }
-            CellValue::Text(s) => {
+            CellValue::Text(id) => {
                 1u8.hash(state);
-                s.hash(state);
+                id.hash(state);
             }
             CellValue::Bool(b) => {
                 2u8.hash(state);
                 b.hash(state);
+            }
+            CellValue::Error(id) => {
+                4u8.hash(state);
+                id.hash(state);
             }
         }
     }
@@ -12514,24 +12735,34 @@ impl Grid {
         }
     }
 
-    pub fn get(&self, row: u32, col: u32) -> Option<&Cell> {
+    pub fn get(&self, row: u32, col: u32) -> Option<&CellContent> {
         self.cells.get(&(row, col))
     }
 
-    pub fn get_mut(&mut self, row: u32, col: u32) -> Option<&mut Cell> {
+    pub fn get_ref(&self, row: u32, col: u32) -> Option<CellRef<'_>> {
+        self.get(row, col).map(|cell| CellRef {
+            row,
+            col,
+            address: CellAddress::from_indices(row, col),
+            value: &cell.value,
+            formula: &cell.formula,
+        })
+    }
+
+    pub fn get_mut(&mut self, row: u32, col: u32) -> Option<&mut CellContent> {
         self.row_signatures = None;
         self.col_signatures = None;
         self.cells.get_mut(&(row, col))
     }
 
-    pub fn insert(&mut self, cell: Cell) {
+    pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
         debug_assert!(
-            cell.row < self.nrows && cell.col < self.ncols,
+            row < self.nrows && col < self.ncols,
             "cell coordinates must lie within the grid bounds"
         );
         self.row_signatures = None;
         self.col_signatures = None;
-        self.cells.insert((cell.row, cell.col), cell);
+        self.cells.insert((row, col), CellContent { value, formula });
     }
 
     pub fn cell_count(&self) -> usize {
@@ -12542,8 +12773,18 @@ impl Grid {
         self.cells.is_empty()
     }
 
-    pub fn iter_cells(&self) -> impl Iterator<Item = &Cell> {
-        self.cells.values()
+    pub fn iter_cells(&self) -> impl Iterator<Item = ((u32, u32), &CellContent)> {
+        self.cells.iter().map(|(coords, cell)| (*coords, cell))
+    }
+
+    pub fn iter_cell_refs(&self) -> impl Iterator<Item = CellRef<'_>> {
+        self.cells.iter().map(|((row, col), cell)| CellRef {
+            row: *row,
+            col: *col,
+            address: CellAddress::from_indices(*row, *col),
+            value: &cell.value,
+            formula: &cell.formula,
+        })
     }
 
     pub fn rows_iter(&self) -> impl Iterator<Item = u32> + '_ {
@@ -12572,9 +12813,14 @@ impl Grid {
                 }
             }
         } else {
-            let mut row_cells: Vec<&Cell> = self.cells.values().filter(|c| c.row == row).collect();
-            row_cells.sort_by_key(|c| c.col);
-            for cell in row_cells {
+            let mut row_cells: Vec<(u32, &CellContent)> = self
+                .cells
+                .iter()
+                .filter(|((r, _), _)| *r == row)
+                .map(|((_, c), cell)| (*c, cell))
+                .collect();
+            row_cells.sort_by_key(|(c, _)| *c);
+            for (_, cell) in row_cells {
                 if cell.value.is_none() && cell.formula.is_none() {
                     continue;
                 }
@@ -12606,9 +12852,14 @@ impl Grid {
                 }
             }
         } else {
-            let mut col_cells: Vec<&Cell> = self.cells.values().filter(|c| c.col == col).collect();
-            col_cells.sort_by_key(|c| c.row);
-            for cell in col_cells {
+            let mut col_cells: Vec<(u32, &CellContent)> = self
+                .cells
+                .iter()
+                .filter(|((_, c), _)| *c == col)
+                .map(|((r, _), cell)| (*r, cell))
+                .collect();
+            col_cells.sort_by_key(|(r, _)| *r);
+            for (_, cell) in col_cells {
                 if cell.value.is_none() && cell.formula.is_none() {
                     continue;
                 }
@@ -12626,16 +12877,14 @@ impl Grid {
         use crate::hashing::{hash_cell_value, hash_row_content_128};
         use xxhash_rust::xxh3::Xxh3;
 
-        let mut row_cells: Vec<Vec<(u32, &Cell)>> = vec![Vec::new(); self.nrows as usize];
+        let mut row_cells: Vec<Vec<(u32, &CellContent)>> = vec![Vec::new(); self.nrows as usize];
 
-        for cell in self.cells.values() {
-            let row_idx = cell.row as usize;
-            debug_assert!(
-                row_idx < row_cells.len() && cell.col < self.ncols,
-                "cell coordinates must lie within the grid bounds"
-            );
-
-            row_cells[row_idx].push((cell.col, cell));
+        for ((row, col), cell) in self.cells.iter() {
+            let row_idx = *row as usize;
+            if row_idx >= row_cells.len() || *col >= self.ncols {
+                continue;
+            }
+            row_cells[row_idx].push((*col, cell));
         }
 
         for row in row_cells.iter_mut() {
@@ -12682,12 +12931,16 @@ impl PartialEq for CellSnapshot {
 impl Eq for CellSnapshot {}
 
 impl CellValue {
-    pub fn as_text(&self) -> Option<&str> {
-        if let CellValue::Text(s) = self {
-            Some(s)
+    pub fn as_text_id(&self) -> Option<StringId> {
+        if let CellValue::Text(id) = self {
+            Some(*id)
         } else {
             None
         }
+    }
+
+    pub fn as_text<'a>(&self, pool: &'a StringPool) -> Option<&'a str> {
+        self.as_text_id().map(|id| pool.resolve(id))
     }
 
     pub fn as_number(&self) -> Option<f64> {
@@ -12710,6 +12963,7 @@ impl CellValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::string_pool::StringPool;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
@@ -12717,21 +12971,29 @@ mod tests {
         a1.parse().expect("address should parse")
     }
 
-    fn make_cell(address: &str, value: Option<CellValue>, formula: Option<&str>) -> Cell {
+    fn make_cell(
+        pool: &mut StringPool,
+        address: &str,
+        value: Option<CellValue>,
+        formula: Option<&str>,
+    ) -> ((u32, u32), CellContent) {
         let (row, col) = address_to_index(address).expect("address should parse");
-        Cell {
-            row,
-            col,
-            address: CellAddress::from_indices(row, col),
-            value,
-            formula: formula.map(|s| s.to_string()),
-        }
+        let formula_id = formula.map(|s| pool.intern(s));
+        (
+            (row, col),
+            CellContent {
+                value,
+                formula: formula_id,
+            },
+        )
     }
 
     #[test]
     fn snapshot_from_number_cell() {
-        let cell = make_cell("A1", Some(CellValue::Number(42.0)), None);
-        let snap = CellSnapshot::from_cell(&cell);
+        let mut pool = StringPool::new();
+        let ((row, col), cell) =
+            make_cell(&mut pool, "A1", Some(CellValue::Number(42.0)), None);
+        let snap = CellSnapshot::from_cell(row, col, &cell);
         assert_eq!(snap.addr.to_string(), "A1");
         assert_eq!(snap.value, Some(CellValue::Number(42.0)));
         assert!(snap.formula.is_none());
@@ -12739,17 +13001,26 @@ mod tests {
 
     #[test]
     fn snapshot_from_text_cell() {
-        let cell = make_cell("B2", Some(CellValue::Text("hello".into())), None);
-        let snap = CellSnapshot::from_cell(&cell);
+        let mut pool = StringPool::new();
+        let text_id = pool.intern("hello");
+        let ((row, col), cell) = make_cell(
+            &mut pool,
+            "B2",
+            Some(CellValue::Text(text_id)),
+            None,
+        );
+        let snap = CellSnapshot::from_cell(row, col, &cell);
         assert_eq!(snap.addr.to_string(), "B2");
-        assert_eq!(snap.value, Some(CellValue::Text("hello".into())));
+        assert_eq!(snap.value, Some(CellValue::Text(text_id)));
         assert!(snap.formula.is_none());
     }
 
     #[test]
     fn snapshot_from_bool_cell() {
-        let cell = make_cell("C3", Some(CellValue::Bool(true)), None);
-        let snap = CellSnapshot::from_cell(&cell);
+        let mut pool = StringPool::new();
+        let ((row, col), cell) =
+            make_cell(&mut pool, "C3", Some(CellValue::Bool(true)), None);
+        let snap = CellSnapshot::from_cell(row, col, &cell);
         assert_eq!(snap.addr.to_string(), "C3");
         assert_eq!(snap.value, Some(CellValue::Bool(true)));
         assert!(snap.formula.is_none());
@@ -12757,8 +13028,9 @@ mod tests {
 
     #[test]
     fn snapshot_from_empty_cell() {
-        let cell = make_cell("D4", None, None);
-        let snap = CellSnapshot::from_cell(&cell);
+        let mut pool = StringPool::new();
+        let ((row, col), cell) = make_cell(&mut pool, "D4", None, None);
+        let snap = CellSnapshot::from_cell(row, col, &cell);
         assert_eq!(snap.addr.to_string(), "D4");
         assert!(snap.value.is_none());
         assert!(snap.formula.is_none());
@@ -12766,30 +13038,34 @@ mod tests {
 
     #[test]
     fn snapshot_equality_same_value_and_formula() {
+        let mut pool = StringPool::new();
+        let formula_id = pool.intern("A1+1");
         let snap1 = CellSnapshot {
             addr: addr("A1"),
             value: Some(CellValue::Number(1.0)),
-            formula: Some("A1+1".into()),
+            formula: Some(formula_id),
         };
         let snap2 = CellSnapshot {
             addr: addr("B2"),
             value: Some(CellValue::Number(1.0)),
-            formula: Some("A1+1".into()),
+            formula: Some(formula_id),
         };
         assert_eq!(snap1, snap2);
     }
 
     #[test]
     fn snapshot_inequality_different_value_same_formula() {
+        let mut pool = StringPool::new();
+        let formula_id = pool.intern("A1+1");
         let snap1 = CellSnapshot {
             addr: addr("A1"),
             value: Some(CellValue::Number(43.0)),
-            formula: Some("A1+1".into()),
+            formula: Some(formula_id),
         };
         let snap2 = CellSnapshot {
             addr: addr("A1"),
             value: Some(CellValue::Number(44.0)),
-            formula: Some("A1+1".into()),
+            formula: Some(formula_id),
         };
         assert_ne!(snap1, snap2);
     }
@@ -12801,24 +13077,28 @@ mod tests {
             value: Some(CellValue::Number(42.0)),
             formula: None,
         };
+        let mut pool = StringPool::new();
+        let formula_id = pool.intern("A1+1");
         let snap2 = CellSnapshot {
             addr: addr("A1"),
             value: Some(CellValue::Number(42.0)),
-            formula: Some("A1+1".into()),
+            formula: Some(formula_id),
         };
         assert_ne!(snap1, snap2);
     }
 
     #[test]
     fn snapshot_equality_ignores_address() {
+        let mut pool = StringPool::new();
+        let text_id = pool.intern("hello");
         let snap1 = CellSnapshot {
             addr: addr("A1"),
-            value: Some(CellValue::Text("hello".into())),
+            value: Some(CellValue::Text(text_id)),
             formula: None,
         };
         let snap2 = CellSnapshot {
             addr: addr("Z9"),
-            value: Some(CellValue::Text("hello".into())),
+            value: Some(CellValue::Text(text_id)),
             formula: None,
         };
         assert_eq!(snap1, snap2);
@@ -12826,19 +13106,21 @@ mod tests {
 
     #[test]
     fn cellvalue_as_text_number_bool_match_variants() {
-        let text = CellValue::Text("abc".into());
+        let mut pool = StringPool::new();
+        let text_id = pool.intern("abc");
+        let text = CellValue::Text(text_id);
         let number = CellValue::Number(5.0);
         let boolean = CellValue::Bool(true);
 
-        assert_eq!(text.as_text(), Some("abc"));
+        assert_eq!(text.as_text(&pool), Some("abc"));
         assert_eq!(text.as_number(), None);
         assert_eq!(text.as_bool(), None);
 
-        assert_eq!(number.as_text(), None);
+        assert_eq!(number.as_text(&pool), None);
         assert_eq!(number.as_number(), Some(5.0));
         assert_eq!(number.as_bool(), None);
 
-        assert_eq!(boolean.as_text(), None);
+        assert_eq!(boolean.as_text(&pool), None);
         assert_eq!(boolean.as_number(), None);
         assert_eq!(boolean.as_bool(), Some(true));
     }
@@ -12872,9 +13154,11 @@ mod tests {
 
     #[test]
     fn get_mut_clears_cached_signatures() {
+        let mut pool = StringPool::new();
         let mut grid = Grid::new(2, 2);
-        grid.insert(make_cell("A1", Some(CellValue::Number(1.0)), None));
-        grid.insert(make_cell("B2", Some(CellValue::Number(2.0)), None));
+        let id1 = pool.intern("1");
+        grid.insert_cell(0, 0, Some(CellValue::Text(id1)), None);
+        grid.insert_cell(1, 1, Some(CellValue::Number(2.0)), None);
 
         grid.compute_all_signatures();
         assert!(grid.row_signatures.is_some());
@@ -12888,14 +13172,17 @@ mod tests {
 
     #[test]
     fn insert_clears_cached_signatures() {
+        let mut pool = StringPool::new();
         let mut grid = Grid::new(3, 3);
-        grid.insert(make_cell("A1", Some(CellValue::Number(1.0)), None));
+        let id1 = pool.intern("1");
+        grid.insert_cell(0, 0, Some(CellValue::Text(id1)), None);
 
         grid.compute_all_signatures();
         assert!(grid.row_signatures.is_some());
         assert!(grid.col_signatures.is_some());
 
-        grid.insert(make_cell("B2", Some(CellValue::Text("x".into())), None));
+        let id2 = pool.intern("x");
+        grid.insert_cell(1, 1, Some(CellValue::Text(id2)), None);
 
         assert!(grid.row_signatures.is_none());
         assert!(grid.col_signatures.is_none());
@@ -12904,16 +13191,16 @@ mod tests {
     #[test]
     fn compute_row_signature_matches_cached_for_dense_and_sparse_paths() {
         let mut dense = Grid::new(1, 3);
-        dense.insert(make_cell("A1", Some(CellValue::Number(1.0)), None));
-        dense.insert(make_cell("B1", Some(CellValue::Number(2.0)), None));
-        dense.insert(make_cell("C1", Some(CellValue::Number(3.0)), None));
+        dense.insert_cell(0, 0, Some(CellValue::Number(1.0)), None);
+        dense.insert_cell(0, 1, Some(CellValue::Number(2.0)), None);
+        dense.insert_cell(0, 2, Some(CellValue::Number(3.0)), None);
         dense.compute_all_signatures();
         let cached_dense = dense.row_signatures.as_ref().unwrap()[0];
         assert_eq!(dense.compute_row_signature(0), cached_dense);
 
         let mut sparse = Grid::new(1, 10);
-        sparse.insert(make_cell("A1", Some(CellValue::Number(1.0)), None));
-        sparse.insert(make_cell("J1", Some(CellValue::Number(10.0)), None));
+        sparse.insert_cell(0, 0, Some(CellValue::Number(1.0)), None);
+        sparse.insert_cell(0, 9, Some(CellValue::Number(10.0)), None);
         sparse.compute_all_signatures();
         let cached_sparse = sparse.row_signatures.as_ref().unwrap()[0];
         assert_eq!(sparse.compute_row_signature(0), cached_sparse);
@@ -12922,16 +13209,16 @@ mod tests {
     #[test]
     fn compute_col_signature_matches_cached_for_dense_and_sparse_paths() {
         let mut dense = Grid::new(3, 1);
-        dense.insert(make_cell("A1", Some(CellValue::Number(1.0)), None));
-        dense.insert(make_cell("A2", Some(CellValue::Number(2.0)), None));
-        dense.insert(make_cell("A3", Some(CellValue::Number(3.0)), None));
+        dense.insert_cell(0, 0, Some(CellValue::Number(1.0)), None);
+        dense.insert_cell(1, 0, Some(CellValue::Number(2.0)), None);
+        dense.insert_cell(2, 0, Some(CellValue::Number(3.0)), None);
         dense.compute_all_signatures();
         let cached_dense = dense.col_signatures.as_ref().unwrap()[0];
         assert_eq!(dense.compute_col_signature(0), cached_dense);
 
         let mut sparse = Grid::new(10, 2);
-        sparse.insert(make_cell("B1", Some(CellValue::Number(1.0)), None));
-        sparse.insert(make_cell("B3", Some(CellValue::Number(3.0)), None));
+        sparse.insert_cell(0, 1, Some(CellValue::Number(1.0)), None);
+        sparse.insert_cell(2, 1, Some(CellValue::Number(3.0)), None);
         sparse.compute_all_signatures();
         let cached_sparse = sparse.col_signatures.as_ref().unwrap()[1];
         assert_eq!(sparse.compute_col_signature(1), cached_sparse);
@@ -13277,7 +13564,7 @@ fn amr_recursive_gap_alignment() {
 
 #![allow(dead_code)]
 
-use excel_diff::{Cell, CellAddress, CellValue, Grid, Sheet, SheetKind, Workbook};
+use excel_diff::{CellValue, Grid, Sheet, SheetKind, Workbook, with_default_session};
 use std::path::PathBuf;
 
 pub fn fixture_path(filename: &str) -> PathBuf {
@@ -13298,13 +13585,7 @@ pub fn grid_from_numbers(values: &[&[i32]]) -> Grid {
     let mut grid = Grid::new(nrows, ncols);
     for (r, row_vals) in values.iter().enumerate() {
         for (c, v) in row_vals.iter().enumerate() {
-            grid.insert(Cell {
-                row: r as u32,
-                col: c as u32,
-                address: CellAddress::from_indices(r as u32, c as u32),
-                value: Some(CellValue::Number(*v as f64)),
-                formula: None,
-            });
+            grid.insert_cell(r as u32, c as u32, Some(CellValue::Number(*v as f64)), None);
         }
     }
 
@@ -13312,13 +13593,13 @@ pub fn grid_from_numbers(values: &[&[i32]]) -> Grid {
 }
 
 pub fn single_sheet_workbook(name: &str, grid: Grid) -> Workbook {
-    Workbook {
+    with_default_session(|session| Workbook {
         sheets: vec![Sheet {
-            name: name.to_string(),
+            name: session.strings.intern(name),
             kind: SheetKind::Worksheet,
             grid,
         }],
-    }
+    })
 }
 
 ```
@@ -16394,7 +16675,7 @@ fn g14_max_move_iterations_limits_detected_moves() {
 //! Integration tests verifying column structural changes do not break row alignment when row content is preserved.
 //! Covers Branch 1.3 acceptance criteria for column insertion/deletion resilience.
 
-use excel_diff::{Cell, CellAddress, CellValue, DiffOp, Grid, diff_workbooks};
+use excel_diff::{CellValue, DiffOp, Grid, diff_workbooks};
 
 mod common;
 use common::single_sheet_workbook;
@@ -16402,13 +16683,7 @@ use common::single_sheet_workbook;
 fn make_grid_with_cells(nrows: u32, ncols: u32, cells: &[(u32, u32, i32)]) -> Grid {
     let mut grid = Grid::new(nrows, ncols);
     for (row, col, val) in cells {
-        grid.insert(Cell {
-            row: *row,
-            col: *col,
-            address: CellAddress::from_indices(*row, *col),
-            value: Some(CellValue::Number(*val as f64)),
-            formula: None,
-        });
+        grid.insert_cell(*row, *col, Some(CellValue::Number(*val as f64)), None);
     }
     grid
 }
@@ -16420,13 +16695,7 @@ fn grid_from_row_data(rows: &[Vec<i32>]) -> Grid {
 
     for (r, row_vals) in rows.iter().enumerate() {
         for (c, val) in row_vals.iter().enumerate() {
-            grid.insert(Cell {
-                row: r as u32,
-                col: c as u32,
-                address: CellAddress::from_indices(r as u32, c as u32),
-                value: Some(CellValue::Number(*val as f64)),
-                formula: None,
-            });
+            grid.insert_cell(r as u32, c as u32, Some(CellValue::Number(*val as f64)), None);
         }
     }
     grid
@@ -16938,7 +17207,7 @@ fn g2_nan_values_are_treated_as_equal() {
 ### File: `core\tests\g5_g7_grid_workbook_tests.rs`
 
 ```rust
-use excel_diff::{CellValue, DiffOp, diff_workbooks, open_workbook};
+use excel_diff::{CellValue, DiffOp, diff_workbooks, open_workbook, with_default_session};
 use std::collections::BTreeSet;
 
 mod common;
@@ -16953,15 +17222,16 @@ fn g5_multi_cell_edits_produces_only_celledited_ops() {
 
     let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
 
+    let (text_x, text_y) = with_default_session(|session| {
+        let x = session.strings.intern("x");
+        let y = session.strings.intern("y");
+        (CellValue::Text(x), CellValue::Text(y))
+    });
     let expected = vec![
         ("B2", CellValue::Number(1.0), CellValue::Number(42.0)),
         ("D5", CellValue::Number(2.0), CellValue::Number(99.0)),
         ("H7", CellValue::Number(3.0), CellValue::Number(3.5)),
-        (
-            "J10",
-            CellValue::Text("x".into()),
-            CellValue::Text("y".into()),
-        ),
+        ("J10", text_x, text_y),
     ];
 
     assert_eq!(
@@ -16992,7 +17262,8 @@ fn g5_multi_cell_edits_produces_only_celledited_ops() {
             })
             .unwrap_or_else(|| panic!("missing CellEdited for {addr}"));
 
-        assert_eq!(sheet, "Sheet1");
+        let sheet_name = report.strings[sheet.0 as usize].as_str();
+        assert_eq!(sheet_name, "Sheet1");
         assert_eq!(from.value, Some(expected_from));
         assert_eq!(to.value, Some(expected_to));
         assert_eq!(from.formula, to.formula, "no formula changes expected");
@@ -17034,7 +17305,8 @@ fn g6_row_append_bottom_emits_two_rowadded_and_no_celledited() {
                 row_idx,
                 row_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                let sheet_name = report.strings[sheet.0 as usize].as_str();
+                assert_eq!(sheet_name, "Sheet1");
                 assert!(row_signature.is_none());
                 Some(*row_idx)
             }
@@ -17081,7 +17353,8 @@ fn g6_row_delete_bottom_emits_two_rowremoved_and_no_celledited() {
                 row_idx,
                 row_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                let sheet_name = report.strings[sheet.0 as usize].as_str();
+                assert_eq!(sheet_name, "Sheet1");
                 assert!(row_signature.is_none());
                 Some(*row_idx)
             }
@@ -17128,7 +17401,8 @@ fn g7_col_append_right_emits_two_columnadded_and_no_celledited() {
                 col_idx,
                 col_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                let sheet_name = report.strings[sheet.0 as usize].as_str();
+                assert_eq!(sheet_name, "Sheet1");
                 assert!(col_signature.is_none());
                 Some(*col_idx)
             }
@@ -17175,7 +17449,8 @@ fn g7_col_delete_right_emits_two_columnremoved_and_no_celledited() {
                 col_idx,
                 col_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                let sheet_name = report.strings[sheet.0 as usize].as_str();
+                assert_eq!(sheet_name, "Sheet1");
                 assert!(col_signature.is_none());
                 Some(*col_idx)
             }
@@ -17682,19 +17957,24 @@ fn hashstats_from_col_meta_tracks_positions() {
 ### File: `core\tests\grid_view_tests.rs`
 
 ```rust
-use excel_diff::{Cell, CellAddress, CellValue, DiffConfig, Grid, GridView};
+use excel_diff::{Cell, CellValue, DiffConfig, Grid, GridView, with_default_session};
 
 mod common;
 use common::grid_from_numbers;
 
-fn make_cell(row: u32, col: u32, value: Option<CellValue>, formula: Option<&str>) -> Cell {
-    Cell {
-        row,
-        col,
-        address: CellAddress::from_indices(row, col),
-        value,
-        formula: formula.map(|s| s.to_string()),
-    }
+fn insert_cell(
+    grid: &mut Grid,
+    row: u32,
+    col: u32,
+    value: Option<CellValue>,
+    formula: Option<&str>,
+) {
+    let formula_id = formula.map(|s| with_default_session(|session| session.strings.intern(s)));
+    grid.insert_cell(row, col, value, formula_id);
+}
+
+fn text(value: &str) -> CellValue {
+    with_default_session(|session| CellValue::Text(session.strings.intern(value)))
 }
 
 #[test]
@@ -17711,8 +17991,6 @@ fn gridview_dense_3x3_layout_and_metadata() {
         assert_eq!(row_view.cells.len(), 3);
         for (col_idx, (col, cell)) in row_view.cells.iter().enumerate() {
             assert_eq!(*col as usize, col_idx);
-            assert_eq!(cell.row as usize, row_idx);
-            assert_eq!(cell.col as usize, col_idx);
         }
 
         let meta = &view.row_meta[row_idx];
@@ -17731,14 +18009,9 @@ fn gridview_dense_3x3_layout_and_metadata() {
 #[test]
 fn gridview_sparse_rows_low_info_classification() {
     let mut grid = Grid::new(4, 4);
-    grid.insert(make_cell(
-        0,
-        0,
-        Some(CellValue::Text("Header".into())),
-        None,
-    ));
-    grid.insert(make_cell(2, 2, Some(CellValue::Number(10.0)), None));
-    grid.insert(make_cell(3, 1, Some(CellValue::Text("   ".into())), None));
+    insert_cell(&mut grid, 0, 0, Some(text("Header")), None);
+    insert_cell(&mut grid, 2, 2, Some(CellValue::Number(10.0)), None);
+    insert_cell(&mut grid, 3, 1, Some(text("   ")), None);
 
     let view = GridView::from_grid(&grid);
 
@@ -17763,7 +18036,7 @@ fn gridview_sparse_rows_low_info_classification() {
 #[test]
 fn gridview_formula_only_row_respects_threshold() {
     let mut grid = Grid::new(2, 2);
-    grid.insert(make_cell(0, 0, None, Some("=A1+1")));
+    insert_cell(&mut grid, 0, 0, None, Some("=A1+1"));
 
     let view_default = GridView::from_grid(&grid);
     assert_eq!(view_default.row_meta[0].non_blank_count, 1);
@@ -17779,16 +18052,11 @@ fn gridview_formula_only_row_respects_threshold() {
 #[test]
 fn gridview_column_metadata_matches_signatures() {
     let mut grid = Grid::new(4, 4);
-    grid.insert(make_cell(
-        0,
-        1,
-        Some(CellValue::Text("a".into())),
-        Some("=B1"),
-    ));
-    grid.insert(make_cell(1, 3, Some(CellValue::Number(2.0)), Some("=1+1")));
-    grid.insert(make_cell(2, 0, Some(CellValue::Bool(true)), None));
-    grid.insert(make_cell(2, 2, Some(CellValue::Text("mid".into())), None));
-    grid.insert(make_cell(3, 0, None, Some("=A1")));
+    insert_cell(&mut grid, 0, 1, Some(text("a")), Some("=B1"));
+    insert_cell(&mut grid, 1, 3, Some(CellValue::Number(2.0)), Some("=1+1"));
+    insert_cell(&mut grid, 2, 0, Some(CellValue::Bool(true)), None);
+    insert_cell(&mut grid, 2, 2, Some(text("mid")), None);
+    insert_cell(&mut grid, 3, 0, None, Some("=A1"));
 
     grid.compute_all_signatures();
     let row_signatures = grid
@@ -17841,12 +18109,13 @@ fn gridview_large_sparse_grid_constructs_without_panic() {
 
     for r in (0..nrows).step_by(100) {
         let col = (r / 100) % ncols;
-        grid.insert(make_cell(
+        insert_cell(
+            &mut grid,
             r,
             col,
             Some(CellValue::Number((r / 100) as f64)),
             None,
-        ));
+        );
     }
 
     let view = GridView::from_grid(&grid);
@@ -17868,15 +18137,16 @@ fn gridview_large_sparse_grid_constructs_without_panic() {
 #[test]
 fn gridview_row_hashes_ignore_small_float_drift() {
     let mut grid_a = Grid::new(1, 1);
-    grid_a.insert(make_cell(0, 0, Some(CellValue::Number(1.0)), None));
+    insert_cell(&mut grid_a, 0, 0, Some(CellValue::Number(1.0)), None);
 
     let mut grid_b = Grid::new(1, 1);
-    grid_b.insert(make_cell(
+    insert_cell(
+        &mut grid_b,
         0,
         0,
         Some(CellValue::Number(1.0000000000000002)),
         None,
-    ));
+    );
 
     let view_a = GridView::from_grid(&grid_a);
     let view_b = GridView::from_grid(&grid_b);
@@ -22479,6 +22749,10 @@ use std::collections::BTreeSet;
 mod common;
 use common::{grid_from_numbers, single_sheet_workbook};
 
+fn sheet_name<'a>(report: &'a excel_diff::DiffReport, id: &excel_diff::SheetId) -> &'a str {
+    report.strings[id.0 as usize].as_str()
+}
+
 #[test]
 fn pg5_1_grid_diff_1x1_identical_empty_diff() {
     let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1]]));
@@ -22503,7 +22777,7 @@ fn pg5_2_grid_diff_1x1_value_change_single_cell_edited() {
             from,
             to,
         } => {
-            assert_eq!(sheet, "Sheet1");
+            assert_eq!(sheet_name(&report, sheet), "Sheet1");
             assert_eq!(addr.to_a1(), "A1");
             assert_eq!(from.value, Some(CellValue::Number(1.0)));
             assert_eq!(to.value, Some(CellValue::Number(2.0)));
@@ -22526,7 +22800,7 @@ fn pg5_3_grid_diff_row_appended_row_added_only() {
             row_idx,
             row_signature,
         } => {
-            assert_eq!(sheet, "Sheet1");
+            assert_eq!(sheet_name(&report, sheet), "Sheet1");
             assert_eq!(*row_idx, 1);
             assert!(row_signature.is_none());
         }
@@ -22548,7 +22822,7 @@ fn pg5_4_grid_diff_column_appended_column_added_only() {
             col_idx,
             col_signature,
         } => {
-            assert_eq!(sheet, "Sheet1");
+            assert_eq!(sheet_name(&report, sheet), "Sheet1");
             assert_eq!(*col_idx, 1);
             assert!(col_signature.is_none());
         }
@@ -22623,7 +22897,7 @@ fn pg5_6_grid_diff_degenerate_grids() {
                 col_idx,
                 col_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                assert_eq!(sheet_name(&report, sheet), "Sheet1");
                 assert_eq!(*col_idx, 0);
                 assert!(col_signature.is_none());
                 col_added += 1;
@@ -22652,7 +22926,7 @@ fn pg5_7_grid_diff_row_truncated_row_removed_only() {
             row_idx,
             row_signature,
         } => {
-            assert_eq!(sheet, "Sheet1");
+            assert_eq!(sheet_name(&report, sheet), "Sheet1");
             assert_eq!(*row_idx, 1);
             assert!(row_signature.is_none());
         }
@@ -22674,7 +22948,7 @@ fn pg5_8_grid_diff_column_truncated_column_removed_only() {
             col_idx,
             col_signature,
         } => {
-            assert_eq!(sheet, "Sheet1");
+            assert_eq!(sheet_name(&report, sheet), "Sheet1");
             assert_eq!(*col_idx, 1);
             assert!(col_signature.is_none());
         }
@@ -22701,7 +22975,7 @@ fn pg5_9_grid_diff_row_and_column_truncated_structure_only() {
                 row_idx,
                 row_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                assert_eq!(sheet_name(&report, sheet), "Sheet1");
                 assert_eq!(*row_idx, 1);
                 assert!(row_signature.is_none());
                 rows_removed += 1;
@@ -22711,7 +22985,7 @@ fn pg5_9_grid_diff_row_and_column_truncated_structure_only() {
                 col_idx,
                 col_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                assert_eq!(sheet_name(&report, sheet), "Sheet1");
                 assert_eq!(*col_idx, 1);
                 assert!(col_signature.is_none());
                 cols_removed += 1;
@@ -22744,7 +23018,7 @@ fn pg5_10_grid_diff_row_appended_with_overlap_cell_edits() {
                 row_idx,
                 row_signature,
             } => {
-                assert_eq!(sheet, "Sheet1");
+                assert_eq!(sheet_name(&report, sheet), "Sheet1");
                 assert_eq!(*row_idx, 2);
                 assert!(row_signature.is_none());
                 row_added += 1;
@@ -23449,7 +23723,7 @@ fn row_signature_consistent_for_same_content_different_column_indices() {
 ### File: `core\tests\sparse_grid_tests.rs`
 
 ```rust
-use excel_diff::{Cell, CellAddress, CellValue, Grid};
+use excel_diff::{CellValue, Grid, with_default_session};
 
 #[test]
 fn sparse_grid_empty_has_zero_cells() {
@@ -23463,14 +23737,7 @@ fn sparse_grid_empty_has_zero_cells() {
 #[test]
 fn sparse_grid_insert_and_retrieve() {
     let mut grid = Grid::new(100, 100);
-    let cell = Cell {
-        row: 50,
-        col: 50,
-        address: CellAddress::from_indices(50, 50),
-        value: Some(CellValue::Number(42.0)),
-        formula: None,
-    };
-    grid.insert(cell);
+    grid.insert_cell(50, 50, Some(CellValue::Number(42.0)), None);
     assert_eq!(grid.cell_count(), 1);
     let retrieved = grid.get(50, 50).expect("cell should exist");
     assert_eq!(retrieved.value, Some(CellValue::Number(42.0)));
@@ -23481,14 +23748,7 @@ fn sparse_grid_insert_and_retrieve() {
 fn sparse_grid_iter_cells_only_populated() {
     let mut grid = Grid::new(1000, 1000);
     for i in 0..10 {
-        let cell = Cell {
-            row: i * 100,
-            col: i * 100,
-            address: CellAddress::from_indices(i * 100, i * 100),
-            value: Some(CellValue::Number(i as f64)),
-            formula: None,
-        };
-        grid.insert(cell);
+        grid.insert_cell(i * 100, i * 100, Some(CellValue::Number(i as f64)), None);
     }
     let cells: Vec<_> = grid.iter_cells().collect();
     assert_eq!(cells.len(), 10);
@@ -23517,13 +23777,7 @@ fn cols_iter_covers_all_cols() {
 #[test]
 fn rows_iter_and_get_are_consistent() {
     let mut grid = Grid::new(2, 2);
-    grid.insert(Cell {
-        row: 1,
-        col: 1,
-        address: CellAddress::from_indices(1, 1),
-        value: Some(CellValue::Number(1.0)),
-        formula: None,
-    });
+    grid.insert_cell(1, 1, Some(CellValue::Number(1.0)), None);
 
     for r in grid.rows_iter() {
         for c in grid.cols_iter() {
@@ -23558,12 +23812,10 @@ fn sparse_grid_all_empty_rows_have_zero_signatures() {
 #[test]
 fn compute_signatures_on_sparse_grid_produces_hashes() {
     let mut grid = Grid::new(4, 4);
-    grid.insert(Cell {
-        row: 1,
-        col: 3,
-        address: CellAddress::from_indices(1, 3),
-        value: Some(CellValue::Text("value".into())),
-        formula: Some("=A1".into()),
+    with_default_session(|session| {
+        let text_id = session.strings.intern("value");
+        let formula_id = session.strings.intern("=A1");
+        grid.insert_cell(1, 3, Some(CellValue::Text(text_id)), Some(formula_id));
     });
 
     grid.compute_all_signatures();
@@ -23586,26 +23838,13 @@ fn compute_signatures_on_sparse_grid_produces_hashes() {
 #[test]
 fn compute_all_signatures_matches_direct_computation() {
     let mut grid = Grid::new(3, 3);
-    grid.insert(Cell {
-        row: 0,
-        col: 1,
-        address: CellAddress::from_indices(0, 1),
-        value: Some(CellValue::Number(10.0)),
-        formula: Some("=5+5".into()),
-    });
-    grid.insert(Cell {
-        row: 1,
-        col: 0,
-        address: CellAddress::from_indices(1, 0),
-        value: Some(CellValue::Text("x".into())),
-        formula: None,
-    });
-    grid.insert(Cell {
-        row: 2,
-        col: 2,
-        address: CellAddress::from_indices(2, 2),
-        value: Some(CellValue::Bool(false)),
-        formula: Some("=A1".into()),
+    with_default_session(|session| {
+        let formula_a = session.strings.intern("=5+5");
+        let text_id = session.strings.intern("x");
+        let formula_b = session.strings.intern("=A1");
+        grid.insert_cell(0, 1, Some(CellValue::Number(10.0)), Some(formula_a));
+        grid.insert_cell(1, 0, Some(CellValue::Text(text_id)), None);
+        grid.insert_cell(2, 2, Some(CellValue::Bool(false)), Some(formula_b));
     });
 
     grid.compute_all_signatures();
@@ -27949,8 +28188,8 @@ def plot_metric_breakdown(df: pd.DataFrame, output_dir: Path, show: bool = False
         width = 0.25
 
         metric_labels = {
-            "move_detection_time_ms": "Move Detection",
-            "alignment_time_ms": "Alignment",
+            "move_detection_time_ms": "Fingerprinting + Move Detection",
+            "alignment_time_ms": "Alignment (incl. diff)",
             "cell_diff_time_ms": "Cell Diff",
         }
 
@@ -28155,7 +28394,6 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-
 
 ```
 

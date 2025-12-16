@@ -1,7 +1,7 @@
 use excel_diff::{DiffOp, diff_workbooks, open_workbook};
 
 mod common;
-use common::{fixture_path, grid_from_numbers, single_sheet_workbook};
+use common::{fixture_path, grid_from_numbers, sid, single_sheet_workbook};
 
 #[test]
 fn g12_column_move_emits_single_blockmovedcolumns() {
@@ -22,7 +22,7 @@ fn g12_column_move_emits_single_blockmovedcolumns() {
             dst_start_col,
             block_hash,
         } => {
-            assert_eq!(sheet, "Data");
+            assert_eq!(sheet, &sid("Data"));
             assert_eq!(*src_start_col, 2);
             assert_eq!(*col_count, 1);
             assert_eq!(*dst_start_col, 5);
@@ -121,7 +121,7 @@ fn g12_multi_column_block_move_emits_blockmovedcolumns() {
             dst_start_col,
             block_hash,
         } => {
-            assert_eq!(sheet, "Data");
+            assert_eq!(sheet, &sid("Data"));
             assert_eq!(*src_start_col, 3);
             assert_eq!(*col_count, 2, "should detect a 2-column block move");
             assert_eq!(*dst_start_col, 1);
@@ -181,7 +181,7 @@ fn g12_column_swap_emits_blockmovedcolumns() {
             dst_start_col,
             ..
         } => {
-            assert_eq!(sheet, "Data");
+            assert_eq!(sheet, &sid("Data"));
             assert_eq!(*col_count, 1, "swap is represented as moving one column");
             assert!(
                 (*src_start_col == 0 && *dst_start_col == 1)

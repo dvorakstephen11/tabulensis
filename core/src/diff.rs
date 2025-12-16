@@ -22,9 +22,22 @@ pub enum DiffError {
         max_rows: u32,
         max_cols: u32,
     },
+
+    #[error("sink error: {message}")]
+    SinkError { message: String },
 }
 
 pub type SheetId = StringId;
+
+/// Summary metadata about a diff run emitted alongside streamed ops.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffSummary {
+    pub complete: bool,
+    pub warnings: Vec<String>,
+    pub op_count: usize,
+    #[cfg(feature = "perf-metrics")]
+    pub metrics: Option<crate::perf::DiffMetrics>,
+}
 
 /// A single diff operation representing one logical change between workbooks.
 ///
