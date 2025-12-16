@@ -1,6 +1,6 @@
 mod common;
 
-use common::{diff_fixture_pkgs, fixture_path, open_fixture_pkg};
+use common::diff_fixture_pkgs;
 use excel_diff::{CellValue, DiffConfig, DiffOp, with_default_session};
 use std::collections::BTreeSet;
 

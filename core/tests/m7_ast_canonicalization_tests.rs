@@ -1,7 +1,7 @@
-use excel_diff::m_ast::{MAstKind, MTokenDebug, tokenize_for_testing};
 use excel_diff::{
-    DataMashup, MParseError, ast_semantically_equal, build_data_mashup, build_queries,
-    canonicalize_m_ast, open_data_mashup, parse_m_expression,
+    DataMashup, MAstKind, MParseError, MTokenDebug, ast_semantically_equal, build_data_mashup,
+    build_queries, canonicalize_m_ast, open_data_mashup, parse_m_expression,
+    tokenize_for_testing,
 };
 
 mod common;

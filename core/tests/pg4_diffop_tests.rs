@@ -3,7 +3,7 @@ mod common;
 use common::sid;
 use excel_diff::{
     CellAddress, CellSnapshot, CellValue, ColSignature, DiffOp, DiffReport, QueryChangeKind,
-    QueryMetadataField, RowSignature, with_default_session,
+    QueryMetadataField, RowSignature,
 };
 use serde_json::Value;
 use std::collections::BTreeSet;

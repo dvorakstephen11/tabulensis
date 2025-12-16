@@ -3,11 +3,8 @@ mod common;
 use common::{fixture_path, open_fixture_workbook};
 use excel_diff::{
     CellAddress, CellSnapshot, CellValue, ContainerError, DiffConfig, DiffOp, DiffReport,
-    PackageError, WorkbookPackage,
-    output::json::{
-        CellDiff, diff_report_to_cell_diffs, diff_workbooks_to_json, serialize_cell_diffs,
-        serialize_diff_report,
-    },
+    PackageError, WorkbookPackage, CellDiff, diff_report_to_cell_diffs,
+    diff_workbooks_to_json, serialize_cell_diffs, serialize_diff_report,
 };
 use serde_json::Value;
 #[cfg(feature = "perf-metrics")]

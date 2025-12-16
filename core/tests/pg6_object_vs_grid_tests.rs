@@ -1,6 +1,6 @@
 mod common;
 
-use common::{fixture_path, open_fixture_workbook, sid};
+use common::{open_fixture_workbook, sid};
 use excel_diff::{DiffConfig, DiffOp, WorkbookPackage};
 
 #[test]

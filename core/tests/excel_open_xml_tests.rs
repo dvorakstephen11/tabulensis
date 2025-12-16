@@ -1,6 +1,6 @@
 mod common;
 
-use common::{fixture_path, open_fixture_pkg, open_fixture_workbook, sid};
+use common::{fixture_path, open_fixture_workbook, sid};
 use excel_diff::{CellAddress, ContainerError, PackageError, SheetKind, WorkbookPackage};
 use std::fs;
 use std::io::{ErrorKind, Write};

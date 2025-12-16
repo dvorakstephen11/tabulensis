@@ -4,7 +4,7 @@ use std::io::{ErrorKind, Read};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use excel_diff::{
-    ContainerError, DataMashupError, ExcelOpenError, RawDataMashup, build_data_mashup,
+    ContainerError, DataMashupError, PackageError, RawDataMashup, build_data_mashup,
     open_data_mashup,
 };
 use quick_xml::{Reader, events::Event};
@@ -72,7 +72,7 @@ fn corrupt_base64_returns_error() {
     let err = open_data_mashup(&path).expect_err("corrupt base64 should fail");
     assert!(matches!(
         err,
-        ExcelOpenError::DataMashup(DataMashupError::Base64Invalid)
+        PackageError::DataMashup(DataMashupError::Base64Invalid)
     ));
 }
 
@@ -82,7 +82,7 @@ fn duplicate_datamashup_parts_are_rejected() {
     let err = open_data_mashup(&path).expect_err("duplicate DataMashup parts should be rejected");
     assert!(matches!(
         err,
-        ExcelOpenError::DataMashup(DataMashupError::FramingInvalid)
+        PackageError::DataMashup(DataMashupError::FramingInvalid)
     ));
 }
 
@@ -93,7 +93,7 @@ fn duplicate_datamashup_elements_are_rejected() {
         open_data_mashup(&path).expect_err("duplicate DataMashup elements should be rejected");
     assert!(matches!(
         err,
-        ExcelOpenError::DataMashup(DataMashupError::FramingInvalid)
+        PackageError::DataMashup(DataMashupError::FramingInvalid)
     ));
 }
 
@@ -102,7 +102,7 @@ fn nonexistent_file_returns_io() {
     let path = fixture_path("missing_mashup.xlsx");
     let err = open_data_mashup(&path).expect_err("missing file should error");
     match err {
-        ExcelOpenError::Container(ContainerError::Io(e)) => {
+        PackageError::Container(ContainerError::Io(e)) => {
             assert_eq!(e.kind(), ErrorKind::NotFound)
         }
         other => panic!("expected Io error, got {other:?}"),
@@ -115,7 +115,7 @@ fn non_excel_container_returns_not_excel_error() {
     let err = open_data_mashup(&path).expect_err("random zip should not parse");
     assert!(matches!(
         err,
-        ExcelOpenError::Container(ContainerError::NotOpcPackage)
+        PackageError::Container(ContainerError::NotOpcPackage)
     ));
 }
 
@@ -125,7 +125,7 @@ fn missing_content_types_is_not_excel_error() {
     let err = open_data_mashup(&path).expect_err("missing [Content_Types].xml should fail");
     assert!(matches!(
         err,
-        ExcelOpenError::Container(ContainerError::NotOpcPackage)
+        PackageError::Container(ContainerError::NotOpcPackage)
     ));
 }
 
@@ -135,7 +135,7 @@ fn non_zip_file_returns_not_zip_error() {
     let err = open_data_mashup(&path).expect_err("non-zip input should not parse as Excel");
     assert!(matches!(
         err,
-        ExcelOpenError::Container(ContainerError::NotZipContainer)
+        PackageError::Container(ContainerError::NotZipContainer)
     ));
 }
 

@@ -129,11 +129,11 @@ fn package_diff_streaming_finishes_on_error() {
     let mut grid_a = Grid::new(10, 1);
     let mut grid_b = Grid::new(10, 1);
     for i in 0..10 {
-        grid_a.insert_cell(i, 0, Some(excel_diff::workbook::CellValue::Number(i as f64)), None);
+        grid_a.insert_cell(i, 0, Some(excel_diff::CellValue::Number(i as f64)), None);
         grid_b.insert_cell(
             i,
             0,
-            Some(excel_diff::workbook::CellValue::Number((i + 100) as f64)),
+            Some(excel_diff::CellValue::Number((i + 100) as f64)),
             None,
         );
     }
@@ -170,4 +170,3 @@ fn package_diff_streaming_finishes_on_error() {
     let result = pkg_a.diff_streaming(&pkg_b, &DiffConfig::default(), &mut sink);
     assert!(result.is_err(), "diff_streaming should return error");
 }
-

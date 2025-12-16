@@ -1,6 +1,6 @@
 use excel_diff::{
     DataMashupError, Permissions, RawDataMashup, build_data_mashup, build_queries,
-    datamashup::parse_metadata, open_data_mashup, parse_package_parts, parse_section_members,
+    open_data_mashup, parse_metadata, parse_package_parts, parse_section_members,
 };
 
 mod common;

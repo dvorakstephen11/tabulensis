@@ -1,5 +1,4 @@
-use excel_diff::grid_view::FrequencyClass;
-use excel_diff::{ColHash, ColMeta, HashStats, RowHash, RowMeta, RowSignature};
+use excel_diff::{ColHash, ColMeta, FrequencyClass, HashStats, RowHash, RowMeta, RowSignature};
 
 fn row_meta(row_idx: u32, hash: RowHash) -> RowMeta {
     RowMeta {
