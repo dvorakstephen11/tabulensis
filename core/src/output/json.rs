@@ -2,7 +2,9 @@
 use crate::config::DiffConfig;
 use crate::diff::DiffReport;
 #[cfg(feature = "excel-open-xml")]
-use crate::excel_open_xml::{PackageError, open_workbook};
+use crate::datamashup::build_data_mashup;
+#[cfg(feature = "excel-open-xml")]
+use crate::excel_open_xml::{PackageError, open_data_mashup, open_workbook};
 use crate::session::DiffSession;
 #[cfg(feature = "excel-open-xml")]
 use crate::sink::VecSink;
@@ -43,9 +45,20 @@ pub fn diff_workbooks(
     path_b: impl AsRef<Path>,
     config: &DiffConfig,
 ) -> Result<DiffReport, PackageError> {
+    let path_a = path_a.as_ref();
+    let path_b = path_b.as_ref();
+
     let mut session = DiffSession::new();
+
     let wb_a = open_workbook(path_a, session.strings_mut())?;
     let wb_b = open_workbook(path_b, session.strings_mut())?;
+
+    let dm_a = open_data_mashup(path_a)?
+        .map(|raw| build_data_mashup(&raw))
+        .transpose()?;
+    let dm_b = open_data_mashup(path_b)?
+        .map(|raw| build_data_mashup(&raw))
+        .transpose()?;
 
     let mut sink = VecSink::new();
     let summary = crate::engine::try_diff_workbooks_streaming(
@@ -56,7 +69,12 @@ pub fn diff_workbooks(
         &mut sink,
     )
     .map_err(|e| PackageError::SerializationError(e.to_string()))?;
-    Ok(build_report_from_sink(sink, summary, session))
+
+    let m_ops = crate::m_diff::diff_m_ops_for_packages(&dm_a, &dm_b, session.strings_mut(), config);
+
+    let mut report = build_report_from_sink(sink, summary, session);
+    report.ops.extend(m_ops);
+    Ok(report)
 }
 
 #[cfg(feature = "excel-open-xml")]

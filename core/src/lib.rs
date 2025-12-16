@@ -42,7 +42,6 @@ pub mod m_ast;
 pub mod m_diff;
 pub mod m_section;
 pub mod output;
-#[cfg(feature = "excel-open-xml")]
 pub mod package;
 #[cfg(feature = "perf-metrics")]
 pub mod perf;
@@ -121,14 +120,11 @@ pub use grid_view::{ColHash, ColMeta, GridView, HashStats, RowHash, RowMeta, Row
 pub use m_ast::{
     MModuleAst, MParseError, ast_semantically_equal, canonicalize_m_ast, parse_m_expression,
 };
-#[allow(deprecated)]
-pub use m_diff::{MQueryDiff, QueryChangeKind as LegacyQueryChangeKind, diff_m_queries};
 pub use m_section::{SectionMember, SectionParseError, parse_section_members};
 #[cfg(feature = "excel-open-xml")]
 pub use output::json::diff_workbooks_to_json;
 pub use output::json::{CellDiff, serialize_cell_diffs, serialize_diff_report};
 pub use output::json_lines::JsonLinesSink;
-#[cfg(feature = "excel-open-xml")]
 pub use package::WorkbookPackage;
 pub use session::DiffSession;
 pub use sink::{CallbackSink, DiffSink, VecSink};
