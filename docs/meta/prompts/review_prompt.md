@@ -10816,25 +10816,27 @@ impl WorkbookPackage {
                 }
             };
 
-            let m_ops = crate::m_diff::diff_m_ops_for_packages(
-                &self.data_mashup,
-                &other.data_mashup,
-                &mut session.strings,
-                config,
-            );
+        let m_ops = crate::m_diff::diff_m_ops_for_packages(
+            &self.data_mashup,
+            &other.data_mashup,
+            &mut session.strings,
+            config,
+        );
 
-            for op in m_ops {
-                sink.emit(op)?;
-                summary.op_count = summary.op_count.saturating_add(1);
+        for op in m_ops {
+            if let Err(e) = sink.emit(op) {
+                let _ = sink.finish();
+                return Err(e);
             }
+            summary.op_count = summary.op_count.saturating_add(1);
+        }
 
-            sink.finish()?;
+        sink.finish()?;
 
             Ok(summary)
         })
     }
 }
-
 
 ```
 
@@ -22026,6 +22028,57 @@ fn package_diff_streaming_finishes_on_error() {
 
     let result = pkg_a.diff_streaming(&pkg_b, &DiffConfig::default(), &mut sink);
     assert!(result.is_err(), "diff_streaming should return error");
+    assert!(sink.finish_called, "sink.finish() should be called on error");
+}
+
+#[test]
+fn package_diff_streaming_finishes_on_m_emit_error() {
+    struct FailOnMOpSink {
+        finish_called: bool,
+        finish_calls: usize,
+    }
+
+    impl DiffSink for FailOnMOpSink {
+        fn emit(&mut self, op: DiffOp) -> Result<(), DiffError> {
+            if op.is_m_op() {
+                return Err(DiffError::SinkError {
+                    message: "fail on m op".to_string(),
+                });
+            }
+            Ok(())
+        }
+
+        fn finish(&mut self) -> Result<(), DiffError> {
+            self.finish_calls += 1;
+            self.finish_called = true;
+            Ok(())
+        }
+    }
+
+    let wb = make_workbook("Sheet1");
+
+    let dm_a = make_dm("section Section1;\nshared Foo = 1;");
+    let dm_b = make_dm("section Section1;\nshared Bar = 1;");
+
+    let pkg_a = WorkbookPackage {
+        workbook: wb.clone(),
+        data_mashup: Some(dm_a),
+    };
+    let pkg_b = WorkbookPackage {
+        workbook: wb,
+        data_mashup: Some(dm_b),
+    };
+
+    let mut sink = FailOnMOpSink {
+        finish_called: false,
+        finish_calls: 0,
+    };
+
+    let result = pkg_a.diff_streaming(&pkg_b, &DiffConfig::default(), &mut sink);
+
+    assert!(result.is_err(), "expected sink error during M op emission");
+    assert!(sink.finish_called, "sink.finish() should be called on M emit error");
+    assert_eq!(sink.finish_calls, 1, "finish should be called exactly once");
 }
 
 ```
