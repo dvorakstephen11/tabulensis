@@ -1206,7 +1206,7 @@ fn pg4_diff_report_json_shape_with_metrics() {
     use excel_diff::perf::DiffMetrics;
 
     let ops = vec![DiffOp::SheetAdded {
-        sheet: "NewSheet".to_string(),
+        sheet: sid("NewSheet"),
     }];
     let mut report = DiffReport::new(ops);
     let mut metrics = DiffMetrics::default();

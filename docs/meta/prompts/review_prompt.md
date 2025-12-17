@@ -106,6 +106,7 @@
       data_mashup_tests.rs
       engine_tests.rs
       excel_open_xml_tests.rs
+      f7_formula_canonicalization_tests.rs
       f7_formula_diff_integration_tests.rs
       f7_formula_parser_tests.rs
       f7_formula_shift_tests.rs
@@ -9135,6 +9136,12 @@ impl<'a> Parser<'a> {
             }
             _ => {
                 let start = self.pos;
+                let Some(b) = self.peek() else {
+                    return Ok(None);
+                };
+                if !is_ident_start(b) {
+                    return Ok(None);
+                }
                 let ident = self.parse_identifier()?;
                 self.skip_ws();
                 if self.peek() == Some(b'!') {
@@ -9187,14 +9194,30 @@ impl<'a> Parser<'a> {
         }
 
         let ident = self.parse_identifier()?;
-        if ident.eq_ignore_ascii_case("TRUE") {
+        self.skip_ws();
+
+        if sheet.is_none()
+            && ident.eq_ignore_ascii_case("TRUE")
+            && !matches!(self.peek(), Some(b'(' | b'['))
+        {
             return Ok(FormulaExpr::Boolean(true));
         }
-        if ident.eq_ignore_ascii_case("FALSE") {
+        if sheet.is_none()
+            && ident.eq_ignore_ascii_case("FALSE")
+            && !matches!(self.peek(), Some(b'(' | b'['))
+        {
             return Ok(FormulaExpr::Boolean(false));
         }
 
-        self.skip_ws();
+        if self.peek() == Some(b'[') {
+            let structured = self.parse_bracket_blob()?;
+            let full = match sheet {
+                Some(s) => format!("{}!{}{}", s, ident, structured),
+                None => format!("{}{}", ident, structured),
+            };
+            return Ok(FormulaExpr::NamedRef(full));
+        }
+
         if self.peek() == Some(b'(') {
             self.bump();
             let mut args = Vec::new();
@@ -9208,7 +9231,7 @@ impl<'a> Parser<'a> {
                 args.push(arg);
                 self.skip_ws();
                 match self.peek() {
-                    Some(b',') | Some(b';') => {
+                    Some(b',' | b';') => {
                         self.bump();
                     }
                     Some(b')') => {
@@ -9218,13 +9241,21 @@ impl<'a> Parser<'a> {
                     _ => return Err(self.err("expected ',' or ')'")),
                 }
             }
-            Ok(FormulaExpr::FunctionCall {
-                name: ident,
-                args,
-            })
-        } else {
-            Ok(FormulaExpr::NamedRef(ident))
+
+            let name = match sheet {
+                Some(s) => format!("{}!{}", s, ident),
+                None => ident,
+            };
+
+            return Ok(FormulaExpr::FunctionCall { name, args });
         }
+
+        let name = match sheet {
+            Some(s) => format!("{}!{}", s, ident),
+            None => ident,
+        };
+
+        Ok(FormulaExpr::NamedRef(name))
     }
 
     fn parse_array(&mut self) -> Result<FormulaExpr, FormulaParseError> {
@@ -9264,32 +9295,51 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_string(&mut self) -> Result<FormulaExpr, FormulaParseError> {
-        self.bump();
-        let start = self.pos;
-        while let Some(b) = self.peek() {
-            self.pos += 1;
-            if b == b'"' {
-                let s = std::str::from_utf8(&self.s[start..self.pos - 1])
-                    .map_err(|_| self.err("invalid utf-8 in string"))?
-                    .to_string();
-                return Ok(FormulaExpr::Text(s));
+        if self.bump() != Some(b'"') {
+            return Err(self.err("expected '\"'"));
+        }
+
+        let mut out = Vec::new();
+        loop {
+            match self.bump() {
+                Some(b'"') => {
+                    if self.peek() == Some(b'"') {
+                        self.bump();
+                        out.push(b'"');
+                        continue;
+                    }
+                    break;
+                }
+                Some(b) => out.push(b),
+                None => return Err(self.err("unterminated string literal")),
             }
         }
-        Err(self.err("unterminated string"))
+
+        let s = String::from_utf8(out).map_err(|_| self.err("invalid utf-8 in string"))?;
+        Ok(FormulaExpr::Text(s))
     }
 
     fn parse_error(&mut self) -> Result<FormulaExpr, FormulaParseError> {
         let start = self.pos;
+
+        if self.bump() != Some(b'#') {
+            return Err(self.err("expected '#'"));
+        }
+
         while let Some(b) = self.peek() {
-            self.pos += 1;
-            if b.is_ascii_alphabetic() || b == b'/' || b == b'0' || b == b'!' {
-                continue;
+            if b.is_ascii_alphanumeric() || matches!(b, b'/' | b'!' | b'?' | b'_') {
+                self.pos += 1;
             } else {
                 break;
             }
         }
-        let txt = std::str::from_utf8(&self.s[start..self.pos]).unwrap();
-        let err = match txt.to_ascii_uppercase().as_str() {
+
+        let txt = std::str::from_utf8(&self.s[start..self.pos])
+            .map_err(|_| self.err("invalid utf-8 in error literal"))?
+            .to_string();
+
+        let upper = txt.to_ascii_uppercase();
+        let err = match upper.as_str() {
             "#NULL!" => ExcelError::Null,
             "#DIV/0!" => ExcelError::Div0,
             "#VALUE!" => ExcelError::Value,
@@ -9300,9 +9350,42 @@ impl<'a> Parser<'a> {
             "#SPILL!" => ExcelError::Spill,
             "#CALC!" => ExcelError::Calc,
             "#GETTING_DATA" => ExcelError::GettingData,
-            other => ExcelError::Unknown(other.to_string()),
+            _ => ExcelError::Unknown(txt),
         };
         Ok(FormulaExpr::Error(err))
+    }
+
+    fn parse_bracket_blob(&mut self) -> Result<String, FormulaParseError> {
+        self.skip_ws();
+        if self.peek() != Some(b'[') {
+            return Err(self.err("expected '['"));
+        }
+
+        let start = self.pos;
+        let mut depth: i32 = 0;
+
+        while let Some(b) = self.bump() {
+            match b {
+                b'[' => depth += 1,
+                b']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if depth != 0 {
+            return Err(self.err("unterminated structured reference"));
+        }
+
+        let txt = std::str::from_utf8(&self.s[start..self.pos])
+            .map_err(|_| self.err("invalid utf-8 in structured reference"))?
+            .to_string();
+
+        Ok(txt)
     }
 
     fn parse_number(&mut self) -> Result<FormulaExpr, FormulaParseError> {
@@ -17763,6 +17846,59 @@ fn missing_worksheet_xml_returns_worksheetxmlmissing() {
 
     let _ = fs::remove_file(&path);
 }
+
+```
+
+---
+
+### File: `core\tests\f7_formula_canonicalization_tests.rs`
+
+```rust
+use excel_diff::parse_formula;
+
+#[test]
+fn canonicalizes_commutative_binary_ops() {
+    let a = parse_formula("A1+B1").unwrap().canonicalize();
+    let b = parse_formula("B1+A1").unwrap().canonicalize();
+    assert_eq!(a, b);
+
+    let a = parse_formula("A1*B1").unwrap().canonicalize();
+    let b = parse_formula("B1*A1").unwrap().canonicalize();
+    assert_eq!(a, b);
+}
+
+#[test]
+fn canonicalizes_commutative_functions_by_sorting_args() {
+    let a = parse_formula("SUM(A1,B1)").unwrap().canonicalize();
+    let b = parse_formula("SUM(B1,A1)").unwrap().canonicalize();
+    assert_eq!(a, b);
+
+    let a = parse_formula("AND(TRUE,FALSE)").unwrap().canonicalize();
+    let b = parse_formula("AND(FALSE,TRUE)").unwrap().canonicalize();
+    assert_eq!(a, b);
+}
+
+#[test]
+fn does_not_canonicalize_non_commutative_ops() {
+    let a = parse_formula("A1-B1").unwrap().canonicalize();
+    let b = parse_formula("B1-A1").unwrap().canonicalize();
+    assert_ne!(a, b);
+}
+
+#[test]
+fn canonicalizes_range_endpoints() {
+    let a = parse_formula("B2:A1").unwrap().canonicalize();
+    let b = parse_formula("A1:B2").unwrap().canonicalize();
+    assert_eq!(a, b);
+}
+
+#[test]
+fn structured_refs_parse_and_canonicalize() {
+    let a = parse_formula("Table1[Column1]").unwrap().canonicalize();
+    let b = parse_formula("TABLE1[COLUMN1]").unwrap().canonicalize();
+    assert_eq!(a, b);
+}
+
 
 ```
 
