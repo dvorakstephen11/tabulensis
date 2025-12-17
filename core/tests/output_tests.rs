@@ -2,9 +2,9 @@ mod common;
 
 use common::{fixture_path, open_fixture_workbook};
 use excel_diff::{
-    CellAddress, CellSnapshot, CellValue, ContainerError, DiffConfig, DiffOp, DiffReport,
-    PackageError, WorkbookPackage, CellDiff, diff_report_to_cell_diffs,
-    diff_workbooks_to_json, serialize_cell_diffs, serialize_diff_report,
+    CellAddress, CellDiff, CellSnapshot, CellValue, ContainerError, DiffConfig, DiffOp, DiffReport,
+    PackageError, WorkbookPackage, diff_report_to_cell_diffs, diff_workbooks_to_json,
+    serialize_cell_diffs, serialize_diff_report,
 };
 use serde_json::Value;
 #[cfg(feature = "perf-metrics")]
@@ -64,31 +64,30 @@ fn diff_report_to_cell_diffs_filters_non_cell_ops() {
     let addr1 = CellAddress::from_indices(0, 0);
     let addr2 = CellAddress::from_indices(1, 1);
 
-    let report = attach_strings(DiffReport::new(vec![
-        DiffOp::SheetAdded {
-            sheet: sheet_added,
-        },
-        DiffOp::cell_edited(
-            sheet1,
-            addr1,
-            make_cell_snapshot(addr1, Some(CellValue::Number(1.0))),
-            make_cell_snapshot(addr1, Some(CellValue::Number(2.0))),
-        ),
-        DiffOp::RowAdded {
-            sheet: sheet1,
-            row_idx: 5,
-            row_signature: None,
-        },
-        DiffOp::cell_edited(
-            sheet2,
-            addr2,
-            make_cell_snapshot(addr2, Some(CellValue::Text(old_text))),
-            make_cell_snapshot(addr2, Some(CellValue::Text(new_text))),
-        ),
-        DiffOp::SheetRemoved {
-            sheet: old_sheet,
-        },
-    ]), pool);
+    let report = attach_strings(
+        DiffReport::new(vec![
+            DiffOp::SheetAdded { sheet: sheet_added },
+            DiffOp::cell_edited(
+                sheet1,
+                addr1,
+                make_cell_snapshot(addr1, Some(CellValue::Number(1.0))),
+                make_cell_snapshot(addr1, Some(CellValue::Number(2.0))),
+            ),
+            DiffOp::RowAdded {
+                sheet: sheet1,
+                row_idx: 5,
+                row_signature: None,
+            },
+            DiffOp::cell_edited(
+                sheet2,
+                addr2,
+                make_cell_snapshot(addr2, Some(CellValue::Text(old_text))),
+                make_cell_snapshot(addr2, Some(CellValue::Text(new_text))),
+            ),
+            DiffOp::SheetRemoved { sheet: old_sheet },
+        ]),
+        pool,
+    );
 
     let cell_diffs = diff_report_to_cell_diffs(&report);
     assert_eq!(
@@ -112,29 +111,32 @@ fn diff_report_to_cell_diffs_ignores_block_moved_rect() {
     let sheet1 = sid_local(&mut pool, "Sheet1");
     let addr = CellAddress::from_indices(2, 2);
 
-    let report = attach_strings(DiffReport::new(vec![
-        DiffOp::block_moved_rect(sheet1, 2, 3, 1, 3, 9, 6, Some(0xCAFEBABE)),
-        DiffOp::cell_edited(
-            sheet1,
-            addr,
-            make_cell_snapshot(addr, Some(CellValue::Number(10.0))),
-            make_cell_snapshot(addr, Some(CellValue::Number(20.0))),
-        ),
-        DiffOp::BlockMovedRows {
-            sheet: sheet1,
-            src_start_row: 0,
-            row_count: 2,
-            dst_start_row: 5,
-            block_hash: None,
-        },
-        DiffOp::BlockMovedColumns {
-            sheet: sheet1,
-            src_start_col: 0,
-            col_count: 2,
-            dst_start_col: 5,
-            block_hash: None,
-        },
-    ]), pool);
+    let report = attach_strings(
+        DiffReport::new(vec![
+            DiffOp::block_moved_rect(sheet1, 2, 3, 1, 3, 9, 6, Some(0xCAFEBABE)),
+            DiffOp::cell_edited(
+                sheet1,
+                addr,
+                make_cell_snapshot(addr, Some(CellValue::Number(10.0))),
+                make_cell_snapshot(addr, Some(CellValue::Number(20.0))),
+            ),
+            DiffOp::BlockMovedRows {
+                sheet: sheet1,
+                src_start_row: 0,
+                row_count: 2,
+                dst_start_row: 5,
+                block_hash: None,
+            },
+            DiffOp::BlockMovedColumns {
+                sheet: sheet1,
+                src_start_col: 0,
+                col_count: 2,
+                dst_start_col: 5,
+                block_hash: None,
+            },
+        ]),
+        pool,
+    );
 
     let cell_diffs = diff_report_to_cell_diffs(&report);
     assert_eq!(
@@ -155,20 +157,23 @@ fn diff_report_to_cell_diffs_maps_values_correctly() {
     let addr_num = CellAddress::from_indices(2, 2); // C3
     let addr_bool = CellAddress::from_indices(3, 3); // D4
 
-    let report = attach_strings(DiffReport::new(vec![
-        DiffOp::cell_edited(
-            sheet_id,
-            addr_num,
-            make_cell_snapshot(addr_num, Some(CellValue::Number(42.5))),
-            make_cell_snapshot(addr_num, Some(CellValue::Number(43.5))),
-        ),
-        DiffOp::cell_edited(
-            sheet_id,
-            addr_bool,
-            make_cell_snapshot(addr_bool, Some(CellValue::Bool(true))),
-            make_cell_snapshot(addr_bool, Some(CellValue::Bool(false))),
-        ),
-    ]), pool);
+    let report = attach_strings(
+        DiffReport::new(vec![
+            DiffOp::cell_edited(
+                sheet_id,
+                addr_num,
+                make_cell_snapshot(addr_num, Some(CellValue::Number(42.5))),
+                make_cell_snapshot(addr_num, Some(CellValue::Number(43.5))),
+            ),
+            DiffOp::cell_edited(
+                sheet_id,
+                addr_bool,
+                make_cell_snapshot(addr_bool, Some(CellValue::Bool(true))),
+                make_cell_snapshot(addr_bool, Some(CellValue::Bool(false))),
+            ),
+        ]),
+        pool,
+    );
 
     let cell_diffs = diff_report_to_cell_diffs(&report);
     assert_eq!(cell_diffs.len(), 2);
@@ -191,20 +196,23 @@ fn diff_report_to_cell_diffs_filters_no_op_cell_edits() {
     let addr_a1 = CellAddress::from_indices(0, 0);
     let addr_a2 = CellAddress::from_indices(1, 0);
 
-    let report = attach_strings(DiffReport::new(vec![
-        DiffOp::cell_edited(
-            sheet,
-            addr_a1,
-            make_cell_snapshot(addr_a1, Some(CellValue::Number(1.0))),
-            make_cell_snapshot(addr_a1, Some(CellValue::Number(1.0))),
-        ),
-        DiffOp::cell_edited(
-            sheet,
-            addr_a2,
-            make_cell_snapshot(addr_a2, Some(CellValue::Number(1.0))),
-            make_cell_snapshot(addr_a2, Some(CellValue::Number(2.0))),
-        ),
-    ]), pool);
+    let report = attach_strings(
+        DiffReport::new(vec![
+            DiffOp::cell_edited(
+                sheet,
+                addr_a1,
+                make_cell_snapshot(addr_a1, Some(CellValue::Number(1.0))),
+                make_cell_snapshot(addr_a1, Some(CellValue::Number(1.0))),
+            ),
+            DiffOp::cell_edited(
+                sheet,
+                addr_a2,
+                make_cell_snapshot(addr_a2, Some(CellValue::Number(1.0))),
+                make_cell_snapshot(addr_a2, Some(CellValue::Number(2.0))),
+            ),
+        ]),
+        pool,
+    );
 
     let diffs = diff_report_to_cell_diffs(&report);
 
@@ -333,7 +341,8 @@ fn json_diff_case_only_sheet_name_no_changes() {
     let old = open_fixture_workbook("sheet_case_only_rename_a.xlsx");
     let new = open_fixture_workbook("sheet_case_only_rename_b.xlsx");
 
-    let report = WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
+    let report =
+        WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
     assert!(
         report.ops.is_empty(),
         "case-only sheet rename with identical content should produce no diff ops"
@@ -345,7 +354,8 @@ fn json_diff_case_only_sheet_name_cell_edit() {
     let old = open_fixture_workbook("sheet_case_only_rename_edit_a.xlsx");
     let new = open_fixture_workbook("sheet_case_only_rename_edit_b.xlsx");
 
-    let report = WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
+    let report =
+        WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
     assert_eq!(report.ops.len(), 1, "expected a single cell edit");
     match &report.ops[0] {
         DiffOp::CellEdited {

@@ -307,7 +307,8 @@ fn duplicate_sheet_identity_last_writer_wins_release() {
 
     match &report.ops[0] {
         DiffOp::SheetRemoved { sheet } => assert_eq!(
-            *sheet, sid("sheet1"),
+            *sheet,
+            sid("sheet1"),
             "duplicate identity should prefer the last sheet in release builds"
         ),
         other => panic!("expected SheetRemoved, got {other:?}"),
@@ -401,8 +402,7 @@ fn duplicate_sheet_identity_panics_in_debug() {
     };
     let new = Workbook { sheets: Vec::new() };
 
-    let result =
-        std::panic::catch_unwind(|| diff_workbooks(&old, &new, &DiffConfig::default()));
+    let result = std::panic::catch_unwind(|| diff_workbooks(&old, &new, &DiffConfig::default()));
     if cfg!(debug_assertions) {
         assert!(
             result.is_err(),

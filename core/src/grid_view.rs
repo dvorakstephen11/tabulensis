@@ -49,7 +49,7 @@ impl<'a> GridView<'a> {
         let mut row_counts = vec![0u32; nrows];
         let mut row_first_non_blank: Vec<Option<u32>> = vec![None; nrows];
 
-            let mut col_counts = vec![0u32; ncols];
+        let mut col_counts = vec![0u32; ncols];
         let mut col_first_non_blank: Vec<Option<u32>> = vec![None; ncols];
 
         for ((row, col), cell) in &grid.cells {

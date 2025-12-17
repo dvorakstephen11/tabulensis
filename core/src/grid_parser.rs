@@ -488,7 +488,13 @@ mod tests {
         let value = convert_value(Some("#DIV/0!"), Some("e"), &[], &mut pool)
             .expect("error cell should convert");
         let err_id = value
-            .and_then(|v| if let CellValue::Error(id) = v { Some(id) } else { None })
+            .and_then(|v| {
+                if let CellValue::Error(id) = v {
+                    Some(id)
+                } else {
+                    None
+                }
+            })
             .expect("error id");
         assert_eq!(pool.resolve(err_id), "#DIV/0!");
     }

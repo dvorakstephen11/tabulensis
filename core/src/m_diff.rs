@@ -10,7 +10,11 @@ use crate::string_pool::{StringId, StringPool};
 
 #[deprecated(note = "use WorkbookPackage::diff instead")]
 #[allow(dead_code)]
-pub fn diff_m_queries(old_queries: &[Query], new_queries: &[Query], config: &DiffConfig) -> Vec<DiffOp> {
+pub fn diff_m_queries(
+    old_queries: &[Query],
+    new_queries: &[Query],
+    config: &DiffConfig,
+) -> Vec<DiffOp> {
     crate::with_default_session(|session| {
         diff_queries_to_ops(old_queries, new_queries, &mut session.strings, config)
     })
@@ -47,9 +51,10 @@ fn definition_change(
     }
 
     if enable_semantic {
-        if let (Some((_, old_h)), Some((_, new_h))) =
-            (canonical_ast_and_hash(old_expr), canonical_ast_and_hash(new_expr))
-        {
+        if let (Some((_, old_h)), Some((_, new_h))) = (
+            canonical_ast_and_hash(old_expr),
+            canonical_ast_and_hash(new_expr),
+        ) {
             let kind = if old_h == new_h {
                 DiffQueryChangeKind::FormattingOnly
             } else {

@@ -8,7 +8,8 @@ fn pg6_1_sheet_added_no_grid_ops_on_main() {
     let old = open_fixture_workbook("pg6_sheet_added_a.xlsx");
     let new = open_fixture_workbook("pg6_sheet_added_b.xlsx");
 
-    let report = WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
+    let report =
+        WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
 
     let mut sheet_added = 0;
     for op in &report.ops {
@@ -45,7 +46,8 @@ fn pg6_2_sheet_removed_no_grid_ops_on_main() {
     let old = open_fixture_workbook("pg6_sheet_removed_a.xlsx");
     let new = open_fixture_workbook("pg6_sheet_removed_b.xlsx");
 
-    let report = WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
+    let report =
+        WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
 
     let mut sheet_removed = 0;
     for op in &report.ops {
@@ -82,7 +84,8 @@ fn pg6_3_rename_as_remove_plus_add_no_grid_ops() {
     let old = open_fixture_workbook("pg6_sheet_renamed_a.xlsx");
     let new = open_fixture_workbook("pg6_sheet_renamed_b.xlsx");
 
-    let report = WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
+    let report =
+        WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
 
     let mut added = 0;
     let mut removed = 0;
@@ -120,7 +123,8 @@ fn pg6_4_sheet_and_grid_change_composed_cleanly() {
     let old = open_fixture_workbook("pg6_sheet_and_grid_change_a.xlsx");
     let new = open_fixture_workbook("pg6_sheet_and_grid_change_b.xlsx");
 
-    let report = WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
+    let report =
+        WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
 
     let mut scratch_added = 0;
     let mut main_cell_edits = 0;

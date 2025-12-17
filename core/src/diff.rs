@@ -157,7 +157,6 @@ pub enum DiffOp {
         old: Option<StringId>,
         new: Option<StringId>,
     },
-
     // Future: DAX operations
     // MeasureAdded { name: StringId }
     // MeasureRemoved { name: StringId }

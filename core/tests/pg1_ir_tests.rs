@@ -9,18 +9,24 @@ fn pg1_basic_two_sheets_structure() {
     assert_eq!(workbook.sheets.len(), 2);
     assert_eq!(workbook.sheets[0].name, sid("Sheet1"));
     assert_eq!(workbook.sheets[1].name, sid("Sheet2"));
-    assert!(matches!(workbook.sheets[0].kind, excel_diff::SheetKind::Worksheet));
-    assert!(matches!(workbook.sheets[1].kind, excel_diff::SheetKind::Worksheet));
+    assert!(matches!(
+        workbook.sheets[0].kind,
+        excel_diff::SheetKind::Worksheet
+    ));
+    assert!(matches!(
+        workbook.sheets[1].kind,
+        excel_diff::SheetKind::Worksheet
+    ));
 
     let sheet1 = &workbook.sheets[0];
     assert_eq!(sheet1.grid.nrows, 3);
     assert_eq!(sheet1.grid.ncols, 3);
     with_default_session(|session| {
         assert_eq!(
-            sheet1
-                .grid
-                .get(0, 0)
-                .and_then(|cell| cell.value.as_ref().and_then(|v| v.as_text(session.strings()))),
+            sheet1.grid.get(0, 0).and_then(|cell| cell
+                .value
+                .as_ref()
+                .and_then(|v| v.as_text(session.strings()))),
             Some("R1C1")
         );
     });

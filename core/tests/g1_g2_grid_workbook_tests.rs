@@ -24,7 +24,11 @@ fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffRe
 
 #[test]
 fn g1_equal_sheet_produces_empty_diff() {
-    let report = diff_fixture_pkgs("equal_sheet_a.xlsx", "equal_sheet_b.xlsx", &DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "equal_sheet_a.xlsx",
+        "equal_sheet_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     assert!(
         report.ops.is_empty(),

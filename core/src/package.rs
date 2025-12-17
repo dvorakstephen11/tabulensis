@@ -90,22 +90,22 @@ impl WorkbookPackage {
                 }
             };
 
-        let m_ops = crate::m_diff::diff_m_ops_for_packages(
-            &self.data_mashup,
-            &other.data_mashup,
-            &mut session.strings,
-            config,
-        );
+            let m_ops = crate::m_diff::diff_m_ops_for_packages(
+                &self.data_mashup,
+                &other.data_mashup,
+                &mut session.strings,
+                config,
+            );
 
-        for op in m_ops {
-            if let Err(e) = sink.emit(op) {
-                let _ = sink.finish();
-                return Err(e);
+            for op in m_ops {
+                if let Err(e) = sink.emit(op) {
+                    let _ = sink.finish();
+                    return Err(e);
+                }
+                summary.op_count = summary.op_count.saturating_add(1);
             }
-            summary.op_count = summary.op_count.saturating_add(1);
-        }
 
-        sink.finish()?;
+            sink.finish()?;
 
             Ok(summary)
         })

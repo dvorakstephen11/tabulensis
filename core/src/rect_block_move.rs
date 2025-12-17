@@ -401,12 +401,7 @@ mod tests {
         let mut grid = Grid::new(nrows, ncols);
         for (r, row_vals) in values.iter().enumerate() {
             for (c, v) in row_vals.iter().enumerate() {
-                grid.insert_cell(
-                    r as u32,
-                    c as u32,
-                    Some(CellValue::Number(*v as f64)),
-                    None,
-                );
+                grid.insert_cell(r as u32, c as u32, Some(CellValue::Number(*v as f64)), None);
             }
         }
 

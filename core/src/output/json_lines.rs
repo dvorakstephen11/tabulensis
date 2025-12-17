@@ -37,11 +37,12 @@ impl<W: Write> JsonLinesSink<W> {
             strings: pool.strings(),
         };
 
-        serde_json::to_writer(&mut self.w, &header)
-            .map_err(|e| DiffError::SinkError { message: e.to_string() })?;
-        self.w
-            .write_all(b"\n")
-            .map_err(|e| DiffError::SinkError { message: e.to_string() })?;
+        serde_json::to_writer(&mut self.w, &header).map_err(|e| DiffError::SinkError {
+            message: e.to_string(),
+        })?;
+        self.w.write_all(b"\n").map_err(|e| DiffError::SinkError {
+            message: e.to_string(),
+        })?;
 
         self.wrote_header = true;
         Ok(())
@@ -50,17 +51,18 @@ impl<W: Write> JsonLinesSink<W> {
 
 impl<W: Write> DiffSink for JsonLinesSink<W> {
     fn emit(&mut self, op: DiffOp) -> Result<(), DiffError> {
-        serde_json::to_writer(&mut self.w, &op)
-            .map_err(|e| DiffError::SinkError { message: e.to_string() })?;
-        self.w
-            .write_all(b"\n")
-            .map_err(|e| DiffError::SinkError { message: e.to_string() })?;
+        serde_json::to_writer(&mut self.w, &op).map_err(|e| DiffError::SinkError {
+            message: e.to_string(),
+        })?;
+        self.w.write_all(b"\n").map_err(|e| DiffError::SinkError {
+            message: e.to_string(),
+        })?;
         Ok(())
     }
 
     fn finish(&mut self) -> Result<(), DiffError> {
-        self.w
-            .flush()
-            .map_err(|e| DiffError::SinkError { message: e.to_string() })
+        self.w.flush().map_err(|e| DiffError::SinkError {
+            message: e.to_string(),
+        })
     }
 }

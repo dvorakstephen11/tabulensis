@@ -54,7 +54,9 @@ impl OpcContainer {
     }
 
     #[cfg(feature = "std-fs")]
-    pub fn open_from_path(path: impl AsRef<std::path::Path>) -> Result<OpcContainer, ContainerError> {
+    pub fn open_from_path(
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<OpcContainer, ContainerError> {
         let file = std::fs::File::open(path)?;
         Self::open_from_reader(file)
     }

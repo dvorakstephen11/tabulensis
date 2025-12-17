@@ -10,7 +10,11 @@ fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffRe
     WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
 }
 
-fn try_diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> Result<DiffReport, DiffError> {
+fn try_diff_workbooks(
+    old: &Workbook,
+    new: &Workbook,
+    config: &DiffConfig,
+) -> Result<DiffReport, DiffError> {
     with_default_session(|session| {
         try_diff_workbooks_with_pool(old, new, &mut session.strings, config)
     })

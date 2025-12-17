@@ -39,7 +39,12 @@ fn grid_from_float_rows(rows: &[&[f64]]) -> Grid {
 
     for (r_idx, row_vals) in rows.iter().enumerate() {
         for (c_idx, value) in row_vals.iter().enumerate() {
-            grid.insert_cell(r_idx as u32, c_idx as u32, Some(CellValue::Number(*value)), None);
+            grid.insert_cell(
+                r_idx as u32,
+                c_idx as u32,
+                Some(CellValue::Number(*value)),
+                None,
+            );
         }
     }
 

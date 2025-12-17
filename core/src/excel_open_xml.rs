@@ -67,11 +67,12 @@ pub(crate) fn open_workbook_from_container(
     let mut sheet_ir = Vec::with_capacity(sheets.len());
     for (idx, sheet) in sheets.iter().enumerate() {
         let target = resolve_sheet_target(sheet, &relationships, idx);
-        let sheet_bytes = container
-            .read_file(&target)
-            .map_err(|_| PackageError::WorksheetXmlMissing {
-                sheet_name: sheet.name.clone(),
-            })?;
+        let sheet_bytes =
+            container
+                .read_file(&target)
+                .map_err(|_| PackageError::WorksheetXmlMissing {
+                    sheet_name: sheet.name.clone(),
+                })?;
         let grid = parse_sheet_xml(&sheet_bytes, &shared_strings, pool)?;
         sheet_ir.push(Sheet {
             name: pool.intern(&sheet.name),

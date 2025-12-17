@@ -3,8 +3,8 @@
 #![allow(dead_code)]
 
 use excel_diff::{
-    CellValue, DiffConfig, DiffReport, Grid, Sheet, SheetKind, StringId, Workbook,
-    WorkbookPackage, with_default_session,
+    CellValue, DiffConfig, DiffReport, Grid, Sheet, SheetKind, StringId, Workbook, WorkbookPackage,
+    with_default_session,
 };
 use std::fs::File;
 use std::path::PathBuf;

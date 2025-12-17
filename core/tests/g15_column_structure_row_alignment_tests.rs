@@ -25,7 +25,12 @@ fn grid_from_row_data(rows: &[Vec<i32>]) -> Grid {
 
     for (r, row_vals) in rows.iter().enumerate() {
         for (c, val) in row_vals.iter().enumerate() {
-            grid.insert_cell(r as u32, c as u32, Some(CellValue::Number(*val as f64)), None);
+            grid.insert_cell(
+                r as u32,
+                c as u32,
+                Some(CellValue::Number(*val as f64)),
+                None,
+            );
         }
     }
     grid

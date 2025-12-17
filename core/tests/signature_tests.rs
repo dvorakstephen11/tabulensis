@@ -65,12 +65,7 @@ fn different_rows_have_different_signatures() {
 #[test]
 fn compute_all_signatures_populates_fields() {
     let mut grid = Grid::new(5, 5);
-    grid.insert_test(make_cell(
-        2,
-        2,
-        Some(CellValue::Text(sid("center"))),
-        None,
-    ));
+    grid.insert_test(make_cell(2, 2, Some(CellValue::Text(sid("center"))), None));
     assert!(grid.row_signatures.is_none());
     assert!(grid.col_signatures.is_none());
     grid.compute_all_signatures();

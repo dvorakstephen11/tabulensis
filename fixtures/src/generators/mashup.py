@@ -850,11 +850,12 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
             )
 
         if self.mode == "m_formatting_only_a":
+            body = "let Source = 1, Foo = 2 in Source"
             return m_diff_scenario(
                 [
                     {
                         "name": "FormatTest",
-                        "body": 'let Source=Excel.CurrentWorkbook(){[Name="Table1"]}[Content] in Source',
+                        "body": body,
                         "load_to_sheet": True,
                         "load_to_model": False,
                     },
@@ -865,8 +866,9 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
             body = "\n".join(
                 [
                     "let",
-                    "    // Load the current workbook table",
-                    "    Source = Excel.CurrentWorkbook(){[Name = \"Table1\"]}[Content]",
+                    "    // Same semantics as m_formatting_only_a with different formatting",
+                    "    Source = 1,",
+                    "    Foo = 2",
                     "in",
                     "    Source",
                 ]
@@ -886,8 +888,8 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
             body = "\n".join(
                 [
                     "let",
-                    "    // Load a different table",
-                    "    Source = Excel.CurrentWorkbook(){[Name = \"Table2\"]}[Content]",
+                    "    Source = 1,",
+                    "    Foo = 3",
                     "in",
                     "    Source",
                 ]
@@ -897,6 +899,110 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
                     {
                         "name": "FormatTest",
                         "body": body,
+                        "load_to_sheet": True,
+                        "load_to_model": False,
+                    },
+                ]
+            )
+
+        if self.mode == "m_record_equiv_a":
+            return m_diff_scenario(
+                [
+                    {
+                        "name": "RecordRoot",
+                        "body": "[B=2, A=1]",
+                        "load_to_sheet": True,
+                        "load_to_model": False,
+                    },
+                ]
+            )
+
+        if self.mode == "m_record_equiv_b":
+            return m_diff_scenario(
+                [
+                    {
+                        "name": "RecordRoot",
+                        "body": "[A=1, B=2]",
+                        "load_to_sheet": True,
+                        "load_to_model": False,
+                    },
+                ]
+            )
+
+        if self.mode == "m_list_formatting_a":
+            return m_diff_scenario(
+                [
+                    {
+                        "name": "ListRoot",
+                        "body": "{1,2,3}",
+                        "load_to_sheet": True,
+                        "load_to_model": False,
+                    },
+                ]
+            )
+
+        if self.mode == "m_list_formatting_b":
+            return m_diff_scenario(
+                [
+                    {
+                        "name": "ListRoot",
+                        "body": "{ 1, /*c*/ 2, 3 }",
+                        "load_to_sheet": True,
+                        "load_to_model": False,
+                    },
+                ]
+            )
+
+        if self.mode == "m_call_formatting_a":
+            return m_diff_scenario(
+                [
+                    {
+                        "name": "CallRoot",
+                        "body": 'Table.FromRows({{1,2},{3,4}}, {"A","B"})',
+                        "load_to_sheet": True,
+                        "load_to_model": False,
+                    },
+                ]
+            )
+
+        if self.mode == "m_call_formatting_b":
+            body = "\n".join(
+                [
+                    "Table.FromRows(",
+                    "    {{1,2},{3,4}},",
+                    "    {\"A\", \"B\"}",
+                    ")",
+                ]
+            )
+            return m_diff_scenario(
+                [
+                    {
+                        "name": "CallRoot",
+                        "body": body,
+                        "load_to_sheet": True,
+                        "load_to_model": False,
+                    },
+                ]
+            )
+
+        if self.mode == "m_primitive_formatting_a":
+            return m_diff_scenario(
+                [
+                    {
+                        "name": "PrimRoot",
+                        "body": '"hello"',
+                        "load_to_sheet": True,
+                        "load_to_model": False,
+                    },
+                ]
+            )
+
+        if self.mode == "m_primitive_formatting_b":
+            return m_diff_scenario(
+                [
+                    {
+                        "name": "PrimRoot",
+                        "body": '"hello" // formatting-only whitespace and comment',
                         "load_to_sheet": True,
                         "load_to_model": False,
                     },
@@ -1164,4 +1270,3 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
         if isinstance(value, bool):
             return f"l{'1' if value else '0'}"
         return f"s{value}"
-

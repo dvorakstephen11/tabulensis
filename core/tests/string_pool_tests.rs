@@ -82,4 +82,3 @@ fn into_strings_returns_all_interned() {
     assert!(strings.contains(&"third".to_string()));
     assert_eq!(strings.len(), 4);
 }
-

@@ -30,14 +30,9 @@ fn vec_sink_and_callback_sink_produce_identical_ops() {
     let config = DiffConfig::default();
 
     let mut vec_sink = VecSink::new();
-    let summary_vec = try_diff_workbooks_streaming(
-        &wb_a,
-        &wb_b,
-        &mut session.strings,
-        &config,
-        &mut vec_sink,
-    )
-    .expect("VecSink diff should succeed");
+    let summary_vec =
+        try_diff_workbooks_streaming(&wb_a, &wb_b, &mut session.strings, &config, &mut vec_sink)
+            .expect("VecSink diff should succeed");
     let vec_ops = vec_sink.into_ops();
 
     let mut callback_ops: Vec<DiffOp> = Vec::new();
@@ -133,4 +128,3 @@ fn streaming_summary_matches_collected_ops() {
     );
     assert!(summary.complete, "diff should be complete");
 }
-

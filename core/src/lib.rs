@@ -102,11 +102,11 @@ pub fn open_workbook(path: impl AsRef<std::path::Path>) -> Result<Workbook, Exce
 pub use addressing::{AddressParseError, address_to_index, index_to_address};
 pub use config::{DiffConfig, LimitBehavior};
 pub use container::{ContainerError, OpcContainer};
+#[doc(hidden)]
+pub use datamashup::parse_metadata;
 pub use datamashup::{
     DataMashup, Metadata, Permissions, Query, QueryMetadata, build_data_mashup, build_queries,
 };
-#[doc(hidden)]
-pub use datamashup::parse_metadata;
 pub use datamashup_framing::{DataMashupError, RawDataMashup};
 pub use datamashup_package::{
     EmbeddedContent, PackageParts, PackageXml, SectionDocument, parse_package_parts,
@@ -116,11 +116,8 @@ pub use diff::{
 };
 #[doc(hidden)]
 pub use engine::{
-    diff_grids_database_mode,
-    diff_workbooks as diff_workbooks_with_pool,
-    diff_workbooks_streaming,
-    try_diff_workbooks as try_diff_workbooks_with_pool,
-    try_diff_workbooks_streaming,
+    diff_grids_database_mode, diff_workbooks as diff_workbooks_with_pool, diff_workbooks_streaming,
+    try_diff_workbooks as try_diff_workbooks_with_pool, try_diff_workbooks_streaming,
 };
 #[cfg(feature = "excel-open-xml")]
 #[allow(deprecated)]
@@ -129,16 +126,20 @@ pub use excel_open_xml::{
     ExcelOpenError, PackageError, open_data_mashup, open_workbook as open_workbook_with_pool,
 };
 pub use grid_parser::{GridParseError, SheetDescriptor};
-pub use grid_view::{ColHash, ColMeta, FrequencyClass, GridView, HashStats, RowHash, RowMeta, RowView};
-pub use m_ast::{MModuleAst, MParseError, ast_semantically_equal, canonicalize_m_ast, parse_m_expression};
+pub use grid_view::{
+    ColHash, ColMeta, FrequencyClass, GridView, HashStats, RowHash, RowMeta, RowView,
+};
 #[doc(hidden)]
 pub use m_ast::{MAstKind, MTokenDebug, tokenize_for_testing};
+pub use m_ast::{
+    MModuleAst, MParseError, ast_semantically_equal, canonicalize_m_ast, parse_m_expression,
+};
 pub use m_section::{SectionMember, SectionParseError, parse_section_members};
+#[doc(hidden)]
+pub use output::json::diff_report_to_cell_diffs;
 #[cfg(feature = "excel-open-xml")]
 #[doc(hidden)]
 pub use output::json::diff_workbooks_to_json;
-#[doc(hidden)]
-pub use output::json::diff_report_to_cell_diffs;
 pub use output::json::{CellDiff, serialize_cell_diffs, serialize_diff_report};
 pub use output::json_lines::JsonLinesSink;
 pub use package::WorkbookPackage;

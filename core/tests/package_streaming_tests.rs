@@ -123,8 +123,7 @@ fn package_diff_streaming_finishes_on_error() {
         }
     }
 
-    let sheet_id =
-        excel_diff::with_default_session(|session| session.strings.intern("Sheet1"));
+    let sheet_id = excel_diff::with_default_session(|session| session.strings.intern("Sheet1"));
 
     let mut grid_a = Grid::new(10, 1);
     let mut grid_b = Grid::new(10, 1);
@@ -169,7 +168,10 @@ fn package_diff_streaming_finishes_on_error() {
 
     let result = pkg_a.diff_streaming(&pkg_b, &DiffConfig::default(), &mut sink);
     assert!(result.is_err(), "diff_streaming should return error");
-    assert!(sink.finish_called, "sink.finish() should be called on error");
+    assert!(
+        sink.finish_called,
+        "sink.finish() should be called on error"
+    );
 }
 
 #[test]
@@ -218,6 +220,9 @@ fn package_diff_streaming_finishes_on_m_emit_error() {
     let result = pkg_a.diff_streaming(&pkg_b, &DiffConfig::default(), &mut sink);
 
     assert!(result.is_err(), "expected sink error during M op emission");
-    assert!(sink.finish_called, "sink.finish() should be called on M emit error");
+    assert!(
+        sink.finish_called,
+        "sink.finish() should be called on M emit error"
+    );
     assert_eq!(sink.finish_calls, 1, "finish should be called exactly once");
 }

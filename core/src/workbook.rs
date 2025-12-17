@@ -346,14 +346,21 @@ impl Grid {
         self.cells.get_mut(&(row, col))
     }
 
-    pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    pub fn insert_cell(
+        &mut self,
+        row: u32,
+        col: u32,
+        value: Option<CellValue>,
+        formula: Option<StringId>,
+    ) {
         debug_assert!(
             row < self.nrows && col < self.ncols,
             "cell coordinates must lie within the grid bounds"
         );
         self.row_signatures = None;
         self.col_signatures = None;
-        self.cells.insert((row, col), CellContent { value, formula });
+        self.cells
+            .insert((row, col), CellContent { value, formula });
     }
 
     pub fn cell_count(&self) -> usize {
@@ -582,8 +589,7 @@ mod tests {
     #[test]
     fn snapshot_from_number_cell() {
         let mut pool = StringPool::new();
-        let ((row, col), cell) =
-            make_cell(&mut pool, "A1", Some(CellValue::Number(42.0)), None);
+        let ((row, col), cell) = make_cell(&mut pool, "A1", Some(CellValue::Number(42.0)), None);
         let snap = CellSnapshot::from_cell(row, col, &cell);
         assert_eq!(snap.addr.to_string(), "A1");
         assert_eq!(snap.value, Some(CellValue::Number(42.0)));
@@ -594,12 +600,7 @@ mod tests {
     fn snapshot_from_text_cell() {
         let mut pool = StringPool::new();
         let text_id = pool.intern("hello");
-        let ((row, col), cell) = make_cell(
-            &mut pool,
-            "B2",
-            Some(CellValue::Text(text_id)),
-            None,
-        );
+        let ((row, col), cell) = make_cell(&mut pool, "B2", Some(CellValue::Text(text_id)), None);
         let snap = CellSnapshot::from_cell(row, col, &cell);
         assert_eq!(snap.addr.to_string(), "B2");
         assert_eq!(snap.value, Some(CellValue::Text(text_id)));
@@ -609,8 +610,7 @@ mod tests {
     #[test]
     fn snapshot_from_bool_cell() {
         let mut pool = StringPool::new();
-        let ((row, col), cell) =
-            make_cell(&mut pool, "C3", Some(CellValue::Bool(true)), None);
+        let ((row, col), cell) = make_cell(&mut pool, "C3", Some(CellValue::Bool(true)), None);
         let snap = CellSnapshot::from_cell(row, col, &cell);
         assert_eq!(snap.addr.to_string(), "C3");
         assert_eq!(snap.value, Some(CellValue::Bool(true)));

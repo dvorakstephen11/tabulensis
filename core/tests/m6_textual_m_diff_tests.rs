@@ -81,7 +81,10 @@ fn literal_change_produces_definitionchanged() {
                 QueryChangeKind::Semantic,
                 "literal change is semantic"
             );
-            assert_ne!(old_hash, new_hash, "hashes should differ for semantic change");
+            assert_ne!(
+                old_hash, new_hash,
+                "hashes should differ for semantic change"
+            );
         }
         _ => panic!("expected QueryDefinitionChanged, got {:?}", ops[0]),
     }
@@ -178,4 +181,3 @@ fn rename_produces_query_renamed() {
         _ => unreachable!(),
     }
 }
-

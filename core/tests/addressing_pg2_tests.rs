@@ -22,7 +22,8 @@ fn pg2_addressing_matrix_consistency() {
 
     for cell in sheet.grid.iter_cell_refs() {
         if let Some(CellValue::Text(text_id)) = cell.value {
-            let text = with_default_session(|session| session.strings.resolve(*text_id).to_string());
+            let text =
+                with_default_session(|session| session.strings.resolve(*text_id).to_string());
             assert_eq!(cell.address.to_a1(), text.as_str());
             let (r, c) = address_to_index(&text).expect("address strings should parse to indices");
             assert_eq!((r, c), (cell.row, cell.col));

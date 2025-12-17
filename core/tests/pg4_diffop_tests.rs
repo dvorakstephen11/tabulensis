@@ -69,7 +69,6 @@ fn op_kind(op: &DiffOp) -> &'static str {
     }
 }
 
-
 fn json_keys(json: &Value) -> BTreeSet<String> {
     json.as_object()
         .expect("object json")

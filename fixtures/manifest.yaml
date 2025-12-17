@@ -613,6 +613,63 @@ scenarios:
       base_file: "templates/base_query.xlsx"
     output: "m_formatting_only_b_variant.xlsx"
 
+  # --- Milestone 8: M Parser Expansion ---
+  - id: "m_record_equiv_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_record_equiv_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_record_equiv_a.xlsx"
+
+  - id: "m_record_equiv_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_record_equiv_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_record_equiv_b.xlsx"
+
+  - id: "m_list_formatting_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_list_formatting_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_list_formatting_a.xlsx"
+
+  - id: "m_list_formatting_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_list_formatting_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_list_formatting_b.xlsx"
+
+  - id: "m_call_formatting_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_call_formatting_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_call_formatting_a.xlsx"
+
+  - id: "m_call_formatting_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_call_formatting_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_call_formatting_b.xlsx"
+
+  - id: "m_primitive_formatting_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_primitive_formatting_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_primitive_formatting_a.xlsx"
+
+  - id: "m_primitive_formatting_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_primitive_formatting_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_primitive_formatting_b.xlsx"
+
   # --- P1: Large Dense Grid (Performance Baseline) ---
   - id: "p1_large_dense"
     generator: "perf_large"

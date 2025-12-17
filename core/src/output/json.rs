@@ -1,16 +1,16 @@
 #[cfg(feature = "excel-open-xml")]
+use crate::DiffSummary;
+#[cfg(feature = "excel-open-xml")]
 use crate::config::DiffConfig;
-use crate::diff::DiffReport;
 #[cfg(feature = "excel-open-xml")]
 use crate::datamashup::build_data_mashup;
+use crate::diff::DiffReport;
 #[cfg(feature = "excel-open-xml")]
 use crate::excel_open_xml::{PackageError, open_data_mashup, open_workbook};
 use crate::session::DiffSession;
 #[cfg(feature = "excel-open-xml")]
 use crate::sink::VecSink;
 use crate::string_pool::StringId;
-#[cfg(feature = "excel-open-xml")]
-use crate::DiffSummary;
 use serde::Serialize;
 use serde::ser::Error as SerdeError;
 #[cfg(feature = "excel-open-xml")]
