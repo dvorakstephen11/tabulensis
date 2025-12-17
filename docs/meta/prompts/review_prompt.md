@@ -75,6 +75,8 @@
       diff.rs
       engine.rs
       excel_open_xml.rs
+      formula.rs
+      formula_diff.rs
       grid_parser.rs
       grid_view.rs
       hashing.rs
@@ -104,6 +106,9 @@
       data_mashup_tests.rs
       engine_tests.rs
       excel_open_xml_tests.rs
+      f7_formula_diff_integration_tests.rs
+      f7_formula_parser_tests.rs
+      f7_formula_shift_tests.rs
       g10_row_block_alignment_grid_workbook_tests.rs
       g11_row_block_move_grid_workbook_tests.rs
       g12_column_block_move_grid_workbook_tests.rs
@@ -5402,6 +5407,25 @@ pub enum QueryChangeKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FormulaDiffResult {
+    Unknown,
+    Unchanged,
+    Added,
+    Removed,
+    FormattingOnly,
+    Filled,
+    SemanticChange,
+    TextChange,
+}
+
+impl Default for FormulaDiffResult {
+    fn default() -> Self {
+        FormulaDiffResult::Unknown
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum QueryMetadataField {
     LoadToSheet,
     LoadToModel,
@@ -5518,6 +5542,8 @@ pub enum DiffOp {
         addr: CellAddress,
         from: CellSnapshot,
         to: CellSnapshot,
+        #[serde(default)]
+        formula_diff: FormulaDiffResult,
     },
 
     QueryAdded {
@@ -5635,6 +5661,7 @@ impl DiffOp {
         addr: CellAddress,
         from: CellSnapshot,
         to: CellSnapshot,
+        formula_diff: FormulaDiffResult,
     ) -> DiffOp {
         debug_assert_eq!(from.addr, addr, "from.addr must match canonical addr");
         debug_assert_eq!(to.addr, addr, "to.addr must match canonical addr");
@@ -5643,6 +5670,7 @@ impl DiffOp {
             addr,
             from,
             to,
+            formula_diff,
         }
     }
 
@@ -5766,7 +5794,8 @@ use crate::column_alignment::{
 };
 use crate::config::{DiffConfig, LimitBehavior};
 use crate::database_alignment::{KeyColumnSpec, diff_table_by_key};
-use crate::diff::{DiffError, DiffOp, DiffReport, DiffSummary, SheetId};
+use crate::diff::{DiffError, DiffOp, DiffReport, DiffSummary, FormulaDiffResult, SheetId};
+use crate::formula_diff::{FormulaParseCache, diff_cell_formulas_ids};
 use crate::grid_view::GridView;
 #[cfg(feature = "perf-metrics")]
 use crate::perf::{DiffMetrics, Phase};
@@ -5786,6 +5815,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 #[derive(Debug, Default)]
 struct DiffContext {
     warnings: Vec<String>,
+    formula_cache: FormulaParseCache,
 }
 
 const DATABASE_MODE_SHEET_ID: &str = "<database>";
@@ -5816,6 +5846,44 @@ fn emit_op<S: DiffSink>(sink: &mut S, op_count: &mut usize, op: DiffOp) -> Resul
     sink.emit(op)?;
     *op_count = op_count.saturating_add(1);
     Ok(())
+}
+
+fn compute_formula_diff(
+    pool: &StringPool,
+    cache: &mut FormulaParseCache,
+    old_cell: Option<&Cell>,
+    new_cell: Option<&Cell>,
+    row_shift: i32,
+    col_shift: i32,
+    config: &DiffConfig,
+) -> FormulaDiffResult {
+    let old_f = old_cell.and_then(|c| c.formula);
+    let new_f = new_cell.and_then(|c| c.formula);
+    diff_cell_formulas_ids(pool, cache, old_f, new_f, row_shift, col_shift, config)
+}
+
+fn emit_cell_edit(
+    sheet_id: &SheetId,
+    addr: CellAddress,
+    old_cell: Option<&Cell>,
+    new_cell: Option<&Cell>,
+    row_shift: i32,
+    col_shift: i32,
+    pool: &StringPool,
+    config: &DiffConfig,
+    cache: &mut FormulaParseCache,
+    sink: &mut impl DiffSink,
+    op_count: &mut usize,
+) -> Result<(), DiffError> {
+    let from = snapshot_with_addr(old_cell, addr);
+    let to = snapshot_with_addr(new_cell, addr);
+    let formula_diff =
+        compute_formula_diff(pool, cache, old_cell, new_cell, row_shift, col_shift, config);
+    emit_op(
+        sink,
+        op_count,
+        DiffOp::cell_edited(sheet_id.clone(), addr, from, to, formula_diff),
+    )
 }
 
 pub fn diff_workbooks(
@@ -6001,6 +6069,7 @@ fn diff_grids_database_mode_streaming<S: DiffSink>(
     sink: &mut S,
     op_count: &mut usize,
 ) -> Result<DiffSummary, DiffError> {
+    let mut formula_cache = FormulaParseCache::default();
     let spec = KeyColumnSpec::new(key_columns.to_vec());
     let alignment = match diff_table_by_key(old, new, key_columns) {
         Ok(alignment) => alignment,
@@ -6063,10 +6132,20 @@ fn diff_grids_database_mode_streaming<S: DiffSink>(
             let from = snapshot_with_addr(old_cell, addr);
             let to = snapshot_with_addr(new_cell, addr);
 
+            let formula_diff = compute_formula_diff(
+                pool,
+                &mut formula_cache,
+                old_cell,
+                new_cell,
+                *row_b as i32 - *row_a as i32,
+                0,
+                config,
+            );
+
             emit_op(
                 sink,
                 op_count,
-                DiffOp::cell_edited(sheet_id, addr, from, to),
+                DiffOp::cell_edited(sheet_id, addr, from, to, formula_diff),
             )?;
         }
     }
@@ -6122,7 +6201,16 @@ fn try_diff_grids<S: DiffSink>(
         );
         match config.on_limit_exceeded {
             LimitBehavior::FallbackToPositional => {
-                positional_diff(sheet_id, old, new, sink, op_count)?;
+                positional_diff(
+                    sheet_id,
+                    old,
+                    new,
+                    pool,
+                    config,
+                    &mut ctx.formula_cache,
+                    sink,
+                    op_count,
+                )?;
                 #[cfg(feature = "perf-metrics")]
                 if let Some(m) = metrics.as_mut() {
                     m.add_cells_compared(cells_in_overlap(old, new));
@@ -6130,7 +6218,16 @@ fn try_diff_grids<S: DiffSink>(
             }
             LimitBehavior::ReturnPartialResult => {
                 ctx.warnings.push(warning);
-                positional_diff(sheet_id, old, new, sink, op_count)?;
+                positional_diff(
+                    sheet_id,
+                    old,
+                    new,
+                    pool,
+                    config,
+                    &mut ctx.formula_cache,
+                    sink,
+                    op_count,
+                )?;
                 #[cfg(feature = "perf-metrics")]
                 if let Some(m) = metrics.as_mut() {
                     m.add_cells_compared(cells_in_overlap(old, new));
@@ -6154,6 +6251,7 @@ fn try_diff_grids<S: DiffSink>(
         old,
         new,
         config,
+        pool,
         sink,
         op_count,
         ctx,
@@ -6168,9 +6266,10 @@ fn diff_grids_core<S: DiffSink>(
     old: &Grid,
     new: &Grid,
     config: &DiffConfig,
+    pool: &StringPool,
     sink: &mut S,
     op_count: &mut usize,
-    _ctx: &mut DiffContext,
+    ctx: &mut DiffContext,
     #[cfg(feature = "perf-metrics")] mut metrics: Option<&mut DiffMetrics>,
 ) -> Result<(), DiffError> {
     if old.nrows == new.nrows && old.ncols == new.ncols && grids_non_blank_cells_equal(old, new) {
@@ -6275,7 +6374,15 @@ fn diff_grids_core<S: DiffSink>(
             {
                 emit_row_block_move(sheet_id, mv, sink, op_count)?;
                 emit_moved_row_block_edits(
-                    sheet_id, &old_view, &new_view, mv, sink, op_count, config,
+                    sheet_id,
+                    &old_view,
+                    &new_view,
+                    mv,
+                    pool,
+                    &mut ctx.formula_cache,
+                    sink,
+                    op_count,
+                    config,
                 )?;
                 #[cfg(feature = "perf-metrics")]
                 if let Some(m) = metrics.as_mut() {
@@ -6313,17 +6420,48 @@ fn diff_grids_core<S: DiffSink>(
             m.start_phase(Phase::CellDiff);
         }
         if old.nrows != new.nrows || old.ncols != new.ncols {
-            if diff_aligned_with_masks(sheet_id, old, new, &old_mask, &new_mask, sink, op_count)? {
+            if diff_aligned_with_masks(
+                sheet_id,
+                old,
+                new,
+                &old_mask,
+                &new_mask,
+                pool,
+                config,
+                &mut ctx.formula_cache,
+                sink,
+                op_count,
+            )? {
                 #[cfg(feature = "perf-metrics")]
                 if let Some(m) = metrics.as_mut() {
                     m.end_phase(Phase::CellDiff);
                 }
                 return Ok(());
             }
-            positional_diff_with_masks(sheet_id, old, new, &old_mask, &new_mask, sink, op_count)?;
+            positional_diff_with_masks(
+                sheet_id,
+                old,
+                new,
+                &old_mask,
+                &new_mask,
+                pool,
+                config,
+                &mut ctx.formula_cache,
+                sink,
+                op_count,
+            )?;
         } else {
             positional_diff_masked_equal_size(
-                sheet_id, old, new, &old_mask, &new_mask, sink, op_count,
+                sheet_id,
+                old,
+                new,
+                &old_mask,
+                &new_mask,
+                pool,
+                config,
+                &mut ctx.formula_cache,
+                sink,
+                op_count,
             )?;
         }
         #[cfg(feature = "perf-metrics")]
@@ -6397,7 +6535,16 @@ fn diff_grids_core<S: DiffSink>(
             if let Some(m) = metrics.as_mut() {
                 m.start_phase(Phase::CellDiff);
             }
-            positional_diff(sheet_id, old, new, sink, op_count)?;
+            positional_diff(
+                sheet_id,
+                old,
+                new,
+                pool,
+                config,
+                &mut ctx.formula_cache,
+                sink,
+                op_count,
+            )?;
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
                 m.add_cells_compared(cells_in_overlap(old, new));
@@ -6419,7 +6566,16 @@ fn diff_grids_core<S: DiffSink>(
                 if let Some(m) = metrics.as_mut() {
                     m.start_phase(Phase::CellDiff);
                 }
-                positional_diff(sheet_id, old, new, sink, op_count)?;
+                positional_diff(
+                    sheet_id,
+                    old,
+                    new,
+                    pool,
+                    config,
+                    &mut ctx.formula_cache,
+                    sink,
+                    op_count,
+                )?;
                 #[cfg(feature = "perf-metrics")]
                 if let Some(m) = metrics.as_mut() {
                     m.add_cells_compared(cells_in_overlap(old, new));
@@ -6443,7 +6599,17 @@ fn diff_grids_core<S: DiffSink>(
             if let Some(m) = metrics.as_mut() {
                 m.start_phase(Phase::CellDiff);
             }
-            emit_column_aligned_diffs(sheet_id, old, new, &col_alignment, sink, op_count)?;
+            emit_column_aligned_diffs(
+                sheet_id,
+                old,
+                new,
+                &col_alignment,
+                pool,
+                config,
+                &mut ctx.formula_cache,
+                sink,
+                op_count,
+            )?;
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
                 let overlap_rows = old.nrows.min(new.nrows) as u64;
@@ -6474,7 +6640,16 @@ fn diff_grids_core<S: DiffSink>(
             if let Some(m) = metrics.as_mut() {
                 m.start_phase(Phase::CellDiff);
             }
-            positional_diff(sheet_id, old, new, sink, op_count)?;
+            positional_diff(
+                sheet_id,
+                old,
+                new,
+                pool,
+                config,
+                &mut ctx.formula_cache,
+                sink,
+                op_count,
+            )?;
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
                 m.add_cells_compared(cells_in_overlap(old, new));
@@ -6491,7 +6666,15 @@ fn diff_grids_core<S: DiffSink>(
             m.start_phase(Phase::CellDiff);
         }
         let compared = emit_amr_aligned_diffs(
-            sheet_id, &old_view, &new_view, &alignment, sink, op_count, config,
+            sheet_id,
+            &old_view,
+            &new_view,
+            &alignment,
+            pool,
+            &mut ctx.formula_cache,
+            sink,
+            op_count,
+            config,
         )?;
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
@@ -6522,7 +6705,15 @@ fn diff_grids_core<S: DiffSink>(
             m.start_phase(Phase::CellDiff);
         }
         let compared = emit_aligned_diffs(
-            sheet_id, &old_view, &new_view, &alignment, sink, op_count, config,
+            sheet_id,
+            &old_view,
+            &new_view,
+            &alignment,
+            pool,
+            &mut ctx.formula_cache,
+            sink,
+            op_count,
+            config,
         )?;
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
@@ -6538,7 +6729,17 @@ fn diff_grids_core<S: DiffSink>(
         if let Some(m) = metrics.as_mut() {
             m.start_phase(Phase::CellDiff);
         }
-        emit_column_aligned_diffs(sheet_id, old, new, &alignment, sink, op_count)?;
+        emit_column_aligned_diffs(
+            sheet_id,
+            old,
+            new,
+            &alignment,
+            pool,
+            config,
+            &mut ctx.formula_cache,
+            sink,
+            op_count,
+        )?;
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
             let overlap_rows = old.nrows.min(new.nrows) as u64;
@@ -6550,7 +6751,16 @@ fn diff_grids_core<S: DiffSink>(
         if let Some(m) = metrics.as_mut() {
             m.start_phase(Phase::CellDiff);
         }
-        positional_diff(sheet_id, old, new, sink, op_count)?;
+        positional_diff(
+            sheet_id,
+            old,
+            new,
+            pool,
+            config,
+            &mut ctx.formula_cache,
+            sink,
+            op_count,
+        )?;
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
             m.add_cells_compared(cells_in_overlap(old, new));
@@ -7281,6 +7491,9 @@ fn positional_diff<S: DiffSink>(
     sheet_id: &SheetId,
     old: &Grid,
     new: &Grid,
+    pool: &StringPool,
+    config: &DiffConfig,
+    cache: &mut FormulaParseCache,
     sink: &mut S,
     op_count: &mut usize,
 ) -> Result<(), DiffError> {
@@ -7288,7 +7501,19 @@ fn positional_diff<S: DiffSink>(
     let overlap_cols = old.ncols.min(new.ncols);
 
     for row in 0..overlap_rows {
-        diff_row_pair(sheet_id, old, new, row, row, overlap_cols, sink, op_count)?;
+        diff_row_pair(
+            sheet_id,
+            old,
+            new,
+            row,
+            row,
+            overlap_cols,
+            pool,
+            config,
+            cache,
+            sink,
+            op_count,
+        )?;
     }
 
     if new.nrows > old.nrows {
@@ -7336,6 +7561,9 @@ fn diff_aligned_with_masks(
     new: &Grid,
     old_mask: &RegionMask,
     new_mask: &RegionMask,
+    pool: &StringPool,
+    config: &DiffConfig,
+    cache: &mut FormulaParseCache,
     sink: &mut impl DiffSink,
     op_count: &mut usize,
 ) -> Result<bool, DiffError> {
@@ -7379,13 +7607,20 @@ fn diff_aligned_with_masks(
             }
 
             let addr = CellAddress::from_indices(*row_b, *col_b);
-            let from = snapshot_with_addr(old_cell, addr);
-            let to = snapshot_with_addr(new_cell, addr);
-
-            emit_op(
+            let row_shift = *row_b as i32 - *row_a as i32;
+            let col_shift = *col_b as i32 - *col_a as i32;
+            emit_cell_edit(
+                sheet_id,
+                addr,
+                old_cell,
+                new_cell,
+                row_shift,
+                col_shift,
+                pool,
+                config,
+                cache,
                 sink,
                 op_count,
-                DiffOp::cell_edited(sheet_id.clone(), addr, from, to),
             )?;
         }
     }
@@ -7445,6 +7680,9 @@ fn positional_diff_with_masks(
     new: &Grid,
     old_mask: &RegionMask,
     new_mask: &RegionMask,
+    pool: &StringPool,
+    config: &DiffConfig,
+    cache: &mut FormulaParseCache,
     sink: &mut impl DiffSink,
     op_count: &mut usize,
 ) -> Result<(), DiffError> {
@@ -7464,13 +7702,18 @@ fn positional_diff_with_masks(
             }
 
             let addr = CellAddress::from_indices(row, col);
-            let from = snapshot_with_addr(old_cell, addr);
-            let to = snapshot_with_addr(new_cell, addr);
-
-            emit_op(
+            emit_cell_edit(
+                sheet_id,
+                addr,
+                old_cell,
+                new_cell,
+                0,
+                0,
+                pool,
+                config,
+                cache,
                 sink,
                 op_count,
-                DiffOp::cell_edited(sheet_id.clone(), addr, from, to),
             )?;
         }
     }
@@ -7528,6 +7771,9 @@ fn positional_diff_masked_equal_size(
     new: &Grid,
     old_mask: &RegionMask,
     new_mask: &RegionMask,
+    pool: &StringPool,
+    config: &DiffConfig,
+    cache: &mut FormulaParseCache,
     sink: &mut impl DiffSink,
     op_count: &mut usize,
 ) -> Result<(), DiffError> {
@@ -7556,13 +7802,18 @@ fn positional_diff_masked_equal_size(
             }
 
             let addr = CellAddress::from_indices(row, col);
-            let from = snapshot_with_addr(old_cell, addr);
-            let to = snapshot_with_addr(new_cell, addr);
-
-            emit_op(
+            emit_cell_edit(
+                sheet_id,
+                addr,
+                old_cell,
+                new_cell,
+                0,
+                0,
+                pool,
+                config,
+                cache,
                 sink,
                 op_count,
-                DiffOp::cell_edited(sheet_id.clone(), addr, from, to),
             )?;
         }
     }
@@ -7650,6 +7901,8 @@ fn emit_moved_row_block_edits(
     old_view: &GridView,
     new_view: &GridView,
     mv: LegacyRowBlockMove,
+    pool: &StringPool,
+    formula_cache: &mut FormulaParseCache,
     sink: &mut impl DiffSink,
     op_count: &mut usize,
     config: &DiffConfig,
@@ -7667,6 +7920,9 @@ fn emit_moved_row_block_edits(
 
         let _ = diff_row_pair_sparse(
             sheet_id,
+            pool,
+            formula_cache,
+            mv.src_start_row + offset,
             mv.dst_start_row + offset,
             overlap_cols,
             &old_row.cells,
@@ -7684,6 +7940,8 @@ fn emit_aligned_diffs(
     old_view: &GridView,
     new_view: &GridView,
     alignment: &LegacyRowAlignment,
+    pool: &StringPool,
+    formula_cache: &mut FormulaParseCache,
     sink: &mut impl DiffSink,
     op_count: &mut usize,
     config: &DiffConfig,
@@ -7698,6 +7956,9 @@ fn emit_aligned_diffs(
         ) {
             compared = compared.saturating_add(diff_row_pair_sparse(
                 sheet_id,
+                pool,
+                formula_cache,
+                *row_a,
                 *row_b,
                 overlap_cols,
                 &old_row.cells,
@@ -7733,6 +7994,8 @@ fn emit_amr_aligned_diffs(
     old_view: &GridView,
     new_view: &GridView,
     alignment: &AmrAlignment,
+    pool: &StringPool,
+    formula_cache: &mut FormulaParseCache,
     sink: &mut impl DiffSink,
     op_count: &mut usize,
     config: &DiffConfig,
@@ -7747,6 +8010,9 @@ fn emit_amr_aligned_diffs(
         ) {
             compared = compared.saturating_add(diff_row_pair_sparse(
                 sheet_id,
+                pool,
+                formula_cache,
+                *row_a,
                 *row_b,
                 overlap_cols,
                 &old_row.cells,
@@ -7811,6 +8077,9 @@ fn emit_amr_aligned_diffs(
 
 fn diff_row_pair_sparse(
     sheet_id: &SheetId,
+    pool: &StringPool,
+    formula_cache: &mut FormulaParseCache,
+    row_a: u32,
     row_b: u32,
     overlap_cols: u32,
     old_cells: &[(u32, &Cell)],
@@ -7822,6 +8091,8 @@ fn diff_row_pair_sparse(
     let mut i = 0usize;
     let mut j = 0usize;
     let mut compared = 0u64;
+
+    let row_shift = row_b as i32 - row_a as i32;
 
     while i < old_cells.len() || j < new_cells.len() {
         let col_a = old_cells.get(i).map(|(c, _)| *c).unwrap_or(u32::MAX);
@@ -7854,13 +8125,18 @@ fn diff_row_pair_sparse(
 
         if changed || config.include_unchanged_cells {
             let addr = CellAddress::from_indices(row_b, col);
-            let from = snapshot_with_addr(old_cell, addr);
-            let to = snapshot_with_addr(new_cell, addr);
-
-            emit_op(
+            emit_cell_edit(
+                sheet_id,
+                addr,
+                old_cell,
+                new_cell,
+                row_shift,
+                0,
+                pool,
+                config,
+                formula_cache,
                 sink,
                 op_count,
-                DiffOp::cell_edited(sheet_id.clone(), addr, from, to),
             )?;
         }
     }
@@ -7875,9 +8151,13 @@ fn diff_row_pair(
     row_a: u32,
     row_b: u32,
     overlap_cols: u32,
+    pool: &StringPool,
+    config: &DiffConfig,
+    formula_cache: &mut FormulaParseCache,
     sink: &mut impl DiffSink,
     op_count: &mut usize,
 ) -> Result<(), DiffError> {
+    let row_shift = row_b as i32 - row_a as i32;
     for col in 0..overlap_cols {
         let old_cell = old.get(row_a, col);
         let new_cell = new.get(row_b, col);
@@ -7887,13 +8167,18 @@ fn diff_row_pair(
         }
 
         let addr = CellAddress::from_indices(row_b, col);
-        let from = snapshot_with_addr(old_cell, addr);
-        let to = snapshot_with_addr(new_cell, addr);
-
-        emit_op(
+        emit_cell_edit(
+            sheet_id,
+            addr,
+            old_cell,
+            new_cell,
+            row_shift,
+            0,
+            pool,
+            config,
+            formula_cache,
             sink,
             op_count,
-            DiffOp::cell_edited(sheet_id.clone(), addr, from, to),
         )?;
     }
     Ok(())
@@ -7904,6 +8189,9 @@ fn emit_column_aligned_diffs(
     old: &Grid,
     new: &Grid,
     alignment: &ColumnAlignment,
+    pool: &StringPool,
+    config: &DiffConfig,
+    cache: &mut FormulaParseCache,
     sink: &mut impl DiffSink,
     op_count: &mut usize,
 ) -> Result<(), DiffError> {
@@ -7919,13 +8207,19 @@ fn emit_column_aligned_diffs(
             }
 
             let addr = CellAddress::from_indices(row, *col_b);
-            let from = snapshot_with_addr(old_cell, addr);
-            let to = snapshot_with_addr(new_cell, addr);
-
-            emit_op(
+            let col_shift = *col_b as i32 - *col_a as i32;
+            emit_cell_edit(
+                sheet_id,
+                addr,
+                old_cell,
+                new_cell,
+                0,
+                col_shift,
+                pool,
+                config,
+                cache,
                 sink,
                 op_count,
-                DiffOp::cell_edited(sheet_id.clone(), addr, from, to),
             )?;
         }
     }
@@ -8044,6 +8338,7 @@ mod tests {
         let config = DiffConfig::default();
         let mut sink = VecSink::new();
         let mut op_count = 0usize;
+        let mut cache = FormulaParseCache::default();
 
         let old_cells_storage = [numbered_cell(1.0), numbered_cell(2.0), numbered_cell(3.0)];
         let new_cells_storage = [numbered_cell(1.0), numbered_cell(2.0), numbered_cell(4.0)];
@@ -8061,6 +8356,9 @@ mod tests {
 
         let compared = diff_row_pair_sparse(
             &sheet_id,
+            &pool,
+            &mut cache,
+            0,
             0,
             3,
             &old_cells,
@@ -8081,6 +8379,7 @@ mod tests {
         let config = DiffConfig::default();
         let mut sink = VecSink::new();
         let mut op_count = 0usize;
+        let mut cache = FormulaParseCache::default();
 
         let old_cells_storage = [numbered_cell(1.0)];
         let new_cells_storage = [numbered_cell(2.0)];
@@ -8090,6 +8389,9 @@ mod tests {
 
         let compared = diff_row_pair_sparse(
             &sheet_id,
+            &pool,
+            &mut cache,
+            0,
             0,
             3,
             &old_cells,
@@ -8300,6 +8602,1086 @@ pub(crate) fn open_data_mashup_from_container(
 pub fn open_data_mashup(path: impl AsRef<Path>) -> Result<Option<RawDataMashup>, PackageError> {
     let mut container = OpcContainer::open_from_path(path.as_ref())?;
     open_data_mashup_from_container(&mut container)
+}
+
+```
+
+---
+
+### File: `core\src\formula.rs`
+
+```rust
+use std::fmt;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FormulaExpr {
+    Number(f64),
+    Text(String),
+    Boolean(bool),
+    Error(ExcelError),
+
+    CellRef(CellReference),
+    RangeRef(RangeReference),
+
+    NamedRef(String),
+
+    FunctionCall {
+        name: String,
+        args: Vec<FormulaExpr>,
+    },
+
+    UnaryOp {
+        op: UnaryOperator,
+        operand: Box<FormulaExpr>,
+    },
+
+    BinaryOp {
+        op: BinaryOperator,
+        left: Box<FormulaExpr>,
+        right: Box<FormulaExpr>,
+    },
+
+    Array(Vec<Vec<FormulaExpr>>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExcelError {
+    Null,
+    Div0,
+    Value,
+    Ref,
+    Name,
+    Num,
+    NA,
+    Spill,
+    Calc,
+    GettingData,
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RowRef {
+    Absolute(u32),
+    Relative(u32),
+    Offset(i32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ColRef {
+    Absolute(u32),
+    Relative(u32),
+    Offset(i32),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CellReference {
+    pub sheet: Option<String>,
+    pub row: RowRef,
+    pub col: ColRef,
+    pub spill: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RangeReference {
+    pub sheet: Option<String>,
+    pub start: CellReference,
+    pub end: CellReference,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UnaryOperator {
+    Plus,
+    Minus,
+    Percent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BinaryOperator {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Pow,
+    Concat,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FormulaParseError {
+    pub pos: usize,
+    pub message: String,
+}
+
+impl fmt::Display for FormulaParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "formula parse error at {}: {}", self.pos, self.message)
+    }
+}
+
+impl std::error::Error for FormulaParseError {}
+
+pub fn parse_formula(formula: &str) -> Result<FormulaExpr, FormulaParseError> {
+    let s = formula.trim();
+    let s = s.strip_prefix('=').unwrap_or(s);
+    let mut p = Parser::new(s);
+    let expr = p.parse_expr(0)?;
+    p.skip_ws();
+    if !p.eof() {
+        return Err(p.err("trailing characters"));
+    }
+    Ok(expr)
+}
+
+#[derive(Clone, Copy)]
+#[allow(dead_code)]
+pub(crate) enum ShiftMode {
+    RelativeOnly,
+    All,
+}
+
+impl FormulaExpr {
+    pub fn canonicalize(&self) -> FormulaExpr {
+        let mut e = self.clone();
+        e.canonicalize_in_place();
+        e
+    }
+
+    pub(crate) fn shifted(&self, row_shift: i32, col_shift: i32, mode: ShiftMode) -> FormulaExpr {
+        shift_expr(self, row_shift, col_shift, mode)
+    }
+
+    fn canonicalize_in_place(&mut self) {
+        match self {
+            FormulaExpr::FunctionCall { name, args } => {
+                *name = name.to_ascii_uppercase();
+                for a in args.iter_mut() {
+                    a.canonicalize_in_place();
+                }
+                if is_commutative_function(name) {
+                    args.sort_by_key(|a| canonical_sort_key(a));
+                }
+            }
+            FormulaExpr::NamedRef(name) => {
+                *name = name.to_ascii_uppercase();
+            }
+            FormulaExpr::CellRef(r) => {
+                if let Some(s) = &mut r.sheet {
+                    *s = s.to_ascii_uppercase();
+                }
+            }
+            FormulaExpr::RangeRef(r) => {
+                if let Some(s) = &mut r.sheet {
+                    *s = s.to_ascii_uppercase();
+                }
+                if let Some(s) = &mut r.start.sheet {
+                    *s = s.to_ascii_uppercase();
+                }
+                if let Some(s) = &mut r.end.sheet {
+                    *s = s.to_ascii_uppercase();
+                }
+                let a = ref_sort_key(&r.start);
+                let b = ref_sort_key(&r.end);
+                if b < a {
+                    std::mem::swap(&mut r.start, &mut r.end);
+                }
+            }
+            FormulaExpr::UnaryOp { operand, .. } => {
+                operand.canonicalize_in_place();
+            }
+            FormulaExpr::BinaryOp { op, left, right } => {
+                left.canonicalize_in_place();
+                right.canonicalize_in_place();
+                if is_commutative_binary(*op) {
+                    let lk = canonical_sort_key(left);
+                    let rk = canonical_sort_key(right);
+                    if rk < lk {
+                        std::mem::swap(left, right);
+                    }
+                }
+            }
+            FormulaExpr::Array(rows) => {
+                for row in rows.iter_mut() {
+                    for cell in row.iter_mut() {
+                        cell.canonicalize_in_place();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn is_commutative_function(name: &str) -> bool {
+    matches!(name, "SUM" | "PRODUCT" | "MIN" | "MAX" | "AND" | "OR")
+}
+
+fn is_commutative_binary(op: BinaryOperator) -> bool {
+    matches!(op, BinaryOperator::Add | BinaryOperator::Mul | BinaryOperator::Eq | BinaryOperator::Ne)
+}
+
+fn canonical_sort_key(e: &FormulaExpr) -> String {
+    format!("{:?}", e.canonicalize())
+}
+
+fn ref_sort_key(r: &CellReference) -> (i64, i64, u8, u8) {
+    (row_key(r.row), col_key(r.col), abs_key_row(r.row), abs_key_col(r.col))
+}
+
+fn row_key(r: RowRef) -> i64 {
+    match r {
+        RowRef::Absolute(n) | RowRef::Relative(n) => n as i64,
+        RowRef::Offset(n) => n as i64,
+    }
+}
+
+fn col_key(c: ColRef) -> i64 {
+    match c {
+        ColRef::Absolute(n) | ColRef::Relative(n) => n as i64,
+        ColRef::Offset(n) => n as i64,
+    }
+}
+
+fn abs_key_row(r: RowRef) -> u8 {
+    match r {
+        RowRef::Absolute(_) => 0,
+        RowRef::Relative(_) => 1,
+        RowRef::Offset(_) => 2,
+    }
+}
+
+fn abs_key_col(c: ColRef) -> u8 {
+    match c {
+        ColRef::Absolute(_) => 0,
+        ColRef::Relative(_) => 1,
+        ColRef::Offset(_) => 2,
+    }
+}
+
+fn shift_expr(e: &FormulaExpr, row_shift: i32, col_shift: i32, mode: ShiftMode) -> FormulaExpr {
+    match e {
+        FormulaExpr::CellRef(r) => FormulaExpr::CellRef(shift_cell_ref(r, row_shift, col_shift, mode)),
+        FormulaExpr::RangeRef(r) => {
+            let mut rr = r.clone();
+            rr.start = shift_cell_ref(&rr.start, row_shift, col_shift, mode);
+            rr.end = shift_cell_ref(&rr.end, row_shift, col_shift, mode);
+            FormulaExpr::RangeRef(rr)
+        }
+        FormulaExpr::FunctionCall { name, args } => FormulaExpr::FunctionCall {
+            name: name.clone(),
+            args: args.iter().map(|a| shift_expr(a, row_shift, col_shift, mode)).collect(),
+        },
+        FormulaExpr::UnaryOp { op, operand } => FormulaExpr::UnaryOp {
+            op: *op,
+            operand: Box::new(shift_expr(operand, row_shift, col_shift, mode)),
+        },
+        FormulaExpr::BinaryOp { op, left, right } => FormulaExpr::BinaryOp {
+            op: *op,
+            left: Box::new(shift_expr(left, row_shift, col_shift, mode)),
+            right: Box::new(shift_expr(right, row_shift, col_shift, mode)),
+        },
+        FormulaExpr::Array(rows) => FormulaExpr::Array(
+            rows.iter()
+                .map(|row| row.iter().map(|x| shift_expr(x, row_shift, col_shift, mode)).collect())
+                .collect(),
+        ),
+        _ => e.clone(),
+    }
+}
+
+fn shift_cell_ref(r: &CellReference, row_shift: i32, col_shift: i32, mode: ShiftMode) -> CellReference {
+    let mut out = r.clone();
+    out.row = shift_row_ref(r.row, row_shift, mode);
+    out.col = shift_col_ref(r.col, col_shift, mode);
+    out
+}
+
+fn shift_row_ref(r: RowRef, delta: i32, mode: ShiftMode) -> RowRef {
+    match r {
+        RowRef::Relative(n) => RowRef::Relative(shift_u32(n, delta)),
+        RowRef::Absolute(n) => match mode {
+            ShiftMode::RelativeOnly => RowRef::Absolute(n),
+            ShiftMode::All => RowRef::Absolute(shift_u32(n, delta)),
+        },
+        RowRef::Offset(n) => RowRef::Offset(n),
+    }
+}
+
+fn shift_col_ref(c: ColRef, delta: i32, mode: ShiftMode) -> ColRef {
+    match c {
+        ColRef::Relative(n) => ColRef::Relative(shift_u32(n, delta)),
+        ColRef::Absolute(n) => match mode {
+            ShiftMode::RelativeOnly => ColRef::Absolute(n),
+            ShiftMode::All => ColRef::Absolute(shift_u32(n, delta)),
+        },
+        ColRef::Offset(n) => ColRef::Offset(n),
+    }
+}
+
+fn shift_u32(n: u32, delta: i32) -> u32 {
+    let v = n as i64 + delta as i64;
+    if v <= 0 {
+        0
+    } else if v >= u32::MAX as i64 {
+        u32::MAX
+    } else {
+        v as u32
+    }
+}
+
+pub fn formulas_equivalent_modulo_shift(
+    a: &FormulaExpr,
+    b: &FormulaExpr,
+    row_shift: i32,
+    col_shift: i32,
+) -> bool {
+    let a_shifted = a.shifted(row_shift, col_shift, ShiftMode::RelativeOnly).canonicalize();
+    let b_canon = b.canonicalize();
+    a_shifted == b_canon
+}
+
+struct Parser<'a> {
+    s: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> Parser<'a> {
+    fn new(input: &'a str) -> Self {
+        Self { s: input.as_bytes(), pos: 0 }
+    }
+
+    fn eof(&self) -> bool {
+        self.pos >= self.s.len()
+    }
+
+    fn peek(&self) -> Option<u8> {
+        self.s.get(self.pos).copied()
+    }
+
+    fn bump(&mut self) -> Option<u8> {
+        let b = self.peek()?;
+        self.pos += 1;
+        Some(b)
+    }
+
+    fn skip_ws(&mut self) {
+        while matches!(self.peek(), Some(b' ' | b'\t' | b'\r' | b'\n')) {
+            self.pos += 1;
+        }
+    }
+
+    fn err(&self, msg: &str) -> FormulaParseError {
+        FormulaParseError { pos: self.pos, message: msg.to_string() }
+    }
+
+    fn parse_expr(&mut self, min_bp: u8) -> Result<FormulaExpr, FormulaParseError> {
+        self.skip_ws();
+
+        let mut lhs = if matches!(self.peek(), Some(b'+' | b'-')) {
+            let op = match self.bump().unwrap() {
+                b'+' => UnaryOperator::Plus,
+                b'-' => UnaryOperator::Minus,
+                _ => return Err(self.err("invalid unary op")),
+            };
+            let rhs = self.parse_expr(90)?;
+            FormulaExpr::UnaryOp { op, operand: Box::new(rhs) }
+        } else {
+            self.parse_primary()?
+        };
+
+        loop {
+            self.skip_ws();
+
+            while matches!(self.peek(), Some(b'%')) {
+                self.bump();
+                lhs = FormulaExpr::UnaryOp { op: UnaryOperator::Percent, operand: Box::new(lhs) };
+                self.skip_ws();
+            }
+
+            let (op, l_bp, r_bp) = match self.peek_infix_op() {
+                Some(x) => x,
+                None => break,
+            };
+
+            if l_bp < min_bp {
+                break;
+            }
+
+            self.consume_infix_op(op)?;
+            let rhs = self.parse_expr(r_bp)?;
+            lhs = FormulaExpr::BinaryOp { op, left: Box::new(lhs), right: Box::new(rhs) };
+        }
+
+        Ok(lhs)
+    }
+
+    fn peek_infix_op(&self) -> Option<(BinaryOperator, u8, u8)> {
+        let b = self.peek()?;
+        match b {
+            b'+' => Some((BinaryOperator::Add, 50, 51)),
+            b'-' => Some((BinaryOperator::Sub, 50, 51)),
+            b'*' => Some((BinaryOperator::Mul, 60, 61)),
+            b'/' => Some((BinaryOperator::Div, 60, 61)),
+            b'^' => Some((BinaryOperator::Pow, 70, 70)),
+            b'&' => Some((BinaryOperator::Concat, 40, 41)),
+            b'=' => Some((BinaryOperator::Eq, 30, 31)),
+            b'<' => {
+                if self.s.get(self.pos + 1) == Some(&b'=') {
+                    Some((BinaryOperator::Le, 30, 31))
+                } else if self.s.get(self.pos + 1) == Some(&b'>') {
+                    Some((BinaryOperator::Ne, 30, 31))
+                } else {
+                    Some((BinaryOperator::Lt, 30, 31))
+                }
+            }
+            b'>' => {
+                if self.s.get(self.pos + 1) == Some(&b'=') {
+                    Some((BinaryOperator::Ge, 30, 31))
+                } else {
+                    Some((BinaryOperator::Gt, 30, 31))
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn consume_infix_op(&mut self, op: BinaryOperator) -> Result<(), FormulaParseError> {
+        match op {
+            BinaryOperator::Le | BinaryOperator::Ge => {
+                self.bump();
+                if self.bump() != Some(b'=') {
+                    return Err(self.err("expected '='"));
+                }
+            }
+            BinaryOperator::Ne => {
+                self.bump();
+                if self.bump() != Some(b'>') {
+                    return Err(self.err("expected '>'"));
+                }
+            }
+            BinaryOperator::Lt | BinaryOperator::Gt => {
+                self.bump();
+            }
+            _ => {
+                self.bump();
+            }
+        }
+        Ok(())
+    }
+
+    fn parse_primary(&mut self) -> Result<FormulaExpr, FormulaParseError> {
+        self.skip_ws();
+        match self.peek() {
+            Some(b'(') => {
+                self.bump();
+                let e = self.parse_expr(0)?;
+                self.skip_ws();
+                if self.bump() != Some(b')') {
+                    return Err(self.err("expected ')'"));
+                }
+                Ok(e)
+            }
+            Some(b'{') => self.parse_array(),
+            Some(b'"') => self.parse_string(),
+            Some(b'#') => self.parse_error(),
+            Some(b'0'..=b'9') => {
+                if self.looks_like_row_range() {
+                    return self.parse_row_range(None);
+                }
+                self.parse_number()
+            }
+            Some(b'\'' | b'[') => self.parse_ref_or_name_with_optional_sheet(),
+            Some(b'$' | b'A'..=b'Z' | b'a'..=b'z' | b'_') => self.parse_ref_or_name_with_optional_sheet(),
+            _ => Err(self.err("unexpected token")),
+        }
+    }
+
+    fn parse_ref_or_name_with_optional_sheet(&mut self) -> Result<FormulaExpr, FormulaParseError> {
+        let start = self.pos;
+        if let Some(sheet) = self.try_parse_sheet_prefix()? {
+            return self.parse_ref_or_name(Some(sheet));
+        }
+        self.pos = start;
+        self.parse_ref_or_name(None)
+    }
+
+    fn try_parse_sheet_prefix(&mut self) -> Result<Option<String>, FormulaParseError> {
+        self.skip_ws();
+        match self.peek() {
+            Some(b'\'') => {
+                let sheet = self.parse_quoted_sheet_name()?;
+                if self.peek() == Some(b'!') {
+                    self.bump();
+                    return Ok(Some(sheet));
+                }
+                Ok(None)
+            }
+            Some(b'[') => {
+                let start = self.pos;
+                while let Some(b) = self.peek() {
+                    if b == b'!' {
+                        let sheet = std::str::from_utf8(&self.s[start..self.pos]).unwrap().to_string();
+                        self.bump();
+                        return Ok(Some(sheet));
+                    }
+                    self.pos += 1;
+                }
+                self.pos = start;
+                Ok(None)
+            }
+            _ => {
+                let start = self.pos;
+                let ident = self.parse_identifier()?;
+                self.skip_ws();
+                if self.peek() == Some(b'!') {
+                    self.bump();
+                    return Ok(Some(ident));
+                }
+                self.pos = start;
+                Ok(None)
+            }
+        }
+    }
+
+    fn parse_ref_or_name(&mut self, sheet: Option<String>) -> Result<FormulaExpr, FormulaParseError> {
+        self.skip_ws();
+
+        if matches!(self.peek(), Some(b'0'..=b'9')) && self.looks_like_row_range() {
+            return self.parse_row_range(sheet);
+        }
+
+        if matches!(self.peek(), Some(b'R' | b'r')) {
+            let start = self.pos;
+            if let Ok(r) = self.try_parse_r1c1(sheet.clone()) {
+                return Ok(r);
+            }
+            self.pos = start;
+        }
+
+        if matches!(self.peek(), Some(b'$' | b'A'..=b'Z' | b'a'..=b'z')) {
+            let start = self.pos;
+            if let Some(r) = self.try_parse_a1_cell_ref(sheet.clone())? {
+                let mut expr = FormulaExpr::CellRef(r);
+                self.skip_ws();
+                if self.peek() == Some(b':') {
+                    self.bump();
+                    let rhs = self.try_parse_a1_cell_ref(None)?;
+                    if let Some(end) = rhs {
+                        expr = FormulaExpr::RangeRef(RangeReference {
+                            sheet,
+                            start: match expr {
+                                FormulaExpr::CellRef(c) => c,
+                                _ => unreachable!(),
+                            },
+                            end,
+                        });
+                    }
+                }
+                return Ok(expr);
+            }
+            self.pos = start;
+        }
+
+        let ident = self.parse_identifier()?;
+        if ident.eq_ignore_ascii_case("TRUE") {
+            return Ok(FormulaExpr::Boolean(true));
+        }
+        if ident.eq_ignore_ascii_case("FALSE") {
+            return Ok(FormulaExpr::Boolean(false));
+        }
+
+        self.skip_ws();
+        if self.peek() == Some(b'(') {
+            self.bump();
+            let mut args = Vec::new();
+            loop {
+                self.skip_ws();
+                if self.peek() == Some(b')') {
+                    self.bump();
+                    break;
+                }
+                let arg = self.parse_expr(0)?;
+                args.push(arg);
+                self.skip_ws();
+                match self.peek() {
+                    Some(b',') | Some(b';') => {
+                        self.bump();
+                    }
+                    Some(b')') => {
+                        self.bump();
+                        break;
+                    }
+                    _ => return Err(self.err("expected ',' or ')'")),
+                }
+            }
+            Ok(FormulaExpr::FunctionCall {
+                name: ident,
+                args,
+            })
+        } else {
+            Ok(FormulaExpr::NamedRef(ident))
+        }
+    }
+
+    fn parse_array(&mut self) -> Result<FormulaExpr, FormulaParseError> {
+        self.bump();
+        let mut rows = Vec::new();
+        let mut current_row = Vec::new();
+        loop {
+            self.skip_ws();
+            if self.peek() == Some(b'}') {
+                self.bump();
+                if !current_row.is_empty() {
+                    rows.push(current_row);
+                }
+                break;
+            }
+            let elem = self.parse_expr(0)?;
+            current_row.push(elem);
+            self.skip_ws();
+            match self.peek() {
+                Some(b',') => {
+                    self.bump();
+                }
+                Some(b';') => {
+                    self.bump();
+                    rows.push(current_row);
+                    current_row = Vec::new();
+                }
+                Some(b'}') => {
+                    self.bump();
+                    rows.push(current_row);
+                    break;
+                }
+                _ => return Err(self.err("expected ',', ';', or '}'")),
+            }
+        }
+        Ok(FormulaExpr::Array(rows))
+    }
+
+    fn parse_string(&mut self) -> Result<FormulaExpr, FormulaParseError> {
+        self.bump();
+        let start = self.pos;
+        while let Some(b) = self.peek() {
+            self.pos += 1;
+            if b == b'"' {
+                let s = std::str::from_utf8(&self.s[start..self.pos - 1])
+                    .map_err(|_| self.err("invalid utf-8 in string"))?
+                    .to_string();
+                return Ok(FormulaExpr::Text(s));
+            }
+        }
+        Err(self.err("unterminated string"))
+    }
+
+    fn parse_error(&mut self) -> Result<FormulaExpr, FormulaParseError> {
+        let start = self.pos;
+        while let Some(b) = self.peek() {
+            self.pos += 1;
+            if b.is_ascii_alphabetic() || b == b'/' || b == b'0' || b == b'!' {
+                continue;
+            } else {
+                break;
+            }
+        }
+        let txt = std::str::from_utf8(&self.s[start..self.pos]).unwrap();
+        let err = match txt.to_ascii_uppercase().as_str() {
+            "#NULL!" => ExcelError::Null,
+            "#DIV/0!" => ExcelError::Div0,
+            "#VALUE!" => ExcelError::Value,
+            "#REF!" => ExcelError::Ref,
+            "#NAME?" => ExcelError::Name,
+            "#NUM!" => ExcelError::Num,
+            "#N/A" => ExcelError::NA,
+            "#SPILL!" => ExcelError::Spill,
+            "#CALC!" => ExcelError::Calc,
+            "#GETTING_DATA" => ExcelError::GettingData,
+            other => ExcelError::Unknown(other.to_string()),
+        };
+        Ok(FormulaExpr::Error(err))
+    }
+
+    fn parse_number(&mut self) -> Result<FormulaExpr, FormulaParseError> {
+        let start = self.pos;
+        while matches!(self.peek(), Some(b'0'..=b'9')) {
+            self.pos += 1;
+        }
+        if self.peek() == Some(b'.') {
+            self.pos += 1;
+            while matches!(self.peek(), Some(b'0'..=b'9')) {
+                self.pos += 1;
+            }
+        }
+        if matches!(self.peek(), Some(b'e' | b'E')) {
+            self.pos += 1;
+            if matches!(self.peek(), Some(b'+' | b'-')) {
+                self.pos += 1;
+            }
+            while matches!(self.peek(), Some(b'0'..=b'9')) {
+                self.pos += 1;
+            }
+        }
+        let txt = std::str::from_utf8(&self.s[start..self.pos]).unwrap();
+        let n: f64 = txt.parse().map_err(|_| self.err("invalid number"))?;
+        Ok(FormulaExpr::Number(n))
+    }
+
+    fn parse_identifier(&mut self) -> Result<String, FormulaParseError> {
+        self.skip_ws();
+        let start = self.pos;
+        if let Some(b) = self.peek() {
+            if !is_ident_start(b) {
+                return Err(self.err("expected identifier"));
+            }
+        } else {
+            return Err(self.err("expected identifier"));
+        }
+        self.pos += 1;
+        while let Some(b) = self.peek() {
+            if is_ident_continue(b) {
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+        let ident = std::str::from_utf8(&self.s[start..self.pos]).unwrap().to_string();
+        Ok(ident)
+    }
+
+    fn parse_quoted_sheet_name(&mut self) -> Result<String, FormulaParseError> {
+        debug_assert_eq!(self.peek(), Some(b'\''));
+        self.bump();
+        let start = self.pos;
+        while let Some(b) = self.peek() {
+            self.pos += 1;
+            if b == b'\'' {
+                if self.peek() == Some(b'\'') {
+                    self.pos += 1;
+                    continue;
+                }
+                let name = std::str::from_utf8(&self.s[start..self.pos - 1]).unwrap().replace("''", "'");
+                return Ok(name);
+            }
+        }
+        Err(self.err("unterminated sheet name"))
+    }
+
+    fn try_parse_r1c1(&mut self, sheet: Option<String>) -> Result<FormulaExpr, FormulaParseError> {
+        let start = self.pos;
+        self.skip_ws();
+        if !matches!(self.peek(), Some(b'R' | b'r')) {
+            self.pos = start;
+            return Err(self.err("expected R1C1 ref"));
+        }
+        self.bump();
+        let row = if self.peek() == Some(b'[') {
+            self.bump();
+            let offset = self.parse_i32()?;
+            if self.bump() != Some(b']') {
+                return Err(self.err("expected ']'"));
+            }
+            RowRef::Offset(offset)
+        } else if matches!(self.peek(), Some(b'0'..=b'9')) {
+            RowRef::Absolute(self.parse_u32()?)
+        } else {
+            RowRef::Relative(0)
+        };
+
+        if !matches!(self.peek(), Some(b'C' | b'c')) {
+            self.pos = start;
+            return Err(self.err("expected 'C'"));
+        }
+        self.bump();
+
+        let col = if self.peek() == Some(b'[') {
+            self.bump();
+            let offset = self.parse_i32()?;
+            if self.bump() != Some(b']') {
+                return Err(self.err("expected ']'"));
+            }
+            ColRef::Offset(offset)
+        } else if matches!(self.peek(), Some(b'0'..=b'9')) {
+            ColRef::Absolute(self.parse_u32()?)
+        } else {
+            ColRef::Relative(0)
+        };
+
+        Ok(FormulaExpr::CellRef(CellReference {
+            sheet,
+            row,
+            col,
+            spill: false,
+        }))
+    }
+
+    fn parse_i32(&mut self) -> Result<i32, FormulaParseError> {
+        self.skip_ws();
+        let start = self.pos;
+        if self.peek() == Some(b'-') || self.peek() == Some(b'+') {
+            self.pos += 1;
+        }
+        while matches!(self.peek(), Some(b'0'..=b'9')) {
+            self.pos += 1;
+        }
+        let txt = std::str::from_utf8(&self.s[start..self.pos]).unwrap();
+        txt.parse::<i32>().map_err(|_| self.err("invalid signed int"))
+    }
+
+    fn parse_u32(&mut self) -> Result<u32, FormulaParseError> {
+        self.skip_ws();
+        let start = self.pos;
+        while matches!(self.peek(), Some(b'0'..=b'9')) {
+            self.pos += 1;
+        }
+        let txt = std::str::from_utf8(&self.s[start..self.pos]).unwrap();
+        txt.parse::<u32>().map_err(|_| self.err("invalid number"))
+    }
+
+    fn try_parse_a1_cell_ref(&mut self, sheet: Option<String>) -> Result<Option<CellReference>, FormulaParseError> {
+        self.skip_ws();
+        let start = self.pos;
+
+        let col_abs = self.consume_if(b'$');
+        if matches!(self.peek(), Some(b'R' | b'r')) {
+            if self.looks_like_r1c1() {
+                self.pos = start;
+                return Ok(None);
+            }
+        }
+
+        let col_start = self.pos;
+        while matches!(self.peek(), Some(b'A'..=b'Z' | b'a'..=b'z')) {
+            self.pos += 1;
+        }
+        if self.pos == col_start {
+            self.pos = start;
+            return Ok(None);
+        }
+
+        let col_txt = std::str::from_utf8(&self.s[col_start..self.pos]).unwrap();
+        if col_txt.len() > 3 {
+            self.pos = start;
+            return Ok(None);
+        }
+
+        let col_num = col_letters_to_u32(col_txt).ok_or_else(|| self.err("invalid column"))?;
+        let row_abs = self.consume_if(b'$');
+
+        let row_start = self.pos;
+        while matches!(self.peek(), Some(b'0'..=b'9')) {
+            self.pos += 1;
+        }
+        if self.pos == row_start {
+            self.pos = start;
+            return Ok(None);
+        }
+
+        let row_txt = std::str::from_utf8(&self.s[row_start..self.pos]).unwrap();
+        let row_num = row_txt.parse::<u32>().map_err(|_| self.err("invalid row"))?;
+
+        let mut spill = false;
+        if self.peek() == Some(b'#') {
+            self.bump();
+            spill = true;
+        }
+
+        Ok(Some(CellReference {
+            sheet,
+            row: if row_abs { RowRef::Absolute(row_num) } else { RowRef::Relative(row_num) },
+            col: if col_abs { ColRef::Absolute(col_num) } else { ColRef::Relative(col_num) },
+            spill,
+        }))
+    }
+
+    fn consume_if(&mut self, b: u8) -> bool {
+        if self.peek() == Some(b) {
+            self.pos += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn looks_like_r1c1(&self) -> bool {
+        let mut i = self.pos;
+        if i >= self.s.len() {
+            return false;
+        }
+        let b = self.s[i];
+        if b != b'R' && b != b'r' {
+            return false;
+        }
+        i += 1;
+        while i < self.s.len() && matches!(self.s[i], b'0'..=b'9') {
+            i += 1;
+        }
+        if i < self.s.len() && self.s[i] == b'[' {
+            return true;
+        }
+        i < self.s.len() && (self.s[i] == b'C' || self.s[i] == b'c')
+    }
+
+    fn looks_like_row_range(&self) -> bool {
+        let mut i = self.pos;
+        while i < self.s.len() && matches!(self.s[i], b'0'..=b'9') {
+            i += 1;
+        }
+        if i == self.pos {
+            return false;
+        }
+        while i < self.s.len() && matches!(self.s[i], b' ' | b'\t') {
+            i += 1;
+        }
+        if i >= self.s.len() || self.s[i] != b':' {
+            return false;
+        }
+        i += 1;
+        while i < self.s.len() && matches!(self.s[i], b' ' | b'\t') {
+            i += 1;
+        }
+        let j = i;
+        while i < self.s.len() && matches!(self.s[i], b'0'..=b'9') {
+            i += 1;
+        }
+        i > j
+    }
+
+    fn parse_row_range(&mut self, sheet: Option<String>) -> Result<FormulaExpr, FormulaParseError> {
+        let start_row = self.parse_u32()?;
+        self.skip_ws();
+        if self.bump() != Some(b':') {
+            return Err(self.err("expected ':' in row range"));
+        }
+        self.skip_ws();
+        let end_row = self.parse_u32()?;
+        Ok(FormulaExpr::NamedRef(format!(
+            "{}{}:{}",
+            match sheet {
+                Some(s) => format!("{}!", s),
+                None => "".to_string(),
+            },
+            start_row,
+            end_row
+        )))
+    }
+}
+
+fn is_ident_start(b: u8) -> bool {
+    matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'_' | b'\\')
+}
+
+fn is_ident_continue(b: u8) -> bool {
+    is_ident_start(b) || matches!(b, b'0'..=b'9' | b'.')
+}
+
+fn col_letters_to_u32(s: &str) -> Option<u32> {
+    let mut col: u32 = 0;
+    for b in s.bytes() {
+        let c = b.to_ascii_uppercase();
+        if !(b'A'..=b'Z').contains(&c) {
+            return None;
+        }
+        col = col * 26 + (c - b'A' + 1) as u32;
+    }
+    Some(col)
+}
+
+```
+
+---
+
+### File: `core\src\formula_diff.rs`
+
+```rust
+use rustc_hash::FxHashMap;
+
+use crate::config::DiffConfig;
+use crate::diff::FormulaDiffResult;
+use crate::formula::{FormulaExpr, parse_formula, formulas_equivalent_modulo_shift};
+use crate::string_pool::{StringId, StringPool};
+
+#[derive(Debug, Default)]
+pub(crate) struct FormulaParseCache {
+    parsed: FxHashMap<StringId, Option<FormulaExpr>>,
+    canonical: FxHashMap<StringId, Option<FormulaExpr>>,
+}
+
+impl FormulaParseCache {
+    fn parsed(&mut self, pool: &StringPool, id: StringId) -> Option<&FormulaExpr> {
+        if !self.parsed.contains_key(&id) {
+            let s = pool.resolve(id);
+            self.parsed.insert(id, parse_formula(s).ok());
+        }
+        self.parsed.get(&id).and_then(|x| x.as_ref())
+    }
+
+    fn canonical(&mut self, pool: &StringPool, id: StringId) -> Option<FormulaExpr> {
+        if !self.canonical.contains_key(&id) {
+            let canon = self.parsed(pool, id).map(|e| e.canonicalize());
+            self.canonical.insert(id, canon);
+        }
+        self.canonical.get(&id).and_then(|x| x.clone())
+    }
+}
+
+pub(crate) fn diff_cell_formulas_ids(
+    pool: &StringPool,
+    cache: &mut FormulaParseCache,
+    old: Option<StringId>,
+    new: Option<StringId>,
+    row_shift: i32,
+    col_shift: i32,
+    config: &DiffConfig,
+) -> FormulaDiffResult {
+    if old == new {
+        return FormulaDiffResult::Unchanged;
+    }
+
+    match (old, new) {
+        (None, Some(_)) => return FormulaDiffResult::Added,
+        (Some(_), None) => return FormulaDiffResult::Removed,
+        (None, None) => return FormulaDiffResult::Unchanged,
+        _ => {}
+    }
+
+    if !config.enable_formula_semantic_diff {
+        return FormulaDiffResult::TextChange;
+    }
+
+    let (Some(old_id), Some(new_id)) = (old, new) else {
+        return FormulaDiffResult::TextChange;
+    };
+
+    let old_ast = match cache.parsed(pool, old_id) {
+        Some(a) => a.clone(),
+        None => return FormulaDiffResult::TextChange,
+    };
+    let new_ast = match cache.parsed(pool, new_id) {
+        Some(a) => a.clone(),
+        None => return FormulaDiffResult::TextChange,
+    };
+
+    let old_c = old_ast.canonicalize();
+    let new_c = match cache.canonical(pool, new_id) {
+        Some(c) => c,
+        None => new_ast.canonicalize(),
+    };
+
+    if old_c == new_c {
+        return FormulaDiffResult::FormattingOnly;
+    }
+
+    if row_shift != 0 || col_shift != 0 {
+        if formulas_equivalent_modulo_shift(&old_ast, &new_ast, row_shift, col_shift) {
+            return FormulaDiffResult::Filled;
+        }
+    }
+
+    FormulaDiffResult::SemanticChange
 }
 
 ```
@@ -9368,6 +10750,8 @@ mod datamashup_framing;
 mod datamashup_package;
 mod diff;
 mod engine;
+mod formula;
+mod formula_diff;
 #[cfg(feature = "excel-open-xml")]
 mod excel_open_xml;
 mod grid_parser;
@@ -9447,7 +10831,8 @@ pub use datamashup_package::{
     EmbeddedContent, PackageParts, PackageXml, SectionDocument, parse_package_parts,
 };
 pub use diff::{
-    DiffError, DiffOp, DiffReport, DiffSummary, QueryChangeKind, QueryMetadataField, SheetId,
+    DiffError, DiffOp, DiffReport, DiffSummary, FormulaDiffResult, QueryChangeKind,
+    QueryMetadataField, SheetId,
 };
 #[doc(hidden)]
 pub use engine::{
@@ -9470,6 +10855,10 @@ pub use m_ast::{
     MModuleAst, MParseError, ast_semantically_equal, canonicalize_m_ast, parse_m_expression,
 };
 pub use m_section::{SectionMember, SectionParseError, parse_section_members};
+pub use formula::{
+    BinaryOperator, CellReference, ColRef, ExcelError, FormulaExpr, FormulaParseError,
+    RangeReference, RowRef, UnaryOperator, formulas_equivalent_modulo_shift, parse_formula,
+};
 #[doc(hidden)]
 pub use output::json::diff_report_to_cell_diffs;
 #[cfg(feature = "excel-open-xml")]
@@ -15795,8 +17184,8 @@ mod common;
 
 use common::sid;
 use excel_diff::{
-    CellAddress, CellSnapshot, CellValue, DiffConfig, DiffOp, DiffReport, Grid, Sheet, SheetKind,
-    Workbook, WorkbookPackage,
+    CellAddress, CellSnapshot, CellValue, DiffConfig, DiffOp, DiffReport, FormulaDiffResult, Grid,
+    Sheet, SheetKind, Workbook, WorkbookPackage,
 };
 
 type SheetSpec<'a> = (&'a str, Vec<(u32, u32, f64)>);
@@ -15897,6 +17286,7 @@ fn cell_edited_detected() {
             addr,
             from,
             to,
+            ..
         } => {
             assert_eq!(*sheet, sid("Sheet1"));
             assert_eq!(addr.to_a1(), "A1");
@@ -15940,6 +17330,7 @@ fn sheet_name_case_insensitive_cell_edit() {
             addr,
             from,
             to,
+            ..
         } => {
             assert_eq!(*sheet, sid("Sheet1"));
             assert_eq!(addr.to_a1(), "A1");
@@ -16024,6 +17415,7 @@ fn deterministic_sheet_op_ordering() {
                 value: Some(CellValue::Number(2.0)),
                 formula: None,
             },
+            FormulaDiffResult::Unchanged,
         ),
         DiffOp::SheetRemoved {
             sheet: sid("Sheet1"),
@@ -16370,6 +17762,263 @@ fn missing_worksheet_xml_returns_worksheetxmlmissing() {
     }
 
     let _ = fs::remove_file(&path);
+}
+
+```
+
+---
+
+### File: `core\tests\f7_formula_diff_integration_tests.rs`
+
+```rust
+use excel_diff::{
+    CellValue, DiffConfig, DiffOp, FormulaDiffResult, Grid, Sheet, SheetKind, StringPool, Workbook,
+    diff_grids_database_mode, diff_workbooks_with_pool,
+};
+
+fn workbook_with_formula(
+    pool: &mut StringPool,
+    sheet: excel_diff::StringId,
+    row: u32,
+    col: u32,
+    formula: &str,
+) -> Workbook {
+    let mut grid = Grid::new(row + 1, col + 1);
+    let formula_id = pool.intern(formula);
+    grid.insert_cell(row, col, None, Some(formula_id));
+
+    Workbook {
+        sheets: vec![Sheet {
+            name: sheet,
+            kind: SheetKind::Worksheet,
+            grid,
+        }],
+    }
+}
+
+fn cell_edit_op(report: &excel_diff::DiffReport) -> DiffOp {
+    report
+        .ops
+        .iter()
+        .find(|op| matches!(op, DiffOp::CellEdited { .. }))
+        .cloned()
+        .expect("expected a cell edit in the diff")
+}
+
+#[test]
+fn formatting_only_vs_text_change_respects_flag() {
+    let mut pool = StringPool::new();
+    let sheet = pool.intern("Sheet1");
+    let old = workbook_with_formula(&mut pool, sheet, 0, 0, "sum(a1,b1)");
+    let new = workbook_with_formula(&mut pool, sheet, 0, 0, "SUM(A1,B1)");
+
+    let mut enabled = DiffConfig::default();
+    enabled.enable_formula_semantic_diff = true;
+    let disabled = DiffConfig::default();
+
+    let report_enabled = diff_workbooks_with_pool(&old, &new, &mut pool, &enabled);
+    let report_disabled = diff_workbooks_with_pool(&old, &new, &mut pool, &disabled);
+
+    match cell_edit_op(&report_enabled) {
+        DiffOp::CellEdited { formula_diff, .. } => {
+            assert_eq!(formula_diff, FormulaDiffResult::FormattingOnly);
+        }
+        _ => panic!("expected CellEdited op in enabled diff"),
+    }
+
+    match cell_edit_op(&report_disabled) {
+        DiffOp::CellEdited { formula_diff, .. } => {
+            assert_eq!(formula_diff, FormulaDiffResult::TextChange);
+        }
+        _ => panic!("expected CellEdited op in disabled diff"),
+    }
+}
+
+#[test]
+fn filled_down_formulas_detect_row_shift() {
+    let mut pool = StringPool::new();
+
+    let mut config = DiffConfig::default();
+    config.enable_formula_semantic_diff = true;
+
+    let mut old = Grid::new(1, 2);
+    old.insert_cell(0, 0, Some(CellValue::Number(1.0)), None);
+    old.insert_cell(0, 1, None, Some(pool.intern("A1+B1")));
+
+    let mut new = Grid::new(2, 2);
+    new.insert_cell(0, 0, Some(CellValue::Number(0.0)), None);
+    new.insert_cell(1, 0, Some(CellValue::Number(1.0)), None);
+    new.insert_cell(1, 1, None, Some(pool.intern("A2+B2")));
+
+    let report = diff_grids_database_mode(&old, &new, &[0], &mut pool, &config);
+
+    let cell_edit = cell_edit_op(&report);
+    match cell_edit {
+        DiffOp::CellEdited {
+            addr,
+            formula_diff,
+            ..
+        } => {
+            assert_eq!(addr.row, 1);
+            assert_eq!(addr.col, 1);
+            assert_eq!(formula_diff, FormulaDiffResult::Filled);
+        }
+        _ => panic!("expected CellEdited op"),
+    }
+
+    assert!(
+        report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::RowAdded { row_idx, .. } if *row_idx == 0)),
+        "expected a row insertion ahead of the filled-down formula",
+    );
+}
+
+```
+
+---
+
+### File: `core\tests\f7_formula_parser_tests.rs`
+
+```rust
+use excel_diff::{
+    BinaryOperator, CellReference, ColRef, ExcelError, FormulaExpr, RangeReference, RowRef,
+    UnaryOperator, parse_formula,
+};
+
+fn cell(sheet: Option<&str>, row: RowRef, col: ColRef) -> FormulaExpr {
+    FormulaExpr::CellRef(CellReference {
+        sheet: sheet.map(|s| s.to_string()),
+        row,
+        col,
+        spill: false,
+    })
+}
+
+#[test]
+fn parses_expected_ast_shapes() {
+    let cases = vec![
+        ("1", FormulaExpr::Number(1.0)),
+        ("\"x\"", FormulaExpr::Text("x".to_string())),
+        ("TRUE", FormulaExpr::Boolean(true)),
+        ("#DIV/0!", FormulaExpr::Error(ExcelError::Div0)),
+        (
+            "A1",
+            cell(None, RowRef::Relative(1), ColRef::Relative(1)),
+        ),
+        (
+            "$B$2",
+            cell(None, RowRef::Absolute(2), ColRef::Absolute(2)),
+        ),
+        (
+            "R[1]C[-1]",
+            cell(None, RowRef::Offset(1), ColRef::Offset(-1)),
+        ),
+        (
+            "SUM(A1,B1)",
+            FormulaExpr::FunctionCall {
+                name: "SUM".into(),
+                args: vec![
+                    cell(None, RowRef::Relative(1), ColRef::Relative(1)),
+                    cell(None, RowRef::Relative(1), ColRef::Relative(2)),
+                ],
+            },
+        ),
+        (
+            "{1,2;3,4}",
+            FormulaExpr::Array(vec![
+                vec![FormulaExpr::Number(1.0), FormulaExpr::Number(2.0)],
+                vec![FormulaExpr::Number(3.0), FormulaExpr::Number(4.0)],
+            ]),
+        ),
+        (
+            "A1:B2",
+            FormulaExpr::RangeRef(RangeReference {
+                sheet: None,
+                start: CellReference {
+                    sheet: None,
+                    row: RowRef::Relative(1),
+                    col: ColRef::Relative(1),
+                    spill: false,
+                },
+                end: CellReference {
+                    sheet: None,
+                    row: RowRef::Relative(2),
+                    col: ColRef::Relative(2),
+                    spill: false,
+                },
+            }),
+        ),
+        (
+            "A1^-1",
+            FormulaExpr::BinaryOp {
+                op: BinaryOperator::Pow,
+                left: Box::new(cell(None, RowRef::Relative(1), ColRef::Relative(1))),
+                right: Box::new(FormulaExpr::UnaryOp {
+                    op: UnaryOperator::Minus,
+                    operand: Box::new(FormulaExpr::Number(1.0)),
+                }),
+            },
+        ),
+    ];
+
+    for (text, expected) in cases {
+        let parsed = parse_formula(text).expect("formula should parse");
+        assert_eq!(parsed, expected, "mismatched AST for '{text}'");
+    }
+}
+
+#[test]
+fn parses_varied_syntaxes() {
+    let samples = [
+        "=sum( A1 , B1 )",
+        "'My Sheet'!$A$1",
+        "[Book1.xlsx]Sheet1!A1",
+        "{1,2;3,4}",
+        "Table1[Column1]",
+        "R1C1",
+        "R[2]C[-3]",
+    ];
+
+    for text in samples {
+        parse_formula(text).unwrap_or_else(|e| panic!("failed to parse {text}: {e}"));
+    }
+}
+
+```
+
+---
+
+### File: `core\tests\f7_formula_shift_tests.rs`
+
+```rust
+use excel_diff::{formulas_equivalent_modulo_shift, parse_formula};
+
+#[test]
+fn filled_down_formulas_match_under_row_shift() {
+    let old = parse_formula("A1+B1").expect("old formula parses");
+    let new = parse_formula("A2+B2").expect("new formula parses");
+
+    assert!(
+        formulas_equivalent_modulo_shift(&old, &new, 1, 0),
+        "expected formulas to match after row shift",
+    );
+    assert!(
+        !formulas_equivalent_modulo_shift(&old, &new, 0, 0),
+        "without shift they should differ",
+    );
+}
+
+#[test]
+fn mismatched_refs_do_not_match_under_zero_shift() {
+    let old = parse_formula("A1+B1").expect("old formula parses");
+    let new = parse_formula("A1+B2").expect("new formula parses");
+
+    assert!(
+        !formulas_equivalent_modulo_shift(&old, &new, 0, 0),
+        "different refs should not be equivalent without a shift",
+    );
 }
 
 ```
@@ -18485,6 +20134,7 @@ fn g2_single_cell_literal_change_produces_one_celledited() {
             addr,
             from,
             to,
+            ..
         } => {
             assert_eq!(*sheet, sid("Sheet1"));
             assert_eq!(addr.to_a1(), "C3");
@@ -18615,6 +20265,7 @@ fn g5_multi_cell_edits_produces_only_celledited_ops() {
                     addr: a,
                     from,
                     to,
+                    ..
                 } if a.to_a1() == addr => Some((sheet, from, to)),
                 _ => None,
             })
@@ -21906,8 +23557,8 @@ mod common;
 use common::{fixture_path, open_fixture_workbook};
 use excel_diff::{
     CellAddress, CellDiff, CellSnapshot, CellValue, ContainerError, DiffConfig, DiffOp, DiffReport,
-    PackageError, WorkbookPackage, diff_report_to_cell_diffs, diff_workbooks_to_json,
-    serialize_cell_diffs, serialize_diff_report,
+    FormulaDiffResult, PackageError, WorkbookPackage, diff_report_to_cell_diffs,
+    diff_workbooks_to_json, serialize_cell_diffs, serialize_diff_report,
 };
 use serde_json::Value;
 #[cfg(feature = "perf-metrics")]
@@ -21941,11 +23592,20 @@ fn make_cell_snapshot(addr: CellAddress, value: Option<CellValue>) -> CellSnapsh
     }
 }
 
+fn cell_edit(
+    sheet: excel_diff::StringId,
+    addr: CellAddress,
+    from: CellSnapshot,
+    to: CellSnapshot,
+) -> DiffOp {
+    DiffOp::cell_edited(sheet, addr, from, to, FormulaDiffResult::Unchanged)
+}
+
 fn numeric_report(addr: CellAddress, from: f64, to: f64) -> DiffReport {
     let mut pool = excel_diff::StringPool::new();
     let sheet = sid_local(&mut pool, "Sheet1");
     attach_strings(
-        DiffReport::new(vec![DiffOp::cell_edited(
+        DiffReport::new(vec![cell_edit(
             sheet,
             addr,
             make_cell_snapshot(addr, Some(CellValue::Number(from))),
@@ -21970,7 +23630,7 @@ fn diff_report_to_cell_diffs_filters_non_cell_ops() {
     let report = attach_strings(
         DiffReport::new(vec![
             DiffOp::SheetAdded { sheet: sheet_added },
-            DiffOp::cell_edited(
+            cell_edit(
                 sheet1,
                 addr1,
                 make_cell_snapshot(addr1, Some(CellValue::Number(1.0))),
@@ -21981,7 +23641,7 @@ fn diff_report_to_cell_diffs_filters_non_cell_ops() {
                 row_idx: 5,
                 row_signature: None,
             },
-            DiffOp::cell_edited(
+            cell_edit(
                 sheet2,
                 addr2,
                 make_cell_snapshot(addr2, Some(CellValue::Text(old_text))),
@@ -22017,7 +23677,7 @@ fn diff_report_to_cell_diffs_ignores_block_moved_rect() {
     let report = attach_strings(
         DiffReport::new(vec![
             DiffOp::block_moved_rect(sheet1, 2, 3, 1, 3, 9, 6, Some(0xCAFEBABE)),
-            DiffOp::cell_edited(
+            cell_edit(
                 sheet1,
                 addr,
                 make_cell_snapshot(addr, Some(CellValue::Number(10.0))),
@@ -22062,13 +23722,13 @@ fn diff_report_to_cell_diffs_maps_values_correctly() {
 
     let report = attach_strings(
         DiffReport::new(vec![
-            DiffOp::cell_edited(
+            cell_edit(
                 sheet_id,
                 addr_num,
                 make_cell_snapshot(addr_num, Some(CellValue::Number(42.5))),
                 make_cell_snapshot(addr_num, Some(CellValue::Number(43.5))),
             ),
-            DiffOp::cell_edited(
+            cell_edit(
                 sheet_id,
                 addr_bool,
                 make_cell_snapshot(addr_bool, Some(CellValue::Bool(true))),
@@ -22101,13 +23761,13 @@ fn diff_report_to_cell_diffs_filters_no_op_cell_edits() {
 
     let report = attach_strings(
         DiffReport::new(vec![
-            DiffOp::cell_edited(
+            cell_edit(
                 sheet,
                 addr_a1,
                 make_cell_snapshot(addr_a1, Some(CellValue::Number(1.0))),
                 make_cell_snapshot(addr_a1, Some(CellValue::Number(1.0))),
             ),
-            DiffOp::cell_edited(
+            cell_edit(
                 sheet,
                 addr_a2,
                 make_cell_snapshot(addr_a2, Some(CellValue::Number(1.0))),
@@ -22434,7 +24094,7 @@ fn serialize_partial_diff_report_includes_complete_false_and_warnings() {
     let addr = CellAddress::from_indices(0, 0);
     let mut pool = excel_diff::StringPool::new();
     let sheet = sid_local(&mut pool, "Sheet1");
-    let ops = vec![DiffOp::cell_edited(
+    let ops = vec![cell_edit(
         sheet,
         addr,
         make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
@@ -22480,7 +24140,7 @@ fn serialize_diff_report_with_metrics_includes_metrics_object() {
     let addr = CellAddress::from_indices(0, 0);
     let mut pool = excel_diff::StringPool::new();
     let sheet = sid_local(&mut pool, "Sheet1");
-    let ops = vec![DiffOp::cell_edited(
+    let ops = vec![cell_edit(
         sheet,
         addr,
         make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
@@ -23499,8 +25159,8 @@ mod common;
 
 use common::sid;
 use excel_diff::{
-    CellAddress, CellSnapshot, CellValue, ColSignature, DiffOp, DiffReport, QueryChangeKind,
-    QueryMetadataField, RowSignature,
+    CellAddress, CellSnapshot, CellValue, ColSignature, DiffOp, DiffReport, FormulaDiffResult,
+    QueryChangeKind, QueryMetadataField, RowSignature,
 };
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -23527,6 +25187,7 @@ fn sample_cell_edited() -> DiffOp {
         addr: addr("C3"),
         from: snapshot("C3", Some(CellValue::Number(1.0)), None),
         to: snapshot("C3", Some(CellValue::Number(2.0)), None),
+        formula_diff: FormulaDiffResult::Unchanged,
     }
 }
 
@@ -23539,6 +25200,7 @@ fn assert_cell_edited_invariants(op: &DiffOp, expected_sheet: &str, expected_add
         addr,
         from,
         to,
+        ..
     } = op
     {
         assert_eq!(sheet, &sid(expected_sheet));
@@ -23923,10 +25585,11 @@ fn pg4_cell_edited_json_shape() {
     assert_eq!(json["addr"], "C3");
     assert_eq!(json["from"]["addr"], "C3");
     assert_eq!(json["to"]["addr"], "C3");
+    assert_eq!(json["formula_diff"], "unchanged");
 
     let obj = json.as_object().expect("object json");
     let keys: BTreeSet<String> = obj.keys().cloned().collect();
-    let expected: BTreeSet<String> = ["addr", "from", "kind", "sheet", "to"]
+    let expected: BTreeSet<String> = ["addr", "from", "kind", "sheet", "to", "formula_diff"]
         .into_iter()
         .map(String::from)
         .collect();
@@ -24688,6 +26351,7 @@ fn pg4_cell_edited_invariant_helper_rejects_mismatched_snapshot_addr() {
         addr: addr("C3"),
         from: snapshot("D4", Some(CellValue::Number(1.0)), None),
         to: snapshot("C3", Some(CellValue::Number(2.0)), None),
+        formula_diff: FormulaDiffResult::Unchanged,
     };
 
     assert_cell_edited_invariants(&op, "Sheet1", "C3");
@@ -24800,6 +26464,7 @@ fn pg5_2_grid_diff_1x1_value_change_single_cell_edited() {
             addr,
             from,
             to,
+            ..
         } => {
             assert_eq!(sheet_name(&report, sheet), "Sheet1");
             assert_eq!(addr.to_a1(), "A1");
