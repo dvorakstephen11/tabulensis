@@ -125,6 +125,8 @@
       m6_textual_m_diff_tests.rs
       m7_ast_canonicalization_tests.rs
       m7_semantic_m_diff_tests.rs
+      m8_m_canonicalize_tokens_tests.rs
+      m8_m_parser_coverage_audit_tests.rs
       m8_m_parser_expansion_tests.rs
       m8_semantic_m_diff_nonlet_tests.rs
       m_section_splitting_tests.rs
@@ -9692,8 +9694,19 @@ fn canonicalize_expr(expr: &mut MExpr) {
 }
 
 fn canonicalize_tokens(tokens: &mut Vec<MToken>) {
-    // Tokens are already whitespace/comment free; no additional normalization needed yet.
-    let _ = tokens;
+    for token in tokens.iter_mut() {
+        let MToken::Identifier(ident) = token else {
+            continue;
+        };
+
+        if ident.eq_ignore_ascii_case("true") {
+            *ident = "true".to_string();
+        } else if ident.eq_ignore_ascii_case("false") {
+            *ident = "false".to_string();
+        } else if ident.eq_ignore_ascii_case("null") {
+            *ident = "null".to_string();
+        }
+    }
 }
 
 fn parse_expression(tokens: &[MToken]) -> Result<MExpr, MParseError> {
@@ -21278,6 +21291,84 @@ fn semantic_gate_does_not_mask_definition_plus_metadata_change() {
         has_def_change,
         "expected QueryDefinitionChanged for definition+metadata change"
     );
+}
+
+```
+
+---
+
+### File: `core\tests\m8_m_canonicalize_tokens_tests.rs`
+
+```rust
+use excel_diff::{ast_semantically_equal, canonicalize_m_ast, parse_m_expression};
+
+#[test]
+fn opaque_boolean_literal_case_is_canonicalized() {
+    let a = "if TRUE then 1 else 0";
+    let b = "if true then 1 else 0";
+
+    let mut ast_a = parse_m_expression(a).expect("a should parse");
+    let mut ast_b = parse_m_expression(b).expect("b should parse");
+
+    canonicalize_m_ast(&mut ast_a);
+    canonicalize_m_ast(&mut ast_b);
+
+    assert!(ast_semantically_equal(&ast_a, &ast_b));
+}
+
+#[test]
+fn opaque_null_literal_case_is_canonicalized() {
+    let a = "if NULL then 1 else 0";
+    let b = "if null then 1 else 0";
+
+    let mut ast_a = parse_m_expression(a).expect("a should parse");
+    let mut ast_b = parse_m_expression(b).expect("b should parse");
+
+    canonicalize_m_ast(&mut ast_a);
+    canonicalize_m_ast(&mut ast_b);
+
+    assert!(ast_semantically_equal(&ast_a, &ast_b));
+}
+
+```
+
+---
+
+### File: `core\tests\m8_m_parser_coverage_audit_tests.rs`
+
+```rust
+use excel_diff::{canonicalize_m_ast, parse_m_expression, MAstKind};
+
+fn assert_opaque(expr: &str) {
+    let mut ast = parse_m_expression(expr).expect("expression should parse into an AST container");
+    canonicalize_m_ast(&mut ast);
+    match ast.root_kind_for_testing() {
+        MAstKind::Opaque { token_count } => {
+            assert!(token_count > 0, "opaque token_count must be > 0")
+        }
+        other => panic!("expected Opaque, got {:?}", other),
+    }
+}
+
+#[test]
+fn coverage_audit_unsupported_constructs_are_opaque() {
+    let cases = [
+        "Source",
+        "#\"Previous Step\"",
+        "if true then 1 else 0",
+        "each _ + 1",
+        "(x) => x",
+        "1 + 2",
+        "not true",
+        "Source[Field]",
+        "Source{0}",
+        "Source{0}[Content]",
+        "x as number",
+    ];
+
+    for expr in cases {
+        assert_opaque(expr);
+    }
 }
 
 ```
