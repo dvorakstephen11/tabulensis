@@ -125,6 +125,8 @@
       m6_textual_m_diff_tests.rs
       m7_ast_canonicalization_tests.rs
       m7_semantic_m_diff_tests.rs
+      m8_m_parser_expansion_tests.rs
+      m8_semantic_m_diff_nonlet_tests.rs
       m_section_splitting_tests.rs
       metrics_unit_tests.rs
       output_tests.rs
@@ -3870,7 +3872,9 @@ impl OpcContainer {
     }
 
     #[cfg(feature = "std-fs")]
-    pub fn open_from_path(path: impl AsRef<std::path::Path>) -> Result<OpcContainer, ContainerError> {
+    pub fn open_from_path(
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<OpcContainer, ContainerError> {
         let file = std::fs::File::open(path)?;
         Self::open_from_reader(file)
     }
@@ -5536,7 +5540,6 @@ pub enum DiffOp {
         old: Option<StringId>,
         new: Option<StringId>,
     },
-
     // Future: DAX operations
     // MeasureAdded { name: StringId }
     // MeasureRemoved { name: StringId }
@@ -5773,7 +5776,9 @@ use crate::row_alignment::{
 };
 use crate::sink::{DiffSink, VecSink};
 use crate::string_pool::StringPool;
-use crate::workbook::{Cell, CellAddress, CellSnapshot, ColSignature, Grid, RowSignature, Sheet, SheetKind, Workbook};
+use crate::workbook::{
+    Cell, CellAddress, CellSnapshot, ColSignature, Grid, RowSignature, Sheet, SheetKind, Workbook,
+};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug, Default)]
@@ -5805,11 +5810,7 @@ fn sheet_kind_order(kind: &SheetKind) -> u8 {
     }
 }
 
-fn emit_op<S: DiffSink>(
-    sink: &mut S,
-    op_count: &mut usize,
-    op: DiffOp,
-) -> Result<(), DiffError> {
+fn emit_op<S: DiffSink>(sink: &mut S, op_count: &mut usize, op: DiffOp) -> Result<(), DiffError> {
     sink.emit(op)?;
     *op_count = op_count.saturating_add(1);
     Ok(())
@@ -5972,9 +5973,16 @@ pub fn diff_grids_database_mode(
 ) -> DiffReport {
     let mut sink = VecSink::new();
     let mut op_count = 0usize;
-    let summary =
-        diff_grids_database_mode_streaming(old, new, key_columns, pool, config, &mut sink, &mut op_count)
-            .unwrap_or_else(|e| panic!("{}", e));
+    let summary = diff_grids_database_mode_streaming(
+        old,
+        new,
+        key_columns,
+        pool,
+        config,
+        &mut sink,
+        &mut op_count,
+    )
+    .unwrap_or_else(|e| panic!("{}", e));
     let mut report = DiffReport::new(sink.into_ops());
     report.complete = summary.complete;
     report.warnings = summary.warnings;
@@ -6033,11 +6041,7 @@ fn diff_grids_database_mode_streaming<S: DiffSink>(
     }
 
     for row_idx in &alignment.right_only_rows {
-        emit_op(
-            sink,
-            op_count,
-            DiffOp::row_added(sheet_id, *row_idx, None),
-        )?;
+        emit_op(sink, op_count, DiffOp::row_added(sheet_id, *row_idx, None))?;
     }
 
     for (row_a, row_b) in &alignment.matched_rows {
@@ -6057,7 +6061,11 @@ fn diff_grids_database_mode_streaming<S: DiffSink>(
             let from = snapshot_with_addr(old_cell, addr);
             let to = snapshot_with_addr(new_cell, addr);
 
-            emit_op(sink, op_count, DiffOp::cell_edited(sheet_id, addr, from, to))?;
+            emit_op(
+                sink,
+                op_count,
+                DiffOp::cell_edited(sheet_id, addr, from, to),
+            )?;
         }
     }
 
@@ -6264,7 +6272,9 @@ fn diff_grids_core<S: DiffSink>(
                     detect_fuzzy_row_block_move_masked(old, new, &old_mask, &new_mask, config)
             {
                 emit_row_block_move(sheet_id, mv, sink, op_count)?;
-                emit_moved_row_block_edits(sheet_id, &old_view, &new_view, mv, sink, op_count, config)?;
+                emit_moved_row_block_edits(
+                    sheet_id, &old_view, &new_view, mv, sink, op_count, config,
+                )?;
                 #[cfg(feature = "perf-metrics")]
                 if let Some(m) = metrics.as_mut() {
                     m.moves_detected = m.moves_detected.saturating_add(1);
@@ -6311,13 +6321,7 @@ fn diff_grids_core<S: DiffSink>(
             positional_diff_with_masks(sheet_id, old, new, &old_mask, &new_mask, sink, op_count)?;
         } else {
             positional_diff_masked_equal_size(
-                sheet_id,
-                old,
-                new,
-                &old_mask,
-                &new_mask,
-                sink,
-                op_count,
+                sheet_id, old, new, &old_mask, &new_mask, sink, op_count,
             )?;
         }
         #[cfg(feature = "perf-metrics")]
@@ -6485,13 +6489,7 @@ fn diff_grids_core<S: DiffSink>(
             m.start_phase(Phase::CellDiff);
         }
         let compared = emit_amr_aligned_diffs(
-            sheet_id,
-            &old_view,
-            &new_view,
-            &alignment,
-            sink,
-            op_count,
-            config,
+            sheet_id, &old_view, &new_view, &alignment, sink, op_count, config,
         )?;
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
@@ -6521,8 +6519,9 @@ fn diff_grids_core<S: DiffSink>(
         if let Some(m) = metrics.as_mut() {
             m.start_phase(Phase::CellDiff);
         }
-        let compared =
-            emit_aligned_diffs(sheet_id, &old_view, &new_view, &alignment, sink, op_count, config)?;
+        let compared = emit_aligned_diffs(
+            sheet_id, &old_view, &new_view, &alignment, sink, op_count, config,
+        )?;
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
             m.add_cells_compared(compared);
@@ -7287,16 +7286,7 @@ fn positional_diff<S: DiffSink>(
     let overlap_cols = old.ncols.min(new.ncols);
 
     for row in 0..overlap_rows {
-        diff_row_pair(
-            sheet_id,
-            old,
-            new,
-            row,
-            row,
-            overlap_cols,
-            sink,
-            op_count,
-        )?;
+        diff_row_pair(sheet_id, old, new, row, row, overlap_cols, sink, op_count)?;
     }
 
     if new.nrows > old.nrows {
@@ -7992,7 +7982,12 @@ mod tests {
         let mut grid = Grid::new(nrows, ncols);
         for (r, row) in values.iter().enumerate() {
             for (c, val) in row.iter().enumerate() {
-                grid.insert_cell(r as u32, c as u32, Some(CellValue::Number(*val as f64)), None);
+                grid.insert_cell(
+                    r as u32,
+                    c as u32,
+                    Some(CellValue::Number(*val as f64)),
+                    None,
+                );
             }
         }
         grid
@@ -8048,16 +8043,8 @@ mod tests {
         let mut sink = VecSink::new();
         let mut op_count = 0usize;
 
-        let old_cells_storage = [
-            numbered_cell(1.0),
-            numbered_cell(2.0),
-            numbered_cell(3.0),
-        ];
-        let new_cells_storage = [
-            numbered_cell(1.0),
-            numbered_cell(2.0),
-            numbered_cell(4.0),
-        ];
+        let old_cells_storage = [numbered_cell(1.0), numbered_cell(2.0), numbered_cell(3.0)];
+        let new_cells_storage = [numbered_cell(1.0), numbered_cell(2.0), numbered_cell(4.0)];
 
         let old_cells: Vec<(u32, &Cell)> = old_cells_storage
             .iter()
@@ -8070,18 +8057,17 @@ mod tests {
             .map(|(idx, cell)| (idx as u32, cell))
             .collect();
 
-        let compared =
-            diff_row_pair_sparse(
-                &sheet_id,
-                0,
-                3,
-                &old_cells,
-                &new_cells,
-                &mut sink,
-                &mut op_count,
-                &config,
-            )
-            .expect("diff should succeed");
+        let compared = diff_row_pair_sparse(
+            &sheet_id,
+            0,
+            3,
+            &old_cells,
+            &new_cells,
+            &mut sink,
+            &mut op_count,
+            &config,
+        )
+        .expect("diff should succeed");
 
         assert_eq!(compared, 3);
     }
@@ -8100,18 +8086,17 @@ mod tests {
         let old_cells: Vec<(u32, &Cell)> = vec![(0, &old_cells_storage[0])];
         let new_cells: Vec<(u32, &Cell)> = vec![(2, &new_cells_storage[0])];
 
-        let compared =
-            diff_row_pair_sparse(
-                &sheet_id,
-                0,
-                3,
-                &old_cells,
-                &new_cells,
-                &mut sink,
-                &mut op_count,
-                &config,
-            )
-            .expect("diff should succeed");
+        let compared = diff_row_pair_sparse(
+            &sheet_id,
+            0,
+            3,
+            &old_cells,
+            &new_cells,
+            &mut sink,
+            &mut op_count,
+            &config,
+        )
+        .expect("diff should succeed");
 
         assert_eq!(compared, 2);
     }
@@ -8249,11 +8234,12 @@ pub(crate) fn open_workbook_from_container(
     let mut sheet_ir = Vec::with_capacity(sheets.len());
     for (idx, sheet) in sheets.iter().enumerate() {
         let target = resolve_sheet_target(sheet, &relationships, idx);
-        let sheet_bytes = container
-            .read_file(&target)
-            .map_err(|_| PackageError::WorksheetXmlMissing {
-                sheet_name: sheet.name.clone(),
-            })?;
+        let sheet_bytes =
+            container
+                .read_file(&target)
+                .map_err(|_| PackageError::WorksheetXmlMissing {
+                    sheet_name: sheet.name.clone(),
+                })?;
         let grid = parse_sheet_xml(&sheet_bytes, &shared_strings, pool)?;
         sheet_ir.push(Sheet {
             name: pool.intern(&sheet.name),
@@ -8811,7 +8797,13 @@ mod tests {
         let value = convert_value(Some("#DIV/0!"), Some("e"), &[], &mut pool)
             .expect("error cell should convert");
         let err_id = value
-            .and_then(|v| if let CellValue::Error(id) = v { Some(id) } else { None })
+            .and_then(|v| {
+                if let CellValue::Error(id) = v {
+                    Some(id)
+                } else {
+                    None
+                }
+            })
             .expect("error id");
         assert_eq!(pool.resolve(err_id), "#DIV/0!");
     }
@@ -8875,7 +8867,7 @@ impl<'a> GridView<'a> {
         let mut row_counts = vec![0u32; nrows];
         let mut row_first_non_blank: Vec<Option<u32>> = vec![None; nrows];
 
-            let mut col_counts = vec![0u32; ncols];
+        let mut col_counts = vec![0u32; ncols];
         let mut col_first_non_blank: Vec<Option<u32>> = vec![None; ncols];
 
         for ((row, col), cell) in &grid.cells {
@@ -9443,11 +9435,11 @@ pub fn open_workbook(path: impl AsRef<std::path::Path>) -> Result<Workbook, Exce
 pub use addressing::{AddressParseError, address_to_index, index_to_address};
 pub use config::{DiffConfig, LimitBehavior};
 pub use container::{ContainerError, OpcContainer};
+#[doc(hidden)]
+pub use datamashup::parse_metadata;
 pub use datamashup::{
     DataMashup, Metadata, Permissions, Query, QueryMetadata, build_data_mashup, build_queries,
 };
-#[doc(hidden)]
-pub use datamashup::parse_metadata;
 pub use datamashup_framing::{DataMashupError, RawDataMashup};
 pub use datamashup_package::{
     EmbeddedContent, PackageParts, PackageXml, SectionDocument, parse_package_parts,
@@ -9457,11 +9449,8 @@ pub use diff::{
 };
 #[doc(hidden)]
 pub use engine::{
-    diff_grids_database_mode,
-    diff_workbooks as diff_workbooks_with_pool,
-    diff_workbooks_streaming,
-    try_diff_workbooks as try_diff_workbooks_with_pool,
-    try_diff_workbooks_streaming,
+    diff_grids_database_mode, diff_workbooks as diff_workbooks_with_pool, diff_workbooks_streaming,
+    try_diff_workbooks as try_diff_workbooks_with_pool, try_diff_workbooks_streaming,
 };
 #[cfg(feature = "excel-open-xml")]
 #[allow(deprecated)]
@@ -9470,16 +9459,20 @@ pub use excel_open_xml::{
     ExcelOpenError, PackageError, open_data_mashup, open_workbook as open_workbook_with_pool,
 };
 pub use grid_parser::{GridParseError, SheetDescriptor};
-pub use grid_view::{ColHash, ColMeta, FrequencyClass, GridView, HashStats, RowHash, RowMeta, RowView};
-pub use m_ast::{MModuleAst, MParseError, ast_semantically_equal, canonicalize_m_ast, parse_m_expression};
+pub use grid_view::{
+    ColHash, ColMeta, FrequencyClass, GridView, HashStats, RowHash, RowMeta, RowView,
+};
 #[doc(hidden)]
 pub use m_ast::{MAstKind, MTokenDebug, tokenize_for_testing};
+pub use m_ast::{
+    MModuleAst, MParseError, ast_semantically_equal, canonicalize_m_ast, parse_m_expression,
+};
 pub use m_section::{SectionMember, SectionParseError, parse_section_members};
+#[doc(hidden)]
+pub use output::json::diff_report_to_cell_diffs;
 #[cfg(feature = "excel-open-xml")]
 #[doc(hidden)]
 pub use output::json::diff_workbooks_to_json;
-#[doc(hidden)]
-pub use output::json::diff_report_to_cell_diffs;
 pub use output::json::{CellDiff, serialize_cell_diffs, serialize_diff_report};
 pub use output::json_lines::JsonLinesSink;
 pub use package::WorkbookPackage;
@@ -9511,7 +9504,11 @@ pub struct MModuleAst {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MAstKind {
     Let { binding_count: usize },
-    Sequence { token_count: usize },
+    Record { field_count: usize },
+    List { item_count: usize },
+    FunctionCall { name: String, arg_count: usize },
+    Primitive,
+    Opaque { token_count: usize },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -9520,13 +9517,38 @@ enum MExpr {
         bindings: Vec<LetBinding>,
         body: Box<MExpr>,
     },
-    Sequence(Vec<MToken>),
+    Record {
+        fields: Vec<RecordField>,
+    },
+    List {
+        items: Vec<MExpr>,
+    },
+    FunctionCall {
+        name: String,
+        args: Vec<MExpr>,
+    },
+    Primitive(MPrimitive),
+    Opaque(Vec<MToken>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct LetBinding {
     name: String,
     value: Box<MExpr>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct RecordField {
+    name: String,
+    value: Box<MExpr>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum MPrimitive {
+    String(String),
+    Number(String),
+    Boolean(bool),
+    Null,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -9588,7 +9610,18 @@ impl MModuleAst {
             MExpr::Let { bindings, .. } => MAstKind::Let {
                 binding_count: bindings.len(),
             },
-            MExpr::Sequence(tokens) => MAstKind::Sequence {
+            MExpr::Record { fields } => MAstKind::Record {
+                field_count: fields.len(),
+            },
+            MExpr::List { items } => MAstKind::List {
+                item_count: items.len(),
+            },
+            MExpr::FunctionCall { name, args } => MAstKind::FunctionCall {
+                name: name.clone(),
+                arg_count: args.len(),
+            },
+            MExpr::Primitive(_) => MAstKind::Primitive,
+            MExpr::Opaque(tokens) => MAstKind::Opaque {
                 token_count: tokens.len(),
             },
         }
@@ -9605,10 +9638,11 @@ pub fn tokenize_for_testing(source: &str) -> Result<Vec<MTokenDebug>, MParseErro
 
 /// Parse a Power Query M expression into a minimal AST.
 ///
-/// Currently supports top-level `let ... in ...` expressions with simple identifier
-/// bindings. Non-`let` inputs are preserved as opaque token sequences. The lexer
-/// recognizes `let`/`in`, quoted identifiers (`#"Foo"`), and hash-prefixed literals
-/// like `#date`/`#datetime` as single identifiers; other M constructs are parsed
+/// Supports top-level `let ... in ...` expressions, record and list literals,
+/// qualified function calls, and primitive literals. Inputs that do not match
+/// those forms are preserved as opaque token sequences. The lexer recognizes
+/// `let`/`in`, quoted identifiers (`#"Foo"`), and hash-prefixed literals like
+/// `#date`/`#datetime` as single identifiers; other M constructs are parsed
 /// best-effort and may be treated as generic tokens.
 pub fn parse_m_expression(source: &str) -> Result<MModuleAst, MParseError> {
     let tokens = tokenize(source)?;
@@ -9636,7 +9670,24 @@ fn canonicalize_expr(expr: &mut MExpr) {
             }
             canonicalize_expr(body);
         }
-        MExpr::Sequence(tokens) => canonicalize_tokens(tokens),
+        MExpr::Record { fields } => {
+            for field in fields.iter_mut() {
+                canonicalize_expr(&mut field.value);
+            }
+            fields.sort_by(|a, b| a.name.cmp(&b.name));
+        }
+        MExpr::List { items } => {
+            for item in items {
+                canonicalize_expr(item);
+            }
+        }
+        MExpr::FunctionCall { args, .. } => {
+            for arg in args {
+                canonicalize_expr(arg);
+            }
+        }
+        MExpr::Primitive(_) => {}
+        MExpr::Opaque(tokens) => canonicalize_tokens(tokens),
     }
 }
 
@@ -9646,14 +9697,332 @@ fn canonicalize_tokens(tokens: &mut Vec<MToken>) {
 }
 
 fn parse_expression(tokens: &[MToken]) -> Result<MExpr, MParseError> {
+    if tokens.is_empty() {
+        return Err(MParseError::Empty);
+    }
+
     if let Some(let_ast) = parse_let(tokens)? {
         return Ok(let_ast);
     }
 
-    Ok(MExpr::Sequence(tokens.to_vec()))
+    if let Some(inner) = strip_wrapping_parens(tokens) {
+        if !inner.is_empty() {
+            return parse_expression(inner);
+        }
+    }
+
+    if let Some(rec) = parse_record_literal(tokens)? {
+        return Ok(rec);
+    }
+    if let Some(list) = parse_list_literal(tokens)? {
+        return Ok(list);
+    }
+    if let Some(call) = parse_function_call(tokens)? {
+        return Ok(call);
+    }
+    if let Some(prim) = parse_primitive(tokens) {
+        return Ok(prim);
+    }
+
+    Ok(MExpr::Opaque(tokens.to_vec()))
+}
+
+fn strip_wrapping_parens(tokens: &[MToken]) -> Option<&[MToken]> {
+    if tokens.len() < 2 {
+        return None;
+    }
+    if !matches!(tokens.first(), Some(MToken::Symbol('('))) {
+        return None;
+    }
+    if !matches!(tokens.last(), Some(MToken::Symbol(')'))) {
+        return None;
+    }
+
+    let mut depth = 0i32;
+    for (i, tok) in tokens.iter().enumerate() {
+        match tok {
+            MToken::Symbol('(') => depth += 1,
+            MToken::Symbol(')') => {
+                depth -= 1;
+                if depth == 0 && i != tokens.len() - 1 {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if depth != 0 {
+        return None;
+    }
+
+    Some(&tokens[1..tokens.len() - 1])
+}
+
+fn split_top_level(tokens: &[MToken], delimiter: char) -> Vec<&[MToken]> {
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0i32;
+    let mut let_depth = 0i32;
+
+    for (i, tok) in tokens.iter().enumerate() {
+        match tok {
+            MToken::Symbol('(') | MToken::Symbol('[') | MToken::Symbol('{') => depth += 1,
+            MToken::Symbol(')') | MToken::Symbol(']') | MToken::Symbol('}') => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            MToken::KeywordLet => let_depth += 1,
+            MToken::KeywordIn => {
+                if let_depth > 0 {
+                    let_depth -= 1;
+                }
+            }
+            MToken::Symbol(c) if *c == delimiter && depth == 0 && let_depth == 0 => {
+                out.push(&tokens[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+
+    out.push(&tokens[start..]);
+    out
+}
+
+fn parse_record_literal(tokens: &[MToken]) -> Result<Option<MExpr>, MParseError> {
+    if tokens.len() < 2 {
+        return Ok(None);
+    }
+    if !matches!(tokens.first(), Some(MToken::Symbol('['))) {
+        return Ok(None);
+    }
+    if !matches!(tokens.last(), Some(MToken::Symbol(']'))) {
+        return Ok(None);
+    }
+
+    let inner = &tokens[1..tokens.len() - 1];
+    if inner.is_empty() {
+        return Ok(Some(MExpr::Record { fields: Vec::new() }));
+    }
+
+    let parts = split_top_level(inner, ',');
+    let mut fields = Vec::with_capacity(parts.len());
+
+    for part in parts {
+        if part.len() < 3 {
+            return Ok(None);
+        }
+
+        let name = match &part[0] {
+            MToken::Identifier(v) => v.clone(),
+            MToken::StringLiteral(v) => v.clone(),
+            _ => return Ok(None),
+        };
+
+        if !matches!(part[1], MToken::Symbol('=')) {
+            return Ok(None);
+        }
+
+        let value_tokens = &part[2..];
+        if value_tokens.is_empty() {
+            return Ok(None);
+        }
+
+        let value_expr = parse_expression(value_tokens)?;
+        fields.push(RecordField {
+            name,
+            value: Box::new(value_expr),
+        });
+    }
+
+    Ok(Some(MExpr::Record { fields }))
+}
+
+fn parse_list_literal(tokens: &[MToken]) -> Result<Option<MExpr>, MParseError> {
+    if tokens.len() < 2 {
+        return Ok(None);
+    }
+    if !matches!(tokens.first(), Some(MToken::Symbol('{'))) {
+        return Ok(None);
+    }
+    if !matches!(tokens.last(), Some(MToken::Symbol('}'))) {
+        return Ok(None);
+    }
+
+    let inner = &tokens[1..tokens.len() - 1];
+    if inner.is_empty() {
+        return Ok(Some(MExpr::List { items: Vec::new() }));
+    }
+
+    let parts = split_top_level(inner, ',');
+    let mut items = Vec::with_capacity(parts.len());
+    for part in parts {
+        if part.is_empty() {
+            return Ok(None);
+        }
+        items.push(parse_expression(part)?);
+    }
+
+    Ok(Some(MExpr::List { items }))
+}
+
+fn parse_function_call(tokens: &[MToken]) -> Result<Option<MExpr>, MParseError> {
+    if tokens.len() < 3 {
+        return Ok(None);
+    }
+    if matches!(tokens.first(), Some(MToken::Symbol('('))) {
+        return Ok(None);
+    }
+
+    let mut open_idx = None;
+    let mut depth = 0i32;
+    let mut let_depth = 0i32;
+
+    for (i, tok) in tokens.iter().enumerate() {
+        match tok {
+            MToken::Symbol('(') => {
+                if depth == 0 && let_depth == 0 {
+                    open_idx = Some(i);
+                    break;
+                }
+                depth += 1;
+            }
+            MToken::Symbol('[') | MToken::Symbol('{') => depth += 1,
+            MToken::Symbol(')') | MToken::Symbol(']') | MToken::Symbol('}') => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            MToken::KeywordLet => let_depth += 1,
+            MToken::KeywordIn => {
+                if let_depth > 0 {
+                    let_depth -= 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let open_idx = match open_idx {
+        Some(i) if i > 0 => i,
+        _ => return Ok(None),
+    };
+
+    if !matches!(tokens.last(), Some(MToken::Symbol(')'))) {
+        return Ok(None);
+    }
+
+    let mut suffix_depth = 0i32;
+    for (i, tok) in tokens[open_idx..].iter().enumerate() {
+        match tok {
+            MToken::Symbol('(') | MToken::Symbol('[') | MToken::Symbol('{') => suffix_depth += 1,
+            MToken::Symbol(')') | MToken::Symbol(']') | MToken::Symbol('}') => {
+                if suffix_depth > 0 {
+                    suffix_depth -= 1;
+                }
+                if suffix_depth == 0 && i != tokens.len() - open_idx - 1 {
+                    return Ok(None);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if suffix_depth != 0 {
+        return Ok(None);
+    }
+
+    let name = match parse_qualified_name(&tokens[..open_idx]) {
+        Some(v) => v,
+        None => return Ok(None),
+    };
+
+    let arg_tokens = &tokens[open_idx + 1..tokens.len() - 1];
+    let args = if arg_tokens.is_empty() {
+        Vec::new()
+    } else {
+        let parts = split_top_level(arg_tokens, ',');
+        let mut args = Vec::with_capacity(parts.len());
+        for part in parts {
+            if part.is_empty() {
+                return Ok(None);
+            }
+            args.push(parse_expression(part)?);
+        }
+        args
+    };
+
+    Ok(Some(MExpr::FunctionCall { name, args }))
+}
+
+fn parse_qualified_name(tokens: &[MToken]) -> Option<String> {
+    if tokens.is_empty() {
+        return None;
+    }
+
+    let mut parts = Vec::new();
+    let mut i = 0usize;
+
+    match &tokens[i] {
+        MToken::Identifier(v) => parts.push(v.clone()),
+        _ => return None,
+    }
+    i += 1;
+
+    while i < tokens.len() {
+        match (&tokens[i], tokens.get(i + 1)) {
+            (MToken::Symbol('.'), Some(MToken::Identifier(v))) => {
+                parts.push(v.clone());
+                i += 2;
+            }
+            _ => return None,
+        }
+    }
+
+    Some(parts.join("."))
+}
+
+fn parse_primitive(tokens: &[MToken]) -> Option<MExpr> {
+    if tokens.len() == 1 {
+        match &tokens[0] {
+            MToken::StringLiteral(v) => {
+                return Some(MExpr::Primitive(MPrimitive::String(v.clone())));
+            }
+            MToken::Number(v) => {
+                return Some(MExpr::Primitive(MPrimitive::Number(v.clone())));
+            }
+            MToken::Identifier(v) => {
+                if v.eq_ignore_ascii_case("true") {
+                    return Some(MExpr::Primitive(MPrimitive::Boolean(true)));
+                }
+                if v.eq_ignore_ascii_case("false") {
+                    return Some(MExpr::Primitive(MPrimitive::Boolean(false)));
+                }
+                if v.eq_ignore_ascii_case("null") {
+                    return Some(MExpr::Primitive(MPrimitive::Null));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if tokens.len() == 2 {
+        if matches!(tokens[0], MToken::Symbol('-')) {
+            if let MToken::Number(v) = &tokens[1] {
+                return Some(MExpr::Primitive(MPrimitive::Number(format!("-{}", v))));
+            }
+        }
+    }
+
+    None
 }
 
 fn parse_let(tokens: &[MToken]) -> Result<Option<MExpr>, MParseError> {
+    if tokens.is_empty() {
+        return Err(MParseError::Empty);
+    }
     if !matches!(tokens.first(), Some(MToken::KeywordLet)) {
         return Ok(None);
     }
@@ -9663,6 +10032,12 @@ fn parse_let(tokens: &[MToken]) -> Result<Option<MExpr>, MParseError> {
     let mut found_in = false;
 
     while idx < tokens.len() {
+        if matches!(tokens.get(idx), Some(MToken::KeywordIn)) {
+            found_in = true;
+            idx += 1;
+            break;
+        }
+
         let name = match tokens.get(idx) {
             Some(MToken::Identifier(name)) => name.clone(),
             _ => return Err(MParseError::InvalidLetBinding),
@@ -9675,75 +10050,68 @@ fn parse_let(tokens: &[MToken]) -> Result<Option<MExpr>, MParseError> {
         idx += 1;
 
         let value_start = idx;
+        let mut value_end = None;
         let mut depth = 0i32;
-        let mut value_end: Option<usize> = None;
         let mut let_depth_in_value = 0i32;
 
         while idx < tokens.len() {
-            match &tokens[idx] {
-                MToken::Symbol(c) if *c == '(' || *c == '[' || *c == '{' => depth += 1,
-                MToken::Symbol(c) if *c == ')' || *c == ']' || *c == '}' => {
-                    if depth > 0 {
-                        depth -= 1;
-                    }
-                }
-                MToken::KeywordLet => {
+            match tokens.get(idx) {
+                Some(MToken::KeywordLet) => {
                     let_depth_in_value += 1;
                 }
-                MToken::KeywordIn => {
+                Some(MToken::KeywordIn) => {
                     if let_depth_in_value > 0 {
                         let_depth_in_value -= 1;
                     } else if depth == 0 {
                         value_end = Some(idx);
-                        found_in = true;
                         break;
                     }
                 }
-                MToken::Symbol(',') if depth == 0 && let_depth_in_value == 0 => {
+                Some(MToken::Symbol(c)) if is_open_delimiter(*c) => depth += 1,
+                Some(MToken::Symbol(c)) if is_close_delimiter(*c) => {
+                    if depth > 0 {
+                        depth -= 1;
+                    }
+                }
+                Some(MToken::Symbol(',')) if depth == 0 && let_depth_in_value == 0 => {
                     value_end = Some(idx);
-                    idx += 1;
                     break;
                 }
                 _ => {}
             }
-
             idx += 1;
         }
 
-        let end = value_end.ok_or(MParseError::MissingInClause)?;
-        if end <= value_start {
+        let value_end = value_end.unwrap_or(idx);
+        if value_end <= value_start {
             return Err(MParseError::InvalidLetBinding);
         }
 
-        let value_expr = parse_expression(&tokens[value_start..end])?;
+        let value_tokens = &tokens[value_start..value_end];
+        let value_expr = parse_expression(value_tokens)?;
+
         bindings.push(LetBinding {
             name,
             value: Box::new(value_expr),
         });
 
-        if found_in {
-            idx = end + 1; // skip the 'in' token
-            break;
+        idx = value_end;
+        if matches!(tokens.get(idx), Some(MToken::Symbol(','))) {
+            idx += 1;
         }
     }
 
     if !found_in {
         return Err(MParseError::MissingInClause);
     }
-
-    if idx > tokens.len() {
+    if idx >= tokens.len() {
         return Err(MParseError::InvalidLetBinding);
     }
 
-    let body_tokens = &tokens[idx..];
-    if body_tokens.is_empty() {
-        return Err(MParseError::InvalidLetBinding);
-    }
-    let body = parse_expression(body_tokens)?;
-
+    let body_expr = parse_expression(&tokens[idx..])?;
     Ok(Some(MExpr::Let {
         bindings,
-        body: Box::new(body),
+        body: Box::new(body_expr),
     }))
 }
 
@@ -9944,7 +10312,11 @@ use crate::string_pool::{StringId, StringPool};
 
 #[deprecated(note = "use WorkbookPackage::diff instead")]
 #[allow(dead_code)]
-pub fn diff_m_queries(old_queries: &[Query], new_queries: &[Query], config: &DiffConfig) -> Vec<DiffOp> {
+pub fn diff_m_queries(
+    old_queries: &[Query],
+    new_queries: &[Query],
+    config: &DiffConfig,
+) -> Vec<DiffOp> {
     crate::with_default_session(|session| {
         diff_queries_to_ops(old_queries, new_queries, &mut session.strings, config)
     })
@@ -9981,9 +10353,10 @@ fn definition_change(
     }
 
     if enable_semantic {
-        if let (Some((_, old_h)), Some((_, new_h))) =
-            (canonical_ast_and_hash(old_expr), canonical_ast_and_hash(new_expr))
-        {
+        if let (Some((_, old_h)), Some((_, new_h))) = (
+            canonical_ast_and_hash(old_expr),
+            canonical_ast_and_hash(new_expr),
+        ) {
             let kind = if old_h == new_h {
                 DiffQueryChangeKind::FormattingOnly
             } else {
@@ -10480,18 +10853,18 @@ fn strip_leading_bom(text: &str) -> &str {
 
 ```rust
 #[cfg(feature = "excel-open-xml")]
+use crate::DiffSummary;
+#[cfg(feature = "excel-open-xml")]
 use crate::config::DiffConfig;
-use crate::diff::DiffReport;
 #[cfg(feature = "excel-open-xml")]
 use crate::datamashup::build_data_mashup;
+use crate::diff::DiffReport;
 #[cfg(feature = "excel-open-xml")]
 use crate::excel_open_xml::{PackageError, open_data_mashup, open_workbook};
 use crate::session::DiffSession;
 #[cfg(feature = "excel-open-xml")]
 use crate::sink::VecSink;
 use crate::string_pool::StringId;
-#[cfg(feature = "excel-open-xml")]
-use crate::DiffSummary;
 use serde::Serialize;
 use serde::ser::Error as SerdeError;
 #[cfg(feature = "excel-open-xml")]
@@ -10679,11 +11052,12 @@ impl<W: Write> JsonLinesSink<W> {
             strings: pool.strings(),
         };
 
-        serde_json::to_writer(&mut self.w, &header)
-            .map_err(|e| DiffError::SinkError { message: e.to_string() })?;
-        self.w
-            .write_all(b"\n")
-            .map_err(|e| DiffError::SinkError { message: e.to_string() })?;
+        serde_json::to_writer(&mut self.w, &header).map_err(|e| DiffError::SinkError {
+            message: e.to_string(),
+        })?;
+        self.w.write_all(b"\n").map_err(|e| DiffError::SinkError {
+            message: e.to_string(),
+        })?;
 
         self.wrote_header = true;
         Ok(())
@@ -10692,18 +11066,19 @@ impl<W: Write> JsonLinesSink<W> {
 
 impl<W: Write> DiffSink for JsonLinesSink<W> {
     fn emit(&mut self, op: DiffOp) -> Result<(), DiffError> {
-        serde_json::to_writer(&mut self.w, &op)
-            .map_err(|e| DiffError::SinkError { message: e.to_string() })?;
-        self.w
-            .write_all(b"\n")
-            .map_err(|e| DiffError::SinkError { message: e.to_string() })?;
+        serde_json::to_writer(&mut self.w, &op).map_err(|e| DiffError::SinkError {
+            message: e.to_string(),
+        })?;
+        self.w.write_all(b"\n").map_err(|e| DiffError::SinkError {
+            message: e.to_string(),
+        })?;
         Ok(())
     }
 
     fn finish(&mut self) -> Result<(), DiffError> {
-        self.w
-            .flush()
-            .map_err(|e| DiffError::SinkError { message: e.to_string() })
+        self.w.flush().map_err(|e| DiffError::SinkError {
+            message: e.to_string(),
+        })
     }
 }
 
@@ -10816,22 +11191,22 @@ impl WorkbookPackage {
                 }
             };
 
-        let m_ops = crate::m_diff::diff_m_ops_for_packages(
-            &self.data_mashup,
-            &other.data_mashup,
-            &mut session.strings,
-            config,
-        );
+            let m_ops = crate::m_diff::diff_m_ops_for_packages(
+                &self.data_mashup,
+                &other.data_mashup,
+                &mut session.strings,
+                config,
+            );
 
-        for op in m_ops {
-            if let Err(e) = sink.emit(op) {
-                let _ = sink.finish();
-                return Err(e);
+            for op in m_ops {
+                if let Err(e) = sink.emit(op) {
+                    let _ = sink.finish();
+                    return Err(e);
+                }
+                summary.op_count = summary.op_count.saturating_add(1);
             }
-            summary.op_count = summary.op_count.saturating_add(1);
-        }
 
-        sink.finish()?;
+            sink.finish()?;
 
             Ok(summary)
         })
@@ -11304,12 +11679,7 @@ mod tests {
         let mut grid = Grid::new(nrows, ncols);
         for (r, row_vals) in values.iter().enumerate() {
             for (c, v) in row_vals.iter().enumerate() {
-                grid.insert_cell(
-                    r as u32,
-                    c as u32,
-                    Some(CellValue::Number(*v as f64)),
-                    None,
-                );
+                grid.insert_cell(r as u32, c as u32, Some(CellValue::Number(*v as f64)), None);
             }
         }
 
@@ -13743,14 +14113,21 @@ impl Grid {
         self.cells.get_mut(&(row, col))
     }
 
-    pub fn insert_cell(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+    pub fn insert_cell(
+        &mut self,
+        row: u32,
+        col: u32,
+        value: Option<CellValue>,
+        formula: Option<StringId>,
+    ) {
         debug_assert!(
             row < self.nrows && col < self.ncols,
             "cell coordinates must lie within the grid bounds"
         );
         self.row_signatures = None;
         self.col_signatures = None;
-        self.cells.insert((row, col), CellContent { value, formula });
+        self.cells
+            .insert((row, col), CellContent { value, formula });
     }
 
     pub fn cell_count(&self) -> usize {
@@ -13979,8 +14356,7 @@ mod tests {
     #[test]
     fn snapshot_from_number_cell() {
         let mut pool = StringPool::new();
-        let ((row, col), cell) =
-            make_cell(&mut pool, "A1", Some(CellValue::Number(42.0)), None);
+        let ((row, col), cell) = make_cell(&mut pool, "A1", Some(CellValue::Number(42.0)), None);
         let snap = CellSnapshot::from_cell(row, col, &cell);
         assert_eq!(snap.addr.to_string(), "A1");
         assert_eq!(snap.value, Some(CellValue::Number(42.0)));
@@ -13991,12 +14367,7 @@ mod tests {
     fn snapshot_from_text_cell() {
         let mut pool = StringPool::new();
         let text_id = pool.intern("hello");
-        let ((row, col), cell) = make_cell(
-            &mut pool,
-            "B2",
-            Some(CellValue::Text(text_id)),
-            None,
-        );
+        let ((row, col), cell) = make_cell(&mut pool, "B2", Some(CellValue::Text(text_id)), None);
         let snap = CellSnapshot::from_cell(row, col, &cell);
         assert_eq!(snap.addr.to_string(), "B2");
         assert_eq!(snap.value, Some(CellValue::Text(text_id)));
@@ -14006,8 +14377,7 @@ mod tests {
     #[test]
     fn snapshot_from_bool_cell() {
         let mut pool = StringPool::new();
-        let ((row, col), cell) =
-            make_cell(&mut pool, "C3", Some(CellValue::Bool(true)), None);
+        let ((row, col), cell) = make_cell(&mut pool, "C3", Some(CellValue::Bool(true)), None);
         let snap = CellSnapshot::from_cell(row, col, &cell);
         assert_eq!(snap.addr.to_string(), "C3");
         assert_eq!(snap.value, Some(CellValue::Bool(true)));
@@ -14244,7 +14614,8 @@ fn pg2_addressing_matrix_consistency() {
 
     for cell in sheet.grid.iter_cell_refs() {
         if let Some(CellValue::Text(text_id)) = cell.value {
-            let text = with_default_session(|session| session.strings.resolve(*text_id).to_string());
+            let text =
+                with_default_session(|session| session.strings.resolve(*text_id).to_string());
             assert_eq!(cell.address.to_a1(), text.as_str());
             let (r, c) = address_to_index(&text).expect("address strings should parse to indices");
             assert_eq!((r, c), (cell.row, cell.col));
@@ -14562,8 +14933,8 @@ fn amr_recursive_gap_alignment() {
 #![allow(dead_code)]
 
 use excel_diff::{
-    CellValue, DiffConfig, DiffReport, Grid, Sheet, SheetKind, StringId, Workbook,
-    WorkbookPackage, with_default_session,
+    CellValue, DiffConfig, DiffReport, Grid, Sheet, SheetKind, StringId, Workbook, WorkbookPackage,
+    with_default_session,
 };
 use std::fs::File;
 use std::path::PathBuf;
@@ -14675,7 +15046,12 @@ fn grid_from_float_rows(rows: &[&[f64]]) -> Grid {
 
     for (r_idx, row_vals) in rows.iter().enumerate() {
         for (c_idx, value) in row_vals.iter().enumerate() {
-            grid.insert_cell(r_idx as u32, c_idx as u32, Some(CellValue::Number(*value)), None);
+            grid.insert_cell(
+                r_idx as u32,
+                c_idx as u32,
+                Some(CellValue::Number(*value)),
+                None,
+            );
         }
     }
 
@@ -15711,7 +16087,8 @@ fn duplicate_sheet_identity_last_writer_wins_release() {
 
     match &report.ops[0] {
         DiffOp::SheetRemoved { sheet } => assert_eq!(
-            *sheet, sid("sheet1"),
+            *sheet,
+            sid("sheet1"),
             "duplicate identity should prefer the last sheet in release builds"
         ),
         other => panic!("expected SheetRemoved, got {other:?}"),
@@ -15805,8 +16182,7 @@ fn duplicate_sheet_identity_panics_in_debug() {
     };
     let new = Workbook { sheets: Vec::new() };
 
-    let result =
-        std::panic::catch_unwind(|| diff_workbooks(&old, &new, &DiffConfig::default()));
+    let result = std::panic::catch_unwind(|| diff_workbooks(&old, &new, &DiffConfig::default()));
     if cfg!(debug_assertions) {
         assert!(
             result.is_err(),
@@ -17665,7 +18041,12 @@ fn grid_from_row_data(rows: &[Vec<i32>]) -> Grid {
 
     for (r, row_vals) in rows.iter().enumerate() {
         for (c, val) in row_vals.iter().enumerate() {
-            grid.insert_cell(r as u32, c as u32, Some(CellValue::Number(*val as f64)), None);
+            grid.insert_cell(
+                r as u32,
+                c as u32,
+                Some(CellValue::Number(*val as f64)),
+                None,
+            );
         }
     }
     grid
@@ -18059,7 +18440,11 @@ fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffRe
 
 #[test]
 fn g1_equal_sheet_produces_empty_diff() {
-    let report = diff_fixture_pkgs("equal_sheet_a.xlsx", "equal_sheet_b.xlsx", &DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "equal_sheet_a.xlsx",
+        "equal_sheet_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     assert!(
         report.ops.is_empty(),
@@ -18740,11 +19125,9 @@ fn find_header_col(workbook: &Workbook, header: &str) -> u32 {
         .sheets
         .iter()
         .flat_map(|sheet| sheet.grid.cells.iter())
-        .find_map(|((row, col), cell)| {
-            match &cell.value {
-                Some(CellValue::Text(text)) if *row == 0 && *text == header_id => Some(*col),
-                _ => None,
-            }
+        .find_map(|((row, col), cell)| match &cell.value {
+            Some(CellValue::Text(text)) if *row == 0 && *text == header_id => Some(*col),
+            _ => None,
         })
         .expect("header column should exist in fixture")
 }
@@ -19168,7 +19551,11 @@ fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffRe
     WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
 }
 
-fn try_diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> Result<DiffReport, DiffError> {
+fn try_diff_workbooks(
+    old: &Workbook,
+    new: &Workbook,
+    config: &DiffConfig,
+) -> Result<DiffReport, DiffError> {
     with_default_session(|session| {
         try_diff_workbooks_with_pool(old, new, &mut session.strings, config)
     })
@@ -20334,7 +20721,10 @@ fn literal_change_produces_definitionchanged() {
                 QueryChangeKind::Semantic,
                 "literal change is semantic"
             );
-            assert_ne!(old_hash, new_hash, "hashes should differ for semantic change");
+            assert_ne!(
+                old_hash, new_hash,
+                "hashes should differ for semantic change"
+            );
         }
         _ => panic!("expected QueryDefinitionChanged, got {:?}", ops[0]),
     }
@@ -20432,7 +20822,6 @@ fn rename_produces_query_renamed() {
     }
 }
 
-
 ```
 
 ---
@@ -20442,8 +20831,7 @@ fn rename_produces_query_renamed() {
 ```rust
 use excel_diff::{
     DataMashup, MAstKind, MParseError, MTokenDebug, ast_semantically_equal, build_data_mashup,
-    build_queries, canonicalize_m_ast, open_data_mashup, parse_m_expression,
-    tokenize_for_testing,
+    build_queries, canonicalize_m_ast, open_data_mashup, parse_m_expression, tokenize_for_testing,
 };
 
 mod common;
@@ -20896,6 +21284,224 @@ fn semantic_gate_does_not_mask_definition_plus_metadata_change() {
 
 ---
 
+### File: `core\tests\m8_m_parser_expansion_tests.rs`
+
+```rust
+use excel_diff::{MAstKind, ast_semantically_equal, canonicalize_m_ast, parse_m_expression};
+
+#[test]
+fn record_literal_parses_as_record() {
+    let ast = parse_m_expression("[Field1 = 1, Field2 = 2]").unwrap();
+    assert_eq!(
+        ast.root_kind_for_testing(),
+        MAstKind::Record { field_count: 2 }
+    );
+}
+
+#[test]
+fn list_literal_parses_as_list() {
+    let ast = parse_m_expression("{1,2,3}").unwrap();
+    assert_eq!(
+        ast.root_kind_for_testing(),
+        MAstKind::List { item_count: 3 }
+    );
+}
+
+#[test]
+fn function_call_parses_as_call() {
+    let ast = parse_m_expression("Table.FromRows(.)").unwrap();
+    assert_eq!(
+        ast.root_kind_for_testing(),
+        MAstKind::FunctionCall {
+            name: "Table.FromRows".to_string(),
+            arg_count: 1
+        }
+    );
+}
+
+#[test]
+fn primitive_string_parses() {
+    let ast = parse_m_expression(r#""hello""#).unwrap();
+    assert_eq!(ast.root_kind_for_testing(), MAstKind::Primitive);
+}
+
+#[test]
+fn primitive_number_parses() {
+    let ast = parse_m_expression("42").unwrap();
+    assert_eq!(ast.root_kind_for_testing(), MAstKind::Primitive);
+}
+
+#[test]
+fn record_field_order_is_semantically_equivalent() {
+    let mut a = parse_m_expression("[B=2, A=1]").unwrap();
+    let mut b = parse_m_expression("[A=1, B=2]").unwrap();
+
+    canonicalize_m_ast(&mut a);
+    canonicalize_m_ast(&mut b);
+
+    assert!(ast_semantically_equal(&a, &b));
+}
+
+#[test]
+fn list_order_is_not_semantically_equivalent() {
+    let mut a = parse_m_expression("{1,2}").unwrap();
+    let mut b = parse_m_expression("{2,1}").unwrap();
+
+    canonicalize_m_ast(&mut a);
+    canonicalize_m_ast(&mut b);
+
+    assert!(!ast_semantically_equal(&a, &b));
+}
+
+```
+
+---
+
+### File: `core\tests\m8_semantic_m_diff_nonlet_tests.rs`
+
+```rust
+use excel_diff::{DiffConfig, DiffOp, QueryChangeKind, WorkbookPackage};
+use std::fs::File;
+
+mod common;
+use common::fixture_path;
+
+fn load_pkg(name: &str) -> WorkbookPackage {
+    let path = fixture_path(name);
+    let file = File::open(&path).expect("fixture file should open");
+    WorkbookPackage::open(file).expect("fixture should parse")
+}
+
+fn m_ops<'a>(ops: &'a [DiffOp]) -> Vec<&'a DiffOp> {
+    ops.iter()
+        .filter(|op| {
+            matches!(
+                op,
+                DiffOp::QueryAdded { .. }
+                    | DiffOp::QueryRemoved { .. }
+                    | DiffOp::QueryRenamed { .. }
+                    | DiffOp::QueryDefinitionChanged { .. }
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn record_reorder_is_masked_by_semantic_canonicalization() {
+    let a = load_pkg("m_record_equiv_a.xlsx");
+    let b = load_pkg("m_record_equiv_b.xlsx");
+
+    let cfg = DiffConfig {
+        enable_m_semantic_diff: true,
+        ..DiffConfig::default()
+    };
+    let diff = a.diff(&b, &cfg);
+
+    let ops = m_ops(&diff.ops);
+    assert_eq!(ops.len(), 1);
+
+    match ops[0] {
+        DiffOp::QueryDefinitionChanged {
+            change_kind,
+            old_hash,
+            new_hash,
+            ..
+        } => {
+            assert_eq!(*change_kind, QueryChangeKind::FormattingOnly);
+            assert_eq!(old_hash, new_hash);
+        }
+        _ => panic!("expected QueryDefinitionChanged"),
+    }
+}
+
+#[test]
+fn list_formatting_only_is_masked() {
+    let a = load_pkg("m_list_formatting_a.xlsx");
+    let b = load_pkg("m_list_formatting_b.xlsx");
+
+    let cfg = DiffConfig {
+        enable_m_semantic_diff: true,
+        ..DiffConfig::default()
+    };
+    let diff = a.diff(&b, &cfg);
+
+    let ops = m_ops(&diff.ops);
+    assert_eq!(ops.len(), 1);
+
+    match ops[0] {
+        DiffOp::QueryDefinitionChanged {
+            change_kind,
+            old_hash,
+            new_hash,
+            ..
+        } => {
+            assert_eq!(*change_kind, QueryChangeKind::FormattingOnly);
+            assert_eq!(old_hash, new_hash);
+        }
+        _ => panic!("expected QueryDefinitionChanged"),
+    }
+}
+
+#[test]
+fn call_formatting_only_is_masked() {
+    let a = load_pkg("m_call_formatting_a.xlsx");
+    let b = load_pkg("m_call_formatting_b.xlsx");
+
+    let cfg = DiffConfig {
+        enable_m_semantic_diff: true,
+        ..DiffConfig::default()
+    };
+    let diff = a.diff(&b, &cfg);
+
+    let ops = m_ops(&diff.ops);
+    assert_eq!(ops.len(), 1);
+
+    match ops[0] {
+        DiffOp::QueryDefinitionChanged {
+            change_kind,
+            old_hash,
+            new_hash,
+            ..
+        } => {
+            assert_eq!(*change_kind, QueryChangeKind::FormattingOnly);
+            assert_eq!(old_hash, new_hash);
+        }
+        _ => panic!("expected QueryDefinitionChanged"),
+    }
+}
+
+#[test]
+fn primitive_formatting_only_is_masked() {
+    let a = load_pkg("m_primitive_formatting_a.xlsx");
+    let b = load_pkg("m_primitive_formatting_b.xlsx");
+
+    let cfg = DiffConfig {
+        enable_m_semantic_diff: true,
+        ..DiffConfig::default()
+    };
+    let diff = a.diff(&b, &cfg);
+
+    let ops = m_ops(&diff.ops);
+    assert_eq!(ops.len(), 1);
+
+    match ops[0] {
+        DiffOp::QueryDefinitionChanged {
+            change_kind,
+            old_hash,
+            new_hash,
+            ..
+        } => {
+            assert_eq!(*change_kind, QueryChangeKind::FormattingOnly);
+            assert_eq!(old_hash, new_hash);
+        }
+        _ => panic!("expected QueryDefinitionChanged"),
+    }
+}
+
+```
+
+---
+
 ### File: `core\tests\m_section_splitting_tests.rs`
 
 ```rust
@@ -21208,9 +21814,9 @@ mod common;
 
 use common::{fixture_path, open_fixture_workbook};
 use excel_diff::{
-    CellAddress, CellSnapshot, CellValue, ContainerError, DiffConfig, DiffOp, DiffReport,
-    PackageError, WorkbookPackage, CellDiff, diff_report_to_cell_diffs,
-    diff_workbooks_to_json, serialize_cell_diffs, serialize_diff_report,
+    CellAddress, CellDiff, CellSnapshot, CellValue, ContainerError, DiffConfig, DiffOp, DiffReport,
+    PackageError, WorkbookPackage, diff_report_to_cell_diffs, diff_workbooks_to_json,
+    serialize_cell_diffs, serialize_diff_report,
 };
 use serde_json::Value;
 #[cfg(feature = "perf-metrics")]
@@ -21270,31 +21876,30 @@ fn diff_report_to_cell_diffs_filters_non_cell_ops() {
     let addr1 = CellAddress::from_indices(0, 0);
     let addr2 = CellAddress::from_indices(1, 1);
 
-    let report = attach_strings(DiffReport::new(vec![
-        DiffOp::SheetAdded {
-            sheet: sheet_added,
-        },
-        DiffOp::cell_edited(
-            sheet1,
-            addr1,
-            make_cell_snapshot(addr1, Some(CellValue::Number(1.0))),
-            make_cell_snapshot(addr1, Some(CellValue::Number(2.0))),
-        ),
-        DiffOp::RowAdded {
-            sheet: sheet1,
-            row_idx: 5,
-            row_signature: None,
-        },
-        DiffOp::cell_edited(
-            sheet2,
-            addr2,
-            make_cell_snapshot(addr2, Some(CellValue::Text(old_text))),
-            make_cell_snapshot(addr2, Some(CellValue::Text(new_text))),
-        ),
-        DiffOp::SheetRemoved {
-            sheet: old_sheet,
-        },
-    ]), pool);
+    let report = attach_strings(
+        DiffReport::new(vec![
+            DiffOp::SheetAdded { sheet: sheet_added },
+            DiffOp::cell_edited(
+                sheet1,
+                addr1,
+                make_cell_snapshot(addr1, Some(CellValue::Number(1.0))),
+                make_cell_snapshot(addr1, Some(CellValue::Number(2.0))),
+            ),
+            DiffOp::RowAdded {
+                sheet: sheet1,
+                row_idx: 5,
+                row_signature: None,
+            },
+            DiffOp::cell_edited(
+                sheet2,
+                addr2,
+                make_cell_snapshot(addr2, Some(CellValue::Text(old_text))),
+                make_cell_snapshot(addr2, Some(CellValue::Text(new_text))),
+            ),
+            DiffOp::SheetRemoved { sheet: old_sheet },
+        ]),
+        pool,
+    );
 
     let cell_diffs = diff_report_to_cell_diffs(&report);
     assert_eq!(
@@ -21318,29 +21923,32 @@ fn diff_report_to_cell_diffs_ignores_block_moved_rect() {
     let sheet1 = sid_local(&mut pool, "Sheet1");
     let addr = CellAddress::from_indices(2, 2);
 
-    let report = attach_strings(DiffReport::new(vec![
-        DiffOp::block_moved_rect(sheet1, 2, 3, 1, 3, 9, 6, Some(0xCAFEBABE)),
-        DiffOp::cell_edited(
-            sheet1,
-            addr,
-            make_cell_snapshot(addr, Some(CellValue::Number(10.0))),
-            make_cell_snapshot(addr, Some(CellValue::Number(20.0))),
-        ),
-        DiffOp::BlockMovedRows {
-            sheet: sheet1,
-            src_start_row: 0,
-            row_count: 2,
-            dst_start_row: 5,
-            block_hash: None,
-        },
-        DiffOp::BlockMovedColumns {
-            sheet: sheet1,
-            src_start_col: 0,
-            col_count: 2,
-            dst_start_col: 5,
-            block_hash: None,
-        },
-    ]), pool);
+    let report = attach_strings(
+        DiffReport::new(vec![
+            DiffOp::block_moved_rect(sheet1, 2, 3, 1, 3, 9, 6, Some(0xCAFEBABE)),
+            DiffOp::cell_edited(
+                sheet1,
+                addr,
+                make_cell_snapshot(addr, Some(CellValue::Number(10.0))),
+                make_cell_snapshot(addr, Some(CellValue::Number(20.0))),
+            ),
+            DiffOp::BlockMovedRows {
+                sheet: sheet1,
+                src_start_row: 0,
+                row_count: 2,
+                dst_start_row: 5,
+                block_hash: None,
+            },
+            DiffOp::BlockMovedColumns {
+                sheet: sheet1,
+                src_start_col: 0,
+                col_count: 2,
+                dst_start_col: 5,
+                block_hash: None,
+            },
+        ]),
+        pool,
+    );
 
     let cell_diffs = diff_report_to_cell_diffs(&report);
     assert_eq!(
@@ -21361,20 +21969,23 @@ fn diff_report_to_cell_diffs_maps_values_correctly() {
     let addr_num = CellAddress::from_indices(2, 2); // C3
     let addr_bool = CellAddress::from_indices(3, 3); // D4
 
-    let report = attach_strings(DiffReport::new(vec![
-        DiffOp::cell_edited(
-            sheet_id,
-            addr_num,
-            make_cell_snapshot(addr_num, Some(CellValue::Number(42.5))),
-            make_cell_snapshot(addr_num, Some(CellValue::Number(43.5))),
-        ),
-        DiffOp::cell_edited(
-            sheet_id,
-            addr_bool,
-            make_cell_snapshot(addr_bool, Some(CellValue::Bool(true))),
-            make_cell_snapshot(addr_bool, Some(CellValue::Bool(false))),
-        ),
-    ]), pool);
+    let report = attach_strings(
+        DiffReport::new(vec![
+            DiffOp::cell_edited(
+                sheet_id,
+                addr_num,
+                make_cell_snapshot(addr_num, Some(CellValue::Number(42.5))),
+                make_cell_snapshot(addr_num, Some(CellValue::Number(43.5))),
+            ),
+            DiffOp::cell_edited(
+                sheet_id,
+                addr_bool,
+                make_cell_snapshot(addr_bool, Some(CellValue::Bool(true))),
+                make_cell_snapshot(addr_bool, Some(CellValue::Bool(false))),
+            ),
+        ]),
+        pool,
+    );
 
     let cell_diffs = diff_report_to_cell_diffs(&report);
     assert_eq!(cell_diffs.len(), 2);
@@ -21397,20 +22008,23 @@ fn diff_report_to_cell_diffs_filters_no_op_cell_edits() {
     let addr_a1 = CellAddress::from_indices(0, 0);
     let addr_a2 = CellAddress::from_indices(1, 0);
 
-    let report = attach_strings(DiffReport::new(vec![
-        DiffOp::cell_edited(
-            sheet,
-            addr_a1,
-            make_cell_snapshot(addr_a1, Some(CellValue::Number(1.0))),
-            make_cell_snapshot(addr_a1, Some(CellValue::Number(1.0))),
-        ),
-        DiffOp::cell_edited(
-            sheet,
-            addr_a2,
-            make_cell_snapshot(addr_a2, Some(CellValue::Number(1.0))),
-            make_cell_snapshot(addr_a2, Some(CellValue::Number(2.0))),
-        ),
-    ]), pool);
+    let report = attach_strings(
+        DiffReport::new(vec![
+            DiffOp::cell_edited(
+                sheet,
+                addr_a1,
+                make_cell_snapshot(addr_a1, Some(CellValue::Number(1.0))),
+                make_cell_snapshot(addr_a1, Some(CellValue::Number(1.0))),
+            ),
+            DiffOp::cell_edited(
+                sheet,
+                addr_a2,
+                make_cell_snapshot(addr_a2, Some(CellValue::Number(1.0))),
+                make_cell_snapshot(addr_a2, Some(CellValue::Number(2.0))),
+            ),
+        ]),
+        pool,
+    );
 
     let diffs = diff_report_to_cell_diffs(&report);
 
@@ -21539,7 +22153,8 @@ fn json_diff_case_only_sheet_name_no_changes() {
     let old = open_fixture_workbook("sheet_case_only_rename_a.xlsx");
     let new = open_fixture_workbook("sheet_case_only_rename_b.xlsx");
 
-    let report = WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
+    let report =
+        WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
     assert!(
         report.ops.is_empty(),
         "case-only sheet rename with identical content should produce no diff ops"
@@ -21551,7 +22166,8 @@ fn json_diff_case_only_sheet_name_cell_edit() {
     let old = open_fixture_workbook("sheet_case_only_rename_edit_a.xlsx");
     let new = open_fixture_workbook("sheet_case_only_rename_edit_b.xlsx");
 
-    let report = WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
+    let report =
+        WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
     assert_eq!(report.ops.len(), 1, "expected a single cell edit");
     match &report.ops[0] {
         DiffOp::CellEdited {
@@ -21982,8 +22598,7 @@ fn package_diff_streaming_finishes_on_error() {
         }
     }
 
-    let sheet_id =
-        excel_diff::with_default_session(|session| session.strings.intern("Sheet1"));
+    let sheet_id = excel_diff::with_default_session(|session| session.strings.intern("Sheet1"));
 
     let mut grid_a = Grid::new(10, 1);
     let mut grid_b = Grid::new(10, 1);
@@ -22028,7 +22643,10 @@ fn package_diff_streaming_finishes_on_error() {
 
     let result = pkg_a.diff_streaming(&pkg_b, &DiffConfig::default(), &mut sink);
     assert!(result.is_err(), "diff_streaming should return error");
-    assert!(sink.finish_called, "sink.finish() should be called on error");
+    assert!(
+        sink.finish_called,
+        "sink.finish() should be called on error"
+    );
 }
 
 #[test]
@@ -22077,7 +22695,10 @@ fn package_diff_streaming_finishes_on_m_emit_error() {
     let result = pkg_a.diff_streaming(&pkg_b, &DiffConfig::default(), &mut sink);
 
     assert!(result.is_err(), "expected sink error during M op emission");
-    assert!(sink.finish_called, "sink.finish() should be called on M emit error");
+    assert!(
+        sink.finish_called,
+        "sink.finish() should be called on M emit error"
+    );
     assert_eq!(sink.finish_calls, 1, "finish should be called exactly once");
 }
 
@@ -22093,8 +22714,8 @@ fn package_diff_streaming_finishes_on_m_emit_error() {
 mod common;
 
 use common::single_sheet_workbook;
-use excel_diff::{CellValue, DiffConfig, DiffOp, DiffReport, Grid, Workbook, WorkbookPackage};
 use excel_diff::perf::DiffMetrics;
+use excel_diff::{CellValue, DiffConfig, DiffOp, DiffReport, Grid, Workbook, WorkbookPackage};
 
 fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
     WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
@@ -22447,18 +23068,24 @@ fn pg1_basic_two_sheets_structure() {
     assert_eq!(workbook.sheets.len(), 2);
     assert_eq!(workbook.sheets[0].name, sid("Sheet1"));
     assert_eq!(workbook.sheets[1].name, sid("Sheet2"));
-    assert!(matches!(workbook.sheets[0].kind, excel_diff::SheetKind::Worksheet));
-    assert!(matches!(workbook.sheets[1].kind, excel_diff::SheetKind::Worksheet));
+    assert!(matches!(
+        workbook.sheets[0].kind,
+        excel_diff::SheetKind::Worksheet
+    ));
+    assert!(matches!(
+        workbook.sheets[1].kind,
+        excel_diff::SheetKind::Worksheet
+    ));
 
     let sheet1 = &workbook.sheets[0];
     assert_eq!(sheet1.grid.nrows, 3);
     assert_eq!(sheet1.grid.ncols, 3);
     with_default_session(|session| {
         assert_eq!(
-            sheet1
-                .grid
-                .get(0, 0)
-                .and_then(|cell| cell.value.as_ref().and_then(|v| v.as_text(session.strings()))),
+            sheet1.grid.get(0, 0).and_then(|cell| cell
+                .value
+                .as_ref()
+                .and_then(|v| v.as_text(session.strings()))),
             Some("R1C1")
         );
     });
@@ -22655,7 +23282,10 @@ fn pg3_value_and_formula_cells_snapshot_from_excel() {
         Some(CellValue::Number(n)) if (n - 43.0).abs() < 1e-6
     ));
     assert_eq!(b1.addr.to_string(), "B1");
-    let b1_formula = b1.formula.map(resolve_text).expect("B1 should have a formula");
+    let b1_formula = b1
+        .formula
+        .map(resolve_text)
+        .expect("B1 should have a formula");
     assert!(b1_formula.contains("A1+1"));
 
     let b2 = snapshot(sheet, "B2");
@@ -22665,14 +23295,20 @@ fn pg3_value_and_formula_cells_snapshot_from_excel() {
     };
     assert_eq!(b2_text, "hello world");
     assert_eq!(b2.addr.to_string(), "B2");
-    let b2_formula = b2.formula.map(resolve_text).expect("B2 should have a formula");
+    let b2_formula = b2
+        .formula
+        .map(resolve_text)
+        .expect("B2 should have a formula");
     assert!(b2_formula.contains("hello"));
     assert!(b2_formula.contains("world"));
 
     let b3 = snapshot(sheet, "B3");
     assert_eq!(b3.value, Some(CellValue::Bool(true)));
     assert_eq!(b3.addr.to_string(), "B3");
-    let b3_formula = b3.formula.map(resolve_text).expect("B3 should have a formula");
+    let b3_formula = b3
+        .formula
+        .map(resolve_text)
+        .expect("B3 should have a formula");
     assert!(
         b3_formula.contains(">0"),
         "B3 formula should include comparison: {b3_formula:?}"
@@ -22838,7 +23474,6 @@ fn op_kind(op: &DiffOp) -> &'static str {
         _ => "Unknown",
     }
 }
-
 
 fn json_keys(json: &Value) -> BTreeSet<String> {
     json.as_object()
@@ -24350,7 +24985,8 @@ fn pg6_1_sheet_added_no_grid_ops_on_main() {
     let old = open_fixture_workbook("pg6_sheet_added_a.xlsx");
     let new = open_fixture_workbook("pg6_sheet_added_b.xlsx");
 
-    let report = WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
+    let report =
+        WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
 
     let mut sheet_added = 0;
     for op in &report.ops {
@@ -24387,7 +25023,8 @@ fn pg6_2_sheet_removed_no_grid_ops_on_main() {
     let old = open_fixture_workbook("pg6_sheet_removed_a.xlsx");
     let new = open_fixture_workbook("pg6_sheet_removed_b.xlsx");
 
-    let report = WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
+    let report =
+        WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
 
     let mut sheet_removed = 0;
     for op in &report.ops {
@@ -24424,7 +25061,8 @@ fn pg6_3_rename_as_remove_plus_add_no_grid_ops() {
     let old = open_fixture_workbook("pg6_sheet_renamed_a.xlsx");
     let new = open_fixture_workbook("pg6_sheet_renamed_b.xlsx");
 
-    let report = WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
+    let report =
+        WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
 
     let mut added = 0;
     let mut removed = 0;
@@ -24462,7 +25100,8 @@ fn pg6_4_sheet_and_grid_change_composed_cleanly() {
     let old = open_fixture_workbook("pg6_sheet_and_grid_change_a.xlsx");
     let new = open_fixture_workbook("pg6_sheet_and_grid_change_b.xlsx");
 
-    let report = WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
+    let report =
+        WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
 
     let mut scratch_added = 0;
     let mut main_cell_edits = 0;
@@ -24570,12 +25209,7 @@ fn different_rows_have_different_signatures() {
 #[test]
 fn compute_all_signatures_populates_fields() {
     let mut grid = Grid::new(5, 5);
-    grid.insert_test(make_cell(
-        2,
-        2,
-        Some(CellValue::Text(sid("center"))),
-        None,
-    ));
+    grid.insert_test(make_cell(2, 2, Some(CellValue::Text(sid("center"))), None));
     assert!(grid.row_signatures.is_none());
     assert!(grid.col_signatures.is_none());
     grid.compute_all_signatures();
@@ -25219,14 +25853,9 @@ fn vec_sink_and_callback_sink_produce_identical_ops() {
     let config = DiffConfig::default();
 
     let mut vec_sink = VecSink::new();
-    let summary_vec = try_diff_workbooks_streaming(
-        &wb_a,
-        &wb_b,
-        &mut session.strings,
-        &config,
-        &mut vec_sink,
-    )
-    .expect("VecSink diff should succeed");
+    let summary_vec =
+        try_diff_workbooks_streaming(&wb_a, &wb_b, &mut session.strings, &config, &mut vec_sink)
+            .expect("VecSink diff should succeed");
     let vec_ops = vec_sink.into_ops();
 
     let mut callback_ops: Vec<DiffOp> = Vec::new();
@@ -25323,7 +25952,6 @@ fn streaming_summary_matches_collected_ops() {
     assert!(summary.complete, "diff should be complete");
 }
 
-
 ```
 
 ---
@@ -25415,7 +26043,6 @@ fn into_strings_returns_all_interned() {
     assert!(strings.contains(&"third".to_string()));
     assert_eq!(strings.len(), 4);
 }
-
 
 ```
 
@@ -26038,6 +26665,63 @@ scenarios:
       mode: "m_formatting_only_b_variant"
       base_file: "templates/base_query.xlsx"
     output: "m_formatting_only_b_variant.xlsx"
+
+  # --- Milestone 8: M Parser Expansion ---
+  - id: "m_record_equiv_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_record_equiv_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_record_equiv_a.xlsx"
+
+  - id: "m_record_equiv_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_record_equiv_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_record_equiv_b.xlsx"
+
+  - id: "m_list_formatting_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_list_formatting_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_list_formatting_a.xlsx"
+
+  - id: "m_list_formatting_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_list_formatting_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_list_formatting_b.xlsx"
+
+  - id: "m_call_formatting_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_call_formatting_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_call_formatting_a.xlsx"
+
+  - id: "m_call_formatting_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_call_formatting_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_call_formatting_b.xlsx"
+
+  - id: "m_primitive_formatting_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_primitive_formatting_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_primitive_formatting_a.xlsx"
+
+  - id: "m_primitive_formatting_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_primitive_formatting_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_primitive_formatting_b.xlsx"
 
   # --- P1: Large Dense Grid (Performance Baseline) ---
   - id: "p1_large_dense"
@@ -28333,11 +29017,12 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
             )
 
         if self.mode == "m_formatting_only_a":
+            body = "let Source = 1, Foo = 2 in Source"
             return m_diff_scenario(
                 [
                     {
                         "name": "FormatTest",
-                        "body": 'let Source=Excel.CurrentWorkbook(){[Name="Table1"]}[Content] in Source',
+                        "body": body,
                         "load_to_sheet": True,
                         "load_to_model": False,
                     },
@@ -28348,8 +29033,9 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
             body = "\n".join(
                 [
                     "let",
-                    "    // Load the current workbook table",
-                    "    Source = Excel.CurrentWorkbook(){[Name = \"Table1\"]}[Content]",
+                    "    // Same semantics as m_formatting_only_a with different formatting",
+                    "    Source = 1,",
+                    "    Foo = 2",
                     "in",
                     "    Source",
                 ]
@@ -28369,8 +29055,8 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
             body = "\n".join(
                 [
                     "let",
-                    "    // Load a different table",
-                    "    Source = Excel.CurrentWorkbook(){[Name = \"Table2\"]}[Content]",
+                    "    Source = 1,",
+                    "    Foo = 3",
                     "in",
                     "    Source",
                 ]
@@ -28380,6 +29066,110 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
                     {
                         "name": "FormatTest",
                         "body": body,
+                        "load_to_sheet": True,
+                        "load_to_model": False,
+                    },
+                ]
+            )
+
+        if self.mode == "m_record_equiv_a":
+            return m_diff_scenario(
+                [
+                    {
+                        "name": "RecordRoot",
+                        "body": "[B=2, A=1]",
+                        "load_to_sheet": True,
+                        "load_to_model": False,
+                    },
+                ]
+            )
+
+        if self.mode == "m_record_equiv_b":
+            return m_diff_scenario(
+                [
+                    {
+                        "name": "RecordRoot",
+                        "body": "[A=1, B=2]",
+                        "load_to_sheet": True,
+                        "load_to_model": False,
+                    },
+                ]
+            )
+
+        if self.mode == "m_list_formatting_a":
+            return m_diff_scenario(
+                [
+                    {
+                        "name": "ListRoot",
+                        "body": "{1,2,3}",
+                        "load_to_sheet": True,
+                        "load_to_model": False,
+                    },
+                ]
+            )
+
+        if self.mode == "m_list_formatting_b":
+            return m_diff_scenario(
+                [
+                    {
+                        "name": "ListRoot",
+                        "body": "{ 1, /*c*/ 2, 3 }",
+                        "load_to_sheet": True,
+                        "load_to_model": False,
+                    },
+                ]
+            )
+
+        if self.mode == "m_call_formatting_a":
+            return m_diff_scenario(
+                [
+                    {
+                        "name": "CallRoot",
+                        "body": 'Table.FromRows({{1,2},{3,4}}, {"A","B"})',
+                        "load_to_sheet": True,
+                        "load_to_model": False,
+                    },
+                ]
+            )
+
+        if self.mode == "m_call_formatting_b":
+            body = "\n".join(
+                [
+                    "Table.FromRows(",
+                    "    {{1,2},{3,4}},",
+                    "    {\"A\", \"B\"}",
+                    ")",
+                ]
+            )
+            return m_diff_scenario(
+                [
+                    {
+                        "name": "CallRoot",
+                        "body": body,
+                        "load_to_sheet": True,
+                        "load_to_model": False,
+                    },
+                ]
+            )
+
+        if self.mode == "m_primitive_formatting_a":
+            return m_diff_scenario(
+                [
+                    {
+                        "name": "PrimRoot",
+                        "body": '"hello"',
+                        "load_to_sheet": True,
+                        "load_to_model": False,
+                    },
+                ]
+            )
+
+        if self.mode == "m_primitive_formatting_b":
+            return m_diff_scenario(
+                [
+                    {
+                        "name": "PrimRoot",
+                        "body": '"hello" // formatting-only whitespace and comment',
                         "load_to_sheet": True,
                         "load_to_model": False,
                     },
@@ -28647,7 +29437,6 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
         if isinstance(value, bool):
             return f"l{'1' if value else '0'}"
         return f"s{value}"
-
 
 ```
 

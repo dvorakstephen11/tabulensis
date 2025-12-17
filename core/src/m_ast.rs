@@ -199,8 +199,19 @@ fn canonicalize_expr(expr: &mut MExpr) {
 }
 
 fn canonicalize_tokens(tokens: &mut Vec<MToken>) {
-    // Tokens are already whitespace/comment free; no additional normalization needed yet.
-    let _ = tokens;
+    for token in tokens.iter_mut() {
+        let MToken::Identifier(ident) = token else {
+            continue;
+        };
+
+        if ident.eq_ignore_ascii_case("true") {
+            *ident = "true".to_string();
+        } else if ident.eq_ignore_ascii_case("false") {
+            *ident = "false".to_string();
+        } else if ident.eq_ignore_ascii_case("null") {
+            *ident = "null".to_string();
+        }
+    }
 }
 
 fn parse_expression(tokens: &[MToken]) -> Result<MExpr, MParseError> {
