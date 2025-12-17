@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 
-use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
+use crate::grid_metadata::{FrequencyClass, RowMeta};
 use crate::grid_view::GridView;
 use crate::workbook::RowSignature;
 
@@ -151,7 +151,7 @@ pub fn discover_local_anchors(old: &[RowMeta], new: &[RowMeta]) -> Vec<Anchor> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
+    use crate::grid_metadata::{FrequencyClass, RowMeta};
 
     fn meta_from_hashes(hashes: &[u128]) -> Vec<RowMeta> {
         hashes
@@ -162,7 +162,6 @@ mod tests {
                 RowMeta {
                     row_idx: idx as u32,
                     signature: sig,
-                    hash: sig,
                     non_blank_count: 1,
                     first_non_blank_col: 0,
                     frequency_class: FrequencyClass::Common,

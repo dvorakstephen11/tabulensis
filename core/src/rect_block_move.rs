@@ -8,7 +8,7 @@
 //! structural changes that preserve content but change position.
 
 use crate::config::DiffConfig;
-use crate::grid_view::{ColHash, ColMeta, GridView, HashStats, RowHash};
+use crate::grid_view::{ColHash, GridView, HashStats, RowHash};
 use crate::workbook::{Cell, Grid};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,18 +42,20 @@ pub(crate) fn detect_exact_rect_block_move(
     let view_a = GridView::from_grid_with_config(old, config);
     let view_b = GridView::from_grid_with_config(new, config);
 
-    if low_info_dominated(&view_a) || low_info_dominated(&view_b) {
+    if view_a.is_low_info_dominated() || view_b.is_low_info_dominated() {
         return None;
     }
 
-    if blank_dominated(&view_a) || blank_dominated(&view_b) {
+    if view_a.is_blank_dominated() || view_b.is_blank_dominated() {
         return None;
     }
 
     let row_stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
     let col_stats = HashStats::from_col_meta(&view_a.col_meta, &view_b.col_meta);
 
-    if has_heavy_repetition(&row_stats, config) || has_heavy_repetition(&col_stats, config) {
+    if row_stats.has_heavy_repetition(config.max_hash_repeat)
+        || col_stats.has_heavy_repetition(config.max_hash_repeat)
+    {
         return None;
     }
 
@@ -247,14 +249,14 @@ fn has_unique_meta(
 fn is_unique_row_in_a(idx: u32, view: &GridView<'_>, stats: &HashStats<RowHash>) -> bool {
     view.row_meta
         .get(idx as usize)
-        .map(|meta| unique_in_a(meta.hash, stats))
+        .map(|meta| unique_in_a(meta.signature, stats))
         .unwrap_or(false)
 }
 
 fn is_unique_row_in_b(idx: u32, view: &GridView<'_>, stats: &HashStats<RowHash>) -> bool {
     view.row_meta
         .get(idx as usize)
-        .map(|meta| unique_in_b(meta.hash, stats))
+        .map(|meta| unique_in_b(meta.signature, stats))
         .unwrap_or(false)
 }
 
@@ -326,47 +328,6 @@ fn is_within_size_bounds(old: &Grid, new: &Grid, config: &DiffConfig) -> bool {
     let rows = old.nrows.max(new.nrows);
     let cols = old.ncols.max(new.ncols);
     rows <= config.max_align_rows && cols <= config.max_align_cols
-}
-
-fn low_info_dominated(view: &GridView<'_>) -> bool {
-    if view.row_meta.is_empty() {
-        return false;
-    }
-
-    let low_info_count = view.row_meta.iter().filter(|m| m.is_low_info).count();
-    low_info_count * 2 > view.row_meta.len()
-}
-
-fn blank_dominated(view: &GridView<'_>) -> bool {
-    if view.col_meta.is_empty() {
-        return false;
-    }
-
-    let blank_cols = view
-        .col_meta
-        .iter()
-        .filter(
-            |ColMeta {
-                 non_blank_count, ..
-             }| *non_blank_count == 0,
-        )
-        .count();
-
-    blank_cols * 2 > view.col_meta.len()
-}
-
-fn has_heavy_repetition<H>(stats: &HashStats<H>, config: &DiffConfig) -> bool
-where
-    H: Eq + std::hash::Hash + Copy,
-{
-    stats
-        .freq_a
-        .values()
-        .chain(stats.freq_b.values())
-        .copied()
-        .max()
-        .unwrap_or(0)
-        > config.max_hash_repeat
 }
 
 fn unique_in_a<H>(hash: H, stats: &HashStats<H>) -> bool

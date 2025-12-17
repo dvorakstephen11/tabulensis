@@ -38,6 +38,7 @@ mod formula_diff;
 #[cfg(feature = "excel-open-xml")]
 mod excel_open_xml;
 mod grid_parser;
+mod grid_metadata;
 mod grid_view;
 pub(crate) mod hashing;
 mod m_ast;

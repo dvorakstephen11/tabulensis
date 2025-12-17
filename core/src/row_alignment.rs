@@ -54,12 +54,12 @@ pub(crate) fn detect_exact_row_block_move(
     let view_a = GridView::from_grid_with_config(old, config);
     let view_b = GridView::from_grid_with_config(new, config);
 
-    if low_info_dominated(&view_a) || low_info_dominated(&view_b) {
+    if view_a.is_low_info_dominated() || view_b.is_low_info_dominated() {
         return None;
     }
 
     let stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
-    if has_heavy_repetition(&stats, config) {
+    if stats.has_heavy_repetition(config.max_hash_repeat) {
         return None;
     }
 
@@ -70,18 +70,18 @@ pub(crate) fn detect_exact_row_block_move(
     if meta_a
         .iter()
         .zip(meta_b.iter())
-        .all(|(a, b)| a.hash == b.hash)
+        .all(|(a, b)| a.signature == b.signature)
     {
         return None;
     }
 
-    let prefix = (0..n).find(|&idx| meta_a[idx].hash != meta_b[idx].hash)?;
+    let prefix = (0..n).find(|&idx| meta_a[idx].signature != meta_b[idx].signature)?;
 
     let mut suffix_len = 0usize;
     while suffix_len < n.saturating_sub(prefix) {
         let idx_a = n - 1 - suffix_len;
         let idx_b = n - 1 - suffix_len;
-        if meta_a[idx_a].hash == meta_b[idx_b].hash {
+        if meta_a[idx_a].signature == meta_b[idx_b].signature {
             suffix_len += 1;
         } else {
             break;
@@ -96,7 +96,7 @@ pub(crate) fn detect_exact_row_block_move(
 
         let mut len = 0usize;
         while src_start + len < tail_start && dst_start + len < tail_start {
-            if meta_a[src_start + len].hash != meta_b[dst_start + len].hash {
+            if meta_a[src_start + len].signature != meta_b[dst_start + len].signature {
                 break;
             }
             len += 1;
@@ -132,7 +132,7 @@ pub(crate) fn detect_exact_row_block_move(
                 return None;
             }
 
-            if meta_a[idx_a].hash != meta_b[idx_b].hash {
+            if meta_a[idx_a].signature != meta_b[idx_b].signature {
                 return None;
             }
 
@@ -141,8 +141,8 @@ pub(crate) fn detect_exact_row_block_move(
         }
 
         for meta in &meta_a[src_start..src_end] {
-            if stats.freq_a.get(&meta.hash).copied().unwrap_or(0) != 1
-                || stats.freq_b.get(&meta.hash).copied().unwrap_or(0) != 1
+            if stats.freq_a.get(&meta.signature).copied().unwrap_or(0) != 1
+                || stats.freq_b.get(&meta.signature).copied().unwrap_or(0) != 1
             {
                 return None;
             }
@@ -156,14 +156,14 @@ pub(crate) fn detect_exact_row_block_move(
     };
 
     if let Some(src_start) =
-        (prefix..tail_start).find(|&idx| meta_a[idx].hash == meta_b[prefix].hash)
+        (prefix..tail_start).find(|&idx| meta_a[idx].signature == meta_b[prefix].signature)
         && let Some(mv) = try_candidate(src_start, prefix)
     {
         return Some(mv);
     }
 
     if let Some(dst_start) =
-        (prefix..tail_start).find(|&idx| meta_b[idx].hash == meta_a[prefix].hash)
+        (prefix..tail_start).find(|&idx| meta_b[idx].signature == meta_a[prefix].signature)
         && let Some(mv) = try_candidate(prefix, dst_start)
     {
         return Some(mv);
@@ -192,12 +192,12 @@ pub(crate) fn detect_fuzzy_row_block_move(
     let view_a = GridView::from_grid_with_config(old, config);
     let view_b = GridView::from_grid_with_config(new, config);
 
-    if low_info_dominated(&view_a) || low_info_dominated(&view_b) {
+    if view_a.is_low_info_dominated() || view_b.is_low_info_dominated() {
         return None;
     }
 
     let stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
-    if has_heavy_repetition(&stats, config) {
+    if stats.has_heavy_repetition(config.max_hash_repeat) {
         return None;
     }
 
@@ -207,14 +207,14 @@ pub(crate) fn detect_fuzzy_row_block_move(
     if meta_a
         .iter()
         .zip(meta_b.iter())
-        .all(|(a, b)| a.hash == b.hash)
+        .all(|(a, b)| a.signature == b.signature)
     {
         return None;
     }
 
     let n = meta_a.len();
     let mut prefix = 0usize;
-    while prefix < n && meta_a[prefix].hash == meta_b[prefix].hash {
+    while prefix < n && meta_a[prefix].signature == meta_b[prefix].signature {
         prefix += 1;
     }
     if prefix == n {
@@ -225,7 +225,7 @@ pub(crate) fn detect_fuzzy_row_block_move(
     while suffix_len < n.saturating_sub(prefix) {
         let idx_a = n - 1 - suffix_len;
         let idx_b = idx_a;
-        if meta_a[idx_a].hash == meta_b[idx_b].hash {
+        if meta_a[idx_a].signature == meta_b[idx_b].signature {
             suffix_len += 1;
         } else {
             break;
@@ -304,7 +304,7 @@ pub(crate) fn detect_fuzzy_row_block_move(
     candidate
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn align_row_changes(
     old: &Grid,
     new: &Grid,
@@ -376,12 +376,12 @@ fn align_rows_internal(
         return None;
     }
 
-    if low_info_dominated(old_view) || low_info_dominated(new_view) {
+    if old_view.is_low_info_dominated() || new_view.is_low_info_dominated() {
         return None;
     }
 
     let stats = HashStats::from_row_meta(&old_view.row_meta, &new_view.row_meta);
-    if has_heavy_repetition(&stats, config) {
+    if stats.has_heavy_repetition(config.max_hash_repeat) {
         return None;
     }
 
@@ -443,7 +443,7 @@ fn find_single_gap_alignment(
         let meta_a = rows_a[idx_a];
         let meta_b = rows_b[idx_b];
 
-        if meta_a.hash == meta_b.hash {
+        if meta_a.signature == meta_b.signature {
             matched.push((meta_a.row_idx, meta_b.row_idx));
             idx_a += 1;
             idx_b += 1;
@@ -456,14 +456,14 @@ fn find_single_gap_alignment(
 
         match change {
             RowChange::Insert => {
-                if !is_unique_to_b(meta_b.hash, stats) {
+                if !stats.is_unique_to_b(meta_b.signature) {
                     return None;
                 }
                 inserted.push(meta_b.row_idx);
                 idx_b += 1;
             }
             RowChange::Delete => {
-                if !is_unique_to_a(meta_a.hash, stats) {
+                if !stats.is_unique_to_a(meta_a.signature) {
                     return None;
                 }
                 deleted.push(meta_a.row_idx);
@@ -482,14 +482,14 @@ fn find_single_gap_alignment(
         match change {
             RowChange::Insert if idx_a == rows_a.len() && rows_b.len() == idx_b + 1 => {
                 let meta_b = rows_b[idx_b];
-                if !is_unique_to_b(meta_b.hash, stats) {
+                if !stats.is_unique_to_b(meta_b.signature) {
                     return None;
                 }
                 inserted.push(meta_b.row_idx);
             }
             RowChange::Delete if idx_b == rows_b.len() && rows_a.len() == idx_a + 1 => {
                 let meta_a = rows_a[idx_a];
-                if !is_unique_to_a(meta_a.hash, stats) {
+                if !stats.is_unique_to_a(meta_a.signature) {
                     return None;
                 }
                 deleted.push(meta_a.row_idx);
@@ -541,7 +541,7 @@ fn find_block_gap_alignment(
     let mut prefix = 0usize;
     while prefix < rows_a.len()
         && prefix < rows_b.len()
-        && rows_a[prefix].hash == rows_b[prefix].hash
+        && rows_a[prefix].signature == rows_b[prefix].signature
     {
         prefix += 1;
     }
@@ -550,7 +550,7 @@ fn find_block_gap_alignment(
     while suffix < shorter_len.saturating_sub(prefix) {
         let idx_a = rows_a.len() - 1 - suffix;
         let idx_b = rows_b.len() - 1 - suffix;
-        if rows_a[idx_a].hash == rows_b[idx_b].hash {
+        if rows_a[idx_a].signature == rows_b[idx_b].signature {
             suffix += 1;
         } else {
             break;
@@ -574,7 +574,7 @@ fn find_block_gap_alignment(
             }
 
             for meta in &rows_b[block_start..block_end] {
-                if !is_unique_to_b(meta.hash, stats) {
+                if !stats.is_unique_to_b(meta.signature) {
                     return None;
                 }
                 inserted.push(meta.row_idx);
@@ -593,7 +593,7 @@ fn find_block_gap_alignment(
             }
 
             for meta in &rows_a[block_start..block_end] {
-                if !is_unique_to_a(meta.hash, stats) {
+                if !stats.is_unique_to_a(meta.signature) {
                     return None;
                 }
                 deleted.push(meta.row_idx);
@@ -629,40 +629,10 @@ fn is_monotonic(pairs: &[(u32, u32)]) -> bool {
     pairs.windows(2).all(|w| w[0].0 < w[1].0 && w[0].1 < w[1].1)
 }
 
-fn is_unique_to_b(hash: RowHash, stats: &HashStats<RowHash>) -> bool {
-    stats.freq_a.get(&hash).copied().unwrap_or(0) == 0
-        && stats.freq_b.get(&hash).copied().unwrap_or(0) == 1
-}
-
-fn is_unique_to_a(hash: RowHash, stats: &HashStats<RowHash>) -> bool {
-    stats.freq_a.get(&hash).copied().unwrap_or(0) == 1
-        && stats.freq_b.get(&hash).copied().unwrap_or(0) == 0
-}
-
 fn is_within_size_bounds(old: &Grid, new: &Grid, config: &DiffConfig) -> bool {
     let rows = old.nrows.max(new.nrows);
     let cols = old.ncols.max(new.ncols);
     rows <= config.max_align_rows && cols <= config.max_align_cols
-}
-
-fn low_info_dominated(view: &GridView<'_>) -> bool {
-    if view.row_meta.is_empty() {
-        return false;
-    }
-
-    let low_info_count = view.row_meta.iter().filter(|m| m.is_low_info).count();
-    low_info_count * 2 > view.row_meta.len()
-}
-
-fn has_heavy_repetition(stats: &HashStats<RowHash>, config: &DiffConfig) -> bool {
-    stats
-        .freq_a
-        .values()
-        .chain(stats.freq_b.values())
-        .copied()
-        .max()
-        .unwrap_or(0)
-        > config.max_hash_repeat
 }
 
 fn hashes_match(slice_a: &[RowMeta], slice_b: &[RowMeta]) -> bool {
@@ -670,12 +640,12 @@ fn hashes_match(slice_a: &[RowMeta], slice_b: &[RowMeta]) -> bool {
         && slice_a
             .iter()
             .zip(slice_b.iter())
-            .all(|(a, b)| a.hash == b.hash)
+            .all(|(a, b)| a.signature == b.signature)
 }
 
 fn block_similarity(slice_a: &[RowMeta], slice_b: &[RowMeta]) -> f64 {
-    let tokens_a: HashSet<RowHash> = slice_a.iter().map(|m| m.hash).collect();
-    let tokens_b: HashSet<RowHash> = slice_b.iter().map(|m| m.hash).collect();
+    let tokens_a: HashSet<RowHash> = slice_a.iter().map(|m| m.signature).collect();
+    let tokens_b: HashSet<RowHash> = slice_b.iter().map(|m| m.signature).collect();
 
     let intersection = tokens_a.intersection(&tokens_b).count();
     let union = tokens_a.union(&tokens_b).count();
@@ -688,7 +658,7 @@ fn block_similarity(slice_a: &[RowMeta], slice_b: &[RowMeta]) -> f64 {
     let positional_matches = slice_a
         .iter()
         .zip(slice_b.iter())
-        .filter(|(a, b)| a.hash == b.hash)
+        .filter(|(a, b)| a.signature == b.signature)
         .count();
     let positional_ratio = (positional_matches as f64 + 1.0) / (slice_a.len() as f64 + 1.0);
 

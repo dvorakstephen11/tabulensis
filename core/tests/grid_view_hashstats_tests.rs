@@ -4,7 +4,6 @@ fn row_meta(row_idx: u32, hash: RowHash) -> RowMeta {
     RowMeta {
         row_idx,
         signature: hash,
-        hash,
         non_blank_count: 0,
         first_non_blank_col: 0,
         frequency_class: FrequencyClass::Common,

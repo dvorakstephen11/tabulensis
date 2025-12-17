@@ -1,12 +1,7 @@
-//! Row metadata and frequency classification for AMR alignment.
+//! Grid row metadata and frequency classification.
 //!
-//! Implements row frequency classification as described in the unified grid diff
-//! specification Section 9.11. Each row is classified into one of four frequency classes:
-//!
-//! - **Unique**: Appears exactly once in the grid (highest anchor quality)
-//! - **Rare**: Appears 2-N times where N is configurable (can serve as secondary anchors)
-//! - **Common**: Appears frequently (poor anchor quality)
-//! - **LowInfo**: Blank or near-blank rows (ignored for anchoring)
+//! This module is the canonical home for row metadata shared across the grid view
+//! layer and alignment algorithms.
 
 use std::collections::HashMap;
 
@@ -25,7 +20,6 @@ pub enum FrequencyClass {
 pub struct RowMeta {
     pub row_idx: u32,
     pub signature: RowSignature,
-    pub hash: RowSignature,
     pub non_blank_count: u16,
     pub first_non_blank_col: u16,
     pub frequency_class: FrequencyClass,
@@ -76,11 +70,10 @@ mod tests {
     use super::*;
 
     fn make_meta(row_idx: u32, hash: u128, non_blank: u16) -> RowMeta {
-        let sig = RowSignature { hash };
+        let signature = RowSignature { hash };
         RowMeta {
             row_idx,
-            signature: sig,
-            hash: sig,
+            signature,
             non_blank_count: non_blank,
             first_non_blank_col: 0,
             frequency_class: FrequencyClass::Common,
@@ -103,3 +96,4 @@ mod tests {
         assert_eq!(meta[2].frequency_class, FrequencyClass::LowInfo);
     }
 }
+

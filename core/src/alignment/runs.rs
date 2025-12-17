@@ -10,7 +10,7 @@
 //! - Data with long runs of blank or placeholder rows
 //! - Adversarial cases designed to stress the alignment algorithm
 
-use crate::alignment::row_metadata::RowMeta;
+use crate::grid_metadata::RowMeta;
 use crate::workbook::RowSignature;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,10 +47,9 @@ mod tests {
         RowMeta {
             row_idx: idx,
             signature: sig,
-            hash: sig,
             non_blank_count: 1,
             first_non_blank_col: 0,
-            frequency_class: crate::alignment::row_metadata::FrequencyClass::Common,
+            frequency_class: crate::grid_metadata::FrequencyClass::Common,
             is_low_info: false,
         }
     }

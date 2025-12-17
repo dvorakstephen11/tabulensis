@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use crate::alignment::row_metadata::classify_row_frequencies;
 use crate::config::DiffConfig;
+use crate::grid_metadata::classify_row_frequencies;
 use crate::hashing::{hash_cell_value, hash_row_content_128};
 use crate::workbook::{Cell, CellValue, Grid, RowSignature};
 use xxhash_rust::xxh3::Xxh3;
 
-pub use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
+pub use crate::grid_metadata::{FrequencyClass, RowMeta};
 
 pub type RowHash = RowSignature;
 pub type ColHash = u128;
@@ -103,7 +103,6 @@ impl<'a> GridView<'a> {
                 RowMeta {
                     row_idx: idx as u32,
                     signature,
-                    hash: signature,
                     non_blank_count,
                     first_non_blank_col,
                     frequency_class,
@@ -145,6 +144,22 @@ impl<'a> GridView<'a> {
             col_meta,
             source: grid,
         }
+    }
+
+    pub fn is_low_info_dominated(&self) -> bool {
+        if self.row_meta.is_empty() {
+            return false;
+        }
+        let low = self.row_meta.iter().filter(|m| m.is_low_info()).count();
+        low * 2 > self.row_meta.len()
+    }
+
+    pub fn is_blank_dominated(&self) -> bool {
+        if self.col_meta.is_empty() {
+            return false;
+        }
+        let blank = self.col_meta.iter().filter(|m| m.non_blank_count == 0).count();
+        blank * 2 > self.col_meta.len()
     }
 }
 
@@ -204,6 +219,29 @@ where
     pub fn is_unique(&self, hash: H) -> bool {
         self.freq_a.get(&hash).copied().unwrap_or(0) == 1
             && self.freq_b.get(&hash).copied().unwrap_or(0) == 1
+    }
+
+    pub fn is_unique_to_a(&self, hash: H) -> bool {
+        self.freq_a.get(&hash).copied().unwrap_or(0) == 1
+            && self.freq_b.get(&hash).copied().unwrap_or(0) == 0
+    }
+
+    pub fn is_unique_to_b(&self, hash: H) -> bool {
+        self.freq_a.get(&hash).copied().unwrap_or(0) == 0
+            && self.freq_b.get(&hash).copied().unwrap_or(0) == 1
+    }
+
+    pub fn max_frequency(&self) -> u32 {
+        self.freq_a
+            .values()
+            .chain(self.freq_b.values())
+            .copied()
+            .max()
+            .unwrap_or(0)
+    }
+
+    pub fn has_heavy_repetition(&self, max_repeat: u32) -> bool {
+        self.max_frequency() > max_repeat
     }
 
     pub fn is_rare(&self, hash: H, threshold: u32) -> bool {

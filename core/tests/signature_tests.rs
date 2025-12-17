@@ -442,7 +442,7 @@ fn gridview_rowmeta_hash_matches_compute_all_signatures() {
     let view = GridView::from_grid(&grid);
 
     for (idx, meta) in view.row_meta.iter().enumerate() {
-        assert_eq!(meta.hash, row_signatures[idx]);
+        assert_eq!(meta.signature, row_signatures[idx]);
     }
 
     for (idx, meta) in view.col_meta.iter().enumerate() {
@@ -473,8 +473,8 @@ fn row_signature_unchanged_after_column_insert_at_position_zero() {
     let view1 = GridView::from_grid(&grid1);
     let view2 = GridView::from_grid(&grid2);
 
-    assert_ne!(view1.row_meta[0].hash, view2.row_meta[0].hash);
-    assert_ne!(view1.row_meta[1].hash, view2.row_meta[1].hash);
+    assert_ne!(view1.row_meta[0].signature, view2.row_meta[0].signature);
+    assert_ne!(view1.row_meta[1].signature, view2.row_meta[1].signature);
 }
 
 #[test]
@@ -500,8 +500,8 @@ fn row_signature_unchanged_after_column_delete_from_middle() {
     let view1 = GridView::from_grid(&grid1);
     let view2 = GridView::from_grid(&grid2);
 
-    assert_ne!(view1.row_meta[0].hash, view2.row_meta[0].hash);
-    assert_ne!(view1.row_meta[1].hash, view2.row_meta[1].hash);
+    assert_ne!(view1.row_meta[0].signature, view2.row_meta[0].signature);
+    assert_ne!(view1.row_meta[1].signature, view2.row_meta[1].signature);
 }
 
 #[test]
@@ -519,5 +519,5 @@ fn row_signature_consistent_for_same_content_different_column_indices() {
     let view1 = GridView::from_grid(&grid1);
     let view2 = GridView::from_grid(&grid2);
 
-    assert_eq!(view1.row_meta[0].hash, view2.row_meta[0].hash);
+    assert_eq!(view1.row_meta[0].signature, view2.row_meta[0].signature);
 }

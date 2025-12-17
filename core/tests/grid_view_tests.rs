@@ -118,7 +118,7 @@ fn gridview_column_metadata_matches_signatures() {
     }
 
     for (idx, meta) in view.row_meta.iter().enumerate() {
-        assert_eq!(meta.hash, row_signatures[idx]);
+        assert_eq!(meta.signature, row_signatures[idx]);
     }
 
     assert_eq!(view.col_meta[0].non_blank_count, 2);
@@ -193,7 +193,7 @@ fn gridview_row_hashes_ignore_small_float_drift() {
     let view_b = GridView::from_grid(&grid_b);
 
     assert_eq!(
-        view_a.row_meta[0].hash, view_b.row_meta[0].hash,
+        view_a.row_meta[0].signature, view_b.row_meta[0].signature,
         "row signatures should be stable under ULP-level float differences"
     );
 }

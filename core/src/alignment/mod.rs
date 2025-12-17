@@ -3,7 +3,7 @@
 //! This module implements a simplified version of the AMR algorithm described in the
 //! unified grid diff specification. The implementation follows the general structure:
 //!
-//! 1. **Row Metadata Collection** (`row_metadata.rs`, Spec Section 9.11)
+//! 1. **Row Metadata Collection** (`grid_metadata.rs`, Spec Section 9.11)
 //!    - Compute row signatures and classify by frequency (Unique/Rare/Common/LowInfo)
 //!
 //! 2. **Anchor Discovery** (`anchor_discovery.rs`, Spec Section 10)
@@ -45,7 +45,6 @@ pub(crate) mod anchor_discovery;
 pub(crate) mod assembly;
 pub(crate) mod gap_strategy;
 pub(crate) mod move_extraction;
-pub(crate) mod row_metadata;
 pub(crate) mod runs;
 
 #[allow(unused_imports)]

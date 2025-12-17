@@ -73,12 +73,12 @@ pub(crate) fn detect_exact_column_block_move(
         })
         .collect();
 
-    if blank_dominated(&view_a) || blank_dominated(&view_b) {
+    if view_a.is_blank_dominated() || view_b.is_blank_dominated() {
         return None;
     }
 
     let stats = HashStats::from_col_meta(&col_meta_a, &col_meta_b);
-    if has_heavy_repetition(&stats, config) {
+    if stats.has_heavy_repetition(config.max_hash_repeat) {
         return None;
     }
 
@@ -191,7 +191,7 @@ pub(crate) fn detect_exact_column_block_move(
     None
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn align_single_column_change(
     old: &Grid,
     new: &Grid,
@@ -221,7 +221,7 @@ pub(crate) fn align_single_column_change_from_views(
     }
 
     let stats = HashStats::from_col_meta(&view_a.col_meta, &view_b.col_meta);
-    if has_heavy_repetition(&stats, config) {
+    if stats.has_heavy_repetition(config.max_hash_repeat) {
         return None;
     }
 
@@ -278,14 +278,14 @@ fn find_single_gap_alignment(
 
         match change {
             ColumnChange::Insert => {
-                if !is_unique_to_b(meta_b.hash, stats) {
+                if !stats.is_unique_to_b(meta_b.hash) {
                     return None;
                 }
                 inserted.push(meta_b.col_idx);
                 idx_b += 1;
             }
             ColumnChange::Delete => {
-                if !is_unique_to_a(meta_a.hash, stats) {
+                if !stats.is_unique_to_a(meta_a.hash) {
                     return None;
                 }
                 deleted.push(meta_a.col_idx);
@@ -304,14 +304,14 @@ fn find_single_gap_alignment(
         match change {
             ColumnChange::Insert if idx_a == cols_a.len() && cols_b.len() == idx_b + 1 => {
                 let meta_b = cols_b[idx_b];
-                if !is_unique_to_b(meta_b.hash, stats) {
+                if !stats.is_unique_to_b(meta_b.hash) {
                     return None;
                 }
                 inserted.push(meta_b.col_idx);
             }
             ColumnChange::Delete if idx_b == cols_b.len() && cols_a.len() == idx_a + 1 => {
                 let meta_a = cols_a[idx_a];
-                if !is_unique_to_a(meta_a.hash, stats) {
+                if !stats.is_unique_to_a(meta_a.hash) {
                     return None;
                 }
                 deleted.push(meta_a.col_idx);
@@ -342,45 +342,10 @@ fn is_monotonic(pairs: &[(u32, u32)]) -> bool {
     pairs.windows(2).all(|w| w[0].0 < w[1].0 && w[0].1 < w[1].1)
 }
 
-fn is_unique_to_b(hash: ColHash, stats: &HashStats<ColHash>) -> bool {
-    stats.freq_a.get(&hash).copied().unwrap_or(0) == 0
-        && stats.freq_b.get(&hash).copied().unwrap_or(0) == 1
-}
-
-fn is_unique_to_a(hash: ColHash, stats: &HashStats<ColHash>) -> bool {
-    stats.freq_a.get(&hash).copied().unwrap_or(0) == 1
-        && stats.freq_b.get(&hash).copied().unwrap_or(0) == 0
-}
-
 fn is_within_size_bounds(old: &Grid, new: &Grid, config: &DiffConfig) -> bool {
     let rows = old.nrows.max(new.nrows);
     let cols = old.ncols.max(new.ncols);
     rows <= config.max_align_rows && cols <= config.max_align_cols
-}
-
-fn has_heavy_repetition(stats: &HashStats<ColHash>, config: &DiffConfig) -> bool {
-    stats
-        .freq_a
-        .values()
-        .chain(stats.freq_b.values())
-        .copied()
-        .max()
-        .unwrap_or(0)
-        > config.max_hash_repeat
-}
-
-fn blank_dominated(view: &GridView<'_>) -> bool {
-    if view.col_meta.is_empty() {
-        return false;
-    }
-
-    let blank_cols = view
-        .col_meta
-        .iter()
-        .filter(|meta| meta.non_blank_count == 0)
-        .count();
-
-    blank_cols * 2 > view.col_meta.len()
 }
 
 #[cfg(test)]

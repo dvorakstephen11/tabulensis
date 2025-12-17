@@ -14,7 +14,7 @@
 
 use std::collections::HashSet;
 
-use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
+use crate::grid_metadata::{FrequencyClass, RowMeta};
 use crate::config::DiffConfig;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -91,7 +91,7 @@ fn has_matching_signatures(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> bool
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
+    use crate::grid_metadata::{FrequencyClass, RowMeta};
     use crate::workbook::RowSignature;
 
     fn meta(row_idx: u32, hash: u128) -> RowMeta {
@@ -99,7 +99,6 @@ mod tests {
         RowMeta {
             row_idx,
             signature,
-            hash: signature,
             non_blank_count: 1,
             first_non_blank_col: 0,
             frequency_class: FrequencyClass::Common,

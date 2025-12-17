@@ -43,25 +43,27 @@ impl WorkbookPackage {
     }
 
     pub fn diff(&self, other: &Self, config: &DiffConfig) -> DiffReport {
-        crate::with_default_session(|session| {
-            let mut report = crate::engine::diff_workbooks(
-                &self.workbook,
-                &other.workbook,
-                &mut session.strings,
-                config,
-            );
+        crate::with_default_session(|session| self.diff_with_pool(other, &mut session.strings, config))
+    }
 
-            let m_ops = crate::m_diff::diff_m_ops_for_packages(
-                &self.data_mashup,
-                &other.data_mashup,
-                &mut session.strings,
-                config,
-            );
+    pub fn diff_with_pool(
+        &self,
+        other: &Self,
+        pool: &mut crate::string_pool::StringPool,
+        config: &DiffConfig,
+    ) -> DiffReport {
+        let mut report = crate::engine::diff_workbooks(&self.workbook, &other.workbook, pool, config);
 
-            report.ops.extend(m_ops);
-            report.strings = session.strings.strings().to_vec();
-            report
-        })
+        let m_ops = crate::m_diff::diff_m_ops_for_packages(
+            &self.data_mashup,
+            &other.data_mashup,
+            pool,
+            config,
+        );
+
+        report.ops.extend(m_ops);
+        report.strings = pool.strings().to_vec();
+        report
     }
 
     pub fn diff_streaming<S: DiffSink>(
@@ -71,43 +73,53 @@ impl WorkbookPackage {
         sink: &mut S,
     ) -> Result<DiffSummary, DiffError> {
         crate::with_default_session(|session| {
-            let grid_result = {
-                let mut no_finish = NoFinishSink::new(sink);
-                crate::engine::try_diff_workbooks_streaming(
-                    &self.workbook,
-                    &other.workbook,
-                    &mut session.strings,
-                    config,
-                    &mut no_finish,
-                )
-            };
-
-            let mut summary = match grid_result {
-                Ok(summary) => summary,
-                Err(e) => {
-                    let _ = sink.finish();
-                    return Err(e);
-                }
-            };
-
-            let m_ops = crate::m_diff::diff_m_ops_for_packages(
-                &self.data_mashup,
-                &other.data_mashup,
-                &mut session.strings,
-                config,
-            );
-
-            for op in m_ops {
-                if let Err(e) = sink.emit(op) {
-                    let _ = sink.finish();
-                    return Err(e);
-                }
-                summary.op_count = summary.op_count.saturating_add(1);
-            }
-
-            sink.finish()?;
-
-            Ok(summary)
+            self.diff_streaming_with_pool(other, &mut session.strings, config, sink)
         })
+    }
+
+    pub fn diff_streaming_with_pool<S: DiffSink>(
+        &self,
+        other: &Self,
+        pool: &mut crate::string_pool::StringPool,
+        config: &DiffConfig,
+        sink: &mut S,
+    ) -> Result<DiffSummary, DiffError> {
+        let grid_result = {
+            let mut no_finish = NoFinishSink::new(sink);
+            crate::engine::try_diff_workbooks_streaming(
+                &self.workbook,
+                &other.workbook,
+                pool,
+                config,
+                &mut no_finish,
+            )
+        };
+
+        let mut summary = match grid_result {
+            Ok(summary) => summary,
+            Err(e) => {
+                let _ = sink.finish();
+                return Err(e);
+            }
+        };
+
+        let m_ops = crate::m_diff::diff_m_ops_for_packages(
+            &self.data_mashup,
+            &other.data_mashup,
+            pool,
+            config,
+        );
+
+        for op in m_ops {
+            if let Err(e) = sink.emit(op) {
+                let _ = sink.finish();
+                return Err(e);
+            }
+            summary.op_count = summary.op_count.saturating_add(1);
+        }
+
+        sink.finish()?;
+
+        Ok(summary)
     }
 }

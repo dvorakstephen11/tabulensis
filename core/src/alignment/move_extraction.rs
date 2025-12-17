@@ -24,7 +24,7 @@
 use std::collections::HashMap;
 
 use crate::alignment::RowBlockMove;
-use crate::alignment::row_metadata::RowMeta;
+use crate::grid_metadata::RowMeta;
 use crate::config::DiffConfig;
 use crate::workbook::RowSignature;
 

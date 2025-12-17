@@ -18,9 +18,9 @@ use crate::alignment::anchor_discovery::{
 };
 use crate::alignment::gap_strategy::{GapStrategy, select_gap_strategy};
 use crate::alignment::move_extraction::{find_block_move, moves_from_matched_pairs};
-use crate::alignment::row_metadata::RowMeta;
 use crate::alignment::runs::{RowRun, compress_to_runs};
 use crate::config::DiffConfig;
+use crate::grid_metadata::RowMeta;
 use crate::grid_view::GridView;
 use crate::workbook::{Grid, RowSignature};
 
@@ -775,7 +775,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
+    use crate::grid_metadata::{FrequencyClass, RowMeta};
     use crate::workbook::CellValue;
 
     fn grid_from_run_lengths(pattern: &[(i32, u32)]) -> Grid {
@@ -809,7 +809,6 @@ mod tests {
                 RowMeta {
                     row_idx: start_row + idx as u32,
                     signature,
-                    hash: signature,
                     non_blank_count: 1,
                     first_non_blank_col: 0,
                     frequency_class: FrequencyClass::Common,
