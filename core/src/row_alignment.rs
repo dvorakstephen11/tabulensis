@@ -29,19 +29,7 @@ use crate::config::DiffConfig;
 use crate::grid_view::{GridView, HashStats, RowHash, RowMeta};
 use crate::workbook::Grid;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RowAlignment {
-    pub matched: Vec<(u32, u32)>, // (row_idx_a, row_idx_b)
-    pub inserted: Vec<u32>,       // row indices in B
-    pub deleted: Vec<u32>,        // row indices in A
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RowBlockMove {
-    pub src_start_row: u32,
-    pub dst_start_row: u32,
-    pub row_count: u32,
-}
+pub(crate) use crate::alignment::{RowAlignment, RowBlockMove};
 
 const _HASH_COLLISION_NOTE: &str = "128-bit xxHash3 collision probability ~10^-29 at 50K rows (birthday bound); \
      secondary verification not required; see hashing.rs for detailed rationale.";
@@ -518,6 +506,7 @@ fn find_single_gap_alignment(
         matched,
         inserted,
         deleted,
+        moves: Vec::new(),
     };
 
     debug_assert!(
@@ -625,6 +614,7 @@ fn find_block_gap_alignment(
         matched,
         inserted,
         deleted,
+        moves: Vec::new(),
     };
 
     debug_assert!(
