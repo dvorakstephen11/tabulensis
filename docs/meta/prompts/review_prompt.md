@@ -36,6 +36,8 @@
       2025-12-14_202417_fullscale.json
       2025-12-15_183914.json
       2025-12-15_191921_fullscale.json
+      2025-12-17_164231_fullscale.json
+      2025-12-17_164437_fullscale.json
       combined_results.csv
       plots/
         commit_comparison.png
@@ -26499,7 +26501,7 @@ fn pg4_diff_report_json_shape_with_metrics() {
     use excel_diff::perf::DiffMetrics;
 
     let ops = vec![DiffOp::SheetAdded {
-        sheet: "NewSheet".to_string(),
+        sheet: sid("NewSheet"),
     }];
     let mut report = DiffReport::new(ops);
     let mut metrics = DiffMetrics::default();
