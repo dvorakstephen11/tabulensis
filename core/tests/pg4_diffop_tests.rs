@@ -2,8 +2,8 @@ mod common;
 
 use common::sid;
 use excel_diff::{
-    CellAddress, CellSnapshot, CellValue, ColSignature, DiffOp, DiffReport, QueryChangeKind,
-    QueryMetadataField, RowSignature,
+    CellAddress, CellSnapshot, CellValue, ColSignature, DiffOp, DiffReport, FormulaDiffResult,
+    QueryChangeKind, QueryMetadataField, RowSignature,
 };
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -30,6 +30,7 @@ fn sample_cell_edited() -> DiffOp {
         addr: addr("C3"),
         from: snapshot("C3", Some(CellValue::Number(1.0)), None),
         to: snapshot("C3", Some(CellValue::Number(2.0)), None),
+        formula_diff: FormulaDiffResult::Unchanged,
     }
 }
 
@@ -42,6 +43,7 @@ fn assert_cell_edited_invariants(op: &DiffOp, expected_sheet: &str, expected_add
         addr,
         from,
         to,
+        ..
     } = op
     {
         assert_eq!(sheet, &sid(expected_sheet));
@@ -426,10 +428,11 @@ fn pg4_cell_edited_json_shape() {
     assert_eq!(json["addr"], "C3");
     assert_eq!(json["from"]["addr"], "C3");
     assert_eq!(json["to"]["addr"], "C3");
+    assert_eq!(json["formula_diff"], "unchanged");
 
     let obj = json.as_object().expect("object json");
     let keys: BTreeSet<String> = obj.keys().cloned().collect();
-    let expected: BTreeSet<String> = ["addr", "from", "kind", "sheet", "to"]
+    let expected: BTreeSet<String> = ["addr", "from", "kind", "sheet", "to", "formula_diff"]
         .into_iter()
         .map(String::from)
         .collect();
@@ -1191,6 +1194,7 @@ fn pg4_cell_edited_invariant_helper_rejects_mismatched_snapshot_addr() {
         addr: addr("C3"),
         from: snapshot("D4", Some(CellValue::Number(1.0)), None),
         to: snapshot("C3", Some(CellValue::Number(2.0)), None),
+        formula_diff: FormulaDiffResult::Unchanged,
     };
 
     assert_cell_edited_invariants(&op, "Sheet1", "C3");

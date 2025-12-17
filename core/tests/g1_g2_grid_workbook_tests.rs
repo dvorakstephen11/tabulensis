@@ -56,6 +56,7 @@ fn g2_single_cell_literal_change_produces_one_celledited() {
             addr,
             from,
             to,
+            ..
         } => {
             assert_eq!(*sheet, sid("Sheet1"));
             assert_eq!(addr.to_a1(), "C3");

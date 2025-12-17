@@ -2,8 +2,8 @@ mod common;
 
 use common::sid;
 use excel_diff::{
-    CellAddress, CellSnapshot, CellValue, DiffConfig, DiffOp, DiffReport, Grid, Sheet, SheetKind,
-    Workbook, WorkbookPackage,
+    CellAddress, CellSnapshot, CellValue, DiffConfig, DiffOp, DiffReport, FormulaDiffResult, Grid,
+    Sheet, SheetKind, Workbook, WorkbookPackage,
 };
 
 type SheetSpec<'a> = (&'a str, Vec<(u32, u32, f64)>);
@@ -104,6 +104,7 @@ fn cell_edited_detected() {
             addr,
             from,
             to,
+            ..
         } => {
             assert_eq!(*sheet, sid("Sheet1"));
             assert_eq!(addr.to_a1(), "A1");
@@ -147,6 +148,7 @@ fn sheet_name_case_insensitive_cell_edit() {
             addr,
             from,
             to,
+            ..
         } => {
             assert_eq!(*sheet, sid("Sheet1"));
             assert_eq!(addr.to_a1(), "A1");
@@ -231,6 +233,7 @@ fn deterministic_sheet_op_ordering() {
                 value: Some(CellValue::Number(2.0)),
                 formula: None,
             },
+            FormulaDiffResult::Unchanged,
         ),
         DiffOp::SheetRemoved {
             sheet: sid("Sheet1"),

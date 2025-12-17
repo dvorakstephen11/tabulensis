@@ -3,8 +3,8 @@ mod common;
 use common::{fixture_path, open_fixture_workbook};
 use excel_diff::{
     CellAddress, CellDiff, CellSnapshot, CellValue, ContainerError, DiffConfig, DiffOp, DiffReport,
-    PackageError, WorkbookPackage, diff_report_to_cell_diffs, diff_workbooks_to_json,
-    serialize_cell_diffs, serialize_diff_report,
+    FormulaDiffResult, PackageError, WorkbookPackage, diff_report_to_cell_diffs,
+    diff_workbooks_to_json, serialize_cell_diffs, serialize_diff_report,
 };
 use serde_json::Value;
 #[cfg(feature = "perf-metrics")]
@@ -38,11 +38,20 @@ fn make_cell_snapshot(addr: CellAddress, value: Option<CellValue>) -> CellSnapsh
     }
 }
 
+fn cell_edit(
+    sheet: excel_diff::StringId,
+    addr: CellAddress,
+    from: CellSnapshot,
+    to: CellSnapshot,
+) -> DiffOp {
+    DiffOp::cell_edited(sheet, addr, from, to, FormulaDiffResult::Unchanged)
+}
+
 fn numeric_report(addr: CellAddress, from: f64, to: f64) -> DiffReport {
     let mut pool = excel_diff::StringPool::new();
     let sheet = sid_local(&mut pool, "Sheet1");
     attach_strings(
-        DiffReport::new(vec![DiffOp::cell_edited(
+        DiffReport::new(vec![cell_edit(
             sheet,
             addr,
             make_cell_snapshot(addr, Some(CellValue::Number(from))),
@@ -67,7 +76,7 @@ fn diff_report_to_cell_diffs_filters_non_cell_ops() {
     let report = attach_strings(
         DiffReport::new(vec![
             DiffOp::SheetAdded { sheet: sheet_added },
-            DiffOp::cell_edited(
+            cell_edit(
                 sheet1,
                 addr1,
                 make_cell_snapshot(addr1, Some(CellValue::Number(1.0))),
@@ -78,7 +87,7 @@ fn diff_report_to_cell_diffs_filters_non_cell_ops() {
                 row_idx: 5,
                 row_signature: None,
             },
-            DiffOp::cell_edited(
+            cell_edit(
                 sheet2,
                 addr2,
                 make_cell_snapshot(addr2, Some(CellValue::Text(old_text))),
@@ -114,7 +123,7 @@ fn diff_report_to_cell_diffs_ignores_block_moved_rect() {
     let report = attach_strings(
         DiffReport::new(vec![
             DiffOp::block_moved_rect(sheet1, 2, 3, 1, 3, 9, 6, Some(0xCAFEBABE)),
-            DiffOp::cell_edited(
+            cell_edit(
                 sheet1,
                 addr,
                 make_cell_snapshot(addr, Some(CellValue::Number(10.0))),
@@ -159,13 +168,13 @@ fn diff_report_to_cell_diffs_maps_values_correctly() {
 
     let report = attach_strings(
         DiffReport::new(vec![
-            DiffOp::cell_edited(
+            cell_edit(
                 sheet_id,
                 addr_num,
                 make_cell_snapshot(addr_num, Some(CellValue::Number(42.5))),
                 make_cell_snapshot(addr_num, Some(CellValue::Number(43.5))),
             ),
-            DiffOp::cell_edited(
+            cell_edit(
                 sheet_id,
                 addr_bool,
                 make_cell_snapshot(addr_bool, Some(CellValue::Bool(true))),
@@ -198,13 +207,13 @@ fn diff_report_to_cell_diffs_filters_no_op_cell_edits() {
 
     let report = attach_strings(
         DiffReport::new(vec![
-            DiffOp::cell_edited(
+            cell_edit(
                 sheet,
                 addr_a1,
                 make_cell_snapshot(addr_a1, Some(CellValue::Number(1.0))),
                 make_cell_snapshot(addr_a1, Some(CellValue::Number(1.0))),
             ),
-            DiffOp::cell_edited(
+            cell_edit(
                 sheet,
                 addr_a2,
                 make_cell_snapshot(addr_a2, Some(CellValue::Number(1.0))),
@@ -531,7 +540,7 @@ fn serialize_partial_diff_report_includes_complete_false_and_warnings() {
     let addr = CellAddress::from_indices(0, 0);
     let mut pool = excel_diff::StringPool::new();
     let sheet = sid_local(&mut pool, "Sheet1");
-    let ops = vec![DiffOp::cell_edited(
+    let ops = vec![cell_edit(
         sheet,
         addr,
         make_cell_snapshot(addr, Some(CellValue::Number(1.0))),
@@ -577,7 +586,7 @@ fn serialize_diff_report_with_metrics_includes_metrics_object() {
     let addr = CellAddress::from_indices(0, 0);
     let mut pool = excel_diff::StringPool::new();
     let sheet = sid_local(&mut pool, "Sheet1");
-    let ops = vec![DiffOp::cell_edited(
+    let ops = vec![cell_edit(
         sheet,
         addr,
         make_cell_snapshot(addr, Some(CellValue::Number(1.0))),

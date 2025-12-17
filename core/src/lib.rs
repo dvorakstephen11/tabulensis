@@ -33,6 +33,8 @@ mod datamashup_framing;
 mod datamashup_package;
 mod diff;
 mod engine;
+mod formula;
+mod formula_diff;
 #[cfg(feature = "excel-open-xml")]
 mod excel_open_xml;
 mod grid_parser;
@@ -112,7 +114,8 @@ pub use datamashup_package::{
     EmbeddedContent, PackageParts, PackageXml, SectionDocument, parse_package_parts,
 };
 pub use diff::{
-    DiffError, DiffOp, DiffReport, DiffSummary, QueryChangeKind, QueryMetadataField, SheetId,
+    DiffError, DiffOp, DiffReport, DiffSummary, FormulaDiffResult, QueryChangeKind,
+    QueryMetadataField, SheetId,
 };
 #[doc(hidden)]
 pub use engine::{
@@ -135,6 +138,10 @@ pub use m_ast::{
     MModuleAst, MParseError, ast_semantically_equal, canonicalize_m_ast, parse_m_expression,
 };
 pub use m_section::{SectionMember, SectionParseError, parse_section_members};
+pub use formula::{
+    BinaryOperator, CellReference, ColRef, ExcelError, FormulaExpr, FormulaParseError,
+    RangeReference, RowRef, UnaryOperator, formulas_equivalent_modulo_shift, parse_formula,
+};
 #[doc(hidden)]
 pub use output::json::diff_report_to_cell_diffs;
 #[cfg(feature = "excel-open-xml")]

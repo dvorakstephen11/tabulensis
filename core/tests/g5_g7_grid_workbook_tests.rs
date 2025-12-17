@@ -47,6 +47,7 @@ fn g5_multi_cell_edits_produces_only_celledited_ops() {
                     addr: a,
                     from,
                     to,
+                    ..
                 } if a.to_a1() == addr => Some((sheet, from, to)),
                 _ => None,
             })

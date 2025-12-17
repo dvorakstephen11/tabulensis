@@ -17,6 +17,25 @@ pub enum QueryChangeKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FormulaDiffResult {
+    Unknown,
+    Unchanged,
+    Added,
+    Removed,
+    FormattingOnly,
+    Filled,
+    SemanticChange,
+    TextChange,
+}
+
+impl Default for FormulaDiffResult {
+    fn default() -> Self {
+        FormulaDiffResult::Unknown
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum QueryMetadataField {
     LoadToSheet,
     LoadToModel,
@@ -133,6 +152,8 @@ pub enum DiffOp {
         addr: CellAddress,
         from: CellSnapshot,
         to: CellSnapshot,
+        #[serde(default)]
+        formula_diff: FormulaDiffResult,
     },
 
     QueryAdded {
@@ -250,6 +271,7 @@ impl DiffOp {
         addr: CellAddress,
         from: CellSnapshot,
         to: CellSnapshot,
+        formula_diff: FormulaDiffResult,
     ) -> DiffOp {
         debug_assert_eq!(from.addr, addr, "from.addr must match canonical addr");
         debug_assert_eq!(to.addr, addr, "to.addr must match canonical addr");
@@ -258,6 +280,7 @@ impl DiffOp {
             addr,
             from,
             to,
+            formula_diff,
         }
     }
 

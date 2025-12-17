@@ -35,6 +35,7 @@ fn pg5_2_grid_diff_1x1_value_change_single_cell_edited() {
             addr,
             from,
             to,
+            ..
         } => {
             assert_eq!(sheet_name(&report, sheet), "Sheet1");
             assert_eq!(addr.to_a1(), "A1");

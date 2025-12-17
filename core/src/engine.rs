@@ -11,7 +11,8 @@ use crate::column_alignment::{
 };
 use crate::config::{DiffConfig, LimitBehavior};
 use crate::database_alignment::{KeyColumnSpec, diff_table_by_key};
-use crate::diff::{DiffError, DiffOp, DiffReport, DiffSummary, SheetId};
+use crate::diff::{DiffError, DiffOp, DiffReport, DiffSummary, FormulaDiffResult, SheetId};
+use crate::formula_diff::{FormulaParseCache, diff_cell_formulas_ids};
 use crate::grid_view::GridView;
 #[cfg(feature = "perf-metrics")]
 use crate::perf::{DiffMetrics, Phase};
@@ -31,6 +32,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 #[derive(Debug, Default)]
 struct DiffContext {
     warnings: Vec<String>,
+    formula_cache: FormulaParseCache,
 }
 
 const DATABASE_MODE_SHEET_ID: &str = "<database>";
@@ -61,6 +63,44 @@ fn emit_op<S: DiffSink>(sink: &mut S, op_count: &mut usize, op: DiffOp) -> Resul
     sink.emit(op)?;
     *op_count = op_count.saturating_add(1);
     Ok(())
+}
+
+fn compute_formula_diff(
+    pool: &StringPool,
+    cache: &mut FormulaParseCache,
+    old_cell: Option<&Cell>,
+    new_cell: Option<&Cell>,
+    row_shift: i32,
+    col_shift: i32,
+    config: &DiffConfig,
+) -> FormulaDiffResult {
+    let old_f = old_cell.and_then(|c| c.formula);
+    let new_f = new_cell.and_then(|c| c.formula);
+    diff_cell_formulas_ids(pool, cache, old_f, new_f, row_shift, col_shift, config)
+}
+
+fn emit_cell_edit(
+    sheet_id: &SheetId,
+    addr: CellAddress,
+    old_cell: Option<&Cell>,
+    new_cell: Option<&Cell>,
+    row_shift: i32,
+    col_shift: i32,
+    pool: &StringPool,
+    config: &DiffConfig,
+    cache: &mut FormulaParseCache,
+    sink: &mut impl DiffSink,
+    op_count: &mut usize,
+) -> Result<(), DiffError> {
+    let from = snapshot_with_addr(old_cell, addr);
+    let to = snapshot_with_addr(new_cell, addr);
+    let formula_diff =
+        compute_formula_diff(pool, cache, old_cell, new_cell, row_shift, col_shift, config);
+    emit_op(
+        sink,
+        op_count,
+        DiffOp::cell_edited(sheet_id.clone(), addr, from, to, formula_diff),
+    )
 }
 
 pub fn diff_workbooks(
@@ -246,6 +286,7 @@ fn diff_grids_database_mode_streaming<S: DiffSink>(
     sink: &mut S,
     op_count: &mut usize,
 ) -> Result<DiffSummary, DiffError> {
+    let mut formula_cache = FormulaParseCache::default();
     let spec = KeyColumnSpec::new(key_columns.to_vec());
     let alignment = match diff_table_by_key(old, new, key_columns) {
         Ok(alignment) => alignment,
@@ -308,10 +349,20 @@ fn diff_grids_database_mode_streaming<S: DiffSink>(
             let from = snapshot_with_addr(old_cell, addr);
             let to = snapshot_with_addr(new_cell, addr);
 
+            let formula_diff = compute_formula_diff(
+                pool,
+                &mut formula_cache,
+                old_cell,
+                new_cell,
+                *row_b as i32 - *row_a as i32,
+                0,
+                config,
+            );
+
             emit_op(
                 sink,
                 op_count,
-                DiffOp::cell_edited(sheet_id, addr, from, to),
+                DiffOp::cell_edited(sheet_id, addr, from, to, formula_diff),
             )?;
         }
     }
@@ -367,7 +418,16 @@ fn try_diff_grids<S: DiffSink>(
         );
         match config.on_limit_exceeded {
             LimitBehavior::FallbackToPositional => {
-                positional_diff(sheet_id, old, new, sink, op_count)?;
+                positional_diff(
+                    sheet_id,
+                    old,
+                    new,
+                    pool,
+                    config,
+                    &mut ctx.formula_cache,
+                    sink,
+                    op_count,
+                )?;
                 #[cfg(feature = "perf-metrics")]
                 if let Some(m) = metrics.as_mut() {
                     m.add_cells_compared(cells_in_overlap(old, new));
@@ -375,7 +435,16 @@ fn try_diff_grids<S: DiffSink>(
             }
             LimitBehavior::ReturnPartialResult => {
                 ctx.warnings.push(warning);
-                positional_diff(sheet_id, old, new, sink, op_count)?;
+                positional_diff(
+                    sheet_id,
+                    old,
+                    new,
+                    pool,
+                    config,
+                    &mut ctx.formula_cache,
+                    sink,
+                    op_count,
+                )?;
                 #[cfg(feature = "perf-metrics")]
                 if let Some(m) = metrics.as_mut() {
                     m.add_cells_compared(cells_in_overlap(old, new));
@@ -399,6 +468,7 @@ fn try_diff_grids<S: DiffSink>(
         old,
         new,
         config,
+        pool,
         sink,
         op_count,
         ctx,
@@ -413,9 +483,10 @@ fn diff_grids_core<S: DiffSink>(
     old: &Grid,
     new: &Grid,
     config: &DiffConfig,
+    pool: &StringPool,
     sink: &mut S,
     op_count: &mut usize,
-    _ctx: &mut DiffContext,
+    ctx: &mut DiffContext,
     #[cfg(feature = "perf-metrics")] mut metrics: Option<&mut DiffMetrics>,
 ) -> Result<(), DiffError> {
     if old.nrows == new.nrows && old.ncols == new.ncols && grids_non_blank_cells_equal(old, new) {
@@ -520,7 +591,15 @@ fn diff_grids_core<S: DiffSink>(
             {
                 emit_row_block_move(sheet_id, mv, sink, op_count)?;
                 emit_moved_row_block_edits(
-                    sheet_id, &old_view, &new_view, mv, sink, op_count, config,
+                    sheet_id,
+                    &old_view,
+                    &new_view,
+                    mv,
+                    pool,
+                    &mut ctx.formula_cache,
+                    sink,
+                    op_count,
+                    config,
                 )?;
                 #[cfg(feature = "perf-metrics")]
                 if let Some(m) = metrics.as_mut() {
@@ -558,17 +637,48 @@ fn diff_grids_core<S: DiffSink>(
             m.start_phase(Phase::CellDiff);
         }
         if old.nrows != new.nrows || old.ncols != new.ncols {
-            if diff_aligned_with_masks(sheet_id, old, new, &old_mask, &new_mask, sink, op_count)? {
+            if diff_aligned_with_masks(
+                sheet_id,
+                old,
+                new,
+                &old_mask,
+                &new_mask,
+                pool,
+                config,
+                &mut ctx.formula_cache,
+                sink,
+                op_count,
+            )? {
                 #[cfg(feature = "perf-metrics")]
                 if let Some(m) = metrics.as_mut() {
                     m.end_phase(Phase::CellDiff);
                 }
                 return Ok(());
             }
-            positional_diff_with_masks(sheet_id, old, new, &old_mask, &new_mask, sink, op_count)?;
+            positional_diff_with_masks(
+                sheet_id,
+                old,
+                new,
+                &old_mask,
+                &new_mask,
+                pool,
+                config,
+                &mut ctx.formula_cache,
+                sink,
+                op_count,
+            )?;
         } else {
             positional_diff_masked_equal_size(
-                sheet_id, old, new, &old_mask, &new_mask, sink, op_count,
+                sheet_id,
+                old,
+                new,
+                &old_mask,
+                &new_mask,
+                pool,
+                config,
+                &mut ctx.formula_cache,
+                sink,
+                op_count,
             )?;
         }
         #[cfg(feature = "perf-metrics")]
@@ -642,7 +752,16 @@ fn diff_grids_core<S: DiffSink>(
             if let Some(m) = metrics.as_mut() {
                 m.start_phase(Phase::CellDiff);
             }
-            positional_diff(sheet_id, old, new, sink, op_count)?;
+            positional_diff(
+                sheet_id,
+                old,
+                new,
+                pool,
+                config,
+                &mut ctx.formula_cache,
+                sink,
+                op_count,
+            )?;
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
                 m.add_cells_compared(cells_in_overlap(old, new));
@@ -664,7 +783,16 @@ fn diff_grids_core<S: DiffSink>(
                 if let Some(m) = metrics.as_mut() {
                     m.start_phase(Phase::CellDiff);
                 }
-                positional_diff(sheet_id, old, new, sink, op_count)?;
+                positional_diff(
+                    sheet_id,
+                    old,
+                    new,
+                    pool,
+                    config,
+                    &mut ctx.formula_cache,
+                    sink,
+                    op_count,
+                )?;
                 #[cfg(feature = "perf-metrics")]
                 if let Some(m) = metrics.as_mut() {
                     m.add_cells_compared(cells_in_overlap(old, new));
@@ -688,7 +816,17 @@ fn diff_grids_core<S: DiffSink>(
             if let Some(m) = metrics.as_mut() {
                 m.start_phase(Phase::CellDiff);
             }
-            emit_column_aligned_diffs(sheet_id, old, new, &col_alignment, sink, op_count)?;
+            emit_column_aligned_diffs(
+                sheet_id,
+                old,
+                new,
+                &col_alignment,
+                pool,
+                config,
+                &mut ctx.formula_cache,
+                sink,
+                op_count,
+            )?;
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
                 let overlap_rows = old.nrows.min(new.nrows) as u64;
@@ -719,7 +857,16 @@ fn diff_grids_core<S: DiffSink>(
             if let Some(m) = metrics.as_mut() {
                 m.start_phase(Phase::CellDiff);
             }
-            positional_diff(sheet_id, old, new, sink, op_count)?;
+            positional_diff(
+                sheet_id,
+                old,
+                new,
+                pool,
+                config,
+                &mut ctx.formula_cache,
+                sink,
+                op_count,
+            )?;
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = metrics.as_mut() {
                 m.add_cells_compared(cells_in_overlap(old, new));
@@ -736,7 +883,15 @@ fn diff_grids_core<S: DiffSink>(
             m.start_phase(Phase::CellDiff);
         }
         let compared = emit_amr_aligned_diffs(
-            sheet_id, &old_view, &new_view, &alignment, sink, op_count, config,
+            sheet_id,
+            &old_view,
+            &new_view,
+            &alignment,
+            pool,
+            &mut ctx.formula_cache,
+            sink,
+            op_count,
+            config,
         )?;
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
@@ -767,7 +922,15 @@ fn diff_grids_core<S: DiffSink>(
             m.start_phase(Phase::CellDiff);
         }
         let compared = emit_aligned_diffs(
-            sheet_id, &old_view, &new_view, &alignment, sink, op_count, config,
+            sheet_id,
+            &old_view,
+            &new_view,
+            &alignment,
+            pool,
+            &mut ctx.formula_cache,
+            sink,
+            op_count,
+            config,
         )?;
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
@@ -783,7 +946,17 @@ fn diff_grids_core<S: DiffSink>(
         if let Some(m) = metrics.as_mut() {
             m.start_phase(Phase::CellDiff);
         }
-        emit_column_aligned_diffs(sheet_id, old, new, &alignment, sink, op_count)?;
+        emit_column_aligned_diffs(
+            sheet_id,
+            old,
+            new,
+            &alignment,
+            pool,
+            config,
+            &mut ctx.formula_cache,
+            sink,
+            op_count,
+        )?;
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
             let overlap_rows = old.nrows.min(new.nrows) as u64;
@@ -795,7 +968,16 @@ fn diff_grids_core<S: DiffSink>(
         if let Some(m) = metrics.as_mut() {
             m.start_phase(Phase::CellDiff);
         }
-        positional_diff(sheet_id, old, new, sink, op_count)?;
+        positional_diff(
+            sheet_id,
+            old,
+            new,
+            pool,
+            config,
+            &mut ctx.formula_cache,
+            sink,
+            op_count,
+        )?;
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
             m.add_cells_compared(cells_in_overlap(old, new));
@@ -1526,6 +1708,9 @@ fn positional_diff<S: DiffSink>(
     sheet_id: &SheetId,
     old: &Grid,
     new: &Grid,
+    pool: &StringPool,
+    config: &DiffConfig,
+    cache: &mut FormulaParseCache,
     sink: &mut S,
     op_count: &mut usize,
 ) -> Result<(), DiffError> {
@@ -1533,7 +1718,19 @@ fn positional_diff<S: DiffSink>(
     let overlap_cols = old.ncols.min(new.ncols);
 
     for row in 0..overlap_rows {
-        diff_row_pair(sheet_id, old, new, row, row, overlap_cols, sink, op_count)?;
+        diff_row_pair(
+            sheet_id,
+            old,
+            new,
+            row,
+            row,
+            overlap_cols,
+            pool,
+            config,
+            cache,
+            sink,
+            op_count,
+        )?;
     }
 
     if new.nrows > old.nrows {
@@ -1581,6 +1778,9 @@ fn diff_aligned_with_masks(
     new: &Grid,
     old_mask: &RegionMask,
     new_mask: &RegionMask,
+    pool: &StringPool,
+    config: &DiffConfig,
+    cache: &mut FormulaParseCache,
     sink: &mut impl DiffSink,
     op_count: &mut usize,
 ) -> Result<bool, DiffError> {
@@ -1624,13 +1824,20 @@ fn diff_aligned_with_masks(
             }
 
             let addr = CellAddress::from_indices(*row_b, *col_b);
-            let from = snapshot_with_addr(old_cell, addr);
-            let to = snapshot_with_addr(new_cell, addr);
-
-            emit_op(
+            let row_shift = *row_b as i32 - *row_a as i32;
+            let col_shift = *col_b as i32 - *col_a as i32;
+            emit_cell_edit(
+                sheet_id,
+                addr,
+                old_cell,
+                new_cell,
+                row_shift,
+                col_shift,
+                pool,
+                config,
+                cache,
                 sink,
                 op_count,
-                DiffOp::cell_edited(sheet_id.clone(), addr, from, to),
             )?;
         }
     }
@@ -1690,6 +1897,9 @@ fn positional_diff_with_masks(
     new: &Grid,
     old_mask: &RegionMask,
     new_mask: &RegionMask,
+    pool: &StringPool,
+    config: &DiffConfig,
+    cache: &mut FormulaParseCache,
     sink: &mut impl DiffSink,
     op_count: &mut usize,
 ) -> Result<(), DiffError> {
@@ -1709,13 +1919,18 @@ fn positional_diff_with_masks(
             }
 
             let addr = CellAddress::from_indices(row, col);
-            let from = snapshot_with_addr(old_cell, addr);
-            let to = snapshot_with_addr(new_cell, addr);
-
-            emit_op(
+            emit_cell_edit(
+                sheet_id,
+                addr,
+                old_cell,
+                new_cell,
+                0,
+                0,
+                pool,
+                config,
+                cache,
                 sink,
                 op_count,
-                DiffOp::cell_edited(sheet_id.clone(), addr, from, to),
             )?;
         }
     }
@@ -1773,6 +1988,9 @@ fn positional_diff_masked_equal_size(
     new: &Grid,
     old_mask: &RegionMask,
     new_mask: &RegionMask,
+    pool: &StringPool,
+    config: &DiffConfig,
+    cache: &mut FormulaParseCache,
     sink: &mut impl DiffSink,
     op_count: &mut usize,
 ) -> Result<(), DiffError> {
@@ -1801,13 +2019,18 @@ fn positional_diff_masked_equal_size(
             }
 
             let addr = CellAddress::from_indices(row, col);
-            let from = snapshot_with_addr(old_cell, addr);
-            let to = snapshot_with_addr(new_cell, addr);
-
-            emit_op(
+            emit_cell_edit(
+                sheet_id,
+                addr,
+                old_cell,
+                new_cell,
+                0,
+                0,
+                pool,
+                config,
+                cache,
                 sink,
                 op_count,
-                DiffOp::cell_edited(sheet_id.clone(), addr, from, to),
             )?;
         }
     }
@@ -1895,6 +2118,8 @@ fn emit_moved_row_block_edits(
     old_view: &GridView,
     new_view: &GridView,
     mv: LegacyRowBlockMove,
+    pool: &StringPool,
+    formula_cache: &mut FormulaParseCache,
     sink: &mut impl DiffSink,
     op_count: &mut usize,
     config: &DiffConfig,
@@ -1912,6 +2137,9 @@ fn emit_moved_row_block_edits(
 
         let _ = diff_row_pair_sparse(
             sheet_id,
+            pool,
+            formula_cache,
+            mv.src_start_row + offset,
             mv.dst_start_row + offset,
             overlap_cols,
             &old_row.cells,
@@ -1929,6 +2157,8 @@ fn emit_aligned_diffs(
     old_view: &GridView,
     new_view: &GridView,
     alignment: &LegacyRowAlignment,
+    pool: &StringPool,
+    formula_cache: &mut FormulaParseCache,
     sink: &mut impl DiffSink,
     op_count: &mut usize,
     config: &DiffConfig,
@@ -1943,6 +2173,9 @@ fn emit_aligned_diffs(
         ) {
             compared = compared.saturating_add(diff_row_pair_sparse(
                 sheet_id,
+                pool,
+                formula_cache,
+                *row_a,
                 *row_b,
                 overlap_cols,
                 &old_row.cells,
@@ -1978,6 +2211,8 @@ fn emit_amr_aligned_diffs(
     old_view: &GridView,
     new_view: &GridView,
     alignment: &AmrAlignment,
+    pool: &StringPool,
+    formula_cache: &mut FormulaParseCache,
     sink: &mut impl DiffSink,
     op_count: &mut usize,
     config: &DiffConfig,
@@ -1992,6 +2227,9 @@ fn emit_amr_aligned_diffs(
         ) {
             compared = compared.saturating_add(diff_row_pair_sparse(
                 sheet_id,
+                pool,
+                formula_cache,
+                *row_a,
                 *row_b,
                 overlap_cols,
                 &old_row.cells,
@@ -2056,6 +2294,9 @@ fn emit_amr_aligned_diffs(
 
 fn diff_row_pair_sparse(
     sheet_id: &SheetId,
+    pool: &StringPool,
+    formula_cache: &mut FormulaParseCache,
+    row_a: u32,
     row_b: u32,
     overlap_cols: u32,
     old_cells: &[(u32, &Cell)],
@@ -2067,6 +2308,8 @@ fn diff_row_pair_sparse(
     let mut i = 0usize;
     let mut j = 0usize;
     let mut compared = 0u64;
+
+    let row_shift = row_b as i32 - row_a as i32;
 
     while i < old_cells.len() || j < new_cells.len() {
         let col_a = old_cells.get(i).map(|(c, _)| *c).unwrap_or(u32::MAX);
@@ -2099,13 +2342,18 @@ fn diff_row_pair_sparse(
 
         if changed || config.include_unchanged_cells {
             let addr = CellAddress::from_indices(row_b, col);
-            let from = snapshot_with_addr(old_cell, addr);
-            let to = snapshot_with_addr(new_cell, addr);
-
-            emit_op(
+            emit_cell_edit(
+                sheet_id,
+                addr,
+                old_cell,
+                new_cell,
+                row_shift,
+                0,
+                pool,
+                config,
+                formula_cache,
                 sink,
                 op_count,
-                DiffOp::cell_edited(sheet_id.clone(), addr, from, to),
             )?;
         }
     }
@@ -2120,9 +2368,13 @@ fn diff_row_pair(
     row_a: u32,
     row_b: u32,
     overlap_cols: u32,
+    pool: &StringPool,
+    config: &DiffConfig,
+    formula_cache: &mut FormulaParseCache,
     sink: &mut impl DiffSink,
     op_count: &mut usize,
 ) -> Result<(), DiffError> {
+    let row_shift = row_b as i32 - row_a as i32;
     for col in 0..overlap_cols {
         let old_cell = old.get(row_a, col);
         let new_cell = new.get(row_b, col);
@@ -2132,13 +2384,18 @@ fn diff_row_pair(
         }
 
         let addr = CellAddress::from_indices(row_b, col);
-        let from = snapshot_with_addr(old_cell, addr);
-        let to = snapshot_with_addr(new_cell, addr);
-
-        emit_op(
+        emit_cell_edit(
+            sheet_id,
+            addr,
+            old_cell,
+            new_cell,
+            row_shift,
+            0,
+            pool,
+            config,
+            formula_cache,
             sink,
             op_count,
-            DiffOp::cell_edited(sheet_id.clone(), addr, from, to),
         )?;
     }
     Ok(())
@@ -2149,6 +2406,9 @@ fn emit_column_aligned_diffs(
     old: &Grid,
     new: &Grid,
     alignment: &ColumnAlignment,
+    pool: &StringPool,
+    config: &DiffConfig,
+    cache: &mut FormulaParseCache,
     sink: &mut impl DiffSink,
     op_count: &mut usize,
 ) -> Result<(), DiffError> {
@@ -2164,13 +2424,19 @@ fn emit_column_aligned_diffs(
             }
 
             let addr = CellAddress::from_indices(row, *col_b);
-            let from = snapshot_with_addr(old_cell, addr);
-            let to = snapshot_with_addr(new_cell, addr);
-
-            emit_op(
+            let col_shift = *col_b as i32 - *col_a as i32;
+            emit_cell_edit(
+                sheet_id,
+                addr,
+                old_cell,
+                new_cell,
+                0,
+                col_shift,
+                pool,
+                config,
+                cache,
                 sink,
                 op_count,
-                DiffOp::cell_edited(sheet_id.clone(), addr, from, to),
             )?;
         }
     }
@@ -2289,6 +2555,7 @@ mod tests {
         let config = DiffConfig::default();
         let mut sink = VecSink::new();
         let mut op_count = 0usize;
+        let mut cache = FormulaParseCache::default();
 
         let old_cells_storage = [numbered_cell(1.0), numbered_cell(2.0), numbered_cell(3.0)];
         let new_cells_storage = [numbered_cell(1.0), numbered_cell(2.0), numbered_cell(4.0)];
@@ -2306,6 +2573,9 @@ mod tests {
 
         let compared = diff_row_pair_sparse(
             &sheet_id,
+            &pool,
+            &mut cache,
+            0,
             0,
             3,
             &old_cells,
@@ -2326,6 +2596,7 @@ mod tests {
         let config = DiffConfig::default();
         let mut sink = VecSink::new();
         let mut op_count = 0usize;
+        let mut cache = FormulaParseCache::default();
 
         let old_cells_storage = [numbered_cell(1.0)];
         let new_cells_storage = [numbered_cell(2.0)];
@@ -2335,6 +2606,9 @@ mod tests {
 
         let compared = diff_row_pair_sparse(
             &sheet_id,
+            &pool,
+            &mut cache,
+            0,
             0,
             3,
             &old_cells,
