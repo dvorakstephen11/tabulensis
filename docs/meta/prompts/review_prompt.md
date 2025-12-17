@@ -6071,31 +6071,6 @@ fn diff_grids_database_mode_streaming<S: DiffSink>(
     })
 }
 
-fn diff_grids<S: DiffSink>(
-    sheet_id: &SheetId,
-    old: &Grid,
-    new: &Grid,
-    config: &DiffConfig,
-    pool: &StringPool,
-    sink: &mut S,
-    op_count: &mut usize,
-) -> Result<(), DiffError> {
-    let mut ctx = DiffContext::default();
-    try_diff_grids(
-        sheet_id,
-        old,
-        new,
-        config,
-        pool,
-        sink,
-        op_count,
-        &mut ctx,
-        #[cfg(feature = "perf-metrics")]
-        None,
-    )?;
-    Ok(())
-}
-
 fn try_diff_grids<S: DiffSink>(
     sheet_id: &SheetId,
     old: &Grid,
@@ -9388,41 +9363,43 @@ mod tests {
 
 use std::cell::RefCell;
 
-pub mod addressing;
+mod addressing;
 pub(crate) mod alignment;
 pub(crate) mod column_alignment;
-pub mod config;
-pub mod container;
+mod config;
+mod container;
 pub(crate) mod database_alignment;
-pub mod datamashup;
-pub mod datamashup_framing;
-pub mod datamashup_package;
-pub mod diff;
-pub mod engine;
+mod datamashup;
+mod datamashup_framing;
+mod datamashup_package;
+mod diff;
+mod engine;
 #[cfg(feature = "excel-open-xml")]
-pub mod excel_open_xml;
-pub mod grid_parser;
-pub mod grid_view;
+mod excel_open_xml;
+mod grid_parser;
+mod grid_view;
 pub(crate) mod hashing;
-pub mod m_ast;
-pub mod m_diff;
-pub mod m_section;
-pub mod output;
-pub mod package;
+mod m_ast;
+mod m_diff;
+mod m_section;
+mod output;
+mod package;
 #[cfg(feature = "perf-metrics")]
+#[doc(hidden)]
 pub mod perf;
 pub(crate) mod rect_block_move;
 pub(crate) mod region_mask;
 pub(crate) mod row_alignment;
-pub mod session;
-pub mod sink;
-pub mod string_pool;
-pub mod workbook;
+mod session;
+mod sink;
+mod string_pool;
+mod workbook;
 
 thread_local! {
     static DEFAULT_SESSION: RefCell<DiffSession> = RefCell::new(DiffSession::new());
 }
 
+#[doc(hidden)]
 pub fn with_default_session<T>(f: impl FnOnce(&mut DiffSession) -> T) -> T {
     DEFAULT_SESSION.with(|session| {
         let mut session = session.borrow_mut();
@@ -9431,6 +9408,7 @@ pub fn with_default_session<T>(f: impl FnOnce(&mut DiffSession) -> T) -> T {
 }
 
 #[deprecated(note = "use WorkbookPackage::diff")]
+#[doc(hidden)]
 pub fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
     DEFAULT_SESSION.with(|session| {
         let mut session = session.borrow_mut();
@@ -9439,6 +9417,7 @@ pub fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> Di
 }
 
 #[deprecated(note = "use WorkbookPackage::diff")]
+#[doc(hidden)]
 pub fn try_diff_workbooks(
     old: &Workbook,
     new: &Workbook,
@@ -9453,6 +9432,7 @@ pub fn try_diff_workbooks(
 #[cfg(feature = "excel-open-xml")]
 #[deprecated(note = "use WorkbookPackage::open")]
 #[allow(deprecated)]
+#[doc(hidden)]
 pub fn open_workbook(path: impl AsRef<std::path::Path>) -> Result<Workbook, ExcelOpenError> {
     DEFAULT_SESSION.with(|session| {
         let mut session = session.borrow_mut();
@@ -9461,16 +9441,21 @@ pub fn open_workbook(path: impl AsRef<std::path::Path>) -> Result<Workbook, Exce
 }
 
 pub use addressing::{AddressParseError, address_to_index, index_to_address};
-pub use config::DiffConfig;
+pub use config::{DiffConfig, LimitBehavior};
 pub use container::{ContainerError, OpcContainer};
 pub use datamashup::{
     DataMashup, Metadata, Permissions, Query, QueryMetadata, build_data_mashup, build_queries,
 };
+#[doc(hidden)]
+pub use datamashup::parse_metadata;
 pub use datamashup_framing::{DataMashupError, RawDataMashup};
 pub use datamashup_package::{
     EmbeddedContent, PackageParts, PackageXml, SectionDocument, parse_package_parts,
 };
-pub use diff::{DiffError, DiffOp, DiffReport, DiffSummary, QueryChangeKind, QueryMetadataField, SheetId};
+pub use diff::{
+    DiffError, DiffOp, DiffReport, DiffSummary, QueryChangeKind, QueryMetadataField, SheetId,
+};
+#[doc(hidden)]
 pub use engine::{
     diff_grids_database_mode,
     diff_workbooks as diff_workbooks_with_pool,
@@ -9480,15 +9465,21 @@ pub use engine::{
 };
 #[cfg(feature = "excel-open-xml")]
 #[allow(deprecated)]
-pub use excel_open_xml::{ExcelOpenError, PackageError, open_data_mashup, open_workbook as open_workbook_with_pool};
-pub use grid_parser::{GridParseError, SheetDescriptor};
-pub use grid_view::{ColHash, ColMeta, GridView, HashStats, RowHash, RowMeta, RowView};
-pub use m_ast::{
-    MModuleAst, MParseError, ast_semantically_equal, canonicalize_m_ast, parse_m_expression,
+#[doc(hidden)]
+pub use excel_open_xml::{
+    ExcelOpenError, PackageError, open_data_mashup, open_workbook as open_workbook_with_pool,
 };
+pub use grid_parser::{GridParseError, SheetDescriptor};
+pub use grid_view::{ColHash, ColMeta, FrequencyClass, GridView, HashStats, RowHash, RowMeta, RowView};
+pub use m_ast::{MModuleAst, MParseError, ast_semantically_equal, canonicalize_m_ast, parse_m_expression};
+#[doc(hidden)]
+pub use m_ast::{MAstKind, MTokenDebug, tokenize_for_testing};
 pub use m_section::{SectionMember, SectionParseError, parse_section_members};
 #[cfg(feature = "excel-open-xml")]
+#[doc(hidden)]
 pub use output::json::diff_workbooks_to_json;
+#[doc(hidden)]
+pub use output::json::diff_report_to_cell_diffs;
 pub use output::json::{CellDiff, serialize_cell_diffs, serialize_diff_report};
 pub use output::json_lines::JsonLinesSink;
 pub use package::WorkbookPackage;
@@ -9952,6 +9943,7 @@ use crate::m_ast::{MModuleAst, canonicalize_m_ast, parse_m_expression};
 use crate::string_pool::{StringId, StringPool};
 
 #[deprecated(note = "use WorkbookPackage::diff instead")]
+#[allow(dead_code)]
 pub fn diff_m_queries(old_queries: &[Query], new_queries: &[Query], config: &DiffConfig) -> Vec<DiffOp> {
     crate::with_default_session(|session| {
         diff_queries_to_ops(old_queries, new_queries, &mut session.strings, config)
@@ -10742,6 +10734,15 @@ use crate::workbook::Workbook;
 pub struct WorkbookPackage {
     pub workbook: Workbook,
     pub data_mashup: Option<DataMashup>,
+}
+
+impl From<Workbook> for WorkbookPackage {
+    fn from(workbook: Workbook) -> Self {
+        Self {
+            workbook,
+            data_mashup: None,
+        }
+    }
 }
 
 impl WorkbookPackage {
@@ -14217,15 +14218,14 @@ mod tests {
 ### File: `core\tests\addressing_pg2_tests.rs`
 
 ```rust
-use excel_diff::{CellValue, address_to_index, index_to_address, open_workbook, with_default_session};
-
 mod common;
-use common::{fixture_path, sid};
+
+use common::{open_fixture_workbook, sid};
+use excel_diff::{CellValue, address_to_index, index_to_address, with_default_session};
 
 #[test]
 fn pg2_addressing_matrix_consistency() {
-    let workbook =
-        open_workbook(fixture_path("pg2_addressing_matrix.xlsx")).expect("address fixture opens");
+    let workbook = open_fixture_workbook("pg2_addressing_matrix.xlsx");
     let sheet_names: Vec<String> = with_default_session(|session| {
         workbook
             .sheets
@@ -14261,9 +14261,11 @@ fn pg2_addressing_matrix_consistency() {
 mod common;
 
 use common::{grid_from_numbers, single_sheet_workbook};
-use excel_diff::config::DiffConfig;
-use excel_diff::diff::DiffOp;
-use excel_diff::diff_workbooks;
+use excel_diff::{DiffConfig, DiffOp, DiffReport, Workbook, WorkbookPackage};
+
+fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
+}
 
 fn count_ops(ops: &[DiffOp], predicate: impl Fn(&DiffOp) -> bool) -> usize {
     ops.iter().filter(|op| predicate(op)).count()
@@ -14558,8 +14560,10 @@ fn amr_recursive_gap_alignment() {
 #![allow(dead_code)]
 
 use excel_diff::{
-    CellValue, Grid, Sheet, SheetKind, StringId, Workbook, with_default_session,
+    CellValue, DiffConfig, DiffReport, Grid, Sheet, SheetKind, StringId, Workbook,
+    WorkbookPackage, with_default_session,
 };
+use std::fs::File;
 use std::path::PathBuf;
 
 pub fn fixture_path(filename: &str) -> PathBuf {
@@ -14567,6 +14571,26 @@ pub fn fixture_path(filename: &str) -> PathBuf {
     path.push("../fixtures/generated");
     path.push(filename);
     path
+}
+
+pub fn open_fixture_pkg(name: &str) -> WorkbookPackage {
+    let path = fixture_path(name);
+    let file = File::open(&path).unwrap_or_else(|e| {
+        panic!("failed to open fixture {}: {e}", path.display());
+    });
+    WorkbookPackage::open(file).unwrap_or_else(|e| {
+        panic!("failed to parse fixture {}: {e}", path.display());
+    })
+}
+
+pub fn open_fixture_workbook(name: &str) -> Workbook {
+    open_fixture_pkg(name).workbook
+}
+
+pub fn diff_fixture_pkgs(a: &str, b: &str, config: &DiffConfig) -> DiffReport {
+    let pkg_a = open_fixture_pkg(a);
+    let pkg_b = open_fixture_pkg(b);
+    pkg_a.diff(&pkg_b, config)
 }
 
 pub fn grid_from_numbers(values: &[&[i32]]) -> Grid {
@@ -14608,22 +14632,26 @@ pub fn single_sheet_workbook(name: &str, grid: Grid) -> Workbook {
 ### File: `core\tests\d1_database_mode_tests.rs`
 
 ```rust
+mod common;
+
+use common::{grid_from_numbers, open_fixture_workbook, sid};
 use excel_diff::{
-    CellValue, DiffOp, Grid, Workbook, diff_grids_database_mode, diff_workbooks, open_workbook,
-    with_default_session,
+    CellValue, DiffConfig, DiffOp, DiffReport, Grid, Workbook, WorkbookPackage,
+    diff_grids_database_mode, with_default_session,
 };
 
-mod common;
-use common::{fixture_path, grid_from_numbers, sid};
+fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
+}
 
-fn diff_db(grid_a: &Grid, grid_b: &Grid, keys: &[u32]) -> excel_diff::DiffReport {
+fn diff_db(grid_a: &Grid, grid_b: &Grid, keys: &[u32]) -> DiffReport {
     with_default_session(|session| {
         diff_grids_database_mode(
             grid_a,
             grid_b,
             keys,
             &mut session.strings,
-            &excel_diff::DiffConfig::default(),
+            &DiffConfig::default(),
         )
     })
 }
@@ -14654,7 +14682,7 @@ fn grid_from_float_rows(rows: &[&[f64]]) -> Grid {
 
 #[test]
 fn d1_equal_ordered_database_mode_empty_diff() {
-    let workbook = open_workbook(fixture_path("db_equal_ordered_a.xlsx")).expect("fixture A opens");
+    let workbook = open_fixture_workbook("db_equal_ordered_a.xlsx");
     let grid = data_grid(&workbook);
 
     let report = diff_db(grid, grid, &[0]);
@@ -14666,8 +14694,8 @@ fn d1_equal_ordered_database_mode_empty_diff() {
 
 #[test]
 fn d1_equal_reordered_database_mode_empty_diff() {
-    let wb_a = open_workbook(fixture_path("db_equal_ordered_a.xlsx")).expect("fixture A opens");
-    let wb_b = open_workbook(fixture_path("db_equal_ordered_b.xlsx")).expect("fixture B opens");
+    let wb_a = open_fixture_workbook("db_equal_ordered_a.xlsx");
+    let wb_b = open_fixture_workbook("db_equal_ordered_b.xlsx");
 
     let grid_a = data_grid(&wb_a);
     let grid_b = data_grid(&wb_b);
@@ -14681,10 +14709,10 @@ fn d1_equal_reordered_database_mode_empty_diff() {
 
 #[test]
 fn d1_spreadsheet_mode_sees_reorder_as_changes() {
-    let wb_a = open_workbook(fixture_path("db_equal_ordered_a.xlsx")).expect("fixture A opens");
-    let wb_b = open_workbook(fixture_path("db_equal_ordered_b.xlsx")).expect("fixture B opens");
+    let wb_a = open_fixture_workbook("db_equal_ordered_a.xlsx");
+    let wb_b = open_fixture_workbook("db_equal_ordered_b.xlsx");
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     assert!(
         !report.ops.is_empty(),
@@ -15115,7 +15143,7 @@ use std::io::{ErrorKind, Read};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use excel_diff::{
-    ContainerError, DataMashupError, ExcelOpenError, RawDataMashup, build_data_mashup,
+    ContainerError, DataMashupError, PackageError, RawDataMashup, build_data_mashup,
     open_data_mashup,
 };
 use quick_xml::{Reader, events::Event};
@@ -15183,7 +15211,7 @@ fn corrupt_base64_returns_error() {
     let err = open_data_mashup(&path).expect_err("corrupt base64 should fail");
     assert!(matches!(
         err,
-        ExcelOpenError::DataMashup(DataMashupError::Base64Invalid)
+        PackageError::DataMashup(DataMashupError::Base64Invalid)
     ));
 }
 
@@ -15193,7 +15221,7 @@ fn duplicate_datamashup_parts_are_rejected() {
     let err = open_data_mashup(&path).expect_err("duplicate DataMashup parts should be rejected");
     assert!(matches!(
         err,
-        ExcelOpenError::DataMashup(DataMashupError::FramingInvalid)
+        PackageError::DataMashup(DataMashupError::FramingInvalid)
     ));
 }
 
@@ -15204,7 +15232,7 @@ fn duplicate_datamashup_elements_are_rejected() {
         open_data_mashup(&path).expect_err("duplicate DataMashup elements should be rejected");
     assert!(matches!(
         err,
-        ExcelOpenError::DataMashup(DataMashupError::FramingInvalid)
+        PackageError::DataMashup(DataMashupError::FramingInvalid)
     ));
 }
 
@@ -15213,7 +15241,7 @@ fn nonexistent_file_returns_io() {
     let path = fixture_path("missing_mashup.xlsx");
     let err = open_data_mashup(&path).expect_err("missing file should error");
     match err {
-        ExcelOpenError::Container(ContainerError::Io(e)) => {
+        PackageError::Container(ContainerError::Io(e)) => {
             assert_eq!(e.kind(), ErrorKind::NotFound)
         }
         other => panic!("expected Io error, got {other:?}"),
@@ -15226,7 +15254,7 @@ fn non_excel_container_returns_not_excel_error() {
     let err = open_data_mashup(&path).expect_err("random zip should not parse");
     assert!(matches!(
         err,
-        ExcelOpenError::Container(ContainerError::NotOpcPackage)
+        PackageError::Container(ContainerError::NotOpcPackage)
     ));
 }
 
@@ -15236,7 +15264,7 @@ fn missing_content_types_is_not_excel_error() {
     let err = open_data_mashup(&path).expect_err("missing [Content_Types].xml should fail");
     assert!(matches!(
         err,
-        ExcelOpenError::Container(ContainerError::NotOpcPackage)
+        PackageError::Container(ContainerError::NotOpcPackage)
     ));
 }
 
@@ -15246,7 +15274,7 @@ fn non_zip_file_returns_not_zip_error() {
     let err = open_data_mashup(&path).expect_err("non-zip input should not parse as Excel");
     assert!(matches!(
         err,
-        ExcelOpenError::Container(ContainerError::NotZipContainer)
+        PackageError::Container(ContainerError::NotZipContainer)
     ));
 }
 
@@ -15376,11 +15404,15 @@ mod common;
 
 use common::sid;
 use excel_diff::{
-    Cell, CellAddress, CellSnapshot, CellValue, DiffOp, DiffReport, Grid, Sheet, SheetKind,
-    Workbook, diff_workbooks,
+    CellAddress, CellSnapshot, CellValue, DiffConfig, DiffOp, DiffReport, Grid, Sheet, SheetKind,
+    Workbook, WorkbookPackage,
 };
 
 type SheetSpec<'a> = (&'a str, Vec<(u32, u32, f64)>);
+
+fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
+}
 
 fn make_workbook(sheets: Vec<SheetSpec<'_>>) -> Workbook {
     let sheet_ir: Vec<Sheet> = sheets
@@ -15426,7 +15458,7 @@ fn make_sheet_with_kind(name: &str, kind: SheetKind, cells: Vec<(u32, u32, f64)>
 #[test]
 fn identical_workbooks_produce_empty_report() {
     let wb = make_workbook(vec![("Sheet1", vec![(0, 0, 1.0)])]);
-    let report = diff_workbooks(&wb, &wb, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb, &wb, &DiffConfig::default());
     assert!(report.ops.is_empty());
 }
 
@@ -15437,7 +15469,7 @@ fn sheet_added_detected() {
         ("Sheet1", vec![(0, 0, 1.0)]),
         ("Sheet2", vec![(0, 0, 2.0)]),
     ]);
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert!(
         report
             .ops
@@ -15453,7 +15485,7 @@ fn sheet_removed_detected() {
         ("Sheet2", vec![(0, 0, 2.0)]),
     ]);
     let new = make_workbook(vec![("Sheet1", vec![(0, 0, 1.0)])]);
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert!(
         report
             .ops
@@ -15466,7 +15498,7 @@ fn sheet_removed_detected() {
 fn cell_edited_detected() {
     let old = make_workbook(vec![("Sheet1", vec![(0, 0, 1.0)])]);
     let new = make_workbook(vec![("Sheet1", vec![(0, 0, 2.0)])]);
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(report.ops.len(), 1);
     match &report.ops[0] {
         DiffOp::CellEdited {
@@ -15488,7 +15520,7 @@ fn cell_edited_detected() {
 fn diff_report_json_round_trips() {
     let old = make_workbook(vec![("Sheet1", vec![(0, 0, 1.0)])]);
     let new = make_workbook(vec![("Sheet1", vec![(0, 0, 2.0)])]);
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     let json = serde_json::to_string(&report).expect("serialize");
     let parsed: DiffReport = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(report, parsed);
@@ -15499,7 +15531,7 @@ fn sheet_name_case_insensitive_no_changes() {
     let old = make_workbook(vec![("Sheet1", vec![(0, 0, 1.0)])]);
     let new = make_workbook(vec![("sheet1", vec![(0, 0, 1.0)])]);
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert!(report.ops.is_empty());
 }
 
@@ -15508,7 +15540,7 @@ fn sheet_name_case_insensitive_cell_edit() {
     let old = make_workbook(vec![("Sheet1", vec![(0, 0, 1.0)])]);
     let new = make_workbook(vec![("sheet1", vec![(0, 0, 2.0)])]);
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(report.ops.len(), 1);
 
     match &report.ops[0] {
@@ -15551,7 +15583,7 @@ fn sheet_identity_includes_kind() {
         sheets: vec![chart],
     };
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
 
     let mut added = 0;
     let mut removed = 0;
@@ -15613,7 +15645,7 @@ fn deterministic_sheet_op_ordering() {
         },
     ];
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(
         report.ops, expected,
         "ops should be ordered by lowercase name then sheet kind"
@@ -15644,7 +15676,7 @@ fn sheet_identity_includes_kind_for_macro_and_other() {
         sheets: vec![other_sheet],
     };
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
 
     let mut added = 0;
     let mut removed = 0;
@@ -15672,7 +15704,7 @@ fn duplicate_sheet_identity_last_writer_wins_release() {
     };
     let new = Workbook { sheets: Vec::new() };
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(report.ops.len(), 1, "expected last writer to win");
 
     match &report.ops[0] {
@@ -15731,7 +15763,7 @@ fn move_detection_respects_column_gate() {
         }],
     };
 
-    let default_report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let default_report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
     assert!(
         !default_report.ops.is_empty(),
         "changes should be detected even when move detection is gated off"
@@ -15744,9 +15776,9 @@ fn move_detection_respects_column_gate() {
         "default gate should skip block move detection on wide sheets"
     );
 
-    let wide_gate = excel_diff::DiffConfig {
+    let wide_gate = DiffConfig {
         max_move_detection_cols: 512,
-        ..excel_diff::DiffConfig::default()
+        ..DiffConfig::default()
     };
     let wide_report = diff_workbooks(&wb_a, &wb_b, &wide_gate);
     assert!(
@@ -15772,7 +15804,7 @@ fn duplicate_sheet_identity_panics_in_debug() {
     let new = Workbook { sheets: Vec::new() };
 
     let result =
-        std::panic::catch_unwind(|| diff_workbooks(&old, &new, &excel_diff::DiffConfig::default()));
+        std::panic::catch_unwind(|| diff_workbooks(&old, &new, &DiffConfig::default()));
     if cfg!(debug_assertions) {
         assert!(
             result.is_err(),
@@ -15790,17 +15822,16 @@ fn duplicate_sheet_identity_panics_in_debug() {
 ### File: `core\tests\excel_open_xml_tests.rs`
 
 ```rust
+mod common;
+
+use common::{fixture_path, open_fixture_workbook, sid};
+use excel_diff::{CellAddress, ContainerError, PackageError, SheetKind, WorkbookPackage};
 use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::Path;
 use std::time::SystemTime;
-
-use excel_diff::{CellAddress, ContainerError, ExcelOpenError, SheetKind, open_workbook};
 use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipWriter};
-
-mod common;
-use common::{fixture_path, sid};
 
 fn temp_xlsx_path(prefix: &str) -> std::path::PathBuf {
     let mut path = std::env::temp_dir();
@@ -15829,8 +15860,7 @@ fn write_zip(entries: &[(&str, &str)], path: &Path) {
 
 #[test]
 fn open_minimal_workbook_succeeds() {
-    let path = fixture_path("minimal.xlsx");
-    let workbook = open_workbook(&path).expect("minimal workbook should open");
+    let workbook = open_fixture_workbook("minimal.xlsx");
     assert_eq!(workbook.sheets.len(), 1);
 
     let sheet = &workbook.sheets[0];
@@ -15847,32 +15877,31 @@ fn open_minimal_workbook_succeeds() {
 #[test]
 fn open_nonexistent_file_returns_io_error() {
     let path = fixture_path("definitely_missing.xlsx");
-    let err = open_workbook(&path).expect_err("missing file should error");
-    match err {
-        ExcelOpenError::Container(ContainerError::Io(e)) => {
-            assert_eq!(e.kind(), ErrorKind::NotFound)
-        }
-        other => panic!("expected Io error, got {other:?}"),
-    }
+    let file = std::fs::File::open(&path);
+    assert!(file.is_err(), "missing file should error");
+    let io_err = file.unwrap_err();
+    assert_eq!(io_err.kind(), ErrorKind::NotFound);
 }
 
 #[test]
 fn random_zip_is_not_excel() {
     let path = fixture_path("random_zip.zip");
-    let err = open_workbook(&path).expect_err("random zip should not parse");
+    let file = std::fs::File::open(&path).expect("random zip file exists");
+    let err = WorkbookPackage::open(file).expect_err("random zip should not parse");
     assert!(matches!(
         err,
-        ExcelOpenError::Container(ContainerError::NotOpcPackage)
+        PackageError::Container(ContainerError::NotOpcPackage)
     ));
 }
 
 #[test]
 fn no_content_types_is_not_excel() {
     let path = fixture_path("no_content_types.xlsx");
-    let err = open_workbook(&path).expect_err("missing content types should fail");
+    let file = std::fs::File::open(&path).expect("no content types file exists");
+    let err = WorkbookPackage::open(file).expect_err("missing content types should fail");
     assert!(matches!(
         err,
-        ExcelOpenError::Container(ContainerError::NotOpcPackage)
+        PackageError::Container(ContainerError::NotOpcPackage)
     ));
 }
 
@@ -15880,10 +15909,11 @@ fn no_content_types_is_not_excel() {
 fn not_zip_container_returns_error() {
     let path = std::env::temp_dir().join("excel_diff_not_zip.txt");
     fs::write(&path, "this is not a zip container").expect("write temp file");
-    let err = open_workbook(&path).expect_err("non-zip should fail");
+    let file = std::fs::File::open(&path).expect("not zip file exists");
+    let err = WorkbookPackage::open(file).expect_err("non-zip should fail");
     assert!(matches!(
         err,
-        ExcelOpenError::Container(ContainerError::NotZipContainer)
+        PackageError::Container(ContainerError::NotZipContainer)
     ));
     let _ = fs::remove_file(&path);
 }
@@ -15899,8 +15929,9 @@ fn missing_workbook_xml_returns_workbookxmlmissing() {
 
     write_zip(&[("[Content_Types].xml", content_types)], &path);
 
-    let err = open_workbook(&path).expect_err("missing workbook xml should error");
-    assert!(matches!(err, ExcelOpenError::WorkbookXmlMissing));
+    let file = std::fs::File::open(&path).expect("temp file exists");
+    let err = WorkbookPackage::open(file).expect_err("missing workbook xml should error");
+    assert!(matches!(err, PackageError::WorkbookXmlMissing));
 
     let _ = fs::remove_file(&path);
 }
@@ -15938,9 +15969,10 @@ fn missing_worksheet_xml_returns_worksheetxmlmissing() {
         &path,
     );
 
-    let err = open_workbook(&path).expect_err("missing worksheet xml should error");
+    let file = std::fs::File::open(&path).expect("temp file exists");
+    let err = WorkbookPackage::open(file).expect_err("missing worksheet xml should error");
     match err {
-        ExcelOpenError::WorksheetXmlMissing { sheet_name } => {
+        PackageError::WorksheetXmlMissing { sheet_name } => {
             assert_eq!(sheet_name, "Sheet1");
         }
         other => panic!("expected WorksheetXmlMissing, got {other:?}"),
@@ -15956,19 +15988,18 @@ fn missing_worksheet_xml_returns_worksheetxmlmissing() {
 ### File: `core\tests\g10_row_block_alignment_grid_workbook_tests.rs`
 
 ```rust
-use excel_diff::{DiffOp, diff_workbooks, open_workbook};
-
 mod common;
-use common::{fixture_path, sid};
+
+use common::{diff_fixture_pkgs, sid};
+use excel_diff::{DiffConfig, DiffOp};
 
 #[test]
 fn g10_row_block_insert_middle_emits_four_rowadded_and_no_noise() {
-    let wb_a = open_workbook(fixture_path("row_block_insert_a.xlsx"))
-        .expect("failed to open fixture: row_block_insert_a.xlsx");
-    let wb_b = open_workbook(fixture_path("row_block_insert_b.xlsx"))
-        .expect("failed to open fixture: row_block_insert_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "row_block_insert_a.xlsx",
+        "row_block_insert_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     let rows_added: Vec<u32> = report
         .ops
@@ -16012,12 +16043,11 @@ fn g10_row_block_insert_middle_emits_four_rowadded_and_no_noise() {
 
 #[test]
 fn g10_row_block_delete_middle_emits_four_rowremoved_and_no_noise() {
-    let wb_a = open_workbook(fixture_path("row_block_delete_a.xlsx"))
-        .expect("failed to open fixture: row_block_delete_a.xlsx");
-    let wb_b = open_workbook(fixture_path("row_block_delete_b.xlsx"))
-        .expect("failed to open fixture: row_block_delete_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "row_block_delete_a.xlsx",
+        "row_block_delete_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     let rows_removed: Vec<u32> = report
         .ops
@@ -16066,19 +16096,22 @@ fn g10_row_block_delete_middle_emits_four_rowremoved_and_no_noise() {
 ### File: `core\tests\g11_row_block_move_grid_workbook_tests.rs`
 
 ```rust
-use excel_diff::{DiffOp, diff_workbooks, open_workbook};
-
 mod common;
-use common::{fixture_path, grid_from_numbers, single_sheet_workbook};
+
+use common::{diff_fixture_pkgs, grid_from_numbers, single_sheet_workbook};
+use excel_diff::{DiffConfig, DiffOp, DiffReport, Workbook, WorkbookPackage};
+
+fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
+}
 
 #[test]
 fn g11_row_block_move_emits_single_blockmovedrows() {
-    let wb_a = open_workbook(fixture_path("row_block_move_a.xlsx"))
-        .expect("failed to open fixture: row_block_move_a.xlsx");
-    let wb_b = open_workbook(fixture_path("row_block_move_b.xlsx"))
-        .expect("failed to open fixture: row_block_move_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "row_block_move_a.xlsx",
+        "row_block_move_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     assert_eq!(report.ops.len(), 1, "expected a single diff op");
     let strings = &report.strings;
@@ -16135,7 +16168,7 @@ fn g11_repeated_rows_do_not_emit_blockmove() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     assert!(
         !report
@@ -16161,19 +16194,22 @@ fn g11_repeated_rows_do_not_emit_blockmove() {
 ### File: `core\tests\g12_column_block_move_grid_workbook_tests.rs`
 
 ```rust
-use excel_diff::{DiffOp, diff_workbooks, open_workbook};
-
 mod common;
-use common::{fixture_path, grid_from_numbers, sid, single_sheet_workbook};
+
+use common::{diff_fixture_pkgs, grid_from_numbers, sid, single_sheet_workbook};
+use excel_diff::{DiffConfig, DiffOp, DiffReport, Workbook, WorkbookPackage};
+
+fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
+}
 
 #[test]
 fn g12_column_move_emits_single_blockmovedcolumns() {
-    let wb_a = open_workbook(fixture_path("column_move_a.xlsx"))
-        .expect("failed to open fixture: column_move_a.xlsx");
-    let wb_b = open_workbook(fixture_path("column_move_b.xlsx"))
-        .expect("failed to open fixture: column_move_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "column_move_a.xlsx",
+        "column_move_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     assert_eq!(report.ops.len(), 1, "expected a single diff op");
 
@@ -16232,7 +16268,7 @@ fn g12_repeated_columns_do_not_emit_blockmovedcolumns() {
     let wb_a = single_sheet_workbook("Data", grid_a);
     let wb_b = single_sheet_workbook("Data", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     assert!(
         !report
@@ -16268,7 +16304,7 @@ fn g12_multi_column_block_move_emits_blockmovedcolumns() {
     let wb_a = single_sheet_workbook("Data", grid_a);
     let wb_b = single_sheet_workbook("Data", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     assert_eq!(
         report.ops.len(),
@@ -16303,7 +16339,7 @@ fn g12_two_independent_column_moves_do_not_emit_blockmovedcolumns() {
     let wb_a = single_sheet_workbook("Data", grid_a);
     let wb_b = single_sheet_workbook("Data", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     assert!(
         !report
@@ -16328,7 +16364,7 @@ fn g12_column_swap_emits_blockmovedcolumns() {
     let wb_a = single_sheet_workbook("Data", grid_a);
     let wb_b = single_sheet_workbook("Data", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     assert_eq!(
         report.ops.len(),
@@ -16363,19 +16399,22 @@ fn g12_column_swap_emits_blockmovedcolumns() {
 ### File: `core\tests\g12_rect_block_move_grid_workbook_tests.rs`
 
 ```rust
-use excel_diff::{DiffOp, diff_workbooks, open_workbook};
-
 mod common;
-use common::{fixture_path, grid_from_numbers, sid, single_sheet_workbook};
+
+use common::{diff_fixture_pkgs, grid_from_numbers, sid, single_sheet_workbook};
+use excel_diff::{DiffConfig, DiffOp, DiffReport, Workbook, WorkbookPackage};
+
+fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
+}
 
 #[test]
 fn g12_rect_block_move_emits_single_blockmovedrect() {
-    let wb_a = open_workbook(fixture_path("rect_block_move_a.xlsx"))
-        .expect("failed to open fixture: rect_block_move_a.xlsx");
-    let wb_b = open_workbook(fixture_path("rect_block_move_b.xlsx"))
-        .expect("failed to open fixture: rect_block_move_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "rect_block_move_a.xlsx",
+        "rect_block_move_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     assert_eq!(report.ops.len(), 1, "expected a single diff op");
 
@@ -16408,7 +16447,7 @@ fn g12_rect_block_move_ambiguous_swap_does_not_emit_blockmovedrect() {
     let wb_a = single_sheet_workbook("Data", grid_a);
     let wb_b = single_sheet_workbook("Data", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     assert!(
         !report
@@ -16429,7 +16468,7 @@ fn g12_rect_block_move_with_internal_edit_falls_back() {
     let wb_a = single_sheet_workbook("Data", grid_a);
     let wb_b = single_sheet_workbook("Data", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     assert!(
         !report
@@ -16512,19 +16551,22 @@ fn grid_from_matrix(matrix: Vec<Vec<i32>>) -> excel_diff::Grid {
 ### File: `core\tests\g13_fuzzy_row_move_grid_workbook_tests.rs`
 
 ```rust
-use excel_diff::{DiffOp, diff_workbooks, open_workbook};
-
 mod common;
-use common::{fixture_path, grid_from_numbers, single_sheet_workbook};
+
+use common::{diff_fixture_pkgs, grid_from_numbers, single_sheet_workbook};
+use excel_diff::{DiffConfig, DiffOp, DiffReport, Workbook, WorkbookPackage};
+
+fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
+}
 
 #[test]
 fn g13_fuzzy_row_move_emits_blockmovedrows_and_celledited() {
-    let wb_a = open_workbook(fixture_path("grid_move_and_edit_a.xlsx"))
-        .expect("failed to open fixture: grid_move_and_edit_a.xlsx");
-    let wb_b = open_workbook(fixture_path("grid_move_and_edit_b.xlsx"))
-        .expect("failed to open fixture: grid_move_and_edit_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "grid_move_and_edit_a.xlsx",
+        "grid_move_and_edit_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     let block_moves: Vec<(u32, u32, u32, Option<u64>)> = report
         .ops
@@ -16597,9 +16639,9 @@ fn g13_fuzzy_row_move_can_be_disabled() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let disabled = excel_diff::DiffConfig {
+    let disabled = DiffConfig {
         enable_fuzzy_moves: false,
-        ..excel_diff::DiffConfig::default()
+        ..DiffConfig::default()
     };
     let report_disabled = diff_workbooks(&wb_a, &wb_b, &disabled);
     let disabled_moves = report_disabled
@@ -16619,7 +16661,7 @@ fn g13_fuzzy_row_move_can_be_disabled() {
         })
         .count();
 
-    let report_enabled = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report_enabled = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
     let enabled_moves = report_enabled
         .ops
         .iter()
@@ -16665,7 +16707,7 @@ fn g13_in_place_edits_do_not_emit_blockmovedrows() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     assert!(
         !report
@@ -16701,7 +16743,7 @@ fn g13_ambiguous_repeated_blocks_do_not_emit_blockmovedrows() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     assert!(
         !report
@@ -16723,10 +16765,14 @@ fn g13_ambiguous_repeated_blocks_do_not_emit_blockmovedrows() {
 ### File: `core\tests\g14_move_combination_tests.rs`
 
 ```rust
-use excel_diff::{DiffConfig, DiffOp, DiffReport, diff_workbooks};
-
 mod common;
+
 use common::{grid_from_numbers, single_sheet_workbook};
+use excel_diff::{DiffConfig, DiffOp, DiffReport, Workbook, WorkbookPackage};
+
+fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
+}
 
 fn collect_rect_moves(report: &DiffReport) -> Vec<&DiffOp> {
     report
@@ -16817,7 +16863,7 @@ fn g14_rect_move_no_additional_changes_produces_single_op() {
     let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
     let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     let has_rect_move = report
         .ops
@@ -16846,7 +16892,7 @@ fn g14_rect_move_plus_cell_edit_no_silent_data_loss() {
     let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
     let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     let rect_moves = collect_rect_moves(&report);
     let cell_edits = collect_cell_edits(&report);
@@ -16900,7 +16946,7 @@ fn g14_pure_row_move_produces_single_op() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     let has_row_move = report
         .ops
@@ -16934,7 +16980,7 @@ fn g14_row_move_plus_cell_edit_no_silent_data_loss() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     assert!(
         !report.ops.is_empty(),
@@ -16961,7 +17007,7 @@ fn g14_pure_column_move_produces_single_op() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     let has_col_move = report
         .ops
@@ -16997,7 +17043,7 @@ fn g14_column_move_plus_cell_edit_no_silent_data_loss() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     assert!(
         !report.ops.is_empty(),
@@ -17027,7 +17073,7 @@ fn g14_two_disjoint_row_block_moves_detected() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     let row_moves = collect_row_moves(&report);
     assert_eq!(
@@ -17087,7 +17133,7 @@ fn g14_row_move_plus_column_move_both_detected() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     let row_moves = collect_row_moves(&report);
     let col_moves = collect_col_moves(&report);
@@ -17150,7 +17196,7 @@ fn g14_fuzzy_row_move_produces_move_and_internal_edits() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     let has_row_move = report
         .ops
@@ -17188,7 +17234,7 @@ fn g14_fuzzy_row_move_plus_outside_edit_no_silent_data_loss() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     assert!(
         !report.ops.is_empty(),
@@ -17212,7 +17258,7 @@ fn g14_grid_changes_no_silent_data_loss() {
     let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
     let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     assert!(
         !report.ops.is_empty(),
@@ -17257,7 +17303,7 @@ fn g14_three_disjoint_rect_block_moves_detected() {
     let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
     let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     let rect_moves: Vec<_> = report
         .ops
@@ -17297,7 +17343,7 @@ fn g14_two_disjoint_rect_moves_plus_outside_edits_no_silent_data_loss() {
     let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
     let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     let rect_moves: Vec<_> = report
         .ops
@@ -17362,7 +17408,7 @@ fn g14_rect_move_plus_row_insertion_outside_no_silent_data_loss() {
     let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
     let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     let rect_moves = collect_rect_moves(&report);
     let row_adds = collect_row_adds(&report);
@@ -17391,7 +17437,7 @@ fn g14_rect_move_plus_row_deletion_outside_no_silent_data_loss() {
     let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
     let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     let rect_moves = collect_rect_moves(&report);
     let row_removes = collect_row_removes(&report);
@@ -17430,7 +17476,7 @@ fn g14_row_block_move_plus_row_insertion_outside_no_silent_data_loss() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     assert!(
         !report.ops.is_empty(),
@@ -17593,10 +17639,14 @@ fn g14_max_move_iterations_limits_detected_moves() {
 //! Integration tests verifying column structural changes do not break row alignment when row content is preserved.
 //! Covers Branch 1.3 acceptance criteria for column insertion/deletion resilience.
 
-use excel_diff::{CellValue, DiffOp, Grid, diff_workbooks};
-
 mod common;
+
 use common::single_sheet_workbook;
+use excel_diff::{CellValue, DiffConfig, DiffOp, DiffReport, Grid, Workbook, WorkbookPackage};
+
+fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
+}
 
 fn make_grid_with_cells(nrows: u32, ncols: u32, cells: &[(u32, u32, i32)]) -> Grid {
     let mut grid = Grid::new(nrows, ncols);
@@ -17654,7 +17704,7 @@ fn g15_blank_column_insert_at_position_zero_preserves_row_alignment() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     let column_adds: Vec<u32> = report
         .ops
@@ -17723,7 +17773,7 @@ fn g15_blank_column_insert_middle_preserves_row_alignment() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     let row_structural_ops: Vec<&DiffOp> = report
         .ops
@@ -17774,7 +17824,7 @@ fn g15_column_delete_preserves_row_alignment_when_content_order_maintained() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     let column_removes: Vec<u32> = report
         .ops
@@ -17838,7 +17888,7 @@ fn g15_row_insert_with_column_structure_change_both_detected() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     assert!(
         !report.ops.is_empty(),
@@ -17874,7 +17924,7 @@ fn g15_single_row_grid_column_insert_no_spurious_row_ops() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     let row_ops: Vec<&DiffOp> = report
         .ops
@@ -17909,7 +17959,7 @@ fn g15_all_blank_column_insert_no_content_change_minimal_diff() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     let row_ops: Vec<&DiffOp> = report
         .ops
@@ -17943,7 +17993,7 @@ fn g15_large_grid_column_insert_row_alignment_preserved() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
 
     let row_structural_ops: Vec<&DiffOp> = report
         .ops
@@ -17981,10 +18031,12 @@ fn g15_large_grid_column_insert_row_alignment_preserved() {
 ### File: `core\tests\g1_g2_grid_workbook_tests.rs`
 
 ```rust
-use excel_diff::{CellValue, DiffOp, Grid, Sheet, SheetKind, Workbook, diff_workbooks, open_workbook};
-
 mod common;
-use common::{fixture_path, sid};
+
+use common::{diff_fixture_pkgs, sid};
+use excel_diff::{
+    CellValue, DiffConfig, DiffOp, DiffReport, Grid, Sheet, SheetKind, Workbook, WorkbookPackage,
+};
 
 fn workbook_with_number(value: f64) -> Workbook {
     let mut grid = Grid::new(1, 1);
@@ -17999,14 +18051,13 @@ fn workbook_with_number(value: f64) -> Workbook {
     }
 }
 
+fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
+}
+
 #[test]
 fn g1_equal_sheet_produces_empty_diff() {
-    let wb_a = open_workbook(fixture_path("equal_sheet_a.xlsx"))
-        .expect("failed to open fixture: equal_sheet_a.xlsx");
-    let wb_b = open_workbook(fixture_path("equal_sheet_b.xlsx"))
-        .expect("failed to open fixture: equal_sheet_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs("equal_sheet_a.xlsx", "equal_sheet_b.xlsx", &DiffConfig::default());
 
     assert!(
         report.ops.is_empty(),
@@ -18016,12 +18067,11 @@ fn g1_equal_sheet_produces_empty_diff() {
 
 #[test]
 fn g2_single_cell_literal_change_produces_one_celledited() {
-    let wb_a = open_workbook(fixture_path("single_cell_value_a.xlsx"))
-        .expect("failed to open fixture: single_cell_value_a.xlsx");
-    let wb_b = open_workbook(fixture_path("single_cell_value_b.xlsx"))
-        .expect("failed to open fixture: single_cell_value_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "single_cell_value_a.xlsx",
+        "single_cell_value_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     assert_eq!(
         report.ops.len(),
@@ -18062,7 +18112,7 @@ fn g2_float_ulp_noise_is_ignored_in_diff() {
     let old = workbook_with_number(1.0);
     let new = workbook_with_number(1.0000000000000002);
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
 
     assert!(
         report.ops.is_empty(),
@@ -18075,7 +18125,7 @@ fn g2_meaningful_float_change_emits_cell_edit() {
     let old = workbook_with_number(1.0);
     let new = workbook_with_number(1.0001);
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
 
     assert_eq!(
         report.ops.len(),
@@ -18101,7 +18151,7 @@ fn g2_nan_values_are_treated_as_equal() {
     let old = workbook_with_number(signaling_nan);
     let new = workbook_with_number(quiet_nan);
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
 
     assert!(
         report.ops.is_empty(),
@@ -18116,20 +18166,19 @@ fn g2_nan_values_are_treated_as_equal() {
 ### File: `core\tests\g5_g7_grid_workbook_tests.rs`
 
 ```rust
-use excel_diff::{CellValue, DiffOp, diff_workbooks, open_workbook, with_default_session};
-use std::collections::BTreeSet;
-
 mod common;
-use common::fixture_path;
+
+use common::diff_fixture_pkgs;
+use excel_diff::{CellValue, DiffConfig, DiffOp, with_default_session};
+use std::collections::BTreeSet;
 
 #[test]
 fn g5_multi_cell_edits_produces_only_celledited_ops() {
-    let wb_a = open_workbook(fixture_path("multi_cell_edits_a.xlsx"))
-        .expect("failed to open fixture: multi_cell_edits_a.xlsx");
-    let wb_b = open_workbook(fixture_path("multi_cell_edits_b.xlsx"))
-        .expect("failed to open fixture: multi_cell_edits_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "multi_cell_edits_a.xlsx",
+        "multi_cell_edits_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     let (text_x, text_y) = with_default_session(|session| {
         let x = session.strings.intern("x");
@@ -18192,12 +18241,11 @@ fn g5_multi_cell_edits_produces_only_celledited_ops() {
 
 #[test]
 fn g6_row_append_bottom_emits_two_rowadded_and_no_celledited() {
-    let wb_a = open_workbook(fixture_path("row_append_bottom_a.xlsx"))
-        .expect("failed to open fixture: row_append_bottom_a.xlsx");
-    let wb_b = open_workbook(fixture_path("row_append_bottom_b.xlsx"))
-        .expect("failed to open fixture: row_append_bottom_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "row_append_bottom_a.xlsx",
+        "row_append_bottom_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     assert_eq!(
         report.ops.len(),
@@ -18240,12 +18288,11 @@ fn g6_row_append_bottom_emits_two_rowadded_and_no_celledited() {
 
 #[test]
 fn g6_row_delete_bottom_emits_two_rowremoved_and_no_celledited() {
-    let wb_a = open_workbook(fixture_path("row_delete_bottom_a.xlsx"))
-        .expect("failed to open fixture: row_delete_bottom_a.xlsx");
-    let wb_b = open_workbook(fixture_path("row_delete_bottom_b.xlsx"))
-        .expect("failed to open fixture: row_delete_bottom_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "row_delete_bottom_a.xlsx",
+        "row_delete_bottom_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     assert_eq!(
         report.ops.len(),
@@ -18288,12 +18335,11 @@ fn g6_row_delete_bottom_emits_two_rowremoved_and_no_celledited() {
 
 #[test]
 fn g7_col_append_right_emits_two_columnadded_and_no_celledited() {
-    let wb_a = open_workbook(fixture_path("col_append_right_a.xlsx"))
-        .expect("failed to open fixture: col_append_right_a.xlsx");
-    let wb_b = open_workbook(fixture_path("col_append_right_b.xlsx"))
-        .expect("failed to open fixture: col_append_right_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "col_append_right_a.xlsx",
+        "col_append_right_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     assert_eq!(
         report.ops.len(),
@@ -18336,12 +18382,11 @@ fn g7_col_append_right_emits_two_columnadded_and_no_celledited() {
 
 #[test]
 fn g7_col_delete_right_emits_two_columnremoved_and_no_celledited() {
-    let wb_a = open_workbook(fixture_path("col_delete_right_a.xlsx"))
-        .expect("failed to open fixture: col_delete_right_a.xlsx");
-    let wb_b = open_workbook(fixture_path("col_delete_right_b.xlsx"))
-        .expect("failed to open fixture: col_delete_right_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "col_delete_right_a.xlsx",
+        "col_delete_right_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     assert_eq!(
         report.ops.len(),
@@ -18389,19 +18434,18 @@ fn g7_col_delete_right_emits_two_columnremoved_and_no_celledited() {
 ### File: `core\tests\g8_row_alignment_grid_workbook_tests.rs`
 
 ```rust
-use excel_diff::{DiffOp, diff_workbooks, open_workbook};
-
 mod common;
-use common::fixture_path;
+
+use common::diff_fixture_pkgs;
+use excel_diff::{DiffConfig, DiffOp};
 
 #[test]
 fn single_row_insert_middle_produces_one_row_added() {
-    let wb_a = open_workbook(fixture_path("row_insert_middle_a.xlsx"))
-        .expect("failed to open fixture: row_insert_middle_a.xlsx");
-    let wb_b = open_workbook(fixture_path("row_insert_middle_b.xlsx"))
-        .expect("failed to open fixture: row_insert_middle_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "row_insert_middle_a.xlsx",
+        "row_insert_middle_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     let strings = &report.strings;
 
@@ -18446,12 +18490,11 @@ fn single_row_insert_middle_produces_one_row_added() {
 
 #[test]
 fn single_row_delete_middle_produces_one_row_removed() {
-    let wb_a = open_workbook(fixture_path("row_delete_middle_a.xlsx"))
-        .expect("failed to open fixture: row_delete_middle_a.xlsx");
-    let wb_b = open_workbook(fixture_path("row_delete_middle_b.xlsx"))
-        .expect("failed to open fixture: row_delete_middle_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "row_delete_middle_a.xlsx",
+        "row_delete_middle_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     let strings = &report.strings;
 
@@ -18500,12 +18543,11 @@ fn single_row_delete_middle_produces_one_row_removed() {
 
 #[test]
 fn alignment_bails_out_when_additional_edits_present() {
-    let wb_a = open_workbook(fixture_path("row_insert_with_edit_a.xlsx"))
-        .expect("failed to open fixture: row_insert_with_edit_a.xlsx");
-    let wb_b = open_workbook(fixture_path("row_insert_with_edit_b.xlsx"))
-        .expect("failed to open fixture: row_insert_with_edit_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "row_insert_with_edit_a.xlsx",
+        "row_insert_with_edit_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     let rows_added: Vec<u32> = report
         .ops
@@ -18551,19 +18593,18 @@ fn alignment_bails_out_when_additional_edits_present() {
 ### File: `core\tests\g9_column_alignment_grid_workbook_tests.rs`
 
 ```rust
-use excel_diff::{CellValue, DiffOp, Workbook, diff_workbooks, open_workbook};
-
 mod common;
-use common::{fixture_path, sid};
+
+use common::{diff_fixture_pkgs, open_fixture_workbook, sid};
+use excel_diff::{CellValue, DiffConfig, DiffOp, Workbook};
 
 #[test]
 fn g9_col_insert_middle_emits_one_columnadded_and_no_noise() {
-    let wb_a = open_workbook(fixture_path("col_insert_middle_a.xlsx"))
-        .expect("failed to open fixture: col_insert_middle_a.xlsx");
-    let wb_b = open_workbook(fixture_path("col_insert_middle_b.xlsx"))
-        .expect("failed to open fixture: col_insert_middle_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "col_insert_middle_a.xlsx",
+        "col_insert_middle_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     let cols_added: Vec<u32> = report
         .ops
@@ -18607,12 +18648,11 @@ fn g9_col_insert_middle_emits_one_columnadded_and_no_noise() {
 
 #[test]
 fn g9_col_delete_middle_emits_one_columnremoved_and_no_noise() {
-    let wb_a = open_workbook(fixture_path("col_delete_middle_a.xlsx"))
-        .expect("failed to open fixture: col_delete_middle_a.xlsx");
-    let wb_b = open_workbook(fixture_path("col_delete_middle_b.xlsx"))
-        .expect("failed to open fixture: col_delete_middle_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let report = diff_fixture_pkgs(
+        "col_delete_middle_a.xlsx",
+        "col_delete_middle_b.xlsx",
+        &DiffConfig::default(),
+    );
 
     let cols_removed: Vec<u32> = report
         .ops
@@ -18656,12 +18696,12 @@ fn g9_col_delete_middle_emits_one_columnremoved_and_no_noise() {
 
 #[test]
 fn g9_alignment_bails_out_when_additional_edits_present() {
-    let wb_a = open_workbook(fixture_path("col_insert_with_edit_a.xlsx"))
-        .expect("failed to open fixture: col_insert_with_edit_a.xlsx");
-    let wb_b = open_workbook(fixture_path("col_insert_with_edit_b.xlsx"))
-        .expect("failed to open fixture: col_insert_with_edit_b.xlsx");
-
-    let report = diff_workbooks(&wb_a, &wb_b, &excel_diff::DiffConfig::default());
+    let wb_b = open_fixture_workbook("col_insert_with_edit_b.xlsx");
+    let report = diff_fixture_pkgs(
+        "col_insert_with_edit_a.xlsx",
+        "col_insert_with_edit_b.xlsx",
+        &DiffConfig::default(),
+    );
     let inserted_idx = find_header_col(&wb_b, "Inserted");
 
     let has_middle_column_add = report.ops.iter().any(|op| match op {
@@ -18714,8 +18754,7 @@ fn find_header_col(workbook: &Workbook, header: &str) -> u32 {
 ### File: `core\tests\grid_view_hashstats_tests.rs`
 
 ```rust
-use excel_diff::grid_view::FrequencyClass;
-use excel_diff::{ColHash, ColMeta, HashStats, RowHash, RowMeta, RowSignature};
+use excel_diff::{ColHash, ColMeta, FrequencyClass, HashStats, RowHash, RowMeta, RowSignature};
 
 fn row_meta(row_idx: u32, hash: RowHash) -> RowMeta {
     RowMeta {
@@ -19118,10 +19157,20 @@ fn test_locate_fixture() {
 mod common;
 
 use common::{sid, single_sheet_workbook};
-use excel_diff::config::{DiffConfig, LimitBehavior};
-use excel_diff::diff::{DiffError, DiffOp};
-use excel_diff::{diff_workbooks, try_diff_workbooks};
-use excel_diff::{CellValue, Grid};
+use excel_diff::{
+    CellValue, DiffConfig, DiffError, DiffOp, DiffReport, Grid, LimitBehavior, Workbook,
+    WorkbookPackage, try_diff_workbooks_with_pool, with_default_session,
+};
+
+fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
+}
+
+fn try_diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> Result<DiffReport, DiffError> {
+    with_default_session(|session| {
+        try_diff_workbooks_with_pool(old, new, &mut session.strings, config)
+    })
+}
 
 fn create_simple_grid(nrows: u32, ncols: u32, base_value: i32) -> Grid {
     let mut grid = Grid::new(nrows, ncols);
@@ -19788,7 +19837,7 @@ fn random_bytes(seed: u64, len: usize) -> Vec<u8> {
 ```rust
 use excel_diff::{
     DataMashupError, Permissions, RawDataMashup, build_data_mashup, build_queries,
-    datamashup::parse_metadata, open_data_mashup, parse_package_parts, parse_section_members,
+    open_data_mashup, parse_metadata, parse_package_parts, parse_section_members,
 };
 
 mod common;
@@ -20389,10 +20438,10 @@ fn rename_produces_query_renamed() {
 ### File: `core\tests\m7_ast_canonicalization_tests.rs`
 
 ```rust
-use excel_diff::m_ast::{MAstKind, MTokenDebug, tokenize_for_testing};
 use excel_diff::{
-    DataMashup, MParseError, ast_semantically_equal, build_data_mashup, build_queries,
-    canonicalize_m_ast, open_data_mashup, parse_m_expression,
+    DataMashup, MAstKind, MParseError, MTokenDebug, ast_semantically_equal, build_data_mashup,
+    build_queries, canonicalize_m_ast, open_data_mashup, parse_m_expression,
+    tokenize_for_testing,
 };
 
 mod common;
@@ -21153,20 +21202,17 @@ fn metrics_default_equality() {
 ### File: `core\tests\output_tests.rs`
 
 ```rust
+mod common;
+
+use common::{fixture_path, open_fixture_workbook};
 use excel_diff::{
-    CellAddress, CellSnapshot, CellValue, ContainerError, DiffOp, DiffReport, ExcelOpenError,
-    diff_workbooks, open_workbook,
-    output::json::{
-        CellDiff, diff_report_to_cell_diffs, diff_workbooks_to_json, serialize_cell_diffs,
-        serialize_diff_report,
-    },
+    CellAddress, CellSnapshot, CellValue, ContainerError, DiffConfig, DiffOp, DiffReport,
+    PackageError, WorkbookPackage, CellDiff, diff_report_to_cell_diffs,
+    diff_workbooks_to_json, serialize_cell_diffs, serialize_diff_report,
 };
 use serde_json::Value;
 #[cfg(feature = "perf-metrics")]
 use std::collections::BTreeSet;
-
-mod common;
-use common::fixture_path;
 
 fn sid_local(pool: &mut excel_diff::StringPool, value: &str) -> excel_diff::StringId {
     pool.intern(value)
@@ -21420,7 +21466,7 @@ fn test_json_format() {
 #[test]
 fn test_json_empty_diff() {
     let fixture = fixture_path("pg1_basic_two_sheets.xlsx");
-    let json = diff_workbooks_to_json(&fixture, &fixture, &excel_diff::DiffConfig::default())
+    let json = diff_workbooks_to_json(&fixture, &fixture, &DiffConfig::default())
         .expect("diffing identical files should succeed");
     let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
     assert!(
@@ -21434,7 +21480,7 @@ fn test_json_non_empty_diff() {
     let a = fixture_path("json_diff_single_cell_a.xlsx");
     let b = fixture_path("json_diff_single_cell_b.xlsx");
 
-    let json = diff_workbooks_to_json(&a, &b, &excel_diff::DiffConfig::default())
+    let json = diff_workbooks_to_json(&a, &b, &DiffConfig::default())
         .expect("diffing different files should succeed");
     let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
     assert_eq!(report.ops.len(), 1, "expected a single diff op");
@@ -21453,7 +21499,7 @@ fn test_json_non_empty_diff_bool() {
     let a = fixture_path("json_diff_bool_a.xlsx");
     let b = fixture_path("json_diff_bool_b.xlsx");
 
-    let json = diff_workbooks_to_json(&a, &b, &excel_diff::DiffConfig::default())
+    let json = diff_workbooks_to_json(&a, &b, &DiffConfig::default())
         .expect("diffing different files should succeed");
     let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
     assert_eq!(report.ops.len(), 1, "expected a single diff op");
@@ -21472,7 +21518,7 @@ fn test_json_diff_value_to_empty() {
     let a = fixture_path("json_diff_value_to_empty_a.xlsx");
     let b = fixture_path("json_diff_value_to_empty_b.xlsx");
 
-    let json = diff_workbooks_to_json(&a, &b, &excel_diff::DiffConfig::default())
+    let json = diff_workbooks_to_json(&a, &b, &DiffConfig::default())
         .expect("diffing different files should succeed");
     let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
     assert_eq!(report.ops.len(), 1, "expected a single diff op");
@@ -21488,13 +21534,10 @@ fn test_json_diff_value_to_empty() {
 
 #[test]
 fn json_diff_case_only_sheet_name_no_changes() {
-    let a = fixture_path("sheet_case_only_rename_a.xlsx");
-    let b = fixture_path("sheet_case_only_rename_b.xlsx");
+    let old = open_fixture_workbook("sheet_case_only_rename_a.xlsx");
+    let new = open_fixture_workbook("sheet_case_only_rename_b.xlsx");
 
-    let old = open_workbook(&a).expect("fixture A should open");
-    let new = open_workbook(&b).expect("fixture B should open");
-
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
     assert!(
         report.ops.is_empty(),
         "case-only sheet rename with identical content should produce no diff ops"
@@ -21503,13 +21546,10 @@ fn json_diff_case_only_sheet_name_no_changes() {
 
 #[test]
 fn json_diff_case_only_sheet_name_cell_edit() {
-    let a = fixture_path("sheet_case_only_rename_edit_a.xlsx");
-    let b = fixture_path("sheet_case_only_rename_edit_b.xlsx");
+    let old = open_fixture_workbook("sheet_case_only_rename_edit_a.xlsx");
+    let new = open_fixture_workbook("sheet_case_only_rename_edit_b.xlsx");
 
-    let old = open_workbook(&a).expect("fixture A should open");
-    let new = open_workbook(&b).expect("fixture B should open");
-
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
     assert_eq!(report.ops.len(), 1, "expected a single cell edit");
     match &report.ops[0] {
         DiffOp::CellEdited {
@@ -21536,7 +21576,7 @@ fn test_json_case_only_sheet_name_no_changes() {
     let a = fixture_path("sheet_case_only_rename_a.xlsx");
     let b = fixture_path("sheet_case_only_rename_b.xlsx");
 
-    let json = diff_workbooks_to_json(&a, &b, &excel_diff::DiffConfig::default())
+    let json = diff_workbooks_to_json(&a, &b, &DiffConfig::default())
         .expect("diffing case-only sheet rename should succeed");
     let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
     assert!(
@@ -21550,7 +21590,7 @@ fn test_json_case_only_sheet_name_cell_edit_via_helper() {
     let a = fixture_path("sheet_case_only_rename_edit_a.xlsx");
     let b = fixture_path("sheet_case_only_rename_edit_b.xlsx");
 
-    let json = diff_workbooks_to_json(&a, &b, &excel_diff::DiffConfig::default())
+    let json = diff_workbooks_to_json(&a, &b, &DiffConfig::default())
         .expect("diffing case-only sheet rename with cell edit should succeed");
     let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
     assert_eq!(report.ops.len(), 1, "expected a single cell edit");
@@ -21578,13 +21618,13 @@ fn test_json_case_only_sheet_name_cell_edit_via_helper() {
 #[test]
 fn test_diff_workbooks_to_json_reports_invalid_zip() {
     let path = fixture_path("not_a_zip.txt");
-    let err = diff_workbooks_to_json(&path, &path, &excel_diff::DiffConfig::default())
+    let err = diff_workbooks_to_json(&path, &path, &DiffConfig::default())
         .expect_err("diffing invalid containers should return an error");
 
     assert!(
         matches!(
             err,
-            ExcelOpenError::Container(ContainerError::NotZipContainer)
+            PackageError::Container(ContainerError::NotZipContainer)
         ),
         "expected container error, got {err}"
     );
@@ -21596,10 +21636,10 @@ fn serialize_diff_report_nan_maps_to_serialization_error() {
     let report = numeric_report(addr, f64::NAN, 1.0);
 
     let err = serialize_diff_report(&report).expect_err("NaN should fail to serialize");
-    let wrapped = ExcelOpenError::SerializationError(err.to_string());
+    let wrapped = PackageError::SerializationError(err.to_string());
 
     match wrapped {
-        ExcelOpenError::SerializationError(msg) => {
+        PackageError::SerializationError(msg) => {
             assert!(
                 msg.to_lowercase().contains("nan"),
                 "error message should mention NaN for clarity"
@@ -21615,9 +21655,9 @@ fn serialize_diff_report_infinity_maps_to_serialization_error() {
     let report = numeric_report(addr, f64::INFINITY, 1.0);
 
     let err = serialize_diff_report(&report).expect_err("Infinity should fail to serialize");
-    let wrapped = ExcelOpenError::SerializationError(err.to_string());
+    let wrapped = PackageError::SerializationError(err.to_string());
     match wrapped {
-        ExcelOpenError::SerializationError(msg) => {
+        PackageError::SerializationError(msg) => {
             assert!(
                 msg.to_lowercase().contains("infinity"),
                 "error message should mention infinity for clarity"
@@ -21633,9 +21673,9 @@ fn serialize_diff_report_neg_infinity_maps_to_serialization_error() {
     let report = numeric_report(addr, f64::NEG_INFINITY, 1.0);
 
     let err = serialize_diff_report(&report).expect_err("NEG_INFINITY should fail to serialize");
-    let wrapped = ExcelOpenError::SerializationError(err.to_string());
+    let wrapped = PackageError::SerializationError(err.to_string());
     match wrapped {
-        ExcelOpenError::SerializationError(msg) => {
+        PackageError::SerializationError(msg) => {
             assert!(
                 msg.to_lowercase().contains("infinity"),
                 "error message should mention infinity for clarity"
@@ -21946,11 +21986,11 @@ fn package_diff_streaming_finishes_on_error() {
     let mut grid_a = Grid::new(10, 1);
     let mut grid_b = Grid::new(10, 1);
     for i in 0..10 {
-        grid_a.insert_cell(i, 0, Some(excel_diff::workbook::CellValue::Number(i as f64)), None);
+        grid_a.insert_cell(i, 0, Some(excel_diff::CellValue::Number(i as f64)), None);
         grid_b.insert_cell(
             i,
             0,
-            Some(excel_diff::workbook::CellValue::Number((i + 100) as f64)),
+            Some(excel_diff::CellValue::Number((i + 100) as f64)),
             None,
         );
     }
@@ -21988,7 +22028,6 @@ fn package_diff_streaming_finishes_on_error() {
     assert!(result.is_err(), "diff_streaming should return error");
 }
 
-
 ```
 
 ---
@@ -22001,11 +22040,12 @@ fn package_diff_streaming_finishes_on_error() {
 mod common;
 
 use common::single_sheet_workbook;
-use excel_diff::config::DiffConfig;
-use excel_diff::diff::DiffOp;
-use excel_diff::engine::diff_workbooks;
+use excel_diff::{CellValue, DiffConfig, DiffOp, DiffReport, Grid, Workbook, WorkbookPackage};
 use excel_diff::perf::DiffMetrics;
-use excel_diff::{CellValue, Grid};
+
+fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
+}
 
 fn create_large_grid(nrows: u32, ncols: u32, base_value: i32) -> Grid {
     let mut grid = Grid::new(nrows, ncols);
@@ -22343,20 +22383,19 @@ fn perf_50k_identical() {
 ### File: `core\tests\pg1_ir_tests.rs`
 
 ```rust
-use excel_diff::{CellAddress, CellValue, Sheet, SheetKind, open_workbook, with_default_session};
-
 mod common;
-use common::{fixture_path, sid};
+
+use common::{open_fixture_workbook, sid};
+use excel_diff::{CellAddress, CellValue, Sheet, with_default_session};
 
 #[test]
 fn pg1_basic_two_sheets_structure() {
-    let workbook = open_workbook(fixture_path("pg1_basic_two_sheets.xlsx"))
-        .expect("pg1 basic fixture should open");
+    let workbook = open_fixture_workbook("pg1_basic_two_sheets.xlsx");
     assert_eq!(workbook.sheets.len(), 2);
     assert_eq!(workbook.sheets[0].name, sid("Sheet1"));
     assert_eq!(workbook.sheets[1].name, sid("Sheet2"));
-    assert!(matches!(workbook.sheets[0].kind, SheetKind::Worksheet));
-    assert!(matches!(workbook.sheets[1].kind, SheetKind::Worksheet));
+    assert!(matches!(workbook.sheets[0].kind, excel_diff::SheetKind::Worksheet));
+    assert!(matches!(workbook.sheets[1].kind, excel_diff::SheetKind::Worksheet));
 
     let sheet1 = &workbook.sheets[0];
     assert_eq!(sheet1.grid.nrows, 3);
@@ -22388,8 +22427,7 @@ fn pg1_basic_two_sheets_structure() {
 
 #[test]
 fn pg1_sparse_used_range_extents() {
-    let workbook =
-        open_workbook(fixture_path("pg1_sparse_used_range.xlsx")).expect("sparse fixture opens");
+    let workbook = open_fixture_workbook("pg1_sparse_used_range.xlsx");
     let sheet = workbook
         .sheets
         .iter()
@@ -22407,8 +22445,7 @@ fn pg1_sparse_used_range_extents() {
 
 #[test]
 fn pg1_empty_and_mixed_sheets() {
-    let workbook = open_workbook(fixture_path("pg1_empty_and_mixed_sheets.xlsx"))
-        .expect("mixed sheets fixture opens");
+    let workbook = open_fixture_workbook("pg1_empty_and_mixed_sheets.xlsx");
 
     let empty = sheet_by_name(&workbook, "Empty");
     assert_eq!(empty.grid.nrows, 0);
@@ -22492,13 +22529,13 @@ fn assert_cell_text(sheet: &Sheet, row: u32, col: u32, expected: &str) {
 ### File: `core\tests\pg3_snapshot_tests.rs`
 
 ```rust
+mod common;
+
+use common::{open_fixture_workbook, sid};
 use excel_diff::{
-    Cell, CellAddress, CellSnapshot, CellValue, Sheet, Workbook, address_to_index, open_workbook,
+    Cell, CellAddress, CellSnapshot, CellValue, Sheet, Workbook, address_to_index,
     with_default_session,
 };
-
-mod common;
-use common::{fixture_path, sid};
 
 fn sheet_by_name<'a>(workbook: &'a Workbook, name: &str) -> &'a Sheet {
     with_default_session(|session| {
@@ -22535,8 +22572,7 @@ fn resolve_text(id: excel_diff::StringId) -> String {
 
 #[test]
 fn pg3_value_and_formula_cells_snapshot_from_excel() {
-    let path = fixture_path("pg3_value_and_formula_cells.xlsx");
-    let workbook = open_workbook(&path).expect("fixture should load");
+    let workbook = open_fixture_workbook("pg3_value_and_formula_cells.xlsx");
     let sheet = sheet_by_name(&workbook, "Types");
 
     let a1 = snapshot(sheet, "A1");
@@ -22592,8 +22628,7 @@ fn pg3_value_and_formula_cells_snapshot_from_excel() {
 
 #[test]
 fn snapshot_json_roundtrip() {
-    let path = fixture_path("pg3_value_and_formula_cells.xlsx");
-    let workbook = open_workbook(&path).expect("fixture should load");
+    let workbook = open_fixture_workbook("pg3_value_and_formula_cells.xlsx");
     let sheet = sheet_by_name(&workbook, "Types");
 
     let snapshots = vec![
@@ -22685,7 +22720,7 @@ mod common;
 use common::sid;
 use excel_diff::{
     CellAddress, CellSnapshot, CellValue, ColSignature, DiffOp, DiffReport, QueryChangeKind,
-    QueryMetadataField, RowSignature, with_default_session,
+    QueryMetadataField, RowSignature,
 };
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -22751,10 +22786,6 @@ fn op_kind(op: &DiffOp) -> &'static str {
     }
 }
 
-fn attach_strings(mut report: DiffReport) -> DiffReport {
-    report.strings = with_default_session(|session| session.strings.strings().to_vec());
-    report
-}
 
 fn json_keys(json: &Value) -> BTreeSet<String> {
     json.as_object()
@@ -23953,14 +23984,18 @@ fn pg4_diff_report_json_shape_with_metrics() {
 ### File: `core\tests\pg5_grid_diff_tests.rs`
 
 ```rust
-use excel_diff::{CellValue, DiffOp, Grid, diff_workbooks};
+mod common;
+
+use common::{grid_from_numbers, single_sheet_workbook};
+use excel_diff::{CellValue, DiffConfig, DiffOp, DiffReport, Grid, Workbook, WorkbookPackage};
 use std::collections::BTreeSet;
 
-mod common;
-use common::{grid_from_numbers, single_sheet_workbook};
-
-fn sheet_name<'a>(report: &'a excel_diff::DiffReport, id: &excel_diff::SheetId) -> &'a str {
+fn sheet_name<'a>(report: &'a DiffReport, id: &excel_diff::SheetId) -> &'a str {
     report.strings[id.0 as usize].as_str()
+}
+
+fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
+    WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
 }
 
 #[test]
@@ -23968,7 +24003,7 @@ fn pg5_1_grid_diff_1x1_identical_empty_diff() {
     let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1]]));
     let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1]]));
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert!(report.ops.is_empty());
 }
 
@@ -23977,7 +24012,7 @@ fn pg5_2_grid_diff_1x1_value_change_single_cell_edited() {
     let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1]]));
     let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[2]]));
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(report.ops.len(), 1);
 
     match &report.ops[0] {
@@ -24001,7 +24036,7 @@ fn pg5_3_grid_diff_row_appended_row_added_only() {
     let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1]]));
     let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1], &[2]]));
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(report.ops.len(), 1);
 
     match &report.ops[0] {
@@ -24023,7 +24058,7 @@ fn pg5_4_grid_diff_column_appended_column_added_only() {
     let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1], &[2]]));
     let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1, 10], &[2, 20]]));
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(report.ops.len(), 1);
 
     match &report.ops[0] {
@@ -24051,7 +24086,7 @@ fn pg5_5_grid_diff_same_shape_scattered_cell_edits() {
         grid_from_numbers(&[&[10, 2, 3], &[4, 50, 6], &[7, 8, 90]]),
     );
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(report.ops.len(), 3);
     assert!(
         report
@@ -24077,13 +24112,13 @@ fn pg5_6_grid_diff_degenerate_grids() {
     let empty_old = single_sheet_workbook("Sheet1", Grid::new(0, 0));
     let empty_new = single_sheet_workbook("Sheet1", Grid::new(0, 0));
 
-    let empty_report = diff_workbooks(&empty_old, &empty_new, &excel_diff::DiffConfig::default());
+    let empty_report = diff_workbooks(&empty_old, &empty_new, &DiffConfig::default());
     assert!(empty_report.ops.is_empty());
 
     let old = single_sheet_workbook("Sheet1", Grid::new(0, 0));
     let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1]]));
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(report.ops.len(), 2);
 
     let mut row_added = 0;
@@ -24127,7 +24162,7 @@ fn pg5_7_grid_diff_row_truncated_row_removed_only() {
     let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1], &[2]]));
     let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1]]));
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(report.ops.len(), 1);
 
     match &report.ops[0] {
@@ -24149,7 +24184,7 @@ fn pg5_8_grid_diff_column_truncated_column_removed_only() {
     let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1, 10], &[2, 20]]));
     let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1], &[2]]));
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(report.ops.len(), 1);
 
     match &report.ops[0] {
@@ -24171,7 +24206,7 @@ fn pg5_9_grid_diff_row_and_column_truncated_structure_only() {
     let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1, 2], &[3, 4]]));
     let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1]]));
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(report.ops.len(), 2);
 
     let mut rows_removed = 0;
@@ -24215,7 +24250,7 @@ fn pg5_10_grid_diff_row_appended_with_overlap_cell_edits() {
     let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1, 2], &[3, 4]]));
     let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1, 20], &[30, 4], &[5, 6]]));
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(report.ops.len(), 3);
 
     let mut row_added = 0;
@@ -24252,17 +24287,17 @@ fn pg5_10_grid_diff_row_appended_with_overlap_cell_edits() {
 ### File: `core\tests\pg6_object_vs_grid_tests.rs`
 
 ```rust
-use excel_diff::{DiffOp, diff_workbooks, open_workbook};
-
 mod common;
-use common::{fixture_path, sid};
+
+use common::{open_fixture_workbook, sid};
+use excel_diff::{DiffConfig, DiffOp, WorkbookPackage};
 
 #[test]
 fn pg6_1_sheet_added_no_grid_ops_on_main() {
-    let old = open_workbook(fixture_path("pg6_sheet_added_a.xlsx")).expect("open pg6 added A");
-    let new = open_workbook(fixture_path("pg6_sheet_added_b.xlsx")).expect("open pg6 added B");
+    let old = open_fixture_workbook("pg6_sheet_added_a.xlsx");
+    let new = open_fixture_workbook("pg6_sheet_added_b.xlsx");
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
 
     let mut sheet_added = 0;
     for op in &report.ops {
@@ -24296,10 +24331,10 @@ fn pg6_1_sheet_added_no_grid_ops_on_main() {
 
 #[test]
 fn pg6_2_sheet_removed_no_grid_ops_on_main() {
-    let old = open_workbook(fixture_path("pg6_sheet_removed_a.xlsx")).expect("open pg6 removed A");
-    let new = open_workbook(fixture_path("pg6_sheet_removed_b.xlsx")).expect("open pg6 removed B");
+    let old = open_fixture_workbook("pg6_sheet_removed_a.xlsx");
+    let new = open_fixture_workbook("pg6_sheet_removed_b.xlsx");
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
 
     let mut sheet_removed = 0;
     for op in &report.ops {
@@ -24333,10 +24368,10 @@ fn pg6_2_sheet_removed_no_grid_ops_on_main() {
 
 #[test]
 fn pg6_3_rename_as_remove_plus_add_no_grid_ops() {
-    let old = open_workbook(fixture_path("pg6_sheet_renamed_a.xlsx")).expect("open pg6 rename A");
-    let new = open_workbook(fixture_path("pg6_sheet_renamed_b.xlsx")).expect("open pg6 rename B");
+    let old = open_fixture_workbook("pg6_sheet_renamed_a.xlsx");
+    let new = open_fixture_workbook("pg6_sheet_renamed_b.xlsx");
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
 
     let mut added = 0;
     let mut removed = 0;
@@ -24371,12 +24406,10 @@ fn pg6_3_rename_as_remove_plus_add_no_grid_ops() {
 
 #[test]
 fn pg6_4_sheet_and_grid_change_composed_cleanly() {
-    let old =
-        open_workbook(fixture_path("pg6_sheet_and_grid_change_a.xlsx")).expect("open pg6 4 A");
-    let new =
-        open_workbook(fixture_path("pg6_sheet_and_grid_change_b.xlsx")).expect("open pg6 4 B");
+    let old = open_fixture_workbook("pg6_sheet_and_grid_change_a.xlsx");
+    let new = open_fixture_workbook("pg6_sheet_and_grid_change_b.xlsx");
 
-    let report = diff_workbooks(&old, &new, &excel_diff::DiffConfig::default());
+    let report = WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
 
     let mut scratch_added = 0;
     let mut main_cell_edits = 0;
