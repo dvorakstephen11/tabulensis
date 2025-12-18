@@ -14,6 +14,7 @@
 mod amr;
 mod context;
 mod grid_diff;
+mod grid_primitives;
 mod move_mask;
 mod workbook_diff;
 
@@ -24,4 +25,3 @@ pub use grid_diff::diff_grids_database_mode;
 pub use workbook_diff::{
     diff_workbooks, diff_workbooks_streaming, try_diff_workbooks, try_diff_workbooks_streaming,
 };
-

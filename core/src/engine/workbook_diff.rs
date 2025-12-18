@@ -149,7 +149,7 @@ pub fn try_diff_workbooks_streaming<S: DiffSink>(
             (Some(old_sheet), Some(new_sheet)) => {
                 let sheet_id: SheetId = old_sheet.name;
                 try_diff_grids(
-                    &sheet_id,
+                    sheet_id,
                     &old_sheet.grid,
                     &new_sheet.grid,
                     config,
@@ -200,4 +200,3 @@ mod tests {
         );
     }
 }
-

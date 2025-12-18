@@ -1,4 +1,6 @@
-use excel_diff::{ColHash, ColMeta, ColSignature, FrequencyClass, HashStats, RowHash, RowMeta, RowSignature};
+use excel_diff::{
+    ColHash, ColMeta, ColSignature, FrequencyClass, HashStats, RowHash, RowMeta, RowSignature,
+};
 
 fn row_meta(row_idx: u32, hash: RowHash) -> RowMeta {
     RowMeta {

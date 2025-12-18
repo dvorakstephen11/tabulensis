@@ -256,9 +256,7 @@ fn fill_gap(
         GapStrategy::DeleteAll => ctx.delete_all(),
         GapStrategy::SmallEdit => align_gap_default(ctx.old_slice, ctx.new_slice, config),
         GapStrategy::HashFallback => align_gap_hash(ctx.old_slice, ctx.new_slice),
-        GapStrategy::MoveCandidate => {
-            align_gap_with_moves(ctx.old_slice, ctx.new_slice, config)
-        }
+        GapStrategy::MoveCandidate => align_gap_with_moves(ctx.old_slice, ctx.new_slice, config),
         GapStrategy::RecursiveAlign => {
             align_gap_recursive(ctx.old_slice, ctx.new_slice, config, depth)
         }
@@ -308,12 +306,8 @@ fn align_gap_with_moves(
             .any(|(a, b)| (*b as i64 - *a as i64) != 0);
 
         if has_nonzero_offset
-            && let Some(mv) = find_block_move(
-                old_slice,
-                new_slice,
-                config.min_block_size_for_move,
-                config,
-            )
+            && let Some(mv) =
+                find_block_move(old_slice, new_slice, config.min_block_size_for_move, config)
         {
             detected_moves.push(mv);
         }

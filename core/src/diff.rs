@@ -228,7 +228,11 @@ impl DiffReport {
         }
     }
 
-    pub fn from_ops_and_summary(ops: Vec<DiffOp>, summary: DiffSummary, strings: Vec<String>) -> DiffReport {
+    pub fn from_ops_and_summary(
+        ops: Vec<DiffOp>,
+        summary: DiffSummary,
+        strings: Vec<String>,
+    ) -> DiffReport {
         let mut report = DiffReport::new(ops);
         report.complete = summary.complete;
         report.warnings = summary.warnings;

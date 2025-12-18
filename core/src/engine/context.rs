@@ -7,12 +7,12 @@ use crate::string_pool::StringPool;
 use super::SheetId;
 
 #[derive(Debug, Default)]
-pub(crate) struct DiffContext {
-    pub(crate) warnings: Vec<String>,
-    pub(crate) formula_cache: FormulaParseCache,
+pub(super) struct DiffContext {
+    pub(super) warnings: Vec<String>,
+    pub(super) formula_cache: FormulaParseCache,
 }
 
-pub(crate) fn emit_op<S: DiffSink>(
+pub(super) fn emit_op<S: DiffSink>(
     sink: &mut S,
     op_count: &mut usize,
     op: DiffOp,
@@ -22,18 +22,18 @@ pub(crate) fn emit_op<S: DiffSink>(
     Ok(())
 }
 
-pub(crate) struct EmitCtx<'a, S: DiffSink> {
-    pub(crate) sheet_id: &'a SheetId,
-    pub(crate) pool: &'a StringPool,
-    pub(crate) config: &'a DiffConfig,
-    pub(crate) cache: &'a mut FormulaParseCache,
-    pub(crate) sink: &'a mut S,
-    pub(crate) op_count: &'a mut usize,
+pub(super) struct EmitCtx<'a, S: DiffSink> {
+    pub(super) sheet_id: SheetId,
+    pub(super) pool: &'a StringPool,
+    pub(super) config: &'a DiffConfig,
+    pub(super) cache: &'a mut FormulaParseCache,
+    pub(super) sink: &'a mut S,
+    pub(super) op_count: &'a mut usize,
 }
 
 impl<'a, S: DiffSink> EmitCtx<'a, S> {
-    pub(crate) fn new(
-        sheet_id: &'a SheetId,
+    pub(super) fn new(
+        sheet_id: SheetId,
         pool: &'a StringPool,
         config: &'a DiffConfig,
         cache: &'a mut FormulaParseCache,
@@ -50,8 +50,7 @@ impl<'a, S: DiffSink> EmitCtx<'a, S> {
         }
     }
 
-    pub(crate) fn emit(&mut self, op: DiffOp) -> Result<(), DiffError> {
+    pub(super) fn emit(&mut self, op: DiffOp) -> Result<(), DiffError> {
         emit_op(self.sink, self.op_count, op)
     }
 }
-
