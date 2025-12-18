@@ -1,11 +1,13 @@
 use crate::config::{DiffConfig, LimitBehavior};
 use crate::diff::{DiffError, DiffOp, DiffReport, DiffSummary};
 use crate::formula_diff::FormulaParseCache;
+use crate::grid_view::GridView;
 #[cfg(feature = "perf-metrics")]
 use crate::perf::{DiffMetrics, Phase};
 use crate::sink::{DiffSink, VecSink};
 use crate::string_pool::StringPool;
-use crate::workbook::Grid;
+use crate::workbook::{Grid, RowSignature};
+use std::collections::HashSet;
 
 use super::SheetId;
 use super::context::{DiffContext, EmitCtx, emit_op};
@@ -122,6 +124,30 @@ fn diff_grids_core<S: DiffSink>(
         if let Some(m) = metrics.as_mut() {
             m.add_cells_compared(cells_in_overlap(old, new));
         }
+        return Ok(());
+    }
+
+    let old_view = GridView::from_grid_with_config(old, config);
+    let new_view = GridView::from_grid_with_config(new, config);
+
+    let preflight = should_short_circuit_to_positional(&old_view, &new_view, config);
+
+    if matches!(
+        preflight,
+        PreflightDecision::ShortCircuitNearIdentical | PreflightDecision::ShortCircuitDissimilar
+    ) {
+        let mut emit_ctx = EmitCtx::new(
+            sheet_id,
+            pool,
+            config,
+            &mut ctx.formula_cache,
+            sink,
+            op_count,
+        );
+        #[cfg(feature = "perf-metrics")]
+        run_positional_diff_with_metrics(&mut emit_ctx, old, new, metrics.as_deref_mut())?;
+        #[cfg(not(feature = "perf-metrics"))]
+        run_positional_diff_with_metrics(&mut emit_ctx, old, new)?;
         return Ok(());
     }
 
@@ -342,6 +368,106 @@ fn grids_non_blank_cells_equal(old: &Grid, new: &Grid) -> bool {
     }
 
     true
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PreflightDecision {
+    RunFullPipeline,
+    ShortCircuitNearIdentical,
+    ShortCircuitDissimilar,
+}
+
+pub(super) fn should_short_circuit_to_positional(
+    old_view: &GridView<'_>,
+    new_view: &GridView<'_>,
+    config: &DiffConfig,
+) -> PreflightDecision {
+    let nrows_old = old_view.row_meta.len();
+    let nrows_new = new_view.row_meta.len();
+    let ncols_old = old_view.col_meta.len();
+    let ncols_new = new_view.col_meta.len();
+
+    if nrows_old != nrows_new || ncols_old != ncols_new {
+        return PreflightDecision::RunFullPipeline;
+    }
+
+    let nrows = nrows_old;
+    if nrows < config.preflight_min_rows as usize {
+        return PreflightDecision::RunFullPipeline;
+    }
+
+    let (in_order_matches, old_sig_set, new_sig_set) =
+        compute_row_signature_stats(old_view, new_view);
+
+    let in_order_mismatches = nrows.saturating_sub(in_order_matches);
+    let in_order_match_ratio = if nrows > 0 {
+        in_order_matches as f64 / nrows as f64
+    } else {
+        1.0
+    };
+
+    let intersection_size = old_sig_set.intersection(&new_sig_set).count();
+    let union_size = old_sig_set.union(&new_sig_set).count();
+    let jaccard = if union_size > 0 {
+        intersection_size as f64 / union_size as f64
+    } else {
+        1.0
+    };
+
+    let multiset_equal = are_multisets_equal(old_view, new_view);
+
+    let near_identical = in_order_mismatches <= config.preflight_in_order_mismatch_max as usize
+        && in_order_match_ratio >= config.preflight_in_order_match_ratio_min
+        && !multiset_equal;
+
+    if near_identical {
+        return PreflightDecision::ShortCircuitNearIdentical;
+    }
+
+    if jaccard < config.bailout_similarity_threshold {
+        return PreflightDecision::ShortCircuitDissimilar;
+    }
+
+    PreflightDecision::RunFullPipeline
+}
+
+fn compute_row_signature_stats(
+    old_view: &GridView<'_>,
+    new_view: &GridView<'_>,
+) -> (usize, HashSet<RowSignature>, HashSet<RowSignature>) {
+    let mut in_order_matches = 0usize;
+    let mut old_sig_set = HashSet::with_capacity(old_view.row_meta.len());
+    let mut new_sig_set = HashSet::with_capacity(new_view.row_meta.len());
+
+    for (old_meta, new_meta) in old_view.row_meta.iter().zip(new_view.row_meta.iter()) {
+        if old_meta.signature == new_meta.signature {
+            in_order_matches += 1;
+        }
+        old_sig_set.insert(old_meta.signature);
+        new_sig_set.insert(new_meta.signature);
+    }
+
+    (in_order_matches, old_sig_set, new_sig_set)
+}
+
+fn are_multisets_equal(old_view: &GridView<'_>, new_view: &GridView<'_>) -> bool {
+    use std::collections::HashMap;
+
+    if old_view.row_meta.len() != new_view.row_meta.len() {
+        return false;
+    }
+
+    let mut old_freq: HashMap<RowSignature, u32> = HashMap::new();
+    for meta in &old_view.row_meta {
+        *old_freq.entry(meta.signature).or_insert(0) += 1;
+    }
+
+    let mut new_freq: HashMap<RowSignature, u32> = HashMap::new();
+    for meta in &new_view.row_meta {
+        *new_freq.entry(meta.signature).or_insert(0) += 1;
+    }
+
+    old_freq == new_freq
 }
 
 #[cfg(feature = "perf-metrics")]

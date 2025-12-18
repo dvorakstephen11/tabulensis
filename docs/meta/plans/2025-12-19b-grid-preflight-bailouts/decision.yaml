@@ -1,0 +1,26 @@
+branch_name: 2025-12-18-grid-preflight-bailouts
+work_type: milestone_progress
+target_subsystem: core grid diff hot path (move detection + alignment gating)
+rationale:
+
+* Latest full-scale perf run shows 50k×100 scenarios spending the majority of time in move detection and alignment (e.g., ~10–11s move detection and ~2–3s alignment on ~14s total), even when no moves are detected. This blocks Phase 5 grid perf goals. 
+* Testing plan Phase 5 explicitly calls out P1 (large dense minimal changes) and P2 (large noise / worst-case alignment) and expects budgets + regression tracking; current metrics indicate we need earlier bail-outs before expensive stages begin.
+* The unified grid diff algorithm spec requires explicit early similarity detection / bail-outs to avoid quadratic behavior and meet 50k-row performance targets; current pipeline enters masked move detection and AMR before making those “too similar / too different” calls.
+* Product differentiation plan emphasizes “Instant Diff” and competing on speed; addressing this now reduces risk that later correctness/features get built on a slow baseline. 
+* Recent cycles successfully landed row/column alignment and block move detection; the next limiting factor is now production-grade performance and adversarial defenses in the hot path.
+  risks_of_deferral:
+* Performance regressions will accumulate in the grid hot path (H1 difficulty) and become harder to unwind once more move/AMR logic and higher-level reporting depends on it. 
+* P1/P2 baselines can’t be stabilized in CI, undermining the regression harness and making “fast by default” marketing claims risky.
+* Slow “no-move” cases waste time and memory on the most common workflows (dense sheets with edits), hurting perceived quality even when correctness is fine.
+  references:
+* docs/rust_docs/excel_diff_meta_programming.md (Planner Agent; planning/decision records)
+* docs/rust_docs/excel_diff_testing_plan.md (Phase 5, P1/P2)
+* docs/rust_docs/unified_grid_diff_algorithm_specification.md (early bail-outs; performance targets; bailout_similarity_threshold)
+* benchmark_results.json (latest perf breakdown) 
+* codebase_context.md (perf fixtures manifest; perf_large_grid_tests)
+* excel_diff_product_differentiation_plan.md (“Instant Diff” positioning) 
+* excel_diff_difficulty_analysis.md (H1 difficulty framing) 
+  difficulty_estimate: 5
+  difficulty_scale_anchor: "10 = H1: High-performance 2D grid diff engine (row/col alignment, block moves, DB mode) "
+
+---

@@ -38,6 +38,7 @@
       2025-12-15_191921_fullscale.json
       2025-12-17_164231_fullscale.json
       2025-12-17_164437_fullscale.json
+      2025-12-18_221709_fullscale.json
       combined_results.csv
       plots/
         commit_comparison.png
@@ -3380,6 +3381,16 @@ pub struct DiffConfig {
     pub max_move_detection_rows: u32,
     /// Masked move detection runs only when max(old.ncols, new.ncols) <= this.
     pub max_move_detection_cols: u32,
+    /// Preflight: minimum row count to consider short-circuit bailouts.
+    /// Grids smaller than this always run full move detection/alignment.
+    pub preflight_min_rows: u32,
+    /// Preflight: maximum number of in-order row mismatches to trigger near-identical bailout.
+    pub preflight_in_order_mismatch_max: u32,
+    /// Preflight: minimum ratio of in-order matching rows (0.0..=1.0) for near-identical bailout.
+    pub preflight_in_order_match_ratio_min: f64,
+    /// Preflight: Jaccard similarity threshold below which grids are considered dissimilar
+    /// and move detection/alignment are skipped.
+    pub bailout_similarity_threshold: f64,
 }
 
 impl Default for DiffConfig {
@@ -3412,6 +3423,10 @@ impl Default for DiffConfig {
             context_anchor_k2: 8,
             max_move_detection_rows: 200,
             max_move_detection_cols: 256,
+            preflight_min_rows: 5000,
+            preflight_in_order_mismatch_max: 32,
+            preflight_in_order_match_ratio_min: 0.995,
+            bailout_similarity_threshold: 0.05,
         }
     }
 }
@@ -3493,6 +3508,24 @@ impl DiffConfig {
             });
         }
 
+        if !self.preflight_in_order_match_ratio_min.is_finite()
+            || self.preflight_in_order_match_ratio_min < 0.0
+            || self.preflight_in_order_match_ratio_min > 1.0
+        {
+            return Err(ConfigError::InvalidPreflightRatio {
+                value: self.preflight_in_order_match_ratio_min,
+            });
+        }
+
+        if !self.bailout_similarity_threshold.is_finite()
+            || self.bailout_similarity_threshold < 0.0
+            || self.bailout_similarity_threshold > 1.0
+        {
+            return Err(ConfigError::InvalidBailoutSimilarity {
+                value: self.bailout_similarity_threshold,
+            });
+        }
+
         Ok(())
     }
 }
@@ -3503,6 +3536,10 @@ pub enum ConfigError {
     InvalidFuzzySimilarity { value: f64 },
     #[error("{field} must be greater than zero (got {value})")]
     NonPositiveLimit { field: &'static str, value: u64 },
+    #[error("preflight_in_order_match_ratio_min must be in [0.0, 1.0] and finite (got {value})")]
+    InvalidPreflightRatio { value: f64 },
+    #[error("bailout_similarity_threshold must be in [0.0, 1.0] and finite (got {value})")]
+    InvalidBailoutSimilarity { value: f64 },
 }
 
 fn ensure_non_zero_u32(value: u32, field: &'static str) -> Result<(), ConfigError> {
@@ -3666,6 +3703,26 @@ impl DiffConfigBuilder {
         self
     }
 
+    pub fn preflight_min_rows(mut self, value: u32) -> Self {
+        self.inner.preflight_min_rows = value;
+        self
+    }
+
+    pub fn preflight_in_order_mismatch_max(mut self, value: u32) -> Self {
+        self.inner.preflight_in_order_mismatch_max = value;
+        self
+    }
+
+    pub fn preflight_in_order_match_ratio_min(mut self, value: f64) -> Self {
+        self.inner.preflight_in_order_match_ratio_min = value;
+        self
+    }
+
+    pub fn bailout_similarity_threshold(mut self, value: f64) -> Self {
+        self.inner.bailout_similarity_threshold = value;
+        self
+    }
+
     pub fn build(self) -> Result<DiffConfig, ConfigError> {
         self.inner.validate()?;
         Ok(self.inner)
@@ -3700,6 +3757,11 @@ mod tests {
 
         assert_eq!(cfg.max_move_detection_rows, 200);
         assert_eq!(cfg.max_move_detection_cols, 256);
+
+        assert_eq!(cfg.preflight_min_rows, 5000);
+        assert_eq!(cfg.preflight_in_order_mismatch_max, 32);
+        assert!((cfg.preflight_in_order_match_ratio_min - 0.995).abs() < f64::EPSILON);
+        assert!((cfg.bailout_similarity_threshold - 0.05).abs() < f64::EPSILON);
 
         assert!(!cfg.include_unchanged_cells);
         assert_eq!(cfg.max_context_rows, 3);
@@ -3760,6 +3822,58 @@ mod tests {
         let cfg = DiffConfig::most_precise();
         assert_eq!(cfg.fuzzy_similarity_threshold, 0.95);
         assert!(cfg.enable_formula_semantic_diff);
+    }
+
+    #[test]
+    fn builder_rejects_invalid_preflight_ratio() {
+        let err = DiffConfig::builder()
+            .preflight_in_order_match_ratio_min(1.5)
+            .build()
+            .expect_err("builder should reject invalid preflight ratio");
+        assert!(matches!(
+            err,
+            ConfigError::InvalidPreflightRatio { value } if (value - 1.5).abs() < f64::EPSILON
+        ));
+
+        let err = DiffConfig::builder()
+            .preflight_in_order_match_ratio_min(-0.1)
+            .build()
+            .expect_err("builder should reject negative preflight ratio");
+        assert!(matches!(err, ConfigError::InvalidPreflightRatio { .. }));
+    }
+
+    #[test]
+    fn builder_rejects_invalid_bailout_similarity() {
+        let err = DiffConfig::builder()
+            .bailout_similarity_threshold(2.0)
+            .build()
+            .expect_err("builder should reject invalid bailout similarity");
+        assert!(matches!(
+            err,
+            ConfigError::InvalidBailoutSimilarity { value } if (value - 2.0).abs() < f64::EPSILON
+        ));
+
+        let err = DiffConfig::builder()
+            .bailout_similarity_threshold(-0.5)
+            .build()
+            .expect_err("builder should reject negative bailout similarity");
+        assert!(matches!(err, ConfigError::InvalidBailoutSimilarity { .. }));
+    }
+
+    #[test]
+    fn preflight_config_builder_setters_work() {
+        let cfg = DiffConfig::builder()
+            .preflight_min_rows(10000)
+            .preflight_in_order_mismatch_max(64)
+            .preflight_in_order_match_ratio_min(0.99)
+            .bailout_similarity_threshold(0.10)
+            .build()
+            .expect("valid config should build");
+
+        assert_eq!(cfg.preflight_min_rows, 10000);
+        assert_eq!(cfg.preflight_in_order_mismatch_max, 64);
+        assert!((cfg.preflight_in_order_match_ratio_min - 0.99).abs() < f64::EPSILON);
+        assert!((cfg.bailout_similarity_threshold - 0.10).abs() < f64::EPSILON);
     }
 }
 
@@ -6117,11 +6231,13 @@ impl<'a, S: DiffSink> EmitCtx<'a, S> {
 use crate::config::{DiffConfig, LimitBehavior};
 use crate::diff::{DiffError, DiffOp, DiffReport, DiffSummary};
 use crate::formula_diff::FormulaParseCache;
+use crate::grid_view::GridView;
 #[cfg(feature = "perf-metrics")]
 use crate::perf::{DiffMetrics, Phase};
 use crate::sink::{DiffSink, VecSink};
 use crate::string_pool::StringPool;
-use crate::workbook::Grid;
+use crate::workbook::{Grid, RowSignature};
+use std::collections::HashSet;
 
 use super::SheetId;
 use super::context::{DiffContext, EmitCtx, emit_op};
@@ -6238,6 +6354,30 @@ fn diff_grids_core<S: DiffSink>(
         if let Some(m) = metrics.as_mut() {
             m.add_cells_compared(cells_in_overlap(old, new));
         }
+        return Ok(());
+    }
+
+    let old_view = GridView::from_grid_with_config(old, config);
+    let new_view = GridView::from_grid_with_config(new, config);
+
+    let preflight = should_short_circuit_to_positional(&old_view, &new_view, config);
+
+    if matches!(
+        preflight,
+        PreflightDecision::ShortCircuitNearIdentical | PreflightDecision::ShortCircuitDissimilar
+    ) {
+        let mut emit_ctx = EmitCtx::new(
+            sheet_id,
+            pool,
+            config,
+            &mut ctx.formula_cache,
+            sink,
+            op_count,
+        );
+        #[cfg(feature = "perf-metrics")]
+        run_positional_diff_with_metrics(&mut emit_ctx, old, new, metrics.as_deref_mut())?;
+        #[cfg(not(feature = "perf-metrics"))]
+        run_positional_diff_with_metrics(&mut emit_ctx, old, new)?;
         return Ok(());
     }
 
@@ -6458,6 +6598,106 @@ fn grids_non_blank_cells_equal(old: &Grid, new: &Grid) -> bool {
     }
 
     true
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PreflightDecision {
+    RunFullPipeline,
+    ShortCircuitNearIdentical,
+    ShortCircuitDissimilar,
+}
+
+pub(super) fn should_short_circuit_to_positional(
+    old_view: &GridView<'_>,
+    new_view: &GridView<'_>,
+    config: &DiffConfig,
+) -> PreflightDecision {
+    let nrows_old = old_view.row_meta.len();
+    let nrows_new = new_view.row_meta.len();
+    let ncols_old = old_view.col_meta.len();
+    let ncols_new = new_view.col_meta.len();
+
+    if nrows_old != nrows_new || ncols_old != ncols_new {
+        return PreflightDecision::RunFullPipeline;
+    }
+
+    let nrows = nrows_old;
+    if nrows < config.preflight_min_rows as usize {
+        return PreflightDecision::RunFullPipeline;
+    }
+
+    let (in_order_matches, old_sig_set, new_sig_set) =
+        compute_row_signature_stats(old_view, new_view);
+
+    let in_order_mismatches = nrows.saturating_sub(in_order_matches);
+    let in_order_match_ratio = if nrows > 0 {
+        in_order_matches as f64 / nrows as f64
+    } else {
+        1.0
+    };
+
+    let intersection_size = old_sig_set.intersection(&new_sig_set).count();
+    let union_size = old_sig_set.union(&new_sig_set).count();
+    let jaccard = if union_size > 0 {
+        intersection_size as f64 / union_size as f64
+    } else {
+        1.0
+    };
+
+    let multiset_equal = are_multisets_equal(old_view, new_view);
+
+    let near_identical = in_order_mismatches <= config.preflight_in_order_mismatch_max as usize
+        && in_order_match_ratio >= config.preflight_in_order_match_ratio_min
+        && !multiset_equal;
+
+    if near_identical {
+        return PreflightDecision::ShortCircuitNearIdentical;
+    }
+
+    if jaccard < config.bailout_similarity_threshold {
+        return PreflightDecision::ShortCircuitDissimilar;
+    }
+
+    PreflightDecision::RunFullPipeline
+}
+
+fn compute_row_signature_stats(
+    old_view: &GridView<'_>,
+    new_view: &GridView<'_>,
+) -> (usize, HashSet<RowSignature>, HashSet<RowSignature>) {
+    let mut in_order_matches = 0usize;
+    let mut old_sig_set = HashSet::with_capacity(old_view.row_meta.len());
+    let mut new_sig_set = HashSet::with_capacity(new_view.row_meta.len());
+
+    for (old_meta, new_meta) in old_view.row_meta.iter().zip(new_view.row_meta.iter()) {
+        if old_meta.signature == new_meta.signature {
+            in_order_matches += 1;
+        }
+        old_sig_set.insert(old_meta.signature);
+        new_sig_set.insert(new_meta.signature);
+    }
+
+    (in_order_matches, old_sig_set, new_sig_set)
+}
+
+fn are_multisets_equal(old_view: &GridView<'_>, new_view: &GridView<'_>) -> bool {
+    use std::collections::HashMap;
+
+    if old_view.row_meta.len() != new_view.row_meta.len() {
+        return false;
+    }
+
+    let mut old_freq: HashMap<RowSignature, u32> = HashMap::new();
+    for meta in &old_view.row_meta {
+        *old_freq.entry(meta.signature).or_insert(0) += 1;
+    }
+
+    let mut new_freq: HashMap<RowSignature, u32> = HashMap::new();
+    for meta in &new_view.row_meta {
+        *new_freq.entry(meta.signature).or_insert(0) += 1;
+    }
+
+    old_freq == new_freq
 }
 
 #[cfg(feature = "perf-metrics")]
@@ -11158,7 +11398,7 @@ pub mod advanced {
 }
 
 pub use addressing::{AddressParseError, address_to_index, index_to_address};
-pub use config::{DiffConfig, LimitBehavior};
+pub use config::{DiffConfig, DiffConfigBuilder, LimitBehavior};
 pub use container::{ContainerError, OpcContainer};
 #[doc(hidden)]
 pub use datamashup::parse_metadata;
@@ -24873,7 +25113,7 @@ mod common;
 
 use common::single_sheet_workbook;
 use excel_diff::perf::DiffMetrics;
-use excel_diff::{CellValue, DiffConfig, DiffOp, DiffReport, Grid, Workbook, WorkbookPackage};
+use excel_diff::{CellValue, DiffConfig, DiffConfigBuilder, DiffOp, DiffReport, Grid, Workbook, WorkbookPackage};
 
 fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
     WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
@@ -25104,6 +25344,16 @@ fn perf_50k_dense_single_edit() {
         "50k dense grid should complete in <30s, took {}ms",
         metrics.total_time_ms
     );
+    assert_eq!(
+        metrics.move_detection_time_ms, 0,
+        "50k dense single edit should skip move detection (preflight bailout), got {}ms",
+        metrics.move_detection_time_ms
+    );
+    assert_eq!(
+        metrics.alignment_time_ms, 0,
+        "50k dense single edit should skip alignment (preflight bailout), got {}ms",
+        metrics.alignment_time_ms
+    );
 }
 
 #[test]
@@ -25129,6 +25379,16 @@ fn perf_50k_completely_different() {
         metrics.total_time_ms < 60000,
         "50k completely different should complete in <60s, took {}ms",
         metrics.total_time_ms
+    );
+    assert_eq!(
+        metrics.move_detection_time_ms, 0,
+        "50k completely different should skip move detection (preflight bailout), got {}ms",
+        metrics.move_detection_time_ms
+    );
+    assert_eq!(
+        metrics.alignment_time_ms, 0,
+        "50k completely different should skip alignment (preflight bailout), got {}ms",
+        metrics.alignment_time_ms
     );
 }
 
@@ -25156,6 +25416,16 @@ fn perf_50k_adversarial_repetitive() {
         metrics.total_time_ms < 120000,
         "50k adversarial repetitive should complete in <120s, took {}ms",
         metrics.total_time_ms
+    );
+    assert_eq!(
+        metrics.move_detection_time_ms, 0,
+        "50k adversarial repetitive should skip move detection (preflight bailout), got {}ms",
+        metrics.move_detection_time_ms
+    );
+    assert_eq!(
+        metrics.alignment_time_ms, 0,
+        "50k adversarial repetitive should skip alignment (preflight bailout), got {}ms",
+        metrics.alignment_time_ms
     );
 }
 
@@ -25205,6 +25475,203 @@ fn perf_50k_identical() {
         metrics.total_time_ms < 15000,
         "50k identical should complete in <15s, took {}ms",
         metrics.total_time_ms
+    );
+}
+
+#[test]
+fn preflight_skips_move_and_alignment_for_single_cell_edit_same_shape() {
+    let grid_a = create_large_grid(6000, 50, 0);
+    let mut grid_b = create_large_grid(6000, 50, 0);
+    grid_b.insert_cell(3000, 25, Some(CellValue::Number(999999.0)), None);
+
+    let wb_a = single_sheet_workbook("Preflight", grid_a);
+    let wb_b = single_sheet_workbook("Preflight", grid_b);
+
+    let config = DiffConfig::builder()
+        .preflight_min_rows(5000)
+        .preflight_in_order_mismatch_max(32)
+        .preflight_in_order_match_ratio_min(0.995)
+        .bailout_similarity_threshold(0.05)
+        .build()
+        .expect("valid config");
+
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
+
+    assert!(report.complete, "report should complete");
+
+    let cell_edits: Vec<_> = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::CellEdited { .. }))
+        .collect();
+    assert_eq!(
+        cell_edits.len(),
+        1,
+        "should have exactly 1 CellEdited op, got {}",
+        cell_edits.len()
+    );
+
+    let structural_ops = report
+        .ops
+        .iter()
+        .filter(|op| {
+            matches!(
+                op,
+                DiffOp::RowAdded { .. }
+                    | DiffOp::RowRemoved { .. }
+                    | DiffOp::ColumnAdded { .. }
+                    | DiffOp::ColumnRemoved { .. }
+                    | DiffOp::BlockMovedRows { .. }
+                    | DiffOp::BlockMovedColumns { .. }
+                    | DiffOp::BlockMovedRect { .. }
+            )
+        })
+        .count();
+    assert_eq!(structural_ops, 0, "should have no structural/move ops");
+
+    let metrics = report.metrics.expect("should have metrics");
+    assert_eq!(
+        metrics.move_detection_time_ms, 0,
+        "move_detection_time_ms should be 0 (skipped), got {}",
+        metrics.move_detection_time_ms
+    );
+    assert_eq!(
+        metrics.alignment_time_ms, 0,
+        "alignment_time_ms should be 0 (skipped), got {}",
+        metrics.alignment_time_ms
+    );
+
+    log_perf_metric(
+        "preflight_single_cell_edit",
+        &metrics,
+        " (preflight bailout)",
+    );
+}
+
+#[test]
+fn preflight_skips_move_and_alignment_for_low_similarity_same_shape() {
+    let grid_a = create_large_grid(6000, 50, 0);
+    let grid_b = create_large_grid(6000, 50, 100_000_000);
+
+    let wb_a = single_sheet_workbook("Preflight", grid_a);
+    let wb_b = single_sheet_workbook("Preflight", grid_b);
+
+    let config = DiffConfig::builder()
+        .preflight_min_rows(5000)
+        .bailout_similarity_threshold(0.05)
+        .build()
+        .expect("valid config");
+
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
+
+    assert!(report.complete, "report should complete");
+
+    let has_cell_edit = report
+        .ops
+        .iter()
+        .any(|op| matches!(op, DiffOp::CellEdited { .. }));
+    assert!(has_cell_edit, "should have at least one CellEdited op");
+
+    let move_ops = report
+        .ops
+        .iter()
+        .filter(|op| {
+            matches!(
+                op,
+                DiffOp::BlockMovedRows { .. }
+                    | DiffOp::BlockMovedColumns { .. }
+                    | DiffOp::BlockMovedRect { .. }
+            )
+        })
+        .count();
+    assert_eq!(move_ops, 0, "should have no move ops");
+
+    let metrics = report.metrics.expect("should have metrics");
+    assert_eq!(
+        metrics.move_detection_time_ms, 0,
+        "move_detection_time_ms should be 0 (skipped), got {}",
+        metrics.move_detection_time_ms
+    );
+    assert_eq!(
+        metrics.alignment_time_ms, 0,
+        "alignment_time_ms should be 0 (skipped), got {}",
+        metrics.alignment_time_ms
+    );
+
+    log_perf_metric(
+        "preflight_low_similarity",
+        &metrics,
+        " (dissimilar bailout)",
+    );
+}
+
+#[test]
+fn preflight_does_not_skip_when_multiset_equal_but_order_differs() {
+    let mut grid_a = Grid::new(6000, 10);
+    for row in 0..6000u32 {
+        for col in 0..10u32 {
+            grid_a.insert_cell(
+                row,
+                col,
+                Some(CellValue::Number((row * 100 + col) as f64)),
+                None,
+            );
+        }
+    }
+
+    let mut grid_b = grid_a.clone();
+
+    for col in 0..10u32 {
+        let tmp_row_50 = grid_b.get(50, col).cloned();
+        let tmp_row_51 = grid_b.get(51, col).cloned();
+        let tmp_row_52 = grid_b.get(52, col).cloned();
+
+        let row_80 = grid_b.get(80, col).cloned();
+        let row_81 = grid_b.get(81, col).cloned();
+        let row_82 = grid_b.get(82, col).cloned();
+
+        if let Some(c) = row_80 {
+            grid_b.insert_cell(50, col, c.value, c.formula);
+        }
+        if let Some(c) = row_81 {
+            grid_b.insert_cell(51, col, c.value, c.formula);
+        }
+        if let Some(c) = row_82 {
+            grid_b.insert_cell(52, col, c.value, c.formula);
+        }
+
+        if let Some(c) = tmp_row_50 {
+            grid_b.insert_cell(80, col, c.value, c.formula);
+        }
+        if let Some(c) = tmp_row_51 {
+            grid_b.insert_cell(81, col, c.value, c.formula);
+        }
+        if let Some(c) = tmp_row_52 {
+            grid_b.insert_cell(82, col, c.value, c.formula);
+        }
+    }
+
+    let wb_a = single_sheet_workbook("MoveTest", grid_a);
+    let wb_b = single_sheet_workbook("MoveTest", grid_b);
+
+    let config = DiffConfig::builder()
+        .preflight_min_rows(5000)
+        .preflight_in_order_mismatch_max(32)
+        .preflight_in_order_match_ratio_min(0.995)
+        .build()
+        .expect("valid config");
+
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
+
+    assert!(report.complete, "report should complete");
+
+    let metrics = report.metrics.expect("should have metrics");
+
+    assert!(
+        metrics.alignment_time_ms > 0 || metrics.cell_diff_time_ms > 0,
+        "preflight should NOT short-circuit when rows are reordered (multiset equal); expected pipeline to proceed, but alignment_time_ms={}, cell_diff_time_ms={}",
+        metrics.alignment_time_ms,
+        metrics.cell_diff_time_ms
     );
 }
 

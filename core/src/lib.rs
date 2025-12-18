@@ -120,7 +120,7 @@ pub mod advanced {
 }
 
 pub use addressing::{AddressParseError, address_to_index, index_to_address};
-pub use config::{DiffConfig, LimitBehavior};
+pub use config::{DiffConfig, DiffConfigBuilder, LimitBehavior};
 pub use container::{ContainerError, OpcContainer};
 #[doc(hidden)]
 pub use datamashup::parse_metadata;

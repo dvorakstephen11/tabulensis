@@ -1,0 +1,64 @@
+{
+  "timestamp": "2025-12-18T22:17:09.934361+00:00",
+  "git_commit": "1ab4cbd47268",
+  "git_branch": "2025-12-19b-grid-preflight-bailouts",
+  "full_scale": true,
+  "tests": {
+    "perf_50k_99_percent_blank": {
+      "total_time_ms": 282,
+      "move_detection_time_ms": 0,
+      "alignment_time_ms": 0,
+      "cell_diff_time_ms": 136,
+      "rows_processed": 100000,
+      "cells_compared": 5000000,
+      "anchors_found": 0,
+      "moves_detected": 0
+    },
+    "perf_50k_identical": {
+      "total_time_ms": 418,
+      "move_detection_time_ms": 0,
+      "alignment_time_ms": 0,
+      "cell_diff_time_ms": 0,
+      "rows_processed": 100000,
+      "cells_compared": 5000000,
+      "anchors_found": 0,
+      "moves_detected": 0
+    },
+    "perf_50k_adversarial_repetitive": {
+      "total_time_ms": 3880,
+      "move_detection_time_ms": 0,
+      "alignment_time_ms": 0,
+      "cell_diff_time_ms": 952,
+      "rows_processed": 100000,
+      "cells_compared": 2500000,
+      "anchors_found": 0,
+      "moves_detected": 0
+    },
+    "perf_50k_dense_single_edit": {
+      "total_time_ms": 7821,
+      "move_detection_time_ms": 0,
+      "alignment_time_ms": 0,
+      "cell_diff_time_ms": 2264,
+      "rows_processed": 100000,
+      "cells_compared": 5000000,
+      "anchors_found": 0,
+      "moves_detected": 0
+    },
+    "perf_50k_completely_different": {
+      "total_time_ms": 7870,
+      "move_detection_time_ms": 0,
+      "alignment_time_ms": 0,
+      "cell_diff_time_ms": 2596,
+      "rows_processed": 100000,
+      "cells_compared": 5000000,
+      "anchors_found": 0,
+      "moves_detected": 0
+    }
+  },
+  "summary": {
+    "total_tests": 5,
+    "total_time_ms": 20271,
+    "total_rows_processed": 500000,
+    "total_cells_compared": 22500000
+  }
+}

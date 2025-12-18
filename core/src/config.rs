@@ -54,6 +54,16 @@ pub struct DiffConfig {
     pub max_move_detection_rows: u32,
     /// Masked move detection runs only when max(old.ncols, new.ncols) <= this.
     pub max_move_detection_cols: u32,
+    /// Preflight: minimum row count to consider short-circuit bailouts.
+    /// Grids smaller than this always run full move detection/alignment.
+    pub preflight_min_rows: u32,
+    /// Preflight: maximum number of in-order row mismatches to trigger near-identical bailout.
+    pub preflight_in_order_mismatch_max: u32,
+    /// Preflight: minimum ratio of in-order matching rows (0.0..=1.0) for near-identical bailout.
+    pub preflight_in_order_match_ratio_min: f64,
+    /// Preflight: Jaccard similarity threshold below which grids are considered dissimilar
+    /// and move detection/alignment are skipped.
+    pub bailout_similarity_threshold: f64,
 }
 
 impl Default for DiffConfig {
@@ -86,6 +96,10 @@ impl Default for DiffConfig {
             context_anchor_k2: 8,
             max_move_detection_rows: 200,
             max_move_detection_cols: 256,
+            preflight_min_rows: 5000,
+            preflight_in_order_mismatch_max: 32,
+            preflight_in_order_match_ratio_min: 0.995,
+            bailout_similarity_threshold: 0.05,
         }
     }
 }
@@ -167,6 +181,24 @@ impl DiffConfig {
             });
         }
 
+        if !self.preflight_in_order_match_ratio_min.is_finite()
+            || self.preflight_in_order_match_ratio_min < 0.0
+            || self.preflight_in_order_match_ratio_min > 1.0
+        {
+            return Err(ConfigError::InvalidPreflightRatio {
+                value: self.preflight_in_order_match_ratio_min,
+            });
+        }
+
+        if !self.bailout_similarity_threshold.is_finite()
+            || self.bailout_similarity_threshold < 0.0
+            || self.bailout_similarity_threshold > 1.0
+        {
+            return Err(ConfigError::InvalidBailoutSimilarity {
+                value: self.bailout_similarity_threshold,
+            });
+        }
+
         Ok(())
     }
 }
@@ -177,6 +209,10 @@ pub enum ConfigError {
     InvalidFuzzySimilarity { value: f64 },
     #[error("{field} must be greater than zero (got {value})")]
     NonPositiveLimit { field: &'static str, value: u64 },
+    #[error("preflight_in_order_match_ratio_min must be in [0.0, 1.0] and finite (got {value})")]
+    InvalidPreflightRatio { value: f64 },
+    #[error("bailout_similarity_threshold must be in [0.0, 1.0] and finite (got {value})")]
+    InvalidBailoutSimilarity { value: f64 },
 }
 
 fn ensure_non_zero_u32(value: u32, field: &'static str) -> Result<(), ConfigError> {
@@ -340,6 +376,26 @@ impl DiffConfigBuilder {
         self
     }
 
+    pub fn preflight_min_rows(mut self, value: u32) -> Self {
+        self.inner.preflight_min_rows = value;
+        self
+    }
+
+    pub fn preflight_in_order_mismatch_max(mut self, value: u32) -> Self {
+        self.inner.preflight_in_order_mismatch_max = value;
+        self
+    }
+
+    pub fn preflight_in_order_match_ratio_min(mut self, value: f64) -> Self {
+        self.inner.preflight_in_order_match_ratio_min = value;
+        self
+    }
+
+    pub fn bailout_similarity_threshold(mut self, value: f64) -> Self {
+        self.inner.bailout_similarity_threshold = value;
+        self
+    }
+
     pub fn build(self) -> Result<DiffConfig, ConfigError> {
         self.inner.validate()?;
         Ok(self.inner)
@@ -374,6 +430,11 @@ mod tests {
 
         assert_eq!(cfg.max_move_detection_rows, 200);
         assert_eq!(cfg.max_move_detection_cols, 256);
+
+        assert_eq!(cfg.preflight_min_rows, 5000);
+        assert_eq!(cfg.preflight_in_order_mismatch_max, 32);
+        assert!((cfg.preflight_in_order_match_ratio_min - 0.995).abs() < f64::EPSILON);
+        assert!((cfg.bailout_similarity_threshold - 0.05).abs() < f64::EPSILON);
 
         assert!(!cfg.include_unchanged_cells);
         assert_eq!(cfg.max_context_rows, 3);
@@ -434,5 +495,57 @@ mod tests {
         let cfg = DiffConfig::most_precise();
         assert_eq!(cfg.fuzzy_similarity_threshold, 0.95);
         assert!(cfg.enable_formula_semantic_diff);
+    }
+
+    #[test]
+    fn builder_rejects_invalid_preflight_ratio() {
+        let err = DiffConfig::builder()
+            .preflight_in_order_match_ratio_min(1.5)
+            .build()
+            .expect_err("builder should reject invalid preflight ratio");
+        assert!(matches!(
+            err,
+            ConfigError::InvalidPreflightRatio { value } if (value - 1.5).abs() < f64::EPSILON
+        ));
+
+        let err = DiffConfig::builder()
+            .preflight_in_order_match_ratio_min(-0.1)
+            .build()
+            .expect_err("builder should reject negative preflight ratio");
+        assert!(matches!(err, ConfigError::InvalidPreflightRatio { .. }));
+    }
+
+    #[test]
+    fn builder_rejects_invalid_bailout_similarity() {
+        let err = DiffConfig::builder()
+            .bailout_similarity_threshold(2.0)
+            .build()
+            .expect_err("builder should reject invalid bailout similarity");
+        assert!(matches!(
+            err,
+            ConfigError::InvalidBailoutSimilarity { value } if (value - 2.0).abs() < f64::EPSILON
+        ));
+
+        let err = DiffConfig::builder()
+            .bailout_similarity_threshold(-0.5)
+            .build()
+            .expect_err("builder should reject negative bailout similarity");
+        assert!(matches!(err, ConfigError::InvalidBailoutSimilarity { .. }));
+    }
+
+    #[test]
+    fn preflight_config_builder_setters_work() {
+        let cfg = DiffConfig::builder()
+            .preflight_min_rows(10000)
+            .preflight_in_order_mismatch_max(64)
+            .preflight_in_order_match_ratio_min(0.99)
+            .bailout_similarity_threshold(0.10)
+            .build()
+            .expect("valid config should build");
+
+        assert_eq!(cfg.preflight_min_rows, 10000);
+        assert_eq!(cfg.preflight_in_order_mismatch_max, 64);
+        assert!((cfg.preflight_in_order_match_ratio_min - 0.99).abs() < f64::EPSILON);
+        assert!((cfg.bailout_similarity_threshold - 0.10).abs() < f64::EPSILON);
     }
 }
