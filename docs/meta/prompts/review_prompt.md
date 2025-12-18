@@ -600,6 +600,7 @@ default = ["excel-open-xml", "std-fs"]
 excel-open-xml = []
 std-fs = []
 perf-metrics = []
+dev-apis = []
 
 [dependencies]
 quick-xml = "0.32"
@@ -869,6 +870,7 @@ mod tests {
 use std::collections::HashMap;
 
 use crate::grid_metadata::{FrequencyClass, RowMeta};
+#[cfg(test)]
 use crate::grid_view::GridView;
 use crate::workbook::RowSignature;
 
@@ -879,7 +881,7 @@ pub struct Anchor {
     pub signature: RowSignature,
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn discover_anchors(old: &GridView<'_>, new: &GridView<'_>) -> Vec<Anchor> {
     discover_anchors_from_meta(&old.row_meta, &new.row_meta)
 }
@@ -1074,7 +1076,9 @@ use crate::alignment_types::{RowAlignment, RowBlockMove};
 use crate::config::DiffConfig;
 use crate::grid_metadata::RowMeta;
 use crate::grid_view::GridView;
-use crate::workbook::{Grid, RowSignature};
+#[cfg(any(test, feature = "dev-apis"))]
+use crate::workbook::Grid;
+use crate::workbook::RowSignature;
 
 #[derive(Default)]
 struct GapAlignmentResult {
@@ -1084,6 +1088,45 @@ struct GapAlignmentResult {
     moves: Vec<RowBlockMove>,
 }
 
+struct GapCtx<'a> {
+    old_range: Range<u32>,
+    new_range: Range<u32>,
+    old_slice: &'a [RowMeta],
+    new_slice: &'a [RowMeta],
+}
+
+impl<'a> GapCtx<'a> {
+    fn new(
+        old_meta: &'a [RowMeta],
+        new_meta: &'a [RowMeta],
+        old_range: Range<u32>,
+        new_range: Range<u32>,
+    ) -> Self {
+        let old_slice = slice_by_range(old_meta, &old_range);
+        let new_slice = slice_by_range(new_meta, &new_range);
+        Self {
+            old_range,
+            new_range,
+            old_slice,
+            new_slice,
+        }
+    }
+
+    fn insert_all(&self) -> GapAlignmentResult {
+        GapAlignmentResult {
+            inserted: (self.new_range.start..self.new_range.end).collect(),
+            ..Default::default()
+        }
+    }
+
+    fn delete_all(&self) -> GapAlignmentResult {
+        GapAlignmentResult {
+            deleted: (self.old_range.start..self.old_range.end).collect(),
+            ..Default::default()
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RowAlignmentWithSignatures {
     pub alignment: RowAlignment,
@@ -1091,11 +1134,12 @@ pub struct RowAlignmentWithSignatures {
     pub row_signatures_b: Vec<RowSignature>,
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn align_rows_amr(old: &Grid, new: &Grid, config: &DiffConfig) -> Option<RowAlignment> {
     align_rows_amr_with_signatures(old, new, config).map(|result| result.alignment)
 }
 
+#[cfg(any(test, feature = "dev-apis"))]
 pub fn align_rows_amr_with_signatures(
     old: &Grid,
     new: &Grid,
@@ -1255,120 +1299,138 @@ fn fill_gap(
     config: &DiffConfig,
     depth: u32,
 ) -> GapAlignmentResult {
-    let old_slice = slice_by_range(old_meta, &old_gap);
-    let new_slice = slice_by_range(new_meta, &new_gap);
+    let ctx = GapCtx::new(old_meta, new_meta, old_gap, new_gap);
     let has_recursed = depth >= config.max_recursion_depth;
-    let strategy = select_gap_strategy(old_slice, new_slice, config, has_recursed);
+    let strategy = select_gap_strategy(ctx.old_slice, ctx.new_slice, config, has_recursed);
 
     match strategy {
         GapStrategy::Empty => GapAlignmentResult::default(),
-
-        GapStrategy::InsertAll => GapAlignmentResult {
-            matched: Vec::new(),
-            inserted: (new_gap.start..new_gap.end).collect(),
-            deleted: Vec::new(),
-            moves: Vec::new(),
-        },
-
-        GapStrategy::DeleteAll => GapAlignmentResult {
-            matched: Vec::new(),
-            inserted: Vec::new(),
-            deleted: (old_gap.start..old_gap.end).collect(),
-            moves: Vec::new(),
-        },
-
-        GapStrategy::SmallEdit => align_small_gap(old_slice, new_slice, config),
-
-        GapStrategy::HashFallback => {
-            let mut result = align_gap_via_hash(old_slice, new_slice);
-            result
-                .moves
-                .extend(moves_from_matched_pairs(&result.matched));
-            result
-        }
-
+        GapStrategy::InsertAll => ctx.insert_all(),
+        GapStrategy::DeleteAll => ctx.delete_all(),
+        GapStrategy::SmallEdit => align_gap_default(ctx.old_slice, ctx.new_slice, config),
+        GapStrategy::HashFallback => align_gap_hash(ctx.old_slice, ctx.new_slice),
         GapStrategy::MoveCandidate => {
-            let mut result = if old_slice.len() as u32 > config.max_lcs_gap_size
-                || new_slice.len() as u32 > config.max_lcs_gap_size
-            {
-                align_gap_via_hash(old_slice, new_slice)
-            } else {
-                align_small_gap(old_slice, new_slice, config)
-            };
-
-            let mut detected_moves = moves_from_matched_pairs(&result.matched);
-
-            if detected_moves.is_empty() {
-                let has_nonzero_offset = result
-                    .matched
-                    .iter()
-                    .any(|(a, b)| (*b as i64 - *a as i64) != 0);
-
-                if has_nonzero_offset
-                    && let Some(mv) = find_block_move(
-                        old_slice,
-                        new_slice,
-                        config.min_block_size_for_move,
-                        config,
-                    )
-                {
-                    detected_moves.push(mv);
-                }
-            }
-
-            result.moves.extend(detected_moves);
-            result
+            align_gap_with_moves(ctx.old_slice, ctx.new_slice, config)
         }
-
         GapStrategy::RecursiveAlign => {
-            let at_limit = depth >= config.max_recursion_depth;
-            if at_limit {
-                if old_slice.len() as u32 > config.max_lcs_gap_size
-                    || new_slice.len() as u32 > config.max_lcs_gap_size
-                {
-                    return align_gap_via_hash(old_slice, new_slice);
-                }
-                return align_small_gap(old_slice, new_slice, config);
-            }
-
-            let anchor_candidates = if depth == 0 {
-                discover_anchors_from_meta(old_slice, new_slice)
-            } else {
-                let ctx_k1 = config.context_anchor_k1 as usize;
-                let ctx_k2 = config.context_anchor_k2 as usize;
-                let mut anchors = discover_local_anchors(old_slice, new_slice);
-                if anchors.is_empty() {
-                    anchors = discover_context_anchors(old_slice, new_slice, ctx_k1);
-                    if anchors.is_empty() {
-                        anchors = discover_context_anchors(old_slice, new_slice, ctx_k2);
-                    }
-                } else {
-                    let mut ctx_anchors = discover_context_anchors(old_slice, new_slice, ctx_k1);
-                    if anchors.len() < ctx_k1 {
-                        anchors.append(&mut ctx_anchors);
-                    }
-                }
-                anchors
-            };
-
-            let anchors = build_anchor_chain(anchor_candidates);
-            if anchors.is_empty() {
-                if old_slice.len() as u32 > config.max_lcs_gap_size
-                    || new_slice.len() as u32 > config.max_lcs_gap_size
-                {
-                    return align_gap_via_hash(old_slice, new_slice);
-                }
-                return align_small_gap(old_slice, new_slice, config);
-            }
-
-            let alignment = assemble_from_meta(old_slice, new_slice, anchors, config, depth + 1);
-            GapAlignmentResult {
-                matched: alignment.matched,
-                inserted: alignment.inserted,
-                deleted: alignment.deleted,
-                moves: alignment.moves,
-            }
+            align_gap_recursive(ctx.old_slice, ctx.new_slice, config, depth)
         }
+    }
+}
+
+fn align_gap_default(
+    old_slice: &[RowMeta],
+    new_slice: &[RowMeta],
+    config: &DiffConfig,
+) -> GapAlignmentResult {
+    if old_slice.len() as u32 > config.max_lcs_gap_size
+        || new_slice.len() as u32 > config.max_lcs_gap_size
+    {
+        return align_gap_via_hash(old_slice, new_slice);
+    }
+    align_small_gap(old_slice, new_slice, config)
+}
+
+fn align_gap_hash(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> GapAlignmentResult {
+    let mut result = align_gap_via_hash(old_slice, new_slice);
+    result
+        .moves
+        .extend(moves_from_matched_pairs(&result.matched));
+    result
+}
+
+fn align_gap_with_moves(
+    old_slice: &[RowMeta],
+    new_slice: &[RowMeta],
+    config: &DiffConfig,
+) -> GapAlignmentResult {
+    let mut result = if old_slice.len() as u32 > config.max_lcs_gap_size
+        || new_slice.len() as u32 > config.max_lcs_gap_size
+    {
+        align_gap_via_hash(old_slice, new_slice)
+    } else {
+        align_small_gap(old_slice, new_slice, config)
+    };
+
+    let mut detected_moves = moves_from_matched_pairs(&result.matched);
+
+    if detected_moves.is_empty() {
+        let has_nonzero_offset = result
+            .matched
+            .iter()
+            .any(|(a, b)| (*b as i64 - *a as i64) != 0);
+
+        if has_nonzero_offset
+            && let Some(mv) = find_block_move(
+                old_slice,
+                new_slice,
+                config.min_block_size_for_move,
+                config,
+            )
+        {
+            detected_moves.push(mv);
+        }
+    }
+
+    result.moves.extend(detected_moves);
+    result
+}
+
+fn recursive_anchor_candidates(
+    old_slice: &[RowMeta],
+    new_slice: &[RowMeta],
+    depth: u32,
+    config: &DiffConfig,
+) -> Vec<Anchor> {
+    if depth == 0 {
+        return discover_anchors_from_meta(old_slice, new_slice);
+    }
+
+    let k1 = config.context_anchor_k1 as usize;
+    let k2 = config.context_anchor_k2 as usize;
+
+    let mut anchors = discover_local_anchors(old_slice, new_slice);
+    if anchors.is_empty() {
+        anchors = discover_context_anchors(old_slice, new_slice, k1);
+        if anchors.is_empty() {
+            anchors = discover_context_anchors(old_slice, new_slice, k2);
+        }
+        return anchors;
+    }
+
+    if anchors.len() < k1 {
+        let mut ctx_anchors = discover_context_anchors(old_slice, new_slice, k1);
+        anchors.append(&mut ctx_anchors);
+    }
+
+    anchors
+}
+
+fn align_gap_recursive(
+    old_slice: &[RowMeta],
+    new_slice: &[RowMeta],
+    config: &DiffConfig,
+    depth: u32,
+) -> GapAlignmentResult {
+    let at_limit = depth >= config.max_recursion_depth;
+    if at_limit {
+        return align_gap_default(old_slice, new_slice, config);
+    }
+
+    let anchors = build_anchor_chain(recursive_anchor_candidates(
+        old_slice, new_slice, depth, config,
+    ));
+
+    if anchors.is_empty() {
+        return align_gap_default(old_slice, new_slice, config);
+    }
+
+    let alignment = assemble_from_meta(old_slice, new_slice, anchors, config, depth + 1);
+    GapAlignmentResult {
+        matched: alignment.matched,
+        inserted: alignment.inserted,
+        deleted: alignment.deleted,
+        moves: alignment.moves,
     }
 }
 
@@ -5687,7 +5749,7 @@ use crate::diff::{DiffError, DiffOp, DiffReport, DiffSummary, FormulaDiffResult,
 use crate::formula_diff::{FormulaParseCache, diff_cell_formulas_ids};
 use crate::grid_view::GridView;
 #[cfg(feature = "perf-metrics")]
-use crate::perf::{DiffMetrics, Phase};
+use crate::perf::{DiffMetrics, Phase, PhaseGuard};
 use crate::rect_block_move::{RectBlockMove, detect_exact_rect_block_move};
 use crate::region_mask::RegionMask;
 use crate::row_alignment::{
@@ -5748,6 +5810,228 @@ struct EmitCtx<'a, S: DiffSink> {
 impl<'a, S: DiffSink> EmitCtx<'a, S> {
     fn emit(&mut self, op: DiffOp) -> Result<(), DiffError> {
         emit_op(self.sink, self.op_count, op)
+    }
+}
+
+struct SheetGridDiffer<'a, 'b, S: DiffSink> {
+    emit_ctx: EmitCtx<'a, S>,
+    old: &'b Grid,
+    new: &'b Grid,
+    old_view: GridView<'b>,
+    new_view: GridView<'b>,
+    old_mask: RegionMask,
+    new_mask: RegionMask,
+    #[cfg(feature = "perf-metrics")]
+    metrics: Option<&'a mut DiffMetrics>,
+}
+
+impl<'a, 'b, S: DiffSink> SheetGridDiffer<'a, 'b, S> {
+    fn new(
+        sheet_id: &'a SheetId,
+        old: &'b Grid,
+        new: &'b Grid,
+        config: &'a DiffConfig,
+        pool: &'a StringPool,
+        cache: &'a mut FormulaParseCache,
+        sink: &'a mut S,
+        op_count: &'a mut usize,
+        #[cfg(feature = "perf-metrics")] metrics: Option<&'a mut DiffMetrics>,
+    ) -> Self {
+        let old_view = GridView::from_grid_with_config(old, config);
+        let new_view = GridView::from_grid_with_config(new, config);
+        let old_mask = RegionMask::all_active(old.nrows, old.ncols);
+        let new_mask = RegionMask::all_active(new.nrows, new.ncols);
+
+        Self {
+            emit_ctx: EmitCtx {
+                sheet_id,
+                pool,
+                config,
+                cache,
+                sink,
+                op_count,
+            },
+            old,
+            new,
+            old_view,
+            new_view,
+            old_mask,
+            new_mask,
+            #[cfg(feature = "perf-metrics")]
+            metrics,
+        }
+    }
+
+    fn move_detection_enabled(&self) -> bool {
+        self.old.nrows.max(self.new.nrows) <= self.emit_ctx.config.max_move_detection_rows
+            && self.old.ncols.max(self.new.ncols) <= self.emit_ctx.config.max_move_detection_cols
+    }
+
+    fn detect_moves(&mut self) -> Result<u32, DiffError> {
+        if !self.move_detection_enabled() {
+            return Ok(0);
+        }
+
+        let mut iteration = 0u32;
+        let config = self.emit_ctx.config;
+
+        loop {
+            if iteration >= config.max_move_iterations {
+                break;
+            }
+
+            if !self.old_mask.has_active_cells() || !self.new_mask.has_active_cells() {
+                break;
+            }
+
+            let mut found_move = false;
+
+            if let Some(mv) = detect_exact_rect_block_move_masked(
+                self.old,
+                self.new,
+                &self.old_mask,
+                &self.new_mask,
+                config,
+            ) {
+                emit_rect_block_move(&mut self.emit_ctx, mv)?;
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = self.metrics.as_mut() {
+                    m.moves_detected = m.moves_detected.saturating_add(1);
+                }
+                self.old_mask.exclude_rect_cells(
+                    mv.src_start_row,
+                    mv.src_row_count,
+                    mv.src_start_col,
+                    mv.src_col_count,
+                );
+                self.new_mask.exclude_rect_cells(
+                    mv.dst_start_row,
+                    mv.src_row_count,
+                    mv.dst_start_col,
+                    mv.src_col_count,
+                );
+                self.old_mask.exclude_rect_cells(
+                    mv.dst_start_row,
+                    mv.src_row_count,
+                    mv.dst_start_col,
+                    mv.src_col_count,
+                );
+                self.new_mask.exclude_rect_cells(
+                    mv.src_start_row,
+                    mv.src_row_count,
+                    mv.src_start_col,
+                    mv.src_col_count,
+                );
+                iteration += 1;
+                found_move = true;
+            }
+
+            if !found_move
+                && let Some(mv) = detect_exact_row_block_move_masked(
+                    self.old,
+                    self.new,
+                    &self.old_mask,
+                    &self.new_mask,
+                    config,
+                )
+            {
+                emit_row_block_move(&mut self.emit_ctx, mv)?;
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = self.metrics.as_mut() {
+                    m.moves_detected = m.moves_detected.saturating_add(1);
+                }
+                self.old_mask.exclude_rows(mv.src_start_row, mv.row_count);
+                self.new_mask.exclude_rows(mv.dst_start_row, mv.row_count);
+                iteration += 1;
+                found_move = true;
+            }
+
+            if !found_move
+                && let Some(mv) = detect_exact_column_block_move_masked(
+                    self.old,
+                    self.new,
+                    &self.old_mask,
+                    &self.new_mask,
+                    config,
+                )
+            {
+                emit_column_block_move(&mut self.emit_ctx, mv)?;
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = self.metrics.as_mut() {
+                    m.moves_detected = m.moves_detected.saturating_add(1);
+                }
+                self.old_mask.exclude_cols(mv.src_start_col, mv.col_count);
+                self.new_mask.exclude_cols(mv.dst_start_col, mv.col_count);
+                iteration += 1;
+                found_move = true;
+            }
+
+            if !found_move
+                && config.enable_fuzzy_moves
+                && let Some(mv) = detect_fuzzy_row_block_move_masked(
+                    self.old,
+                    self.new,
+                    &self.old_mask,
+                    &self.new_mask,
+                    config,
+                )
+            {
+                emit_row_block_move(&mut self.emit_ctx, mv)?;
+                emit_moved_row_block_edits(&mut self.emit_ctx, &self.old_view, &self.new_view, mv)?;
+                #[cfg(feature = "perf-metrics")]
+                if let Some(m) = self.metrics.as_mut() {
+                    m.moves_detected = m.moves_detected.saturating_add(1);
+                }
+                self.old_mask.exclude_rows(mv.src_start_row, mv.row_count);
+                self.new_mask.exclude_rows(mv.dst_start_row, mv.row_count);
+                iteration += 1;
+                found_move = true;
+            }
+
+            if !found_move {
+                break;
+            }
+
+            if self.old.nrows != self.new.nrows || self.old.ncols != self.new.ncols {
+                break;
+            }
+        }
+
+        Ok(iteration)
+    }
+
+    fn has_mask_exclusions(&self) -> bool {
+        self.old_mask.has_exclusions() || self.new_mask.has_exclusions()
+    }
+
+    fn diff_with_masks(&mut self) -> Result<bool, DiffError> {
+        if self.old.nrows != self.new.nrows || self.old.ncols != self.new.ncols {
+            if diff_aligned_with_masks(
+                &mut self.emit_ctx,
+                self.old,
+                self.new,
+                &self.old_mask,
+                &self.new_mask,
+            )? {
+                return Ok(true);
+            }
+            positional_diff_with_masks(
+                &mut self.emit_ctx,
+                self.old,
+                self.new,
+                &self.old_mask,
+                &self.new_mask,
+            )?;
+        } else {
+            positional_diff_masked_equal_size(
+                &mut self.emit_ctx,
+                self.old,
+                self.new,
+                &self.old_mask,
+                &self.new_mask,
+            )?;
+        }
+        Ok(true)
     }
 }
 
@@ -6356,220 +6640,116 @@ fn diff_grids_core<S: DiffSink>(
         return Ok(());
     }
 
-    let old_view = GridView::from_grid_with_config(old, config);
-    let new_view = GridView::from_grid_with_config(new, config);
-
-    let mut emit_ctx = EmitCtx {
+    let mut differ = SheetGridDiffer::new(
         sheet_id,
-        pool,
+        old,
+        new,
         config,
-        cache: &mut ctx.formula_cache,
+        pool,
+        &mut ctx.formula_cache,
         sink,
         op_count,
-    };
-
-    let mut old_mask = RegionMask::all_active(old.nrows, old.ncols);
-    let mut new_mask = RegionMask::all_active(new.nrows, new.ncols);
-    let move_detection_enabled = old.nrows.max(new.nrows) <= config.max_move_detection_rows
-        && old.ncols.max(new.ncols) <= config.max_move_detection_cols;
-    let mut iteration = 0;
-
-    if move_detection_enabled {
-        loop {
-            if iteration >= config.max_move_iterations {
-                break;
-            }
-
-            if !old_mask.has_active_cells() || !new_mask.has_active_cells() {
-                break;
-            }
-
-            let mut found_move = false;
-
-            if let Some(mv) =
-                detect_exact_rect_block_move_masked(old, new, &old_mask, &new_mask, config)
-            {
-                emit_rect_block_move(&mut emit_ctx, mv)?;
-                #[cfg(feature = "perf-metrics")]
-                if let Some(m) = metrics.as_mut() {
-                    m.moves_detected = m.moves_detected.saturating_add(1);
-                }
-                old_mask.exclude_rect_cells(
-                    mv.src_start_row,
-                    mv.src_row_count,
-                    mv.src_start_col,
-                    mv.src_col_count,
-                );
-                new_mask.exclude_rect_cells(
-                    mv.dst_start_row,
-                    mv.src_row_count,
-                    mv.dst_start_col,
-                    mv.src_col_count,
-                );
-                old_mask.exclude_rect_cells(
-                    mv.dst_start_row,
-                    mv.src_row_count,
-                    mv.dst_start_col,
-                    mv.src_col_count,
-                );
-                new_mask.exclude_rect_cells(
-                    mv.src_start_row,
-                    mv.src_row_count,
-                    mv.src_start_col,
-                    mv.src_col_count,
-                );
-                iteration += 1;
-                found_move = true;
-            }
-
-            if !found_move
-                && let Some(mv) =
-                    detect_exact_row_block_move_masked(old, new, &old_mask, &new_mask, config)
-            {
-                emit_row_block_move(&mut emit_ctx, mv)?;
-                #[cfg(feature = "perf-metrics")]
-                if let Some(m) = metrics.as_mut() {
-                    m.moves_detected = m.moves_detected.saturating_add(1);
-                }
-                old_mask.exclude_rows(mv.src_start_row, mv.row_count);
-                new_mask.exclude_rows(mv.dst_start_row, mv.row_count);
-                iteration += 1;
-                found_move = true;
-            }
-
-            if !found_move
-                && let Some(mv) =
-                    detect_exact_column_block_move_masked(old, new, &old_mask, &new_mask, config)
-            {
-                emit_column_block_move(&mut emit_ctx, mv)?;
-                #[cfg(feature = "perf-metrics")]
-                if let Some(m) = metrics.as_mut() {
-                    m.moves_detected = m.moves_detected.saturating_add(1);
-                }
-                old_mask.exclude_cols(mv.src_start_col, mv.col_count);
-                new_mask.exclude_cols(mv.dst_start_col, mv.col_count);
-                iteration += 1;
-                found_move = true;
-            }
-
-            if !found_move
-                && config.enable_fuzzy_moves
-                && let Some(mv) =
-                    detect_fuzzy_row_block_move_masked(old, new, &old_mask, &new_mask, config)
-            {
-                emit_row_block_move(&mut emit_ctx, mv)?;
-                emit_moved_row_block_edits(&mut emit_ctx, &old_view, &new_view, mv)?;
-                #[cfg(feature = "perf-metrics")]
-                if let Some(m) = metrics.as_mut() {
-                    m.moves_detected = m.moves_detected.saturating_add(1);
-                }
-                old_mask.exclude_rows(mv.src_start_row, mv.row_count);
-                new_mask.exclude_rows(mv.dst_start_row, mv.row_count);
-                iteration += 1;
-                found_move = true;
-            }
-
-            if !found_move {
-                break;
-            }
-
-            if old.nrows != new.nrows || old.ncols != new.ncols {
-                break;
-            }
-        }
-
         #[cfg(feature = "perf-metrics")]
-        if let Some(m) = metrics.as_mut() {
-            m.end_phase(Phase::MoveDetection);
-        }
-    } else {
-        #[cfg(feature = "perf-metrics")]
-        if let Some(m) = metrics.as_mut() {
-            m.end_phase(Phase::MoveDetection);
-        }
+        metrics.as_deref_mut(),
+    );
+
+    differ.detect_moves()?;
+
+    #[cfg(feature = "perf-metrics")]
+    if let Some(m) = differ.metrics.as_mut() {
+        m.end_phase(Phase::MoveDetection);
     }
 
-    if old_mask.has_exclusions() || new_mask.has_exclusions() {
+    if differ.has_mask_exclusions() {
         #[cfg(feature = "perf-metrics")]
-        if let Some(m) = metrics.as_mut() {
+        if let Some(m) = differ.metrics.as_mut() {
             m.start_phase(Phase::CellDiff);
         }
-        if old.nrows != new.nrows || old.ncols != new.ncols {
-            if diff_aligned_with_masks(&mut emit_ctx, old, new, &old_mask, &new_mask)? {
-                #[cfg(feature = "perf-metrics")]
-                if let Some(m) = metrics.as_mut() {
-                    m.end_phase(Phase::CellDiff);
-                }
-                return Ok(());
-            }
-            positional_diff_with_masks(&mut emit_ctx, old, new, &old_mask, &new_mask)?;
-        } else {
-            positional_diff_masked_equal_size(&mut emit_ctx, old, new, &old_mask, &new_mask)?;
-        }
+        let result = differ.diff_with_masks()?;
         #[cfg(feature = "perf-metrics")]
-        if let Some(m) = metrics.as_mut() {
+        if let Some(m) = differ.metrics.as_mut() {
             m.end_phase(Phase::CellDiff);
         }
-        return Ok(());
+        if result {
+            return Ok(());
+        }
     }
 
     #[cfg(feature = "perf-metrics")]
-    if let Some(m) = metrics.as_mut() {
+    if let Some(m) = differ.metrics.as_mut() {
         m.start_phase(Phase::Alignment);
     }
 
     #[cfg(feature = "perf-metrics")]
     if try_diff_with_amr(
-        &mut emit_ctx,
+        &mut differ.emit_ctx,
         old,
         new,
-        &old_view,
-        &new_view,
-        metrics.as_deref_mut(),
+        &differ.old_view,
+        &differ.new_view,
+        differ.metrics.as_deref_mut(),
     )? {
         return Ok(());
     }
     #[cfg(not(feature = "perf-metrics"))]
-    if try_diff_with_amr(&mut emit_ctx, old, new, &old_view, &new_view)? {
+    if try_diff_with_amr(
+        &mut differ.emit_ctx,
+        old,
+        new,
+        &differ.old_view,
+        &differ.new_view,
+    )? {
         return Ok(());
     }
 
-    if let Some(alignment) = align_row_changes_from_views(&old_view, &new_view, config) {
+    if let Some(alignment) =
+        align_row_changes_from_views(&differ.old_view, &differ.new_view, config)
+    {
         #[cfg(feature = "perf-metrics")]
-        if let Some(m) = metrics.as_mut() {
+        if let Some(m) = differ.metrics.as_mut() {
             m.start_phase(Phase::CellDiff);
         }
-        let compared = emit_row_aligned_diffs(&mut emit_ctx, &old_view, &new_view, &alignment)?;
+        let compared = emit_row_aligned_diffs(
+            &mut differ.emit_ctx,
+            &differ.old_view,
+            &differ.new_view,
+            &alignment,
+        )?;
         #[cfg(feature = "perf-metrics")]
-        if let Some(m) = metrics.as_mut() {
+        if let Some(m) = differ.metrics.as_mut() {
             m.add_cells_compared(compared);
             m.end_phase(Phase::CellDiff);
         }
         #[cfg(not(feature = "perf-metrics"))]
         let _ = compared;
     } else if let Some(alignment) =
-        align_single_column_change_from_views(&old_view, &new_view, config)
+        align_single_column_change_from_views(&differ.old_view, &differ.new_view, config)
     {
         #[cfg(feature = "perf-metrics")]
-        if let Some(m) = metrics.as_mut() {
+        if let Some(m) = differ.metrics.as_mut() {
             m.start_phase(Phase::CellDiff);
         }
-        emit_column_aligned_diffs(&mut emit_ctx, old, new, &alignment)?;
+        emit_column_aligned_diffs(&mut differ.emit_ctx, old, new, &alignment)?;
         #[cfg(feature = "perf-metrics")]
-        if let Some(m) = metrics.as_mut() {
+        if let Some(m) = differ.metrics.as_mut() {
             let overlap_rows = old.nrows.min(new.nrows) as u64;
             m.add_cells_compared(overlap_rows.saturating_mul(alignment.matched.len() as u64));
             m.end_phase(Phase::CellDiff);
         }
     } else {
         #[cfg(feature = "perf-metrics")]
-        run_positional_diff_with_metrics(&mut emit_ctx, old, new, metrics.as_deref_mut())?;
+        run_positional_diff_with_metrics(
+            &mut differ.emit_ctx,
+            old,
+            new,
+            differ.metrics.as_deref_mut(),
+        )?;
         #[cfg(not(feature = "perf-metrics"))]
-        run_positional_diff_with_metrics(&mut emit_ctx, old, new)?;
+        run_positional_diff_with_metrics(&mut differ.emit_ctx, old, new)?;
     }
 
     #[cfg(feature = "perf-metrics")]
-    if let Some(m) = metrics.as_mut() {
+    if let Some(m) = differ.metrics.as_mut() {
         m.end_phase(Phase::Alignment);
     }
 
@@ -8269,9 +8449,9 @@ pub fn parse_formula(formula: &str) -> Result<FormulaExpr, FormulaParseError> {
 }
 
 #[derive(Clone, Copy)]
-#[allow(dead_code)]
 pub(crate) enum ShiftMode {
     RelativeOnly,
+    #[cfg(any(test, feature = "dev-apis"))]
     All,
 }
 
@@ -8458,6 +8638,7 @@ fn shift_row_ref(r: RowRef, delta: i32, mode: ShiftMode) -> RowRef {
         RowRef::Relative(n) => RowRef::Relative(shift_u32(n, delta)),
         RowRef::Absolute(n) => match mode {
             ShiftMode::RelativeOnly => RowRef::Absolute(n),
+            #[cfg(any(test, feature = "dev-apis"))]
             ShiftMode::All => RowRef::Absolute(shift_u32(n, delta)),
         },
         RowRef::Offset(n) => RowRef::Offset(n),
@@ -8469,6 +8650,7 @@ fn shift_col_ref(c: ColRef, delta: i32, mode: ShiftMode) -> ColRef {
         ColRef::Relative(n) => ColRef::Relative(shift_u32(n, delta)),
         ColRef::Absolute(n) => match mode {
             ShiftMode::RelativeOnly => ColRef::Absolute(n),
+            #[cfg(any(test, feature = "dev-apis"))]
             ShiftMode::All => ColRef::Absolute(shift_u32(n, delta)),
         },
         ColRef::Offset(n) => ColRef::Offset(n),
@@ -10328,12 +10510,15 @@ fn to_u16(value: u32) -> u16 {
 
 use std::hash::{Hash, Hasher};
 use xxhash_rust::xxh3::Xxh3;
+#[cfg(any(test, feature = "dev-apis"))]
 use xxhash_rust::xxh64::Xxh64;
 
-use crate::workbook::{CellContent, CellValue, ColSignature, RowSignature};
+use crate::workbook::{CellContent, CellValue};
+#[cfg(any(test, feature = "dev-apis"))]
+use crate::workbook::{ColSignature, RowSignature};
 
-#[allow(dead_code)]
 pub(crate) const XXH64_SEED: u64 = 0;
+#[cfg(any(test, feature = "dev-apis"))]
 const HASH_MIX_CONSTANT: u64 = 0x9e3779b97f4a7c15;
 const CANONICAL_NAN_BITS: u64 = 0x7FF8_0000_0000_0000;
 
@@ -10377,7 +10562,7 @@ pub(crate) fn hash_cell_value<H: Hasher>(value: &Option<CellValue>, state: &mut 
     }
 }
 
-#[allow(dead_code)]
+#[cfg(any(test, feature = "dev-apis"))]
 pub(crate) fn hash_cell_content(cell: &CellContent) -> u64 {
     let mut hasher = Xxh64::new(XXH64_SEED);
     hash_cell_value(&cell.value, &mut hasher);
@@ -10385,7 +10570,7 @@ pub(crate) fn hash_cell_content(cell: &CellContent) -> u64 {
     hasher.finish()
 }
 
-#[allow(dead_code)]
+#[cfg(any(test, feature = "dev-apis"))]
 pub(crate) fn hash_cell_content_128(cell: &CellContent) -> u128 {
     let mut hasher = Xxh3::new();
     hash_cell_value(&cell.value, &mut hasher);
@@ -10402,6 +10587,7 @@ pub(crate) fn hash_row_content_128(cells: &[(u32, &CellContent)]) -> u128 {
     hasher.digest128()
 }
 
+#[cfg(any(test, feature = "dev-apis"))]
 pub(crate) fn hash_col_content_128(cells: &[&CellContent]) -> u128 {
     let mut hasher = Xxh3::new();
     for cell in cells.iter() {
@@ -10435,27 +10621,27 @@ pub(crate) fn hash_col_content_unordered_128(cells: &[&CellContent]) -> u128 {
     combined.digest128()
 }
 
-#[allow(dead_code)]
+#[cfg(any(test, feature = "dev-apis"))]
 pub(crate) fn mix_hash(hash: u64) -> u64 {
     hash.rotate_left(13) ^ HASH_MIX_CONSTANT
 }
 
-#[allow(dead_code)]
+#[cfg(any(test, feature = "dev-apis"))]
 pub(crate) fn mix_hash_128(hash: u128) -> u128 {
     hash.rotate_left(47) ^ (HASH_MIX_CONSTANT as u128)
 }
 
-#[allow(dead_code)]
+#[cfg(any(test, feature = "dev-apis"))]
 pub(crate) fn combine_hashes(current: u64, contribution: u64) -> u64 {
     current.wrapping_add(mix_hash(contribution))
 }
 
-#[allow(dead_code)]
+#[cfg(any(test, feature = "dev-apis"))]
 pub(crate) fn combine_hashes_128(current: u128, contribution: u128) -> u128 {
     current.wrapping_add(mix_hash_128(contribution))
 }
 
-#[allow(dead_code)]
+#[cfg(any(test, feature = "dev-apis"))]
 pub(crate) fn compute_row_signature<'a>(
     cells: impl Iterator<Item = ((u32, u32), &'a CellContent)>,
     row: u32,
@@ -10469,7 +10655,7 @@ pub(crate) fn compute_row_signature<'a>(
     RowSignature { hash }
 }
 
-#[allow(dead_code)]
+#[cfg(any(test, feature = "dev-apis"))]
 pub(crate) fn compute_col_signature<'a>(
     cells: impl Iterator<Item = ((u32, u32), &'a CellContent)>,
     col: u32,
@@ -11559,7 +11745,7 @@ use crate::m_ast::{MModuleAst, canonicalize_m_ast, parse_m_expression};
 use crate::string_pool::{StringId, StringPool};
 
 #[deprecated(note = "use WorkbookPackage::diff instead")]
-#[allow(dead_code)]
+#[cfg(any(test, feature = "dev-apis"))]
 pub fn diff_m_queries(
     old_queries: &[Query],
     new_queries: &[Query],
@@ -12528,6 +12714,28 @@ impl DiffMetrics {
     pub fn add_cells_compared(&mut self, count: u64) {
         self.cells_compared = self.cells_compared.saturating_add(count);
     }
+
+    pub fn phase_guard(&mut self, phase: Phase) -> PhaseGuard<'_> {
+        PhaseGuard::new(self, phase)
+    }
+}
+
+pub struct PhaseGuard<'a> {
+    metrics: &'a mut DiffMetrics,
+    phase: Phase,
+}
+
+impl<'a> PhaseGuard<'a> {
+    pub fn new(metrics: &'a mut DiffMetrics, phase: Phase) -> Self {
+        metrics.start_phase(phase);
+        Self { metrics, phase }
+    }
+}
+
+impl Drop for PhaseGuard<'_> {
+    fn drop(&mut self) {
+        self.metrics.end_phase(self.phase);
+    }
 }
 
 ```
@@ -13171,9 +13379,7 @@ pub struct RegionMask {
     excluded_rows: HashSet<u32>,
     excluded_cols: HashSet<u32>,
     excluded_rects: Vec<RectMask>,
-    #[allow(dead_code)]
     nrows: u32,
-    #[allow(dead_code)]
     ncols: u32,
     row_shift_min: Option<u32>,
     row_shift_max: Option<u32>,
@@ -13181,7 +13387,6 @@ pub struct RegionMask {
     col_shift_max: Option<u32>,
 }
 
-#[allow(dead_code)]
 impl RegionMask {
     pub fn all_active(nrows: u32, ncols: u32) -> Self {
         Self {
@@ -13223,6 +13428,7 @@ impl RegionMask {
         self.col_shift_max = Some(self.col_shift_max.map_or(end, |m| m.max(end)));
     }
 
+    #[cfg(any(test, feature = "dev-apis"))]
     pub fn exclude_rect(&mut self, row_start: u32, row_count: u32, col_start: u32, col_count: u32) {
         self.exclude_rows(row_start, row_count);
         self.exclude_cols(col_start, col_count);
@@ -13302,6 +13508,7 @@ impl RegionMask {
         self.active_row_count() > 0 && self.active_col_count() > 0
     }
 
+    #[cfg(any(test, feature = "dev-apis"))]
     pub fn rows_overlap_excluded(&self, start: u32, count: u32) -> bool {
         for row in start..start.saturating_add(count) {
             if self.excluded_rows.contains(&row) {
@@ -13311,6 +13518,7 @@ impl RegionMask {
         false
     }
 
+    #[cfg(any(test, feature = "dev-apis"))]
     pub fn cols_overlap_excluded(&self, start: u32, count: u32) -> bool {
         for col in start..start.saturating_add(count) {
             if self.excluded_cols.contains(&col) {
@@ -13320,6 +13528,7 @@ impl RegionMask {
         false
     }
 
+    #[cfg(any(test, feature = "dev-apis"))]
     pub fn rect_overlaps_excluded(
         &self,
         row_start: u32,
@@ -13331,6 +13540,7 @@ impl RegionMask {
             || self.cols_overlap_excluded(col_start, col_count)
     }
 
+    #[cfg(any(test, feature = "dev-apis"))]
     pub fn is_row_in_shift_zone(&self, row: u32) -> bool {
         match (self.row_shift_min, self.row_shift_max) {
             (Some(min), Some(max)) => row >= min && row <= max,
@@ -13338,6 +13548,7 @@ impl RegionMask {
         }
     }
 
+    #[cfg(any(test, feature = "dev-apis"))]
     pub fn is_col_in_shift_zone(&self, col: u32) -> bool {
         match (self.col_shift_min, self.col_shift_max) {
             (Some(min), Some(max)) => col >= min && col <= max,
@@ -13506,8 +13717,8 @@ mod tests {
 //! - AMR returns `None` (fallback to `align_row_changes`)
 //! - Explicit move detection in masked regions
 //!
-//! Functions marked `#[allow(dead_code)]` are retained for testing but not
-//! called from production code paths.
+//! Functions marked `#[cfg(any(test, feature = "dev-apis"))]` are retained for
+//! testing but not called from production code paths.
 
 use std::collections::HashSet;
 
@@ -13814,7 +14025,7 @@ pub(crate) fn align_row_changes_from_views(
     align_rows_internal(old_view, new_view, true, config)
 }
 
-#[allow(dead_code)]
+#[cfg(any(test, feature = "dev-apis"))]
 pub(crate) fn align_single_row_change(
     old: &Grid,
     new: &Grid,
@@ -15194,7 +15405,7 @@ pub struct ColSignature {
     pub hash: u128,
 }
 
-#[allow(dead_code)]
+#[cfg(any(test, feature = "dev-apis"))]
 mod signature_serde {
     use serde::de::Error as DeError;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
