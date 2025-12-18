@@ -179,91 +179,103 @@ pub fn try_diff_workbooks_streaming<S: DiffSink>(
         m
     };
 
-    let mut old_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
-    for sheet in &old.sheets {
-        let key = make_sheet_key(sheet, pool);
-        let was_unique = old_sheets.insert(key.clone(), sheet).is_none();
-        debug_assert!(
-            was_unique,
-            "duplicate sheet identity in old workbook: ({}, {:?})",
-            key.name_lower, key.kind
-        );
-    }
-
-    let mut new_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
-    for sheet in &new.sheets {
-        let key = make_sheet_key(sheet, pool);
-        let was_unique = new_sheets.insert(key.clone(), sheet).is_none();
-        debug_assert!(
-            was_unique,
-            "duplicate sheet identity in new workbook: ({}, {:?})",
-            key.name_lower, key.kind
-        );
-    }
-
-    let mut all_keys: Vec<SheetKey> = old_sheets
-        .keys()
-        .chain(new_sheets.keys())
-        .cloned()
-        .collect();
-    all_keys.sort_by(|a, b| match a.name_lower.cmp(&b.name_lower) {
-        std::cmp::Ordering::Equal => sheet_kind_order(&a.kind).cmp(&sheet_kind_order(&b.kind)),
-        other => other,
-    });
-    all_keys.dedup();
-
-    for key in all_keys {
-        match (old_sheets.get(&key), new_sheets.get(&key)) {
-            (None, Some(new_sheet)) => {
-                emit_op(
-                    sink,
-                    &mut op_count,
-                    DiffOp::SheetAdded {
-                        sheet: new_sheet.name,
-                    },
-                )?;
-            }
-            (Some(old_sheet), None) => {
-                emit_op(
-                    sink,
-                    &mut op_count,
-                    DiffOp::SheetRemoved {
-                        sheet: old_sheet.name,
-                    },
-                )?;
-            }
-            (Some(old_sheet), Some(new_sheet)) => {
-                let sheet_id: SheetId = old_sheet.name;
-                try_diff_grids(
-                    &sheet_id,
-                    &old_sheet.grid,
-                    &new_sheet.grid,
-                    config,
-                    pool,
-                    sink,
-                    &mut op_count,
-                    &mut ctx,
-                    #[cfg(feature = "perf-metrics")]
-                    Some(&mut metrics),
-                )?;
-            }
-            (None, None) => unreachable!(),
+    let result: Result<(), DiffError> = (|| {
+        let mut old_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
+        for sheet in &old.sheets {
+            let key = make_sheet_key(sheet, pool);
+            let was_unique = old_sheets.insert(key.clone(), sheet).is_none();
+            debug_assert!(
+                was_unique,
+                "duplicate sheet identity in old workbook: ({}, {:?})",
+                key.name_lower, key.kind
+            );
         }
-    }
+
+        let mut new_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
+        for sheet in &new.sheets {
+            let key = make_sheet_key(sheet, pool);
+            let was_unique = new_sheets.insert(key.clone(), sheet).is_none();
+            debug_assert!(
+                was_unique,
+                "duplicate sheet identity in new workbook: ({}, {:?})",
+                key.name_lower, key.kind
+            );
+        }
+
+        let mut all_keys: Vec<SheetKey> = old_sheets
+            .keys()
+            .chain(new_sheets.keys())
+            .cloned()
+            .collect();
+        all_keys.sort_by(|a, b| match a.name_lower.cmp(&b.name_lower) {
+            std::cmp::Ordering::Equal => sheet_kind_order(&a.kind).cmp(&sheet_kind_order(&b.kind)),
+            other => other,
+        });
+        all_keys.dedup();
+
+        for key in all_keys {
+            match (old_sheets.get(&key), new_sheets.get(&key)) {
+                (None, Some(new_sheet)) => {
+                    emit_op(
+                        sink,
+                        &mut op_count,
+                        DiffOp::SheetAdded {
+                            sheet: new_sheet.name,
+                        },
+                    )?;
+                }
+                (Some(old_sheet), None) => {
+                    emit_op(
+                        sink,
+                        &mut op_count,
+                        DiffOp::SheetRemoved {
+                            sheet: old_sheet.name,
+                        },
+                    )?;
+                }
+                (Some(old_sheet), Some(new_sheet)) => {
+                    let sheet_id: SheetId = old_sheet.name;
+                    try_diff_grids(
+                        &sheet_id,
+                        &old_sheet.grid,
+                        &new_sheet.grid,
+                        config,
+                        pool,
+                        sink,
+                        &mut op_count,
+                        &mut ctx,
+                        #[cfg(feature = "perf-metrics")]
+                        Some(&mut metrics),
+                    )?;
+                }
+                (None, None) => unreachable!(),
+            }
+        }
+
+        Ok(())
+    })();
 
     #[cfg(feature = "perf-metrics")]
     {
         metrics.end_phase(Phase::Total);
     }
-    sink.finish()?;
-    let complete = ctx.warnings.is_empty();
-    Ok(DiffSummary {
-        complete,
-        warnings: ctx.warnings,
-        op_count,
-        #[cfg(feature = "perf-metrics")]
-        metrics: Some(metrics),
-    })
+
+    let finish = sink.finish();
+
+    match (result, finish) {
+        (Ok(()), Ok(())) => {
+            let complete = ctx.warnings.is_empty();
+            Ok(DiffSummary {
+                complete,
+                warnings: ctx.warnings,
+                op_count,
+                #[cfg(feature = "perf-metrics")]
+                metrics: Some(metrics),
+            })
+        }
+        (Err(e), _) => Err(e),
+        (Ok(()), Err(e)) => Err(e),
+    }
 }
 
 pub fn diff_grids_database_mode(
@@ -301,14 +313,56 @@ fn diff_grids_database_mode_streaming<S: DiffSink>(
     sink: &mut S,
     op_count: &mut usize,
 ) -> Result<DiffSummary, DiffError> {
+    let sheet_id: SheetId = pool.intern(DATABASE_MODE_SHEET_ID);
+    sink.begin(pool)?;
+
+    let mut warnings = Vec::new();
     let mut formula_cache = FormulaParseCache::default();
-    let spec = KeyColumnSpec::new(key_columns.to_vec());
-    let alignment = match diff_table_by_key(old, new, key_columns) {
-        Ok(alignment) => alignment,
-        Err(_) => {
-            let sheet_id: SheetId = pool.intern(DATABASE_MODE_SHEET_ID);
-            sink.begin(pool)?;
-            let mut ctx = DiffContext::default();
+
+    let result: Result<(), DiffError> = match diff_table_by_key(old, new, key_columns) {
+        Ok(alignment) => {
+            {
+                let mut ctx = EmitCtx {
+                    sheet_id: &sheet_id,
+                    pool,
+                    config,
+                    cache: &mut formula_cache,
+                    sink,
+                    op_count,
+                };
+
+                for row_a in &alignment.left_only_rows {
+                    ctx.emit(DiffOp::row_removed(sheet_id, *row_a, None))?;
+                }
+                for row_b in &alignment.right_only_rows {
+                    ctx.emit(DiffOp::row_added(sheet_id, *row_b, None))?;
+                }
+
+                let spec = KeyColumnSpec::new(key_columns.to_vec());
+                let max_cols = old.ncols.max(new.ncols);
+
+                for (row_a, row_b) in &alignment.matched_rows {
+                    for col in 0..max_cols {
+                        if spec.is_key_column(col) {
+                            continue;
+                        }
+                        let old_cell = old.get(*row_a, col);
+                        let new_cell = new.get(*row_b, col);
+                        if cells_content_equal(old_cell, new_cell) {
+                            continue;
+                        }
+
+                        let addr = CellAddress::from_indices(*row_b, col);
+                        let row_shift = *row_b as i32 - *row_a as i32;
+                        emit_cell_edit(&mut ctx, addr, old_cell, new_cell, row_shift, 0)?;
+                    }
+                }
+            }
+            Ok(())
+        }
+        Err(err) => {
+            warnings.push(format!("Key alignment failed: {:?}", err));
+            let mut diff_ctx = DiffContext::default();
             try_diff_grids(
                 &sheet_id,
                 old,
@@ -317,81 +371,28 @@ fn diff_grids_database_mode_streaming<S: DiffSink>(
                 pool,
                 sink,
                 op_count,
-                &mut ctx,
+                &mut diff_ctx,
                 #[cfg(feature = "perf-metrics")]
                 None,
             )?;
-            sink.finish()?;
-            let complete = ctx.warnings.is_empty();
-            return Ok(DiffSummary {
-                complete,
-                warnings: ctx.warnings,
-                op_count: *op_count,
-                #[cfg(feature = "perf-metrics")]
-                metrics: None,
-            });
+            warnings.extend(diff_ctx.warnings);
+            Ok(())
         }
     };
 
-    let sheet_id: SheetId = pool.intern(DATABASE_MODE_SHEET_ID);
-    sink.begin(pool)?;
-    let max_cols = old.ncols.max(new.ncols);
+    let finish = sink.finish();
 
-    for row_idx in &alignment.left_only_rows {
-        emit_op(
-            sink,
-            op_count,
-            DiffOp::row_removed(sheet_id, *row_idx, None),
-        )?;
+    match (result, finish) {
+        (Ok(()), Ok(())) => Ok(DiffSummary {
+            complete: warnings.is_empty(),
+            warnings,
+            op_count: *op_count,
+            #[cfg(feature = "perf-metrics")]
+            metrics: None,
+        }),
+        (Err(e), _) => Err(e),
+        (Ok(()), Err(e)) => Err(e),
     }
-
-    for row_idx in &alignment.right_only_rows {
-        emit_op(sink, op_count, DiffOp::row_added(sheet_id, *row_idx, None))?;
-    }
-
-    for (row_a, row_b) in &alignment.matched_rows {
-        for col in 0..max_cols {
-            if spec.is_key_column(col) {
-                continue;
-            }
-
-            let old_cell = old.get(*row_a, col);
-            let new_cell = new.get(*row_b, col);
-
-            if cells_content_equal(old_cell, new_cell) {
-                continue;
-            }
-
-            let addr = CellAddress::from_indices(*row_b, col);
-            let from = snapshot_with_addr(old_cell, addr);
-            let to = snapshot_with_addr(new_cell, addr);
-
-            let formula_diff = compute_formula_diff(
-                pool,
-                &mut formula_cache,
-                old_cell,
-                new_cell,
-                *row_b as i32 - *row_a as i32,
-                0,
-                config,
-            );
-
-            emit_op(
-                sink,
-                op_count,
-                DiffOp::cell_edited(sheet_id, addr, from, to, formula_diff),
-            )?;
-        }
-    }
-
-    sink.finish()?;
-    Ok(DiffSummary {
-        complete: true,
-        warnings: Vec::new(),
-        op_count: *op_count,
-        #[cfg(feature = "perf-metrics")]
-        metrics: None,
-    })
 }
 
 fn try_diff_grids<S: DiffSink>(
@@ -703,119 +704,39 @@ fn diff_grids_core<S: DiffSink>(
         && old.ncols.max(new.ncols) <= config.max_move_detection_cols;
     let mut iteration = 0;
 
-    if move_detection_enabled {
-        loop {
-            if iteration >= config.max_move_iterations {
-                break;
-            }
-
-            if !old_mask.has_active_cells() || !new_mask.has_active_cells() {
-                break;
-            }
-
-            let mut found_move = false;
-
-            if let Some(mv) =
-                detect_exact_rect_block_move_masked(old, new, &old_mask, &new_mask, config)
-            {
-                emit_rect_block_move(&mut emit_ctx, mv)?;
-                #[cfg(feature = "perf-metrics")]
-                if let Some(m) = metrics.as_mut() {
-                    m.moves_detected = m.moves_detected.saturating_add(1);
-                }
-                old_mask.exclude_rect_cells(
-                    mv.src_start_row,
-                    mv.src_row_count,
-                    mv.src_start_col,
-                    mv.src_col_count,
-                );
-                new_mask.exclude_rect_cells(
-                    mv.dst_start_row,
-                    mv.src_row_count,
-                    mv.dst_start_col,
-                    mv.src_col_count,
-                );
-                old_mask.exclude_rect_cells(
-                    mv.dst_start_row,
-                    mv.src_row_count,
-                    mv.dst_start_col,
-                    mv.src_col_count,
-                );
-                new_mask.exclude_rect_cells(
-                    mv.src_start_row,
-                    mv.src_row_count,
-                    mv.src_start_col,
-                    mv.src_col_count,
-                );
-                iteration += 1;
-                found_move = true;
-            }
-
-            if !found_move
-                && let Some(mv) =
-                    detect_exact_row_block_move_masked(old, new, &old_mask, &new_mask, config)
-            {
-                emit_row_block_move(&mut emit_ctx, mv)?;
-                #[cfg(feature = "perf-metrics")]
-                if let Some(m) = metrics.as_mut() {
-                    m.moves_detected = m.moves_detected.saturating_add(1);
-                }
-                old_mask.exclude_rows(mv.src_start_row, mv.row_count);
-                new_mask.exclude_rows(mv.dst_start_row, mv.row_count);
-                iteration += 1;
-                found_move = true;
-            }
-
-            if !found_move
-                && let Some(mv) =
-                    detect_exact_column_block_move_masked(old, new, &old_mask, &new_mask, config)
-            {
-                emit_column_block_move(&mut emit_ctx, mv)?;
-                #[cfg(feature = "perf-metrics")]
-                if let Some(m) = metrics.as_mut() {
-                    m.moves_detected = m.moves_detected.saturating_add(1);
-                }
-                old_mask.exclude_cols(mv.src_start_col, mv.col_count);
-                new_mask.exclude_cols(mv.dst_start_col, mv.col_count);
-                iteration += 1;
-                found_move = true;
-            }
-
-            if !found_move
-                && config.enable_fuzzy_moves
-                && let Some(mv) =
-                    detect_fuzzy_row_block_move_masked(old, new, &old_mask, &new_mask, config)
-            {
-                emit_row_block_move(&mut emit_ctx, mv)?;
-                emit_moved_row_block_edits(&mut emit_ctx, &old_view, &new_view, mv)?;
-                #[cfg(feature = "perf-metrics")]
-                if let Some(m) = metrics.as_mut() {
-                    m.moves_detected = m.moves_detected.saturating_add(1);
-                }
-                old_mask.exclude_rows(mv.src_start_row, mv.row_count);
-                new_mask.exclude_rows(mv.dst_start_row, mv.row_count);
-                iteration += 1;
-                found_move = true;
-            }
-
-            if !found_move {
-                break;
-            }
-
-            if old.nrows != new.nrows || old.ncols != new.ncols {
-                break;
-            }
+    while move_detection_enabled && iteration < config.max_move_iterations {
+        if !old_mask.has_active_cells() || !new_mask.has_active_cells() {
+            break;
         }
+
+        let Some(mv) = detect_one_move(old, new, &old_mask, &new_mask, config) else {
+            break;
+        };
+
+        apply_move(
+            mv,
+            &mut emit_ctx,
+            &old_view,
+            &new_view,
+            &mut old_mask,
+            &mut new_mask,
+        )?;
 
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
-            m.end_phase(Phase::MoveDetection);
+            m.moves_detected = m.moves_detected.saturating_add(1);
         }
-    } else {
-        #[cfg(feature = "perf-metrics")]
-        if let Some(m) = metrics.as_mut() {
-            m.end_phase(Phase::MoveDetection);
+
+        iteration += 1;
+
+        if old.nrows != new.nrows || old.ncols != new.ncols {
+            break;
         }
+    }
+
+    #[cfg(feature = "perf-metrics")]
+    if let Some(m) = metrics.as_mut() {
+        m.end_phase(Phase::MoveDetection);
     }
 
     if old_mask.has_exclusions() || new_mask.has_exclusions() {
@@ -1114,6 +1035,140 @@ fn align_indices_by_signature<T: Copy + Eq>(
     }
 }
 
+#[derive(Debug)]
+struct GridProjection {
+    grid: Grid,
+    row_map: Vec<u32>,
+    col_map: Vec<u32>,
+}
+
+impl GridProjection {
+    #[inline]
+    fn map_row(&self, local: u32) -> Option<u32> {
+        self.row_map.get(local as usize).copied()
+    }
+    #[inline]
+    fn map_col(&self, local: u32) -> Option<u32> {
+        self.col_map.get(local as usize).copied()
+    }
+}
+
+#[inline]
+fn apply_row_move_exclusions(
+    old_mask: &mut RegionMask,
+    new_mask: &mut RegionMask,
+    mv: RowBlockMove,
+) {
+    old_mask.exclude_rows(mv.src_start_row, mv.row_count);
+    new_mask.exclude_rows(mv.dst_start_row, mv.row_count);
+}
+
+#[inline]
+fn apply_col_move_exclusions(
+    old_mask: &mut RegionMask,
+    new_mask: &mut RegionMask,
+    mv: ColumnBlockMove,
+) {
+    old_mask.exclude_cols(mv.src_start_col, mv.col_count);
+    new_mask.exclude_cols(mv.dst_start_col, mv.col_count);
+}
+
+#[inline]
+fn apply_rect_move_exclusions(
+    old_mask: &mut RegionMask,
+    new_mask: &mut RegionMask,
+    mv: RectBlockMove,
+) {
+    old_mask.exclude_rect_cells(
+        mv.src_start_row,
+        mv.src_row_count,
+        mv.src_start_col,
+        mv.src_col_count,
+    );
+    old_mask.exclude_rect_cells(
+        mv.dst_start_row,
+        mv.src_row_count,
+        mv.dst_start_col,
+        mv.src_col_count,
+    );
+    new_mask.exclude_rect_cells(
+        mv.src_start_row,
+        mv.src_row_count,
+        mv.src_start_col,
+        mv.src_col_count,
+    );
+    new_mask.exclude_rect_cells(
+        mv.dst_start_row,
+        mv.src_row_count,
+        mv.dst_start_col,
+        mv.src_col_count,
+    );
+}
+
+enum DetectedMove {
+    Rect(RectBlockMove),
+    Row(RowBlockMove),
+    Col(ColumnBlockMove),
+    FuzzyRow(RowBlockMove),
+}
+
+fn detect_one_move(
+    old: &Grid,
+    new: &Grid,
+    old_mask: &RegionMask,
+    new_mask: &RegionMask,
+    config: &DiffConfig,
+) -> Option<DetectedMove> {
+    detect_exact_rect_block_move_masked(old, new, old_mask, new_mask, config)
+        .map(DetectedMove::Rect)
+        .or_else(|| {
+            detect_exact_row_block_move_masked(old, new, old_mask, new_mask, config)
+                .map(DetectedMove::Row)
+        })
+        .or_else(|| {
+            detect_exact_column_block_move_masked(old, new, old_mask, new_mask, config)
+                .map(DetectedMove::Col)
+        })
+        .or_else(|| {
+            if config.enable_fuzzy_moves {
+                detect_fuzzy_row_block_move_masked(old, new, old_mask, new_mask, config)
+                    .map(DetectedMove::FuzzyRow)
+            } else {
+                None
+            }
+        })
+}
+
+fn apply_move<S: DiffSink>(
+    mv: DetectedMove,
+    ctx: &mut EmitCtx<'_, S>,
+    old_view: &GridView,
+    new_view: &GridView,
+    old_mask: &mut RegionMask,
+    new_mask: &mut RegionMask,
+) -> Result<(), DiffError> {
+    match mv {
+        DetectedMove::Rect(mv) => {
+            emit_rect_block_move(ctx, mv)?;
+            apply_rect_move_exclusions(old_mask, new_mask, mv);
+        }
+        DetectedMove::Row(mv) => {
+            emit_row_block_move(ctx, mv)?;
+            apply_row_move_exclusions(old_mask, new_mask, mv);
+        }
+        DetectedMove::Col(mv) => {
+            emit_column_block_move(ctx, mv)?;
+            apply_col_move_exclusions(old_mask, new_mask, mv);
+        }
+        DetectedMove::FuzzyRow(mv) => {
+            emit_row_block_move(ctx, mv)?;
+            emit_moved_row_block_edits(ctx, old_view, new_view, mv)?;
+            apply_row_move_exclusions(old_mask, new_mask, mv);
+        }
+    }
+    Ok(())
+}
+
 fn inject_moves_from_insert_delete(
     old: &Grid,
     new: &Grid,
@@ -1193,7 +1248,7 @@ fn build_projected_grid_from_maps(
     mask: &RegionMask,
     row_map: &[u32],
     col_map: &[u32],
-) -> (Grid, Vec<u32>, Vec<u32>) {
+) -> GridProjection {
     let nrows = row_map.len() as u32;
     let ncols = col_map.len() as u32;
 
@@ -1223,10 +1278,14 @@ fn build_projected_grid_from_maps(
         projected.insert_cell(new_row, new_col, cell.value.clone(), cell.formula);
     }
 
-    (projected, row_map.to_vec(), col_map.to_vec())
+    GridProjection {
+        grid: projected,
+        row_map: row_map.to_vec(),
+        col_map: col_map.to_vec(),
+    }
 }
 
-fn build_masked_grid(source: &Grid, mask: &RegionMask) -> (Grid, Vec<u32>, Vec<u32>) {
+fn build_masked_grid(source: &Grid, mask: &RegionMask) -> GridProjection {
     let row_map: Vec<u32> = mask.active_rows().collect();
     let col_map: Vec<u32> = mask.active_cols().collect();
 
@@ -1260,7 +1319,11 @@ fn build_masked_grid(source: &Grid, mask: &RegionMask) -> (Grid, Vec<u32>, Vec<u
         projected.insert_cell(new_row, new_col, cell.value.clone(), cell.formula);
     }
 
-    (projected, row_map, col_map)
+    GridProjection {
+        grid: projected,
+        row_map,
+        col_map,
+    }
 }
 
 fn detect_exact_row_block_move_masked(
@@ -1278,16 +1341,16 @@ fn detect_exact_row_block_move_masked(
         return detect_exact_row_block_move(old, new, config);
     }
 
-    let (old_proj, old_rows, _) = build_masked_grid(old, old_mask);
-    let (new_proj, new_rows, _) = build_masked_grid(new, new_mask);
+    let old_p = build_masked_grid(old, old_mask);
+    let new_p = build_masked_grid(new, new_mask);
 
-    if old_proj.nrows != new_proj.nrows || old_proj.ncols != new_proj.ncols {
+    if old_p.grid.nrows != new_p.grid.nrows || old_p.grid.ncols != new_p.grid.ncols {
         return None;
     }
 
-    let mv_local = detect_exact_row_block_move(&old_proj, &new_proj, config)?;
-    let src_start_row = *old_rows.get(mv_local.src_start_row as usize)?;
-    let dst_start_row = *new_rows.get(mv_local.dst_start_row as usize)?;
+    let mv_local = detect_exact_row_block_move(&old_p.grid, &new_p.grid, config)?;
+    let src_start_row = old_p.map_row(mv_local.src_start_row)?;
+    let dst_start_row = new_p.map_row(mv_local.dst_start_row)?;
 
     Some(RowBlockMove {
         src_start_row,
@@ -1311,16 +1374,16 @@ fn detect_exact_column_block_move_masked(
         return detect_exact_column_block_move(old, new, config);
     }
 
-    let (old_proj, _, old_cols) = build_masked_grid(old, old_mask);
-    let (new_proj, _, new_cols) = build_masked_grid(new, new_mask);
+    let old_p = build_masked_grid(old, old_mask);
+    let new_p = build_masked_grid(new, new_mask);
 
-    if old_proj.nrows != new_proj.nrows || old_proj.ncols != new_proj.ncols {
+    if old_p.grid.nrows != new_p.grid.nrows || old_p.grid.ncols != new_p.grid.ncols {
         return None;
     }
 
-    let mv_local = detect_exact_column_block_move(&old_proj, &new_proj, config)?;
-    let src_start_col = *old_cols.get(mv_local.src_start_col as usize)?;
-    let dst_start_col = *new_cols.get(mv_local.dst_start_col as usize)?;
+    let mv_local = detect_exact_column_block_move(&old_p.grid, &new_p.grid, config)?;
+    let src_start_col = old_p.map_col(mv_local.src_start_col)?;
+    let dst_start_col = new_p.map_col(mv_local.dst_start_col)?;
 
     Some(ColumnBlockMove {
         src_start_col,
@@ -1340,8 +1403,6 @@ fn detect_exact_rect_block_move_masked(
         return None;
     }
 
-    // Fast path: allow the strict detector to short-circuit when it succeeds, but
-    // fall back to the masked search if it fails (e.g., when extra diffs exist).
     if !old_mask.has_exclusions()
         && !new_mask.has_exclusions()
         && old.nrows == new.nrows
@@ -1363,40 +1424,31 @@ fn detect_exact_rect_block_move_masked(
         |c| col_signature_at(old, c),
         |c| col_signature_at(new, c),
     )?;
-    let (old_proj, old_rows, old_cols) =
-        build_projected_grid_from_maps(old, old_mask, &aligned_rows.0, &aligned_cols.0);
-    let (new_proj, new_rows, new_cols) =
-        build_projected_grid_from_maps(new, new_mask, &aligned_rows.1, &aligned_cols.1);
+    let old_p = build_projected_grid_from_maps(old, old_mask, &aligned_rows.0, &aligned_cols.0);
+    let new_p = build_projected_grid_from_maps(new, new_mask, &aligned_rows.1, &aligned_cols.1);
 
     let map_move = |mv_local: RectBlockMove,
-                    row_map_old: &[u32],
-                    row_map_new: &[u32],
-                    col_map_old: &[u32],
-                    col_map_new: &[u32]|
+                    old_proj: &GridProjection,
+                    new_proj: &GridProjection|
      -> Option<RectBlockMove> {
-        let src_start_row = *row_map_old.get(mv_local.src_start_row as usize)?;
-        let dst_start_row = *row_map_new.get(mv_local.dst_start_row as usize)?;
-        let src_start_col = *col_map_old.get(mv_local.src_start_col as usize)?;
-        let dst_start_col = *col_map_new.get(mv_local.dst_start_col as usize)?;
-
         Some(RectBlockMove {
-            src_start_row,
-            dst_start_row,
-            src_start_col,
-            dst_start_col,
+            src_start_row: old_proj.map_row(mv_local.src_start_row)?,
+            dst_start_row: new_proj.map_row(mv_local.dst_start_row)?,
+            src_start_col: old_proj.map_col(mv_local.src_start_col)?,
+            dst_start_col: new_proj.map_col(mv_local.dst_start_col)?,
             src_row_count: mv_local.src_row_count,
             src_col_count: mv_local.src_col_count,
             block_hash: mv_local.block_hash,
         })
     };
 
-    if let Some(mv_local) = detect_exact_rect_block_move(&old_proj, &new_proj, config)
-        && let Some(mapped) = map_move(mv_local, &old_rows, &new_rows, &old_cols, &new_cols)
+    if let Some(mv_local) = detect_exact_rect_block_move(&old_p.grid, &new_p.grid, config)
+        && let Some(mapped) = map_move(mv_local, &old_p, &new_p)
     {
         return Some(mapped);
     }
 
-    let diff_positions = collect_differences_in_grid(&old_proj, &new_proj);
+    let diff_positions = collect_differences_in_grid(&old_p.grid, &new_p.grid);
     if diff_positions.is_empty() {
         return None;
     }
@@ -1426,8 +1478,8 @@ fn detect_exact_rect_block_move_masked(
                 let dst_col = dst_cols.0 + dc;
 
                 if !cells_content_equal(
-                    old_proj.get(src_row, src_col),
-                    new_proj.get(dst_row, dst_col),
+                    old_p.grid.get(src_row, src_col),
+                    new_p.grid.get(dst_row, dst_col),
                 ) {
                     return false;
                 }
@@ -1469,69 +1521,61 @@ fn detect_exact_rect_block_move_masked(
             }
 
             for (col_a, col_b) in col_pairs {
-                let mut scoped_old_mask = RegionMask::all_active(old_proj.nrows, old_proj.ncols);
-                let mut scoped_new_mask = RegionMask::all_active(new_proj.nrows, new_proj.ncols);
+                let mut scoped_old_mask =
+                    RegionMask::all_active(old_p.grid.nrows, old_p.grid.ncols);
+                let mut scoped_new_mask =
+                    RegionMask::all_active(new_p.grid.nrows, new_p.grid.ncols);
 
-                for row in 0..old_proj.nrows {
+                for row in 0..old_p.grid.nrows {
                     if !in_range(row, row_a) && !in_range(row, row_b) {
                         scoped_old_mask.exclude_row(row);
                         scoped_new_mask.exclude_row(row);
                     }
                 }
 
-                for col in 0..old_proj.ncols {
+                for col in 0..old_p.grid.ncols {
                     if !in_range(col, col_a) && !in_range(col, col_b) {
                         scoped_old_mask.exclude_col(col);
                         scoped_new_mask.exclude_col(col);
                     }
                 }
 
-                let (old_scoped, scoped_old_rows, scoped_old_cols) =
-                    build_masked_grid(&old_proj, &scoped_old_mask);
-                let (new_scoped, scoped_new_rows, scoped_new_cols) =
-                    build_masked_grid(&new_proj, &scoped_new_mask);
+                let old_scoped = build_masked_grid(&old_p.grid, &scoped_old_mask);
+                let new_scoped = build_masked_grid(&new_p.grid, &scoped_new_mask);
 
-                if old_scoped.nrows != new_scoped.nrows || old_scoped.ncols != new_scoped.ncols {
+                if old_scoped.grid.nrows != new_scoped.grid.nrows
+                    || old_scoped.grid.ncols != new_scoped.grid.ncols
+                {
                     continue;
                 }
 
                 if let Some(candidate) =
-                    detect_exact_rect_block_move(&old_scoped, &new_scoped, config)
+                    detect_exact_rect_block_move(&old_scoped.grid, &new_scoped.grid, config)
                 {
-                    let scoped_row_map_old: Option<Vec<u32>> = scoped_old_rows
-                        .iter()
-                        .map(|idx| old_rows.get(*idx as usize).copied())
-                        .collect();
-                    let scoped_row_map_new: Option<Vec<u32>> = scoped_new_rows
-                        .iter()
-                        .map(|idx| new_rows.get(*idx as usize).copied())
-                        .collect();
-                    let scoped_col_map_old: Option<Vec<u32>> = scoped_old_cols
-                        .iter()
-                        .map(|idx| old_cols.get(*idx as usize).copied())
-                        .collect();
-                    let scoped_col_map_new: Option<Vec<u32>> = scoped_new_cols
-                        .iter()
-                        .map(|idx| new_cols.get(*idx as usize).copied())
-                        .collect();
+                    let compose_maps = |scoped_proj: &GridProjection,
+                                        outer_proj: &GridProjection|
+                     -> GridProjection {
+                        let row_map: Vec<u32> = scoped_proj
+                            .row_map
+                            .iter()
+                            .filter_map(|idx| outer_proj.map_row(*idx))
+                            .collect();
+                        let col_map: Vec<u32> = scoped_proj
+                            .col_map
+                            .iter()
+                            .filter_map(|idx| outer_proj.map_col(*idx))
+                            .collect();
+                        GridProjection {
+                            grid: Grid::new(0, 0),
+                            row_map,
+                            col_map,
+                        }
+                    };
 
-                    if let (
-                        Some(row_map_old),
-                        Some(row_map_new),
-                        Some(col_map_old),
-                        Some(col_map_new),
-                    ) = (
-                        scoped_row_map_old,
-                        scoped_row_map_new,
-                        scoped_col_map_old,
-                        scoped_col_map_new,
-                    ) && let Some(mapped) = map_move(
-                        candidate,
-                        &row_map_old,
-                        &row_map_new,
-                        &col_map_old,
-                        &col_map_new,
-                    ) {
+                    let composed_old = compose_maps(&old_scoped, &old_p);
+                    let composed_new = compose_maps(&new_scoped, &new_p);
+
+                    if let Some(mapped) = map_move(candidate, &composed_old, &composed_new) {
                         return Some(mapped);
                     }
                 }
@@ -1558,10 +1602,10 @@ fn detect_exact_rect_block_move_masked(
 
                     if rectangles_match(src_rows, src_cols, dst_rows, dst_cols) {
                         let mapped = RectBlockMove {
-                            src_start_row: *old_rows.get(src_rows.0 as usize)?,
-                            dst_start_row: *new_rows.get(dst_rows.0 as usize)?,
-                            src_start_col: *old_cols.get(src_cols.0 as usize)?,
-                            dst_start_col: *new_cols.get(dst_cols.0 as usize)?,
+                            src_start_row: old_p.map_row(src_rows.0)?,
+                            dst_start_row: new_p.map_row(dst_rows.0)?,
+                            src_start_col: old_p.map_col(src_cols.0)?,
+                            dst_start_col: new_p.map_col(dst_cols.0)?,
                             src_row_count: range_len(src_rows),
                             src_col_count: range_len(src_cols),
                             block_hash: None,
@@ -1591,16 +1635,16 @@ fn detect_fuzzy_row_block_move_masked(
         return detect_fuzzy_row_block_move(old, new, config);
     }
 
-    let (old_proj, old_rows, _) = build_masked_grid(old, old_mask);
-    let (new_proj, new_rows, _) = build_masked_grid(new, new_mask);
+    let old_p = build_masked_grid(old, old_mask);
+    let new_p = build_masked_grid(new, new_mask);
 
-    if old_proj.nrows != new_proj.nrows || old_proj.ncols != new_proj.ncols {
+    if old_p.grid.nrows != new_p.grid.nrows || old_p.grid.ncols != new_p.grid.ncols {
         return None;
     }
 
-    let mv_local = detect_fuzzy_row_block_move(&old_proj, &new_proj, config)?;
-    let src_start_row = *old_rows.get(mv_local.src_start_row as usize)?;
-    let dst_start_row = *new_rows.get(mv_local.dst_start_row as usize)?;
+    let mv_local = detect_fuzzy_row_block_move(&old_p.grid, &new_p.grid, config)?;
+    let src_start_row = old_p.map_row(mv_local.src_start_row)?;
+    let dst_start_row = new_p.map_row(mv_local.dst_start_row)?;
 
     Some(RowBlockMove {
         src_start_row,

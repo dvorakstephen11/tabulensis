@@ -4,13 +4,13 @@ use std::hash::Hash;
 use crate::config::DiffConfig;
 use crate::grid_metadata::classify_row_frequencies;
 use crate::hashing::{hash_cell_value, hash_row_content_128};
-use crate::workbook::{Cell, CellValue, Grid, RowSignature};
+use crate::workbook::{Cell, CellValue, ColSignature, Grid, RowSignature};
 use xxhash_rust::xxh3::Xxh3;
 
 pub use crate::grid_metadata::{FrequencyClass, RowMeta};
 
 pub type RowHash = RowSignature;
-pub type ColHash = u128;
+pub type ColHash = ColSignature;
 
 #[derive(Debug)]
 pub struct RowView<'a> {
@@ -129,7 +129,9 @@ impl<'a> GridView<'a> {
         let col_meta: Vec<ColMeta> = (0..ncols)
             .map(|idx| ColMeta {
                 col_idx: idx as u32,
-                hash: col_hashers[idx].digest128(),
+                hash: ColSignature {
+                    hash: col_hashers[idx].digest128(),
+                },
                 non_blank_count: to_u16(col_counts.get(idx).copied().unwrap_or(0)),
                 first_non_blank_row: col_first_non_blank
                     .get(idx)

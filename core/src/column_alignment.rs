@@ -1,7 +1,7 @@
 use crate::config::DiffConfig;
 use crate::grid_view::{ColHash, ColMeta, GridView, HashStats};
 use crate::hashing::hash_col_content_unordered_128;
-use crate::workbook::Grid;
+use crate::workbook::{ColSignature, Grid};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ColumnAlignment {
@@ -27,7 +27,9 @@ fn unordered_col_hashes(grid: &Grid) -> Vec<ColHash> {
     }
     col_cells
         .iter()
-        .map(|cells| hash_col_content_unordered_128(cells))
+        .map(|cells| ColSignature {
+            hash: hash_col_content_unordered_128(cells),
+        })
         .collect()
 }
 

@@ -1,4 +1,4 @@
-use excel_diff::{ColHash, ColMeta, FrequencyClass, HashStats, RowHash, RowMeta, RowSignature};
+use excel_diff::{ColHash, ColMeta, ColSignature, FrequencyClass, HashStats, RowHash, RowMeta, RowSignature};
 
 fn row_meta(row_idx: u32, hash: RowHash) -> RowMeta {
     RowMeta {
@@ -118,9 +118,9 @@ fn hashstats_empty_inputs() {
 
 #[test]
 fn hashstats_from_col_meta_tracks_positions() {
-    let h1: ColHash = 10;
-    let h2: ColHash = 20;
-    let h3: ColHash = 30;
+    let h1: ColHash = ColSignature { hash: 10 };
+    let h2: ColHash = ColSignature { hash: 20 };
+    let h3: ColHash = ColSignature { hash: 30 };
 
     let cols_a = vec![col_meta(0, h1), col_meta(1, h2), col_meta(2, h2)];
     let cols_b = vec![col_meta(0, h2), col_meta(1, h3)];

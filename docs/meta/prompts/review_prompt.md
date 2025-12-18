@@ -64,6 +64,7 @@
         mod.rs
         move_extraction.rs
         runs.rs
+      alignment_types.rs
       bin/
         wasm_smoke.rs
       column_alignment.rs
@@ -308,9 +309,10 @@ resolver = "2"
 
 ```rust
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use excel_diff::config::DiffConfig;
-use excel_diff::diff_workbooks;
-use excel_diff::{CellValue, Grid, Sheet, SheetKind, Workbook, with_default_session};
+use excel_diff::{
+    CellValue, DiffConfig, DiffSession, Grid, Sheet, SheetKind, Workbook,
+    try_diff_workbooks_with_pool,
+};
 use std::time::Duration;
 
 const MAX_BENCH_TIME_SECS: u64 = 30;
@@ -373,14 +375,15 @@ fn create_sparse_grid(nrows: u32, ncols: u32, fill_percent: u32, seed: u64) -> G
     grid
 }
 
-fn single_sheet_workbook(name: &str, grid: Grid) -> Workbook {
-    with_default_session(|session| Workbook {
+fn single_sheet_workbook(session: &mut DiffSession, name: &str, grid: Grid) -> Workbook {
+    let sheet_name = session.strings.intern(name);
+    Workbook {
         sheets: vec![Sheet {
-            name: session.strings.intern(name),
+            name: sheet_name,
             kind: SheetKind::Worksheet,
             grid,
         }],
-    })
+    }
 }
 
 fn bench_identical_grids(c: &mut Criterion) {
@@ -390,15 +393,19 @@ fn bench_identical_grids(c: &mut Criterion) {
     group.sample_size(SAMPLE_SIZE);
 
     for size in [500u32, 1000, 2000, 5000].iter() {
+        let mut session = DiffSession::new();
         let grid_a = create_large_grid(*size, 50, 0);
         let grid_b = create_large_grid(*size, 50, 0);
-        let wb_a = single_sheet_workbook("Bench", grid_a);
-        let wb_b = single_sheet_workbook("Bench", grid_b);
+        let wb_a = single_sheet_workbook(&mut session, "Bench", grid_a);
+        let wb_b = single_sheet_workbook(&mut session, "Bench", grid_b);
         let config = DiffConfig::default();
 
         group.throughput(Throughput::Elements(*size as u64 * 50));
-        group.bench_with_input(BenchmarkId::new("rows", size), size, |b, _| {
-            b.iter(|| diff_workbooks(&wb_a, &wb_b, &config));
+        group.bench_with_input(BenchmarkId::new("rows", size), size, move |b, _| {
+            b.iter(|| {
+                let _ = try_diff_workbooks_with_pool(&wb_a, &wb_b, &mut session.strings, &config)
+                    .expect("diff should succeed");
+            });
         });
     }
     group.finish();
@@ -411,16 +418,20 @@ fn bench_single_cell_edit(c: &mut Criterion) {
     group.sample_size(SAMPLE_SIZE);
 
     for size in [500u32, 1000, 2000, 5000].iter() {
+        let mut session = DiffSession::new();
         let grid_a = create_large_grid(*size, 50, 0);
         let mut grid_b = create_large_grid(*size, 50, 0);
         grid_b.insert_cell(size / 2, 25, Some(CellValue::Number(999999.0)), None);
-        let wb_a = single_sheet_workbook("Bench", grid_a);
-        let wb_b = single_sheet_workbook("Bench", grid_b);
+        let wb_a = single_sheet_workbook(&mut session, "Bench", grid_a);
+        let wb_b = single_sheet_workbook(&mut session, "Bench", grid_b);
         let config = DiffConfig::default();
 
         group.throughput(Throughput::Elements(*size as u64 * 50));
-        group.bench_with_input(BenchmarkId::new("rows", size), size, |b, _| {
-            b.iter(|| diff_workbooks(&wb_a, &wb_b, &config));
+        group.bench_with_input(BenchmarkId::new("rows", size), size, move |b, _| {
+            b.iter(|| {
+                let _ = try_diff_workbooks_with_pool(&wb_a, &wb_b, &mut session.strings, &config)
+                    .expect("diff should succeed");
+            });
         });
     }
     group.finish();
@@ -433,15 +444,19 @@ fn bench_all_rows_different(c: &mut Criterion) {
     group.sample_size(SAMPLE_SIZE);
 
     for size in [500u32, 1000, 2000].iter() {
+        let mut session = DiffSession::new();
         let grid_a = create_large_grid(*size, 50, 0);
         let grid_b = create_large_grid(*size, 50, 1);
-        let wb_a = single_sheet_workbook("Bench", grid_a);
-        let wb_b = single_sheet_workbook("Bench", grid_b);
+        let wb_a = single_sheet_workbook(&mut session, "Bench", grid_a);
+        let wb_b = single_sheet_workbook(&mut session, "Bench", grid_b);
         let config = DiffConfig::default();
 
         group.throughput(Throughput::Elements(*size as u64 * 50));
-        group.bench_with_input(BenchmarkId::new("rows", size), size, |b, _| {
-            b.iter(|| diff_workbooks(&wb_a, &wb_b, &config));
+        group.bench_with_input(BenchmarkId::new("rows", size), size, move |b, _| {
+            b.iter(|| {
+                let _ = try_diff_workbooks_with_pool(&wb_a, &wb_b, &mut session.strings, &config)
+                    .expect("diff should succeed");
+            });
         });
     }
     group.finish();
@@ -454,16 +469,20 @@ fn bench_adversarial_repetitive(c: &mut Criterion) {
     group.sample_size(SAMPLE_SIZE);
 
     for size in [500u32, 1000, 2000].iter() {
+        let mut session = DiffSession::new();
         let grid_a = create_repetitive_grid(*size, 50, 100);
         let mut grid_b = create_repetitive_grid(*size, 50, 100);
         grid_b.insert_cell(size / 2, 25, Some(CellValue::Number(999999.0)), None);
-        let wb_a = single_sheet_workbook("Bench", grid_a);
-        let wb_b = single_sheet_workbook("Bench", grid_b);
+        let wb_a = single_sheet_workbook(&mut session, "Bench", grid_a);
+        let wb_b = single_sheet_workbook(&mut session, "Bench", grid_b);
         let config = DiffConfig::default();
 
         group.throughput(Throughput::Elements(*size as u64 * 50));
-        group.bench_with_input(BenchmarkId::new("rows", size), size, |b, _| {
-            b.iter(|| diff_workbooks(&wb_a, &wb_b, &config));
+        group.bench_with_input(BenchmarkId::new("rows", size), size, move |b, _| {
+            b.iter(|| {
+                let _ = try_diff_workbooks_with_pool(&wb_a, &wb_b, &mut session.strings, &config)
+                    .expect("diff should succeed");
+            });
         });
     }
     group.finish();
@@ -476,16 +495,20 @@ fn bench_sparse_grid(c: &mut Criterion) {
     group.sample_size(SAMPLE_SIZE);
 
     for size in [500u32, 1000, 2000, 5000].iter() {
+        let mut session = DiffSession::new();
         let grid_a = create_sparse_grid(*size, 100, 1, 12345);
         let mut grid_b = create_sparse_grid(*size, 100, 1, 12345);
         grid_b.insert_cell(size / 2, 50, Some(CellValue::Number(999999.0)), None);
-        let wb_a = single_sheet_workbook("Bench", grid_a);
-        let wb_b = single_sheet_workbook("Bench", grid_b);
+        let wb_a = single_sheet_workbook(&mut session, "Bench", grid_a);
+        let wb_b = single_sheet_workbook(&mut session, "Bench", grid_b);
         let config = DiffConfig::default();
 
         group.throughput(Throughput::Elements(*size as u64 * 100));
-        group.bench_with_input(BenchmarkId::new("rows", size), size, |b, _| {
-            b.iter(|| diff_workbooks(&wb_a, &wb_b, &config));
+        group.bench_with_input(BenchmarkId::new("rows", size), size, move |b, _| {
+            b.iter(|| {
+                let _ = try_diff_workbooks_with_pool(&wb_a, &wb_b, &mut session.strings, &config)
+                    .expect("diff should succeed");
+            });
         });
     }
     group.finish();
@@ -498,6 +521,7 @@ fn bench_row_insertion(c: &mut Criterion) {
     group.sample_size(SAMPLE_SIZE);
 
     for size in [500u32, 1000, 2000].iter() {
+        let mut session = DiffSession::new();
         let grid_a = create_large_grid(*size, 50, 0);
         let mut grid_b = Grid::new(size + 100, 50);
         for row in 0..(size / 2) {
@@ -528,13 +552,16 @@ fn bench_row_insertion(c: &mut Criterion) {
                 );
             }
         }
-        let wb_a = single_sheet_workbook("Bench", grid_a);
-        let wb_b = single_sheet_workbook("Bench", grid_b);
+        let wb_a = single_sheet_workbook(&mut session, "Bench", grid_a);
+        let wb_b = single_sheet_workbook(&mut session, "Bench", grid_b);
         let config = DiffConfig::default();
 
         group.throughput(Throughput::Elements(*size as u64 * 50));
-        group.bench_with_input(BenchmarkId::new("rows", size), size, |b, _| {
-            b.iter(|| diff_workbooks(&wb_a, &wb_b, &config));
+        group.bench_with_input(BenchmarkId::new("rows", size), size, move |b, _| {
+            b.iter(|| {
+                let _ = try_diff_workbooks_with_pool(&wb_a, &wb_b, &mut session.strings, &config)
+                    .expect("diff should succeed");
+            });
         });
     }
     group.finish();
@@ -1043,25 +1070,11 @@ use crate::alignment::anchor_discovery::{
 use crate::alignment::gap_strategy::{GapStrategy, select_gap_strategy};
 use crate::alignment::move_extraction::{find_block_move, moves_from_matched_pairs};
 use crate::alignment::runs::{RowRun, compress_to_runs};
+use crate::alignment_types::{RowAlignment, RowBlockMove};
 use crate::config::DiffConfig;
 use crate::grid_metadata::RowMeta;
 use crate::grid_view::GridView;
 use crate::workbook::{Grid, RowSignature};
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct RowAlignment {
-    pub matched: Vec<(u32, u32)>,
-    pub inserted: Vec<u32>,
-    pub deleted: Vec<u32>,
-    pub moves: Vec<RowBlockMove>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RowBlockMove {
-    pub src_start_row: u32,
-    pub dst_start_row: u32,
-    pub row_count: u32,
-}
 
 #[derive(Default)]
 struct GapAlignmentResult {
@@ -2117,8 +2130,8 @@ mod tests {
 
 use std::collections::HashSet;
 
-use crate::grid_metadata::{FrequencyClass, RowMeta};
 use crate::config::DiffConfig;
+use crate::grid_metadata::{FrequencyClass, RowMeta};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GapStrategy {
@@ -2281,9 +2294,11 @@ pub(crate) mod move_extraction;
 pub(crate) mod runs;
 
 #[allow(unused_imports)]
+pub(crate) use crate::alignment_types::{RowAlignment, RowBlockMove};
+#[allow(unused_imports)]
 pub(crate) use assembly::{
-    RowAlignment, RowAlignmentWithSignatures, RowBlockMove, align_rows_amr,
-    align_rows_amr_with_signatures, align_rows_amr_with_signatures_from_views,
+    RowAlignmentWithSignatures, align_rows_amr, align_rows_amr_with_signatures,
+    align_rows_amr_with_signatures_from_views,
 };
 
 ```
@@ -2319,8 +2334,8 @@ pub(crate) use assembly::{
 use std::collections::HashMap;
 
 use crate::alignment::RowBlockMove;
-use crate::grid_metadata::RowMeta;
 use crate::config::DiffConfig;
+use crate::grid_metadata::RowMeta;
 use crate::workbook::RowSignature;
 
 pub fn find_block_move(
@@ -2623,6 +2638,28 @@ mod tests {
             assert_eq!(run.count, 100, "each run should have 100 rows");
         }
     }
+}
+
+```
+
+---
+
+### File: `core\src\alignment_types.rs`
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RowAlignment {
+    pub matched: Vec<(u32, u32)>,
+    pub inserted: Vec<u32>,
+    pub deleted: Vec<u32>,
+    pub moves: Vec<RowBlockMove>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RowBlockMove {
+    pub src_start_row: u32,
+    pub dst_start_row: u32,
+    pub row_count: u32,
 }
 
 ```
@@ -5485,6 +5522,10 @@ impl DiffReport {
         self.complete = false;
     }
 
+    pub fn resolve(&self, id: StringId) -> Option<&str> {
+        self.strings.get(id.0 as usize).map(|s| s.as_str())
+    }
+
     pub fn grid_ops(&self) -> impl Iterator<Item = &DiffOp> {
         self.ops.iter().filter(|op| !op.is_m_op())
     }
@@ -5636,8 +5677,9 @@ impl DiffOp {
 //! Provides the main entry point [`diff_workbooks`] for comparing two workbooks
 //! and generating a [`DiffReport`] of all changes.
 
+use crate::alignment::align_rows_amr_with_signatures_from_views;
 use crate::alignment::move_extraction::moves_from_matched_pairs;
-use crate::alignment::{RowAlignment, RowBlockMove, align_rows_amr_with_signatures_from_views};
+use crate::alignment_types::{RowAlignment, RowBlockMove};
 use crate::column_alignment::{
     ColumnAlignment, ColumnBlockMove, align_single_column_change_from_views,
     detect_exact_column_block_move,
@@ -5800,6 +5842,8 @@ pub fn try_diff_workbooks_streaming<S: DiffSink>(
     config: &DiffConfig,
     sink: &mut S,
 ) -> Result<DiffSummary, DiffError> {
+    sink.begin(pool)?;
+
     let mut ctx = DiffContext::default();
     let mut op_count = 0usize;
     #[cfg(feature = "perf-metrics")]
@@ -5937,6 +5981,7 @@ fn diff_grids_database_mode_streaming<S: DiffSink>(
         Ok(alignment) => alignment,
         Err(_) => {
             let sheet_id: SheetId = pool.intern(DATABASE_MODE_SHEET_ID);
+            sink.begin(pool)?;
             let mut ctx = DiffContext::default();
             try_diff_grids(
                 &sheet_id,
@@ -5963,6 +6008,7 @@ fn diff_grids_database_mode_streaming<S: DiffSink>(
     };
 
     let sheet_id: SheetId = pool.intern(DATABASE_MODE_SHEET_ID);
+    sink.begin(pool)?;
     let max_cols = old.ncols.max(new.ncols);
 
     for row_idx in &alignment.left_only_rows {
@@ -7988,6 +8034,8 @@ pub enum PackageError {
     WorkbookXmlMissing,
     #[error("worksheet XML missing for sheet {sheet_name}")]
     WorksheetXmlMissing { sheet_name: String },
+    #[error("diff error: {0}")]
+    Diff(#[from] crate::diff::DiffError),
     #[error("serialization error: {0}")]
     SerializationError(String),
 }
@@ -8307,7 +8355,10 @@ fn is_commutative_function(name: &str) -> bool {
 }
 
 fn is_commutative_binary(op: BinaryOperator) -> bool {
-    matches!(op, BinaryOperator::Add | BinaryOperator::Mul | BinaryOperator::Eq | BinaryOperator::Ne)
+    matches!(
+        op,
+        BinaryOperator::Add | BinaryOperator::Mul | BinaryOperator::Eq | BinaryOperator::Ne
+    )
 }
 
 fn canonical_sort_key(e: &FormulaExpr) -> String {
@@ -8315,7 +8366,12 @@ fn canonical_sort_key(e: &FormulaExpr) -> String {
 }
 
 fn ref_sort_key(r: &CellReference) -> (i64, i64, u8, u8) {
-    (row_key(r.row), col_key(r.col), abs_key_row(r.row), abs_key_col(r.col))
+    (
+        row_key(r.row),
+        col_key(r.col),
+        abs_key_row(r.row),
+        abs_key_col(r.col),
+    )
 }
 
 fn row_key(r: RowRef) -> i64 {
@@ -8350,7 +8406,9 @@ fn abs_key_col(c: ColRef) -> u8 {
 
 fn shift_expr(e: &FormulaExpr, row_shift: i32, col_shift: i32, mode: ShiftMode) -> FormulaExpr {
     match e {
-        FormulaExpr::CellRef(r) => FormulaExpr::CellRef(shift_cell_ref(r, row_shift, col_shift, mode)),
+        FormulaExpr::CellRef(r) => {
+            FormulaExpr::CellRef(shift_cell_ref(r, row_shift, col_shift, mode))
+        }
         FormulaExpr::RangeRef(r) => {
             let mut rr = r.clone();
             rr.start = shift_cell_ref(&rr.start, row_shift, col_shift, mode);
@@ -8359,7 +8417,10 @@ fn shift_expr(e: &FormulaExpr, row_shift: i32, col_shift: i32, mode: ShiftMode) 
         }
         FormulaExpr::FunctionCall { name, args } => FormulaExpr::FunctionCall {
             name: name.clone(),
-            args: args.iter().map(|a| shift_expr(a, row_shift, col_shift, mode)).collect(),
+            args: args
+                .iter()
+                .map(|a| shift_expr(a, row_shift, col_shift, mode))
+                .collect(),
         },
         FormulaExpr::UnaryOp { op, operand } => FormulaExpr::UnaryOp {
             op: *op,
@@ -8372,14 +8433,23 @@ fn shift_expr(e: &FormulaExpr, row_shift: i32, col_shift: i32, mode: ShiftMode) 
         },
         FormulaExpr::Array(rows) => FormulaExpr::Array(
             rows.iter()
-                .map(|row| row.iter().map(|x| shift_expr(x, row_shift, col_shift, mode)).collect())
+                .map(|row| {
+                    row.iter()
+                        .map(|x| shift_expr(x, row_shift, col_shift, mode))
+                        .collect()
+                })
                 .collect(),
         ),
         _ => e.clone(),
     }
 }
 
-fn shift_cell_ref(r: &CellReference, row_shift: i32, col_shift: i32, mode: ShiftMode) -> CellReference {
+fn shift_cell_ref(
+    r: &CellReference,
+    row_shift: i32,
+    col_shift: i32,
+    mode: ShiftMode,
+) -> CellReference {
     let mut out = r.clone();
     out.row = shift_row_ref(r.row, row_shift, mode);
     out.col = shift_col_ref(r.col, col_shift, mode);
@@ -8425,7 +8495,9 @@ pub fn formulas_equivalent_modulo_shift(
     row_shift: i32,
     col_shift: i32,
 ) -> bool {
-    let a_shifted = a.shifted(row_shift, col_shift, ShiftMode::RelativeOnly).canonicalize();
+    let a_shifted = a
+        .shifted(row_shift, col_shift, ShiftMode::RelativeOnly)
+        .canonicalize();
     let b_canon = b.canonicalize();
     a_shifted == b_canon
 }
@@ -8437,7 +8509,10 @@ struct Parser<'a> {
 
 impl<'a> Parser<'a> {
     fn new(input: &'a str) -> Self {
-        Self { s: input.as_bytes(), pos: 0 }
+        Self {
+            s: input.as_bytes(),
+            pos: 0,
+        }
     }
 
     fn eof(&self) -> bool {
@@ -8461,7 +8536,10 @@ impl<'a> Parser<'a> {
     }
 
     fn err(&self, msg: &str) -> FormulaParseError {
-        FormulaParseError { pos: self.pos, message: msg.to_string() }
+        FormulaParseError {
+            pos: self.pos,
+            message: msg.to_string(),
+        }
     }
 
     fn parse_expr(&mut self, min_bp: u8) -> Result<FormulaExpr, FormulaParseError> {
@@ -8474,7 +8552,10 @@ impl<'a> Parser<'a> {
                 _ => return Err(self.err("invalid unary op")),
             };
             let rhs = self.parse_expr(90)?;
-            FormulaExpr::UnaryOp { op, operand: Box::new(rhs) }
+            FormulaExpr::UnaryOp {
+                op,
+                operand: Box::new(rhs),
+            }
         } else {
             self.parse_primary()?
         };
@@ -8484,7 +8565,10 @@ impl<'a> Parser<'a> {
 
             while matches!(self.peek(), Some(b'%')) {
                 self.bump();
-                lhs = FormulaExpr::UnaryOp { op: UnaryOperator::Percent, operand: Box::new(lhs) };
+                lhs = FormulaExpr::UnaryOp {
+                    op: UnaryOperator::Percent,
+                    operand: Box::new(lhs),
+                };
                 self.skip_ws();
             }
 
@@ -8499,7 +8583,11 @@ impl<'a> Parser<'a> {
 
             self.consume_infix_op(op)?;
             let rhs = self.parse_expr(r_bp)?;
-            lhs = FormulaExpr::BinaryOp { op, left: Box::new(lhs), right: Box::new(rhs) };
+            lhs = FormulaExpr::BinaryOp {
+                op,
+                left: Box::new(lhs),
+                right: Box::new(rhs),
+            };
         }
 
         Ok(lhs)
@@ -8581,7 +8669,9 @@ impl<'a> Parser<'a> {
                 self.parse_number()
             }
             Some(b'\'' | b'[') => self.parse_ref_or_name_with_optional_sheet(),
-            Some(b'$' | b'A'..=b'Z' | b'a'..=b'z' | b'_') => self.parse_ref_or_name_with_optional_sheet(),
+            Some(b'$' | b'A'..=b'Z' | b'a'..=b'z' | b'_') => {
+                self.parse_ref_or_name_with_optional_sheet()
+            }
             _ => Err(self.err("unexpected token")),
         }
     }
@@ -8610,7 +8700,9 @@ impl<'a> Parser<'a> {
                 let start = self.pos;
                 while let Some(b) = self.peek() {
                     if b == b'!' {
-                        let sheet = std::str::from_utf8(&self.s[start..self.pos]).unwrap().to_string();
+                        let sheet = std::str::from_utf8(&self.s[start..self.pos])
+                            .unwrap()
+                            .to_string();
                         self.bump();
                         return Ok(Some(sheet));
                     }
@@ -8639,7 +8731,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_ref_or_name(&mut self, sheet: Option<String>) -> Result<FormulaExpr, FormulaParseError> {
+    fn parse_ref_or_name(
+        &mut self,
+        sheet: Option<String>,
+    ) -> Result<FormulaExpr, FormulaParseError> {
         self.skip_ws();
 
         if matches!(self.peek(), Some(b'0'..=b'9')) && self.looks_like_row_range() {
@@ -8916,7 +9011,9 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        let ident = std::str::from_utf8(&self.s[start..self.pos]).unwrap().to_string();
+        let ident = std::str::from_utf8(&self.s[start..self.pos])
+            .unwrap()
+            .to_string();
         Ok(ident)
     }
 
@@ -8931,7 +9028,9 @@ impl<'a> Parser<'a> {
                     self.pos += 1;
                     continue;
                 }
-                let name = std::str::from_utf8(&self.s[start..self.pos - 1]).unwrap().replace("''", "'");
+                let name = std::str::from_utf8(&self.s[start..self.pos - 1])
+                    .unwrap()
+                    .replace("''", "'");
                 return Ok(name);
             }
         }
@@ -8996,7 +9095,8 @@ impl<'a> Parser<'a> {
             self.pos += 1;
         }
         let txt = std::str::from_utf8(&self.s[start..self.pos]).unwrap();
-        txt.parse::<i32>().map_err(|_| self.err("invalid signed int"))
+        txt.parse::<i32>()
+            .map_err(|_| self.err("invalid signed int"))
     }
 
     fn parse_u32(&mut self) -> Result<u32, FormulaParseError> {
@@ -9009,7 +9109,10 @@ impl<'a> Parser<'a> {
         txt.parse::<u32>().map_err(|_| self.err("invalid number"))
     }
 
-    fn try_parse_a1_cell_ref(&mut self, sheet: Option<String>) -> Result<Option<CellReference>, FormulaParseError> {
+    fn try_parse_a1_cell_ref(
+        &mut self,
+        sheet: Option<String>,
+    ) -> Result<Option<CellReference>, FormulaParseError> {
         self.skip_ws();
         let start = self.pos;
 
@@ -9049,7 +9152,9 @@ impl<'a> Parser<'a> {
         }
 
         let row_txt = std::str::from_utf8(&self.s[row_start..self.pos]).unwrap();
-        let row_num = row_txt.parse::<u32>().map_err(|_| self.err("invalid row"))?;
+        let row_num = row_txt
+            .parse::<u32>()
+            .map_err(|_| self.err("invalid row"))?;
 
         let mut spill = false;
         if self.peek() == Some(b'#') {
@@ -9059,8 +9164,16 @@ impl<'a> Parser<'a> {
 
         Ok(Some(CellReference {
             sheet,
-            row: if row_abs { RowRef::Absolute(row_num) } else { RowRef::Relative(row_num) },
-            col: if col_abs { ColRef::Absolute(col_num) } else { ColRef::Relative(col_num) },
+            row: if row_abs {
+                RowRef::Absolute(row_num)
+            } else {
+                RowRef::Relative(row_num)
+            },
+            col: if col_abs {
+                ColRef::Absolute(col_num)
+            } else {
+                ColRef::Relative(col_num)
+            },
             spill,
         }))
     }
@@ -9169,7 +9282,7 @@ use rustc_hash::FxHashMap;
 
 use crate::config::DiffConfig;
 use crate::diff::FormulaDiffResult;
-use crate::formula::{FormulaExpr, parse_formula, formulas_equivalent_modulo_shift};
+use crate::formula::{FormulaExpr, formulas_equivalent_modulo_shift, parse_formula};
 use crate::string_pool::{StringId, StringPool};
 
 #[derive(Debug, Default)]
@@ -9357,7 +9470,6 @@ mod tests {
         assert_eq!(meta[2].frequency_class, FrequencyClass::LowInfo);
     }
 }
-
 
 ```
 
@@ -10035,7 +10147,11 @@ impl<'a> GridView<'a> {
         if self.col_meta.is_empty() {
             return false;
         }
-        let blank = self.col_meta.iter().filter(|m| m.non_blank_count == 0).count();
+        let blank = self
+            .col_meta
+            .iter()
+            .filter(|m| m.non_blank_count == 0)
+            .count();
         blank * 2 > self.col_meta.len()
     }
 }
@@ -10454,6 +10570,7 @@ use std::cell::RefCell;
 
 mod addressing;
 pub(crate) mod alignment;
+mod alignment_types;
 pub(crate) mod column_alignment;
 mod config;
 mod container;
@@ -10463,12 +10580,12 @@ mod datamashup_framing;
 mod datamashup_package;
 mod diff;
 mod engine;
-mod formula;
-mod formula_diff;
 #[cfg(feature = "excel-open-xml")]
 mod excel_open_xml;
-mod grid_parser;
+mod formula;
+mod formula_diff;
 mod grid_metadata;
+mod grid_parser;
 mod grid_view;
 pub(crate) mod hashing;
 mod m_ast;
@@ -10532,6 +10649,22 @@ pub fn open_workbook(path: impl AsRef<std::path::Path>) -> Result<Workbook, Exce
     })
 }
 
+/// Advanced APIs for power users.
+///
+/// The recommended entry point for most callers is [`WorkbookPackage`]. This module exposes
+/// lower-level functions and types for callers who want to manage their own sessions/pools or
+/// stream ops directly.
+pub mod advanced {
+    pub use crate::engine::{
+        diff_grids_database_mode, diff_workbooks as diff_workbooks_with_pool,
+        diff_workbooks_streaming, try_diff_workbooks as try_diff_workbooks_with_pool,
+        try_diff_workbooks_streaming,
+    };
+    pub use crate::session::DiffSession;
+    pub use crate::sink::{CallbackSink, DiffSink, VecSink};
+    pub use crate::string_pool::{StringId, StringPool};
+}
+
 pub use addressing::{AddressParseError, address_to_index, index_to_address};
 pub use config::{DiffConfig, LimitBehavior};
 pub use container::{ContainerError, OpcContainer};
@@ -10559,6 +10692,10 @@ pub use engine::{
 pub use excel_open_xml::{
     ExcelOpenError, PackageError, open_data_mashup, open_workbook as open_workbook_with_pool,
 };
+pub use formula::{
+    BinaryOperator, CellReference, ColRef, ExcelError, FormulaExpr, FormulaParseError,
+    RangeReference, RowRef, UnaryOperator, formulas_equivalent_modulo_shift, parse_formula,
+};
 pub use grid_parser::{GridParseError, SheetDescriptor};
 pub use grid_view::{
     ColHash, ColMeta, FrequencyClass, GridView, HashStats, RowHash, RowMeta, RowView,
@@ -10569,10 +10706,6 @@ pub use m_ast::{
     MModuleAst, MParseError, ast_semantically_equal, canonicalize_m_ast, parse_m_expression,
 };
 pub use m_section::{SectionMember, SectionParseError, parse_section_members};
-pub use formula::{
-    BinaryOperator, CellReference, ColRef, ExcelError, FormulaExpr, FormulaParseError,
-    RangeReference, RowRef, UnaryOperator, formulas_equivalent_modulo_shift, parse_formula,
-};
 #[doc(hidden)]
 pub use output::json::diff_report_to_cell_diffs;
 #[cfg(feature = "excel-open-xml")]
@@ -11980,7 +12113,6 @@ use crate::excel_open_xml::{PackageError, open_data_mashup, open_workbook};
 use crate::session::DiffSession;
 #[cfg(feature = "excel-open-xml")]
 use crate::sink::VecSink;
-use crate::string_pool::StringId;
 use serde::Serialize;
 use serde::ser::Error as SerdeError;
 #[cfg(feature = "excel-open-xml")]
@@ -12037,8 +12169,7 @@ pub fn diff_workbooks(
         session.strings_mut(),
         config,
         &mut sink,
-    )
-    .map_err(|e| PackageError::SerializationError(e.to_string()))?;
+    )?;
 
     let m_ops = crate::m_diff::diff_m_ops_for_packages(&dm_a, &dm_b, session.strings_mut(), config);
 
@@ -12061,16 +12192,12 @@ pub fn diff_report_to_cell_diffs(report: &DiffReport) -> Vec<CellDiff> {
     use crate::diff::DiffOp;
     use crate::workbook::CellValue;
 
-    fn resolve_string<'a>(report: &'a DiffReport, id: StringId) -> Option<&'a str> {
-        report.strings.get(id.0 as usize).map(|s| s.as_str())
-    }
-
     fn render_value(report: &DiffReport, value: &Option<CellValue>) -> Option<String> {
         match value {
             Some(CellValue::Number(n)) => Some(n.to_string()),
-            Some(CellValue::Text(id)) => resolve_string(report, *id).map(|s| s.to_string()),
+            Some(CellValue::Text(id)) => report.resolve(*id).map(|s| s.to_string()),
             Some(CellValue::Bool(b)) => Some(b.to_string()),
-            Some(CellValue::Error(id)) => resolve_string(report, *id).map(|s| s.to_string()),
+            Some(CellValue::Error(id)) => report.resolve(*id).map(|s| s.to_string()),
             Some(CellValue::Blank) => Some(String::new()),
             None => None,
         }
@@ -12181,6 +12308,10 @@ impl<W: Write> JsonLinesSink<W> {
 }
 
 impl<W: Write> DiffSink for JsonLinesSink<W> {
+    fn begin(&mut self, pool: &StringPool) -> Result<(), DiffError> {
+        JsonLinesSink::begin(self, pool)
+    }
+
     fn emit(&mut self, op: DiffOp) -> Result<(), DiffError> {
         serde_json::to_writer(&mut self.w, &op).map_err(|e| DiffError::SinkError {
             message: e.to_string(),
@@ -12260,7 +12391,9 @@ impl WorkbookPackage {
     }
 
     pub fn diff(&self, other: &Self, config: &DiffConfig) -> DiffReport {
-        crate::with_default_session(|session| self.diff_with_pool(other, &mut session.strings, config))
+        crate::with_default_session(|session| {
+            self.diff_with_pool(other, &mut session.strings, config)
+        })
     }
 
     pub fn diff_with_pool(
@@ -12269,7 +12402,8 @@ impl WorkbookPackage {
         pool: &mut crate::string_pool::StringPool,
         config: &DiffConfig,
     ) -> DiffReport {
-        let mut report = crate::engine::diff_workbooks(&self.workbook, &other.workbook, pool, config);
+        let mut report =
+            crate::engine::diff_workbooks(&self.workbook, &other.workbook, pool, config);
 
         let m_ops = crate::m_diff::diff_m_ops_for_packages(
             &self.data_mashup,
@@ -12301,6 +12435,13 @@ impl WorkbookPackage {
         config: &DiffConfig,
         sink: &mut S,
     ) -> Result<DiffSummary, DiffError> {
+        let m_ops = crate::m_diff::diff_m_ops_for_packages(
+            &self.data_mashup,
+            &other.data_mashup,
+            pool,
+            config,
+        );
+
         let grid_result = {
             let mut no_finish = NoFinishSink::new(sink);
             crate::engine::try_diff_workbooks_streaming(
@@ -12319,13 +12460,6 @@ impl WorkbookPackage {
                 return Err(e);
             }
         };
-
-        let m_ops = crate::m_diff::diff_m_ops_for_packages(
-            &self.data_mashup,
-            &other.data_mashup,
-            pool,
-            config,
-        );
 
         for op in m_ops {
             if let Err(e) = sink.emit(op) {
@@ -13382,7 +13516,7 @@ use crate::config::DiffConfig;
 use crate::grid_view::{GridView, HashStats, RowHash, RowMeta};
 use crate::workbook::Grid;
 
-pub(crate) use crate::alignment::{RowAlignment, RowBlockMove};
+pub(crate) use crate::alignment_types::{RowAlignment, RowBlockMove};
 
 const _HASH_COLLISION_NOTE: &str = "128-bit xxHash3 collision probability ~10^-29 at 50K rows (birthday bound); \
      secondary verification not required; see hashing.rs for detailed rationale.";
@@ -14675,9 +14809,17 @@ impl DiffSession {
 
 ```rust
 use crate::diff::{DiffError, DiffOp};
+use crate::string_pool::StringPool;
 
 /// Trait for streaming diff operations to a consumer.
 pub trait DiffSink {
+    /// Called once before any ops are emitted.
+    ///
+    /// Default is a no-op so sinks that don't need setup can ignore it.
+    fn begin(&mut self, _pool: &StringPool) -> Result<(), DiffError> {
+        Ok(())
+    }
+
     fn emit(&mut self, op: DiffOp) -> Result<(), DiffError>;
 
     fn finish(&mut self) -> Result<(), DiffError> {
@@ -14696,6 +14838,10 @@ impl<'a, S: DiffSink> NoFinishSink<'a, S> {
 }
 
 impl<S: DiffSink> DiffSink for NoFinishSink<'_, S> {
+    fn begin(&mut self, pool: &StringPool) -> Result<(), DiffError> {
+        self.inner.begin(pool)
+    }
+
     fn emit(&mut self, op: DiffOp) -> Result<(), DiffError> {
         self.inner.emit(op)
     }
@@ -17463,7 +17609,6 @@ fn structured_refs_parse_and_canonicalize() {
     assert_eq!(a, b);
 }
 
-
 ```
 
 ---
@@ -17555,9 +17700,7 @@ fn filled_down_formulas_detect_row_shift() {
     let cell_edit = cell_edit_op(&report);
     match cell_edit {
         DiffOp::CellEdited {
-            addr,
-            formula_diff,
-            ..
+            addr, formula_diff, ..
         } => {
             assert_eq!(addr.row, 1);
             assert_eq!(addr.col, 1);
@@ -17603,14 +17746,8 @@ fn parses_expected_ast_shapes() {
         ("\"x\"", FormulaExpr::Text("x".to_string())),
         ("TRUE", FormulaExpr::Boolean(true)),
         ("#DIV/0!", FormulaExpr::Error(ExcelError::Div0)),
-        (
-            "A1",
-            cell(None, RowRef::Relative(1), ColRef::Relative(1)),
-        ),
-        (
-            "$B$2",
-            cell(None, RowRef::Absolute(2), ColRef::Absolute(2)),
-        ),
+        ("A1", cell(None, RowRef::Relative(1), ColRef::Relative(1))),
+        ("$B$2", cell(None, RowRef::Absolute(2), ColRef::Absolute(2))),
         (
             "R[1]C[-1]",
             cell(None, RowRef::Offset(1), ColRef::Offset(-1)),
@@ -22687,7 +22824,7 @@ fn opaque_null_literal_case_is_canonicalized() {
 ### File: `core\tests\m8_m_parser_coverage_audit_tests.rs`
 
 ```rust
-use excel_diff::{canonicalize_m_ast, parse_m_expression, MAstKind};
+use excel_diff::{MAstKind, canonicalize_m_ast, parse_m_expression};
 
 fn assert_opaque(expr: &str) {
     let mut ast = parse_m_expression(expr).expect("expression should parse into an AST container");
@@ -23924,9 +24061,11 @@ fn serialize_diff_report_with_metrics_includes_metrics_object() {
 
 ```rust
 use excel_diff::{
-    DataMashup, DiffConfig, DiffError, DiffOp, DiffSink, Grid, Metadata, PackageParts, PackageXml,
-    Permissions, SectionDocument, Sheet, SheetKind, Workbook, WorkbookPackage,
+    CellValue, DataMashup, DiffConfig, DiffError, DiffOp, DiffSink, Grid, JsonLinesSink, Metadata,
+    PackageParts, PackageXml, Permissions, SectionDocument, Sheet, SheetKind, StringId, Workbook,
+    WorkbookPackage,
 };
+use serde::Deserialize;
 
 #[derive(Default)]
 struct StrictSink {
@@ -24150,6 +24289,122 @@ fn package_diff_streaming_finishes_on_m_emit_error() {
         "sink.finish() should be called on M emit error"
     );
     assert_eq!(sink.finish_calls, 1, "finish should be called exactly once");
+}
+
+#[test]
+fn package_streaming_json_lines_header_includes_m_strings() {
+    #[derive(Deserialize)]
+    struct Header {
+        kind: String,
+        strings: Vec<String>,
+    }
+
+    fn collect_string_ids(op: &DiffOp) -> Vec<StringId> {
+        fn collect_cell_value(ids: &mut Vec<StringId>, value: &CellValue) {
+            match value {
+                CellValue::Text(id) | CellValue::Error(id) => ids.push(*id),
+                CellValue::Number(_) | CellValue::Bool(_) | CellValue::Blank => {}
+            }
+        }
+
+        fn collect_snapshot(ids: &mut Vec<StringId>, snap: &excel_diff::CellSnapshot) {
+            if let Some(value) = &snap.value {
+                collect_cell_value(ids, value);
+            }
+            if let Some(formula) = snap.formula {
+                ids.push(formula);
+            }
+        }
+
+        let mut ids = Vec::new();
+        match op {
+            DiffOp::SheetAdded { sheet } | DiffOp::SheetRemoved { sheet } => ids.push(*sheet),
+            DiffOp::RowAdded { sheet, .. } | DiffOp::RowRemoved { sheet, .. } => ids.push(*sheet),
+            DiffOp::ColumnAdded { sheet, .. } | DiffOp::ColumnRemoved { sheet, .. } => {
+                ids.push(*sheet);
+            }
+            DiffOp::BlockMovedRows { sheet, .. }
+            | DiffOp::BlockMovedColumns { sheet, .. }
+            | DiffOp::BlockMovedRect { sheet, .. } => ids.push(*sheet),
+            DiffOp::CellEdited {
+                sheet, from, to, ..
+            } => {
+                ids.push(*sheet);
+                collect_snapshot(&mut ids, from);
+                collect_snapshot(&mut ids, to);
+            }
+            DiffOp::QueryAdded { name }
+            | DiffOp::QueryRemoved { name }
+            | DiffOp::QueryDefinitionChanged { name, .. } => ids.push(*name),
+            DiffOp::QueryRenamed { from, to } => {
+                ids.push(*from);
+                ids.push(*to);
+            }
+            DiffOp::QueryMetadataChanged { name, old, new, .. } => {
+                ids.push(*name);
+                ids.extend(old.iter().copied());
+                ids.extend(new.iter().copied());
+            }
+            _ => {}
+        }
+        ids
+    }
+
+    let wb = make_workbook("Sheet1");
+
+    let dm_a = make_dm("section Section1;\nshared Foo = 1;");
+    let dm_b = make_dm("section Section1;\nshared Bar = 1;");
+
+    let pkg_a = WorkbookPackage {
+        workbook: wb.clone(),
+        data_mashup: Some(dm_a),
+    };
+    let pkg_b = WorkbookPackage {
+        workbook: wb,
+        data_mashup: Some(dm_b),
+    };
+
+    let mut out = Vec::<u8>::new();
+    let mut sink = JsonLinesSink::new(&mut out);
+
+    let summary = pkg_a
+        .diff_streaming(&pkg_b, &DiffConfig::default(), &mut sink)
+        .expect("diff_streaming should succeed");
+
+    let text = std::str::from_utf8(&out).expect("output should be valid UTF-8");
+    let mut lines = text.lines().filter(|l| !l.trim().is_empty());
+    let header_line = lines.next().expect("expected a JSON Lines header line");
+    let header: Header = serde_json::from_str(header_line).expect("header should parse");
+
+    assert_eq!(header.kind, "Header");
+    assert!(
+        header.strings.iter().any(|s| s == "Section1/Foo"),
+        "expected header string table to include query name Section1/Foo"
+    );
+    assert!(
+        header.strings.iter().any(|s| s == "Section1/Bar"),
+        "expected header string table to include query name Section1/Bar"
+    );
+
+    let mut op_lines = 0usize;
+    for line in lines {
+        let op: DiffOp = serde_json::from_str(line).expect("op line should parse as DiffOp");
+        for id in collect_string_ids(&op) {
+            assert!(
+                (id.0 as usize) < header.strings.len(),
+                "StringId {} out of range for header string table (len={})",
+                id.0,
+                header.strings.len()
+            );
+        }
+        op_lines += 1;
+    }
+
+    assert!(op_lines > 0, "expected at least one op line after header");
+    assert_eq!(
+        summary.op_count, op_lines,
+        "summary op_count should match number of ops written after the header"
+    );
 }
 
 ```

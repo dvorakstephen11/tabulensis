@@ -228,7 +228,7 @@ pub struct RowSignature {
     pub hash: u128,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct ColSignature {
     pub hash: u128,
 }

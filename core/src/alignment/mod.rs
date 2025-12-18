@@ -47,10 +47,5 @@ pub(crate) mod gap_strategy;
 pub(crate) mod move_extraction;
 pub(crate) mod runs;
 
-#[allow(unused_imports)]
-pub(crate) use crate::alignment_types::{RowAlignment, RowBlockMove};
-#[allow(unused_imports)]
-pub(crate) use assembly::{
-    RowAlignmentWithSignatures, align_rows_amr, align_rows_amr_with_signatures,
-    align_rows_amr_with_signatures_from_views,
-};
+pub(crate) use crate::alignment_types::RowBlockMove;
+pub(crate) use assembly::align_rows_amr_with_signatures_from_views;

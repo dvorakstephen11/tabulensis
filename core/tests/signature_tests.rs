@@ -446,7 +446,7 @@ fn gridview_rowmeta_hash_matches_compute_all_signatures() {
     }
 
     for (idx, meta) in view.col_meta.iter().enumerate() {
-        assert_eq!(meta.hash, col_signatures[idx].hash);
+        assert_eq!(meta.hash, col_signatures[idx]);
     }
 }
 
