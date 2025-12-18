@@ -2,7 +2,7 @@ use rustc_hash::FxHashMap;
 
 use crate::config::DiffConfig;
 use crate::diff::FormulaDiffResult;
-use crate::formula::{FormulaExpr, parse_formula, formulas_equivalent_modulo_shift};
+use crate::formula::{FormulaExpr, formulas_equivalent_modulo_shift, parse_formula};
 use crate::string_pool::{StringId, StringPool};
 
 #[derive(Debug, Default)]

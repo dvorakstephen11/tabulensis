@@ -245,6 +245,10 @@ impl DiffReport {
         self.complete = false;
     }
 
+    pub fn resolve(&self, id: StringId) -> Option<&str> {
+        self.strings.get(id.0 as usize).map(|s| s.as_str())
+    }
+
     pub fn grid_ops(&self) -> impl Iterator<Item = &DiffOp> {
         self.ops.iter().filter(|op| !op.is_m_op())
     }

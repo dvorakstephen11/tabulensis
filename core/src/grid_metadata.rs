@@ -96,4 +96,3 @@ mod tests {
         assert_eq!(meta[2].frequency_class, FrequencyClass::LowInfo);
     }
 }
-

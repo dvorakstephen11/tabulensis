@@ -19,25 +19,11 @@ use crate::alignment::anchor_discovery::{
 use crate::alignment::gap_strategy::{GapStrategy, select_gap_strategy};
 use crate::alignment::move_extraction::{find_block_move, moves_from_matched_pairs};
 use crate::alignment::runs::{RowRun, compress_to_runs};
+use crate::alignment_types::{RowAlignment, RowBlockMove};
 use crate::config::DiffConfig;
 use crate::grid_metadata::RowMeta;
 use crate::grid_view::GridView;
 use crate::workbook::{Grid, RowSignature};
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct RowAlignment {
-    pub matched: Vec<(u32, u32)>,
-    pub inserted: Vec<u32>,
-    pub deleted: Vec<u32>,
-    pub moves: Vec<RowBlockMove>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RowBlockMove {
-    pub src_start_row: u32,
-    pub dst_start_row: u32,
-    pub row_count: u32,
-}
 
 #[derive(Default)]
 struct GapAlignmentResult {

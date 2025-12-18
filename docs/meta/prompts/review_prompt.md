@@ -63,7 +63,6 @@
         gap_strategy.rs
         mod.rs
         move_extraction.rs
-        row_metadata.rs
         runs.rs
       bin/
         wasm_smoke.rs
@@ -79,6 +78,7 @@
       excel_open_xml.rs
       formula.rs
       formula_diff.rs
+      grid_metadata.rs
       grid_parser.rs
       grid_view.rs
       hashing.rs
@@ -841,7 +841,7 @@ mod tests {
 
 use std::collections::HashMap;
 
-use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
+use crate::grid_metadata::{FrequencyClass, RowMeta};
 use crate::grid_view::GridView;
 use crate::workbook::RowSignature;
 
@@ -980,7 +980,7 @@ pub fn discover_local_anchors(old: &[RowMeta], new: &[RowMeta]) -> Vec<Anchor> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
+    use crate::grid_metadata::{FrequencyClass, RowMeta};
 
     fn meta_from_hashes(hashes: &[u128]) -> Vec<RowMeta> {
         hashes
@@ -991,7 +991,6 @@ mod tests {
                 RowMeta {
                     row_idx: idx as u32,
                     signature: sig,
-                    hash: sig,
                     non_blank_count: 1,
                     first_non_blank_col: 0,
                     frequency_class: FrequencyClass::Common,
@@ -1043,9 +1042,9 @@ use crate::alignment::anchor_discovery::{
 };
 use crate::alignment::gap_strategy::{GapStrategy, select_gap_strategy};
 use crate::alignment::move_extraction::{find_block_move, moves_from_matched_pairs};
-use crate::alignment::row_metadata::RowMeta;
 use crate::alignment::runs::{RowRun, compress_to_runs};
 use crate::config::DiffConfig;
+use crate::grid_metadata::RowMeta;
 use crate::grid_view::GridView;
 use crate::workbook::{Grid, RowSignature};
 
@@ -1800,7 +1799,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
+    use crate::grid_metadata::{FrequencyClass, RowMeta};
     use crate::workbook::CellValue;
 
     fn grid_from_run_lengths(pattern: &[(i32, u32)]) -> Grid {
@@ -1834,7 +1833,6 @@ mod tests {
                 RowMeta {
                     row_idx: start_row + idx as u32,
                     signature,
-                    hash: signature,
                     non_blank_count: 1,
                     first_non_blank_col: 0,
                     frequency_class: FrequencyClass::Common,
@@ -2119,7 +2117,7 @@ mod tests {
 
 use std::collections::HashSet;
 
-use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
+use crate::grid_metadata::{FrequencyClass, RowMeta};
 use crate::config::DiffConfig;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2196,7 +2194,7 @@ fn has_matching_signatures(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> bool
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
+    use crate::grid_metadata::{FrequencyClass, RowMeta};
     use crate::workbook::RowSignature;
 
     fn meta(row_idx: u32, hash: u128) -> RowMeta {
@@ -2204,7 +2202,6 @@ mod tests {
         RowMeta {
             row_idx,
             signature,
-            hash: signature,
             non_blank_count: 1,
             first_non_blank_col: 0,
             frequency_class: FrequencyClass::Common,
@@ -2239,7 +2236,7 @@ mod tests {
 //! This module implements a simplified version of the AMR algorithm described in the
 //! unified grid diff specification. The implementation follows the general structure:
 //!
-//! 1. **Row Metadata Collection** (`row_metadata.rs`, Spec Section 9.11)
+//! 1. **Row Metadata Collection** (`grid_metadata.rs`, Spec Section 9.11)
 //!    - Compute row signatures and classify by frequency (Unique/Rare/Common/LowInfo)
 //!
 //! 2. **Anchor Discovery** (`anchor_discovery.rs`, Spec Section 10)
@@ -2281,7 +2278,6 @@ pub(crate) mod anchor_discovery;
 pub(crate) mod assembly;
 pub(crate) mod gap_strategy;
 pub(crate) mod move_extraction;
-pub(crate) mod row_metadata;
 pub(crate) mod runs;
 
 #[allow(unused_imports)]
@@ -2323,7 +2319,7 @@ pub(crate) use assembly::{
 use std::collections::HashMap;
 
 use crate::alignment::RowBlockMove;
-use crate::alignment::row_metadata::RowMeta;
+use crate::grid_metadata::RowMeta;
 use crate::config::DiffConfig;
 use crate::workbook::RowSignature;
 
@@ -2437,119 +2433,6 @@ pub fn moves_from_matched_pairs(pairs: &[(u32, u32)]) -> Vec<RowBlockMove> {
 
 ---
 
-### File: `core\src\alignment\row_metadata.rs`
-
-```rust
-//! Row metadata and frequency classification for AMR alignment.
-//!
-//! Implements row frequency classification as described in the unified grid diff
-//! specification Section 9.11. Each row is classified into one of four frequency classes:
-//!
-//! - **Unique**: Appears exactly once in the grid (highest anchor quality)
-//! - **Rare**: Appears 2-N times where N is configurable (can serve as secondary anchors)
-//! - **Common**: Appears frequently (poor anchor quality)
-//! - **LowInfo**: Blank or near-blank rows (ignored for anchoring)
-
-use std::collections::HashMap;
-
-use crate::config::DiffConfig;
-use crate::workbook::RowSignature;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum FrequencyClass {
-    Unique,
-    Rare,
-    Common,
-    LowInfo,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct RowMeta {
-    pub row_idx: u32,
-    pub signature: RowSignature,
-    pub hash: RowSignature,
-    pub non_blank_count: u16,
-    pub first_non_blank_col: u16,
-    pub frequency_class: FrequencyClass,
-    pub is_low_info: bool,
-}
-
-impl RowMeta {
-    pub fn is_low_info(&self) -> bool {
-        self.is_low_info || matches!(self.frequency_class, FrequencyClass::LowInfo)
-    }
-}
-
-pub fn frequency_map(row_meta: &[RowMeta]) -> HashMap<RowSignature, u32> {
-    let mut map = HashMap::new();
-    for meta in row_meta {
-        *map.entry(meta.signature).or_insert(0) += 1;
-    }
-    map
-}
-
-pub fn classify_row_frequencies(row_meta: &mut [RowMeta], config: &DiffConfig) {
-    let freq_map = frequency_map(row_meta);
-    for meta in row_meta.iter_mut() {
-        if meta.frequency_class == FrequencyClass::LowInfo {
-            continue;
-        }
-
-        let count = freq_map.get(&meta.signature).copied().unwrap_or(0);
-        let mut class = match count {
-            1 => FrequencyClass::Unique,
-            0 => FrequencyClass::Common,
-            c if c <= config.rare_threshold => FrequencyClass::Rare,
-            _ => FrequencyClass::Common,
-        };
-
-        if (meta.non_blank_count as u32) < config.low_info_threshold || meta.is_low_info {
-            class = FrequencyClass::LowInfo;
-            meta.is_low_info = true;
-        }
-
-        meta.frequency_class = class;
-    }
-}
-
-#[cfg(test)]
-#[allow(clippy::field_reassign_with_default)]
-mod tests {
-    use super::*;
-
-    fn make_meta(row_idx: u32, hash: u128, non_blank: u16) -> RowMeta {
-        let sig = RowSignature { hash };
-        RowMeta {
-            row_idx,
-            signature: sig,
-            hash: sig,
-            non_blank_count: non_blank,
-            first_non_blank_col: 0,
-            frequency_class: FrequencyClass::Common,
-            is_low_info: false,
-        }
-    }
-
-    #[test]
-    fn classifies_unique_and_rare_and_low_info() {
-        let mut meta = vec![make_meta(0, 1, 3), make_meta(1, 1, 3), make_meta(2, 2, 1)];
-
-        let mut config = DiffConfig::default();
-        config.rare_threshold = 2;
-        config.low_info_threshold = 2;
-
-        classify_row_frequencies(&mut meta, &config);
-
-        assert_eq!(meta[0].frequency_class, FrequencyClass::Rare);
-        assert_eq!(meta[1].frequency_class, FrequencyClass::Rare);
-        assert_eq!(meta[2].frequency_class, FrequencyClass::LowInfo);
-    }
-}
-
-```
-
----
-
 ### File: `core\src\alignment\runs.rs`
 
 ```rust
@@ -2565,7 +2448,7 @@ mod tests {
 //! - Data with long runs of blank or placeholder rows
 //! - Adversarial cases designed to stress the alignment algorithm
 
-use crate::alignment::row_metadata::RowMeta;
+use crate::grid_metadata::RowMeta;
 use crate::workbook::RowSignature;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2602,10 +2485,9 @@ mod tests {
         RowMeta {
             row_idx: idx,
             signature: sig,
-            hash: sig,
             non_blank_count: 1,
             first_non_blank_col: 0,
-            frequency_class: crate::alignment::row_metadata::FrequencyClass::Common,
+            frequency_class: crate::grid_metadata::FrequencyClass::Common,
             is_low_info: false,
         }
     }
@@ -2878,12 +2760,12 @@ pub(crate) fn detect_exact_column_block_move(
         })
         .collect();
 
-    if blank_dominated(&view_a) || blank_dominated(&view_b) {
+    if view_a.is_blank_dominated() || view_b.is_blank_dominated() {
         return None;
     }
 
     let stats = HashStats::from_col_meta(&col_meta_a, &col_meta_b);
-    if has_heavy_repetition(&stats, config) {
+    if stats.has_heavy_repetition(config.max_hash_repeat) {
         return None;
     }
 
@@ -2996,7 +2878,7 @@ pub(crate) fn detect_exact_column_block_move(
     None
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn align_single_column_change(
     old: &Grid,
     new: &Grid,
@@ -3026,7 +2908,7 @@ pub(crate) fn align_single_column_change_from_views(
     }
 
     let stats = HashStats::from_col_meta(&view_a.col_meta, &view_b.col_meta);
-    if has_heavy_repetition(&stats, config) {
+    if stats.has_heavy_repetition(config.max_hash_repeat) {
         return None;
     }
 
@@ -3083,14 +2965,14 @@ fn find_single_gap_alignment(
 
         match change {
             ColumnChange::Insert => {
-                if !is_unique_to_b(meta_b.hash, stats) {
+                if !stats.is_unique_to_b(meta_b.hash) {
                     return None;
                 }
                 inserted.push(meta_b.col_idx);
                 idx_b += 1;
             }
             ColumnChange::Delete => {
-                if !is_unique_to_a(meta_a.hash, stats) {
+                if !stats.is_unique_to_a(meta_a.hash) {
                     return None;
                 }
                 deleted.push(meta_a.col_idx);
@@ -3109,14 +2991,14 @@ fn find_single_gap_alignment(
         match change {
             ColumnChange::Insert if idx_a == cols_a.len() && cols_b.len() == idx_b + 1 => {
                 let meta_b = cols_b[idx_b];
-                if !is_unique_to_b(meta_b.hash, stats) {
+                if !stats.is_unique_to_b(meta_b.hash) {
                     return None;
                 }
                 inserted.push(meta_b.col_idx);
             }
             ColumnChange::Delete if idx_b == cols_b.len() && cols_a.len() == idx_a + 1 => {
                 let meta_a = cols_a[idx_a];
-                if !is_unique_to_a(meta_a.hash, stats) {
+                if !stats.is_unique_to_a(meta_a.hash) {
                     return None;
                 }
                 deleted.push(meta_a.col_idx);
@@ -3147,45 +3029,10 @@ fn is_monotonic(pairs: &[(u32, u32)]) -> bool {
     pairs.windows(2).all(|w| w[0].0 < w[1].0 && w[0].1 < w[1].1)
 }
 
-fn is_unique_to_b(hash: ColHash, stats: &HashStats<ColHash>) -> bool {
-    stats.freq_a.get(&hash).copied().unwrap_or(0) == 0
-        && stats.freq_b.get(&hash).copied().unwrap_or(0) == 1
-}
-
-fn is_unique_to_a(hash: ColHash, stats: &HashStats<ColHash>) -> bool {
-    stats.freq_a.get(&hash).copied().unwrap_or(0) == 1
-        && stats.freq_b.get(&hash).copied().unwrap_or(0) == 0
-}
-
 fn is_within_size_bounds(old: &Grid, new: &Grid, config: &DiffConfig) -> bool {
     let rows = old.nrows.max(new.nrows);
     let cols = old.ncols.max(new.ncols);
     rows <= config.max_align_rows && cols <= config.max_align_cols
-}
-
-fn has_heavy_repetition(stats: &HashStats<ColHash>, config: &DiffConfig) -> bool {
-    stats
-        .freq_a
-        .values()
-        .chain(stats.freq_b.values())
-        .copied()
-        .max()
-        .unwrap_or(0)
-        > config.max_hash_repeat
-}
-
-fn blank_dominated(view: &GridView<'_>) -> bool {
-    if view.col_meta.is_empty() {
-        return false;
-    }
-
-    let blank_cols = view
-        .col_meta
-        .iter()
-        .filter(|meta| meta.non_blank_count == 0)
-        .count();
-
-    blank_cols * 2 > view.col_meta.len()
 }
 
 #[cfg(test)]
@@ -9409,6 +9256,113 @@ pub(crate) fn diff_cell_formulas_ids(
 
 ---
 
+### File: `core\src\grid_metadata.rs`
+
+```rust
+//! Grid row metadata and frequency classification.
+//!
+//! This module is the canonical home for row metadata shared across the grid view
+//! layer and alignment algorithms.
+
+use std::collections::HashMap;
+
+use crate::config::DiffConfig;
+use crate::workbook::RowSignature;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FrequencyClass {
+    Unique,
+    Rare,
+    Common,
+    LowInfo,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RowMeta {
+    pub row_idx: u32,
+    pub signature: RowSignature,
+    pub non_blank_count: u16,
+    pub first_non_blank_col: u16,
+    pub frequency_class: FrequencyClass,
+    pub is_low_info: bool,
+}
+
+impl RowMeta {
+    pub fn is_low_info(&self) -> bool {
+        self.is_low_info || matches!(self.frequency_class, FrequencyClass::LowInfo)
+    }
+}
+
+pub fn frequency_map(row_meta: &[RowMeta]) -> HashMap<RowSignature, u32> {
+    let mut map = HashMap::new();
+    for meta in row_meta {
+        *map.entry(meta.signature).or_insert(0) += 1;
+    }
+    map
+}
+
+pub fn classify_row_frequencies(row_meta: &mut [RowMeta], config: &DiffConfig) {
+    let freq_map = frequency_map(row_meta);
+    for meta in row_meta.iter_mut() {
+        if meta.frequency_class == FrequencyClass::LowInfo {
+            continue;
+        }
+
+        let count = freq_map.get(&meta.signature).copied().unwrap_or(0);
+        let mut class = match count {
+            1 => FrequencyClass::Unique,
+            0 => FrequencyClass::Common,
+            c if c <= config.rare_threshold => FrequencyClass::Rare,
+            _ => FrequencyClass::Common,
+        };
+
+        if (meta.non_blank_count as u32) < config.low_info_threshold || meta.is_low_info {
+            class = FrequencyClass::LowInfo;
+            meta.is_low_info = true;
+        }
+
+        meta.frequency_class = class;
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
+mod tests {
+    use super::*;
+
+    fn make_meta(row_idx: u32, hash: u128, non_blank: u16) -> RowMeta {
+        let signature = RowSignature { hash };
+        RowMeta {
+            row_idx,
+            signature,
+            non_blank_count: non_blank,
+            first_non_blank_col: 0,
+            frequency_class: FrequencyClass::Common,
+            is_low_info: false,
+        }
+    }
+
+    #[test]
+    fn classifies_unique_and_rare_and_low_info() {
+        let mut meta = vec![make_meta(0, 1, 3), make_meta(1, 1, 3), make_meta(2, 2, 1)];
+
+        let mut config = DiffConfig::default();
+        config.rare_threshold = 2;
+        config.low_info_threshold = 2;
+
+        classify_row_frequencies(&mut meta, &config);
+
+        assert_eq!(meta[0].frequency_class, FrequencyClass::Rare);
+        assert_eq!(meta[1].frequency_class, FrequencyClass::Rare);
+        assert_eq!(meta[2].frequency_class, FrequencyClass::LowInfo);
+    }
+}
+
+
+```
+
+---
+
 ### File: `core\src\grid_parser.rs`
 
 ```rust
@@ -9924,13 +9878,13 @@ mod tests {
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use crate::alignment::row_metadata::classify_row_frequencies;
 use crate::config::DiffConfig;
+use crate::grid_metadata::classify_row_frequencies;
 use crate::hashing::{hash_cell_value, hash_row_content_128};
 use crate::workbook::{Cell, CellValue, Grid, RowSignature};
 use xxhash_rust::xxh3::Xxh3;
 
-pub use crate::alignment::row_metadata::{FrequencyClass, RowMeta};
+pub use crate::grid_metadata::{FrequencyClass, RowMeta};
 
 pub type RowHash = RowSignature;
 pub type ColHash = u128;
@@ -10026,7 +9980,6 @@ impl<'a> GridView<'a> {
                 RowMeta {
                     row_idx: idx as u32,
                     signature,
-                    hash: signature,
                     non_blank_count,
                     first_non_blank_col,
                     frequency_class,
@@ -10068,6 +10021,22 @@ impl<'a> GridView<'a> {
             col_meta,
             source: grid,
         }
+    }
+
+    pub fn is_low_info_dominated(&self) -> bool {
+        if self.row_meta.is_empty() {
+            return false;
+        }
+        let low = self.row_meta.iter().filter(|m| m.is_low_info()).count();
+        low * 2 > self.row_meta.len()
+    }
+
+    pub fn is_blank_dominated(&self) -> bool {
+        if self.col_meta.is_empty() {
+            return false;
+        }
+        let blank = self.col_meta.iter().filter(|m| m.non_blank_count == 0).count();
+        blank * 2 > self.col_meta.len()
     }
 }
 
@@ -10127,6 +10096,29 @@ where
     pub fn is_unique(&self, hash: H) -> bool {
         self.freq_a.get(&hash).copied().unwrap_or(0) == 1
             && self.freq_b.get(&hash).copied().unwrap_or(0) == 1
+    }
+
+    pub fn is_unique_to_a(&self, hash: H) -> bool {
+        self.freq_a.get(&hash).copied().unwrap_or(0) == 1
+            && self.freq_b.get(&hash).copied().unwrap_or(0) == 0
+    }
+
+    pub fn is_unique_to_b(&self, hash: H) -> bool {
+        self.freq_a.get(&hash).copied().unwrap_or(0) == 0
+            && self.freq_b.get(&hash).copied().unwrap_or(0) == 1
+    }
+
+    pub fn max_frequency(&self) -> u32 {
+        self.freq_a
+            .values()
+            .chain(self.freq_b.values())
+            .copied()
+            .max()
+            .unwrap_or(0)
+    }
+
+    pub fn has_heavy_repetition(&self, max_repeat: u32) -> bool {
+        self.max_frequency() > max_repeat
     }
 
     pub fn is_rare(&self, hash: H, threshold: u32) -> bool {
@@ -10476,6 +10468,7 @@ mod formula_diff;
 #[cfg(feature = "excel-open-xml")]
 mod excel_open_xml;
 mod grid_parser;
+mod grid_metadata;
 mod grid_view;
 pub(crate) mod hashing;
 mod m_ast;
@@ -12267,25 +12260,27 @@ impl WorkbookPackage {
     }
 
     pub fn diff(&self, other: &Self, config: &DiffConfig) -> DiffReport {
-        crate::with_default_session(|session| {
-            let mut report = crate::engine::diff_workbooks(
-                &self.workbook,
-                &other.workbook,
-                &mut session.strings,
-                config,
-            );
+        crate::with_default_session(|session| self.diff_with_pool(other, &mut session.strings, config))
+    }
 
-            let m_ops = crate::m_diff::diff_m_ops_for_packages(
-                &self.data_mashup,
-                &other.data_mashup,
-                &mut session.strings,
-                config,
-            );
+    pub fn diff_with_pool(
+        &self,
+        other: &Self,
+        pool: &mut crate::string_pool::StringPool,
+        config: &DiffConfig,
+    ) -> DiffReport {
+        let mut report = crate::engine::diff_workbooks(&self.workbook, &other.workbook, pool, config);
 
-            report.ops.extend(m_ops);
-            report.strings = session.strings.strings().to_vec();
-            report
-        })
+        let m_ops = crate::m_diff::diff_m_ops_for_packages(
+            &self.data_mashup,
+            &other.data_mashup,
+            pool,
+            config,
+        );
+
+        report.ops.extend(m_ops);
+        report.strings = pool.strings().to_vec();
+        report
     }
 
     pub fn diff_streaming<S: DiffSink>(
@@ -12295,44 +12290,54 @@ impl WorkbookPackage {
         sink: &mut S,
     ) -> Result<DiffSummary, DiffError> {
         crate::with_default_session(|session| {
-            let grid_result = {
-                let mut no_finish = NoFinishSink::new(sink);
-                crate::engine::try_diff_workbooks_streaming(
-                    &self.workbook,
-                    &other.workbook,
-                    &mut session.strings,
-                    config,
-                    &mut no_finish,
-                )
-            };
-
-            let mut summary = match grid_result {
-                Ok(summary) => summary,
-                Err(e) => {
-                    let _ = sink.finish();
-                    return Err(e);
-                }
-            };
-
-            let m_ops = crate::m_diff::diff_m_ops_for_packages(
-                &self.data_mashup,
-                &other.data_mashup,
-                &mut session.strings,
-                config,
-            );
-
-            for op in m_ops {
-                if let Err(e) = sink.emit(op) {
-                    let _ = sink.finish();
-                    return Err(e);
-                }
-                summary.op_count = summary.op_count.saturating_add(1);
-            }
-
-            sink.finish()?;
-
-            Ok(summary)
+            self.diff_streaming_with_pool(other, &mut session.strings, config, sink)
         })
+    }
+
+    pub fn diff_streaming_with_pool<S: DiffSink>(
+        &self,
+        other: &Self,
+        pool: &mut crate::string_pool::StringPool,
+        config: &DiffConfig,
+        sink: &mut S,
+    ) -> Result<DiffSummary, DiffError> {
+        let grid_result = {
+            let mut no_finish = NoFinishSink::new(sink);
+            crate::engine::try_diff_workbooks_streaming(
+                &self.workbook,
+                &other.workbook,
+                pool,
+                config,
+                &mut no_finish,
+            )
+        };
+
+        let mut summary = match grid_result {
+            Ok(summary) => summary,
+            Err(e) => {
+                let _ = sink.finish();
+                return Err(e);
+            }
+        };
+
+        let m_ops = crate::m_diff::diff_m_ops_for_packages(
+            &self.data_mashup,
+            &other.data_mashup,
+            pool,
+            config,
+        );
+
+        for op in m_ops {
+            if let Err(e) = sink.emit(op) {
+                let _ = sink.finish();
+                return Err(e);
+            }
+            summary.op_count = summary.op_count.saturating_add(1);
+        }
+
+        sink.finish()?;
+
+        Ok(summary)
     }
 }
 
@@ -12409,7 +12414,7 @@ impl DiffMetrics {
 //! structural changes that preserve content but change position.
 
 use crate::config::DiffConfig;
-use crate::grid_view::{ColHash, ColMeta, GridView, HashStats, RowHash};
+use crate::grid_view::{ColHash, GridView, HashStats, RowHash};
 use crate::workbook::{Cell, Grid};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12443,18 +12448,20 @@ pub(crate) fn detect_exact_rect_block_move(
     let view_a = GridView::from_grid_with_config(old, config);
     let view_b = GridView::from_grid_with_config(new, config);
 
-    if low_info_dominated(&view_a) || low_info_dominated(&view_b) {
+    if view_a.is_low_info_dominated() || view_b.is_low_info_dominated() {
         return None;
     }
 
-    if blank_dominated(&view_a) || blank_dominated(&view_b) {
+    if view_a.is_blank_dominated() || view_b.is_blank_dominated() {
         return None;
     }
 
     let row_stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
     let col_stats = HashStats::from_col_meta(&view_a.col_meta, &view_b.col_meta);
 
-    if has_heavy_repetition(&row_stats, config) || has_heavy_repetition(&col_stats, config) {
+    if row_stats.has_heavy_repetition(config.max_hash_repeat)
+        || col_stats.has_heavy_repetition(config.max_hash_repeat)
+    {
         return None;
     }
 
@@ -12648,14 +12655,14 @@ fn has_unique_meta(
 fn is_unique_row_in_a(idx: u32, view: &GridView<'_>, stats: &HashStats<RowHash>) -> bool {
     view.row_meta
         .get(idx as usize)
-        .map(|meta| unique_in_a(meta.hash, stats))
+        .map(|meta| unique_in_a(meta.signature, stats))
         .unwrap_or(false)
 }
 
 fn is_unique_row_in_b(idx: u32, view: &GridView<'_>, stats: &HashStats<RowHash>) -> bool {
     view.row_meta
         .get(idx as usize)
-        .map(|meta| unique_in_b(meta.hash, stats))
+        .map(|meta| unique_in_b(meta.signature, stats))
         .unwrap_or(false)
 }
 
@@ -12727,47 +12734,6 @@ fn is_within_size_bounds(old: &Grid, new: &Grid, config: &DiffConfig) -> bool {
     let rows = old.nrows.max(new.nrows);
     let cols = old.ncols.max(new.ncols);
     rows <= config.max_align_rows && cols <= config.max_align_cols
-}
-
-fn low_info_dominated(view: &GridView<'_>) -> bool {
-    if view.row_meta.is_empty() {
-        return false;
-    }
-
-    let low_info_count = view.row_meta.iter().filter(|m| m.is_low_info).count();
-    low_info_count * 2 > view.row_meta.len()
-}
-
-fn blank_dominated(view: &GridView<'_>) -> bool {
-    if view.col_meta.is_empty() {
-        return false;
-    }
-
-    let blank_cols = view
-        .col_meta
-        .iter()
-        .filter(
-            |ColMeta {
-                 non_blank_count, ..
-             }| *non_blank_count == 0,
-        )
-        .count();
-
-    blank_cols * 2 > view.col_meta.len()
-}
-
-fn has_heavy_repetition<H>(stats: &HashStats<H>, config: &DiffConfig) -> bool
-where
-    H: Eq + std::hash::Hash + Copy,
-{
-    stats
-        .freq_a
-        .values()
-        .chain(stats.freq_b.values())
-        .copied()
-        .max()
-        .unwrap_or(0)
-        > config.max_hash_repeat
 }
 
 fn unique_in_a<H>(hash: H, stats: &HashStats<H>) -> bool
@@ -13441,12 +13407,12 @@ pub(crate) fn detect_exact_row_block_move(
     let view_a = GridView::from_grid_with_config(old, config);
     let view_b = GridView::from_grid_with_config(new, config);
 
-    if low_info_dominated(&view_a) || low_info_dominated(&view_b) {
+    if view_a.is_low_info_dominated() || view_b.is_low_info_dominated() {
         return None;
     }
 
     let stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
-    if has_heavy_repetition(&stats, config) {
+    if stats.has_heavy_repetition(config.max_hash_repeat) {
         return None;
     }
 
@@ -13457,18 +13423,18 @@ pub(crate) fn detect_exact_row_block_move(
     if meta_a
         .iter()
         .zip(meta_b.iter())
-        .all(|(a, b)| a.hash == b.hash)
+        .all(|(a, b)| a.signature == b.signature)
     {
         return None;
     }
 
-    let prefix = (0..n).find(|&idx| meta_a[idx].hash != meta_b[idx].hash)?;
+    let prefix = (0..n).find(|&idx| meta_a[idx].signature != meta_b[idx].signature)?;
 
     let mut suffix_len = 0usize;
     while suffix_len < n.saturating_sub(prefix) {
         let idx_a = n - 1 - suffix_len;
         let idx_b = n - 1 - suffix_len;
-        if meta_a[idx_a].hash == meta_b[idx_b].hash {
+        if meta_a[idx_a].signature == meta_b[idx_b].signature {
             suffix_len += 1;
         } else {
             break;
@@ -13483,7 +13449,7 @@ pub(crate) fn detect_exact_row_block_move(
 
         let mut len = 0usize;
         while src_start + len < tail_start && dst_start + len < tail_start {
-            if meta_a[src_start + len].hash != meta_b[dst_start + len].hash {
+            if meta_a[src_start + len].signature != meta_b[dst_start + len].signature {
                 break;
             }
             len += 1;
@@ -13519,7 +13485,7 @@ pub(crate) fn detect_exact_row_block_move(
                 return None;
             }
 
-            if meta_a[idx_a].hash != meta_b[idx_b].hash {
+            if meta_a[idx_a].signature != meta_b[idx_b].signature {
                 return None;
             }
 
@@ -13528,8 +13494,8 @@ pub(crate) fn detect_exact_row_block_move(
         }
 
         for meta in &meta_a[src_start..src_end] {
-            if stats.freq_a.get(&meta.hash).copied().unwrap_or(0) != 1
-                || stats.freq_b.get(&meta.hash).copied().unwrap_or(0) != 1
+            if stats.freq_a.get(&meta.signature).copied().unwrap_or(0) != 1
+                || stats.freq_b.get(&meta.signature).copied().unwrap_or(0) != 1
             {
                 return None;
             }
@@ -13543,14 +13509,14 @@ pub(crate) fn detect_exact_row_block_move(
     };
 
     if let Some(src_start) =
-        (prefix..tail_start).find(|&idx| meta_a[idx].hash == meta_b[prefix].hash)
+        (prefix..tail_start).find(|&idx| meta_a[idx].signature == meta_b[prefix].signature)
         && let Some(mv) = try_candidate(src_start, prefix)
     {
         return Some(mv);
     }
 
     if let Some(dst_start) =
-        (prefix..tail_start).find(|&idx| meta_b[idx].hash == meta_a[prefix].hash)
+        (prefix..tail_start).find(|&idx| meta_b[idx].signature == meta_a[prefix].signature)
         && let Some(mv) = try_candidate(prefix, dst_start)
     {
         return Some(mv);
@@ -13579,12 +13545,12 @@ pub(crate) fn detect_fuzzy_row_block_move(
     let view_a = GridView::from_grid_with_config(old, config);
     let view_b = GridView::from_grid_with_config(new, config);
 
-    if low_info_dominated(&view_a) || low_info_dominated(&view_b) {
+    if view_a.is_low_info_dominated() || view_b.is_low_info_dominated() {
         return None;
     }
 
     let stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
-    if has_heavy_repetition(&stats, config) {
+    if stats.has_heavy_repetition(config.max_hash_repeat) {
         return None;
     }
 
@@ -13594,14 +13560,14 @@ pub(crate) fn detect_fuzzy_row_block_move(
     if meta_a
         .iter()
         .zip(meta_b.iter())
-        .all(|(a, b)| a.hash == b.hash)
+        .all(|(a, b)| a.signature == b.signature)
     {
         return None;
     }
 
     let n = meta_a.len();
     let mut prefix = 0usize;
-    while prefix < n && meta_a[prefix].hash == meta_b[prefix].hash {
+    while prefix < n && meta_a[prefix].signature == meta_b[prefix].signature {
         prefix += 1;
     }
     if prefix == n {
@@ -13612,7 +13578,7 @@ pub(crate) fn detect_fuzzy_row_block_move(
     while suffix_len < n.saturating_sub(prefix) {
         let idx_a = n - 1 - suffix_len;
         let idx_b = idx_a;
-        if meta_a[idx_a].hash == meta_b[idx_b].hash {
+        if meta_a[idx_a].signature == meta_b[idx_b].signature {
             suffix_len += 1;
         } else {
             break;
@@ -13691,7 +13657,7 @@ pub(crate) fn detect_fuzzy_row_block_move(
     candidate
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn align_row_changes(
     old: &Grid,
     new: &Grid,
@@ -13763,12 +13729,12 @@ fn align_rows_internal(
         return None;
     }
 
-    if low_info_dominated(old_view) || low_info_dominated(new_view) {
+    if old_view.is_low_info_dominated() || new_view.is_low_info_dominated() {
         return None;
     }
 
     let stats = HashStats::from_row_meta(&old_view.row_meta, &new_view.row_meta);
-    if has_heavy_repetition(&stats, config) {
+    if stats.has_heavy_repetition(config.max_hash_repeat) {
         return None;
     }
 
@@ -13830,7 +13796,7 @@ fn find_single_gap_alignment(
         let meta_a = rows_a[idx_a];
         let meta_b = rows_b[idx_b];
 
-        if meta_a.hash == meta_b.hash {
+        if meta_a.signature == meta_b.signature {
             matched.push((meta_a.row_idx, meta_b.row_idx));
             idx_a += 1;
             idx_b += 1;
@@ -13843,14 +13809,14 @@ fn find_single_gap_alignment(
 
         match change {
             RowChange::Insert => {
-                if !is_unique_to_b(meta_b.hash, stats) {
+                if !stats.is_unique_to_b(meta_b.signature) {
                     return None;
                 }
                 inserted.push(meta_b.row_idx);
                 idx_b += 1;
             }
             RowChange::Delete => {
-                if !is_unique_to_a(meta_a.hash, stats) {
+                if !stats.is_unique_to_a(meta_a.signature) {
                     return None;
                 }
                 deleted.push(meta_a.row_idx);
@@ -13869,14 +13835,14 @@ fn find_single_gap_alignment(
         match change {
             RowChange::Insert if idx_a == rows_a.len() && rows_b.len() == idx_b + 1 => {
                 let meta_b = rows_b[idx_b];
-                if !is_unique_to_b(meta_b.hash, stats) {
+                if !stats.is_unique_to_b(meta_b.signature) {
                     return None;
                 }
                 inserted.push(meta_b.row_idx);
             }
             RowChange::Delete if idx_b == rows_b.len() && rows_a.len() == idx_a + 1 => {
                 let meta_a = rows_a[idx_a];
-                if !is_unique_to_a(meta_a.hash, stats) {
+                if !stats.is_unique_to_a(meta_a.signature) {
                     return None;
                 }
                 deleted.push(meta_a.row_idx);
@@ -13928,7 +13894,7 @@ fn find_block_gap_alignment(
     let mut prefix = 0usize;
     while prefix < rows_a.len()
         && prefix < rows_b.len()
-        && rows_a[prefix].hash == rows_b[prefix].hash
+        && rows_a[prefix].signature == rows_b[prefix].signature
     {
         prefix += 1;
     }
@@ -13937,7 +13903,7 @@ fn find_block_gap_alignment(
     while suffix < shorter_len.saturating_sub(prefix) {
         let idx_a = rows_a.len() - 1 - suffix;
         let idx_b = rows_b.len() - 1 - suffix;
-        if rows_a[idx_a].hash == rows_b[idx_b].hash {
+        if rows_a[idx_a].signature == rows_b[idx_b].signature {
             suffix += 1;
         } else {
             break;
@@ -13961,7 +13927,7 @@ fn find_block_gap_alignment(
             }
 
             for meta in &rows_b[block_start..block_end] {
-                if !is_unique_to_b(meta.hash, stats) {
+                if !stats.is_unique_to_b(meta.signature) {
                     return None;
                 }
                 inserted.push(meta.row_idx);
@@ -13980,7 +13946,7 @@ fn find_block_gap_alignment(
             }
 
             for meta in &rows_a[block_start..block_end] {
-                if !is_unique_to_a(meta.hash, stats) {
+                if !stats.is_unique_to_a(meta.signature) {
                     return None;
                 }
                 deleted.push(meta.row_idx);
@@ -14016,40 +13982,10 @@ fn is_monotonic(pairs: &[(u32, u32)]) -> bool {
     pairs.windows(2).all(|w| w[0].0 < w[1].0 && w[0].1 < w[1].1)
 }
 
-fn is_unique_to_b(hash: RowHash, stats: &HashStats<RowHash>) -> bool {
-    stats.freq_a.get(&hash).copied().unwrap_or(0) == 0
-        && stats.freq_b.get(&hash).copied().unwrap_or(0) == 1
-}
-
-fn is_unique_to_a(hash: RowHash, stats: &HashStats<RowHash>) -> bool {
-    stats.freq_a.get(&hash).copied().unwrap_or(0) == 1
-        && stats.freq_b.get(&hash).copied().unwrap_or(0) == 0
-}
-
 fn is_within_size_bounds(old: &Grid, new: &Grid, config: &DiffConfig) -> bool {
     let rows = old.nrows.max(new.nrows);
     let cols = old.ncols.max(new.ncols);
     rows <= config.max_align_rows && cols <= config.max_align_cols
-}
-
-fn low_info_dominated(view: &GridView<'_>) -> bool {
-    if view.row_meta.is_empty() {
-        return false;
-    }
-
-    let low_info_count = view.row_meta.iter().filter(|m| m.is_low_info).count();
-    low_info_count * 2 > view.row_meta.len()
-}
-
-fn has_heavy_repetition(stats: &HashStats<RowHash>, config: &DiffConfig) -> bool {
-    stats
-        .freq_a
-        .values()
-        .chain(stats.freq_b.values())
-        .copied()
-        .max()
-        .unwrap_or(0)
-        > config.max_hash_repeat
 }
 
 fn hashes_match(slice_a: &[RowMeta], slice_b: &[RowMeta]) -> bool {
@@ -14057,12 +13993,12 @@ fn hashes_match(slice_a: &[RowMeta], slice_b: &[RowMeta]) -> bool {
         && slice_a
             .iter()
             .zip(slice_b.iter())
-            .all(|(a, b)| a.hash == b.hash)
+            .all(|(a, b)| a.signature == b.signature)
 }
 
 fn block_similarity(slice_a: &[RowMeta], slice_b: &[RowMeta]) -> f64 {
-    let tokens_a: HashSet<RowHash> = slice_a.iter().map(|m| m.hash).collect();
-    let tokens_b: HashSet<RowHash> = slice_b.iter().map(|m| m.hash).collect();
+    let tokens_a: HashSet<RowHash> = slice_a.iter().map(|m| m.signature).collect();
+    let tokens_b: HashSet<RowHash> = slice_b.iter().map(|m| m.signature).collect();
 
     let intersection = tokens_a.intersection(&tokens_b).count();
     let union = tokens_a.union(&tokens_b).count();
@@ -14075,7 +14011,7 @@ fn block_similarity(slice_a: &[RowMeta], slice_b: &[RowMeta]) -> f64 {
     let positional_matches = slice_a
         .iter()
         .zip(slice_b.iter())
-        .filter(|(a, b)| a.hash == b.hash)
+        .filter(|(a, b)| a.signature == b.signature)
         .count();
     let positional_ratio = (positional_matches as f64 + 1.0) / (slice_a.len() as f64 + 1.0);
 
@@ -20573,7 +20509,6 @@ fn row_meta(row_idx: u32, hash: RowHash) -> RowMeta {
     RowMeta {
         row_idx,
         signature: hash,
-        hash,
         non_blank_count: 0,
         first_non_blank_col: 0,
         frequency_class: FrequencyClass::Common,
@@ -20851,7 +20786,7 @@ fn gridview_column_metadata_matches_signatures() {
     }
 
     for (idx, meta) in view.row_meta.iter().enumerate() {
-        assert_eq!(meta.hash, row_signatures[idx]);
+        assert_eq!(meta.signature, row_signatures[idx]);
     }
 
     assert_eq!(view.col_meta[0].non_blank_count, 2);
@@ -20926,7 +20861,7 @@ fn gridview_row_hashes_ignore_small_float_drift() {
     let view_b = GridView::from_grid(&grid_b);
 
     assert_eq!(
-        view_a.row_meta[0].hash, view_b.row_meta[0].hash,
+        view_a.row_meta[0].signature, view_b.row_meta[0].signature,
         "row signatures should be stable under ULP-level float differences"
     );
 }
@@ -27106,7 +27041,7 @@ fn gridview_rowmeta_hash_matches_compute_all_signatures() {
     let view = GridView::from_grid(&grid);
 
     for (idx, meta) in view.row_meta.iter().enumerate() {
-        assert_eq!(meta.hash, row_signatures[idx]);
+        assert_eq!(meta.signature, row_signatures[idx]);
     }
 
     for (idx, meta) in view.col_meta.iter().enumerate() {
@@ -27137,8 +27072,8 @@ fn row_signature_unchanged_after_column_insert_at_position_zero() {
     let view1 = GridView::from_grid(&grid1);
     let view2 = GridView::from_grid(&grid2);
 
-    assert_ne!(view1.row_meta[0].hash, view2.row_meta[0].hash);
-    assert_ne!(view1.row_meta[1].hash, view2.row_meta[1].hash);
+    assert_ne!(view1.row_meta[0].signature, view2.row_meta[0].signature);
+    assert_ne!(view1.row_meta[1].signature, view2.row_meta[1].signature);
 }
 
 #[test]
@@ -27164,8 +27099,8 @@ fn row_signature_unchanged_after_column_delete_from_middle() {
     let view1 = GridView::from_grid(&grid1);
     let view2 = GridView::from_grid(&grid2);
 
-    assert_ne!(view1.row_meta[0].hash, view2.row_meta[0].hash);
-    assert_ne!(view1.row_meta[1].hash, view2.row_meta[1].hash);
+    assert_ne!(view1.row_meta[0].signature, view2.row_meta[0].signature);
+    assert_ne!(view1.row_meta[1].signature, view2.row_meta[1].signature);
 }
 
 #[test]
@@ -27183,7 +27118,7 @@ fn row_signature_consistent_for_same_content_different_column_indices() {
     let view1 = GridView::from_grid(&grid1);
     let view2 = GridView::from_grid(&grid2);
 
-    assert_eq!(view1.row_meta[0].hash, view2.row_meta[0].hash);
+    assert_eq!(view1.row_meta[0].signature, view2.row_meta[0].signature);
 }
 
 ```

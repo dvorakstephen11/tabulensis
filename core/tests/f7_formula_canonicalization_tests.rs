@@ -42,4 +42,3 @@ fn structured_refs_parse_and_canonicalize() {
     let b = parse_formula("TABLE1[COLUMN1]").unwrap().canonicalize();
     assert_eq!(a, b);
 }
-

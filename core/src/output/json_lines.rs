@@ -50,6 +50,10 @@ impl<W: Write> JsonLinesSink<W> {
 }
 
 impl<W: Write> DiffSink for JsonLinesSink<W> {
+    fn begin(&mut self, pool: &StringPool) -> Result<(), DiffError> {
+        JsonLinesSink::begin(self, pool)
+    }
+
     fn emit(&mut self, op: DiffOp) -> Result<(), DiffError> {
         serde_json::to_writer(&mut self.w, &op).map_err(|e| DiffError::SinkError {
             message: e.to_string(),

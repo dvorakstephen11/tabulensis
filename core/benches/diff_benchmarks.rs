@@ -1,7 +1,8 @@
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use excel_diff::config::DiffConfig;
-use excel_diff::diff_workbooks;
-use excel_diff::{CellValue, Grid, Sheet, SheetKind, Workbook, with_default_session};
+use excel_diff::{
+    CellValue, DiffConfig, DiffSession, Grid, Sheet, SheetKind, Workbook,
+    try_diff_workbooks_with_pool,
+};
 use std::time::Duration;
 
 const MAX_BENCH_TIME_SECS: u64 = 30;
@@ -64,14 +65,15 @@ fn create_sparse_grid(nrows: u32, ncols: u32, fill_percent: u32, seed: u64) -> G
     grid
 }
 
-fn single_sheet_workbook(name: &str, grid: Grid) -> Workbook {
-    with_default_session(|session| Workbook {
+fn single_sheet_workbook(session: &mut DiffSession, name: &str, grid: Grid) -> Workbook {
+    let sheet_name = session.strings.intern(name);
+    Workbook {
         sheets: vec![Sheet {
-            name: session.strings.intern(name),
+            name: sheet_name,
             kind: SheetKind::Worksheet,
             grid,
         }],
-    })
+    }
 }
 
 fn bench_identical_grids(c: &mut Criterion) {
@@ -81,15 +83,19 @@ fn bench_identical_grids(c: &mut Criterion) {
     group.sample_size(SAMPLE_SIZE);
 
     for size in [500u32, 1000, 2000, 5000].iter() {
+        let mut session = DiffSession::new();
         let grid_a = create_large_grid(*size, 50, 0);
         let grid_b = create_large_grid(*size, 50, 0);
-        let wb_a = single_sheet_workbook("Bench", grid_a);
-        let wb_b = single_sheet_workbook("Bench", grid_b);
+        let wb_a = single_sheet_workbook(&mut session, "Bench", grid_a);
+        let wb_b = single_sheet_workbook(&mut session, "Bench", grid_b);
         let config = DiffConfig::default();
 
         group.throughput(Throughput::Elements(*size as u64 * 50));
-        group.bench_with_input(BenchmarkId::new("rows", size), size, |b, _| {
-            b.iter(|| diff_workbooks(&wb_a, &wb_b, &config));
+        group.bench_with_input(BenchmarkId::new("rows", size), size, move |b, _| {
+            b.iter(|| {
+                let _ = try_diff_workbooks_with_pool(&wb_a, &wb_b, &mut session.strings, &config)
+                    .expect("diff should succeed");
+            });
         });
     }
     group.finish();
@@ -102,16 +108,20 @@ fn bench_single_cell_edit(c: &mut Criterion) {
     group.sample_size(SAMPLE_SIZE);
 
     for size in [500u32, 1000, 2000, 5000].iter() {
+        let mut session = DiffSession::new();
         let grid_a = create_large_grid(*size, 50, 0);
         let mut grid_b = create_large_grid(*size, 50, 0);
         grid_b.insert_cell(size / 2, 25, Some(CellValue::Number(999999.0)), None);
-        let wb_a = single_sheet_workbook("Bench", grid_a);
-        let wb_b = single_sheet_workbook("Bench", grid_b);
+        let wb_a = single_sheet_workbook(&mut session, "Bench", grid_a);
+        let wb_b = single_sheet_workbook(&mut session, "Bench", grid_b);
         let config = DiffConfig::default();
 
         group.throughput(Throughput::Elements(*size as u64 * 50));
-        group.bench_with_input(BenchmarkId::new("rows", size), size, |b, _| {
-            b.iter(|| diff_workbooks(&wb_a, &wb_b, &config));
+        group.bench_with_input(BenchmarkId::new("rows", size), size, move |b, _| {
+            b.iter(|| {
+                let _ = try_diff_workbooks_with_pool(&wb_a, &wb_b, &mut session.strings, &config)
+                    .expect("diff should succeed");
+            });
         });
     }
     group.finish();
@@ -124,15 +134,19 @@ fn bench_all_rows_different(c: &mut Criterion) {
     group.sample_size(SAMPLE_SIZE);
 
     for size in [500u32, 1000, 2000].iter() {
+        let mut session = DiffSession::new();
         let grid_a = create_large_grid(*size, 50, 0);
         let grid_b = create_large_grid(*size, 50, 1);
-        let wb_a = single_sheet_workbook("Bench", grid_a);
-        let wb_b = single_sheet_workbook("Bench", grid_b);
+        let wb_a = single_sheet_workbook(&mut session, "Bench", grid_a);
+        let wb_b = single_sheet_workbook(&mut session, "Bench", grid_b);
         let config = DiffConfig::default();
 
         group.throughput(Throughput::Elements(*size as u64 * 50));
-        group.bench_with_input(BenchmarkId::new("rows", size), size, |b, _| {
-            b.iter(|| diff_workbooks(&wb_a, &wb_b, &config));
+        group.bench_with_input(BenchmarkId::new("rows", size), size, move |b, _| {
+            b.iter(|| {
+                let _ = try_diff_workbooks_with_pool(&wb_a, &wb_b, &mut session.strings, &config)
+                    .expect("diff should succeed");
+            });
         });
     }
     group.finish();
@@ -145,16 +159,20 @@ fn bench_adversarial_repetitive(c: &mut Criterion) {
     group.sample_size(SAMPLE_SIZE);
 
     for size in [500u32, 1000, 2000].iter() {
+        let mut session = DiffSession::new();
         let grid_a = create_repetitive_grid(*size, 50, 100);
         let mut grid_b = create_repetitive_grid(*size, 50, 100);
         grid_b.insert_cell(size / 2, 25, Some(CellValue::Number(999999.0)), None);
-        let wb_a = single_sheet_workbook("Bench", grid_a);
-        let wb_b = single_sheet_workbook("Bench", grid_b);
+        let wb_a = single_sheet_workbook(&mut session, "Bench", grid_a);
+        let wb_b = single_sheet_workbook(&mut session, "Bench", grid_b);
         let config = DiffConfig::default();
 
         group.throughput(Throughput::Elements(*size as u64 * 50));
-        group.bench_with_input(BenchmarkId::new("rows", size), size, |b, _| {
-            b.iter(|| diff_workbooks(&wb_a, &wb_b, &config));
+        group.bench_with_input(BenchmarkId::new("rows", size), size, move |b, _| {
+            b.iter(|| {
+                let _ = try_diff_workbooks_with_pool(&wb_a, &wb_b, &mut session.strings, &config)
+                    .expect("diff should succeed");
+            });
         });
     }
     group.finish();
@@ -167,16 +185,20 @@ fn bench_sparse_grid(c: &mut Criterion) {
     group.sample_size(SAMPLE_SIZE);
 
     for size in [500u32, 1000, 2000, 5000].iter() {
+        let mut session = DiffSession::new();
         let grid_a = create_sparse_grid(*size, 100, 1, 12345);
         let mut grid_b = create_sparse_grid(*size, 100, 1, 12345);
         grid_b.insert_cell(size / 2, 50, Some(CellValue::Number(999999.0)), None);
-        let wb_a = single_sheet_workbook("Bench", grid_a);
-        let wb_b = single_sheet_workbook("Bench", grid_b);
+        let wb_a = single_sheet_workbook(&mut session, "Bench", grid_a);
+        let wb_b = single_sheet_workbook(&mut session, "Bench", grid_b);
         let config = DiffConfig::default();
 
         group.throughput(Throughput::Elements(*size as u64 * 100));
-        group.bench_with_input(BenchmarkId::new("rows", size), size, |b, _| {
-            b.iter(|| diff_workbooks(&wb_a, &wb_b, &config));
+        group.bench_with_input(BenchmarkId::new("rows", size), size, move |b, _| {
+            b.iter(|| {
+                let _ = try_diff_workbooks_with_pool(&wb_a, &wb_b, &mut session.strings, &config)
+                    .expect("diff should succeed");
+            });
         });
     }
     group.finish();
@@ -189,6 +211,7 @@ fn bench_row_insertion(c: &mut Criterion) {
     group.sample_size(SAMPLE_SIZE);
 
     for size in [500u32, 1000, 2000].iter() {
+        let mut session = DiffSession::new();
         let grid_a = create_large_grid(*size, 50, 0);
         let mut grid_b = Grid::new(size + 100, 50);
         for row in 0..(size / 2) {
@@ -219,13 +242,16 @@ fn bench_row_insertion(c: &mut Criterion) {
                 );
             }
         }
-        let wb_a = single_sheet_workbook("Bench", grid_a);
-        let wb_b = single_sheet_workbook("Bench", grid_b);
+        let wb_a = single_sheet_workbook(&mut session, "Bench", grid_a);
+        let wb_b = single_sheet_workbook(&mut session, "Bench", grid_b);
         let config = DiffConfig::default();
 
         group.throughput(Throughput::Elements(*size as u64 * 50));
-        group.bench_with_input(BenchmarkId::new("rows", size), size, |b, _| {
-            b.iter(|| diff_workbooks(&wb_a, &wb_b, &config));
+        group.bench_with_input(BenchmarkId::new("rows", size), size, move |b, _| {
+            b.iter(|| {
+                let _ = try_diff_workbooks_with_pool(&wb_a, &wb_b, &mut session.strings, &config)
+                    .expect("diff should succeed");
+            });
         });
     }
     group.finish();

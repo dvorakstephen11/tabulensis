@@ -19,14 +19,8 @@ fn parses_expected_ast_shapes() {
         ("\"x\"", FormulaExpr::Text("x".to_string())),
         ("TRUE", FormulaExpr::Boolean(true)),
         ("#DIV/0!", FormulaExpr::Error(ExcelError::Div0)),
-        (
-            "A1",
-            cell(None, RowRef::Relative(1), ColRef::Relative(1)),
-        ),
-        (
-            "$B$2",
-            cell(None, RowRef::Absolute(2), ColRef::Absolute(2)),
-        ),
+        ("A1", cell(None, RowRef::Relative(1), ColRef::Relative(1))),
+        ("$B$2", cell(None, RowRef::Absolute(2), ColRef::Absolute(2))),
         (
             "R[1]C[-1]",
             cell(None, RowRef::Offset(1), ColRef::Offset(-1)),

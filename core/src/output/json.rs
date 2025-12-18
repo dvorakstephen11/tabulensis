@@ -10,7 +10,6 @@ use crate::excel_open_xml::{PackageError, open_data_mashup, open_workbook};
 use crate::session::DiffSession;
 #[cfg(feature = "excel-open-xml")]
 use crate::sink::VecSink;
-use crate::string_pool::StringId;
 use serde::Serialize;
 use serde::ser::Error as SerdeError;
 #[cfg(feature = "excel-open-xml")]
@@ -67,8 +66,7 @@ pub fn diff_workbooks(
         session.strings_mut(),
         config,
         &mut sink,
-    )
-    .map_err(|e| PackageError::SerializationError(e.to_string()))?;
+    )?;
 
     let m_ops = crate::m_diff::diff_m_ops_for_packages(&dm_a, &dm_b, session.strings_mut(), config);
 
@@ -91,16 +89,12 @@ pub fn diff_report_to_cell_diffs(report: &DiffReport) -> Vec<CellDiff> {
     use crate::diff::DiffOp;
     use crate::workbook::CellValue;
 
-    fn resolve_string<'a>(report: &'a DiffReport, id: StringId) -> Option<&'a str> {
-        report.strings.get(id.0 as usize).map(|s| s.as_str())
-    }
-
     fn render_value(report: &DiffReport, value: &Option<CellValue>) -> Option<String> {
         match value {
             Some(CellValue::Number(n)) => Some(n.to_string()),
-            Some(CellValue::Text(id)) => resolve_string(report, *id).map(|s| s.to_string()),
+            Some(CellValue::Text(id)) => report.resolve(*id).map(|s| s.to_string()),
             Some(CellValue::Bool(b)) => Some(b.to_string()),
-            Some(CellValue::Error(id)) => resolve_string(report, *id).map(|s| s.to_string()),
+            Some(CellValue::Error(id)) => report.resolve(*id).map(|s| s.to_string()),
             Some(CellValue::Blank) => Some(String::new()),
             None => None,
         }

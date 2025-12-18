@@ -1,7 +1,9 @@
 use excel_diff::{
-    DataMashup, DiffConfig, DiffError, DiffOp, DiffSink, Grid, Metadata, PackageParts, PackageXml,
-    Permissions, SectionDocument, Sheet, SheetKind, Workbook, WorkbookPackage,
+    CellValue, DataMashup, DiffConfig, DiffError, DiffOp, DiffSink, Grid, JsonLinesSink, Metadata,
+    PackageParts, PackageXml, Permissions, SectionDocument, Sheet, SheetKind, StringId, Workbook,
+    WorkbookPackage,
 };
+use serde::Deserialize;
 
 #[derive(Default)]
 struct StrictSink {
@@ -225,4 +227,120 @@ fn package_diff_streaming_finishes_on_m_emit_error() {
         "sink.finish() should be called on M emit error"
     );
     assert_eq!(sink.finish_calls, 1, "finish should be called exactly once");
+}
+
+#[test]
+fn package_streaming_json_lines_header_includes_m_strings() {
+    #[derive(Deserialize)]
+    struct Header {
+        kind: String,
+        strings: Vec<String>,
+    }
+
+    fn collect_string_ids(op: &DiffOp) -> Vec<StringId> {
+        fn collect_cell_value(ids: &mut Vec<StringId>, value: &CellValue) {
+            match value {
+                CellValue::Text(id) | CellValue::Error(id) => ids.push(*id),
+                CellValue::Number(_) | CellValue::Bool(_) | CellValue::Blank => {}
+            }
+        }
+
+        fn collect_snapshot(ids: &mut Vec<StringId>, snap: &excel_diff::CellSnapshot) {
+            if let Some(value) = &snap.value {
+                collect_cell_value(ids, value);
+            }
+            if let Some(formula) = snap.formula {
+                ids.push(formula);
+            }
+        }
+
+        let mut ids = Vec::new();
+        match op {
+            DiffOp::SheetAdded { sheet } | DiffOp::SheetRemoved { sheet } => ids.push(*sheet),
+            DiffOp::RowAdded { sheet, .. } | DiffOp::RowRemoved { sheet, .. } => ids.push(*sheet),
+            DiffOp::ColumnAdded { sheet, .. } | DiffOp::ColumnRemoved { sheet, .. } => {
+                ids.push(*sheet);
+            }
+            DiffOp::BlockMovedRows { sheet, .. }
+            | DiffOp::BlockMovedColumns { sheet, .. }
+            | DiffOp::BlockMovedRect { sheet, .. } => ids.push(*sheet),
+            DiffOp::CellEdited {
+                sheet, from, to, ..
+            } => {
+                ids.push(*sheet);
+                collect_snapshot(&mut ids, from);
+                collect_snapshot(&mut ids, to);
+            }
+            DiffOp::QueryAdded { name }
+            | DiffOp::QueryRemoved { name }
+            | DiffOp::QueryDefinitionChanged { name, .. } => ids.push(*name),
+            DiffOp::QueryRenamed { from, to } => {
+                ids.push(*from);
+                ids.push(*to);
+            }
+            DiffOp::QueryMetadataChanged { name, old, new, .. } => {
+                ids.push(*name);
+                ids.extend(old.iter().copied());
+                ids.extend(new.iter().copied());
+            }
+            _ => {}
+        }
+        ids
+    }
+
+    let wb = make_workbook("Sheet1");
+
+    let dm_a = make_dm("section Section1;\nshared Foo = 1;");
+    let dm_b = make_dm("section Section1;\nshared Bar = 1;");
+
+    let pkg_a = WorkbookPackage {
+        workbook: wb.clone(),
+        data_mashup: Some(dm_a),
+    };
+    let pkg_b = WorkbookPackage {
+        workbook: wb,
+        data_mashup: Some(dm_b),
+    };
+
+    let mut out = Vec::<u8>::new();
+    let mut sink = JsonLinesSink::new(&mut out);
+
+    let summary = pkg_a
+        .diff_streaming(&pkg_b, &DiffConfig::default(), &mut sink)
+        .expect("diff_streaming should succeed");
+
+    let text = std::str::from_utf8(&out).expect("output should be valid UTF-8");
+    let mut lines = text.lines().filter(|l| !l.trim().is_empty());
+    let header_line = lines.next().expect("expected a JSON Lines header line");
+    let header: Header = serde_json::from_str(header_line).expect("header should parse");
+
+    assert_eq!(header.kind, "Header");
+    assert!(
+        header.strings.iter().any(|s| s == "Section1/Foo"),
+        "expected header string table to include query name Section1/Foo"
+    );
+    assert!(
+        header.strings.iter().any(|s| s == "Section1/Bar"),
+        "expected header string table to include query name Section1/Bar"
+    );
+
+    let mut op_lines = 0usize;
+    for line in lines {
+        let op: DiffOp = serde_json::from_str(line).expect("op line should parse as DiffOp");
+        for id in collect_string_ids(&op) {
+            assert!(
+                (id.0 as usize) < header.strings.len(),
+                "StringId {} out of range for header string table (len={})",
+                id.0,
+                header.strings.len()
+            );
+        }
+        op_lines += 1;
+    }
+
+    assert!(op_lines > 0, "expected at least one op line after header");
+    assert_eq!(
+        summary.op_count, op_lines,
+        "summary op_count should match number of ops written after the header"
+    );
 }

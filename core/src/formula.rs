@@ -208,7 +208,10 @@ fn is_commutative_function(name: &str) -> bool {
 }
 
 fn is_commutative_binary(op: BinaryOperator) -> bool {
-    matches!(op, BinaryOperator::Add | BinaryOperator::Mul | BinaryOperator::Eq | BinaryOperator::Ne)
+    matches!(
+        op,
+        BinaryOperator::Add | BinaryOperator::Mul | BinaryOperator::Eq | BinaryOperator::Ne
+    )
 }
 
 fn canonical_sort_key(e: &FormulaExpr) -> String {
@@ -216,7 +219,12 @@ fn canonical_sort_key(e: &FormulaExpr) -> String {
 }
 
 fn ref_sort_key(r: &CellReference) -> (i64, i64, u8, u8) {
-    (row_key(r.row), col_key(r.col), abs_key_row(r.row), abs_key_col(r.col))
+    (
+        row_key(r.row),
+        col_key(r.col),
+        abs_key_row(r.row),
+        abs_key_col(r.col),
+    )
 }
 
 fn row_key(r: RowRef) -> i64 {
@@ -251,7 +259,9 @@ fn abs_key_col(c: ColRef) -> u8 {
 
 fn shift_expr(e: &FormulaExpr, row_shift: i32, col_shift: i32, mode: ShiftMode) -> FormulaExpr {
     match e {
-        FormulaExpr::CellRef(r) => FormulaExpr::CellRef(shift_cell_ref(r, row_shift, col_shift, mode)),
+        FormulaExpr::CellRef(r) => {
+            FormulaExpr::CellRef(shift_cell_ref(r, row_shift, col_shift, mode))
+        }
         FormulaExpr::RangeRef(r) => {
             let mut rr = r.clone();
             rr.start = shift_cell_ref(&rr.start, row_shift, col_shift, mode);
@@ -260,7 +270,10 @@ fn shift_expr(e: &FormulaExpr, row_shift: i32, col_shift: i32, mode: ShiftMode) 
         }
         FormulaExpr::FunctionCall { name, args } => FormulaExpr::FunctionCall {
             name: name.clone(),
-            args: args.iter().map(|a| shift_expr(a, row_shift, col_shift, mode)).collect(),
+            args: args
+                .iter()
+                .map(|a| shift_expr(a, row_shift, col_shift, mode))
+                .collect(),
         },
         FormulaExpr::UnaryOp { op, operand } => FormulaExpr::UnaryOp {
             op: *op,
@@ -273,14 +286,23 @@ fn shift_expr(e: &FormulaExpr, row_shift: i32, col_shift: i32, mode: ShiftMode) 
         },
         FormulaExpr::Array(rows) => FormulaExpr::Array(
             rows.iter()
-                .map(|row| row.iter().map(|x| shift_expr(x, row_shift, col_shift, mode)).collect())
+                .map(|row| {
+                    row.iter()
+                        .map(|x| shift_expr(x, row_shift, col_shift, mode))
+                        .collect()
+                })
                 .collect(),
         ),
         _ => e.clone(),
     }
 }
 
-fn shift_cell_ref(r: &CellReference, row_shift: i32, col_shift: i32, mode: ShiftMode) -> CellReference {
+fn shift_cell_ref(
+    r: &CellReference,
+    row_shift: i32,
+    col_shift: i32,
+    mode: ShiftMode,
+) -> CellReference {
     let mut out = r.clone();
     out.row = shift_row_ref(r.row, row_shift, mode);
     out.col = shift_col_ref(r.col, col_shift, mode);
@@ -326,7 +348,9 @@ pub fn formulas_equivalent_modulo_shift(
     row_shift: i32,
     col_shift: i32,
 ) -> bool {
-    let a_shifted = a.shifted(row_shift, col_shift, ShiftMode::RelativeOnly).canonicalize();
+    let a_shifted = a
+        .shifted(row_shift, col_shift, ShiftMode::RelativeOnly)
+        .canonicalize();
     let b_canon = b.canonicalize();
     a_shifted == b_canon
 }
@@ -338,7 +362,10 @@ struct Parser<'a> {
 
 impl<'a> Parser<'a> {
     fn new(input: &'a str) -> Self {
-        Self { s: input.as_bytes(), pos: 0 }
+        Self {
+            s: input.as_bytes(),
+            pos: 0,
+        }
     }
 
     fn eof(&self) -> bool {
@@ -362,7 +389,10 @@ impl<'a> Parser<'a> {
     }
 
     fn err(&self, msg: &str) -> FormulaParseError {
-        FormulaParseError { pos: self.pos, message: msg.to_string() }
+        FormulaParseError {
+            pos: self.pos,
+            message: msg.to_string(),
+        }
     }
 
     fn parse_expr(&mut self, min_bp: u8) -> Result<FormulaExpr, FormulaParseError> {
@@ -375,7 +405,10 @@ impl<'a> Parser<'a> {
                 _ => return Err(self.err("invalid unary op")),
             };
             let rhs = self.parse_expr(90)?;
-            FormulaExpr::UnaryOp { op, operand: Box::new(rhs) }
+            FormulaExpr::UnaryOp {
+                op,
+                operand: Box::new(rhs),
+            }
         } else {
             self.parse_primary()?
         };
@@ -385,7 +418,10 @@ impl<'a> Parser<'a> {
 
             while matches!(self.peek(), Some(b'%')) {
                 self.bump();
-                lhs = FormulaExpr::UnaryOp { op: UnaryOperator::Percent, operand: Box::new(lhs) };
+                lhs = FormulaExpr::UnaryOp {
+                    op: UnaryOperator::Percent,
+                    operand: Box::new(lhs),
+                };
                 self.skip_ws();
             }
 
@@ -400,7 +436,11 @@ impl<'a> Parser<'a> {
 
             self.consume_infix_op(op)?;
             let rhs = self.parse_expr(r_bp)?;
-            lhs = FormulaExpr::BinaryOp { op, left: Box::new(lhs), right: Box::new(rhs) };
+            lhs = FormulaExpr::BinaryOp {
+                op,
+                left: Box::new(lhs),
+                right: Box::new(rhs),
+            };
         }
 
         Ok(lhs)
@@ -482,7 +522,9 @@ impl<'a> Parser<'a> {
                 self.parse_number()
             }
             Some(b'\'' | b'[') => self.parse_ref_or_name_with_optional_sheet(),
-            Some(b'$' | b'A'..=b'Z' | b'a'..=b'z' | b'_') => self.parse_ref_or_name_with_optional_sheet(),
+            Some(b'$' | b'A'..=b'Z' | b'a'..=b'z' | b'_') => {
+                self.parse_ref_or_name_with_optional_sheet()
+            }
             _ => Err(self.err("unexpected token")),
         }
     }
@@ -511,7 +553,9 @@ impl<'a> Parser<'a> {
                 let start = self.pos;
                 while let Some(b) = self.peek() {
                     if b == b'!' {
-                        let sheet = std::str::from_utf8(&self.s[start..self.pos]).unwrap().to_string();
+                        let sheet = std::str::from_utf8(&self.s[start..self.pos])
+                            .unwrap()
+                            .to_string();
                         self.bump();
                         return Ok(Some(sheet));
                     }
@@ -540,7 +584,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_ref_or_name(&mut self, sheet: Option<String>) -> Result<FormulaExpr, FormulaParseError> {
+    fn parse_ref_or_name(
+        &mut self,
+        sheet: Option<String>,
+    ) -> Result<FormulaExpr, FormulaParseError> {
         self.skip_ws();
 
         if matches!(self.peek(), Some(b'0'..=b'9')) && self.looks_like_row_range() {
@@ -817,7 +864,9 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        let ident = std::str::from_utf8(&self.s[start..self.pos]).unwrap().to_string();
+        let ident = std::str::from_utf8(&self.s[start..self.pos])
+            .unwrap()
+            .to_string();
         Ok(ident)
     }
 
@@ -832,7 +881,9 @@ impl<'a> Parser<'a> {
                     self.pos += 1;
                     continue;
                 }
-                let name = std::str::from_utf8(&self.s[start..self.pos - 1]).unwrap().replace("''", "'");
+                let name = std::str::from_utf8(&self.s[start..self.pos - 1])
+                    .unwrap()
+                    .replace("''", "'");
                 return Ok(name);
             }
         }
@@ -897,7 +948,8 @@ impl<'a> Parser<'a> {
             self.pos += 1;
         }
         let txt = std::str::from_utf8(&self.s[start..self.pos]).unwrap();
-        txt.parse::<i32>().map_err(|_| self.err("invalid signed int"))
+        txt.parse::<i32>()
+            .map_err(|_| self.err("invalid signed int"))
     }
 
     fn parse_u32(&mut self) -> Result<u32, FormulaParseError> {
@@ -910,7 +962,10 @@ impl<'a> Parser<'a> {
         txt.parse::<u32>().map_err(|_| self.err("invalid number"))
     }
 
-    fn try_parse_a1_cell_ref(&mut self, sheet: Option<String>) -> Result<Option<CellReference>, FormulaParseError> {
+    fn try_parse_a1_cell_ref(
+        &mut self,
+        sheet: Option<String>,
+    ) -> Result<Option<CellReference>, FormulaParseError> {
         self.skip_ws();
         let start = self.pos;
 
@@ -950,7 +1005,9 @@ impl<'a> Parser<'a> {
         }
 
         let row_txt = std::str::from_utf8(&self.s[row_start..self.pos]).unwrap();
-        let row_num = row_txt.parse::<u32>().map_err(|_| self.err("invalid row"))?;
+        let row_num = row_txt
+            .parse::<u32>()
+            .map_err(|_| self.err("invalid row"))?;
 
         let mut spill = false;
         if self.peek() == Some(b'#') {
@@ -960,8 +1017,16 @@ impl<'a> Parser<'a> {
 
         Ok(Some(CellReference {
             sheet,
-            row: if row_abs { RowRef::Absolute(row_num) } else { RowRef::Relative(row_num) },
-            col: if col_abs { ColRef::Absolute(col_num) } else { ColRef::Relative(col_num) },
+            row: if row_abs {
+                RowRef::Absolute(row_num)
+            } else {
+                RowRef::Relative(row_num)
+            },
+            col: if col_abs {
+                ColRef::Absolute(col_num)
+            } else {
+                ColRef::Relative(col_num)
+            },
             spill,
         }))
     }

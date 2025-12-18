@@ -29,7 +29,7 @@ use crate::config::DiffConfig;
 use crate::grid_view::{GridView, HashStats, RowHash, RowMeta};
 use crate::workbook::Grid;
 
-pub(crate) use crate::alignment::{RowAlignment, RowBlockMove};
+pub(crate) use crate::alignment_types::{RowAlignment, RowBlockMove};
 
 const _HASH_COLLISION_NOTE: &str = "128-bit xxHash3 collision probability ~10^-29 at 50K rows (birthday bound); \
      secondary verification not required; see hashing.rs for detailed rationale.";

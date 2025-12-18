@@ -1,4 +1,4 @@
-use excel_diff::{canonicalize_m_ast, parse_m_expression, MAstKind};
+use excel_diff::{MAstKind, canonicalize_m_ast, parse_m_expression};
 
 fn assert_opaque(expr: &str) {
     let mut ast = parse_m_expression(expr).expect("expression should parse into an AST container");

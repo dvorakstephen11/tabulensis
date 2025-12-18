@@ -43,7 +43,9 @@ impl WorkbookPackage {
     }
 
     pub fn diff(&self, other: &Self, config: &DiffConfig) -> DiffReport {
-        crate::with_default_session(|session| self.diff_with_pool(other, &mut session.strings, config))
+        crate::with_default_session(|session| {
+            self.diff_with_pool(other, &mut session.strings, config)
+        })
     }
 
     pub fn diff_with_pool(
@@ -52,7 +54,8 @@ impl WorkbookPackage {
         pool: &mut crate::string_pool::StringPool,
         config: &DiffConfig,
     ) -> DiffReport {
-        let mut report = crate::engine::diff_workbooks(&self.workbook, &other.workbook, pool, config);
+        let mut report =
+            crate::engine::diff_workbooks(&self.workbook, &other.workbook, pool, config);
 
         let m_ops = crate::m_diff::diff_m_ops_for_packages(
             &self.data_mashup,
@@ -84,6 +87,13 @@ impl WorkbookPackage {
         config: &DiffConfig,
         sink: &mut S,
     ) -> Result<DiffSummary, DiffError> {
+        let m_ops = crate::m_diff::diff_m_ops_for_packages(
+            &self.data_mashup,
+            &other.data_mashup,
+            pool,
+            config,
+        );
+
         let grid_result = {
             let mut no_finish = NoFinishSink::new(sink);
             crate::engine::try_diff_workbooks_streaming(
@@ -102,13 +112,6 @@ impl WorkbookPackage {
                 return Err(e);
             }
         };
-
-        let m_ops = crate::m_diff::diff_m_ops_for_packages(
-            &self.data_mashup,
-            &other.data_mashup,
-            pool,
-            config,
-        );
 
         for op in m_ops {
             if let Err(e) = sink.emit(op) {

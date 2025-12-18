@@ -158,7 +158,11 @@ impl<'a> GridView<'a> {
         if self.col_meta.is_empty() {
             return false;
         }
-        let blank = self.col_meta.iter().filter(|m| m.non_blank_count == 0).count();
+        let blank = self
+            .col_meta
+            .iter()
+            .filter(|m| m.non_blank_count == 0)
+            .count();
         blank * 2 > self.col_meta.len()
     }
 }

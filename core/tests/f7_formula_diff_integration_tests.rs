@@ -82,9 +82,7 @@ fn filled_down_formulas_detect_row_shift() {
     let cell_edit = cell_edit_op(&report);
     match cell_edit {
         DiffOp::CellEdited {
-            addr,
-            formula_diff,
-            ..
+            addr, formula_diff, ..
         } => {
             assert_eq!(addr.row, 1);
             assert_eq!(addr.col, 1);

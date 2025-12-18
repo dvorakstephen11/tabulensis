@@ -48,7 +48,9 @@ pub(crate) mod move_extraction;
 pub(crate) mod runs;
 
 #[allow(unused_imports)]
+pub(crate) use crate::alignment_types::{RowAlignment, RowBlockMove};
+#[allow(unused_imports)]
 pub(crate) use assembly::{
-    RowAlignment, RowAlignmentWithSignatures, RowBlockMove, align_rows_amr,
-    align_rows_amr_with_signatures, align_rows_amr_with_signatures_from_views,
+    RowAlignmentWithSignatures, align_rows_amr, align_rows_amr_with_signatures,
+    align_rows_amr_with_signatures_from_views,
 };

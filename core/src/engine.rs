@@ -3,8 +3,9 @@
 //! Provides the main entry point [`diff_workbooks`] for comparing two workbooks
 //! and generating a [`DiffReport`] of all changes.
 
+use crate::alignment::align_rows_amr_with_signatures_from_views;
 use crate::alignment::move_extraction::moves_from_matched_pairs;
-use crate::alignment::{RowAlignment, RowBlockMove, align_rows_amr_with_signatures_from_views};
+use crate::alignment_types::{RowAlignment, RowBlockMove};
 use crate::column_alignment::{
     ColumnAlignment, ColumnBlockMove, align_single_column_change_from_views,
     detect_exact_column_block_move,
@@ -167,6 +168,8 @@ pub fn try_diff_workbooks_streaming<S: DiffSink>(
     config: &DiffConfig,
     sink: &mut S,
 ) -> Result<DiffSummary, DiffError> {
+    sink.begin(pool)?;
+
     let mut ctx = DiffContext::default();
     let mut op_count = 0usize;
     #[cfg(feature = "perf-metrics")]
@@ -304,6 +307,7 @@ fn diff_grids_database_mode_streaming<S: DiffSink>(
         Ok(alignment) => alignment,
         Err(_) => {
             let sheet_id: SheetId = pool.intern(DATABASE_MODE_SHEET_ID);
+            sink.begin(pool)?;
             let mut ctx = DiffContext::default();
             try_diff_grids(
                 &sheet_id,
@@ -330,6 +334,7 @@ fn diff_grids_database_mode_streaming<S: DiffSink>(
     };
 
     let sheet_id: SheetId = pool.intern(DATABASE_MODE_SHEET_ID);
+    sink.begin(pool)?;
     let max_cols = old.ncols.max(new.ncols);
 
     for row_idx in &alignment.left_only_rows {

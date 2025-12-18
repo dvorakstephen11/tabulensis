@@ -24,6 +24,7 @@ use std::cell::RefCell;
 
 mod addressing;
 pub(crate) mod alignment;
+mod alignment_types;
 pub(crate) mod column_alignment;
 mod config;
 mod container;
@@ -33,12 +34,12 @@ mod datamashup_framing;
 mod datamashup_package;
 mod diff;
 mod engine;
-mod formula;
-mod formula_diff;
 #[cfg(feature = "excel-open-xml")]
 mod excel_open_xml;
-mod grid_parser;
+mod formula;
+mod formula_diff;
 mod grid_metadata;
+mod grid_parser;
 mod grid_view;
 pub(crate) mod hashing;
 mod m_ast;
@@ -102,6 +103,22 @@ pub fn open_workbook(path: impl AsRef<std::path::Path>) -> Result<Workbook, Exce
     })
 }
 
+/// Advanced APIs for power users.
+///
+/// The recommended entry point for most callers is [`WorkbookPackage`]. This module exposes
+/// lower-level functions and types for callers who want to manage their own sessions/pools or
+/// stream ops directly.
+pub mod advanced {
+    pub use crate::engine::{
+        diff_grids_database_mode, diff_workbooks as diff_workbooks_with_pool,
+        diff_workbooks_streaming, try_diff_workbooks as try_diff_workbooks_with_pool,
+        try_diff_workbooks_streaming,
+    };
+    pub use crate::session::DiffSession;
+    pub use crate::sink::{CallbackSink, DiffSink, VecSink};
+    pub use crate::string_pool::{StringId, StringPool};
+}
+
 pub use addressing::{AddressParseError, address_to_index, index_to_address};
 pub use config::{DiffConfig, LimitBehavior};
 pub use container::{ContainerError, OpcContainer};
@@ -129,6 +146,10 @@ pub use engine::{
 pub use excel_open_xml::{
     ExcelOpenError, PackageError, open_data_mashup, open_workbook as open_workbook_with_pool,
 };
+pub use formula::{
+    BinaryOperator, CellReference, ColRef, ExcelError, FormulaExpr, FormulaParseError,
+    RangeReference, RowRef, UnaryOperator, formulas_equivalent_modulo_shift, parse_formula,
+};
 pub use grid_parser::{GridParseError, SheetDescriptor};
 pub use grid_view::{
     ColHash, ColMeta, FrequencyClass, GridView, HashStats, RowHash, RowMeta, RowView,
@@ -139,10 +160,6 @@ pub use m_ast::{
     MModuleAst, MParseError, ast_semantically_equal, canonicalize_m_ast, parse_m_expression,
 };
 pub use m_section::{SectionMember, SectionParseError, parse_section_members};
-pub use formula::{
-    BinaryOperator, CellReference, ColRef, ExcelError, FormulaExpr, FormulaParseError,
-    RangeReference, RowRef, UnaryOperator, formulas_equivalent_modulo_shift, parse_formula,
-};
 #[doc(hidden)]
 pub use output::json::diff_report_to_cell_diffs;
 #[cfg(feature = "excel-open-xml")]

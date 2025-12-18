@@ -31,6 +31,8 @@ pub enum PackageError {
     WorkbookXmlMissing,
     #[error("worksheet XML missing for sheet {sheet_name}")]
     WorksheetXmlMissing { sheet_name: String },
+    #[error("diff error: {0}")]
+    Diff(#[from] crate::diff::DiffError),
     #[error("serialization error: {0}")]
     SerializationError(String),
 }

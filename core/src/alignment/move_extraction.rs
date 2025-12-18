@@ -24,8 +24,8 @@
 use std::collections::HashMap;
 
 use crate::alignment::RowBlockMove;
-use crate::grid_metadata::RowMeta;
 use crate::config::DiffConfig;
+use crate::grid_metadata::RowMeta;
 use crate::workbook::RowSignature;
 
 pub fn find_block_move(

@@ -14,8 +14,8 @@
 
 use std::collections::HashSet;
 
-use crate::grid_metadata::{FrequencyClass, RowMeta};
 use crate::config::DiffConfig;
+use crate::grid_metadata::{FrequencyClass, RowMeta};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GapStrategy {

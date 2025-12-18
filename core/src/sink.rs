@@ -1,7 +1,15 @@
 use crate::diff::{DiffError, DiffOp};
+use crate::string_pool::StringPool;
 
 /// Trait for streaming diff operations to a consumer.
 pub trait DiffSink {
+    /// Called once before any ops are emitted.
+    ///
+    /// Default is a no-op so sinks that don't need setup can ignore it.
+    fn begin(&mut self, _pool: &StringPool) -> Result<(), DiffError> {
+        Ok(())
+    }
+
     fn emit(&mut self, op: DiffOp) -> Result<(), DiffError>;
 
     fn finish(&mut self) -> Result<(), DiffError> {
@@ -20,6 +28,10 @@ impl<'a, S: DiffSink> NoFinishSink<'a, S> {
 }
 
 impl<S: DiffSink> DiffSink for NoFinishSink<'_, S> {
+    fn begin(&mut self, pool: &StringPool) -> Result<(), DiffError> {
+        self.inner.begin(pool)
+    }
+
     fn emit(&mut self, op: DiffOp) -> Result<(), DiffError> {
         self.inner.emit(op)
     }
