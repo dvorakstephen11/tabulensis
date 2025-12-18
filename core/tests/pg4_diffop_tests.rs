@@ -1224,7 +1224,7 @@ fn pg4_diff_report_json_shape_with_metrics() {
     let obj = json.as_object().expect("report json object");
 
     let keys: BTreeSet<String> = obj.keys().cloned().collect();
-    let expected: BTreeSet<String> = ["complete", "ops", "version", "metrics"]
+    let expected: BTreeSet<String> = ["complete", "metrics", "ops", "strings", "version"]
         .into_iter()
         .map(String::from)
         .collect();
