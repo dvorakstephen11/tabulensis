@@ -125,9 +125,9 @@ pub fn parse_formula(formula: &str) -> Result<FormulaExpr, FormulaParseError> {
 }
 
 #[derive(Clone, Copy)]
-#[allow(dead_code)]
 pub(crate) enum ShiftMode {
     RelativeOnly,
+    #[cfg(any(test, feature = "dev-apis"))]
     All,
 }
 
@@ -314,6 +314,7 @@ fn shift_row_ref(r: RowRef, delta: i32, mode: ShiftMode) -> RowRef {
         RowRef::Relative(n) => RowRef::Relative(shift_u32(n, delta)),
         RowRef::Absolute(n) => match mode {
             ShiftMode::RelativeOnly => RowRef::Absolute(n),
+            #[cfg(any(test, feature = "dev-apis"))]
             ShiftMode::All => RowRef::Absolute(shift_u32(n, delta)),
         },
         RowRef::Offset(n) => RowRef::Offset(n),
@@ -325,6 +326,7 @@ fn shift_col_ref(c: ColRef, delta: i32, mode: ShiftMode) -> ColRef {
         ColRef::Relative(n) => ColRef::Relative(shift_u32(n, delta)),
         ColRef::Absolute(n) => match mode {
             ShiftMode::RelativeOnly => ColRef::Absolute(n),
+            #[cfg(any(test, feature = "dev-apis"))]
             ShiftMode::All => ColRef::Absolute(shift_u32(n, delta)),
         },
         ColRef::Offset(n) => ColRef::Offset(n),

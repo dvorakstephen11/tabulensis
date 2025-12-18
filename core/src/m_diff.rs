@@ -9,7 +9,7 @@ use crate::m_ast::{MModuleAst, canonicalize_m_ast, parse_m_expression};
 use crate::string_pool::{StringId, StringPool};
 
 #[deprecated(note = "use WorkbookPackage::diff instead")]
-#[allow(dead_code)]
+#[cfg(any(test, feature = "dev-apis"))]
 pub fn diff_m_queries(
     old_queries: &[Query],
     new_queries: &[Query],

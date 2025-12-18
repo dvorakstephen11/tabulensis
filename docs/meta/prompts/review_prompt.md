@@ -2293,13 +2293,8 @@ pub(crate) mod gap_strategy;
 pub(crate) mod move_extraction;
 pub(crate) mod runs;
 
-#[allow(unused_imports)]
-pub(crate) use crate::alignment_types::{RowAlignment, RowBlockMove};
-#[allow(unused_imports)]
-pub(crate) use assembly::{
-    RowAlignmentWithSignatures, align_rows_amr, align_rows_amr_with_signatures,
-    align_rows_amr_with_signatures_from_views,
-};
+pub(crate) use crate::alignment_types::RowBlockMove;
+pub(crate) use assembly::align_rows_amr_with_signatures_from_views;
 
 ```
 
@@ -2725,7 +2720,7 @@ fn main() {
 use crate::config::DiffConfig;
 use crate::grid_view::{ColHash, ColMeta, GridView, HashStats};
 use crate::hashing::hash_col_content_unordered_128;
-use crate::workbook::Grid;
+use crate::workbook::{ColSignature, Grid};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ColumnAlignment {
@@ -2751,7 +2746,9 @@ fn unordered_col_hashes(grid: &Grid) -> Vec<ColHash> {
     }
     col_cells
         .iter()
-        .map(|cells| hash_col_content_unordered_128(cells))
+        .map(|cells| ColSignature {
+            hash: hash_col_content_unordered_128(cells),
+        })
         .collect()
 }
 
@@ -9993,13 +9990,13 @@ use std::hash::Hash;
 use crate::config::DiffConfig;
 use crate::grid_metadata::classify_row_frequencies;
 use crate::hashing::{hash_cell_value, hash_row_content_128};
-use crate::workbook::{Cell, CellValue, Grid, RowSignature};
+use crate::workbook::{Cell, CellValue, ColSignature, Grid, RowSignature};
 use xxhash_rust::xxh3::Xxh3;
 
 pub use crate::grid_metadata::{FrequencyClass, RowMeta};
 
 pub type RowHash = RowSignature;
-pub type ColHash = u128;
+pub type ColHash = ColSignature;
 
 #[derive(Debug)]
 pub struct RowView<'a> {
@@ -10118,7 +10115,9 @@ impl<'a> GridView<'a> {
         let col_meta: Vec<ColMeta> = (0..ncols)
             .map(|idx| ColMeta {
                 col_idx: idx as u32,
-                hash: col_hashers[idx].digest128(),
+                hash: ColSignature {
+                    hash: col_hashers[idx].digest128(),
+                },
                 non_blank_count: to_u16(col_counts.get(idx).copied().unwrap_or(0)),
                 first_non_blank_row: col_first_non_blank
                     .get(idx)
@@ -15190,7 +15189,7 @@ pub struct RowSignature {
     pub hash: u128,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct ColSignature {
     pub hash: u128,
 }
@@ -20640,7 +20639,7 @@ fn find_header_col(workbook: &Workbook, header: &str) -> u32 {
 ### File: `core\tests\grid_view_hashstats_tests.rs`
 
 ```rust
-use excel_diff::{ColHash, ColMeta, FrequencyClass, HashStats, RowHash, RowMeta, RowSignature};
+use excel_diff::{ColHash, ColMeta, ColSignature, FrequencyClass, HashStats, RowHash, RowMeta, RowSignature};
 
 fn row_meta(row_idx: u32, hash: RowHash) -> RowMeta {
     RowMeta {
@@ -20760,9 +20759,9 @@ fn hashstats_empty_inputs() {
 
 #[test]
 fn hashstats_from_col_meta_tracks_positions() {
-    let h1: ColHash = 10;
-    let h2: ColHash = 20;
-    let h3: ColHash = 30;
+    let h1: ColHash = ColSignature { hash: 10 };
+    let h2: ColHash = ColSignature { hash: 20 };
+    let h3: ColHash = ColSignature { hash: 30 };
 
     let cols_a = vec![col_meta(0, h1), col_meta(1, h2), col_meta(2, h2)];
     let cols_b = vec![col_meta(0, h2), col_meta(1, h3)];
@@ -20919,7 +20918,7 @@ fn gridview_column_metadata_matches_signatures() {
     let view = GridView::from_grid(&grid);
 
     for (idx, meta) in view.col_meta.iter().enumerate() {
-        assert_eq!(meta.hash, col_signatures[idx].hash);
+        assert_eq!(meta.hash, col_signatures[idx]);
     }
 
     for (idx, meta) in view.row_meta.iter().enumerate() {
@@ -27300,7 +27299,7 @@ fn gridview_rowmeta_hash_matches_compute_all_signatures() {
     }
 
     for (idx, meta) in view.col_meta.iter().enumerate() {
-        assert_eq!(meta.hash, col_signatures[idx].hash);
+        assert_eq!(meta.hash, col_signatures[idx]);
     }
 }
 

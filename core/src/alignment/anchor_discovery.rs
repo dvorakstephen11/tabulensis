@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 
 use crate::grid_metadata::{FrequencyClass, RowMeta};
+#[cfg(test)]
 use crate::grid_view::GridView;
 use crate::workbook::RowSignature;
 
@@ -23,7 +24,7 @@ pub struct Anchor {
     pub signature: RowSignature,
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn discover_anchors(old: &GridView<'_>, new: &GridView<'_>) -> Vec<Anchor> {
     discover_anchors_from_meta(&old.row_meta, &new.row_meta)
 }

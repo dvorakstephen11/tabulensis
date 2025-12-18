@@ -23,7 +23,9 @@ use crate::alignment_types::{RowAlignment, RowBlockMove};
 use crate::config::DiffConfig;
 use crate::grid_metadata::RowMeta;
 use crate::grid_view::GridView;
-use crate::workbook::{Grid, RowSignature};
+#[cfg(any(test, feature = "dev-apis"))]
+use crate::workbook::Grid;
+use crate::workbook::RowSignature;
 
 #[derive(Default)]
 struct GapAlignmentResult {
@@ -33,6 +35,45 @@ struct GapAlignmentResult {
     moves: Vec<RowBlockMove>,
 }
 
+struct GapCtx<'a> {
+    old_range: Range<u32>,
+    new_range: Range<u32>,
+    old_slice: &'a [RowMeta],
+    new_slice: &'a [RowMeta],
+}
+
+impl<'a> GapCtx<'a> {
+    fn new(
+        old_meta: &'a [RowMeta],
+        new_meta: &'a [RowMeta],
+        old_range: Range<u32>,
+        new_range: Range<u32>,
+    ) -> Self {
+        let old_slice = slice_by_range(old_meta, &old_range);
+        let new_slice = slice_by_range(new_meta, &new_range);
+        Self {
+            old_range,
+            new_range,
+            old_slice,
+            new_slice,
+        }
+    }
+
+    fn insert_all(&self) -> GapAlignmentResult {
+        GapAlignmentResult {
+            inserted: (self.new_range.start..self.new_range.end).collect(),
+            ..Default::default()
+        }
+    }
+
+    fn delete_all(&self) -> GapAlignmentResult {
+        GapAlignmentResult {
+            deleted: (self.old_range.start..self.old_range.end).collect(),
+            ..Default::default()
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RowAlignmentWithSignatures {
     pub alignment: RowAlignment,
@@ -40,11 +81,12 @@ pub struct RowAlignmentWithSignatures {
     pub row_signatures_b: Vec<RowSignature>,
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn align_rows_amr(old: &Grid, new: &Grid, config: &DiffConfig) -> Option<RowAlignment> {
     align_rows_amr_with_signatures(old, new, config).map(|result| result.alignment)
 }
 
+#[cfg(any(test, feature = "dev-apis"))]
 pub fn align_rows_amr_with_signatures(
     old: &Grid,
     new: &Grid,
@@ -204,120 +246,138 @@ fn fill_gap(
     config: &DiffConfig,
     depth: u32,
 ) -> GapAlignmentResult {
-    let old_slice = slice_by_range(old_meta, &old_gap);
-    let new_slice = slice_by_range(new_meta, &new_gap);
+    let ctx = GapCtx::new(old_meta, new_meta, old_gap, new_gap);
     let has_recursed = depth >= config.max_recursion_depth;
-    let strategy = select_gap_strategy(old_slice, new_slice, config, has_recursed);
+    let strategy = select_gap_strategy(ctx.old_slice, ctx.new_slice, config, has_recursed);
 
     match strategy {
         GapStrategy::Empty => GapAlignmentResult::default(),
-
-        GapStrategy::InsertAll => GapAlignmentResult {
-            matched: Vec::new(),
-            inserted: (new_gap.start..new_gap.end).collect(),
-            deleted: Vec::new(),
-            moves: Vec::new(),
-        },
-
-        GapStrategy::DeleteAll => GapAlignmentResult {
-            matched: Vec::new(),
-            inserted: Vec::new(),
-            deleted: (old_gap.start..old_gap.end).collect(),
-            moves: Vec::new(),
-        },
-
-        GapStrategy::SmallEdit => align_small_gap(old_slice, new_slice, config),
-
-        GapStrategy::HashFallback => {
-            let mut result = align_gap_via_hash(old_slice, new_slice);
-            result
-                .moves
-                .extend(moves_from_matched_pairs(&result.matched));
-            result
-        }
-
+        GapStrategy::InsertAll => ctx.insert_all(),
+        GapStrategy::DeleteAll => ctx.delete_all(),
+        GapStrategy::SmallEdit => align_gap_default(ctx.old_slice, ctx.new_slice, config),
+        GapStrategy::HashFallback => align_gap_hash(ctx.old_slice, ctx.new_slice),
         GapStrategy::MoveCandidate => {
-            let mut result = if old_slice.len() as u32 > config.max_lcs_gap_size
-                || new_slice.len() as u32 > config.max_lcs_gap_size
-            {
-                align_gap_via_hash(old_slice, new_slice)
-            } else {
-                align_small_gap(old_slice, new_slice, config)
-            };
-
-            let mut detected_moves = moves_from_matched_pairs(&result.matched);
-
-            if detected_moves.is_empty() {
-                let has_nonzero_offset = result
-                    .matched
-                    .iter()
-                    .any(|(a, b)| (*b as i64 - *a as i64) != 0);
-
-                if has_nonzero_offset
-                    && let Some(mv) = find_block_move(
-                        old_slice,
-                        new_slice,
-                        config.min_block_size_for_move,
-                        config,
-                    )
-                {
-                    detected_moves.push(mv);
-                }
-            }
-
-            result.moves.extend(detected_moves);
-            result
+            align_gap_with_moves(ctx.old_slice, ctx.new_slice, config)
         }
-
         GapStrategy::RecursiveAlign => {
-            let at_limit = depth >= config.max_recursion_depth;
-            if at_limit {
-                if old_slice.len() as u32 > config.max_lcs_gap_size
-                    || new_slice.len() as u32 > config.max_lcs_gap_size
-                {
-                    return align_gap_via_hash(old_slice, new_slice);
-                }
-                return align_small_gap(old_slice, new_slice, config);
-            }
-
-            let anchor_candidates = if depth == 0 {
-                discover_anchors_from_meta(old_slice, new_slice)
-            } else {
-                let ctx_k1 = config.context_anchor_k1 as usize;
-                let ctx_k2 = config.context_anchor_k2 as usize;
-                let mut anchors = discover_local_anchors(old_slice, new_slice);
-                if anchors.is_empty() {
-                    anchors = discover_context_anchors(old_slice, new_slice, ctx_k1);
-                    if anchors.is_empty() {
-                        anchors = discover_context_anchors(old_slice, new_slice, ctx_k2);
-                    }
-                } else {
-                    let mut ctx_anchors = discover_context_anchors(old_slice, new_slice, ctx_k1);
-                    if anchors.len() < ctx_k1 {
-                        anchors.append(&mut ctx_anchors);
-                    }
-                }
-                anchors
-            };
-
-            let anchors = build_anchor_chain(anchor_candidates);
-            if anchors.is_empty() {
-                if old_slice.len() as u32 > config.max_lcs_gap_size
-                    || new_slice.len() as u32 > config.max_lcs_gap_size
-                {
-                    return align_gap_via_hash(old_slice, new_slice);
-                }
-                return align_small_gap(old_slice, new_slice, config);
-            }
-
-            let alignment = assemble_from_meta(old_slice, new_slice, anchors, config, depth + 1);
-            GapAlignmentResult {
-                matched: alignment.matched,
-                inserted: alignment.inserted,
-                deleted: alignment.deleted,
-                moves: alignment.moves,
-            }
+            align_gap_recursive(ctx.old_slice, ctx.new_slice, config, depth)
         }
+    }
+}
+
+fn align_gap_default(
+    old_slice: &[RowMeta],
+    new_slice: &[RowMeta],
+    config: &DiffConfig,
+) -> GapAlignmentResult {
+    if old_slice.len() as u32 > config.max_lcs_gap_size
+        || new_slice.len() as u32 > config.max_lcs_gap_size
+    {
+        return align_gap_via_hash(old_slice, new_slice);
+    }
+    align_small_gap(old_slice, new_slice, config)
+}
+
+fn align_gap_hash(old_slice: &[RowMeta], new_slice: &[RowMeta]) -> GapAlignmentResult {
+    let mut result = align_gap_via_hash(old_slice, new_slice);
+    result
+        .moves
+        .extend(moves_from_matched_pairs(&result.matched));
+    result
+}
+
+fn align_gap_with_moves(
+    old_slice: &[RowMeta],
+    new_slice: &[RowMeta],
+    config: &DiffConfig,
+) -> GapAlignmentResult {
+    let mut result = if old_slice.len() as u32 > config.max_lcs_gap_size
+        || new_slice.len() as u32 > config.max_lcs_gap_size
+    {
+        align_gap_via_hash(old_slice, new_slice)
+    } else {
+        align_small_gap(old_slice, new_slice, config)
+    };
+
+    let mut detected_moves = moves_from_matched_pairs(&result.matched);
+
+    if detected_moves.is_empty() {
+        let has_nonzero_offset = result
+            .matched
+            .iter()
+            .any(|(a, b)| (*b as i64 - *a as i64) != 0);
+
+        if has_nonzero_offset
+            && let Some(mv) = find_block_move(
+                old_slice,
+                new_slice,
+                config.min_block_size_for_move,
+                config,
+            )
+        {
+            detected_moves.push(mv);
+        }
+    }
+
+    result.moves.extend(detected_moves);
+    result
+}
+
+fn recursive_anchor_candidates(
+    old_slice: &[RowMeta],
+    new_slice: &[RowMeta],
+    depth: u32,
+    config: &DiffConfig,
+) -> Vec<Anchor> {
+    if depth == 0 {
+        return discover_anchors_from_meta(old_slice, new_slice);
+    }
+
+    let k1 = config.context_anchor_k1 as usize;
+    let k2 = config.context_anchor_k2 as usize;
+
+    let mut anchors = discover_local_anchors(old_slice, new_slice);
+    if anchors.is_empty() {
+        anchors = discover_context_anchors(old_slice, new_slice, k1);
+        if anchors.is_empty() {
+            anchors = discover_context_anchors(old_slice, new_slice, k2);
+        }
+        return anchors;
+    }
+
+    if anchors.len() < k1 {
+        let mut ctx_anchors = discover_context_anchors(old_slice, new_slice, k1);
+        anchors.append(&mut ctx_anchors);
+    }
+
+    anchors
+}
+
+fn align_gap_recursive(
+    old_slice: &[RowMeta],
+    new_slice: &[RowMeta],
+    config: &DiffConfig,
+    depth: u32,
+) -> GapAlignmentResult {
+    let at_limit = depth >= config.max_recursion_depth;
+    if at_limit {
+        return align_gap_default(old_slice, new_slice, config);
+    }
+
+    let anchors = build_anchor_chain(recursive_anchor_candidates(
+        old_slice, new_slice, depth, config,
+    ));
+
+    if anchors.is_empty() {
+        return align_gap_default(old_slice, new_slice, config);
+    }
+
+    let alignment = assemble_from_meta(old_slice, new_slice, anchors, config, depth + 1);
+    GapAlignmentResult {
+        matched: alignment.matched,
+        inserted: alignment.inserted,
+        deleted: alignment.deleted,
+        moves: alignment.moves,
     }
 }
 

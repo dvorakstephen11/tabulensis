@@ -20,8 +20,8 @@
 //! - AMR returns `None` (fallback to `align_row_changes`)
 //! - Explicit move detection in masked regions
 //!
-//! Functions marked `#[allow(dead_code)]` are retained for testing but not
-//! called from production code paths.
+//! Functions marked `#[cfg(any(test, feature = "dev-apis"))]` are retained for
+//! testing but not called from production code paths.
 
 use std::collections::HashSet;
 
@@ -328,7 +328,7 @@ pub(crate) fn align_row_changes_from_views(
     align_rows_internal(old_view, new_view, true, config)
 }
 
-#[allow(dead_code)]
+#[cfg(any(test, feature = "dev-apis"))]
 pub(crate) fn align_single_row_change(
     old: &Grid,
     new: &Grid,

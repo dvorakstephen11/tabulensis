@@ -233,7 +233,7 @@ pub struct ColSignature {
     pub hash: u128,
 }
 
-#[allow(dead_code)]
+#[cfg(any(test, feature = "dev-apis"))]
 mod signature_serde {
     use serde::de::Error as DeError;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};

@@ -45,4 +45,26 @@ impl DiffMetrics {
     pub fn add_cells_compared(&mut self, count: u64) {
         self.cells_compared = self.cells_compared.saturating_add(count);
     }
+
+    pub fn phase_guard(&mut self, phase: Phase) -> PhaseGuard<'_> {
+        PhaseGuard::new(self, phase)
+    }
+}
+
+pub struct PhaseGuard<'a> {
+    metrics: &'a mut DiffMetrics,
+    phase: Phase,
+}
+
+impl<'a> PhaseGuard<'a> {
+    pub fn new(metrics: &'a mut DiffMetrics, phase: Phase) -> Self {
+        metrics.start_phase(phase);
+        Self { metrics, phase }
+    }
+}
+
+impl Drop for PhaseGuard<'_> {
+    fn drop(&mut self) {
+        self.metrics.end_phase(self.phase);
+    }
 }

@@ -18,9 +18,7 @@ pub struct RegionMask {
     excluded_rows: HashSet<u32>,
     excluded_cols: HashSet<u32>,
     excluded_rects: Vec<RectMask>,
-    #[allow(dead_code)]
     nrows: u32,
-    #[allow(dead_code)]
     ncols: u32,
     row_shift_min: Option<u32>,
     row_shift_max: Option<u32>,
@@ -28,7 +26,6 @@ pub struct RegionMask {
     col_shift_max: Option<u32>,
 }
 
-#[allow(dead_code)]
 impl RegionMask {
     pub fn all_active(nrows: u32, ncols: u32) -> Self {
         Self {
@@ -70,6 +67,7 @@ impl RegionMask {
         self.col_shift_max = Some(self.col_shift_max.map_or(end, |m| m.max(end)));
     }
 
+    #[cfg(any(test, feature = "dev-apis"))]
     pub fn exclude_rect(&mut self, row_start: u32, row_count: u32, col_start: u32, col_count: u32) {
         self.exclude_rows(row_start, row_count);
         self.exclude_cols(col_start, col_count);
@@ -149,6 +147,7 @@ impl RegionMask {
         self.active_row_count() > 0 && self.active_col_count() > 0
     }
 
+    #[cfg(any(test, feature = "dev-apis"))]
     pub fn rows_overlap_excluded(&self, start: u32, count: u32) -> bool {
         for row in start..start.saturating_add(count) {
             if self.excluded_rows.contains(&row) {
@@ -158,6 +157,7 @@ impl RegionMask {
         false
     }
 
+    #[cfg(any(test, feature = "dev-apis"))]
     pub fn cols_overlap_excluded(&self, start: u32, count: u32) -> bool {
         for col in start..start.saturating_add(count) {
             if self.excluded_cols.contains(&col) {
@@ -167,6 +167,7 @@ impl RegionMask {
         false
     }
 
+    #[cfg(any(test, feature = "dev-apis"))]
     pub fn rect_overlaps_excluded(
         &self,
         row_start: u32,
@@ -178,6 +179,7 @@ impl RegionMask {
             || self.cols_overlap_excluded(col_start, col_count)
     }
 
+    #[cfg(any(test, feature = "dev-apis"))]
     pub fn is_row_in_shift_zone(&self, row: u32) -> bool {
         match (self.row_shift_min, self.row_shift_max) {
             (Some(min), Some(max)) => row >= min && row <= max,
@@ -185,6 +187,7 @@ impl RegionMask {
         }
     }
 
+    #[cfg(any(test, feature = "dev-apis"))]
     pub fn is_col_in_shift_zone(&self, col: u32) -> bool {
         match (self.col_shift_min, self.col_shift_max) {
             (Some(min), Some(max)) => col >= min && col <= max,

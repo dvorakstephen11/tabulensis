@@ -12,6 +12,7 @@ default = ["excel-open-xml", "std-fs"]
 excel-open-xml = []
 std-fs = []
 perf-metrics = []
+dev-apis = []
 
 [dependencies]
 quick-xml = "0.32"
