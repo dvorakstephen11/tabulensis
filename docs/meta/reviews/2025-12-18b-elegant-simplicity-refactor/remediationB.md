@@ -260,7 +260,8 @@ let summary = crate::engine::try_diff_workbooks_streaming(
     &mut session.strings,
     config,
     &mut sink,
-)?; // now becomes PackageError::Diff automatically via From
+)?; // now becomes 
+PackageError::Diff automatically via From
 ```
 
 This is a small change, but it removes a persistent “misleading abstraction,” which is exactly the kind of accidental complexity that makes maintainers distrust code.
