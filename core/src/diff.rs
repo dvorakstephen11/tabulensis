@@ -228,6 +228,18 @@ impl DiffReport {
         }
     }
 
+    pub fn from_ops_and_summary(ops: Vec<DiffOp>, summary: DiffSummary, strings: Vec<String>) -> DiffReport {
+        let mut report = DiffReport::new(ops);
+        report.complete = summary.complete;
+        report.warnings = summary.warnings;
+        #[cfg(feature = "perf-metrics")]
+        {
+            report.metrics = summary.metrics;
+        }
+        report.strings = strings;
+        report
+    }
+
     pub fn with_partial_result(ops: Vec<DiffOp>, warning: String) -> DiffReport {
         DiffReport {
             version: Self::SCHEMA_VERSION.to_string(),

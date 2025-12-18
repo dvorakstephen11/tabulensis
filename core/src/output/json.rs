@@ -122,15 +122,7 @@ pub fn diff_report_to_cell_diffs(report: &DiffReport) -> Vec<CellDiff> {
 
 #[cfg(feature = "excel-open-xml")]
 fn build_report_from_sink(sink: VecSink, summary: DiffSummary, session: DiffSession) -> DiffReport {
-    let mut report = DiffReport::new(sink.into_ops());
-    report.complete = summary.complete;
-    report.warnings = summary.warnings;
-    #[cfg(feature = "perf-metrics")]
-    {
-        report.metrics = summary.metrics;
-    }
-    report.strings = session.strings.into_strings();
-    report
+    DiffReport::from_ops_and_summary(sink.into_ops(), summary, session.strings.into_strings())
 }
 
 fn contains_non_finite_numbers(report: &DiffReport) -> bool {

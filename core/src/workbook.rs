@@ -223,95 +223,37 @@ impl Hash for CellValue {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub struct RowSignature {
+    #[serde(with = "signature_hex")]
     pub hash: u128,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub struct ColSignature {
+    #[serde(with = "signature_hex")]
     pub hash: u128,
 }
 
-#[cfg(any(test, feature = "dev-apis"))]
-mod signature_serde {
+mod signature_hex {
     use serde::de::Error as DeError;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use serde::{Deserialize, Deserializer, Serializer};
 
-    pub fn serialize_u128<S>(val: &u128, serializer: S) -> Result<S::Ok, S::Error>
+    pub fn serialize<S>(val: &u128, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        format!("{:032x}", val).serialize(serializer)
+        let s = format!("{:032x}", val);
+        serializer.serialize_str(&s)
     }
 
-    pub fn deserialize_u128<'de, D>(deserializer: D) -> Result<u128, D::Error>
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<u128, D::Error>
     where
         D: Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
         u128::from_str_radix(&s, 16)
             .map_err(|e| DeError::custom(format!("invalid hex hash: {}", e)))
-    }
-}
-
-impl serde::Serialize for RowSignature {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("RowSignature", 1)?;
-        s.serialize_field("hash", &format!("{:032x}", self.hash))?;
-        s.end()
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for RowSignature {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        use serde::de::Error as DeError;
-
-        #[derive(serde::Deserialize)]
-        struct Helper {
-            hash: String,
-        }
-        let helper = Helper::deserialize(deserializer)?;
-        let hash = u128::from_str_radix(&helper.hash, 16)
-            .map_err(|e| DeError::custom(format!("invalid hex hash: {}", e)))?;
-        Ok(RowSignature { hash })
-    }
-}
-
-impl serde::Serialize for ColSignature {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("ColSignature", 1)?;
-        s.serialize_field("hash", &format!("{:032x}", self.hash))?;
-        s.end()
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for ColSignature {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        use serde::de::Error as DeError;
-
-        #[derive(serde::Deserialize)]
-        struct Helper {
-            hash: String,
-        }
-        let helper = Helper::deserialize(deserializer)?;
-        let hash = u128::from_str_radix(&helper.hash, 16)
-            .map_err(|e| DeError::custom(format!("invalid hex hash: {}", e)))?;
-        Ok(ColSignature { hash })
     }
 }
 
