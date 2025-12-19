@@ -1,1405 +1,788 @@
-# Excel Diff Engine: Sprint Plan
+# Excel Diff Engine: 7-Branch Sprint Plan to 90% MVP Completion
 
-This plan addresses all recommendations from the midway design evaluation, organized into seven feature branches with explicit dependencies, acceptance criteria, and technical specifications.
+## Executive Summary
+
+This plan identifies the remaining work needed to bring the Excel Diff engine from its current ~70% completion state to at least 90% MVP completion. The codebase has strong foundations in grid diffing, M parsing, formula parsing, and API design. The remaining work focuses on:
+
+1. **Database Mode at workbook level** (critical for competitor parity)
+2. **CLI tool with Git integration** (required for developer adoption)
+3. **Robustness and error handling** (production readiness)
+4. **Cross-platform packaging** (Mac/Win/Web)
+5. **VBA and named range diffing** (object graph completeness)
+6. **Documentation and polish** (developer experience)
+7. **Performance hardening** (large file reliability)
+
+---
+
+## Current State Assessment
+
+### Completed Components (from old_next_sprint_plan.md branches)
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| **Grid Diff Engine** | ✅ Complete | AMR alignment, move detection, multi-gap handling |
+| **DiffConfig** | ✅ Complete | Full builder, presets, serde serialization |
+| **StringPool/Interning** | ✅ Complete | Memory-efficient string handling |
+| **Streaming Output** | ✅ Complete | DiffSink trait, VecSink, JsonLinesSink |
+| **WorkbookPackage API** | ✅ Complete | Unified entry point for parsing and diffing |
+| **M Parser** | ✅ Complete | let/in, records, lists, function calls, canonicalization |
+| **Formula Parser** | ✅ Complete | Full AST, canonicalization, shift detection |
+| **Database Mode (grid level)** | ✅ Complete | `diff_grids_database_mode` implemented |
+| **Performance Infrastructure** | ✅ Complete | Metrics, benchmarks, CI integration |
+| **WASM Compilation** | ✅ Partial | Core compiles, smoke test exists |
+
+### Missing for 90% MVP
+
+| Component | Priority | Difficulty | Notes |
+|-----------|----------|------------|-------|
+| **CLI Tool** | Critical | Medium | No binary distribution exists |
+| **Git Integration** | Critical | Medium | difftool/mergetool configuration |
+| **Database Mode (workbook level)** | Critical | Low | API exists but not exposed via WorkbookPackage |
+| **Error Handling** | High | Medium | Many unwraps, panics in edge cases |
+| **VBA Module Diffing** | High | Medium | Currently ignored |
+| **Named Range Diffing** | High | Low | Currently ignored |
+| **Chart Object Diffing** | Medium | Medium | Currently ignored |
+| **Three-way Merge** | Medium | High | Not implemented |
+| **Mac/Win Packaging** | High | Medium | No installers/packages |
+| **Web Demo** | Medium | Medium | WASM exists but no frontend |
 
 ---
 
 ## Branch Dependency Graph
 
 ```
-                    ┌─────────────────────┐
-                    │  Branch 3: Config   │
-                    │    (DiffConfig)     │
-                    └──────────┬──────────┘
-                               │
-              ┌────────────────┼────────────────┐
-              │                │                │
-              ▼                ▼                ▼
+                    ┌─────────────────────────┐
+                    │  Branch 1: CLI Tool &   │
+                    │  Git Integration        │
+                    └───────────┬─────────────┘
+                                │
+           ┌────────────────────┼────────────────────┐
+           │                    │                    │
+           ▼                    ▼                    ▼
 ┌─────────────────────┐ ┌─────────────────┐ ┌─────────────────────┐
-│ Branch 1: Grid      │ │ Branch 4: WASM  │ │ Branch 5: API       │
-│ Correctness         │ │ & Memory        │ │ Unification         │
+│ Branch 2: Database  │ │ Branch 3: Error │ │ Branch 7: Web Demo  │
+│ Mode API            │ │ Hardening       │ │ (WASM Frontend)     │
 └──────────┬──────────┘ └────────┬────────┘ └─────────────────────┘
            │                     │
-           ▼                     │
-┌─────────────────────┐          │
-│ Branch 2: Grid      │◄─────────┘
-│ Scalability (AMR)   │
-│ + Perf Infra        │
-└─────────────────────┘
-
-┌─────────────────────┐  ┌─────────────────────┐
-│ Branch 6: M Parser  │  │ Branch 7: Formula   │
-│ (Independent)       │  │ Parser (Independent)│
-└─────────────────────┘  └─────────────────────┘
+           │                     │
+           │                     ▼
+           │            ┌─────────────────────┐
+           └───────────►│ Branch 4: Object    │
+                        │ Graph Completion    │
+                        └──────────┬──────────┘
+                                   │
+              ┌────────────────────┼────────────────────┐
+              │                                         │
+              ▼                                         ▼
+┌─────────────────────┐                    ┌─────────────────────┐
+│ Branch 5: Packaging │                    │ Branch 6: Perf &    │
+│ & Distribution      │                    │ Robustness          │
+└─────────────────────┘                    └─────────────────────┘
 ```
 
-**Critical Path:** Branch 3 → Branch 1 → Branch 2
+**Critical Path:** Branch 1 → Branch 2 → Branch 4 → Branch 5
 
-**Parallel Work:** Branches 5, 6, 7 can proceed independently. Branch 4 can proceed in parallel with Branch 1 but must complete before Branch 2's performance validation.
+**Parallel Work:** Branches 3, 6, 7 can proceed independently after Branch 1.
 
 ---
 
-## Branch 1: Grid Algorithm Correctness & Hashing
+## Branch 1: CLI Tool & Git Integration
 
-**Goal:** Fix all correctness bugs in the core grid diff algorithm before tackling scalability.
+**Goal:** Create a usable command-line tool that can be integrated with Git as a difftool.
 
-**Depends on:** Branch 3 (DiffConfig) — thresholds for hashing and similarity should come from config.
+**Depends on:** Nothing (uses existing library)
 
-**Evaluation References:** Priority Recommendations #1 (partial), #8, #9
+**MVP Importance:** Critical — without a CLI, the library cannot be used.
 
-### 1.1 Fix Silent Data Loss on Rectangular Block Moves
-
-**Problem:** When `detect_rect_block_move` finds a match, `diff_grids` emits the move and returns immediately. Edits outside the moved region are never computed.
+### 1.1 Create CLI Binary Crate
 
 **Technical Specification:**
 
+Create `cli/` directory with a new crate:
+
+```
+cli/
+  Cargo.toml
+  src/
+    main.rs
+    commands/
+      mod.rs
+      diff.rs
+      info.rs
+    output/
+      mod.rs
+      text.rs
+      json.rs
+```
+
 ```rust
-pub fn diff_grids(old: &GridView, new: &GridView, config: &DiffConfig) -> Vec<DiffOp> {
-    let mut ops = Vec::new();
-    let mut old_mask = CellMask::all_active(old);
-    let mut new_mask = CellMask::all_active(new);
+// cli/src/main.rs
+use clap::{Parser, Subcommand};
 
-    // Phase 1: Iterative move detection (see 1.2)
-    loop {
-        if let Some(rect_move) = detect_rect_block_move(old, new, &old_mask, &new_mask, config) {
-            ops.push(DiffOp::RectMoved { ... });
-            old_mask.exclude_rect(rect_move.old_bounds);
-            new_mask.exclude_rect(rect_move.new_bounds);
-            continue;
-        }
-        if let Some(row_move) = detect_row_block_move(old, new, &old_mask, &new_mask, config) {
-            ops.push(DiffOp::RowBlockMoved { ... });
-            old_mask.exclude_rows(row_move.old_range);
-            new_mask.exclude_rows(row_move.new_range);
-            continue;
-        }
-        // ... column block moves ...
-        break;
-    }
+#[derive(Parser)]
+#[command(name = "excel-diff")]
+#[command(about = "Compare Excel workbooks semantically")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
 
-    // Phase 2: Alignment on remaining (unmasked) cells
-    let alignment_ops = align_remaining(old, new, &old_mask, &new_mask, config);
-    ops.extend(alignment_ops);
-
-    ops
+#[derive(Subcommand)]
+enum Commands {
+    Diff {
+        #[arg(help = "Old workbook path")]
+        old: PathBuf,
+        #[arg(help = "New workbook path")]
+        new: PathBuf,
+        #[arg(long, help = "Output format: text, json, jsonl")]
+        format: Option<String>,
+        #[arg(long, help = "Use database mode with specified key columns")]
+        key_columns: Option<String>,
+        #[arg(long, help = "Use fastest preset")]
+        fast: bool,
+        #[arg(long, help = "Use most precise preset")]
+        precise: bool,
+    },
+    Info {
+        #[arg(help = "Workbook path")]
+        path: PathBuf,
+        #[arg(long, help = "Show Power Query information")]
+        queries: bool,
+    },
 }
 ```
 
 **Deliverables:**
-- [ ] Implement `CellMask` (or `RegionMask`) to track which cells have been accounted for
-- [ ] Refactor move detection functions to accept masks and only consider unmasked cells
-- [ ] Refactor `diff_grids` to continue after move detection rather than early return
-- [ ] Add test: rect move + cell edit outside moved region → both reported
-- [ ] Add test: rect move + row insertion outside moved region → both reported
+- [ ] Create `cli/Cargo.toml` with clap dependency
+- [ ] Implement `diff` subcommand with text output
+- [ ] Implement `diff` subcommand with JSON output
+- [ ] Implement `diff` subcommand with JSON Lines output
+- [ ] Implement `info` subcommand showing workbook structure
+- [ ] Add `--key-columns` flag for database mode
+- [ ] Add config preset flags (`--fast`, `--precise`)
+- [ ] Add exit codes (0 = identical, 1 = different, 2 = error)
+- [ ] Write CLI usage documentation
 
-### 1.2 Make Move Detection Iterative
-
-**Problem:** The engine detects at most one structural move per sheet.
-
-**Technical Specification:**
-
-The loop structure in 1.1 handles this. Key considerations:
-- Each iteration must make progress (move at least one cell from active to accounted)
-- Iteration cap as a safety valve (configurable via `DiffConfig::max_move_iterations`)
-- Skip masked move detection on very large sheets (configurable via `DiffConfig::max_move_detection_rows` / `DiffConfig::max_move_detection_cols`)
-- Moves should be detected in order of "confidence" or "size" to avoid fragmentation
-
-**Deliverables:**
-- [ ] Implement the iterative loop with mask subtraction
-- [ ] Add `DiffConfig::max_move_iterations` (default: 10)
-- [ ] Add test: two disjoint row block moves → both detected
-- [ ] Add test: row block move + column block move → both detected
-- [ ] Add test: three rect moves → all three detected
-
-### 1.3 Remove Column-Index Dependency from Row Hashes
-
-**Problem:** `hash_cell_contribution(col, cell)` includes the column index, so inserting a column at position 0 invalidates every row hash.
+### 1.2 Git Integration
 
 **Technical Specification:**
 
-Option A — Content-only row signatures:
-```rust
-fn compute_row_signature(row: &[CellSnapshot]) -> u128 {
-    let mut hasher = XxHash128::default();
-    for cell in row.iter().filter(|c| !c.is_blank()) {
-        cell.value.hash(&mut hasher);
-        cell.formula.hash(&mut hasher);
-    }
-    hasher.finish_128()
-}
-```
+The CLI must work as a Git difftool:
 
-Option B — Position-invariant multiset hash (commutative):
-```rust
-fn compute_row_signature(row: &[CellSnapshot]) -> u128 {
-    row.iter()
-        .filter(|c| !c.is_blank())
-        .map(|c| hash_cell_content(c))
-        .fold(0u128, |acc, h| acc.wrapping_add(h))
-}
-```
+```bash
+# .gitconfig
+[difftool "excel-diff"]
+    cmd = excel-diff diff \"$LOCAL\" \"$REMOTE\"
 
-**Decision:** Option A (ordered) is preferred because row content order matters semantically. The key insight is that we hash *content* in *content order*, not *position*.
+[diff "xlsx"]
+    textconv = excel-diff info
+    binary = true
+```
 
 **Deliverables:**
-- [ ] Refactor `hash_cell_contribution` to exclude column index
-- [ ] Update `GridView::from_grid` to use new signature computation
-- [ ] Add test: insert column at position 0 → row alignment still succeeds
-- [ ] Add test: delete column from middle → row alignment still succeeds
-- [ ] Verify existing tests still pass (semantic equivalence preserved)
+- [ ] Document Git configuration in README
+- [ ] Add `--git-diff` output mode (unified diff-style)
+- [ ] Test with actual Git repositories
+- [ ] Add `.gitattributes` example for xlsx files
 
-### 1.4 Upgrade to 128-bit Row Signatures
-
-**Problem:** 64-bit hashes have non-negligible collision probability at 50K rows across large corpora.
+### 1.3 Human-Readable Text Output
 
 **Technical Specification:**
 
-```rust
-pub struct RowSignature(u128);
+```
+Comparing: old.xlsx → new.xlsx
 
-impl RowSignature {
-    pub fn compute(row: &[CellSnapshot]) -> Self {
-        let mut hasher = xxhash_rust::xxh3::Xxh3::new();
-        // ... hash content ...
-        Self(hasher.digest128())
-    }
-}
+Sheet "Data":
+  Row 5: ADDED
+  Row 12: REMOVED
+  Cell C7: 100 → 150
+  Cell D7: "old" → "new"
+  Block moved: rows 10-15 → rows 20-25
+
+Power Query:
+  Query "SalesData": DEFINITION CHANGED (semantic)
+  Query "Transform": FORMATTING ONLY
+  Query "NewQuery": ADDED
 ```
 
 **Deliverables:**
-- [ ] Add `xxhash-rust` dependency (or use `siphasher` for SipHash128)
-- [ ] Change `row_signatures` type from `Vec<u64>` to `Vec<u128>`
-- [ ] Update all signature comparisons
-- [ ] Document collision probability analysis in code comments
-
-### 1.5 Semantic Float Normalization
-
-**Problem:** `f64::to_bits()` distinguishes `0.0` from `-0.0` and is sensitive to ULP drift.
-
-**Technical Specification:**
-
-```rust
-fn normalize_float_for_hash(n: f64) -> u64 {
-    if n.is_nan() {
-        return CANONICAL_NAN_BITS;
-    }
-    if n == 0.0 {
-        return 0u64; // Canonical zero (handles -0.0)
-    }
-    // Round to 15 significant digits
-    let magnitude = n.abs().log10().floor() as i32;
-    let scale = 10f64.powi(14 - magnitude);
-    let normalized = (n * scale).round() / scale;
-    normalized.to_bits()
-}
-```
-
-**Deliverables:**
-- [ ] Implement `normalize_float_for_hash` function
-- [ ] Use normalized value in `CellValue::Number` hashing
-- [ ] Add test: `0.0` and `-0.0` hash identically
-- [ ] Add test: `1.0` and `1.0000000000000002` hash identically
-- [ ] Add test: `1.0` and `1.0001` hash differently (beyond epsilon)
-- [ ] Add test: `NaN` values hash identically regardless of payload
+- [ ] Implement text formatter for DiffOps
+- [ ] Color-coded output (optional, detect TTY)
+- [ ] Summary statistics at end
+- [ ] Configurable verbosity levels
 
 ### Acceptance Criteria for Branch 1
 
-- [ ] All existing tests pass
-- [ ] No silent data loss: every cell difference is reported
-- [ ] Multiple moves per sheet are detected and reported
-- [ ] Column insertion/deletion does not break row alignment
-- [ ] Float comparison is semantically correct (no spurious diffs from recalc noise)
-- [ ] Hash collision probability documented and acceptable (<10^-18 at 50K rows)
+- [ ] `excel-diff diff old.xlsx new.xlsx` produces readable output
+- [ ] `excel-diff diff --format=json` produces valid JSON
+- [ ] Exit code 0 when files identical, 1 when different
+- [ ] Git difftool integration documented and tested
+- [ ] `--help` output is clear and complete
 
 ---
 
-## Branch 2: Grid Algorithm Scalability (AMR) + Performance Infrastructure
+## Branch 2: Database Mode API Integration
 
-**Goal:** Implement the Anchor-Move-Refine alignment algorithm and remove hard caps. Establish performance regression testing.
+**Goal:** Expose database mode through WorkbookPackage API and CLI.
 
-**Depends on:** Branch 1 (correctness fixes), Branch 3 (DiffConfig), Branch 4 (memory optimizations help but not strictly required)
+**Depends on:** Branch 1 (CLI infrastructure)
 
-**Evaluation References:** Priority Recommendations #1 (main), #6, #7
+**MVP Importance:** Critical — this is a key differentiator from competitors.
 
-### 2.1 Refactor Alignment into Spec-Aligned Phases
-
-**Problem:** Current alignment is a monolithic function with interleaved concerns.
-
-**Technical Specification:**
-
-Create module structure:
-```
-src/
-  alignment/
-    mod.rs
-    row_metadata.rs      // RowMeta, frequency classification
-    anchor_discovery.rs  // Find unique/rare row anchors
-    anchor_chain.rs      // LIS-based global anchor chain
-    move_extraction.rs   // Identify candidate moves from anchor gaps
-    gap_strategy.rs      // Per-gap alignment decisions
-    assembly.rs          // Final alignment construction
-    column_alignment.rs  // Parallel structure for columns
-```
-
-Each module should have:
-- Clear input/output types
-- Unit tests for that phase in isolation
-- Doc comments referencing spec sections
-
-**Deliverables:**
-- [ ] Create `alignment/` module structure
-- [ ] Extract `RowMeta` struct (hash, non_blank_count, frequency_class)
-- [ ] Extract `collect_row_metadata` function
-- [ ] Extract `discover_anchors` function
-- [ ] Extract `build_anchor_chain` (LIS) function
-- [ ] Extract `extract_move_candidates` function
-- [ ] Extract `fill_gap` function
-- [ ] Extract `assemble_alignment` function
-- [ ] Ensure existing tests pass through refactored code path
-
-### 2.2 Implement Row Frequency Classification
+### 2.1 Add Database Mode to WorkbookPackage
 
 **Technical Specification:**
 
 ```rust
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum FrequencyClass {
-    Unique,      // Appears exactly once
-    Rare,        // Appears 2-5 times (configurable)
-    Common,      // Appears 6+ times
-    LowInfo,     // Blank or near-blank (< N non-blank cells)
-}
-
-pub struct RowMeta {
-    pub signature: RowSignature,
-    pub non_blank_count: u32,
-    pub frequency_class: FrequencyClass,
-}
-
-impl GridView {
-    pub fn classify_row_frequencies(&mut self, config: &DiffConfig) {
-        let mut freq_map: HashMap<RowSignature, u32> = HashMap::new();
-        for sig in &self.row_signatures {
-            *freq_map.entry(*sig).or_default() += 1;
-        }
-        for (i, sig) in self.row_signatures.iter().enumerate() {
-            let count = freq_map[sig];
-            self.row_meta[i].frequency_class = match count {
-                1 => FrequencyClass::Unique,
-                2..=config.rare_threshold => FrequencyClass::Rare,
-                _ => FrequencyClass::Common,
-            };
-            if self.row_meta[i].non_blank_count < config.low_info_threshold {
-                self.row_meta[i].frequency_class = FrequencyClass::LowInfo;
-            }
-        }
+impl WorkbookPackage {
+    pub fn diff_database_mode(
+        &self,
+        other: &Self,
+        sheet_name: &str,
+        key_columns: &[u32],
+        config: &DiffConfig,
+    ) -> DiffReport {
+        // Find sheets by name
+        // Call diff_grids_database_mode
+        // Return unified report
     }
 }
 ```
 
 **Deliverables:**
-- [ ] Implement `FrequencyClass` enum
-- [ ] Implement `RowMeta` struct
-- [ ] Add frequency classification to `GridView`
-- [ ] Add `DiffConfig::rare_threshold` (default: 5)
-- [ ] Add `DiffConfig::low_info_threshold` (default: 2 non-blank cells)
-- [ ] Add tests for frequency classification edge cases
+- [ ] Add `diff_database_mode` method to WorkbookPackage
+- [ ] Add sheet name matching (case-insensitive)
+- [ ] Return error if sheet not found
+- [ ] Add streaming variant `diff_database_mode_streaming`
 
-### 2.3 Implement Anchor Discovery and LIS Chain
+### 2.2 Integrate with CLI
 
 **Technical Specification:**
 
+```bash
+excel-diff diff --database --sheet=Data --keys=A old.xlsx new.xlsx
+excel-diff diff --database --sheet=Data --keys=A,B,C old.xlsx new.xlsx
+```
+
+**Deliverables:**
+- [ ] Add `--database` flag to diff command
+- [ ] Add `--sheet` argument for sheet selection
+- [ ] Add `--keys` argument parsing (comma-separated column letters)
+- [ ] Convert column letters to indices (A=0, B=1, AA=26, etc.)
+- [ ] Add helpful error messages for invalid columns
+
+### 2.3 Auto-Key Detection (Stretch Goal)
+
+**Technical Specification:**
+
+Heuristically detect likely key columns:
+- First column with unique values
+- Column named "ID", "Key", "SKU", etc.
+
 ```rust
-pub struct Anchor {
-    pub old_row: u32,
-    pub new_row: u32,
-    pub signature: RowSignature,
-}
-
-pub fn discover_anchors(
-    old: &GridView,
-    new: &GridView,
-    config: &DiffConfig,
-) -> Vec<Anchor> {
-    // Find rows that are Unique in BOTH grids with matching signatures
-    let old_unique: HashMap<RowSignature, u32> = old.row_meta.iter()
-        .enumerate()
-        .filter(|(_, m)| m.frequency_class == FrequencyClass::Unique)
-        .map(|(i, m)| (m.signature, i as u32))
-        .collect();
-
-    let mut anchors = Vec::new();
-    for (new_idx, meta) in new.row_meta.iter().enumerate() {
-        if meta.frequency_class == FrequencyClass::Unique {
-            if let Some(&old_idx) = old_unique.get(&meta.signature) {
-                anchors.push(Anchor {
-                    old_row: old_idx,
-                    new_row: new_idx as u32,
-                    signature: meta.signature,
-                });
-            }
-        }
-    }
-    anchors
-}
-
-pub fn build_anchor_chain(anchors: Vec<Anchor>) -> Vec<Anchor> {
-    // LIS on old_row indices to find longest increasing subsequence
-    // This gives us the maximal set of anchors that preserve relative order
-    lis_by_key(anchors, |a| a.old_row)
+pub fn suggest_key_columns(grid: &Grid, pool: &StringPool) -> Vec<u32> {
+    // Check column 0 for uniqueness
+    // Check header row for common key names
 }
 ```
 
 **Deliverables:**
-- [ ] Implement `Anchor` struct
-- [ ] Implement `discover_anchors` function
-- [ ] Implement LIS algorithm (`lis_by_key`)
-- [ ] Implement `build_anchor_chain` function
-- [ ] Add test: simple anchor discovery (3 unique rows)
-- [ ] Add test: LIS selection (anchors with crossings)
-- [ ] Add test: no anchors (all rows common) → graceful fallback
-
-### 2.4 Implement Multi-Gap Alignment
-
-**Problem:** Current alignment handles only single contiguous insert/delete blocks.
-
-**Technical Specification:**
-
-The anchor chain divides both grids into gaps. For each gap:
-
-```rust
-pub enum GapStrategy {
-    Empty,           // Both sides empty, nothing to do
-    InsertAll,       // Old side empty, all new rows are insertions
-    DeleteAll,       // New side empty, all old rows are deletions
-    SmallEdit,       // Both sides small, use cell-level diff
-    MoveCandidate,   // Check for block moves within gap
-    RecursiveAlign,  // Gap large enough to recurse with rare anchors
-}
-
-pub fn select_gap_strategy(
-    old_gap: Range<u32>,
-    new_gap: Range<u32>,
-    old: &GridView,
-    new: &GridView,
-    config: &DiffConfig,
-) -> GapStrategy {
-    let old_len = old_gap.len();
-    let new_len = new_gap.len();
-
-    if old_len == 0 && new_len == 0 {
-        return GapStrategy::Empty;
-    }
-    if old_len == 0 {
-        return GapStrategy::InsertAll;
-    }
-    if new_len == 0 {
-        return GapStrategy::DeleteAll;
-    }
-    if old_len <= config.small_gap_threshold && new_len <= config.small_gap_threshold {
-        return GapStrategy::SmallEdit;
-    }
-    // Check for potential moves
-    if has_matching_signatures_in_gap(old, new, old_gap, new_gap) {
-        return GapStrategy::MoveCandidate;
-    }
-    if old_len > config.recursive_threshold || new_len > config.recursive_threshold {
-        return GapStrategy::RecursiveAlign;
-    }
-    GapStrategy::SmallEdit
-}
-```
-
-**Deliverables:**
-- [ ] Implement `GapStrategy` enum
-- [ ] Implement `select_gap_strategy` function
-- [ ] Implement `fill_gap` dispatcher
-- [ ] Implement `InsertAll` gap handler
-- [ ] Implement `DeleteAll` gap handler
-- [ ] Implement `SmallEdit` gap handler (cell-level diff)
-- [ ] Implement `MoveCandidate` gap handler
-- [ ] Implement `RecursiveAlign` gap handler (recurse with rare anchors)
-- [ ] Add test: two disjoint insertion regions → both aligned correctly
-- [ ] Add test: insertion + deletion in different regions → both reported
-- [ ] Add test: gap contains moved block → move detected within gap
-
-### 2.5 Remove/Raise Hard Caps
-
-**Technical Specification:**
-
-Replace hard constants with configurable limits that serve as safety valves, not functional restrictions:
-
-```rust
-pub struct DiffConfig {
-    // Safety caps (very high defaults, for truly pathological cases)
-    pub max_align_rows: u32,        // Default: 500_000 (was 2_000)
-    pub max_align_cols: u32,        // Default: 16_384 (was 64)
-    pub max_block_gap: u32,         // Default: 10_000 (was 32)
-
-    // Operational limits
-    pub max_move_iterations: u32,       // Default: 20
-    pub max_move_detection_rows: u32,   // Default: 200
-    pub max_move_detection_cols: u32,   // Default: 256
-    pub max_recursion_depth: u32,       // Default: 10
-
-    // When limits hit, behavior selection
-    pub on_limit_exceeded: LimitBehavior,
-}
-
-pub enum LimitBehavior {
-    FallbackToPositional,  // Current behavior
-    ReturnPartialResult,   // Return what we have + marker
-    ReturnError,           // Fail explicitly
-}
-```
-
-**Deliverables:**
-- [ ] Add configurable limits to `DiffConfig`
-- [ ] Remove hardcoded `MAX_ALIGN_ROWS`, `MAX_ALIGN_COLS`, `MAX_BLOCK_GAP` constants
-- [ ] Harmonize column caps across modules (alignment vs rect_block_move)
-- [ ] Implement `LimitBehavior` handling
-- [ ] Add test: 50K row grid aligns successfully
-- [ ] Add test: 500 column grid aligns successfully
-- [ ] Add test: limit exceeded → configured behavior occurs
-
-### 2.6 Run-Length Encoding for Repetitive Rows (Optional Optimization)
-
-**Technical Specification:**
-
-For grids where >50% of rows share signatures with other rows:
-
-```rust
-pub struct RowRun {
-    pub signature: RowSignature,
-    pub start_row: u32,
-    pub count: u32,
-}
-
-pub fn compress_to_runs(meta: &[RowMeta]) -> Vec<RowRun> {
-    let mut runs = Vec::new();
-    let mut i = 0;
-    while i < meta.len() {
-        let sig = meta[i].signature;
-        let start = i;
-        while i < meta.len() && meta[i].signature == sig {
-            i += 1;
-        }
-        runs.push(RowRun {
-            signature: sig,
-            start_row: start as u32,
-            count: (i - start) as u32,
-        });
-    }
-    runs
-}
-```
-
-This is an optimization for adversarial cases (99% blank rows, template rows). Implement if needed after core AMR is working.
-
-**Deliverables:**
-- [ ] Implement `RowRun` struct
-- [ ] Implement `compress_to_runs` function
-- [ ] Implement run-aware alignment (operates on runs, not individual rows)
-- [ ] Add test: 10K identical blank rows → runs compress to 1 entry
-- [ ] Add test: alternating pattern A-B-A-B → no compression benefit, falls back
-
-### 2.7 Performance Infrastructure
-
-**Technical Specification:**
-
-```rust
-#[cfg(feature = "perf-metrics")]
-pub struct DiffMetrics {
-    pub alignment_time_ms: u64,       // Alignment stage (may include nested cell diff time)
-    pub move_detection_time_ms: u64,  // Fingerprinting + masked move detection
-    pub cell_diff_time_ms: u64,       // Emitting cell diffs
-    pub total_time_ms: u64,
-    pub rows_processed: u64,
-    pub cells_compared: u64,
-    pub anchors_found: u32,
-    pub moves_detected: u32,
-}
-```
-
-**Note:** `parse_time_ms` and `peak_memory_bytes` are planned for a future phase.
-Parse timing requires wrapping the parser in metric collection, and memory tracking
-requires integration with a memory allocator (e.g., `tikv-jemallocator`). These
-are deferred to avoid scope creep in the current branch.
-
-```rust
-// Future phase: add these fields when parser and memory infra are ready
-// pub parse_time_ms: u64,
-// pub peak_memory_bytes: usize,
-}
-
-#[cfg(feature = "perf-metrics")]
-impl DiffMetrics {
-    pub fn start_phase(&mut self, phase: Phase) { ... }
-    pub fn end_phase(&mut self, phase: Phase) { ... }
-}
-```
-
-**CI Integration:**
-
-```yaml
-# .github/workflows/perf.yml
-perf-regression:
-  runs-on: ubuntu-latest
-  steps:
-    - uses: actions/checkout@v4
-    - name: Build with perf metrics
-      run: cargo build --release --features perf-metrics
-    - name: Run perf suite
-      run: cargo test --release --features perf-metrics perf_
-    - name: Check thresholds
-      run: python scripts/check_perf_thresholds.py
-```
-
-**Fixtures and Thresholds:**
-
-| Fixture | Rows | Cols | Max Time | Max Memory |
-|---------|------|------|----------|------------|
-| p1_large_dense | 50,000 | 100 | 5s | 500MB |
-| p2_large_noise | 50,000 | 100 | 10s | 600MB |
-| p3_adversarial_repetitive | 50,000 | 50 | 15s | 400MB |
-| p4_99_percent_blank | 50,000 | 100 | 2s | 200MB |
-| p5_identical | 50,000 | 100 | 1s | 300MB |
-
-**Deliverables:**
-- [ ] Add `perf-metrics` feature flag
-- [ ] Implement `DiffMetrics` struct
-- [ ] Add timing instrumentation to key phases
-- [ ] Add memory tracking (via `tikv-jemallocator` stats or similar)
-- [ ] Create perf test fixtures (use existing manifest definitions)
-- [ ] Create `scripts/check_perf_thresholds.py`
-- [ ] Add perf regression job to CI
-- [ ] Document baseline numbers in code/docs
+- [ ] Implement `suggest_key_columns` function
+- [ ] Add `--auto-keys` flag to CLI
+- [ ] Print suggested keys when database mode fails due to duplicates
 
 ### Acceptance Criteria for Branch 2
 
-- [ ] AMR algorithm implemented with all phases
-- [ ] Multi-gap alignment working (arbitrary number of disjoint edit regions)
-- [ ] 50K×100 grid aligns in <5s on reference hardware
-- [ ] No hardcoded caps below 100K rows
-- [ ] Performance regression tests in CI
-- [ ] Adversarial repetitive case (p3) completes without timeout
-- [ ] All existing tests pass
-
-**Activity Log**: See `docs/meta/activity_logs/2025-12-09-sprint-branch-2.md` for implementation notes and intentional spec deviations.
+- [ ] `excel-diff diff --database --keys=A` works correctly
+- [ ] Reordered rows with same keys produce no diff
+- [ ] Changed values in non-key columns reported correctly
+- [ ] Multi-column keys work (`--keys=A,C,E`)
+- [ ] Integration tests with D1-D4 fixtures pass
 
 ---
 
-## Branch 3: Configuration Infrastructure
+## Branch 3: Error Handling & Robustness
 
-**Goal:** Centralize all algorithm thresholds and behavioral knobs in a single `DiffConfig` type.
+**Goal:** Replace panics with proper error handling, improve resilience to malformed files.
 
-**Depends on:** Nothing (should be done early)
+**Depends on:** Nothing (can proceed in parallel)
 
-**Evaluation References:** Priority Recommendation #2
+**MVP Importance:** High — production code must not panic.
 
-### 3.1 Define DiffConfig Structure
+### 3.1 Audit and Fix Panics
 
 **Technical Specification:**
 
+Search for `.unwrap()`, `.expect()`, `panic!()`, and `unreachable!()` in non-test code:
+
+```bash
+rg '\.unwrap\(\)|\.expect\(|panic!\(|unreachable!\(' core/src --type rust
+```
+
+**Deliverables:**
+- [ ] Audit all unwraps in `core/src`
+- [ ] Replace with `?` operator where possible
+- [ ] Add context to errors using `thiserror` or `anyhow`
+- [ ] Document remaining intentional panics (logic errors)
+
+### 3.2 Graceful Handling of Malformed Files
+
+**Technical Specification:**
+
+The parser should not crash on:
+- Truncated ZIP files
+- Missing required XML parts
+- Invalid XML
+- Unexpected DataMashup formats
+
 ```rust
-#[derive(Clone, Debug)]
-pub struct DiffConfig {
-    // Alignment thresholds
-    pub rare_frequency_threshold: u32,
-    pub low_info_cell_threshold: u32,
-    pub small_gap_threshold: u32,
-    pub recursive_align_threshold: u32,
-
-    // Move detection
-    pub fuzzy_similarity_threshold: f64,
-    pub min_block_size_for_move: u32,
-    pub max_move_iterations: u32,
-
-    // Masked move-detection gates (independent of recursive_align_threshold)
-    pub max_move_detection_rows: u32,
-    pub max_move_detection_cols: u32,
-
-    // Safety limits
-    pub max_align_rows: u32,
-    pub max_align_cols: u32,
-    pub max_recursion_depth: u32,
-    pub on_limit_exceeded: LimitBehavior,
-
-    // Output control
-    pub include_unchanged_cells: bool,
-    pub max_context_rows: u32,
-
-    // Feature flags
-    pub enable_fuzzy_moves: bool,
-    pub enable_formula_semantic_diff: bool,
-    pub enable_m_semantic_diff: bool,
-}
-
-impl Default for DiffConfig {
-    fn default() -> Self {
-        Self {
-            rare_frequency_threshold: 5,
-            low_info_cell_threshold: 2,
-            small_gap_threshold: 50,
-            recursive_align_threshold: 200,
-            fuzzy_similarity_threshold: 0.80,
-            min_block_size_for_move: 3,
-            max_move_iterations: 20,
-            max_align_rows: 500_000,
-            max_align_cols: 16_384,
-            max_recursion_depth: 10,
-            on_limit_exceeded: LimitBehavior::FallbackToPositional,
-            include_unchanged_cells: false,
-            max_context_rows: 3,
-            enable_fuzzy_moves: true,
-            enable_formula_semantic_diff: false,
-            enable_m_semantic_diff: true,
-        }
-    }
-}
-
-impl DiffConfig {
-    pub fn fastest() -> Self {
-        Self {
-            enable_fuzzy_moves: false,
-            small_gap_threshold: 20,
-            ..Default::default()
-        }
-    }
-
-    pub fn most_precise() -> Self {
-        Self {
-            fuzzy_similarity_threshold: 0.95,
-            enable_formula_semantic_diff: true,
-            ..Default::default()
-        }
-    }
+pub enum PackageError {
+    NotAZip(std::io::Error),
+    MissingPart { path: String },
+    InvalidXml { part: String, error: String },
+    UnsupportedFormat { message: String },
+    // ...
 }
 ```
 
 **Deliverables:**
-- [ ] Define `DiffConfig` struct with all fields
-- [ ] Implement `Default` trait
-- [ ] Implement preset constructors (`fastest`, `balanced`, `most_precise`)
-- [ ] Add builder pattern for custom configurations
-- [ ] Add serde serialization for config persistence
+- [ ] Create comprehensive `PackageError` enum
+- [ ] Add tests with corrupt fixture files
+- [ ] Ensure all XML parsing has try/catch
+- [ ] Add validation for ZIP entry sizes (prevent zip bombs)
 
-### 3.2 Thread Config Through the Pipeline
+### 3.3 Improve Error Messages
 
 **Technical Specification:**
 
-Update all diff function signatures:
-
-```rust
-// Before
-pub fn diff_workbooks(old: &Workbook, new: &Workbook) -> DiffReport
-
-// After
-pub fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport
-```
-
-Functions to update:
-- `diff_workbooks`
-- `diff_grids`
-- `diff_grids_database_mode`
-- `align_rows`
-- `align_columns`
-- `detect_rect_block_move`
-- `detect_row_block_move`
-- `detect_column_block_move`
-- `diff_m_queries`
+Errors should include:
+- File path (when available)
+- XML path within the package
+- Line/column for parse errors
+- Actionable suggestions
 
 **Deliverables:**
-- [ ] Update all public diff APIs to accept `&DiffConfig`
-- [ ] Update all internal functions to pass config through
-- [ ] Remove all hardcoded `const` thresholds from algorithm code
-- [ ] Update all tests to use explicit configs (or `DiffConfig::default()`)
-- [ ] Add tests verifying different configs produce expected trade-offs
+- [ ] Add context to all error types
+- [ ] Implement `Display` with helpful messages
+- [ ] Add error code constants for programmatic handling
+- [ ] Document error codes in user documentation
 
 ### Acceptance Criteria for Branch 3
 
-- [ ] No hardcoded algorithm constants remain in diff code
-- [ ] All diff functions accept `&DiffConfig`
-- [ ] Preset configs work as documented
-- [ ] Config is serializable for persistence/debugging
-- [ ] Tests demonstrate config affects behavior
+- [ ] No panics when processing corrupt fixtures
+- [ ] All errors include actionable context
+- [ ] `clippy::unwrap_used` lint passes (or exceptions documented)
+- [ ] Fuzzing with `cargo-fuzz` finds no crashes
 
 ---
 
-## Branch 4: WASM & Memory Readiness
+## Branch 4: Object Graph Completion
 
-**Goal:** Make the core engine compile to WASM and handle large workbooks without exhausting memory.
+**Goal:** Add diffing for VBA modules, named ranges, and chart objects.
 
-**Depends on:** Branch 3 (DiffConfig for streaming thresholds)
+**Depends on:** Branch 2 (database mode), Branch 3 (error handling)
 
-**Evaluation References:** Priority Recommendations #3, #4
+**MVP Importance:** High — competitors diff these objects.
 
-### 4.1 String Interning
+### 4.1 VBA Module Diffing
 
 **Technical Specification:**
+
+VBA modules are stored in `xl/vbaProject.bin` (OLE compound document).
 
 ```rust
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct StringId(u32);
-
-pub struct StringPool {
-    strings: Vec<String>,
-    index: HashMap<String, StringId>,
+pub struct VbaModule {
+    pub name: StringId,
+    pub module_type: VbaModuleType,
+    pub code: String,
 }
 
-impl StringPool {
-    pub fn intern(&mut self, s: &str) -> StringId {
-        if let Some(&id) = self.index.get(s) {
-            return id;
-        }
-        let id = StringId(self.strings.len() as u32);
-        self.strings.push(s.to_owned());
-        self.index.insert(s.to_owned(), id);
-        id
-    }
-
-    pub fn resolve(&self, id: StringId) -> &str {
-        &self.strings[id.0 as usize]
-    }
+pub enum VbaModuleType {
+    Standard,
+    Class,
+    Form,
+    Document,
 }
 
-// Updated CellValue
-pub enum CellValue {
-    Blank,
-    Number(f64),
-    Text(StringId),  // Was: Text(String)
-    Boolean(bool),
-    Error(StringId), // Was: Error(String)
+// New DiffOps
+pub enum DiffOp {
+    // ... existing ops ...
+    VbaModuleAdded { name: StringId },
+    VbaModuleRemoved { name: StringId },
+    VbaModuleChanged { name: StringId },
 }
-
-// Updated SheetId
-pub type SheetId = StringId;  // Was: String
 ```
 
 **Deliverables:**
-- [ ] Implement `StringPool` and `StringId`
-- [ ] Update `CellValue::Text` to use `StringId`
-- [ ] Update `SheetId` to use `StringId`
-- [ ] Update `DiffOp` to use `StringId` for sheet references
-- [ ] Thread `StringPool` through parsing and diff
-- [ ] Update serialization to include string table in metadata
-- [ ] Add test: 50K identical strings → single allocation
-- [ ] Measure memory improvement on repetitive fixtures
+- [ ] Add `oletools` or implement OLE parsing
+- [ ] Extract VBA module source code
+- [ ] Implement VBA module comparison (text diff)
+- [ ] Add `VbaModule*` DiffOp variants
+- [ ] Update WorkbookPackage to include VBA modules
+- [ ] Add tests with `.xlsm` fixtures
 
-### 4.2 Eliminate Coordinate Redundancy
+### 4.2 Named Range Diffing
 
 **Technical Specification:**
 
-Current `Cell` struct stores coordinates three times:
-1. HashMap key `(row, col)`
-2. `Cell.row` and `Cell.col` fields
-3. `Cell.address.row` and `Cell.address.col`
+Named ranges are defined in `xl/workbook.xml`:
 
-Reduce to just the HashMap key:
+```xml
+<definedNames>
+  <definedName name="SalesData">Sheet1!$A$1:$Z$100</definedName>
+</definedNames>
+```
 
 ```rust
-// Before
-pub struct Cell {
-    pub row: u32,
-    pub col: u32,
-    pub address: CellAddress,
-    pub value: CellValue,
-    pub formula: Option<String>,
+pub struct NamedRange {
+    pub name: StringId,
+    pub refers_to: StringId,
+    pub scope: Option<StringId>, // Sheet-scoped or workbook-scoped
 }
 
-// After
-pub struct CellContent {
-    pub value: CellValue,
-    pub formula: Option<StringId>,  // Also intern formulas
+pub enum DiffOp {
+    // ... existing ops ...
+    NamedRangeAdded { name: StringId },
+    NamedRangeRemoved { name: StringId },
+    NamedRangeChanged { name: StringId, old_ref: StringId, new_ref: StringId },
 }
-
-// Grid stores: HashMap<(u32, u32), CellContent>
-// CellAddress derived on-demand when needed for output
 ```
 
 **Deliverables:**
-- [ ] Rename `Cell` to `CellContent`, remove coordinate fields
-- [ ] Update `Grid` to use `HashMap<(u32, u32), CellContent>`
-- [ ] Create `CellAddress::from_coords(row, col)` for output generation
-- [ ] Update all code that accessed `cell.row`/`cell.col` to use key
-- [ ] Measure memory improvement (expect ~16 bytes/cell saved)
+- [ ] Parse named ranges from workbook.xml
+- [ ] Add NamedRange to Workbook struct
+- [ ] Implement named range comparison
+- [ ] Add `NamedRange*` DiffOp variants
+- [ ] Add tests with named range fixtures
 
-### 4.3 Abstract I/O to Read + Seek
+### 4.3 Chart Object Diffing (Basic)
 
 **Technical Specification:**
+
+Charts are complex objects. For MVP, detect add/remove/change at chart level:
 
 ```rust
-// Before (in container.rs)
-pub fn open(path: &Path) -> Result<OpcContainer, ContainerError> {
-    let file = std::fs::File::open(path)?;
-    // ...
+pub struct ChartInfo {
+    pub name: StringId,
+    pub chart_type: StringId,
+    pub data_range: Option<StringId>,
 }
 
-// After
-pub fn open_from_reader<R: Read + Seek>(reader: R) -> Result<OpcContainer, ContainerError> {
-    let mut zip = ZipArchive::new(reader)?;
-    // ...
-}
-
-// Convenience wrapper in a separate module (not compiled for WASM)
-#[cfg(feature = "std-fs")]
-pub fn open_from_path(path: &Path) -> Result<OpcContainer, ContainerError> {
-    let file = std::fs::File::open(path)?;
-    open_from_reader(file)
+pub enum DiffOp {
+    // ... existing ops ...
+    ChartAdded { sheet: StringId, name: StringId },
+    ChartRemoved { sheet: StringId, name: StringId },
+    ChartChanged { sheet: StringId, name: StringId },
 }
 ```
 
 **Deliverables:**
-- [ ] Refactor `OpcContainer::open` to accept `R: Read + Seek`
-- [ ] Create `std-fs` feature flag for path-based convenience functions
-- [ ] Ensure core crate compiles with `default-features = false`
-- [ ] Add WASM compile test to CI
-
-### 4.4 Streaming Output
-
-**Technical Specification:**
-
-```rust
-pub trait DiffSink {
-    fn emit(&mut self, op: DiffOp) -> Result<(), DiffError>;
-    fn finish(self) -> Result<(), DiffError>;
-}
-
-pub struct VecSink(Vec<DiffOp>);
-pub struct JsonLinesSink<W: Write>(W);
-pub struct CallbackSink<F: FnMut(DiffOp)>(F);
-
-impl<W: Write> DiffSink for JsonLinesSink<W> {
-    fn emit(&mut self, op: DiffOp) -> Result<(), DiffError> {
-        serde_json::to_writer(&mut self.0, &op)?;
-        self.0.write_all(b"\n")?;
-        Ok(())
-    }
-}
-
-// Updated diff API
-pub fn diff_workbooks_streaming<S: DiffSink>(
-    old: &Workbook,
-    new: &Workbook,
-    config: &DiffConfig,
-    sink: &mut S,
-) -> Result<DiffSummary, DiffError>
-```
-
-**Ordering Decision:**
-
-The evaluation notes tension between streaming and globally-sorted output. Resolution:
-
-- **Within a sheet:** Emit in row-major order (stable, predictable)
-- **Across sheets:** Emit sheets in sorted name order
-- **No global sort** of the entire diff; order is deterministic by construction
-
-This allows true streaming without a collection-and-sort step.
-
-**Deliverables:**
-- [ ] Define `DiffSink` trait
-- [ ] Implement `VecSink` (for backward compatibility)
-- [ ] Implement `JsonLinesSink`
-- [ ] Implement `CallbackSink`
-- [ ] Refactor diff engine to emit through sink rather than return Vec
-- [ ] Provide `diff_workbooks` wrapper that uses `VecSink` internally
-- [ ] Remove global sort from diff pipeline
-- [ ] Document ordering guarantees
-- [ ] Add test: streaming output produces same ops as vec output (order may differ)
-
-### 4.5 WASM Build Gate
-
-**Technical Specification:**
-
-```yaml
-# .github/workflows/wasm.yml
-wasm-build:
-  runs-on: ubuntu-latest
-  steps:
-    - uses: actions/checkout@v4
-    - name: Install wasm target
-      run: rustup target add wasm32-unknown-unknown
-    - name: Build core for WASM
-      run: cargo build --target wasm32-unknown-unknown --no-default-features -p excel_diff_core
-    - name: Check size
-      run: |
-        SIZE=$(stat -c%s target/wasm32-unknown-unknown/release/excel_diff_core.wasm)
-        if [ $SIZE -gt 5000000 ]; then
-          echo "WASM size $SIZE exceeds 5MB limit"
-          exit 1
-        fi
-```
-
-**Deliverables:**
-- [ ] Add `wasm32-unknown-unknown` build to CI
-- [ ] Fix any compilation errors for WASM target
-- [ ] Add WASM size budget check (initial target: <5MB)
-- [ ] Create minimal WASM smoke test (parse small workbook, run diff)
-- [ ] Document WASM usage in README
+- [ ] Parse chart metadata from `xl/charts/*.xml`
+- [ ] Detect chart add/remove at sheet level
+- [ ] Compute hash of chart XML for change detection
+- [ ] Add `Chart*` DiffOp variants
+- [ ] Document limitations (no deep chart diffing)
 
 ### Acceptance Criteria for Branch 4
 
-- [ ] String interning implemented and reduces memory on repetitive data
-- [ ] Coordinate redundancy eliminated
-- [ ] Core crate compiles to WASM
-- [ ] Streaming output works without full materialization
-- [ ] WASM build in CI with size budget
-- [ ] 50K row workbook parseable without OOM in 256MB WASM heap
+- [ ] VBA module changes detected and reported
+- [ ] Named range add/remove/change detected
+- [ ] Chart add/remove/change detected
+- [ ] No regressions in existing grid/M diff tests
+- [ ] New DiffOps serialize correctly to JSON
 
 ---
 
-## Branch 5: API Unification
+## Branch 5: Packaging & Distribution
 
-**Goal:** Present a single, coherent domain model and diff API to consumers.
+**Goal:** Create distributable packages for Windows, macOS, and web.
 
-**Depends on:** Branch 3 (DiffConfig)
+**Depends on:** Branch 4 (feature completeness)
 
-**Evaluation References:** Priority Recommendation #5
+**MVP Importance:** High — users need to install it.
 
-### 5.1 Implement WorkbookPackage
-
-**Technical Specification:**
-
-```rust
-pub struct WorkbookPackage {
-    pub workbook: Workbook,
-    pub data_mashup: Option<DataMashup>,
-    // Future: pub data_model: Option<DataModel>,
-}
-
-impl WorkbookPackage {
-    pub fn open<R: Read + Seek>(reader: R) -> Result<Self, PackageError> {
-        let mut container = OpcContainer::open_from_reader(reader)?;
-
-        let workbook = parse_workbook(&mut container)?;
-
-        let data_mashup = match container.get_part("customXml/item1.xml") {
-            Some(part) => Some(parse_data_mashup(part)?),
-            None => None,
-        };
-
-        Ok(Self { workbook, data_mashup })
-    }
-}
-```
-
-**Deliverables:**
-- [ ] Define `WorkbookPackage` struct
-- [ ] Implement `WorkbookPackage::open`
-- [ ] Consolidate error types into `PackageError`
-- [ ] Update examples and documentation
-
-### 5.2 Extend DiffOp for M Queries
+### 5.1 Windows Packaging
 
 **Technical Specification:**
 
-```rust
-pub enum DiffOp {
-    // Existing grid operations
-    SheetAdded { sheet: SheetId },
-    SheetRemoved { sheet: SheetId },
-    RowsInserted { sheet: SheetId, start: u32, count: u32 },
-    RowsDeleted { sheet: SheetId, start: u32, count: u32 },
-    RowBlockMoved { sheet: SheetId, from: u32, to: u32, count: u32 },
-    // ... other grid ops ...
-    CellEdited { sheet: SheetId, row: u32, col: u32, old: CellSnapshot, new: CellSnapshot },
+Options:
+1. **MSI installer** (via `cargo-wix`)
+2. **Portable ZIP** (single .exe)
+3. **Scoop/Chocolatey** package
 
-    // New: M query operations
-    QueryAdded { name: StringId },
-    QueryRemoved { name: StringId },
-    QueryDefinitionChanged {
-        name: StringId,
-        change_kind: QueryChangeKind,
-        old_hash: u64,
-        new_hash: u64,
-    },
-    QueryMetadataChanged { name: StringId, field: StringId },
-
-    // Future: DAX operations (reserved)
-    // MeasureAdded { ... },
-    // MeasureRemoved { ... },
-    // MeasureDefinitionChanged { ... },
-}
-
-pub enum QueryChangeKind {
-    Semantic,      // AST structure changed
-    FormattingOnly, // Whitespace/comments only
-    Renamed,       // Query renamed (not yet emitted)
-}
+```yaml
+# .github/workflows/release.yml
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo build --release -p excel_diff_cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: excel-diff-windows
+          path: target/release/excel-diff.exe
 ```
 
 **Deliverables:**
-- [ ] Add M query variants to `DiffOp`
-- [ ] Update `diff_m_queries` to return `Vec<DiffOp>` instead of `Vec<MQueryDiff>`
-- [ ] Deprecate `MQueryDiff` type (or make it internal)
-- [ ] Add reserved variant comments for DAX
-- [ ] Update serialization schema
+- [ ] Set up GitHub Actions release workflow
+- [ ] Build Windows x64 binary
+- [ ] Create portable ZIP package
+- [ ] (Optional) Create MSI installer
+- [ ] Add to Scoop bucket
 
-### 5.3 Unified diff_packages API
+### 5.2 macOS Packaging
 
 **Technical Specification:**
 
-```rust
-impl WorkbookPackage {
-    pub fn diff(&self, other: &Self, config: &DiffConfig) -> DiffReport {
-        let mut ops = Vec::new();
+Options:
+1. **Homebrew tap**
+2. **DMG with CLI**
+3. **Universal binary** (x64 + ARM64)
 
-        // Object graph diff (sheets, tables, named ranges)
-        ops.extend(diff_object_graph(&self.workbook, &other.workbook, config));
+**Deliverables:**
+- [ ] Build macOS x64 binary
+- [ ] Build macOS ARM64 binary (Apple Silicon)
+- [ ] Create universal binary
+- [ ] Create Homebrew formula
+- [ ] Test on macOS Sequoia
 
-        // Grid diff per sheet
-        for (sheet_id, old_sheet, new_sheet) in matched_sheets(&self.workbook, &other.workbook) {
-            let sheet_ops = diff_sheet(old_sheet, new_sheet, config);
-            ops.extend(sheet_ops);
-        }
+### 5.3 Web Demo (WASM)
 
-        // M query diff
-        if let (Some(old_dm), Some(new_dm)) = (&self.data_mashup, &other.data_mashup) {
-            ops.extend(diff_m_queries(&old_dm.queries, &new_dm.queries, config));
-        }
+**Technical Specification:**
 
-        DiffReport { ops, metadata: ... }
-    }
+Simple web page that:
+1. Accepts two file uploads
+2. Runs diff in browser via WASM
+3. Displays results
 
-    pub fn diff_streaming<S: DiffSink>(
-        &self,
-        other: &Self,
-        config: &DiffConfig,
-        sink: &mut S,
-    ) -> Result<DiffSummary, DiffError> {
-        // Same logic but emits through sink
-    }
-}
+```
+web/
+  index.html
+  main.js
+  wasm/
+    excel_diff_wasm.js
+    excel_diff_wasm_bg.wasm
 ```
 
 **Deliverables:**
-- [ ] Implement `WorkbookPackage::diff`
-- [ ] Implement `WorkbookPackage::diff_streaming`
-- [ ] Deprecate standalone `diff_workbooks` and `diff_m_queries` (keep as internal)
-- [ ] Add projection helpers: `DiffReport::grid_ops()`, `DiffReport::m_ops()`
-- [ ] Update all examples and docs to use new API
+- [ ] Create `wasm/` crate with wasm-bindgen exports
+- [ ] Build with `wasm-pack`
+- [ ] Create minimal HTML/JS frontend
+- [ ] Deploy to GitHub Pages
+- [ ] Test with various file sizes
 
 ### Acceptance Criteria for Branch 5
 
-- [ ] Single `WorkbookPackage::open` parses entire file
-- [ ] Single `WorkbookPackage::diff` produces unified results
-- [ ] M query changes appear in same `DiffOp` stream as grid changes
-- [ ] Old APIs deprecated with clear migration path
-- [ ] Public API surface reduced
+- [ ] Windows .exe downloadable from GitHub Releases
+- [ ] macOS binary downloadable and runs on M1+
+- [ ] Web demo functional at https://[user].github.io/excel_diff
+- [ ] Installation instructions in README for all platforms
+- [ ] CI builds all platforms on release tags
 
 ---
 
-## Branch 6: M Parser Expansion
+## Branch 6: Performance Hardening
 
-**Goal:** Extend M parser beyond `let ... in` to handle all common top-level expression forms.
+**Goal:** Ensure reliable performance on large files, add safeguards.
 
-**Depends on:** Nothing (independent)
+**Depends on:** Nothing (can proceed in parallel)
 
-**Evaluation References:** Priority Recommendation #10
+**MVP Importance:** Medium — must not regress, should handle edge cases.
 
-### 6.1 Audit Current Parser Coverage
-
-**Deliverables:**
-- [ ] Document which M constructs are fully parsed vs. treated as opaque sequences
-- [ ] Create test fixtures for each unsupported construct
-- [ ] Prioritize by frequency in real-world Power Query usage
-
-### 6.2 Implement Non-Let Top-Level Expressions
+### 6.1 Memory Budgeting
 
 **Technical Specification:**
 
-Currently unsupported top-level forms:
-- Direct record literals: `[Field1 = 1, Field2 = 2]`
-- Direct list literals: `{1, 2, 3}`
-- Direct function calls: `Table.FromRows(...)`
-- Direct primitive expressions: `"hello"`, `42`
+Add memory limits to prevent OOM:
 
 ```rust
-pub enum MExpression {
-    Let { bindings: Vec<MBinding>, body: Box<MExpression> },
-    Record { fields: Vec<MField> },
-    List { items: Vec<MExpression> },
-    FunctionCall { name: String, args: Vec<MExpression> },
-    // ... other expression types ...
-    Primitive(MPrimitive),
-    Opaque(Vec<MToken>), // Fallback for truly unparseable
+pub struct DiffConfig {
+    // ... existing fields ...
+    pub max_memory_mb: Option<u32>,
+}
+```
+
+When limit approached:
+1. Emit partial result
+2. Add warning to DiffSummary
+3. Fall back to positional diff
+
+**Deliverables:**
+- [ ] Add memory tracking (via allocator stats or estimation)
+- [ ] Implement memory limit check in hot paths
+- [ ] Add `--max-memory` CLI flag
+- [ ] Test with fixtures that exceed limits
+
+### 6.2 Progress Reporting
+
+**Technical Specification:**
+
+For long-running operations, emit progress:
+
+```rust
+pub trait ProgressCallback: Send {
+    fn on_progress(&self, phase: &str, percent: f32);
+}
+
+pub fn diff_workbooks_with_progress<P: ProgressCallback>(
+    old: &Workbook,
+    new: &Workbook,
+    config: &DiffConfig,
+    progress: &P,
+) -> DiffReport
+```
+
+**Deliverables:**
+- [ ] Define ProgressCallback trait
+- [ ] Add progress hooks to major phases
+- [ ] Add `--progress` flag to CLI
+- [ ] Show progress bar in terminal
+
+### 6.3 Timeout Support
+
+**Technical Specification:**
+
+Allow callers to set a timeout:
+
+```rust
+pub struct DiffConfig {
+    // ... existing fields ...
+    pub timeout_seconds: Option<u32>,
 }
 ```
 
 **Deliverables:**
-- [ ] Extend `MExpression` enum with new variants
-- [ ] Implement record literal parsing
-- [ ] Implement list literal parsing
-- [ ] Implement function call parsing
-- [ ] Implement primitive expression parsing
-- [ ] Update `canonicalize` to handle new expression types
-- [ ] Add tests for each new construct
-
-### 6.3 Update Semantic Comparison
-
-**Deliverables:**
-- [ ] Ensure `canonicalize_tokens` is no longer a no-op for non-let expressions
-- [ ] Implement canonicalization for records (sort fields by name)
-- [ ] Implement canonicalization for lists (preserve order)
-- [ ] Add semantic equivalence tests: `[B=2, A=1]` equals `[A=1, B=2]`
+- [ ] Add timeout field to DiffConfig
+- [ ] Check elapsed time in hot loops
+- [ ] Return partial result on timeout
+- [ ] Add `--timeout` CLI flag
 
 ### Acceptance Criteria for Branch 6
 
-- [ ] All common M top-level forms parsed to AST
-- [ ] `Opaque` fallback used only for genuinely obscure constructs
-- [ ] Semantic diff correctly identifies formatting-only changes for all forms
-- [ ] No regressions in existing M diff tests
+- [ ] 50K×100 grid completes in <10s
+- [ ] Memory stays under 1GB for 100K row files
+- [ ] Progress callback fires at reasonable intervals
+- [ ] Timeout triggers graceful partial result
 
 ---
 
-## Branch 7: Excel Formula Parser
+## Branch 7: Documentation & Polish
 
-**Goal:** Add semantic diff capability for Excel formulas.
+**Goal:** Comprehensive documentation, examples, and developer experience.
 
-**Depends on:** Nothing (independent), but integrates with Branch 5's unified DiffOp
+**Depends on:** Branches 1-5 for accurate documentation
 
-**Evaluation References:** Priority Recommendation #11
+**MVP Importance:** Medium — affects adoption but not functionality.
 
-### 7.1 Implement Formula AST
-
-**Technical Specification:**
-
-```rust
-pub enum FormulaExpr {
-    Number(f64),
-    Text(String),
-    Boolean(bool),
-    Error(ExcelError),
-    CellRef(CellReference),
-    RangeRef(RangeReference),
-    NamedRef(String),
-    FunctionCall { name: String, args: Vec<FormulaExpr> },
-    BinaryOp { op: BinaryOperator, left: Box<FormulaExpr>, right: Box<FormulaExpr> },
-    UnaryOp { op: UnaryOperator, operand: Box<FormulaExpr> },
-    Array { rows: Vec<Vec<FormulaExpr>> },
-}
-
-pub struct CellReference {
-    pub sheet: Option<String>,
-    pub col: ColRef,
-    pub row: RowRef,
-}
-
-pub enum ColRef {
-    Absolute(u32),  // $A
-    Relative(u32),  // A
-}
-
-pub enum RowRef {
-    Absolute(u32),  // $1
-    Relative(u32),  // 1
-}
-```
+### 7.1 User Documentation
 
 **Deliverables:**
-- [ ] Define `FormulaExpr` AST types
-- [ ] Define `CellReference` and `RangeReference` types
-- [ ] Implement formula parser (consider using `pest` or `nom`)
-- [ ] Handle R1C1 vs A1 notation
-- [ ] Handle array formulas
-- [ ] Handle structured references (table references)
-- [ ] Add comprehensive parser tests
+- [ ] README with quick start guide
+- [ ] CLI reference documentation
+- [ ] Configuration guide (DiffConfig options)
+- [ ] Git integration tutorial
+- [ ] Database mode guide with examples
+- [ ] FAQ section
 
-### 7.2 Implement Formula Canonicalization
-
-**Technical Specification:**
-
-```rust
-impl FormulaExpr {
-    pub fn canonicalize(&self) -> FormulaExpr {
-        match self {
-            FormulaExpr::FunctionCall { name, args } => {
-                let canon_name = name.to_uppercase();
-                let canon_args: Vec<_> = args.iter().map(|a| a.canonicalize()).collect();
-
-                // Commutative functions: sort arguments
-                if is_commutative(&canon_name) {
-                    let mut sorted = canon_args;
-                    sorted.sort_by_key(|a| a.canonical_hash());
-                    return FormulaExpr::FunctionCall { name: canon_name, args: sorted };
-                }
-
-                FormulaExpr::FunctionCall { name: canon_name, args: canon_args }
-            }
-            FormulaExpr::BinaryOp { op, left, right } if op.is_commutative() => {
-                let l = left.canonicalize();
-                let r = right.canonicalize();
-                if l.canonical_hash() > r.canonical_hash() {
-                    FormulaExpr::BinaryOp { op: *op, left: Box::new(r), right: Box::new(l) }
-                } else {
-                    FormulaExpr::BinaryOp { op: *op, left: Box::new(l), right: Box::new(r) }
-                }
-            }
-            // ... other cases ...
-        }
-    }
-}
-
-fn is_commutative(func: &str) -> bool {
-    matches!(func, "SUM" | "PRODUCT" | "AND" | "OR" | "MAX" | "MIN" | ...)
-}
-```
+### 7.2 API Documentation
 
 **Deliverables:**
-- [ ] Implement `canonicalize` for all expression types
-- [ ] Identify and handle commutative functions
-- [ ] Identify and handle commutative operators (+, *, AND, OR)
-- [ ] Case-normalize function names
-- [ ] Add canonicalization tests
+- [ ] Complete rustdoc for all public types
+- [ ] Code examples in doc comments
+- [ ] Architecture overview document
+- [ ] Migration guide from old APIs
 
-### 7.3 Implement Reference Shift Detection
-
-**Technical Specification:**
-
-When a formula is copied/filled, references shift. Detect when two formulas are "the same modulo shift":
-
-```rust
-pub fn formulas_equivalent_modulo_shift(
-    f1: &FormulaExpr,
-    f2: &FormulaExpr,
-    row_shift: i32,
-    col_shift: i32,
-) -> bool {
-    match (f1, f2) {
-        (FormulaExpr::CellRef(r1), FormulaExpr::CellRef(r2)) => {
-            refs_match_with_shift(r1, r2, row_shift, col_shift)
-        }
-        (FormulaExpr::FunctionCall { name: n1, args: a1 },
-         FormulaExpr::FunctionCall { name: n2, args: a2 }) => {
-            n1 == n2 && a1.len() == a2.len() &&
-            a1.iter().zip(a2.iter()).all(|(x, y)|
-                formulas_equivalent_modulo_shift(x, y, row_shift, col_shift))
-        }
-        // ... other cases ...
-    }
-}
-```
+### 7.3 Example Programs
 
 **Deliverables:**
-- [ ] Implement `formulas_equivalent_modulo_shift`
-- [ ] Integrate with cell diff to detect "formula filled" vs "formula changed"
-- [ ] Add test: `=A1+B1` in C1 vs `=A2+B2` in C2 → equivalent (row shift)
-- [ ] Add test: `=A1+B1` vs `=A1+B2` → not equivalent
-
-### 7.4 Integrate with Cell Diff
-
-**Technical Specification:**
-
-```rust
-pub fn diff_cell_formulas(
-    old: &Option<String>,
-    new: &Option<String>,
-    config: &DiffConfig,
-) -> FormulaDiffResult {
-    if !config.enable_formula_semantic_diff {
-        return FormulaDiffResult::from_text_comparison(old, new);
-    }
-
-    match (old, new) {
-        (None, None) => FormulaDiffResult::Unchanged,
-        (None, Some(_)) => FormulaDiffResult::Added,
-        (Some(_), None) => FormulaDiffResult::Removed,
-        (Some(old_str), Some(new_str)) => {
-            if old_str == new_str {
-                return FormulaDiffResult::Unchanged;
-            }
-
-            let old_ast = parse_formula(old_str).ok();
-            let new_ast = parse_formula(new_str).ok();
-
-            match (old_ast, new_ast) {
-                (Some(o), Some(n)) => {
-                    if o.canonicalize() == n.canonicalize() {
-                        FormulaDiffResult::FormattingOnly
-                    } else {
-                        FormulaDiffResult::SemanticChange
-                    }
-                }
-                _ => FormulaDiffResult::TextChange, // Parse failed, fall back
-            }
-        }
-    }
-}
-```
-
-**Deliverables:**
-- [ ] Implement `diff_cell_formulas`
-- [ ] Update `CellEdited` DiffOp to include formula diff classification
-- [ ] Add `DiffConfig::enable_formula_semantic_diff` flag
-- [ ] Add integration tests with real formula patterns
+- [ ] `examples/basic_diff.rs` - Simple file comparison
+- [ ] `examples/streaming.rs` - Large file streaming
+- [ ] `examples/database_mode.rs` - Key-based diffing
+- [ ] `examples/custom_config.rs` - Configuration options
 
 ### Acceptance Criteria for Branch 7
 
-- [ ] Formula parser handles common Excel formula syntax
-- [ ] Canonicalization normalizes commutative operations
-- [ ] Reference shift detection works for fill patterns
-- [ ] Semantic formula diff integrated with cell diff
-- [ ] Feature flag allows disabling for performance
+- [ ] README has clear installation and usage instructions
+- [ ] `cargo doc --open` produces useful documentation
+- [ ] All examples compile and run
+- [ ] No broken links in documentation
 
 ---
 
-## Execution Order
+## Execution Timeline
 
-### Phase 1: Foundation (Weeks 1-2)
-- **Branch 3: Configuration Infrastructure** (1 week)
-  - Unblocks all other work
-  - Small, well-defined scope
+### Week 1-2: Foundation
+- **Branch 1: CLI Tool** (primary focus)
+- **Branch 3: Error Handling** (parallel)
 
-### Phase 2: Correctness (Weeks 2-4)
-- **Branch 1: Grid Algorithm Correctness** (2-3 weeks)
-  - Critical bug fixes
-  - Must complete before scalability work
+### Week 3-4: Core Features
+- **Branch 2: Database Mode API** (depends on Branch 1)
+- **Branch 6: Performance** (parallel)
 
-### Phase 3: Parallel Work (Weeks 4-8)
-Run in parallel based on team capacity:
+### Week 5-6: Completeness
+- **Branch 4: Object Graph** (depends on Branch 2, 3)
+- **Branch 7: Documentation** (start in parallel)
 
-- **Branch 2: Grid Scalability + Perf Infra** (3-4 weeks)
-  - Depends on Branch 1
-  - Largest single branch
-
-- **Branch 4: WASM & Memory** (2-3 weeks)
-  - Can start after Branch 3
-  - Memory work helps Branch 2 validation
-
-- **Branch 5: API Unification** (1-2 weeks)
-  - Independent
-  - Good for parallel work
-
-- **Branch 6: M Parser** (2 weeks)
-  - Fully independent
-  - Good for parallel work
-
-### Phase 4: Enhancement (Weeks 8-10)
-- **Branch 7: Formula Parser** (2-3 weeks)
-  - Independent but lower priority
-  - Can be deferred if needed
+### Week 7: Distribution
+- **Branch 5: Packaging** (depends on Branch 4)
+- **Branch 7: Documentation** (complete)
 
 ---
 
 ## Risk Mitigation
 
-| Risk | Mitigation |
-|------|------------|
-| AMR complexity exceeds estimate | Start with phased refactor (2.1) to create seams; implement incrementally |
-| WASM size budget exceeded | Feature-gate heavy dependencies; measure early and often |
-| String interning breaks existing code | Comprehensive test coverage before starting; incremental migration |
-| Formula parser scope creep | Define MVP formula subset; expand iteratively |
-| Performance regressions | Establish baselines in Branch 2 perf infra before other changes |
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| VBA parsing complexity | High | Use existing `oletools` crate or defer to Phase 2 |
+| WASM bundle size | Medium | Feature-gate heavy components, measure early |
+| macOS code signing | Medium | Use ad-hoc signing initially, add notarization later |
+| Cross-platform testing | Medium | Use GitHub Actions matrix builds |
+| Documentation debt | Low | Write docs alongside code, not after |
 
 ---
 
 ## Definition of Done (All Branches)
 
 - [ ] All new code has unit tests
-- [ ] All public APIs documented
+- [ ] All public APIs documented with rustdoc
 - [ ] No new clippy warnings
-- [ ] CI passes (including new WASM and perf gates)
-- [ ] Code reviewed by at least one other engineer
-- [ ] Integration tests cover happy path and key error cases
-- [ ] Memory and performance within budgets
-- [ ] Backward compatibility maintained or migration path documented
+- [ ] CI passes on all platforms
+- [ ] Integration tests cover happy path and error cases
+- [ ] README updated if user-facing changes
+
+---
+
+## Post-90% MVP Roadmap
+
+Features deferred beyond 90% MVP:
+
+1. **Three-way merge** - Complex, needs design
+2. **DAX/Data Model parsing** - Large effort (H5, difficulty 14)
+3. **Step-level M diff** - Nice to have, not critical
+4. **GUI application** - Significant investment
+5. **Cloud/SaaS version** - Business decision
+6. **Concurrent diffing** - Performance optimization
+7. **Custom output templates** - User request driven
+
+---
+
+## Appendix: Completion Estimation
+
+| Branch | Estimated Effort | MVP Contribution |
+|--------|-----------------|------------------|
+| Branch 1: CLI | 1-2 weeks | +8% |
+| Branch 2: Database Mode | 3-4 days | +3% |
+| Branch 3: Error Handling | 1 week | +4% |
+| Branch 4: Object Graph | 1-2 weeks | +6% |
+| Branch 5: Packaging | 1 week | +4% |
+| Branch 6: Performance | 3-4 days | +2% |
+| Branch 7: Documentation | 3-4 days | +3% |
+
+**Total: ~6-8 weeks for +30% completion (70% → 100%)**
+
+Current state: ~70% complete
+After this sprint: ~100% of MVP scope
+
+Note: "100% MVP" means all core features needed for a usable product. Advanced features (DAX, three-way merge, GUI) are Phase 2.
+

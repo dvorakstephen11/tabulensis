@@ -708,9 +708,29 @@ scenarios:
     args: 
       count: 1000 
       seed: 42 
-      # Inject a new ID at the end
       extra_rows: [{id: 1001, name: "New Row", amount: 999}]
     output: "db_row_added_b.xlsx"
+
+  # --- D3: Row Update (Database Mode) ---
+  - id: "db_row_update_b"
+    generator: "db_keyed"
+    args:
+      count: 1000
+      seed: 42
+      updates:
+        - { id: 7, amount: 120 }
+    output: "db_row_update_b.xlsx"
+
+  # --- D4: Reorder + Change (Database Mode) ---
+  - id: "db_reorder_and_change_b"
+    generator: "db_keyed"
+    args:
+      count: 1000
+      seed: 42
+      shuffle: true
+      updates:
+        - { id: 7, amount: 120 }
+    output: "db_reorder_and_change_b.xlsx"
 
   # --- P3: Adversarial Repetitive Grid (RLE stress test) ---
   - id: "p3_adversarial_repetitive"

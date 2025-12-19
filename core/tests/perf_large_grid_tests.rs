@@ -4,7 +4,9 @@ mod common;
 
 use common::single_sheet_workbook;
 use excel_diff::perf::DiffMetrics;
-use excel_diff::{CellValue, DiffConfig, DiffConfigBuilder, DiffOp, DiffReport, Grid, Workbook, WorkbookPackage};
+use excel_diff::{
+    CellValue, DiffConfig, DiffConfigBuilder, DiffOp, DiffReport, Grid, Workbook, WorkbookPackage,
+};
 
 fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
     WorkbookPackage::from(old.clone()).diff(&WorkbookPackage::from(new.clone()), config)
