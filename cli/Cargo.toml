@@ -1,0 +1,18 @@
+[package]
+name = "excel_diff_cli"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "excel-diff"
+path = "src/main.rs"
+
+[dependencies]
+excel_diff = { path = "../core" }
+clap = { version = "4.4", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+
+[dev-dependencies]
+serde_json = "1.0"
+

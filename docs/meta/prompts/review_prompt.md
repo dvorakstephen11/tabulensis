@@ -50,6 +50,21 @@
         trend_summary.md
   Cargo.lock
   Cargo.toml
+  cli/
+    Cargo.toml
+    src/
+      commands/
+        diff.rs
+        info.rs
+        mod.rs
+      main.rs
+      output/
+        git_diff.rs
+        json.rs
+        mod.rs
+        text.rs
+    tests/
+      integration_tests.rs
   core/
     benches/
       diff_benchmarks.rs
@@ -307,8 +322,1416 @@ docs/meta/completion_estimates/
 
 ```toml
 [workspace]
-members = ["core"]
+members = ["core", "cli"]
 resolver = "2"
+
+```
+
+---
+
+### File: `cli\Cargo.toml`
+
+```toml
+[package]
+name = "excel_diff_cli"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "excel-diff"
+path = "src/main.rs"
+
+[dependencies]
+excel_diff = { path = "../core" }
+clap = { version = "4.4", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+
+[dev-dependencies]
+serde_json = "1.0"
+
+
+```
+
+---
+
+### File: `cli\src\commands\diff.rs`
+
+```rust
+use crate::output::{git_diff, json, text};
+use crate::OutputFormat;
+use anyhow::{Context, Result, bail};
+use excel_diff::{DiffConfig, DiffReport, JsonLinesSink, WorkbookPackage};
+use std::fs::File;
+use std::io::{self, BufWriter, Write};
+use std::process::ExitCode;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Verbosity {
+    Quiet,
+    Normal,
+    Verbose,
+}
+
+pub fn run(
+    old_path: &str,
+    new_path: &str,
+    format: OutputFormat,
+    git_diff_mode: bool,
+    fast: bool,
+    precise: bool,
+    key_columns: Option<String>,
+    quiet: bool,
+    verbose: bool,
+) -> Result<ExitCode> {
+    if fast && precise {
+        bail!("Cannot use both --fast and --precise flags together");
+    }
+
+    if key_columns.is_some() {
+        bail!("Database mode is not implemented in CLI yet; use Branch 2 flags (--database --sheet --keys) once available");
+    }
+
+    if git_diff_mode && (format == OutputFormat::Json || format == OutputFormat::Jsonl) {
+        bail!("Cannot use --git-diff with --format=json or --format=jsonl");
+    }
+
+    let verbosity = if quiet {
+        Verbosity::Quiet
+    } else if verbose {
+        Verbosity::Verbose
+    } else {
+        Verbosity::Normal
+    };
+
+    let config = build_config(fast, precise);
+
+    let old_file = File::open(old_path)
+        .with_context(|| format!("Failed to open old workbook: {}", old_path))?;
+    let new_file = File::open(new_path)
+        .with_context(|| format!("Failed to open new workbook: {}", new_path))?;
+
+    let old_pkg = WorkbookPackage::open(old_file)
+        .with_context(|| format!("Failed to parse old workbook: {}", old_path))?;
+    let new_pkg = WorkbookPackage::open(new_file)
+        .with_context(|| format!("Failed to parse new workbook: {}", new_path))?;
+
+    if format == OutputFormat::Jsonl && !git_diff_mode {
+        return run_streaming(&old_pkg, &new_pkg, &config);
+    }
+
+    let report = old_pkg.diff(&new_pkg, &config);
+
+    print_warnings_to_stderr(&report);
+
+    let stdout = io::stdout();
+    let mut handle = stdout.lock();
+
+    if git_diff_mode {
+        git_diff::write_git_diff(&mut handle, &report, old_path, new_path)?;
+    } else {
+        match format {
+            OutputFormat::Text => {
+                text::write_text_report(&mut handle, &report, verbosity)?;
+            }
+            OutputFormat::Json => {
+                json::write_json_report(&mut handle, &report)?;
+            }
+            OutputFormat::Jsonl => {
+                unreachable!("JSONL handled by streaming path");
+            }
+        }
+    }
+
+    Ok(exit_code_from_report(&report))
+}
+
+fn run_streaming(
+    old_pkg: &WorkbookPackage,
+    new_pkg: &WorkbookPackage,
+    config: &DiffConfig,
+) -> Result<ExitCode> {
+    let stdout = io::stdout();
+    let handle = stdout.lock();
+    let mut writer = BufWriter::new(handle);
+    let mut sink = JsonLinesSink::new(&mut writer);
+
+    let summary = old_pkg
+        .diff_streaming(new_pkg, config, &mut sink)
+        .context("Streaming diff failed")?;
+
+    writer.flush()?;
+
+    for warning in &summary.warnings {
+        eprintln!("Warning: {}", warning);
+    }
+
+    if summary.op_count == 0 && summary.complete {
+        Ok(ExitCode::from(0))
+    } else {
+        Ok(ExitCode::from(1))
+    }
+}
+
+fn build_config(fast: bool, precise: bool) -> DiffConfig {
+    if fast {
+        DiffConfig::fastest()
+    } else if precise {
+        DiffConfig::most_precise()
+    } else {
+        DiffConfig::default()
+    }
+}
+
+fn print_warnings_to_stderr(report: &DiffReport) {
+    for warning in &report.warnings {
+        eprintln!("Warning: {}", warning);
+    }
+}
+
+fn exit_code_from_report(report: &DiffReport) -> ExitCode {
+    if report.ops.is_empty() && report.complete {
+        ExitCode::from(0)
+    } else {
+        ExitCode::from(1)
+    }
+}
+
+
+```
+
+---
+
+### File: `cli\src\commands\info.rs`
+
+```rust
+use anyhow::{Context, Result};
+use excel_diff::{SheetKind, WorkbookPackage, build_queries};
+use std::fs::File;
+use std::io::{self, Write};
+use std::path::Path;
+use std::process::ExitCode;
+
+pub fn run(path: &str, show_queries: bool) -> Result<ExitCode> {
+    let file = File::open(path).with_context(|| format!("Failed to open workbook: {}", path))?;
+
+    let pkg = WorkbookPackage::open(file)
+        .with_context(|| format!("Failed to parse workbook: {}", path))?;
+
+    let stdout = io::stdout();
+    let mut handle = stdout.lock();
+
+    let filename = Path::new(path)
+        .file_name()
+        .map(|s| s.to_string_lossy())
+        .unwrap_or_else(|| path.into());
+
+    writeln!(handle, "Workbook: {}", filename)?;
+    writeln!(handle, "Sheets: {}", pkg.workbook.sheets.len())?;
+
+    for sheet in &pkg.workbook.sheets {
+        let name = excel_diff::with_default_session(|session| {
+            session.strings.resolve(sheet.name).to_string()
+        });
+        let kind_str = match sheet.kind {
+            SheetKind::Worksheet => "worksheet",
+            SheetKind::Chart => "chart",
+            SheetKind::Macro => "macro",
+            SheetKind::Other => "other",
+        };
+        writeln!(
+            handle,
+            "  - \"{}\" ({}) {}x{}, {} cells",
+            name,
+            kind_str,
+            sheet.grid.nrows,
+            sheet.grid.ncols,
+            sheet.grid.cell_count()
+        )?;
+    }
+
+    if show_queries {
+        writeln!(handle)?;
+        match &pkg.data_mashup {
+            None => {
+                writeln!(handle, "Power Query: none")?;
+            }
+            Some(dm) => {
+                match build_queries(dm) {
+                    Ok(mut queries) => {
+                        queries.sort_by(|a, b| a.name.cmp(&b.name));
+                        writeln!(handle, "Power Query: {} queries", queries.len())?;
+                        for query in &queries {
+                            let load_flags = format_load_flags(&query.metadata);
+                            let group = query
+                                .metadata
+                                .group_path
+                                .as_deref()
+                                .map(|g| format!(" [group: {}]", g))
+                                .unwrap_or_default();
+                            writeln!(handle, "  - \"{}\"{}{}", query.name, load_flags, group)?;
+                        }
+                    }
+                    Err(e) => {
+                        writeln!(handle, "Power Query: error parsing queries: {}", e)?;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(ExitCode::from(0))
+}
+
+fn format_load_flags(meta: &excel_diff::QueryMetadata) -> String {
+    let mut flags = Vec::new();
+    if meta.load_to_sheet {
+        flags.push("sheet");
+    }
+    if meta.load_to_model {
+        flags.push("model");
+    }
+    if meta.is_connection_only {
+        flags.push("connection-only");
+    }
+    if flags.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", flags.join(", "))
+    }
+}
+
+
+```
+
+---
+
+### File: `cli\src\commands\mod.rs`
+
+```rust
+pub mod diff;
+pub mod info;
+
+
+```
+
+---
+
+### File: `cli\src\main.rs`
+
+```rust
+mod commands;
+mod output;
+
+use clap::{Parser, Subcommand, ValueEnum};
+use std::process::ExitCode;
+
+#[derive(Parser)]
+#[command(name = "excel-diff")]
+#[command(about = "Compare Excel workbooks and show differences")]
+#[command(version)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Commands,
+}
+
+#[derive(Subcommand)]
+pub enum Commands {
+    #[command(about = "Compare two Excel workbooks")]
+    Diff {
+        #[arg(help = "Path to the old/base workbook")]
+        old: String,
+        #[arg(help = "Path to the new/changed workbook")]
+        new: String,
+        #[arg(long, short, value_enum, default_value = "text", help = "Output format")]
+        format: OutputFormat,
+        #[arg(long, help = "Produce unified diff-style output for Git")]
+        git_diff: bool,
+        #[arg(long, help = "Use fastest diff preset (less precise move detection)")]
+        fast: bool,
+        #[arg(long, help = "Use most precise diff preset (slower, more accurate)")]
+        precise: bool,
+        #[arg(long, help = "Key columns for database mode (not yet implemented)")]
+        key_columns: Option<String>,
+        #[arg(long, short, help = "Quiet mode: only show summary")]
+        quiet: bool,
+        #[arg(long, short, help = "Verbose mode: show additional details")]
+        verbose: bool,
+    },
+    #[command(about = "Show information about a workbook")]
+    Info {
+        #[arg(help = "Path to the workbook")]
+        path: String,
+        #[arg(long, help = "Include Power Query information")]
+        queries: bool,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum, PartialEq, Eq)]
+pub enum OutputFormat {
+    Text,
+    Json,
+    Jsonl,
+}
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+
+    let result = match cli.command {
+        Commands::Diff {
+            old,
+            new,
+            format,
+            git_diff,
+            fast,
+            precise,
+            key_columns,
+            quiet,
+            verbose,
+        } => commands::diff::run(
+            &old,
+            &new,
+            format,
+            git_diff,
+            fast,
+            precise,
+            key_columns,
+            quiet,
+            verbose,
+        ),
+        Commands::Info { path, queries } => commands::info::run(&path, queries),
+    };
+
+    match result {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("Error: {:#}", e);
+            ExitCode::from(2)
+        }
+    }
+}
+
+
+```
+
+---
+
+### File: `cli\src\output\git_diff.rs`
+
+```rust
+use anyhow::Result;
+use excel_diff::{
+    CellValue, DiffOp, DiffReport, QueryChangeKind, QueryMetadataField, index_to_address,
+};
+use std::collections::BTreeMap;
+use std::io::Write;
+
+pub fn write_git_diff<W: Write>(
+    w: &mut W,
+    report: &DiffReport,
+    old_path: &str,
+    new_path: &str,
+) -> Result<()> {
+    writeln!(w, "diff --git a/{} b/{}", old_path, new_path)?;
+    writeln!(w, "--- a/{}", old_path)?;
+    writeln!(w, "+++ b/{}", new_path)?;
+
+    if report.ops.is_empty() {
+        writeln!(w, "@@ No differences @@")?;
+        return Ok(());
+    }
+
+    let (sheet_ops, m_ops) = partition_ops(report);
+
+    for (sheet_name, ops) in &sheet_ops {
+        writeln!(w, "@@ Sheet \"{}\" @@", sheet_name)?;
+        for op in ops {
+            write_op_diff_lines(w, report, op)?;
+        }
+    }
+
+    if !m_ops.is_empty() {
+        writeln!(w, "@@ Power Query @@")?;
+        for op in &m_ops {
+            write_op_diff_lines(w, report, op)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn partition_ops(report: &DiffReport) -> (BTreeMap<String, Vec<&DiffOp>>, Vec<&DiffOp>) {
+    let mut sheet_ops: BTreeMap<String, Vec<&DiffOp>> = BTreeMap::new();
+    let mut m_ops: Vec<&DiffOp> = Vec::new();
+
+    for op in &report.ops {
+        if op.is_m_op() {
+            m_ops.push(op);
+        } else if let Some(sheet_id) = get_sheet_id(op) {
+            let sheet_name = report
+                .resolve(sheet_id)
+                .unwrap_or("<unknown>")
+                .to_string();
+            sheet_ops.entry(sheet_name).or_default().push(op);
+        }
+    }
+
+    (sheet_ops, m_ops)
+}
+
+fn get_sheet_id(op: &DiffOp) -> Option<excel_diff::StringId> {
+    match op {
+        DiffOp::SheetAdded { sheet } => Some(*sheet),
+        DiffOp::SheetRemoved { sheet } => Some(*sheet),
+        DiffOp::RowAdded { sheet, .. } => Some(*sheet),
+        DiffOp::RowRemoved { sheet, .. } => Some(*sheet),
+        DiffOp::ColumnAdded { sheet, .. } => Some(*sheet),
+        DiffOp::ColumnRemoved { sheet, .. } => Some(*sheet),
+        DiffOp::BlockMovedRows { sheet, .. } => Some(*sheet),
+        DiffOp::BlockMovedColumns { sheet, .. } => Some(*sheet),
+        DiffOp::BlockMovedRect { sheet, .. } => Some(*sheet),
+        DiffOp::CellEdited { sheet, .. } => Some(*sheet),
+        _ => None,
+    }
+}
+
+fn write_op_diff_lines<W: Write>(w: &mut W, report: &DiffReport, op: &DiffOp) -> Result<()> {
+    match op {
+        DiffOp::SheetAdded { sheet } => {
+            writeln!(
+                w,
+                "+ Sheet \"{}\": ADDED",
+                report.resolve(*sheet).unwrap_or("<unknown>")
+            )?;
+        }
+        DiffOp::SheetRemoved { sheet } => {
+            writeln!(
+                w,
+                "- Sheet \"{}\": REMOVED",
+                report.resolve(*sheet).unwrap_or("<unknown>")
+            )?;
+        }
+        DiffOp::RowAdded { row_idx, .. } => {
+            writeln!(w, "+ Row {}: ADDED", row_idx + 1)?;
+        }
+        DiffOp::RowRemoved { row_idx, .. } => {
+            writeln!(w, "- Row {}: REMOVED", row_idx + 1)?;
+        }
+        DiffOp::ColumnAdded { col_idx, .. } => {
+            writeln!(w, "+ Column {}: ADDED", col_letter(*col_idx))?;
+        }
+        DiffOp::ColumnRemoved { col_idx, .. } => {
+            writeln!(w, "- Column {}: REMOVED", col_letter(*col_idx))?;
+        }
+        DiffOp::BlockMovedRows {
+            src_start_row,
+            row_count,
+            dst_start_row,
+            ..
+        } => {
+            let src_end = src_start_row + row_count - 1;
+            let dst_end = dst_start_row + row_count - 1;
+            writeln!(
+                w,
+                "- Block: rows {}-{} (moved)",
+                src_start_row + 1,
+                src_end + 1
+            )?;
+            writeln!(
+                w,
+                "+ Block: rows {}-{} (moved)",
+                dst_start_row + 1,
+                dst_end + 1
+            )?;
+        }
+        DiffOp::BlockMovedColumns {
+            src_start_col,
+            col_count,
+            dst_start_col,
+            ..
+        } => {
+            let src_end = src_start_col + col_count - 1;
+            let dst_end = dst_start_col + col_count - 1;
+            writeln!(
+                w,
+                "- Block: columns {}-{} (moved)",
+                col_letter(*src_start_col),
+                col_letter(src_end)
+            )?;
+            writeln!(
+                w,
+                "+ Block: columns {}-{} (moved)",
+                col_letter(*dst_start_col),
+                col_letter(dst_end)
+            )?;
+        }
+        DiffOp::BlockMovedRect {
+            src_start_row,
+            src_row_count,
+            src_start_col,
+            src_col_count,
+            dst_start_row,
+            dst_start_col,
+            ..
+        } => {
+            let src_range = format_range(
+                *src_start_row,
+                *src_start_col,
+                *src_row_count,
+                *src_col_count,
+            );
+            let dst_range = format_range(
+                *dst_start_row,
+                *dst_start_col,
+                *src_row_count,
+                *src_col_count,
+            );
+            writeln!(w, "- Block: {} (moved)", src_range)?;
+            writeln!(w, "+ Block: {} (moved)", dst_range)?;
+        }
+        DiffOp::CellEdited {
+            addr, from, to, ..
+        } => {
+            let old_str = format_cell_value(&from.value, report);
+            let new_str = format_cell_value(&to.value, report);
+            writeln!(w, "- Cell {}: {}", addr, old_str)?;
+            writeln!(w, "+ Cell {}: {}", addr, new_str)?;
+        }
+        DiffOp::QueryAdded { name } => {
+            writeln!(
+                w,
+                "+ Query \"{}\": ADDED",
+                report.resolve(*name).unwrap_or("<unknown>")
+            )?;
+        }
+        DiffOp::QueryRemoved { name } => {
+            writeln!(
+                w,
+                "- Query \"{}\": REMOVED",
+                report.resolve(*name).unwrap_or("<unknown>")
+            )?;
+        }
+        DiffOp::QueryRenamed { from, to } => {
+            writeln!(
+                w,
+                "- Query \"{}\"",
+                report.resolve(*from).unwrap_or("<unknown>")
+            )?;
+            writeln!(
+                w,
+                "+ Query \"{}\" (renamed)",
+                report.resolve(*to).unwrap_or("<unknown>")
+            )?;
+        }
+        DiffOp::QueryDefinitionChanged {
+            name, change_kind, ..
+        } => {
+            let kind_str = match change_kind {
+                QueryChangeKind::Semantic => "semantic change",
+                QueryChangeKind::FormattingOnly => "formatting only",
+                QueryChangeKind::Renamed => "renamed",
+            };
+            writeln!(
+                w,
+                "~ Query \"{}\": definition changed ({})",
+                report.resolve(*name).unwrap_or("<unknown>"),
+                kind_str
+            )?;
+        }
+        DiffOp::QueryMetadataChanged {
+            name,
+            field,
+            old,
+            new,
+        } => {
+            let field_name = match field {
+                QueryMetadataField::LoadToSheet => "load_to_sheet",
+                QueryMetadataField::LoadToModel => "load_to_model",
+                QueryMetadataField::GroupPath => "group_path",
+                QueryMetadataField::ConnectionOnly => "connection_only",
+            };
+            let old_str = old
+                .map(|id| report.resolve(id).unwrap_or("<unknown>").to_string())
+                .unwrap_or_else(|| "<none>".to_string());
+            let new_str = new
+                .map(|id| report.resolve(id).unwrap_or("<unknown>").to_string())
+                .unwrap_or_else(|| "<none>".to_string());
+            writeln!(
+                w,
+                "- Query \"{}\".{}: {}",
+                report.resolve(*name).unwrap_or("<unknown>"),
+                field_name,
+                old_str
+            )?;
+            writeln!(
+                w,
+                "+ Query \"{}\".{}: {}",
+                report.resolve(*name).unwrap_or("<unknown>"),
+                field_name,
+                new_str
+            )?;
+        }
+        _ => {
+            writeln!(w, "~ {:?}", op)?;
+        }
+    }
+    Ok(())
+}
+
+fn col_letter(col: u32) -> String {
+    index_to_address(0, col)
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect()
+}
+
+fn format_range(start_row: u32, start_col: u32, row_count: u32, col_count: u32) -> String {
+    let tl = index_to_address(start_row, start_col);
+    let br = index_to_address(start_row + row_count - 1, start_col + col_count - 1);
+    format!("{}:{}", tl, br)
+}
+
+fn format_cell_value(value: &Option<CellValue>, report: &DiffReport) -> String {
+    match value {
+        None => "<empty>".to_string(),
+        Some(CellValue::Blank) => "<blank>".to_string(),
+        Some(CellValue::Number(n)) => format_number(*n),
+        Some(CellValue::Text(id)) => {
+            let text = report.resolve(*id).unwrap_or("<unknown>");
+            format!("\"{}\"", escape_string(text))
+        }
+        Some(CellValue::Bool(b)) => {
+            if *b {
+                "TRUE".to_string()
+            } else {
+                "FALSE".to_string()
+            }
+        }
+        Some(CellValue::Error(id)) => report.resolve(*id).unwrap_or("#ERROR").to_string(),
+    }
+}
+
+fn format_number(n: f64) -> String {
+    if n.fract() == 0.0 && n.abs() < 1e15 {
+        format!("{:.0}", n)
+    } else {
+        let s = format!("{:.10}", n);
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+}
+
+fn escape_string(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+        .replace('"', "\\\"")
+}
+
+
+```
+
+---
+
+### File: `cli\src\output\json.rs`
+
+```rust
+use anyhow::Result;
+use excel_diff::DiffReport;
+use std::io::Write;
+
+pub fn write_json_report<W: Write>(w: &mut W, report: &DiffReport) -> Result<()> {
+    serde_json::to_writer_pretty(&mut *w, report)?;
+    writeln!(w)?;
+    Ok(())
+}
+
+
+```
+
+---
+
+### File: `cli\src\output\mod.rs`
+
+```rust
+pub mod git_diff;
+pub mod json;
+pub mod text;
+
+
+```
+
+---
+
+### File: `cli\src\output\text.rs`
+
+```rust
+use crate::commands::diff::Verbosity;
+use anyhow::Result;
+use excel_diff::{
+    CellValue, DiffOp, DiffReport, QueryChangeKind, QueryMetadataField, StringId,
+    index_to_address,
+};
+use std::collections::BTreeMap;
+use std::io::Write;
+
+pub fn write_text_report<W: Write>(
+    w: &mut W,
+    report: &DiffReport,
+    verbosity: Verbosity,
+) -> Result<()> {
+    if report.ops.is_empty() {
+        writeln!(w, "No differences found.")?;
+        write_summary(w, report, verbosity)?;
+        return Ok(());
+    }
+
+    let (sheet_ops, m_ops) = partition_ops(report);
+
+    for (sheet_name, ops) in &sheet_ops {
+        writeln!(w, "Sheet \"{}\":", sheet_name)?;
+        for op in ops {
+            let lines = render_op(report, op, verbosity);
+            for line in lines {
+                writeln!(w, "  {}", line)?;
+            }
+        }
+        writeln!(w)?;
+    }
+
+    if !m_ops.is_empty() {
+        writeln!(w, "Power Query:")?;
+        for op in &m_ops {
+            let lines = render_op(report, op, verbosity);
+            for line in lines {
+                writeln!(w, "  {}", line)?;
+            }
+        }
+        writeln!(w)?;
+    }
+
+    write_summary(w, report, verbosity)?;
+
+    Ok(())
+}
+
+fn partition_ops(report: &DiffReport) -> (BTreeMap<String, Vec<&DiffOp>>, Vec<&DiffOp>) {
+    let mut sheet_ops: BTreeMap<String, Vec<&DiffOp>> = BTreeMap::new();
+    let mut m_ops: Vec<&DiffOp> = Vec::new();
+
+    for op in &report.ops {
+        if op.is_m_op() {
+            m_ops.push(op);
+        } else if let Some(sheet_id) = get_sheet_id(op) {
+            let sheet_name = report
+                .resolve(sheet_id)
+                .unwrap_or("<unknown>")
+                .to_string();
+            sheet_ops.entry(sheet_name).or_default().push(op);
+        }
+    }
+
+    (sheet_ops, m_ops)
+}
+
+fn get_sheet_id(op: &DiffOp) -> Option<StringId> {
+    match op {
+        DiffOp::SheetAdded { sheet } => Some(*sheet),
+        DiffOp::SheetRemoved { sheet } => Some(*sheet),
+        DiffOp::RowAdded { sheet, .. } => Some(*sheet),
+        DiffOp::RowRemoved { sheet, .. } => Some(*sheet),
+        DiffOp::ColumnAdded { sheet, .. } => Some(*sheet),
+        DiffOp::ColumnRemoved { sheet, .. } => Some(*sheet),
+        DiffOp::BlockMovedRows { sheet, .. } => Some(*sheet),
+        DiffOp::BlockMovedColumns { sheet, .. } => Some(*sheet),
+        DiffOp::BlockMovedRect { sheet, .. } => Some(*sheet),
+        DiffOp::CellEdited { sheet, .. } => Some(*sheet),
+        _ => None,
+    }
+}
+
+fn render_op(report: &DiffReport, op: &DiffOp, verbosity: Verbosity) -> Vec<String> {
+    match op {
+        DiffOp::SheetAdded { sheet } => {
+            vec![format!(
+                "Sheet \"{}\": ADDED",
+                report.resolve(*sheet).unwrap_or("<unknown>")
+            )]
+        }
+        DiffOp::SheetRemoved { sheet } => {
+            vec![format!(
+                "Sheet \"{}\": REMOVED",
+                report.resolve(*sheet).unwrap_or("<unknown>")
+            )]
+        }
+        DiffOp::RowAdded { row_idx, .. } => {
+            vec![format!("Row {}: ADDED", row_idx + 1)]
+        }
+        DiffOp::RowRemoved { row_idx, .. } => {
+            vec![format!("Row {}: REMOVED", row_idx + 1)]
+        }
+        DiffOp::ColumnAdded { col_idx, .. } => {
+            vec![format!("Column {}: ADDED", col_letter(*col_idx))]
+        }
+        DiffOp::ColumnRemoved { col_idx, .. } => {
+            vec![format!("Column {}: REMOVED", col_letter(*col_idx))]
+        }
+        DiffOp::BlockMovedRows {
+            src_start_row,
+            row_count,
+            dst_start_row,
+            block_hash,
+            ..
+        } => {
+            let src_end = src_start_row + row_count - 1;
+            let dst_end = dst_start_row + row_count - 1;
+            let mut result = vec![format!(
+                "Block moved: rows {}-{} → rows {}-{}",
+                src_start_row + 1,
+                src_end + 1,
+                dst_start_row + 1,
+                dst_end + 1
+            )];
+            if verbosity == Verbosity::Verbose {
+                if let Some(hash) = block_hash {
+                    result.push(format!("  (hash: {:016x})", hash));
+                }
+            }
+            result
+        }
+        DiffOp::BlockMovedColumns {
+            src_start_col,
+            col_count,
+            dst_start_col,
+            block_hash,
+            ..
+        } => {
+            let src_end = src_start_col + col_count - 1;
+            let dst_end = dst_start_col + col_count - 1;
+            let mut result = vec![format!(
+                "Block moved: columns {}-{} → columns {}-{}",
+                col_letter(*src_start_col),
+                col_letter(src_end),
+                col_letter(*dst_start_col),
+                col_letter(dst_end)
+            )];
+            if verbosity == Verbosity::Verbose {
+                if let Some(hash) = block_hash {
+                    result.push(format!("  (hash: {:016x})", hash));
+                }
+            }
+            result
+        }
+        DiffOp::BlockMovedRect {
+            src_start_row,
+            src_row_count,
+            src_start_col,
+            src_col_count,
+            dst_start_row,
+            dst_start_col,
+            block_hash,
+            ..
+        } => {
+            let src_range = format_range(
+                *src_start_row,
+                *src_start_col,
+                *src_row_count,
+                *src_col_count,
+            );
+            let dst_range = format_range(
+                *dst_start_row,
+                *dst_start_col,
+                *src_row_count,
+                *src_col_count,
+            );
+            let mut result = vec![format!("Block moved: {} → {}", src_range, dst_range)];
+            if verbosity == Verbosity::Verbose {
+                if let Some(hash) = block_hash {
+                    result.push(format!("  (hash: {:016x})", hash));
+                }
+            }
+            result
+        }
+        DiffOp::CellEdited {
+            addr, from, to, ..
+        } => {
+            let old_str = format_cell_value(&from.value, report);
+            let new_str = format_cell_value(&to.value, report);
+            let mut result = vec![format!("Cell {}: {} → {}", addr, old_str, new_str)];
+            if verbosity == Verbosity::Verbose {
+                if let Some(formula_id) = from.formula {
+                    if let Some(formula) = report.resolve(formula_id) {
+                        result.push(format!("  old formula: ={}", formula));
+                    }
+                }
+                if let Some(formula_id) = to.formula {
+                    if let Some(formula) = report.resolve(formula_id) {
+                        result.push(format!("  new formula: ={}", formula));
+                    }
+                }
+            }
+            result
+        }
+        DiffOp::QueryAdded { name } => {
+            vec![format!(
+                "Query \"{}\": ADDED",
+                report.resolve(*name).unwrap_or("<unknown>")
+            )]
+        }
+        DiffOp::QueryRemoved { name } => {
+            vec![format!(
+                "Query \"{}\": REMOVED",
+                report.resolve(*name).unwrap_or("<unknown>")
+            )]
+        }
+        DiffOp::QueryRenamed { from, to } => {
+            vec![format!(
+                "Query renamed: \"{}\" → \"{}\"",
+                report.resolve(*from).unwrap_or("<unknown>"),
+                report.resolve(*to).unwrap_or("<unknown>")
+            )]
+        }
+        DiffOp::QueryDefinitionChanged {
+            name, change_kind, ..
+        } => {
+            let kind_str = match change_kind {
+                QueryChangeKind::Semantic => "semantic change",
+                QueryChangeKind::FormattingOnly => "formatting only",
+                QueryChangeKind::Renamed => "renamed",
+            };
+            vec![format!(
+                "Query \"{}\": definition changed ({})",
+                report.resolve(*name).unwrap_or("<unknown>"),
+                kind_str
+            )]
+        }
+        DiffOp::QueryMetadataChanged {
+            name,
+            field,
+            old,
+            new,
+        } => {
+            let field_name = match field {
+                QueryMetadataField::LoadToSheet => "load_to_sheet",
+                QueryMetadataField::LoadToModel => "load_to_model",
+                QueryMetadataField::GroupPath => "group_path",
+                QueryMetadataField::ConnectionOnly => "connection_only",
+            };
+            let old_str = old
+                .map(|id| report.resolve(id).unwrap_or("<unknown>").to_string())
+                .unwrap_or_else(|| "<none>".to_string());
+            let new_str = new
+                .map(|id| report.resolve(id).unwrap_or("<unknown>").to_string())
+                .unwrap_or_else(|| "<none>".to_string());
+            vec![format!(
+                "Query \"{}\": {} changed: {} → {}",
+                report.resolve(*name).unwrap_or("<unknown>"),
+                field_name,
+                old_str,
+                new_str
+            )]
+        }
+        _ => vec![format!("{:?}", op)],
+    }
+}
+
+fn col_letter(col: u32) -> String {
+    index_to_address(0, col)
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect()
+}
+
+fn format_range(start_row: u32, start_col: u32, row_count: u32, col_count: u32) -> String {
+    let tl = index_to_address(start_row, start_col);
+    let br = index_to_address(start_row + row_count - 1, start_col + col_count - 1);
+    format!("{}:{}", tl, br)
+}
+
+fn format_cell_value(value: &Option<CellValue>, report: &DiffReport) -> String {
+    match value {
+        None => "<empty>".to_string(),
+        Some(CellValue::Blank) => "<blank>".to_string(),
+        Some(CellValue::Number(n)) => format_number(*n),
+        Some(CellValue::Text(id)) => {
+            let text = report.resolve(*id).unwrap_or("<unknown>");
+            format!("\"{}\"", escape_string(text))
+        }
+        Some(CellValue::Bool(b)) => {
+            if *b {
+                "TRUE".to_string()
+            } else {
+                "FALSE".to_string()
+            }
+        }
+        Some(CellValue::Error(id)) => report.resolve(*id).unwrap_or("#ERROR").to_string(),
+    }
+}
+
+fn format_number(n: f64) -> String {
+    if n.fract() == 0.0 && n.abs() < 1e15 {
+        format!("{:.0}", n)
+    } else {
+        let s = format!("{:.10}", n);
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+}
+
+fn escape_string(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+        .replace('"', "\\\"")
+}
+
+fn write_summary<W: Write>(w: &mut W, report: &DiffReport, verbosity: Verbosity) -> Result<()> {
+    if verbosity == Verbosity::Quiet && report.ops.is_empty() {
+        return Ok(());
+    }
+
+    writeln!(w, "---")?;
+    writeln!(w, "Summary:")?;
+    writeln!(w, "  Total changes: {}", report.ops.len())?;
+
+    let counts = count_ops(report);
+    if counts.sheets > 0 {
+        writeln!(w, "  Sheet changes: {}", counts.sheets)?;
+    }
+    if counts.rows > 0 {
+        writeln!(w, "  Row changes: {}", counts.rows)?;
+    }
+    if counts.cols > 0 {
+        writeln!(w, "  Column changes: {}", counts.cols)?;
+    }
+    if counts.blocks > 0 {
+        writeln!(w, "  Block moves: {}", counts.blocks)?;
+    }
+    if counts.cells > 0 {
+        writeln!(w, "  Cell edits: {}", counts.cells)?;
+    }
+    if counts.queries > 0 {
+        writeln!(w, "  Query changes: {}", counts.queries)?;
+    }
+
+    if !report.complete {
+        writeln!(w, "  Status: INCOMPLETE (some changes may be missing)")?;
+    } else {
+        writeln!(w, "  Status: complete")?;
+    }
+
+    Ok(())
+}
+
+struct OpCounts {
+    sheets: usize,
+    rows: usize,
+    cols: usize,
+    blocks: usize,
+    cells: usize,
+    queries: usize,
+}
+
+fn count_ops(report: &DiffReport) -> OpCounts {
+    let mut counts = OpCounts {
+        sheets: 0,
+        rows: 0,
+        cols: 0,
+        blocks: 0,
+        cells: 0,
+        queries: 0,
+    };
+
+    for op in &report.ops {
+        match op {
+            DiffOp::SheetAdded { .. } | DiffOp::SheetRemoved { .. } => counts.sheets += 1,
+            DiffOp::RowAdded { .. } | DiffOp::RowRemoved { .. } => counts.rows += 1,
+            DiffOp::ColumnAdded { .. } | DiffOp::ColumnRemoved { .. } => counts.cols += 1,
+            DiffOp::BlockMovedRows { .. }
+            | DiffOp::BlockMovedColumns { .. }
+            | DiffOp::BlockMovedRect { .. } => counts.blocks += 1,
+            DiffOp::CellEdited { .. } => counts.cells += 1,
+            DiffOp::QueryAdded { .. }
+            | DiffOp::QueryRemoved { .. }
+            | DiffOp::QueryRenamed { .. }
+            | DiffOp::QueryDefinitionChanged { .. }
+            | DiffOp::QueryMetadataChanged { .. } => counts.queries += 1,
+            _ => {}
+        }
+    }
+
+    counts
+}
+
+
+```
+
+---
+
+### File: `cli\tests\integration_tests.rs`
+
+```rust
+use std::process::Command;
+
+fn excel_diff_cmd() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_excel-diff"))
+}
+
+fn fixture_path(name: &str) -> String {
+    format!("../fixtures/generated/{}", name)
+}
+
+#[test]
+fn identical_files_exit_0() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            &fixture_path("equal_sheet_a.xlsx"),
+            &fixture_path("equal_sheet_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert!(
+        output.status.success(),
+        "identical files should exit 0: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn different_files_exit_1() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            &fixture_path("single_cell_value_a.xlsx"),
+            &fixture_path("single_cell_value_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "different files should exit 1: stdout={}, stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn nonexistent_file_exit_2() {
+    let output = excel_diff_cmd()
+        .args(["diff", "nonexistent_a.xlsx", "nonexistent_b.xlsx"])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "nonexistent file should exit 2: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn json_output_is_valid_json() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--format",
+            "json",
+            &fixture_path("single_cell_value_a.xlsx"),
+            &fixture_path("single_cell_value_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+
+    assert!(parsed.get("version").is_some(), "should have version field");
+    assert!(parsed.get("ops").is_some(), "should have ops field");
+    assert!(parsed.get("strings").is_some(), "should have strings field");
+}
+
+#[test]
+fn jsonl_first_line_is_header() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--format",
+            "jsonl",
+            &fixture_path("single_cell_value_a.xlsx"),
+            &fixture_path("single_cell_value_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let first_line = stdout.lines().next().expect("should have at least one line");
+    let header: serde_json::Value =
+        serde_json::from_str(first_line).expect("first line should be valid JSON");
+
+    assert_eq!(header.get("kind").and_then(|v| v.as_str()), Some("Header"));
+    assert!(header.get("version").is_some());
+    assert!(header.get("strings").is_some());
+}
+
+#[test]
+fn info_shows_sheets() {
+    let output = excel_diff_cmd()
+        .args(["info", &fixture_path("pg1_basic_two_sheets.xlsx")])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Sheets:"));
+}
+
+#[test]
+fn info_with_queries_shows_power_query() {
+    let output = excel_diff_cmd()
+        .args(["info", "--queries", &fixture_path("one_query.xlsx")])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Power Query:"));
+}
+
+#[test]
+fn fast_and_precise_are_mutually_exclusive() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--fast",
+            "--precise",
+            &fixture_path("equal_sheet_a.xlsx"),
+            &fixture_path("equal_sheet_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "conflicting flags should exit 2"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Cannot use both"));
+}
+
+#[test]
+fn key_columns_not_implemented_error() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--key-columns",
+            "A,B",
+            &fixture_path("equal_sheet_a.xlsx"),
+            &fixture_path("equal_sheet_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "key-columns should exit 2 (not implemented)"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not implemented"));
+}
+
+#[test]
+fn git_diff_produces_unified_style() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--git-diff",
+            &fixture_path("single_cell_value_a.xlsx"),
+            &fixture_path("single_cell_value_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("diff --git"));
+    assert!(stdout.contains("---"));
+    assert!(stdout.contains("+++"));
+    assert!(stdout.contains("@@"));
+}
+
+#[test]
+fn git_diff_conflicts_with_json_format() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--git-diff",
+            "--format",
+            "json",
+            &fixture_path("equal_sheet_a.xlsx"),
+            &fixture_path("equal_sheet_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "git-diff with json format should exit 2"
+    );
+}
+
+#[test]
+fn row_changes_detected() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            &fixture_path("row_insert_middle_a.xlsx"),
+            &fixture_path("row_insert_middle_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Row") && stdout.contains("ADDED"));
+}
+
+#[test]
+fn column_changes_detected() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            &fixture_path("col_insert_middle_a.xlsx"),
+            &fixture_path("col_insert_middle_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Column") && stdout.contains("ADDED"));
+}
+
+#[test]
+fn power_query_changes_detected() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            &fixture_path("m_add_query_a.xlsx"),
+            &fixture_path("m_add_query_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Power Query") || stdout.contains("Query"));
+}
+
 
 ```
 
