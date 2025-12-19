@@ -1,0 +1,34 @@
+pub const PKG_NOT_ZIP: &str = "EXDIFF_PKG_001";
+pub const PKG_NOT_OPC: &str = "EXDIFF_PKG_002";
+pub const PKG_MISSING_PART: &str = "EXDIFF_PKG_003";
+pub const PKG_INVALID_XML: &str = "EXDIFF_PKG_004";
+pub const PKG_ZIP_PART_TOO_LARGE: &str = "EXDIFF_PKG_005";
+pub const PKG_ZIP_TOO_MANY_ENTRIES: &str = "EXDIFF_PKG_006";
+pub const PKG_ZIP_TOTAL_TOO_LARGE: &str = "EXDIFF_PKG_007";
+pub const PKG_ZIP_READ: &str = "EXDIFF_PKG_008";
+pub const PKG_UNSUPPORTED_FORMAT: &str = "EXDIFF_PKG_009";
+
+pub const GRID_XML_ERROR: &str = "EXDIFF_GRID_001";
+pub const GRID_INVALID_ADDRESS: &str = "EXDIFF_GRID_002";
+pub const GRID_SHARED_STRING_OOB: &str = "EXDIFF_GRID_003";
+
+pub const CONTAINER_IO: &str = "EXDIFF_CTR_001";
+pub const CONTAINER_ZIP: &str = "EXDIFF_CTR_002";
+pub const CONTAINER_NOT_ZIP: &str = "EXDIFF_CTR_003";
+pub const CONTAINER_NOT_OPC: &str = "EXDIFF_CTR_004";
+pub const CONTAINER_TOO_MANY_ENTRIES: &str = "EXDIFF_CTR_005";
+pub const CONTAINER_PART_TOO_LARGE: &str = "EXDIFF_CTR_006";
+pub const CONTAINER_TOTAL_TOO_LARGE: &str = "EXDIFF_CTR_007";
+
+pub const DM_BASE64_INVALID: &str = "EXDIFF_DM_001";
+pub const DM_UNSUPPORTED_VERSION: &str = "EXDIFF_DM_002";
+pub const DM_FRAMING_INVALID: &str = "EXDIFF_DM_003";
+pub const DM_XML_ERROR: &str = "EXDIFF_DM_004";
+pub const DM_INNER_PART_TOO_LARGE: &str = "EXDIFF_DM_005";
+pub const DM_INVALID_HEADER: &str = "EXDIFF_DM_006";
+
+pub const DIFF_LIMITS_EXCEEDED: &str = "EXDIFF_DIFF_001";
+pub const DIFF_SINK_ERROR: &str = "EXDIFF_DIFF_002";
+pub const DIFF_SHEET_NOT_FOUND: &str = "EXDIFF_DIFF_003";
+pub const DIFF_INTERNAL_ERROR: &str = "EXDIFF_DIFF_004";
+

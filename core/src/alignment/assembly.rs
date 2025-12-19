@@ -799,6 +799,7 @@ where
     }
 
     let mut result: Vec<usize> = Vec::new();
+    #[allow(clippy::unwrap_used)]
     let mut current = *piles.last().unwrap();
     loop {
         result.push(current);

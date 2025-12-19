@@ -4,6 +4,8 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 use thiserror::Error;
 
+use crate::error_codes;
+
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum DataMashupError {
@@ -15,6 +17,23 @@ pub enum DataMashupError {
     FramingInvalid,
     #[error("XML parse error: {0}")]
     XmlError(String),
+    #[error("invalid header: {0}")]
+    InvalidHeader(String),
+    #[error("inner package part too large: '{path}' ({size} bytes, limit {limit} bytes)")]
+    InnerPartTooLarge { path: String, size: u64, limit: u64 },
+}
+
+impl DataMashupError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            DataMashupError::Base64Invalid => error_codes::DM_BASE64_INVALID,
+            DataMashupError::UnsupportedVersion(_) => error_codes::DM_UNSUPPORTED_VERSION,
+            DataMashupError::FramingInvalid => error_codes::DM_FRAMING_INVALID,
+            DataMashupError::XmlError(_) => error_codes::DM_XML_ERROR,
+            DataMashupError::InvalidHeader(_) => error_codes::DM_INVALID_HEADER,
+            DataMashupError::InnerPartTooLarge { .. } => error_codes::DM_INNER_PART_TOO_LARGE,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

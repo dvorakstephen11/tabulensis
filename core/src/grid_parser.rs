@@ -4,6 +4,7 @@
 //! relationship files to construct [`Grid`] representations of sheet data.
 
 use crate::addressing::address_to_index;
+use crate::error_codes;
 use crate::string_pool::{StringId, StringPool};
 use crate::workbook::{CellValue, Grid};
 use quick_xml::Reader;
@@ -16,10 +17,27 @@ use thiserror::Error;
 pub enum GridParseError {
     #[error("XML parse error: {0}")]
     XmlError(String),
+    #[error("XML parse error at line {line}, column {column}: {message}")]
+    XmlErrorAt {
+        line: usize,
+        column: usize,
+        message: String,
+    },
     #[error("invalid cell address: {0}")]
     InvalidAddress(String),
     #[error("shared string index {0} out of bounds")]
     SharedStringOutOfBounds(usize),
+}
+
+impl GridParseError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            GridParseError::XmlError(_) => error_codes::GRID_XML_ERROR,
+            GridParseError::XmlErrorAt { .. } => error_codes::GRID_XML_ERROR,
+            GridParseError::InvalidAddress(_) => error_codes::GRID_INVALID_ADDRESS,
+            GridParseError::SharedStringOutOfBounds(_) => error_codes::GRID_SHARED_STRING_OOB,
+        }
+    }
 }
 
 pub struct SheetDescriptor {
@@ -407,6 +425,28 @@ fn get_attr_value(element: &BytesStart<'_>, key: &[u8]) -> Result<Option<String>
 
 fn to_xml_err(err: quick_xml::Error) -> GridParseError {
     GridParseError::XmlError(err.to_string())
+}
+
+#[allow(dead_code)]
+fn xml_error_with_position(err: quick_xml::Error, xml: &[u8], byte_offset: usize) -> GridParseError {
+    let (line, column) = compute_line_col(xml, byte_offset);
+    GridParseError::XmlErrorAt {
+        line,
+        column,
+        message: err.to_string(),
+    }
+}
+
+fn compute_line_col(data: &[u8], offset: usize) -> (usize, usize) {
+    let safe_offset = offset.min(data.len());
+    let slice = &data[..safe_offset];
+    let line = slice.iter().filter(|&&b| b == b'\n').count() + 1;
+    let last_newline = slice.iter().rposition(|&b| b == b'\n');
+    let column = match last_newline {
+        Some(pos) => safe_offset - pos,
+        None => safe_offset + 1,
+    };
+    (line, column)
 }
 
 struct ParsedCell {

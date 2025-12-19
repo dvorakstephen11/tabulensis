@@ -42,7 +42,18 @@ pub fn diff_workbooks(
 ) -> DiffReport {
     match try_diff_workbooks(old, new, pool, config) {
         Ok(report) => report,
-        Err(e) => panic!("{}", e),
+        Err(e) => {
+            let strings = pool.strings().to_vec();
+            DiffReport {
+                version: DiffReport::SCHEMA_VERSION.to_string(),
+                strings,
+                ops: Vec::new(),
+                complete: false,
+                warnings: vec![format!("[{}] {}", e.code(), e)],
+                #[cfg(feature = "perf-metrics")]
+                metrics: None,
+            }
+        }
     }
 }
 
@@ -55,7 +66,13 @@ pub fn diff_workbooks_streaming<S: DiffSink>(
 ) -> DiffSummary {
     match try_diff_workbooks_streaming(old, new, pool, config, sink) {
         Ok(summary) => summary,
-        Err(e) => panic!("{}", e),
+        Err(e) => DiffSummary {
+            complete: false,
+            warnings: vec![format!("[{}] {}", e.code(), e)],
+            op_count: 0,
+            #[cfg(feature = "perf-metrics")]
+            metrics: None,
+        },
     }
 }
 
@@ -96,23 +113,25 @@ pub fn try_diff_workbooks_streaming<S: DiffSink>(
     let mut old_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
     for sheet in &old.sheets {
         let key = make_sheet_key(sheet, pool);
-        let was_unique = old_sheets.insert(key.clone(), sheet).is_none();
-        debug_assert!(
-            was_unique,
-            "duplicate sheet identity in old workbook: ({}, {:?})",
-            key.name_lower, key.kind
-        );
+        if old_sheets.insert(key.clone(), sheet).is_some() {
+            ctx.warnings.push(format!(
+                "duplicate sheet identity in old workbook: '{}' ({:?}); \
+                 later definition overwrites earlier one. The file may be corrupt.",
+                key.name_lower, key.kind
+            ));
+        }
     }
 
     let mut new_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
     for sheet in &new.sheets {
         let key = make_sheet_key(sheet, pool);
-        let was_unique = new_sheets.insert(key.clone(), sheet).is_none();
-        debug_assert!(
-            was_unique,
-            "duplicate sheet identity in new workbook: ({}, {:?})",
-            key.name_lower, key.kind
-        );
+        if new_sheets.insert(key.clone(), sheet).is_some() {
+            ctx.warnings.push(format!(
+                "duplicate sheet identity in new workbook: '{}' ({:?}); \
+                 later definition overwrites earlier one. The file may be corrupt.",
+                key.name_lower, key.kind
+            ));
+        }
     }
 
     let mut all_keys: Vec<SheetKey> = old_sheets
@@ -161,7 +180,10 @@ pub fn try_diff_workbooks_streaming<S: DiffSink>(
                     Some(&mut metrics),
                 )?;
             }
-            (None, None) => unreachable!(),
+            (None, None) => {
+                debug_assert!(false, "sheet key in all_keys but not in either map");
+                continue;
+            }
         }
     }
 

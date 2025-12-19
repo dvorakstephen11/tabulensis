@@ -1,9 +1,9 @@
 mod common;
 
 use common::{fixture_path, open_fixture_workbook, sid};
-use excel_diff::{CellAddress, ContainerError, PackageError, SheetKind, WorkbookPackage};
+use excel_diff::{CellAddress, ContainerError, ContainerLimits, OpcContainer, PackageError, SheetKind, WorkbookPackage};
 use std::fs;
-use std::io::{ErrorKind, Write};
+use std::io::{Cursor, ErrorKind, Write};
 use std::path::Path;
 use std::time::SystemTime;
 use zip::write::FileOptions;
@@ -95,7 +95,7 @@ fn not_zip_container_returns_error() {
 }
 
 #[test]
-fn missing_workbook_xml_returns_workbookxmlmissing() {
+fn missing_workbook_xml_returns_missing_part() {
     let path = temp_xlsx_path("missing_workbook_xml");
     let content_types = r#"<?xml version="1.0" encoding="UTF-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -107,13 +107,18 @@ fn missing_workbook_xml_returns_workbookxmlmissing() {
 
     let file = std::fs::File::open(&path).expect("temp file exists");
     let err = WorkbookPackage::open(file).expect_err("missing workbook xml should error");
-    assert!(matches!(err, PackageError::WorkbookXmlMissing));
+    match err {
+        PackageError::MissingPart { path } => {
+            assert_eq!(path, "xl/workbook.xml");
+        }
+        other => panic!("expected MissingPart for xl/workbook.xml, got {other:?}"),
+    }
 
     let _ = fs::remove_file(&path);
 }
 
 #[test]
-fn missing_worksheet_xml_returns_worksheetxmlmissing() {
+fn missing_worksheet_xml_returns_missing_part() {
     let path = temp_xlsx_path("missing_worksheet_xml");
     let content_types = r#"<?xml version="1.0" encoding="UTF-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -148,11 +153,121 @@ fn missing_worksheet_xml_returns_worksheetxmlmissing() {
     let file = std::fs::File::open(&path).expect("temp file exists");
     let err = WorkbookPackage::open(file).expect_err("missing worksheet xml should error");
     match err {
-        PackageError::WorksheetXmlMissing { sheet_name } => {
-            assert_eq!(sheet_name, "Sheet1");
+        PackageError::MissingPart { path: part_path } => {
+            assert!(
+                part_path.contains("sheet1.xml"),
+                "expected path to contain sheet1.xml, got {part_path}"
+            );
         }
-        other => panic!("expected WorksheetXmlMissing, got {other:?}"),
+        other => panic!("expected MissingPart for worksheet, got {other:?}"),
     }
 
     let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn truncated_zip_never_panics() {
+    let valid_zip_bytes = {
+        let mut buf = Vec::new();
+        {
+            let cursor = Cursor::new(&mut buf);
+            let mut writer = ZipWriter::new(cursor);
+            let options = FileOptions::default().compression_method(CompressionMethod::Stored);
+            writer.start_file("[Content_Types].xml", options).unwrap();
+            writer.write_all(b"<Types/>").unwrap();
+            writer.finish().unwrap();
+        }
+        buf
+    };
+
+    for truncate_at in [0, 4, 10, 20, valid_zip_bytes.len() / 2] {
+        let truncated = &valid_zip_bytes[..truncate_at.min(valid_zip_bytes.len())];
+        let cursor = Cursor::new(truncated.to_vec());
+        let result = std::panic::catch_unwind(|| OpcContainer::open_from_reader(cursor));
+        assert!(result.is_ok(), "truncated ZIP at byte {} should not panic", truncate_at);
+        let inner = result.unwrap();
+        assert!(inner.is_err(), "truncated ZIP should return error, not Ok");
+    }
+}
+
+#[test]
+fn zip_bomb_defense_rejects_oversized_part() {
+    let path = temp_xlsx_path("oversized_part");
+    let content_types = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="xml" ContentType="application/xml"/>
+</Types>"#;
+
+    let large_content = "x".repeat(1024);
+
+    write_zip(
+        &[
+            ("[Content_Types].xml", content_types),
+            ("large_file.xml", &large_content),
+        ],
+        &path,
+    );
+
+    let file = std::fs::File::open(&path).expect("temp file exists");
+    let limits = ContainerLimits {
+        max_entries: 100,
+        max_part_uncompressed_bytes: 100,
+        max_total_uncompressed_bytes: 10_000,
+    };
+    let mut container = OpcContainer::open_from_reader_with_limits(file, limits)
+        .expect("container should open (content_types is small)");
+
+    let err = container.read_file_checked("large_file.xml")
+        .expect_err("oversized part should be rejected");
+    assert!(
+        matches!(err, ContainerError::PartTooLarge { .. }),
+        "expected PartTooLarge error, got {err:?}"
+    );
+
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn invalid_xml_in_workbook_does_not_panic() {
+    let path = temp_xlsx_path("invalid_xml");
+    let content_types = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="xml" ContentType="application/xml"/>
+</Types>"#;
+
+    let malformed_workbook = "<workbook><sheets><sheet name='x' unclosed";
+
+    write_zip(
+        &[
+            ("[Content_Types].xml", content_types),
+            ("xl/workbook.xml", malformed_workbook),
+        ],
+        &path,
+    );
+
+    let file = std::fs::File::open(&path).expect("temp file exists");
+    let result = std::panic::catch_unwind(|| WorkbookPackage::open(file));
+    assert!(result.is_ok(), "malformed XML should not panic (catch_unwind succeeded)");
+
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn corrupt_inputs_never_panic() {
+    let test_cases: Vec<(&str, Vec<u8>)> = vec![
+        ("empty", vec![]),
+        ("garbage", vec![0xFF, 0xFE, 0x00, 0x01, 0x02, 0x03]),
+        ("partial_zip_header", vec![0x50, 0x4B, 0x03, 0x04]),
+        ("random_bytes", (0..100).map(|i| (i * 17 + 31) as u8).collect()),
+    ];
+
+    for (name, bytes) in test_cases {
+        let cursor = Cursor::new(bytes);
+        let result = std::panic::catch_unwind(|| WorkbookPackage::open(cursor));
+        assert!(
+            result.is_ok(),
+            "corrupt input '{}' should not panic",
+            name
+        );
+    }
 }

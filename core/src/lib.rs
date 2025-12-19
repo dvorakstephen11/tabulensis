@@ -20,6 +20,9 @@
 //! }
 //! ```
 
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
+#![cfg_attr(not(test), deny(clippy::expect_used))]
+
 use std::cell::RefCell;
 
 mod addressing;
@@ -32,6 +35,7 @@ mod database_alignment;
 mod datamashup;
 mod datamashup_framing;
 mod datamashup_package;
+pub mod error_codes;
 mod diff;
 mod engine;
 #[cfg(feature = "excel-open-xml")]
@@ -121,13 +125,13 @@ pub mod advanced {
 
 pub use addressing::{AddressParseError, address_to_index, index_to_address};
 pub use config::{DiffConfig, DiffConfigBuilder, LimitBehavior};
-pub use container::{ContainerError, OpcContainer};
+pub use container::{ContainerError, ContainerLimits, OpcContainer};
 #[doc(hidden)]
 pub use datamashup::parse_metadata;
 pub use datamashup::{
     DataMashup, Metadata, Permissions, Query, QueryMetadata, build_data_mashup, build_queries,
 };
-pub use datamashup_framing::{DataMashupError, RawDataMashup};
+pub use datamashup_framing::{DataMashupError, RawDataMashup, parse_data_mashup};
 pub use datamashup_package::{
     EmbeddedContent, PackageParts, PackageXml, SectionDocument, parse_package_parts,
 };

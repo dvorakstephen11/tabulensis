@@ -1,0 +1,42 @@
+[package]
+name = "excel_diff-fuzz"
+version = "0.0.0"
+authors = ["Automatically generated"]
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+
+[dependencies.excel_diff]
+path = ".."
+features = ["excel-open-xml"]
+
+[[bin]]
+name = "fuzz_open_workbook"
+path = "fuzz_targets/fuzz_open_workbook.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_datamashup_parse"
+path = "fuzz_targets/fuzz_datamashup_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_diff_grids"
+path = "fuzz_targets/fuzz_diff_grids.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = 1
+

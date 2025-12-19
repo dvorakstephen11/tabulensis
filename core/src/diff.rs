@@ -5,6 +5,7 @@
 //! - [`DiffReport`]: A versioned collection of diff operations
 //! - [`DiffError`]: Errors that can occur during the diff process
 
+use crate::error_codes;
 use crate::string_pool::StringId;
 use crate::workbook::{CellAddress, CellSnapshot, ColSignature, RowSignature};
 use thiserror::Error;
@@ -65,6 +66,20 @@ pub enum DiffError {
         requested: String,
         available: Vec<String>,
     },
+
+    #[error("internal error: {message}")]
+    InternalError { message: String },
+}
+
+impl DiffError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            DiffError::LimitsExceeded { .. } => error_codes::DIFF_LIMITS_EXCEEDED,
+            DiffError::SinkError { .. } => error_codes::DIFF_SINK_ERROR,
+            DiffError::SheetNotFound { .. } => error_codes::DIFF_SHEET_NOT_FOUND,
+            DiffError::InternalError { .. } => error_codes::DIFF_INTERNAL_ERROR,
+        }
+    }
 }
 
 pub type SheetId = StringId;

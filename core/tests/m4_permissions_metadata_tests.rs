@@ -93,10 +93,10 @@ fn metadata_invalid_length_prefix_errors() {
 
     let err = parse_metadata(&bytes).expect_err("invalid length prefix should error");
     match err {
-        DataMashupError::XmlError(msg) => {
+        DataMashupError::InvalidHeader(msg) => {
             assert!(msg.contains("metadata length prefix invalid"));
         }
-        other => panic!("expected XmlError, got {other:?}"),
+        other => panic!("expected InvalidHeader, got {other:?}"),
     }
 }
 

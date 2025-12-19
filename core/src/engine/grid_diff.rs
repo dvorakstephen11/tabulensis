@@ -238,7 +238,7 @@ pub fn diff_grids_database_mode(
     let sheet_id: SheetId = pool.intern(DATABASE_MODE_SHEET_ID);
     let mut sink = VecSink::new();
     let mut op_count = 0usize;
-    let summary = try_diff_grids_database_mode_streaming(
+    match try_diff_grids_database_mode_streaming(
         sheet_id,
         old,
         new,
@@ -247,10 +247,24 @@ pub fn diff_grids_database_mode(
         config,
         &mut sink,
         &mut op_count,
-    )
-    .unwrap_or_else(|e| panic!("{}", e));
-    let strings = pool.strings().to_vec();
-    DiffReport::from_ops_and_summary(sink.into_ops(), summary, strings)
+    ) {
+        Ok(summary) => {
+            let strings = pool.strings().to_vec();
+            DiffReport::from_ops_and_summary(sink.into_ops(), summary, strings)
+        }
+        Err(e) => {
+            let strings = pool.strings().to_vec();
+            DiffReport {
+                version: DiffReport::SCHEMA_VERSION.to_string(),
+                strings,
+                ops: sink.into_ops(),
+                complete: false,
+                warnings: vec![format!("[{}] {}", e.code(), e)],
+                #[cfg(feature = "perf-metrics")]
+                metrics: None,
+            }
+        }
+    }
 }
 
 pub(crate) fn try_diff_grids_database_mode_streaming<S: DiffSink>(

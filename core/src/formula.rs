@@ -401,6 +401,7 @@ impl<'a> Parser<'a> {
         self.skip_ws();
 
         let mut lhs = if matches!(self.peek(), Some(b'+' | b'-')) {
+            #[allow(clippy::unwrap_used)]
             let op = match self.bump().unwrap() {
                 b'+' => UnaryOperator::Plus,
                 b'-' => UnaryOperator::Minus,
@@ -555,6 +556,7 @@ impl<'a> Parser<'a> {
                 let start = self.pos;
                 while let Some(b) = self.peek() {
                     if b == b'!' {
+                        #[allow(clippy::unwrap_used)]
                         let sheet = std::str::from_utf8(&self.s[start..self.pos])
                             .unwrap()
                             .to_string();
@@ -843,6 +845,7 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
             }
         }
+        #[allow(clippy::unwrap_used)]
         let txt = std::str::from_utf8(&self.s[start..self.pos]).unwrap();
         let n: f64 = txt.parse().map_err(|_| self.err("invalid number"))?;
         Ok(FormulaExpr::Number(n))
@@ -866,6 +869,7 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
+        #[allow(clippy::unwrap_used)]
         let ident = std::str::from_utf8(&self.s[start..self.pos])
             .unwrap()
             .to_string();
@@ -883,6 +887,7 @@ impl<'a> Parser<'a> {
                     self.pos += 1;
                     continue;
                 }
+                #[allow(clippy::unwrap_used)]
                 let name = std::str::from_utf8(&self.s[start..self.pos - 1])
                     .unwrap()
                     .replace("''", "'");
@@ -949,6 +954,7 @@ impl<'a> Parser<'a> {
         while matches!(self.peek(), Some(b'0'..=b'9')) {
             self.pos += 1;
         }
+        #[allow(clippy::unwrap_used)]
         let txt = std::str::from_utf8(&self.s[start..self.pos]).unwrap();
         txt.parse::<i32>()
             .map_err(|_| self.err("invalid signed int"))
@@ -960,6 +966,7 @@ impl<'a> Parser<'a> {
         while matches!(self.peek(), Some(b'0'..=b'9')) {
             self.pos += 1;
         }
+        #[allow(clippy::unwrap_used)]
         let txt = std::str::from_utf8(&self.s[start..self.pos]).unwrap();
         txt.parse::<u32>().map_err(|_| self.err("invalid number"))
     }
@@ -988,6 +995,7 @@ impl<'a> Parser<'a> {
             return Ok(None);
         }
 
+        #[allow(clippy::unwrap_used)]
         let col_txt = std::str::from_utf8(&self.s[col_start..self.pos]).unwrap();
         if col_txt.len() > 3 {
             self.pos = start;
@@ -1006,6 +1014,7 @@ impl<'a> Parser<'a> {
             return Ok(None);
         }
 
+        #[allow(clippy::unwrap_used)]
         let row_txt = std::str::from_utf8(&self.s[row_start..self.pos]).unwrap();
         let row_num = row_txt
             .parse::<u32>()

@@ -170,8 +170,7 @@ fn limit_exceeded_return_error_returns_structured_error() {
 }
 
 #[test]
-#[should_panic(expected = "alignment limits exceeded")]
-fn limit_exceeded_return_error_panics_via_legacy_api() {
+fn limit_exceeded_return_error_produces_warning_via_legacy_api() {
     let grid_a = create_simple_grid(100, 10, 0);
     let grid_b = create_simple_grid(100, 10, 0);
 
@@ -184,7 +183,13 @@ fn limit_exceeded_return_error_panics_via_legacy_api() {
         ..Default::default()
     };
 
-    let _ = diff_workbooks(&wb_a, &wb_b, &config);
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
+    assert!(!report.complete, "report should be incomplete");
+    assert!(
+        report.warnings.iter().any(|w| w.contains("limits exceeded")),
+        "should have limits exceeded warning; warnings: {:?}",
+        report.warnings
+    );
 }
 
 #[test]

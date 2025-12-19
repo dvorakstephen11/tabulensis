@@ -397,7 +397,7 @@ fn move_detection_respects_column_gate() {
 }
 
 #[test]
-fn duplicate_sheet_identity_panics_in_debug() {
+fn duplicate_sheet_identity_emits_warning() {
     let duplicate_a = make_sheet_with_kind("Sheet1", SheetKind::Worksheet, vec![(0, 0, 1.0)]);
     let duplicate_b = make_sheet_with_kind("sheet1", SheetKind::Worksheet, vec![(0, 1, 2.0)]);
     let old = Workbook {
@@ -406,12 +406,11 @@ fn duplicate_sheet_identity_panics_in_debug() {
     let new = Workbook { sheets: Vec::new() };
 
     let result = std::panic::catch_unwind(|| diff_workbooks(&old, &new, &DiffConfig::default()));
-    if cfg!(debug_assertions) {
-        assert!(
-            result.is_err(),
-            "duplicate sheet identities should trigger a debug assertion"
-        );
-    } else {
-        assert!(result.is_ok(), "debug assertions disabled should not panic");
-    }
+    assert!(result.is_ok(), "duplicate sheet identity should not panic");
+    let report = result.unwrap();
+    assert!(
+        report.warnings.iter().any(|w| w.contains("duplicate sheet identity")),
+        "should emit warning about duplicate sheet identity; warnings: {:?}",
+        report.warnings
+    );
 }

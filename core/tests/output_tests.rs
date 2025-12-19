@@ -436,12 +436,13 @@ fn test_diff_workbooks_to_json_reports_invalid_zip() {
     let err = diff_workbooks_to_json(&path, &path, &DiffConfig::default())
         .expect_err("diffing invalid containers should return an error");
 
+    let inner = match err {
+        PackageError::WithPath { source, .. } => *source,
+        other => other,
+    };
     assert!(
-        matches!(
-            err,
-            PackageError::Container(ContainerError::NotZipContainer)
-        ),
-        "expected container error, got {err}"
+        matches!(inner, PackageError::Container(ContainerError::NotZipContainer)),
+        "expected container error, got {inner:?}"
     );
 }
 

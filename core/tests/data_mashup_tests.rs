@@ -13,6 +13,25 @@ use zip::ZipArchive;
 mod common;
 use common::fixture_path;
 
+fn unwrap_path_error(err: PackageError) -> PackageError {
+    match err {
+        PackageError::WithPath { source, .. } => *source,
+        other => other,
+    }
+}
+
+fn unwrap_datamashup_part_error(err: PackageError) -> PackageError {
+    match err {
+        PackageError::DataMashupPartError { source, .. } => PackageError::DataMashup(source),
+        other => other,
+    }
+}
+
+fn unwrap_all(err: PackageError) -> PackageError {
+    let err = unwrap_path_error(err);
+    unwrap_datamashup_part_error(err)
+}
+
 #[test]
 fn workbook_without_datamashup_returns_none() {
     let path = fixture_path("minimal.xlsx");
@@ -70,20 +89,22 @@ fn utf16_be_datamashup_parses() {
 fn corrupt_base64_returns_error() {
     let path = fixture_path("corrupt_base64.xlsx");
     let err = open_data_mashup(&path).expect_err("corrupt base64 should fail");
-    assert!(matches!(
-        err,
-        PackageError::DataMashup(DataMashupError::Base64Invalid)
-    ));
+    let err = unwrap_all(err);
+    assert!(
+        matches!(err, PackageError::DataMashup(DataMashupError::Base64Invalid)),
+        "expected Base64Invalid, got {err:?}"
+    );
 }
 
 #[test]
 fn duplicate_datamashup_parts_are_rejected() {
     let path = fixture_path("duplicate_datamashup_parts.xlsx");
     let err = open_data_mashup(&path).expect_err("duplicate DataMashup parts should be rejected");
-    assert!(matches!(
-        err,
-        PackageError::DataMashup(DataMashupError::FramingInvalid)
-    ));
+    let err = unwrap_all(err);
+    assert!(
+        matches!(err, PackageError::DataMashup(DataMashupError::FramingInvalid)),
+        "expected FramingInvalid, got {err:?}"
+    );
 }
 
 #[test]
@@ -91,16 +112,18 @@ fn duplicate_datamashup_elements_are_rejected() {
     let path = fixture_path("duplicate_datamashup_elements.xlsx");
     let err =
         open_data_mashup(&path).expect_err("duplicate DataMashup elements should be rejected");
-    assert!(matches!(
-        err,
-        PackageError::DataMashup(DataMashupError::FramingInvalid)
-    ));
+    let err = unwrap_all(err);
+    assert!(
+        matches!(err, PackageError::DataMashup(DataMashupError::FramingInvalid)),
+        "expected FramingInvalid, got {err:?}"
+    );
 }
 
 #[test]
 fn nonexistent_file_returns_io() {
     let path = fixture_path("missing_mashup.xlsx");
     let err = open_data_mashup(&path).expect_err("missing file should error");
+    let err = unwrap_path_error(err);
     match err {
         PackageError::Container(ContainerError::Io(e)) => {
             assert_eq!(e.kind(), ErrorKind::NotFound)
@@ -113,30 +136,33 @@ fn nonexistent_file_returns_io() {
 fn non_excel_container_returns_not_excel_error() {
     let path = fixture_path("random_zip.zip");
     let err = open_data_mashup(&path).expect_err("random zip should not parse");
-    assert!(matches!(
-        err,
-        PackageError::Container(ContainerError::NotOpcPackage)
-    ));
+    let err = unwrap_path_error(err);
+    assert!(
+        matches!(err, PackageError::Container(ContainerError::NotOpcPackage)),
+        "expected NotOpcPackage, got {err:?}"
+    );
 }
 
 #[test]
 fn missing_content_types_is_not_excel_error() {
     let path = fixture_path("no_content_types.xlsx");
     let err = open_data_mashup(&path).expect_err("missing [Content_Types].xml should fail");
-    assert!(matches!(
-        err,
-        PackageError::Container(ContainerError::NotOpcPackage)
-    ));
+    let err = unwrap_path_error(err);
+    assert!(
+        matches!(err, PackageError::Container(ContainerError::NotOpcPackage)),
+        "expected NotOpcPackage, got {err:?}"
+    );
 }
 
 #[test]
 fn non_zip_file_returns_not_zip_error() {
     let path = fixture_path("not_a_zip.txt");
     let err = open_data_mashup(&path).expect_err("non-zip input should not parse as Excel");
-    assert!(matches!(
-        err,
-        PackageError::Container(ContainerError::NotZipContainer)
-    ));
+    let err = unwrap_path_error(err);
+    assert!(
+        matches!(err, PackageError::Container(ContainerError::NotZipContainer)),
+        "expected NotZipContainer, got {err:?}"
+    );
 }
 
 #[test]

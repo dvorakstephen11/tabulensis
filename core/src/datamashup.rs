@@ -364,18 +364,26 @@ fn metadata_xml_bytes(metadata_bytes: &[u8]) -> Result<Vec<u8>, DataMashupError>
     }
 
     if metadata_bytes.len() >= 8 {
-        let content_len = u32::from_le_bytes(metadata_bytes[0..4].try_into().unwrap()) as usize;
-        let xml_len = u32::from_le_bytes(metadata_bytes[4..8].try_into().unwrap()) as usize;
+        let content_len_bytes: [u8; 4] = metadata_bytes[0..4]
+            .try_into()
+            .map_err(|_| DataMashupError::InvalidHeader("cannot read content length".into()))?;
+        let content_len = u32::from_le_bytes(content_len_bytes) as usize;
+
+        let xml_len_bytes: [u8; 4] = metadata_bytes[4..8]
+            .try_into()
+            .map_err(|_| DataMashupError::InvalidHeader("cannot read XML length".into()))?;
+        let xml_len = u32::from_le_bytes(xml_len_bytes) as usize;
+
         let start = 8usize
             .checked_add(content_len)
-            .ok_or_else(|| DataMashupError::XmlError("metadata length overflow".into()))?;
+            .ok_or_else(|| DataMashupError::InvalidHeader("metadata length overflow".into()))?;
         let end = start
             .checked_add(xml_len)
-            .ok_or_else(|| DataMashupError::XmlError("metadata length overflow".into()))?;
+            .ok_or_else(|| DataMashupError::InvalidHeader("metadata length overflow".into()))?;
         if end <= metadata_bytes.len() {
             return Ok(metadata_bytes[start..end].to_vec());
         }
-        return Err(DataMashupError::XmlError(
+        return Err(DataMashupError::InvalidHeader(
             "metadata length prefix invalid".into(),
         ));
     }
