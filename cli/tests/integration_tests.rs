@@ -5,7 +5,14 @@ fn excel_diff_cmd() -> Command {
 }
 
 fn fixture_path(name: &str) -> String {
-    format!("../fixtures/generated/{}", name)
+    let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("fixtures")
+        .join("generated")
+        .join(name);
+
+    p.to_string_lossy().into_owned()
 }
 
 #[test]

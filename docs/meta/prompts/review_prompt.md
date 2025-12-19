@@ -9,6 +9,7 @@
   .gitattributes.example
   .github/
     workflows/
+      ci.yml
       perf.yml
       wasm.yml
   .gitignore
@@ -180,6 +181,7 @@
       string_pool_tests.rs
   fixtures/
     manifest.yaml
+    manifest_cli_tests.yaml
     pyproject.toml
     README.md
     requirements.txt
@@ -210,6 +212,45 @@
 ```
 
 ## File Contents
+
+### File: `.github\workflows\ci.yml`
+
+```yaml
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install fixture generator
+        run: python -m pip install -e fixtures
+
+      - name: Generate test fixtures
+        run: generate-fixtures --manifest fixtures/manifest_cli_tests.yaml --force
+
+      - name: Run tests
+        run: cargo test --workspace
+
+
+```
+
+---
 
 ### File: `.github\workflows\perf.yml`
 
@@ -1561,7 +1602,14 @@ fn excel_diff_cmd() -> Command {
 }
 
 fn fixture_path(name: &str) -> String {
-    format!("../fixtures/generated/{}", name)
+    let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("fixtures")
+        .join("generated")
+        .join(name);
+
+    p.to_string_lossy().into_owned()
 }
 
 #[test]
@@ -31218,6 +31266,87 @@ scenarios:
       cols: 100
       mode: "dense"
     output: "grid_identical.xlsx"
+
+```
+
+---
+
+### File: `fixtures\manifest_cli_tests.yaml`
+
+```yaml
+scenarios:
+  - id: "pg1_basic_two_sheets"
+    generator: "basic_grid"
+    args: { rows: 3, cols: 3, two_sheets: true }
+    output: "pg1_basic_two_sheets.xlsx"
+
+  - id: "m4_packageparts_one_query"
+    generator: "mashup:one_query"
+    args:
+      base_file: "templates/base_query.xlsx"
+    output: "one_query.xlsx"
+
+  - id: "g1_equal_sheet"
+    generator: "basic_grid"
+    args:
+      rows: 5
+      cols: 5
+      sheet: "Sheet1"
+    output:
+      - "equal_sheet_a.xlsx"
+      - "equal_sheet_b.xlsx"
+
+  - id: "g2_single_cell_value"
+    generator: "single_cell_diff"
+    args:
+      rows: 5
+      cols: 5
+      sheet: "Sheet1"
+      target_cell: "C3"
+      value_a: 1.0
+      value_b: 2.0
+    output:
+      - "single_cell_value_a.xlsx"
+      - "single_cell_value_b.xlsx"
+
+  - id: "g8_row_insert_middle"
+    generator: "row_alignment_g8"
+    args:
+      mode: "insert"
+      sheet: "Sheet1"
+      base_rows: 10
+      cols: 5
+      insert_at: 6
+    output:
+      - "row_insert_middle_a.xlsx"
+      - "row_insert_middle_b.xlsx"
+
+  - id: "g9_col_insert_middle"
+    generator: "column_alignment_g9"
+    args:
+      mode: "insert"
+      sheet: "Data"
+      cols: 8
+      data_rows: 9
+      insert_at: 4
+    output:
+      - "col_insert_middle_a.xlsx"
+      - "col_insert_middle_b.xlsx"
+
+  - id: "m_add_query_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_add_query_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_add_query_a.xlsx"
+
+  - id: "m_add_query_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_add_query_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_add_query_b.xlsx"
+
 
 ```
 
