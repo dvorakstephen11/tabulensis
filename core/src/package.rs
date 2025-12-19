@@ -1,8 +1,9 @@
 use crate::config::DiffConfig;
 use crate::datamashup::DataMashup;
-use crate::diff::{DiffError, DiffReport, DiffSummary};
-use crate::sink::{DiffSink, NoFinishSink};
-use crate::workbook::Workbook;
+use crate::diff::{DiffError, DiffReport, DiffSummary, SheetId};
+use crate::sink::{DiffSink, NoFinishSink, VecSink};
+use crate::string_pool::StringPool;
+use crate::workbook::{Sheet, Workbook};
 
 #[derive(Debug, Clone)]
 pub struct WorkbookPackage {
@@ -124,5 +125,180 @@ impl WorkbookPackage {
         sink.finish()?;
 
         Ok(summary)
+    }
+
+    pub fn diff_database_mode(
+        &self,
+        other: &Self,
+        sheet_name: &str,
+        key_columns: &[u32],
+        config: &DiffConfig,
+    ) -> Result<DiffReport, DiffError> {
+        crate::with_default_session(|session| {
+            self.diff_database_mode_with_pool(
+                other,
+                sheet_name,
+                key_columns,
+                &mut session.strings,
+                config,
+            )
+        })
+    }
+
+    pub fn diff_database_mode_with_pool(
+        &self,
+        other: &Self,
+        sheet_name: &str,
+        key_columns: &[u32],
+        pool: &mut StringPool,
+        config: &DiffConfig,
+    ) -> Result<DiffReport, DiffError> {
+        let (old_sheet, new_sheet, sheet_id) =
+            find_sheets_case_insensitive(&self.workbook, &other.workbook, sheet_name, pool)?;
+
+        let mut sink = VecSink::new();
+        let mut op_count = 0usize;
+
+        let summary = crate::engine::try_diff_grids_database_mode_streaming(
+            sheet_id,
+            &old_sheet.grid,
+            &new_sheet.grid,
+            key_columns,
+            pool,
+            config,
+            &mut sink,
+            &mut op_count,
+        )?;
+
+        let m_ops = crate::m_diff::diff_m_ops_for_packages(
+            &self.data_mashup,
+            &other.data_mashup,
+            pool,
+            config,
+        );
+
+        let mut ops = sink.into_ops();
+        ops.extend(m_ops);
+
+        let strings = pool.strings().to_vec();
+        Ok(DiffReport::from_ops_and_summary(ops, summary, strings))
+    }
+
+    pub fn diff_database_mode_streaming<S: DiffSink>(
+        &self,
+        other: &Self,
+        sheet_name: &str,
+        key_columns: &[u32],
+        config: &DiffConfig,
+        sink: &mut S,
+    ) -> Result<DiffSummary, DiffError> {
+        crate::with_default_session(|session| {
+            self.diff_database_mode_streaming_with_pool(
+                other,
+                sheet_name,
+                key_columns,
+                &mut session.strings,
+                config,
+                sink,
+            )
+        })
+    }
+
+    pub fn diff_database_mode_streaming_with_pool<S: DiffSink>(
+        &self,
+        other: &Self,
+        sheet_name: &str,
+        key_columns: &[u32],
+        pool: &mut StringPool,
+        config: &DiffConfig,
+        sink: &mut S,
+    ) -> Result<DiffSummary, DiffError> {
+        let m_ops = crate::m_diff::diff_m_ops_for_packages(
+            &self.data_mashup,
+            &other.data_mashup,
+            pool,
+            config,
+        );
+
+        let (old_sheet, new_sheet, sheet_id) =
+            find_sheets_case_insensitive(&self.workbook, &other.workbook, sheet_name, pool)?;
+
+        let grid_result = {
+            let mut no_finish = NoFinishSink::new(sink);
+            crate::engine::try_diff_grids_database_mode_streaming(
+                sheet_id,
+                &old_sheet.grid,
+                &new_sheet.grid,
+                key_columns,
+                pool,
+                config,
+                &mut no_finish,
+                &mut 0usize,
+            )
+        };
+
+        let mut summary = match grid_result {
+            Ok(summary) => summary,
+            Err(e) => {
+                let _ = sink.finish();
+                return Err(e);
+            }
+        };
+
+        for op in m_ops {
+            if let Err(e) = sink.emit(op) {
+                let _ = sink.finish();
+                return Err(e);
+            }
+            summary.op_count = summary.op_count.saturating_add(1);
+        }
+
+        sink.finish()?;
+
+        Ok(summary)
+    }
+}
+
+fn find_sheets_case_insensitive<'a>(
+    old_wb: &'a Workbook,
+    new_wb: &'a Workbook,
+    sheet_name: &str,
+    pool: &StringPool,
+) -> Result<(&'a Sheet, &'a Sheet, SheetId), DiffError> {
+    let sheet_name_lower = sheet_name.to_lowercase();
+
+    let old_sheet = old_wb.sheets.iter().find(|s| {
+        let name = pool.resolve(s.name);
+        name.to_lowercase() == sheet_name_lower
+    });
+
+    let new_sheet = new_wb.sheets.iter().find(|s| {
+        let name = pool.resolve(s.name);
+        name.to_lowercase() == sheet_name_lower
+    });
+
+    match (old_sheet, new_sheet) {
+        (Some(old), Some(new)) => {
+            let sheet_id = old.name;
+            Ok((old, new, sheet_id))
+        }
+        _ => {
+            let mut available: Vec<String> = old_wb
+                .sheets
+                .iter()
+                .map(|s| pool.resolve(s.name).to_string())
+                .collect();
+            for s in &new_wb.sheets {
+                let name = pool.resolve(s.name).to_string();
+                if !available.iter().any(|n| n.to_lowercase() == name.to_lowercase()) {
+                    available.push(name);
+                }
+            }
+            available.sort();
+            Err(DiffError::SheetNotFound {
+                requested: sheet_name.to_string(),
+                available,
+            })
+        }
     }
 }
