@@ -317,6 +317,7 @@ dependencies = [
  "clap",
  "excel_diff",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

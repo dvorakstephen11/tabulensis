@@ -72,7 +72,7 @@ pub fn run(
     } else {
         match format {
             OutputFormat::Text => {
-                text::write_text_report(&mut handle, &report, verbosity)?;
+                text::write_text_report(&mut handle, &report, old_path, new_path, verbosity)?;
             }
             OutputFormat::Json => {
                 json::write_json_report(&mut handle, &report)?;

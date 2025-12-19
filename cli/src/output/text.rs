@@ -10,11 +10,31 @@ use std::io::Write;
 pub fn write_text_report<W: Write>(
     w: &mut W,
     report: &DiffReport,
+    old_path: &str,
+    new_path: &str,
     verbosity: Verbosity,
 ) -> Result<()> {
+    if verbosity != Verbosity::Quiet {
+        let old_name = std::path::Path::new(old_path)
+            .file_name()
+            .map(|s| s.to_string_lossy())
+            .unwrap_or_else(|| old_path.into());
+        let new_name = std::path::Path::new(new_path)
+            .file_name()
+            .map(|s| s.to_string_lossy())
+            .unwrap_or_else(|| new_path.into());
+        writeln!(w, "Comparing: {} -> {}", old_name, new_name)?;
+        writeln!(w)?;
+    }
+
+    if verbosity == Verbosity::Quiet {
+        write_summary(w, report)?;
+        return Ok(());
+    }
+
     if report.ops.is_empty() {
         writeln!(w, "No differences found.")?;
-        write_summary(w, report, verbosity)?;
+        write_summary(w, report)?;
         return Ok(());
     }
 
@@ -42,8 +62,7 @@ pub fn write_text_report<W: Write>(
         writeln!(w)?;
     }
 
-    write_summary(w, report, verbosity)?;
-
+    write_summary(w, report)?;
     Ok(())
 }
 
@@ -317,11 +336,7 @@ fn escape_string(s: &str) -> String {
         .replace('"', "\\\"")
 }
 
-fn write_summary<W: Write>(w: &mut W, report: &DiffReport, verbosity: Verbosity) -> Result<()> {
-    if verbosity == Verbosity::Quiet && report.ops.is_empty() {
-        return Ok(());
-    }
-
+fn write_summary<W: Write>(w: &mut W, report: &DiffReport) -> Result<()> {
     writeln!(w, "---")?;
     writeln!(w, "Summary:")?;
     writeln!(w, "  Total changes: {}", report.ops.len())?;
