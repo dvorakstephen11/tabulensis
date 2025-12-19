@@ -29,12 +29,18 @@ pub enum Commands {
         fast: bool,
         #[arg(long, help = "Use most precise diff preset (slower, more accurate)")]
         precise: bool,
-        #[arg(long, help = "Key columns for database mode (not yet implemented)")]
-        key_columns: Option<String>,
         #[arg(long, short, help = "Quiet mode: only show summary")]
         quiet: bool,
         #[arg(long, short, help = "Verbose mode: show additional details")]
         verbose: bool,
+        #[arg(long, help = "Use database mode: align rows by key columns")]
+        database: bool,
+        #[arg(long, help = "Sheet name to diff in database mode")]
+        sheet: Option<String>,
+        #[arg(long, help = "Key columns for database mode (comma-separated column letters, e.g. A,B,C)")]
+        keys: Option<String>,
+        #[arg(long, help = "Auto-detect key columns for database mode")]
+        auto_keys: bool,
     },
     #[command(about = "Show information about a workbook")]
     Info {
@@ -63,9 +69,12 @@ fn main() -> ExitCode {
             git_diff,
             fast,
             precise,
-            key_columns,
             quiet,
             verbose,
+            database,
+            sheet,
+            keys,
+            auto_keys,
         } => commands::diff::run(
             &old,
             &new,
@@ -73,9 +82,12 @@ fn main() -> ExitCode {
             git_diff,
             fast,
             precise,
-            key_columns,
             quiet,
             verbose,
+            database,
+            sheet,
+            keys,
+            auto_keys,
         ),
         Commands::Info { path, queries } => commands::info::run(&path, queries),
     };

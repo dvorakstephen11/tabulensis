@@ -1,5 +1,5 @@
 use crate::hashing::normalize_float_for_hash;
-use crate::string_pool::StringId;
+use crate::string_pool::{StringId, StringPool};
 use crate::workbook::{CellValue, Grid};
 use std::collections::{HashMap, HashSet};
 
@@ -153,6 +153,62 @@ fn extract_key(grid: &Grid, row_idx: u32, spec: &KeyColumnSpec) -> KeyValue {
     }
 
     KeyValue::new(components)
+}
+
+pub fn suggest_key_columns(grid: &Grid, pool: &StringPool) -> Vec<u32> {
+    if grid.nrows == 0 || grid.ncols == 0 {
+        return Vec::new();
+    }
+
+    let header_matches_key_pattern = |col: u32| -> bool {
+        if let Some(cell) = grid.get(0, col) {
+            if let Some(CellValue::Text(id)) = &cell.value {
+                let text = pool.resolve(*id).to_lowercase();
+                return text == "id" || text == "key" || text == "sku" 
+                    || text.contains("_id") || text.ends_with("id");
+            }
+        }
+        false
+    };
+
+    let column_has_unique_values = |col: u32| -> bool {
+        let start_row = if grid.nrows > 1 { 1 } else { 0 };
+        let mut seen: HashSet<KeyComponent> = HashSet::new();
+        for row in start_row..grid.nrows {
+            let component = match grid.get(row, col) {
+                Some(cell) => KeyComponent {
+                    value: KeyValueRepr::from_cell_value(cell.value.as_ref()),
+                    formula: cell.formula,
+                },
+                None => KeyComponent {
+                    value: KeyValueRepr::None,
+                    formula: None,
+                },
+            };
+            if !seen.insert(component) {
+                return false;
+            }
+        }
+        true
+    };
+
+    if header_matches_key_pattern(0) && column_has_unique_values(0) {
+        return vec![0];
+    }
+
+    for col in 0..grid.ncols {
+        if header_matches_key_pattern(col) && column_has_unique_values(col) {
+            return vec![col];
+        }
+    }
+
+    for col in 0..grid.ncols {
+        if column_has_unique_values(col) {
+            return vec![col];
+        }
+    }
+
+    Vec::new()
 }
 
 #[cfg(test)]

@@ -28,7 +28,7 @@ mod alignment_types;
 pub(crate) mod column_alignment;
 mod config;
 mod container;
-pub(crate) mod database_alignment;
+mod database_alignment;
 mod datamashup;
 mod datamashup_framing;
 mod datamashup_package;
@@ -175,3 +175,4 @@ pub use workbook::{
     Cell, CellAddress, CellSnapshot, CellValue, ColSignature, Grid, RowSignature, Sheet, SheetKind,
     Workbook,
 };
+pub use database_alignment::suggest_key_columns;

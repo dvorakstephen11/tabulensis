@@ -59,6 +59,12 @@ pub enum DiffError {
 
     #[error("sink error: {message}")]
     SinkError { message: String },
+
+    #[error("sheet '{requested}' not found. Available sheets: {}", available.join(", "))]
+    SheetNotFound {
+        requested: String,
+        available: Vec<String>,
+    },
 }
 
 pub type SheetId = StringId;

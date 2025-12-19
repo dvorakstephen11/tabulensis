@@ -160,14 +160,13 @@ fn fast_and_precise_are_mutually_exclusive() {
 }
 
 #[test]
-fn key_columns_not_implemented_error() {
+fn database_mode_requires_keys_or_auto_keys() {
     let output = excel_diff_cmd()
         .args([
             "diff",
-            "--key-columns",
-            "A,B",
-            &fixture_path("equal_sheet_a.xlsx"),
-            &fixture_path("equal_sheet_b.xlsx"),
+            "--database",
+            &fixture_path("db_equal_ordered_a.xlsx"),
+            &fixture_path("db_equal_ordered_b.xlsx"),
         ])
         .output()
         .expect("failed to run excel-diff");
@@ -175,10 +174,32 @@ fn key_columns_not_implemented_error() {
     assert_eq!(
         output.status.code(),
         Some(2),
-        "key-columns should exit 2 (not implemented)"
+        "database without keys should exit 2"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("not implemented"));
+    assert!(stderr.contains("--keys") || stderr.contains("--auto-keys"));
+}
+
+#[test]
+fn database_flags_require_database_mode() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--keys",
+            "A",
+            &fixture_path("db_equal_ordered_a.xlsx"),
+            &fixture_path("db_equal_ordered_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "keys without database flag should exit 2"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--database"));
 }
 
 #[test]
@@ -264,5 +285,274 @@ fn power_query_changes_detected() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Power Query") || stdout.contains("Query"));
+}
+
+#[test]
+fn d1_database_reorder_no_diff() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--database",
+            "--sheet",
+            "Data",
+            "--keys",
+            "A",
+            &fixture_path("db_equal_ordered_a.xlsx"),
+            &fixture_path("db_equal_ordered_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert!(
+        output.status.success(),
+        "D1 reorder should exit 0 (no changes): stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn d1_database_reorder_json_empty_ops() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--database",
+            "--sheet",
+            "Data",
+            "--keys",
+            "A",
+            "--format",
+            "json",
+            &fixture_path("db_equal_ordered_a.xlsx"),
+            &fixture_path("db_equal_ordered_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+    let ops = parsed.get("ops").and_then(|v| v.as_array());
+    assert!(
+        ops.map(|o| o.is_empty()).unwrap_or(false),
+        "D1 reorder should have empty ops array"
+    );
+}
+
+#[test]
+fn d2_database_row_added() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--database",
+            "--sheet",
+            "Data",
+            "--keys",
+            "A",
+            "--format",
+            "json",
+            &fixture_path("db_equal_ordered_a.xlsx"),
+            &fixture_path("db_row_added_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "D2 row added should exit 1"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+    let ops = parsed.get("ops").and_then(|v| v.as_array()).unwrap();
+    let has_row_added = ops.iter().any(|op| {
+        op.get("kind").and_then(|k| k.as_str()) == Some("RowAdded")
+    });
+    assert!(has_row_added, "D2 should contain RowAdded op");
+}
+
+#[test]
+fn d3_database_row_updated() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--database",
+            "--sheet",
+            "Data",
+            "--keys",
+            "A",
+            "--format",
+            "json",
+            &fixture_path("db_equal_ordered_a.xlsx"),
+            &fixture_path("db_row_update_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "D3 row update should exit 1"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+    let ops = parsed.get("ops").and_then(|v| v.as_array()).unwrap();
+    let has_cell_edited = ops.iter().any(|op| {
+        op.get("kind").and_then(|k| k.as_str()) == Some("CellEdited")
+    });
+    assert!(has_cell_edited, "D3 should contain CellEdited op");
+}
+
+#[test]
+fn d4_database_reorder_and_change() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--database",
+            "--sheet",
+            "Data",
+            "--keys",
+            "A",
+            "--format",
+            "json",
+            &fixture_path("db_equal_ordered_a.xlsx"),
+            &fixture_path("db_reorder_and_change_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "D4 reorder+change should exit 1"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+    let ops = parsed.get("ops").and_then(|v| v.as_array()).unwrap();
+    
+    let has_cell_edited = ops.iter().any(|op| {
+        op.get("kind").and_then(|k| k.as_str()) == Some("CellEdited")
+    });
+    assert!(has_cell_edited, "D4 should contain CellEdited op");
+    
+    assert!(
+        ops.len() < 10,
+        "D4 should have few ops (reorder ignored, only changes): got {} ops",
+        ops.len()
+    );
+}
+
+#[test]
+fn database_multi_column_keys() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--database",
+            "--sheet",
+            "Data",
+            "--keys",
+            "A,C",
+            &fixture_path("db_equal_ordered_a.xlsx"),
+            &fixture_path("db_equal_ordered_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert!(
+        output.status.success(),
+        "Multi-column keys should work: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn database_invalid_column_error() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--database",
+            "--sheet",
+            "Data",
+            "--keys",
+            "1",
+            &fixture_path("db_equal_ordered_a.xlsx"),
+            &fixture_path("db_equal_ordered_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "Invalid column should exit 2"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("not a valid column") || stderr.contains("Invalid"),
+        "Should mention invalid column: {}",
+        stderr
+    );
+}
+
+#[test]
+fn database_sheet_not_found_error() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--database",
+            "--sheet",
+            "NoSuchSheet",
+            "--keys",
+            "A",
+            &fixture_path("db_equal_ordered_a.xlsx"),
+            &fixture_path("db_equal_ordered_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "Sheet not found should exit 2"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("not found") || stderr.contains("Available"),
+        "Should mention sheet not found: {}",
+        stderr
+    );
+}
+
+#[test]
+fn database_auto_keys() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--database",
+            "--sheet",
+            "Data",
+            "--auto-keys",
+            &fixture_path("db_equal_ordered_a.xlsx"),
+            &fixture_path("db_equal_ordered_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert!(
+        output.status.success(),
+        "Auto-keys should work: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Auto-detected") || stderr.is_empty(),
+        "Should print auto-detected message or be silent"
+    );
 }
 

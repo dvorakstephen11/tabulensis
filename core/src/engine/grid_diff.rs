@@ -235,9 +235,11 @@ pub fn diff_grids_database_mode(
     pool: &mut StringPool,
     config: &DiffConfig,
 ) -> DiffReport {
+    let sheet_id: SheetId = pool.intern(DATABASE_MODE_SHEET_ID);
     let mut sink = VecSink::new();
     let mut op_count = 0usize;
-    let summary = diff_grids_database_mode_streaming(
+    let summary = try_diff_grids_database_mode_streaming(
+        sheet_id,
         old,
         new,
         key_columns,
@@ -251,7 +253,8 @@ pub fn diff_grids_database_mode(
     DiffReport::from_ops_and_summary(sink.into_ops(), summary, strings)
 }
 
-fn diff_grids_database_mode_streaming<S: DiffSink>(
+pub(crate) fn try_diff_grids_database_mode_streaming<S: DiffSink>(
+    sheet_id: SheetId,
     old: &Grid,
     new: &Grid,
     key_columns: &[u32],
@@ -265,9 +268,11 @@ fn diff_grids_database_mode_streaming<S: DiffSink>(
     let alignment = match diff_table_by_key(old, new, key_columns) {
         Ok(alignment) => alignment,
         Err(_) => {
-            let sheet_id: SheetId = pool.intern(DATABASE_MODE_SHEET_ID);
             sink.begin(pool)?;
             let mut ctx = DiffContext::default();
+            ctx.warnings.push(
+                "database-mode: duplicate keys for requested columns; falling back to spreadsheet mode".to_string()
+            );
             try_diff_grids(
                 sheet_id,
                 old,
@@ -292,7 +297,6 @@ fn diff_grids_database_mode_streaming<S: DiffSink>(
         }
     };
 
-    let sheet_id: SheetId = pool.intern(DATABASE_MODE_SHEET_ID);
     sink.begin(pool)?;
     let max_cols = old.ncols.max(new.ncols);
 
