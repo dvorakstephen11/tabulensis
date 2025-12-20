@@ -6,7 +6,7 @@
 use crate::addressing::address_to_index;
 use crate::error_codes;
 use crate::string_pool::{StringId, StringPool};
-use crate::workbook::{CellValue, Grid};
+use crate::workbook::{CellValue, Grid, NamedRange};
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 use std::collections::HashMap;
@@ -141,6 +141,177 @@ pub fn parse_workbook_xml(xml: &[u8]) -> Result<Vec<SheetDescriptor>, GridParseE
     Ok(sheets)
 }
 
+pub fn parse_defined_names(
+    workbook_xml: &[u8],
+    sheets_in_order: &[SheetDescriptor],
+    pool: &mut StringPool,
+) -> Result<Vec<NamedRange>, GridParseError> {
+    fn local_name(name: &[u8]) -> &[u8] {
+        name.rsplit(|&b| b == b':').next().unwrap_or(name)
+    }
+
+    fn quote_sheet_name(sheet: &str) -> String {
+        let needs_quotes = sheet
+            .chars()
+            .any(|c| matches!(c, ' ' | '\'' | '!' | ',' | ';' | '[' | ']' | '(' | ')'));
+        if !needs_quotes {
+            return sheet.to_string();
+        }
+        let escaped = sheet.replace('\'', "''");
+        format!("'{escaped}'")
+    }
+
+    let mut reader = Reader::from_reader(workbook_xml);
+    reader.config_mut().trim_text(false);
+    let mut buf = Vec::new();
+    let mut named_ranges = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) if local_name(e.name().as_ref()) == b"definedName" => {
+                let mut name = None;
+                let mut local_sheet_id = None;
+                for attr in e.attributes() {
+                    let attr = attr.map_err(|e| xml_msg_err(&reader, workbook_xml, e.to_string()))?;
+                    match attr.key.as_ref() {
+                        b"name" => {
+                            name = Some(
+                                attr.unescape_value()
+                                    .map_err(|e| xml_err(&reader, workbook_xml, e))?
+                                    .into_owned(),
+                            );
+                        }
+                        b"localSheetId" => {
+                            let value = attr
+                                .unescape_value()
+                                .map_err(|e| xml_err(&reader, workbook_xml, e))?
+                                .into_owned();
+                            local_sheet_id = value.parse::<usize>().ok();
+                        }
+                        _ => {}
+                    }
+                }
+
+                let name = match name {
+                    Some(name) => name,
+                    None => {
+                        return Err(xml_msg_err(
+                            &reader,
+                            workbook_xml,
+                            "definedName missing required 'name' attribute",
+                        ));
+                    }
+                };
+
+                let refers_to = reader
+                    .read_text(e.name())
+                    .map_err(|e| xml_err(&reader, workbook_xml, e))?
+                    .into_owned();
+                let refers_to = refers_to.trim();
+
+                let (qualified_name, scope) = match local_sheet_id {
+                    None => (name.clone(), None),
+                    Some(idx) => {
+                        let sheet_name = sheets_in_order.get(idx).map(|s| s.name.as_str());
+                        let sheet_name = match sheet_name {
+                            Some(sheet_name) => sheet_name,
+                            None => {
+                                return Err(xml_msg_err(
+                                    &reader,
+                                    workbook_xml,
+                                    format!(
+                                        "definedName localSheetId {idx} out of bounds (sheets={})",
+                                        sheets_in_order.len()
+                                    ),
+                                ));
+                            }
+                        };
+                        let sheet_name_id = pool.intern(sheet_name);
+                        let qualified = format!("{}!{}", quote_sheet_name(sheet_name), name);
+                        (qualified, Some(sheet_name_id))
+                    }
+                };
+
+                named_ranges.push(NamedRange {
+                    name: pool.intern(&qualified_name),
+                    refers_to: pool.intern(refers_to),
+                    scope,
+                });
+            }
+            Ok(Event::Empty(e)) if local_name(e.name().as_ref()) == b"definedName" => {
+                let mut name = None;
+                let mut local_sheet_id = None;
+                for attr in e.attributes() {
+                    let attr = attr.map_err(|e| xml_msg_err(&reader, workbook_xml, e.to_string()))?;
+                    match attr.key.as_ref() {
+                        b"name" => {
+                            name = Some(
+                                attr.unescape_value()
+                                    .map_err(|e| xml_err(&reader, workbook_xml, e))?
+                                    .into_owned(),
+                            );
+                        }
+                        b"localSheetId" => {
+                            let value = attr
+                                .unescape_value()
+                                .map_err(|e| xml_err(&reader, workbook_xml, e))?
+                                .into_owned();
+                            local_sheet_id = value.parse::<usize>().ok();
+                        }
+                        _ => {}
+                    }
+                }
+
+                let name = match name {
+                    Some(name) => name,
+                    None => {
+                        return Err(xml_msg_err(
+                            &reader,
+                            workbook_xml,
+                            "definedName missing required 'name' attribute",
+                        ));
+                    }
+                };
+
+                let (qualified_name, scope) = match local_sheet_id {
+                    None => (name.clone(), None),
+                    Some(idx) => {
+                        let sheet_name = sheets_in_order.get(idx).map(|s| s.name.as_str());
+                        let sheet_name = match sheet_name {
+                            Some(sheet_name) => sheet_name,
+                            None => {
+                                return Err(xml_msg_err(
+                                    &reader,
+                                    workbook_xml,
+                                    format!(
+                                        "definedName localSheetId {idx} out of bounds (sheets={})",
+                                        sheets_in_order.len()
+                                    ),
+                                ));
+                            }
+                        };
+                        let sheet_name_id = pool.intern(sheet_name);
+                        let qualified = format!("{}!{}", quote_sheet_name(sheet_name), name);
+                        (qualified, Some(sheet_name_id))
+                    }
+                };
+
+                named_ranges.push(NamedRange {
+                    name: pool.intern(&qualified_name),
+                    refers_to: pool.intern(""),
+                    scope,
+                });
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(xml_err(&reader, workbook_xml, e)),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(named_ranges)
+}
+
 pub fn parse_relationships(xml: &[u8]) -> Result<HashMap<String, String>, GridParseError> {
     let mut reader = Reader::from_reader(xml);
     reader.config_mut().trim_text(true);
@@ -184,6 +355,52 @@ pub fn parse_relationships(xml: &[u8]) -> Result<HashMap<String, String>, GridPa
                 if let (Some(id), Some(target), Some(rel_type)) = (id, target, rel_type)
                     && rel_type.contains("worksheet")
                 {
+                    map.insert(id, target);
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(xml_err(&reader, xml, e)),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(map)
+}
+
+pub fn parse_relationships_all(xml: &[u8]) -> Result<HashMap<String, String>, GridParseError> {
+    let mut reader = Reader::from_reader(xml);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    let mut map = HashMap::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == b"Relationship" => {
+                let mut id = None;
+                let mut target = None;
+                for attr in e.attributes() {
+                    let attr = attr.map_err(|e| xml_msg_err(&reader, xml, e.to_string()))?;
+                    match attr.key.as_ref() {
+                        b"Id" => {
+                            id = Some(
+                                attr.unescape_value()
+                                    .map_err(|e| xml_err(&reader, xml, e))?
+                                    .into_owned(),
+                            )
+                        }
+                        b"Target" => {
+                            target = Some(
+                                attr.unescape_value()
+                                    .map_err(|e| xml_err(&reader, xml, e))?
+                                    .into_owned(),
+                            )
+                        }
+                        _ => {}
+                    }
+                }
+
+                if let (Some(id), Some(target)) = (id, target) {
                     map.insert(id, target);
                 }
             }

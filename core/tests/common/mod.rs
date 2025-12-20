@@ -65,5 +65,6 @@ pub fn single_sheet_workbook(name: &str, grid: Grid) -> Workbook {
             kind: SheetKind::Worksheet,
             grid,
         }],
+        ..Default::default()
     })
 }

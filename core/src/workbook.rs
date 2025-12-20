@@ -45,9 +45,32 @@ impl CellSnapshot {
 }
 
 /// An Excel workbook containing one or more sheets.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Workbook {
     pub sheets: Vec<Sheet>,
+    pub named_ranges: Vec<NamedRange>,
+    pub charts: Vec<ChartObject>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedRange {
+    pub name: StringId,
+    pub refers_to: StringId,
+    pub scope: Option<StringId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChartInfo {
+    pub name: StringId,
+    pub chart_type: StringId,
+    pub data_range: Option<StringId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChartObject {
+    pub sheet: StringId,
+    pub info: ChartInfo,
+    pub xml_hash: u128,
 }
 
 /// A single sheet within a workbook.

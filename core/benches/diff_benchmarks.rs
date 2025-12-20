@@ -73,6 +73,7 @@ fn single_sheet_workbook(session: &mut DiffSession, name: &str, grid: Grid) -> W
             kind: SheetKind::Worksheet,
             grid,
         }],
+        ..Default::default()
     }
 }
 

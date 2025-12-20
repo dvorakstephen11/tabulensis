@@ -29,7 +29,10 @@ fn make_workbook(sheets: Vec<SheetSpec<'_>>) -> Workbook {
             }
         })
         .collect();
-    Workbook { sheets: sheet_ir }
+    Workbook {
+        sheets: sheet_ir,
+        ..Default::default()
+    }
 }
 
 fn make_sheet_with_kind(name: &str, kind: SheetKind, cells: Vec<(u32, u32, f64)>) -> Sheet {
@@ -178,9 +181,11 @@ fn sheet_identity_includes_kind() {
 
     let old = Workbook {
         sheets: vec![worksheet],
+        ..Default::default()
     };
     let new = Workbook {
         sheets: vec![chart],
+        ..Default::default()
     };
 
     let report = diff_workbooks(&old, &new, &DiffConfig::default());
@@ -213,9 +218,11 @@ fn deterministic_sheet_op_ordering() {
 
     let old = Workbook {
         sheets: vec![budget_old.clone(), sheet1_old],
+        ..Default::default()
     };
     let new = Workbook {
         sheets: vec![budget_new.clone(), sheet1_chart, summary_new],
+        ..Default::default()
     };
 
     let budget_addr = CellAddress::from_indices(0, 0);
@@ -272,9 +279,11 @@ fn sheet_identity_includes_kind_for_macro_and_other() {
 
     let old = Workbook {
         sheets: vec![macro_sheet],
+        ..Default::default()
     };
     let new = Workbook {
         sheets: vec![other_sheet],
+        ..Default::default()
     };
 
     let report = diff_workbooks(&old, &new, &DiffConfig::default());
@@ -302,8 +311,12 @@ fn duplicate_sheet_identity_last_writer_wins_release() {
 
     let old = Workbook {
         sheets: vec![duplicate_a, duplicate_b],
+        ..Default::default()
     };
-    let new = Workbook { sheets: Vec::new() };
+    let new = Workbook {
+        sheets: Vec::new(),
+        ..Default::default()
+    };
 
     let report = diff_workbooks(&old, &new, &DiffConfig::default());
     assert_eq!(report.ops.len(), 1, "expected last writer to win");
@@ -356,6 +369,7 @@ fn move_detection_respects_column_gate() {
             kind: SheetKind::Worksheet,
             grid: grid_a,
         }],
+        ..Default::default()
     };
     let wb_b = Workbook {
         sheets: vec![Sheet {
@@ -363,6 +377,7 @@ fn move_detection_respects_column_gate() {
             kind: SheetKind::Worksheet,
             grid: grid_b,
         }],
+        ..Default::default()
     };
 
     let default_report = diff_workbooks(&wb_a, &wb_b, &DiffConfig::default());
@@ -402,8 +417,12 @@ fn duplicate_sheet_identity_emits_warning() {
     let duplicate_b = make_sheet_with_kind("sheet1", SheetKind::Worksheet, vec![(0, 1, 2.0)]);
     let old = Workbook {
         sheets: vec![duplicate_a, duplicate_b],
+        ..Default::default()
     };
-    let new = Workbook { sheets: Vec::new() };
+    let new = Workbook {
+        sheets: Vec::new(),
+        ..Default::default()
+    };
 
     let result = std::panic::catch_unwind(|| diff_workbooks(&old, &new, &DiffConfig::default()));
     assert!(result.is_ok(), "duplicate sheet identity should not panic");

@@ -15,6 +15,7 @@ fn workbook_with_number(value: f64) -> Workbook {
             kind: SheetKind::Worksheet,
             grid,
         }],
+        ..Default::default()
     }
 }
 

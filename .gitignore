@@ -15,6 +15,7 @@ fixtures/generated/*.xlsx
 fixtures/generated/*.pbix
 fixtures/generated/*.zip
 fixtures/generated/*.csv
+fixtures/generated/*.xlsm
 
 
 # Docs

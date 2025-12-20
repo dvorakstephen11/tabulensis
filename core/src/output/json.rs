@@ -1,12 +1,10 @@
 #[cfg(feature = "excel-open-xml")]
-use crate::DiffSummary;
-#[cfg(feature = "excel-open-xml")]
 use crate::config::DiffConfig;
 #[cfg(feature = "excel-open-xml")]
 use crate::datamashup::build_data_mashup;
 use crate::diff::DiffReport;
 #[cfg(feature = "excel-open-xml")]
-use crate::excel_open_xml::{PackageError, open_data_mashup, open_workbook};
+use crate::excel_open_xml::{PackageError, open_data_mashup, open_vba_modules, open_workbook};
 use crate::session::DiffSession;
 #[cfg(feature = "excel-open-xml")]
 use crate::sink::VecSink;
@@ -59,6 +57,9 @@ pub fn diff_workbooks(
         .map(|raw| build_data_mashup(&raw))
         .transpose()?;
 
+    let vba_a = open_vba_modules(path_a, session.strings_mut())?;
+    let vba_b = open_vba_modules(path_b, session.strings_mut())?;
+
     let mut sink = VecSink::new();
     let summary = crate::engine::try_diff_workbooks_streaming(
         &wb_a,
@@ -68,11 +69,27 @@ pub fn diff_workbooks(
         &mut sink,
     )?;
 
+    let mut ops = sink.into_ops();
+
+    let mut object_ops = crate::object_diff::diff_named_ranges(&wb_a, &wb_b, session.strings());
+    object_ops.extend(crate::object_diff::diff_charts(
+        &wb_a,
+        &wb_b,
+        session.strings(),
+    ));
+    object_ops.extend(crate::object_diff::diff_vba_modules(
+        vba_a.as_deref(),
+        vba_b.as_deref(),
+        session.strings(),
+    ));
+    ops.extend(object_ops);
+
     let m_ops = crate::m_diff::diff_m_ops_for_packages(&dm_a, &dm_b, session.strings_mut(), config);
 
-    let mut report = build_report_from_sink(sink, summary, session);
-    report.ops.extend(m_ops);
-    Ok(report)
+    ops.extend(m_ops);
+
+    let strings = session.strings.into_strings();
+    Ok(DiffReport::from_ops_and_summary(ops, summary, strings))
 }
 
 #[cfg(feature = "excel-open-xml")]
@@ -118,11 +135,6 @@ pub fn diff_report_to_cell_diffs(report: &DiffReport) -> Vec<CellDiff> {
             }
         })
         .collect()
-}
-
-#[cfg(feature = "excel-open-xml")]
-fn build_report_from_sink(sink: VecSink, summary: DiffSummary, session: DiffSession) -> DiffReport {
-    DiffReport::from_ops_and_summary(sink.into_ops(), summary, session.strings.into_strings())
 }
 
 fn contains_non_finite_numbers(report: &DiffReport) -> bool {

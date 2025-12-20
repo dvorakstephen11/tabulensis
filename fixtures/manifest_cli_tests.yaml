@@ -71,3 +71,33 @@ scenarios:
       base_file: "templates/base_query.xlsx"
     output: "m_add_query_b.xlsx"
 
+  - id: "branch4_named_ranges"
+    generator: "named_ranges"
+    output:
+      - "named_ranges_a.xlsx"
+      - "named_ranges_b.xlsx"
+
+  - id: "branch4_charts"
+    generator: "charts"
+    output:
+      - "charts_a.xlsx"
+      - "charts_b.xlsx"
+
+  - id: "branch4_vba_base"
+    generator: "copy_template"
+    args:
+      template: "templates/vba_base.xlsm"
+    output: "vba_base.xlsm"
+
+  - id: "branch4_vba_added"
+    generator: "copy_template"
+    args:
+      template: "templates/vba_added.xlsm"
+    output: "vba_added.xlsm"
+
+  - id: "branch4_vba_changed"
+    generator: "copy_template"
+    args:
+      template: "templates/vba_changed.xlsm"
+    output: "vba_changed.xlsm"
+

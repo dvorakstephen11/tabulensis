@@ -70,6 +70,7 @@ fuzz_target!(|input: FuzzInput| {
             kind: SheetKind::Worksheet,
             grid: old_grid,
         }],
+        ..Default::default()
     };
     let new_wb = Workbook {
         sheets: vec![Sheet {
@@ -77,6 +78,7 @@ fuzz_target!(|input: FuzzInput| {
             kind: SheetKind::Worksheet,
             grid: new_grid,
         }],
+        ..Default::default()
     };
 
     let config = DiffConfig {

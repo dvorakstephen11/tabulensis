@@ -16,6 +16,7 @@ fn make_workbook(session: &mut DiffSession, value: f64) -> Workbook {
             kind: SheetKind::Worksheet,
             grid,
         }],
+        ..Default::default()
     }
 }
 

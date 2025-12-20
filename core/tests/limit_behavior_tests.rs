@@ -262,6 +262,7 @@ fn multiple_sheets_limit_warning_includes_sheet_name() {
                 grid: grid_large_a,
             },
         ],
+        ..Default::default()
     };
 
     let wb_b = excel_diff::Workbook {
@@ -277,6 +278,7 @@ fn multiple_sheets_limit_warning_includes_sheet_name() {
                 grid: grid_large_b,
             },
         ],
+        ..Default::default()
     };
 
     let config = DiffConfig {

@@ -1035,6 +1035,38 @@ fn pg4_diffop_roundtrip_each_variant() {
             old: Some(sid("true")),
             new: Some(sid("false")),
         },
+        DiffOp::NamedRangeAdded {
+            name: sid("GlobalAdd"),
+        },
+        DiffOp::NamedRangeRemoved {
+            name: sid("GlobalRemove"),
+        },
+        DiffOp::NamedRangeChanged {
+            name: sid("Sheet1!LocalChange"),
+            old_ref: sid("Sheet1!$C$1"),
+            new_ref: sid("Sheet1!$C$2"),
+        },
+        DiffOp::ChartAdded {
+            sheet: sid("Sheet1"),
+            name: sid("Chart 1"),
+        },
+        DiffOp::ChartRemoved {
+            sheet: sid("Sheet1"),
+            name: sid("Chart 2"),
+        },
+        DiffOp::ChartChanged {
+            sheet: sid("Sheet1"),
+            name: sid("Chart 1"),
+        },
+        DiffOp::VbaModuleAdded {
+            name: sid("Module1"),
+        },
+        DiffOp::VbaModuleRemoved {
+            name: sid("Module2"),
+        },
+        DiffOp::VbaModuleChanged {
+            name: sid("Module1"),
+        },
     ];
 
     for original in ops {

@@ -177,6 +177,41 @@ pub enum DiffOp {
         formula_diff: FormulaDiffResult,
     },
 
+    VbaModuleAdded {
+        name: StringId,
+    },
+    VbaModuleRemoved {
+        name: StringId,
+    },
+    VbaModuleChanged {
+        name: StringId,
+    },
+
+    NamedRangeAdded {
+        name: StringId,
+    },
+    NamedRangeRemoved {
+        name: StringId,
+    },
+    NamedRangeChanged {
+        name: StringId,
+        old_ref: StringId,
+        new_ref: StringId,
+    },
+
+    ChartAdded {
+        sheet: StringId,
+        name: StringId,
+    },
+    ChartRemoved {
+        sheet: StringId,
+        name: StringId,
+    },
+    ChartChanged {
+        sheet: StringId,
+        name: StringId,
+    },
+
     QueryAdded {
         name: StringId,
     },

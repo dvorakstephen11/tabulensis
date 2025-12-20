@@ -38,7 +38,18 @@ pub fn write_text_report<W: Write>(
         return Ok(());
     }
 
-    let (sheet_ops, m_ops) = partition_ops(report);
+    let (workbook_ops, sheet_ops, m_ops) = partition_ops(report);
+
+    if !workbook_ops.is_empty() {
+        writeln!(w, "Workbook:")?;
+        for op in &workbook_ops {
+            let lines = render_op(report, op, verbosity);
+            for line in lines {
+                writeln!(w, "  {}", line)?;
+            }
+        }
+        writeln!(w)?;
+    }
 
     for (sheet_name, ops) in &sheet_ops {
         writeln!(w, "Sheet \"{}\":", sheet_name)?;
@@ -66,7 +77,10 @@ pub fn write_text_report<W: Write>(
     Ok(())
 }
 
-fn partition_ops(report: &DiffReport) -> (BTreeMap<String, Vec<&DiffOp>>, Vec<&DiffOp>) {
+fn partition_ops(
+    report: &DiffReport,
+) -> (Vec<&DiffOp>, BTreeMap<String, Vec<&DiffOp>>, Vec<&DiffOp>) {
+    let mut workbook_ops: Vec<&DiffOp> = Vec::new();
     let mut sheet_ops: BTreeMap<String, Vec<&DiffOp>> = BTreeMap::new();
     let mut m_ops: Vec<&DiffOp> = Vec::new();
 
@@ -79,10 +93,12 @@ fn partition_ops(report: &DiffReport) -> (BTreeMap<String, Vec<&DiffOp>>, Vec<&D
                 .unwrap_or("<unknown>")
                 .to_string();
             sheet_ops.entry(sheet_name).or_default().push(op);
+        } else {
+            workbook_ops.push(op);
         }
     }
 
-    (sheet_ops, m_ops)
+    (workbook_ops, sheet_ops, m_ops)
 }
 
 fn get_sheet_id(op: &DiffOp) -> Option<StringId> {
@@ -97,6 +113,9 @@ fn get_sheet_id(op: &DiffOp) -> Option<StringId> {
         DiffOp::BlockMovedColumns { sheet, .. } => Some(*sheet),
         DiffOp::BlockMovedRect { sheet, .. } => Some(*sheet),
         DiffOp::CellEdited { sheet, .. } => Some(*sheet),
+        DiffOp::ChartAdded { sheet, .. } => Some(*sheet),
+        DiffOp::ChartRemoved { sheet, .. } => Some(*sheet),
+        DiffOp::ChartChanged { sheet, .. } => Some(*sheet),
         _ => None,
     }
 }
@@ -282,6 +301,64 @@ fn render_op(report: &DiffReport, op: &DiffOp, verbosity: Verbosity) -> Vec<Stri
                 new_str
             )]
         }
+        DiffOp::VbaModuleAdded { name } => {
+            vec![format!(
+                "VBA module \"{}\": ADDED",
+                report.resolve(*name).unwrap_or("<unknown>")
+            )]
+        }
+        DiffOp::VbaModuleRemoved { name } => {
+            vec![format!(
+                "VBA module \"{}\": REMOVED",
+                report.resolve(*name).unwrap_or("<unknown>")
+            )]
+        }
+        DiffOp::VbaModuleChanged { name } => {
+            vec![format!(
+                "VBA module \"{}\": CHANGED",
+                report.resolve(*name).unwrap_or("<unknown>")
+            )]
+        }
+        DiffOp::NamedRangeAdded { name } => {
+            vec![format!(
+                "Named range \"{}\": ADDED",
+                report.resolve(*name).unwrap_or("<unknown>")
+            )]
+        }
+        DiffOp::NamedRangeRemoved { name } => {
+            vec![format!(
+                "Named range \"{}\": REMOVED",
+                report.resolve(*name).unwrap_or("<unknown>")
+            )]
+        }
+        DiffOp::NamedRangeChanged {
+            name,
+            old_ref,
+            new_ref,
+        } => {
+            let mut lines = vec![format!(
+                "Named range \"{}\": CHANGED",
+                report.resolve(*name).unwrap_or("<unknown>")
+            )];
+            if verbosity == Verbosity::Verbose {
+                let old_str = report.resolve(*old_ref).unwrap_or("<unknown>");
+                let new_str = report.resolve(*new_ref).unwrap_or("<unknown>");
+                lines.push(format!("  refers_to: {} -> {}", old_str, new_str));
+            }
+            lines
+        }
+        DiffOp::ChartAdded { name, .. } => vec![format!(
+            "Chart \"{}\": ADDED",
+            report.resolve(*name).unwrap_or("<unknown>")
+        )],
+        DiffOp::ChartRemoved { name, .. } => vec![format!(
+            "Chart \"{}\": REMOVED",
+            report.resolve(*name).unwrap_or("<unknown>")
+        )],
+        DiffOp::ChartChanged { name, .. } => vec![format!(
+            "Chart \"{}\": CHANGED",
+            report.resolve(*name).unwrap_or("<unknown>")
+        )],
         _ => vec![format!("{:?}", op)],
     }
 }

@@ -2,13 +2,30 @@ use crate::config::DiffConfig;
 use crate::datamashup::DataMashup;
 use crate::diff::{DiffError, DiffReport, DiffSummary, SheetId};
 use crate::sink::{DiffSink, NoFinishSink, VecSink};
+use crate::string_pool::StringId;
 use crate::string_pool::StringPool;
 use crate::workbook::{Sheet, Workbook};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VbaModuleType {
+    Standard,
+    Class,
+    Form,
+    Document,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VbaModule {
+    pub name: StringId,
+    pub module_type: VbaModuleType,
+    pub code: String,
+}
 
 #[derive(Debug, Clone)]
 pub struct WorkbookPackage {
     pub workbook: Workbook,
     pub data_mashup: Option<DataMashup>,
+    pub vba_modules: Option<Vec<VbaModule>>,
 }
 
 impl From<Workbook> for WorkbookPackage {
@@ -16,6 +33,7 @@ impl From<Workbook> for WorkbookPackage {
         Self {
             workbook,
             data_mashup: None,
+            vba_modules: None,
         }
     }
 }
@@ -36,9 +54,12 @@ impl WorkbookPackage {
                 Some(raw) => Some(crate::datamashup::build_data_mashup(&raw)?),
                 None => None,
             };
+            let vba_modules =
+                crate::excel_open_xml::open_vba_modules_from_container(&mut container, &mut session.strings)?;
             Ok(Self {
                 workbook,
                 data_mashup,
+                vba_modules,
             })
         })
     }
@@ -57,6 +78,20 @@ impl WorkbookPackage {
     ) -> DiffReport {
         let mut report =
             crate::engine::diff_workbooks(&self.workbook, &other.workbook, pool, config);
+
+        let mut object_ops =
+            crate::object_diff::diff_named_ranges(&self.workbook, &other.workbook, pool);
+        object_ops.extend(crate::object_diff::diff_charts(
+            &self.workbook,
+            &other.workbook,
+            pool,
+        ));
+        object_ops.extend(crate::object_diff::diff_vba_modules(
+            self.vba_modules.as_deref(),
+            other.vba_modules.as_deref(),
+            pool,
+        ));
+        report.ops.extend(object_ops);
 
         let m_ops = crate::m_diff::diff_m_ops_for_packages(
             &self.data_mashup,
@@ -88,6 +123,19 @@ impl WorkbookPackage {
         config: &DiffConfig,
         sink: &mut S,
     ) -> Result<DiffSummary, DiffError> {
+        let mut object_ops =
+            crate::object_diff::diff_named_ranges(&self.workbook, &other.workbook, pool);
+        object_ops.extend(crate::object_diff::diff_charts(
+            &self.workbook,
+            &other.workbook,
+            pool,
+        ));
+        object_ops.extend(crate::object_diff::diff_vba_modules(
+            self.vba_modules.as_deref(),
+            other.vba_modules.as_deref(),
+            pool,
+        ));
+
         let m_ops = crate::m_diff::diff_m_ops_for_packages(
             &self.data_mashup,
             &other.data_mashup,
@@ -113,6 +161,14 @@ impl WorkbookPackage {
                 return Err(e);
             }
         };
+
+        for op in object_ops {
+            if let Err(e) = sink.emit(op) {
+                let _ = sink.finish();
+                return Err(e);
+            }
+            summary.op_count = summary.op_count.saturating_add(1);
+        }
 
         for op in m_ops {
             if let Err(e) = sink.emit(op) {
@@ -170,6 +226,19 @@ impl WorkbookPackage {
             &mut op_count,
         )?;
 
+        let mut object_ops =
+            crate::object_diff::diff_named_ranges(&self.workbook, &other.workbook, pool);
+        object_ops.extend(crate::object_diff::diff_charts(
+            &self.workbook,
+            &other.workbook,
+            pool,
+        ));
+        object_ops.extend(crate::object_diff::diff_vba_modules(
+            self.vba_modules.as_deref(),
+            other.vba_modules.as_deref(),
+            pool,
+        ));
+
         let m_ops = crate::m_diff::diff_m_ops_for_packages(
             &self.data_mashup,
             &other.data_mashup,
@@ -178,6 +247,7 @@ impl WorkbookPackage {
         );
 
         let mut ops = sink.into_ops();
+        ops.extend(object_ops);
         ops.extend(m_ops);
 
         let strings = pool.strings().to_vec();
@@ -213,6 +283,19 @@ impl WorkbookPackage {
         config: &DiffConfig,
         sink: &mut S,
     ) -> Result<DiffSummary, DiffError> {
+        let mut object_ops =
+            crate::object_diff::diff_named_ranges(&self.workbook, &other.workbook, pool);
+        object_ops.extend(crate::object_diff::diff_charts(
+            &self.workbook,
+            &other.workbook,
+            pool,
+        ));
+        object_ops.extend(crate::object_diff::diff_vba_modules(
+            self.vba_modules.as_deref(),
+            other.vba_modules.as_deref(),
+            pool,
+        ));
+
         let m_ops = crate::m_diff::diff_m_ops_for_packages(
             &self.data_mashup,
             &other.data_mashup,
@@ -244,6 +327,14 @@ impl WorkbookPackage {
                 return Err(e);
             }
         };
+
+        for op in object_ops {
+            if let Err(e) = sink.emit(op) {
+                let _ = sink.finish();
+                return Err(e);
+            }
+            summary.op_count = summary.op_count.saturating_add(1);
+        }
 
         for op in m_ops {
             if let Err(e) = sink.emit(op) {

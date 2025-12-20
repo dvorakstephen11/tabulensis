@@ -5,37 +5,72 @@ from pathlib import Path
 from typing import Dict, Any, List
 
 # Import generators
-from generators.grid import (
-    BasicGridGenerator, 
-    SparseGridGenerator, 
-    EdgeCaseGenerator, 
-    AddressSanityGenerator,
-    ValueFormulaGenerator,
-    SingleCellDiffGenerator,
-    MultiCellDiffGenerator,
-    GridTailDiffGenerator,
-    RowAlignmentG8Generator,
-    RowAlignmentG10Generator,
-    RowBlockMoveG11Generator,
-    RowFuzzyMoveG13Generator,
-    ColumnMoveG12Generator,
-    RectBlockMoveG12Generator,
-    ColumnAlignmentG9Generator,
-    SheetCaseRenameGenerator,
-    Pg6SheetScenarioGenerator,
-)
-from generators.corrupt import ContainerCorruptGenerator
-from generators.mashup import (
-    MashupCorruptGenerator,
-    MashupDuplicateGenerator,
-    MashupInjectGenerator,
-    MashupEncodeGenerator,
-    MashupMultiEmbeddedGenerator,
-    MashupOneQueryGenerator,
-    MashupPermissionsMetadataGenerator,
-)
-from generators.perf import LargeGridGenerator
-from generators.database import KeyedTableGenerator
+try:
+    from .generators.corrupt import ContainerCorruptGenerator
+    from .generators.database import KeyedTableGenerator
+    from .generators.grid import (
+        AddressSanityGenerator,
+        BasicGridGenerator,
+        ColumnAlignmentG9Generator,
+        ColumnMoveG12Generator,
+        EdgeCaseGenerator,
+        GridTailDiffGenerator,
+        MultiCellDiffGenerator,
+        Pg6SheetScenarioGenerator,
+        RectBlockMoveG12Generator,
+        RowAlignmentG10Generator,
+        RowAlignmentG8Generator,
+        RowBlockMoveG11Generator,
+        RowFuzzyMoveG13Generator,
+        SheetCaseRenameGenerator,
+        SingleCellDiffGenerator,
+        SparseGridGenerator,
+        ValueFormulaGenerator,
+    )
+    from .generators.mashup import (
+        MashupCorruptGenerator,
+        MashupDuplicateGenerator,
+        MashupEncodeGenerator,
+        MashupInjectGenerator,
+        MashupMultiEmbeddedGenerator,
+        MashupOneQueryGenerator,
+        MashupPermissionsMetadataGenerator,
+    )
+    from .generators.objects import ChartsGenerator, CopyTemplateGenerator, NamedRangesGenerator
+    from .generators.perf import LargeGridGenerator
+except ImportError:
+    from generators.corrupt import ContainerCorruptGenerator
+    from generators.database import KeyedTableGenerator
+    from generators.grid import (
+        AddressSanityGenerator,
+        BasicGridGenerator,
+        ColumnAlignmentG9Generator,
+        ColumnMoveG12Generator,
+        EdgeCaseGenerator,
+        GridTailDiffGenerator,
+        MultiCellDiffGenerator,
+        Pg6SheetScenarioGenerator,
+        RectBlockMoveG12Generator,
+        RowAlignmentG10Generator,
+        RowAlignmentG8Generator,
+        RowBlockMoveG11Generator,
+        RowFuzzyMoveG13Generator,
+        SheetCaseRenameGenerator,
+        SingleCellDiffGenerator,
+        SparseGridGenerator,
+        ValueFormulaGenerator,
+    )
+    from generators.mashup import (
+        MashupCorruptGenerator,
+        MashupDuplicateGenerator,
+        MashupEncodeGenerator,
+        MashupInjectGenerator,
+        MashupMultiEmbeddedGenerator,
+        MashupOneQueryGenerator,
+        MashupPermissionsMetadataGenerator,
+    )
+    from generators.objects import ChartsGenerator, CopyTemplateGenerator, NamedRangesGenerator
+    from generators.perf import LargeGridGenerator
 
 # Registry of generators
 GENERATORS: Dict[str, Any] = {
@@ -66,6 +101,9 @@ GENERATORS: Dict[str, Any] = {
     "mashup:permissions_metadata": MashupPermissionsMetadataGenerator,
     "perf_large": LargeGridGenerator,
     "db_keyed": KeyedTableGenerator,
+    "named_ranges": NamedRangesGenerator,
+    "charts": ChartsGenerator,
+    "copy_template": CopyTemplateGenerator,
 }
 
 def load_manifest(manifest_path: Path) -> Dict[str, Any]:

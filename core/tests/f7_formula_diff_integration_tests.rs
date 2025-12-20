@@ -20,6 +20,7 @@ fn workbook_with_formula(
             kind: SheetKind::Worksheet,
             grid,
         }],
+        ..Default::default()
     }
 }
 

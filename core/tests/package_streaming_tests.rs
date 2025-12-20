@@ -59,6 +59,7 @@ fn make_workbook(sheet_name: &str) -> Workbook {
             kind: SheetKind::Worksheet,
             grid: Grid::new(0, 0),
         }],
+        ..Default::default()
     }
 }
 
@@ -72,10 +73,12 @@ fn package_diff_streaming_does_not_emit_after_finish_and_finishes_once() {
     let pkg_a = WorkbookPackage {
         workbook: wb.clone(),
         data_mashup: Some(dm_a),
+        vba_modules: None,
     };
     let pkg_b = WorkbookPackage {
         workbook: wb,
         data_mashup: Some(dm_b),
+        vba_modules: None,
     };
 
     let mut sink = StrictSink::default();
@@ -145,6 +148,7 @@ fn package_diff_streaming_finishes_on_error() {
             kind: SheetKind::Worksheet,
             grid: grid_a,
         }],
+        ..Default::default()
     };
     let wb_b = Workbook {
         sheets: vec![Sheet {
@@ -152,15 +156,18 @@ fn package_diff_streaming_finishes_on_error() {
             kind: SheetKind::Worksheet,
             grid: grid_b,
         }],
+        ..Default::default()
     };
 
     let pkg_a = WorkbookPackage {
         workbook: wb_a,
         data_mashup: None,
+        vba_modules: None,
     };
     let pkg_b = WorkbookPackage {
         workbook: wb_b,
         data_mashup: None,
+        vba_modules: None,
     };
 
     let mut sink = FailingSink {
@@ -208,10 +215,12 @@ fn package_diff_streaming_finishes_on_m_emit_error() {
     let pkg_a = WorkbookPackage {
         workbook: wb.clone(),
         data_mashup: Some(dm_a),
+        vba_modules: None,
     };
     let pkg_b = WorkbookPackage {
         workbook: wb,
         data_mashup: Some(dm_b),
+        vba_modules: None,
     };
 
     let mut sink = FailOnMOpSink {
@@ -296,10 +305,12 @@ fn package_streaming_json_lines_header_includes_m_strings() {
     let pkg_a = WorkbookPackage {
         workbook: wb.clone(),
         data_mashup: Some(dm_a),
+        vba_modules: None,
     };
     let pkg_b = WorkbookPackage {
         workbook: wb,
         data_mashup: Some(dm_b),
+        vba_modules: None,
     };
 
     let mut out = Vec::<u8>::new();

@@ -20,7 +20,14 @@ pub fn write_git_diff<W: Write>(
         return Ok(());
     }
 
-    let (sheet_ops, m_ops) = partition_ops(report);
+    let (workbook_ops, sheet_ops, m_ops) = partition_ops(report);
+
+    if !workbook_ops.is_empty() {
+        writeln!(w, "@@ Workbook @@")?;
+        for op in &workbook_ops {
+            write_op_diff_lines(w, report, op)?;
+        }
+    }
 
     for (sheet_name, ops) in &sheet_ops {
         writeln!(w, "@@ Sheet \"{}\" @@", sheet_name)?;
@@ -39,7 +46,10 @@ pub fn write_git_diff<W: Write>(
     Ok(())
 }
 
-fn partition_ops(report: &DiffReport) -> (BTreeMap<String, Vec<&DiffOp>>, Vec<&DiffOp>) {
+fn partition_ops(
+    report: &DiffReport,
+) -> (Vec<&DiffOp>, BTreeMap<String, Vec<&DiffOp>>, Vec<&DiffOp>) {
+    let mut workbook_ops: Vec<&DiffOp> = Vec::new();
     let mut sheet_ops: BTreeMap<String, Vec<&DiffOp>> = BTreeMap::new();
     let mut m_ops: Vec<&DiffOp> = Vec::new();
 
@@ -52,10 +62,12 @@ fn partition_ops(report: &DiffReport) -> (BTreeMap<String, Vec<&DiffOp>>, Vec<&D
                 .unwrap_or("<unknown>")
                 .to_string();
             sheet_ops.entry(sheet_name).or_default().push(op);
+        } else {
+            workbook_ops.push(op);
         }
     }
 
-    (sheet_ops, m_ops)
+    (workbook_ops, sheet_ops, m_ops)
 }
 
 fn get_sheet_id(op: &DiffOp) -> Option<excel_diff::StringId> {
@@ -70,6 +82,9 @@ fn get_sheet_id(op: &DiffOp) -> Option<excel_diff::StringId> {
         DiffOp::BlockMovedColumns { sheet, .. } => Some(*sheet),
         DiffOp::BlockMovedRect { sheet, .. } => Some(*sheet),
         DiffOp::CellEdited { sheet, .. } => Some(*sheet),
+        DiffOp::ChartAdded { sheet, .. } => Some(*sheet),
+        DiffOp::ChartRemoved { sheet, .. } => Some(*sheet),
+        DiffOp::ChartChanged { sheet, .. } => Some(*sheet),
         _ => None,
     }
 }
@@ -248,6 +263,80 @@ fn write_op_diff_lines<W: Write>(w: &mut W, report: &DiffReport, op: &DiffOp) ->
                 report.resolve(*name).unwrap_or("<unknown>"),
                 field_name,
                 new_str
+            )?;
+        }
+        DiffOp::VbaModuleAdded { name } => {
+            writeln!(
+                w,
+                "+ VBA module \"{}\": ADDED",
+                report.resolve(*name).unwrap_or("<unknown>")
+            )?;
+        }
+        DiffOp::VbaModuleRemoved { name } => {
+            writeln!(
+                w,
+                "- VBA module \"{}\": REMOVED",
+                report.resolve(*name).unwrap_or("<unknown>")
+            )?;
+        }
+        DiffOp::VbaModuleChanged { name } => {
+            writeln!(
+                w,
+                "~ VBA module \"{}\": CHANGED",
+                report.resolve(*name).unwrap_or("<unknown>")
+            )?;
+        }
+        DiffOp::NamedRangeAdded { name } => {
+            writeln!(
+                w,
+                "+ Named range \"{}\": ADDED",
+                report.resolve(*name).unwrap_or("<unknown>")
+            )?;
+        }
+        DiffOp::NamedRangeRemoved { name } => {
+            writeln!(
+                w,
+                "- Named range \"{}\": REMOVED",
+                report.resolve(*name).unwrap_or("<unknown>")
+            )?;
+        }
+        DiffOp::NamedRangeChanged {
+            name,
+            old_ref,
+            new_ref,
+        } => {
+            writeln!(
+                w,
+                "- Named range \"{}\": {}",
+                report.resolve(*name).unwrap_or("<unknown>"),
+                report.resolve(*old_ref).unwrap_or("<unknown>")
+            )?;
+            writeln!(
+                w,
+                "+ Named range \"{}\": {}",
+                report.resolve(*name).unwrap_or("<unknown>"),
+                report.resolve(*new_ref).unwrap_or("<unknown>")
+            )?;
+        }
+        DiffOp::ChartAdded { name, .. } => {
+            writeln!(
+                w,
+                "+ Chart \"{}\": ADDED",
+                report.resolve(*name).unwrap_or("<unknown>")
+            )?;
+        }
+        DiffOp::ChartRemoved { name, .. } => {
+            writeln!(
+                w,
+                "- Chart \"{}\": REMOVED",
+                report.resolve(*name).unwrap_or("<unknown>")
+            )?;
+        }
+        DiffOp::ChartChanged { name, .. } => {
+            writeln!(
+                w,
+                "~ Chart \"{}\": CHANGED",
+                report.resolve(*name).unwrap_or("<unknown>")
             )?;
         }
         _ => {

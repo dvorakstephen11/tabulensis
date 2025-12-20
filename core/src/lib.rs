@@ -49,6 +49,7 @@ pub(crate) mod hashing;
 mod m_ast;
 mod m_diff;
 mod m_section;
+mod object_diff;
 mod output;
 mod package;
 #[cfg(feature = "perf-metrics")]
@@ -172,12 +173,12 @@ pub use output::json::diff_report_to_cell_diffs;
 pub use output::json::diff_workbooks_to_json;
 pub use output::json::{CellDiff, serialize_cell_diffs, serialize_diff_report};
 pub use output::json_lines::JsonLinesSink;
-pub use package::WorkbookPackage;
+pub use package::{VbaModule, VbaModuleType, WorkbookPackage};
 pub use session::DiffSession;
 pub use sink::{CallbackSink, DiffSink, VecSink};
 pub use string_pool::{StringId, StringPool};
 pub use workbook::{
-    Cell, CellAddress, CellSnapshot, CellValue, ColSignature, Grid, RowSignature, Sheet, SheetKind,
-    Workbook,
+    Cell, CellAddress, CellSnapshot, CellValue, ChartInfo, ChartObject, ColSignature, Grid,
+    NamedRange, RowSignature, Sheet, SheetKind, Workbook,
 };
 pub use database_alignment::suggest_key_columns;
