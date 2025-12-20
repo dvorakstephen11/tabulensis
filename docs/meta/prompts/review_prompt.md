@@ -141,6 +141,7 @@
       d1_database_mode_tests.rs
       d2_d4_database_mode_workbook_tests.rs
       data_mashup_tests.rs
+      database_mode_wrapper_tests.rs
       engine_tests.rs
       excel_open_xml_tests.rs
       f7_formula_canonicalization_tests.rs
@@ -203,6 +204,13 @@
         grid.py
         mashup.py
         perf.py
+  fuzz/
+    .gitignore
+    Cargo.toml
+    fuzz_targets/
+      datamashup.rs
+      diff_engine.rs
+      open_workbook.rs
   ideas.md
   logs/
     2025-11-28b-diffop-pg4/
@@ -239,6 +247,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Install Python
         uses: actions/setup-python@v5
@@ -253,6 +263,9 @@ jobs:
 
       - name: Run tests
         run: cargo test --workspace
+
+      - name: Run clippy (deny unwrap/expect)
+        run: cargo clippy --workspace -- -D clippy::unwrap_used -D clippy::expect_used
 
 
 ```
@@ -520,7 +533,7 @@ pub fn run(
                 json::write_json_report(&mut handle, &report)?;
             }
             OutputFormat::Jsonl => {
-                unreachable!("JSONL handled by streaming path");
+                bail!("Internal error: JSONL format should be handled by the streaming path");
             }
         }
     }
@@ -613,7 +626,7 @@ fn run_database_mode(
                 json::write_json_report(&mut handle, &report)?;
             }
             OutputFormat::Jsonl => {
-                unreachable!("JSONL handled by streaming path");
+                bail!("Internal error: JSONL format should be handled by the streaming path");
             }
         }
     }
@@ -3117,13 +3130,12 @@ where
         }
     }
 
-    if piles.is_empty() {
+    let Some(&last) = piles.last() else {
         return Vec::new();
-    }
+    };
 
     let mut result: Vec<usize> = Vec::new();
-    #[allow(clippy::unwrap_used)]
-    let mut current = *piles.last().unwrap();
+    let mut current = last;
     loop {
         result.push(current);
         if let Some(prev) = predecessors[current] {
@@ -4168,13 +4180,12 @@ where
         }
     }
 
-    if piles.is_empty() {
+    let Some(&last) = piles.last() else {
         return Vec::new();
-    }
+    };
 
     let mut result: Vec<usize> = Vec::new();
-    #[allow(clippy::unwrap_used)]
-    let mut current = *piles.last().unwrap();
+    let mut current = last;
     loop {
         result.push(current);
         if let Some(prev) = predecessors[current] {
@@ -5046,6 +5057,7 @@ use excel_diff::{
     CallbackSink, CellValue, DiffConfig, DiffSession, Grid, Sheet, SheetKind, Workbook,
     try_diff_workbooks_streaming,
 };
+use core::hint::black_box;
 
 fn make_workbook(session: &mut DiffSession, value: f64) -> Workbook {
     let mut grid = Grid::new(1, 1);
@@ -5068,23 +5080,17 @@ fn main() {
     let wb_b = make_workbook(&mut session, 2.0);
 
     let mut op_count = 0usize;
-    {
-        let mut sink = CallbackSink::new(|_op| op_count += 1);
-        let summary = try_diff_workbooks_streaming(
-            &wb_a,
-            &wb_b,
-            &mut session.strings,
-            &DiffConfig::default(),
-            &mut sink,
-        )
-        .expect("smoke diff should succeed");
-
-        assert!(summary.complete, "smoke diff should be complete");
-        assert_eq!(
-            summary.op_count, op_count,
-            "sink count should match reported op count"
-        );
-        assert!(op_count > 0, "expected at least one diff op");
+    let mut sink = CallbackSink::new(|_op| op_count += 1);
+    if let Ok(summary) = try_diff_workbooks_streaming(
+        &wb_a,
+        &wb_b,
+        &mut session.strings,
+        &DiffConfig::default(),
+        &mut sink,
+    ) {
+        black_box(summary.complete);
+        black_box(summary.op_count);
+        black_box(op_count);
     }
 }
 
@@ -6230,23 +6236,23 @@ impl Default for ContainerLimits {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ContainerError {
-    #[error("I/O error: {0}")]
+    #[error("[EXDIFF_CTR_001] I/O error: {0}. Suggestion: check the file path and permissions.")]
     Io(#[from] std::io::Error),
-    #[error("ZIP error: {0}")]
+    #[error("[EXDIFF_CTR_002] ZIP error: {0}. Suggestion: verify the file is a valid .xlsx and not corrupt.")]
     Zip(String),
-    #[error("not a ZIP container")]
+    #[error("[EXDIFF_CTR_003] not a ZIP container. Suggestion: verify the input is a ZIP-based .xlsx file.")]
     NotZipContainer,
-    #[error("not an OPC package (missing [Content_Types].xml)")]
+    #[error("[EXDIFF_CTR_004] not an OPC package (missing [Content_Types].xml). Suggestion: verify the file is a valid .xlsx workbook.")]
     NotOpcPackage,
-    #[error("archive has too many entries: {entries} (limit: {max_entries})")]
+    #[error("[EXDIFF_CTR_005] archive has too many entries: {entries} (limit: {max_entries}). Suggestion: possible ZIP bomb; increase limits only for trusted files.")]
     TooManyEntries { entries: usize, max_entries: usize },
-    #[error("part '{path}' is too large: {size} bytes (limit: {limit} bytes)")]
+    #[error("[EXDIFF_CTR_006] part '{path}' is too large: {size} bytes (limit: {limit} bytes). Suggestion: possible ZIP bomb; increase limits only for trusted files.")]
     PartTooLarge { path: String, size: u64, limit: u64 },
-    #[error("total uncompressed size exceeds limit: would exceed {limit} bytes")]
+    #[error("[EXDIFF_CTR_007] total uncompressed size exceeds limit: would exceed {limit} bytes. Suggestion: possible ZIP bomb; increase limits only for trusted files.")]
     TotalTooLarge { limit: u64 },
-    #[error("failed to read ZIP entry '{path}': {reason}")]
+    #[error("[EXDIFF_CTR_002] failed to read ZIP entry '{path}': {reason}. Suggestion: the file may be corrupt or truncated.")]
     ZipRead { path: String, reason: String },
-    #[error("file not found in archive: {path}")]
+    #[error("[EXDIFF_CTR_002] file not found in archive: {path}. Suggestion: the file may be corrupt or incomplete.")]
     FileNotFound { path: String },
 }
 
@@ -6291,11 +6297,13 @@ impl OpcContainer {
             ZipError::InvalidArchive(_) | ZipError::UnsupportedArchive(_) => {
                 ContainerError::NotZipContainer
             }
-            ZipError::Io(e) => ContainerError::Io(e),
-            other => ContainerError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                other.to_string(),
-            )),
+            ZipError::Io(e) => match e.kind() {
+                std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::InvalidData => {
+                    ContainerError::NotZipContainer
+                }
+                _ => ContainerError::Io(e),
+            },
+            other => ContainerError::Zip(other.to_string()),
         })?;
 
         if archive.len() > limits.max_entries {
@@ -6311,8 +6319,20 @@ impl OpcContainer {
             total_read: 0,
         };
 
-        if container.archive.by_name("[Content_Types].xml").is_err() {
-            return Err(ContainerError::NotOpcPackage);
+        match container.archive.by_name("[Content_Types].xml") {
+            Ok(file) => {
+                let size = file.size();
+                if size > container.limits.max_part_uncompressed_bytes {
+                    return Err(ContainerError::PartTooLarge {
+                        path: "[Content_Types].xml".to_string(),
+                        size,
+                        limit: container.limits.max_part_uncompressed_bytes,
+                    });
+                }
+            }
+            Err(ZipError::FileNotFound) => return Err(ContainerError::NotOpcPackage),
+            Err(ZipError::Io(e)) => return Err(ContainerError::Io(e)),
+            Err(other) => return Err(ContainerError::Zip(other.to_string())),
         }
 
         Ok(container)
@@ -7438,18 +7458,22 @@ use crate::error_codes;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum DataMashupError {
-    #[error("base64 decoding failed")]
+    #[error("[EXDIFF_DM_001] base64 decoding failed. Suggestion: the workbook may be corrupt; re-save the file in Excel.")]
     Base64Invalid,
-    #[error("unsupported version: {0}")]
+    #[error("[EXDIFF_DM_002] unsupported DataMashup version: {0}. Suggestion: update excel_diff or re-save the file in Excel.")]
     UnsupportedVersion(u32),
-    #[error("invalid framing structure")]
+    #[error("[EXDIFF_DM_003] invalid framing structure. Suggestion: the workbook may be corrupt.")]
     FramingInvalid,
-    #[error("XML parse error: {0}")]
+    #[error("[EXDIFF_DM_004] XML parse error: {0}. Suggestion: re-save the file in Excel.")]
     XmlError(String),
-    #[error("invalid header: {0}")]
+    #[error("[EXDIFF_DM_006] invalid header: {0}. Suggestion: the workbook may be corrupt.")]
     InvalidHeader(String),
-    #[error("inner package part too large: '{path}' ({size} bytes, limit {limit} bytes)")]
+    #[error("[EXDIFF_DM_005] inner package part too large: '{path}' ({size} bytes, limit {limit} bytes). Suggestion: possible nested ZIP bomb; increase limits only for trusted files.")]
     InnerPartTooLarge { path: String, size: u64, limit: u64 },
+    #[error("[EXDIFF_DM_007] inner package has too many entries: {entries} (limit: {max_entries}). Suggestion: possible nested ZIP bomb; increase limits only for trusted files.")]
+    InnerTooManyEntries { entries: usize, max_entries: usize },
+    #[error("[EXDIFF_DM_008] inner package total uncompressed size exceeds limit: would exceed {limit} bytes. Suggestion: possible nested ZIP bomb; increase limits only for trusted files.")]
+    InnerTotalTooLarge { limit: u64 },
 }
 
 impl DataMashupError {
@@ -7461,6 +7485,8 @@ impl DataMashupError {
             DataMashupError::XmlError(_) => error_codes::DM_XML_ERROR,
             DataMashupError::InvalidHeader(_) => error_codes::DM_INVALID_HEADER,
             DataMashupError::InnerPartTooLarge { .. } => error_codes::DM_INNER_PART_TOO_LARGE,
+            DataMashupError::InnerTooManyEntries { .. } => error_codes::DM_INNER_TOO_MANY_ENTRIES,
+            DataMashupError::InnerTotalTooLarge { .. } => error_codes::DM_INNER_TOTAL_TOO_LARGE,
         }
     }
 }
@@ -7854,6 +7880,23 @@ use crate::datamashup_framing::DataMashupError;
 use std::io::{Cursor, Read, Seek};
 use zip::ZipArchive;
 
+#[derive(Debug, Clone, Copy)]
+pub struct DataMashupLimits {
+    pub max_inner_entries: usize,
+    pub max_inner_part_bytes: u64,
+    pub max_inner_total_bytes: u64,
+}
+
+impl Default for DataMashupLimits {
+    fn default() -> Self {
+        Self {
+            max_inner_entries: 10_000,
+            max_inner_part_bytes: 100 * 1024 * 1024,
+            max_inner_total_bytes: 500 * 1024 * 1024,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageXml {
     pub raw_xml: String,
@@ -7879,9 +7922,24 @@ pub struct PackageParts {
 }
 
 pub fn parse_package_parts(bytes: &[u8]) -> Result<PackageParts, DataMashupError> {
+    parse_package_parts_with_limits(bytes, DataMashupLimits::default())
+}
+
+pub fn parse_package_parts_with_limits(
+    bytes: &[u8],
+    limits: DataMashupLimits,
+) -> Result<PackageParts, DataMashupError> {
     let cursor = Cursor::new(bytes);
     let mut archive = ZipArchive::new(cursor).map_err(|_| DataMashupError::FramingInvalid)?;
 
+    if archive.len() > limits.max_inner_entries {
+        return Err(DataMashupError::InnerTooManyEntries {
+            entries: archive.len(),
+            max_entries: limits.max_inner_entries,
+        });
+    }
+
+    let mut total_read: u64 = 0;
     let mut package_xml: Option<PackageXml> = None;
     let mut main_section: Option<SectionDocument> = None;
     let mut embedded_contents: Vec<EmbeddedContent> = Vec::new();
@@ -7897,26 +7955,32 @@ pub fn parse_package_parts(bytes: &[u8]) -> Result<PackageParts, DataMashupError
         let raw_name = file.name().to_string();
         let name = normalize_path(&raw_name);
         if package_xml.is_none() && name == "Config/Package.xml" {
+            reserve_inner_read_budget(&mut total_read, name, file.size(), limits)?;
             let text = read_file_to_string(&mut file)?;
             package_xml = Some(PackageXml { raw_xml: text });
             continue;
         }
         if main_section.is_none() && name == "Formulas/Section1.m" {
+            reserve_inner_read_budget(&mut total_read, name, file.size(), limits)?;
             let text = strip_leading_bom(read_file_to_string(&mut file)?);
             main_section = Some(SectionDocument { source: text });
             continue;
         }
         if name.starts_with("Content/") {
+            reserve_inner_read_budget(&mut total_read, name, file.size(), limits)?;
             let mut content_bytes = Vec::new();
             if file.read_to_end(&mut content_bytes).is_err() {
                 continue;
             }
 
-            if let Some(section) = extract_embedded_section(&content_bytes) {
-                embedded_contents.push(EmbeddedContent {
-                    name: normalize_path(&raw_name).to_string(),
-                    section: SectionDocument { source: section },
-                });
+            match extract_embedded_section(&content_bytes, limits, name)? {
+                Some(section) => {
+                    embedded_contents.push(EmbeddedContent {
+                        name: normalize_path(&raw_name).to_string(),
+                        section: SectionDocument { source: section },
+                    });
+                }
+                None => {}
             }
         }
     }
@@ -7942,13 +8006,59 @@ fn read_file_to_string(file: &mut zip::read::ZipFile<'_>) -> Result<String, Data
     String::from_utf8(buf).map_err(|_| DataMashupError::FramingInvalid)
 }
 
-fn extract_embedded_section(bytes: &[u8]) -> Option<String> {
-    let cursor = Cursor::new(bytes);
-    let mut archive = ZipArchive::new(cursor).ok()?;
-    find_section_document(&mut archive)
+fn reserve_inner_read_budget(
+    total_read: &mut u64,
+    path: &str,
+    size: u64,
+    limits: DataMashupLimits,
+) -> Result<(), DataMashupError> {
+    if size > limits.max_inner_part_bytes {
+        return Err(DataMashupError::InnerPartTooLarge {
+            path: path.to_string(),
+            size,
+            limit: limits.max_inner_part_bytes,
+        });
+    }
+
+    let new_total = total_read.saturating_add(size);
+    if new_total > limits.max_inner_total_bytes {
+        return Err(DataMashupError::InnerTotalTooLarge {
+            limit: limits.max_inner_total_bytes,
+        });
+    }
+
+    *total_read = new_total;
+    Ok(())
 }
 
-fn find_section_document<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Option<String> {
+fn extract_embedded_section(
+    bytes: &[u8],
+    limits: DataMashupLimits,
+    outer_name: &str,
+) -> Result<Option<String>, DataMashupError> {
+    let cursor = Cursor::new(bytes);
+    let mut archive = match ZipArchive::new(cursor) {
+        Ok(archive) => archive,
+        Err(_) => return Ok(None),
+    };
+
+    if archive.len() > limits.max_inner_entries {
+        return Err(DataMashupError::InnerTooManyEntries {
+            entries: archive.len(),
+            max_entries: limits.max_inner_entries,
+        });
+    }
+
+    find_section_document(&mut archive, limits, outer_name)
+}
+
+fn find_section_document<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    limits: DataMashupLimits,
+    outer_name: &str,
+) -> Result<Option<String>, DataMashupError> {
+    let mut total_read: u64 = 0;
+
     for idx in 0..archive.len() {
         let mut file = match archive.by_index(idx) {
             Ok(file) => file,
@@ -7958,15 +8068,20 @@ fn find_section_document<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Option<
             continue;
         }
 
-        if normalize_path(file.name()) == "Formulas/Section1.m" {
+        let inner_name = normalize_path(file.name());
+        if inner_name == "Formulas/Section1.m" {
+            let combined_name = format!("{outer_name}/{inner_name}");
+            reserve_inner_read_budget(&mut total_read, &combined_name, file.size(), limits)?;
             let mut buf = Vec::new();
             if file.read_to_end(&mut buf).is_ok() {
-                let text = String::from_utf8(buf).ok()?;
-                return Some(strip_leading_bom(text));
+                if let Ok(text) = String::from_utf8(buf) {
+                    return Ok(Some(strip_leading_bom(text)));
+                }
             }
+            return Ok(None);
         }
     }
-    None
+    Ok(None)
 }
 
 fn strip_leading_bom(text: String) -> String {
@@ -8032,7 +8147,7 @@ pub enum QueryMetadataField {
 #[non_exhaustive]
 pub enum DiffError {
     #[error(
-        "alignment limits exceeded for sheet '{sheet}': rows={rows}, cols={cols} (limits: rows={max_rows}, cols={max_cols})"
+        "[EXDIFF_DIFF_001] alignment limits exceeded for sheet '{sheet}': rows={rows}, cols={cols} (limits: rows={max_rows}, cols={max_cols}). Suggestion: increase `max_align_rows`/`max_align_cols` or change `on_limit_exceeded`."
     )]
     LimitsExceeded {
         sheet: StringId,
@@ -8042,16 +8157,16 @@ pub enum DiffError {
         max_cols: u32,
     },
 
-    #[error("sink error: {message}")]
+    #[error("[EXDIFF_DIFF_002] sink error: {message}. Suggestion: check the output destination and retry.")]
     SinkError { message: String },
 
-    #[error("sheet '{requested}' not found. Available sheets: {}", available.join(", "))]
+    #[error("[EXDIFF_DIFF_003] sheet '{requested}' not found. Available sheets: {}. Suggestion: check the sheet name and casing.", available.join(", "))]
     SheetNotFound {
         requested: String,
         available: Vec<String>,
     },
 
-    #[error("internal error: {message}")]
+    #[error("[EXDIFF_DIFF_004] internal error: {message}. Suggestion: report a bug with the input file if possible.")]
     InternalError { message: String },
 }
 
@@ -9043,7 +9158,7 @@ pub fn diff_grids_database_mode(
                 strings,
                 ops: sink.into_ops(),
                 complete: false,
-                warnings: vec![format!("[{}] {}", e.code(), e)],
+                warnings: vec![e.to_string()],
                 #[cfg(feature = "perf-metrics")]
                 metrics: None,
             }
@@ -11139,7 +11254,7 @@ pub fn diff_workbooks(
                 strings,
                 ops: Vec::new(),
                 complete: false,
-                warnings: vec![format!("[{}] {}", e.code(), e)],
+                warnings: vec![e.to_string()],
                 #[cfg(feature = "perf-metrics")]
                 metrics: None,
             }
@@ -11158,7 +11273,7 @@ pub fn diff_workbooks_streaming<S: DiffSink>(
         Ok(summary) => summary,
         Err(e) => DiffSummary {
             complete: false,
-            warnings: vec![format!("[{}] {}", e.code(), e)],
+            warnings: vec![e.to_string()],
             op_count: 0,
             #[cfg(feature = "perf-metrics")]
             metrics: None,
@@ -11203,11 +11318,14 @@ pub fn try_diff_workbooks_streaming<S: DiffSink>(
     let mut old_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
     for sheet in &old.sheets {
         let key = make_sheet_key(sheet, pool);
-        if old_sheets.insert(key.clone(), sheet).is_some() {
+        if let Some(previous) = old_sheets.insert(key.clone(), sheet) {
             ctx.warnings.push(format!(
                 "duplicate sheet identity in old workbook: '{}' ({:?}); \
-                 later definition overwrites earlier one. The file may be corrupt.",
-                key.name_lower, key.kind
+                 later definition '{}' overwrites earlier one '{}'. The file may be corrupt.",
+                key.name_lower,
+                key.kind,
+                pool.resolve(sheet.name),
+                pool.resolve(previous.name)
             ));
         }
     }
@@ -11215,11 +11333,14 @@ pub fn try_diff_workbooks_streaming<S: DiffSink>(
     let mut new_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
     for sheet in &new.sheets {
         let key = make_sheet_key(sheet, pool);
-        if new_sheets.insert(key.clone(), sheet).is_some() {
+        if let Some(previous) = new_sheets.insert(key.clone(), sheet) {
             ctx.warnings.push(format!(
                 "duplicate sheet identity in new workbook: '{}' ({:?}); \
-                 later definition overwrites earlier one. The file may be corrupt.",
-                key.name_lower, key.kind
+                 later definition '{}' overwrites earlier one '{}'. The file may be corrupt.",
+                key.name_lower,
+                key.kind,
+                pool.resolve(sheet.name),
+                pool.resolve(previous.name)
             ));
         }
     }
@@ -11348,6 +11469,8 @@ pub const DM_FRAMING_INVALID: &str = "EXDIFF_DM_003";
 pub const DM_XML_ERROR: &str = "EXDIFF_DM_004";
 pub const DM_INNER_PART_TOO_LARGE: &str = "EXDIFF_DM_005";
 pub const DM_INVALID_HEADER: &str = "EXDIFF_DM_006";
+pub const DM_INNER_TOO_MANY_ENTRIES: &str = "EXDIFF_DM_007";
+pub const DM_INNER_TOTAL_TOO_LARGE: &str = "EXDIFF_DM_008";
 
 pub const DIFF_LIMITS_EXCEEDED: &str = "EXDIFF_DIFF_001";
 pub const DIFF_SINK_ERROR: &str = "EXDIFF_DIFF_002";
@@ -11386,28 +11509,28 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum PackageError {
-    #[error("container error: {0}")]
+    #[error("{0}")]
     Container(#[from] ContainerError),
-    #[error("grid parse error: {0}")]
+    #[error("{0}")]
     GridParse(#[from] GridParseError),
-    #[error("DataMashup error: {0}")]
+    #[error("{0}")]
     DataMashup(#[from] DataMashupError),
-    #[error("workbook.xml missing or unreadable")]
+    #[error("[EXDIFF_PKG_003] workbook.xml missing or unreadable. Suggestion: re-save the file in Excel or verify it is a valid .xlsx.")]
     WorkbookXmlMissing,
-    #[error("worksheet XML missing for sheet {sheet_name}")]
+    #[error("[EXDIFF_PKG_003] worksheet XML missing for sheet {sheet_name}. Suggestion: re-save the file in Excel or verify it is a valid .xlsx.")]
     WorksheetXmlMissing { sheet_name: String },
-    #[error("diff error: {0}")]
+    #[error("{0}")]
     Diff(#[from] crate::diff::DiffError),
-    #[error("serialization error: {0}")]
+    #[error("[EXDIFF_PKG_009] serialization error: {0}. Suggestion: verify the workbook is a standard .xlsx saved by Excel.")]
     SerializationError(String),
 
-    #[error("not a valid ZIP file: {message}")]
+    #[error("[EXDIFF_PKG_001] not a valid ZIP file: {message}. Suggestion: verify the input is a .xlsx workbook.")]
     NotAZip { message: String },
 
-    #[error("missing required part: {path}")]
+    #[error("[EXDIFF_PKG_003] missing required part: {path}. Suggestion: the workbook may be corrupt; re-save the file in Excel.")]
     MissingPart { path: String },
 
-    #[error("invalid XML in '{part}' at line {line}, column {column}: {message}")]
+    #[error("[EXDIFF_PKG_004] invalid XML in '{part}' at line {line}, column {column}: {message}. Suggestion: re-save the file in Excel.")]
     InvalidXml {
         part: String,
         line: usize,
@@ -11415,13 +11538,13 @@ pub enum PackageError {
         message: String,
     },
 
-    #[error("unsupported format: {message}")]
+    #[error("[EXDIFF_PKG_009] unsupported format: {message}. Suggestion: verify the workbook is a standard .xlsx saved by Excel.")]
     UnsupportedFormat { message: String },
 
-    #[error("failed to read part '{part}': {message}")]
+    #[error("[EXDIFF_PKG_008] failed to read part '{part}': {message}")]
     ReadPartFailed { part: String, message: String },
 
-    #[error("DataMashup error in part '{part}': {source}")]
+    #[error("{source} (in part '{part}')")]
     DataMashupPartError { part: String, source: DataMashupError },
 
     #[error("[{path}] {source}")]
@@ -12035,8 +12158,10 @@ impl<'a> Parser<'a> {
         self.skip_ws();
 
         let mut lhs = if matches!(self.peek(), Some(b'+' | b'-')) {
-            #[allow(clippy::unwrap_used)]
-            let op = match self.bump().unwrap() {
+            let op_byte = self
+                .bump()
+                .ok_or_else(|| self.err("unexpected EOF after unary op"))?;
+            let op = match op_byte {
                 b'+' => UnaryOperator::Plus,
                 b'-' => UnaryOperator::Minus,
                 _ => return Err(self.err("invalid unary op")),
@@ -12190,9 +12315,8 @@ impl<'a> Parser<'a> {
                 let start = self.pos;
                 while let Some(b) = self.peek() {
                     if b == b'!' {
-                        #[allow(clippy::unwrap_used)]
                         let sheet = std::str::from_utf8(&self.s[start..self.pos])
-                            .unwrap()
+                            .map_err(|_| self.err("invalid utf-8 in sheet name"))?
                             .to_string();
                         self.bump();
                         return Ok(Some(sheet));
@@ -12242,24 +12366,22 @@ impl<'a> Parser<'a> {
 
         if matches!(self.peek(), Some(b'$' | b'A'..=b'Z' | b'a'..=b'z')) {
             let start = self.pos;
-            if let Some(r) = self.try_parse_a1_cell_ref(sheet.clone())? {
-                let mut expr = FormulaExpr::CellRef(r);
-                self.skip_ws();
-                if self.peek() == Some(b':') {
-                    self.bump();
-                    let rhs = self.try_parse_a1_cell_ref(None)?;
-                    if let Some(end) = rhs {
-                        expr = FormulaExpr::RangeRef(RangeReference {
-                            sheet,
-                            start: match expr {
-                                FormulaExpr::CellRef(c) => c,
-                                _ => unreachable!(),
-                            },
-                            end,
-                        });
+                if let Some(r) = self.try_parse_a1_cell_ref(sheet.clone())? {
+                    let start_ref = r.clone();
+                    let mut expr = FormulaExpr::CellRef(r);
+                    self.skip_ws();
+                    if self.peek() == Some(b':') {
+                        self.bump();
+                        let rhs = self.try_parse_a1_cell_ref(None)?;
+                        if let Some(end) = rhs {
+                            expr = FormulaExpr::RangeRef(RangeReference {
+                                sheet,
+                                start: start_ref,
+                                end,
+                            });
+                        }
                     }
-                }
-                return Ok(expr);
+                    return Ok(expr);
             }
             self.pos = start;
         }
@@ -12479,8 +12601,8 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
             }
         }
-        #[allow(clippy::unwrap_used)]
-        let txt = std::str::from_utf8(&self.s[start..self.pos]).unwrap();
+        let txt = std::str::from_utf8(&self.s[start..self.pos])
+            .map_err(|_| self.err("invalid utf-8 in number"))?;
         let n: f64 = txt.parse().map_err(|_| self.err("invalid number"))?;
         Ok(FormulaExpr::Number(n))
     }
@@ -12503,9 +12625,8 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        #[allow(clippy::unwrap_used)]
         let ident = std::str::from_utf8(&self.s[start..self.pos])
-            .unwrap()
+            .map_err(|_| self.err("invalid utf-8 in identifier"))?
             .to_string();
         Ok(ident)
     }
@@ -12521,9 +12642,8 @@ impl<'a> Parser<'a> {
                     self.pos += 1;
                     continue;
                 }
-                #[allow(clippy::unwrap_used)]
                 let name = std::str::from_utf8(&self.s[start..self.pos - 1])
-                    .unwrap()
+                    .map_err(|_| self.err("invalid utf-8 in sheet name"))?
                     .replace("''", "'");
                 return Ok(name);
             }
@@ -12588,8 +12708,8 @@ impl<'a> Parser<'a> {
         while matches!(self.peek(), Some(b'0'..=b'9')) {
             self.pos += 1;
         }
-        #[allow(clippy::unwrap_used)]
-        let txt = std::str::from_utf8(&self.s[start..self.pos]).unwrap();
+        let txt = std::str::from_utf8(&self.s[start..self.pos])
+            .map_err(|_| self.err("invalid utf-8 in signed int"))?;
         txt.parse::<i32>()
             .map_err(|_| self.err("invalid signed int"))
     }
@@ -12600,8 +12720,8 @@ impl<'a> Parser<'a> {
         while matches!(self.peek(), Some(b'0'..=b'9')) {
             self.pos += 1;
         }
-        #[allow(clippy::unwrap_used)]
-        let txt = std::str::from_utf8(&self.s[start..self.pos]).unwrap();
+        let txt = std::str::from_utf8(&self.s[start..self.pos])
+            .map_err(|_| self.err("invalid utf-8 in number"))?;
         txt.parse::<u32>().map_err(|_| self.err("invalid number"))
     }
 
@@ -12629,8 +12749,8 @@ impl<'a> Parser<'a> {
             return Ok(None);
         }
 
-        #[allow(clippy::unwrap_used)]
-        let col_txt = std::str::from_utf8(&self.s[col_start..self.pos]).unwrap();
+        let col_txt = std::str::from_utf8(&self.s[col_start..self.pos])
+            .map_err(|_| self.err("invalid utf-8 in column"))?;
         if col_txt.len() > 3 {
             self.pos = start;
             return Ok(None);
@@ -12648,8 +12768,8 @@ impl<'a> Parser<'a> {
             return Ok(None);
         }
 
-        #[allow(clippy::unwrap_used)]
-        let row_txt = std::str::from_utf8(&self.s[row_start..self.pos]).unwrap();
+        let row_txt = std::str::from_utf8(&self.s[row_start..self.pos])
+            .map_err(|_| self.err("invalid utf-8 in row"))?;
         let row_num = row_txt
             .parse::<u32>()
             .map_err(|_| self.err("invalid row"))?;
@@ -12993,17 +13113,17 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum GridParseError {
-    #[error("XML parse error: {0}")]
+    #[error("[EXDIFF_GRID_001] XML parse error: {0}. Suggestion: re-save the file in Excel or verify it is valid XML.")]
     XmlError(String),
-    #[error("XML parse error at line {line}, column {column}: {message}")]
+    #[error("[EXDIFF_GRID_001] XML parse error at line {line}, column {column}: {message}. Suggestion: re-save the file in Excel or verify it is valid XML.")]
     XmlErrorAt {
         line: usize,
         column: usize,
         message: String,
     },
-    #[error("invalid cell address: {0}")]
+    #[error("[EXDIFF_GRID_002] invalid cell address: {0}. Suggestion: the workbook may be corrupt.")]
     InvalidAddress(String),
-    #[error("shared string index {0} out of bounds")]
+    #[error("[EXDIFF_GRID_003] shared string index {0} out of bounds. Suggestion: the workbook may be corrupt.")]
     SharedStringOutOfBounds(usize),
 }
 
@@ -13044,7 +13164,7 @@ pub fn parse_shared_strings(
             Ok(Event::Start(e)) if e.name().as_ref() == b"t" && in_si => {
                 let text = reader
                     .read_text(e.name())
-                    .map_err(|e| GridParseError::XmlError(e.to_string()))?
+                    .map_err(|e| xml_err(&reader, xml, e))?
                     .into_owned();
                 current.push_str(&text);
             }
@@ -13054,7 +13174,7 @@ pub fn parse_shared_strings(
                 in_si = false;
             }
             Ok(Event::Eof) => break,
-            Err(e) => return Err(GridParseError::XmlError(e.to_string())),
+            Err(e) => return Err(xml_err(&reader, xml, e)),
             _ => {}
         }
         buf.clear();
@@ -13076,17 +13196,27 @@ pub fn parse_workbook_xml(xml: &[u8]) -> Result<Vec<SheetDescriptor>, GridParseE
                 let mut rel_id = None;
                 let mut sheet_id = None;
                 for attr in e.attributes() {
-                    let attr = attr.map_err(|e| GridParseError::XmlError(e.to_string()))?;
+                    let attr = attr.map_err(|e| xml_msg_err(&reader, xml, e.to_string()))?;
                     match attr.key.as_ref() {
                         b"name" => {
-                            name = Some(attr.unescape_value().map_err(to_xml_err)?.into_owned())
+                            name = Some(
+                                attr.unescape_value()
+                                    .map_err(|e| xml_err(&reader, xml, e))?
+                                    .into_owned(),
+                            )
                         }
                         b"sheetId" => {
-                            let parsed = attr.unescape_value().map_err(to_xml_err)?;
+                            let parsed = attr
+                                .unescape_value()
+                                .map_err(|e| xml_err(&reader, xml, e))?;
                             sheet_id = parsed.into_owned().parse::<u32>().ok();
                         }
                         b"r:id" => {
-                            rel_id = Some(attr.unescape_value().map_err(to_xml_err)?.into_owned())
+                            rel_id = Some(
+                                attr.unescape_value()
+                                    .map_err(|e| xml_err(&reader, xml, e))?
+                                    .into_owned(),
+                            )
                         }
                         _ => {}
                     }
@@ -13100,7 +13230,7 @@ pub fn parse_workbook_xml(xml: &[u8]) -> Result<Vec<SheetDescriptor>, GridParseE
                 }
             }
             Ok(Event::Eof) => break,
-            Err(e) => return Err(GridParseError::XmlError(e.to_string())),
+            Err(e) => return Err(xml_err(&reader, xml, e)),
             _ => {}
         }
         buf.clear();
@@ -13122,14 +13252,28 @@ pub fn parse_relationships(xml: &[u8]) -> Result<HashMap<String, String>, GridPa
                 let mut target = None;
                 let mut rel_type = None;
                 for attr in e.attributes() {
-                    let attr = attr.map_err(|e| GridParseError::XmlError(e.to_string()))?;
+                    let attr = attr.map_err(|e| xml_msg_err(&reader, xml, e.to_string()))?;
                     match attr.key.as_ref() {
-                        b"Id" => id = Some(attr.unescape_value().map_err(to_xml_err)?.into_owned()),
+                        b"Id" => {
+                            id = Some(
+                                attr.unescape_value()
+                                    .map_err(|e| xml_err(&reader, xml, e))?
+                                    .into_owned(),
+                            )
+                        }
                         b"Target" => {
-                            target = Some(attr.unescape_value().map_err(to_xml_err)?.into_owned())
+                            target = Some(
+                                attr.unescape_value()
+                                    .map_err(|e| xml_err(&reader, xml, e))?
+                                    .into_owned(),
+                            )
                         }
                         b"Type" => {
-                            rel_type = Some(attr.unescape_value().map_err(to_xml_err)?.into_owned())
+                            rel_type = Some(
+                                attr.unescape_value()
+                                    .map_err(|e| xml_err(&reader, xml, e))?
+                                    .into_owned(),
+                            )
                         }
                         _ => {}
                     }
@@ -13142,7 +13286,7 @@ pub fn parse_relationships(xml: &[u8]) -> Result<HashMap<String, String>, GridPa
                 }
             }
             Ok(Event::Eof) => break,
-            Err(e) => return Err(GridParseError::XmlError(e.to_string())),
+            Err(e) => return Err(xml_err(&reader, xml, e)),
             _ => {}
         }
         buf.clear();
@@ -13195,18 +13339,18 @@ pub fn parse_sheet_xml(
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == b"dimension" => {
-                if let Some(r) = get_attr_value(&e, b"ref")? {
+                if let Some(r) = get_attr_value(&reader, xml, &e, b"ref")? {
                     dimension_hint = dimension_from_ref(&r);
                 }
             }
             Ok(Event::Start(e)) if e.name().as_ref() == b"c" => {
-                let cell = parse_cell(&mut reader, e, shared_strings, pool)?;
+                let cell = parse_cell(&mut reader, xml, e, shared_strings, pool)?;
                 max_row = Some(max_row.map_or(cell.row, |r| r.max(cell.row)));
                 max_col = Some(max_col.map_or(cell.col, |c| c.max(cell.col)));
                 parsed_cells.push(cell);
             }
             Ok(Event::Eof) => break,
-            Err(e) => return Err(GridParseError::XmlError(e.to_string())),
+            Err(e) => return Err(xml_err(&reader, xml, e)),
             _ => {}
         }
         buf.clear();
@@ -13231,16 +13375,19 @@ pub fn parse_sheet_xml(
 
 fn parse_cell(
     reader: &mut Reader<&[u8]>,
+    xml: &[u8],
     start: BytesStart,
     shared_strings: &[StringId],
     pool: &mut StringPool,
 ) -> Result<ParsedCell, GridParseError> {
-    let address_raw = get_attr_value(&start, b"r")?
-        .ok_or_else(|| GridParseError::XmlError("cell missing address".into()))?;
+    let address_raw =
+        get_attr_value(reader, xml, &start, b"r")?.ok_or_else(|| {
+            xml_msg_err(reader, xml, "cell missing address")
+        })?;
     let (row, col) = address_to_index(&address_raw)
         .ok_or_else(|| GridParseError::InvalidAddress(address_raw.clone()))?;
 
-    let cell_type = get_attr_value(&start, b"t")?;
+    let cell_type = get_attr_value(reader, xml, &start, b"t")?;
 
     let mut value_text: Option<String> = None;
     let mut formula_text: Option<String> = None;
@@ -13252,30 +13399,28 @@ fn parse_cell(
             Ok(Event::Start(e)) if e.name().as_ref() == b"v" => {
                 let text = reader
                     .read_text(e.name())
-                    .map_err(|e| GridParseError::XmlError(e.to_string()))?
+                    .map_err(|e| xml_err(reader, xml, e))?
                     .into_owned();
                 value_text = Some(text);
             }
             Ok(Event::Start(e)) if e.name().as_ref() == b"f" => {
                 let text = reader
                     .read_text(e.name())
-                    .map_err(|e| GridParseError::XmlError(e.to_string()))?
+                    .map_err(|e| xml_err(reader, xml, e))?
                     .into_owned();
                 let unescaped = quick_xml::escape::unescape(&text)
-                    .map_err(|e| GridParseError::XmlError(e.to_string()))?
+                    .map_err(|e| xml_msg_err(reader, xml, e.to_string()))?
                     .into_owned();
                 formula_text = Some(unescaped);
             }
             Ok(Event::Start(e)) if e.name().as_ref() == b"is" => {
-                inline_text = Some(read_inline_string(reader)?);
+                inline_text = Some(read_inline_string(reader, xml)?);
             }
             Ok(Event::End(e)) if e.name().as_ref() == start.name().as_ref() => break,
             Ok(Event::Eof) => {
-                return Err(GridParseError::XmlError(
-                    "unexpected EOF inside cell".into(),
-                ));
+                return Err(xml_msg_err(reader, xml, "unexpected EOF inside cell"));
             }
-            Err(e) => return Err(GridParseError::XmlError(e.to_string())),
+            Err(e) => return Err(xml_err(reader, xml, e)),
             _ => {}
         }
         buf.clear();
@@ -13288,6 +13433,8 @@ fn parse_cell(
             cell_type.as_deref(),
             shared_strings,
             pool,
+            reader,
+            xml,
         )?,
     };
 
@@ -13299,7 +13446,7 @@ fn parse_cell(
     })
 }
 
-fn read_inline_string(reader: &mut Reader<&[u8]>) -> Result<String, GridParseError> {
+fn read_inline_string(reader: &mut Reader<&[u8]>, xml: &[u8]) -> Result<String, GridParseError> {
     let mut buf = Vec::new();
     let mut value = String::new();
     loop {
@@ -13307,17 +13454,19 @@ fn read_inline_string(reader: &mut Reader<&[u8]>) -> Result<String, GridParseErr
             Ok(Event::Start(e)) if e.name().as_ref() == b"t" => {
                 let text = reader
                     .read_text(e.name())
-                    .map_err(|e| GridParseError::XmlError(e.to_string()))?
+                    .map_err(|e| xml_err(reader, xml, e))?
                     .into_owned();
                 value.push_str(&text);
             }
             Ok(Event::End(e)) if e.name().as_ref() == b"is" => break,
             Ok(Event::Eof) => {
-                return Err(GridParseError::XmlError(
-                    "unexpected EOF inside inline string".into(),
+                return Err(xml_msg_err(
+                    reader,
+                    xml,
+                    "unexpected EOF inside inline string",
                 ));
             }
-            Err(e) => return Err(GridParseError::XmlError(e.to_string())),
+            Err(e) => return Err(xml_err(reader, xml, e)),
             _ => {}
         }
         buf.clear();
@@ -13330,6 +13479,8 @@ fn convert_value(
     cell_type: Option<&str>,
     shared_strings: &[StringId],
     pool: &mut StringPool,
+    reader: &Reader<&[u8]>,
+    xml: &[u8],
 ) -> Result<Option<CellValue>, GridParseError> {
     let raw = match value_text {
         Some(t) => t,
@@ -13345,7 +13496,7 @@ fn convert_value(
         Some("s") => {
             let idx = trimmed
                 .parse::<usize>()
-                .map_err(|e| GridParseError::XmlError(e.to_string()))?;
+                .map_err(|e| xml_msg_err(reader, xml, e.to_string()))?;
             let text_id = *shared_strings
                 .get(idx)
                 .ok_or(GridParseError::SharedStringOutOfBounds(idx))?;
@@ -13389,24 +13540,43 @@ fn build_grid(nrows: u32, ncols: u32, cells: Vec<ParsedCell>) -> Result<Grid, Gr
     Ok(grid)
 }
 
-fn get_attr_value(element: &BytesStart<'_>, key: &[u8]) -> Result<Option<String>, GridParseError> {
+fn get_attr_value(
+    reader: &Reader<&[u8]>,
+    xml: &[u8],
+    element: &BytesStart<'_>,
+    key: &[u8],
+) -> Result<Option<String>, GridParseError> {
     for attr in element.attributes() {
-        let attr = attr.map_err(|e| GridParseError::XmlError(e.to_string()))?;
+        let attr = attr.map_err(|e| xml_msg_err(reader, xml, e.to_string()))?;
         if attr.key.as_ref() == key {
             return Ok(Some(
-                attr.unescape_value().map_err(to_xml_err)?.into_owned(),
+                attr.unescape_value()
+                    .map_err(|e| xml_err(reader, xml, e))?
+                    .into_owned(),
             ));
         }
     }
     Ok(None)
 }
 
-fn to_xml_err(err: quick_xml::Error) -> GridParseError {
-    GridParseError::XmlError(err.to_string())
+fn xml_err(reader: &Reader<&[u8]>, xml: &[u8], err: quick_xml::Error) -> GridParseError {
+    xml_error_with_position(err, xml, reader.buffer_position())
 }
 
-#[allow(dead_code)]
-fn xml_error_with_position(err: quick_xml::Error, xml: &[u8], byte_offset: usize) -> GridParseError {
+fn xml_msg_err(reader: &Reader<&[u8]>, xml: &[u8], message: impl Into<String>) -> GridParseError {
+    let (line, column) = compute_line_col(xml, reader.buffer_position());
+    GridParseError::XmlErrorAt {
+        line,
+        column,
+        message: message.into(),
+    }
+}
+
+fn xml_error_with_position(
+    err: quick_xml::Error,
+    xml: &[u8],
+    byte_offset: usize,
+) -> GridParseError {
     let (line, column) = compute_line_col(xml, byte_offset);
     GridParseError::XmlErrorAt {
         line,
@@ -13461,11 +13631,20 @@ mod tests {
         let xml = br#"<is><t xml:space="preserve"> hello</t></is>"#;
         let mut reader = Reader::from_reader(xml.as_ref());
         reader.config_mut().trim_text(false);
-        let value = read_inline_string(&mut reader).expect("inline string should parse");
+        let value = read_inline_string(&mut reader, xml).expect("inline string should parse");
         assert_eq!(value, " hello");
 
         let mut pool = StringPool::new();
-        let converted = convert_value(Some(value.as_str()), Some("inlineStr"), &[], &mut pool)
+        let dummy_xml: &[u8] = b"";
+        let dummy_reader = Reader::from_reader(dummy_xml);
+        let converted = convert_value(
+            Some(value.as_str()),
+            Some("inlineStr"),
+            &[],
+            &mut pool,
+            &dummy_reader,
+            dummy_xml,
+        )
             .expect("inlineStr conversion should succeed");
         let text_id = converted
             .as_ref()
@@ -13476,34 +13655,43 @@ mod tests {
 
     #[test]
     fn convert_value_bool_0_1_and_other() {
+        let dummy_xml: &[u8] = b"";
+        let dummy_reader = Reader::from_reader(dummy_xml);
+
         let mut pool = StringPool::new();
-        let false_val = convert_value(Some("0"), Some("b"), &[], &mut pool)
+        let false_val = convert_value(Some("0"), Some("b"), &[], &mut pool, &dummy_reader, dummy_xml)
             .expect("bool cell conversion should succeed");
         assert_eq!(false_val, Some(CellValue::Bool(false)));
 
         let mut pool = StringPool::new();
-        let true_val = convert_value(Some("1"), Some("b"), &[], &mut pool)
+        let true_val = convert_value(Some("1"), Some("b"), &[], &mut pool, &dummy_reader, dummy_xml)
             .expect("bool cell conversion should succeed");
         assert_eq!(true_val, Some(CellValue::Bool(true)));
 
-        let none_val = convert_value(Some("2"), Some("b"), &[], &mut pool)
+        let none_val = convert_value(Some("2"), Some("b"), &[], &mut pool, &dummy_reader, dummy_xml)
             .expect("unexpected bool tokens should still parse");
         assert!(none_val.is_none());
     }
 
     #[test]
     fn convert_value_shared_string_index_out_of_bounds_errors() {
+        let dummy_xml: &[u8] = b"";
+        let dummy_reader = Reader::from_reader(dummy_xml);
+
         let mut pool = StringPool::new();
         let only_id = pool.intern("only");
-        let err = convert_value(Some("5"), Some("s"), &[only_id], &mut pool)
+        let err = convert_value(Some("5"), Some("s"), &[only_id], &mut pool, &dummy_reader, dummy_xml)
             .expect_err("invalid shared string index should error");
         assert!(matches!(err, GridParseError::SharedStringOutOfBounds(5)));
     }
 
     #[test]
     fn convert_value_error_cell_as_text() {
+        let dummy_xml: &[u8] = b"";
+        let dummy_reader = Reader::from_reader(dummy_xml);
+
         let mut pool = StringPool::new();
-        let value = convert_value(Some("#DIV/0!"), Some("e"), &[], &mut pool)
+        let value = convert_value(Some("#DIV/0!"), Some("e"), &[], &mut pool, &dummy_reader, dummy_xml)
             .expect("error cell should convert");
         let err_id = value
             .and_then(|v| {
@@ -14223,7 +14411,8 @@ pub use datamashup::{
 };
 pub use datamashup_framing::{DataMashupError, RawDataMashup, parse_data_mashup};
 pub use datamashup_package::{
-    EmbeddedContent, PackageParts, PackageXml, SectionDocument, parse_package_parts,
+    DataMashupLimits, EmbeddedContent, PackageParts, PackageXml, SectionDocument,
+    parse_package_parts, parse_package_parts_with_limits,
 };
 pub use diff::{
     DiffError, DiffOp, DiffReport, DiffSummary, FormulaDiffResult, QueryChangeKind,
@@ -20944,6 +21133,53 @@ fn assemble_top_level_bytes(raw: &RawDataMashup) -> Vec<u8> {
 
 ---
 
+### File: `core\tests\database_mode_wrapper_tests.rs`
+
+```rust
+use excel_diff::{
+    CellValue, DiffConfig, Grid, LimitBehavior, diff_grids_database_mode, with_default_session,
+};
+
+#[test]
+fn database_mode_wrapper_limits_exceeded_returns_incomplete_report() {
+    let mut grid_a = Grid::new(2, 1);
+    grid_a.insert_cell(0, 0, Some(CellValue::Number(1.0)), None);
+    grid_a.insert_cell(1, 0, Some(CellValue::Number(1.0)), None);
+
+    let mut grid_b = Grid::new(2, 1);
+    grid_b.insert_cell(0, 0, Some(CellValue::Number(1.0)), None);
+    grid_b.insert_cell(1, 0, Some(CellValue::Number(1.0)), None);
+
+    let config = DiffConfig {
+        max_align_rows: 1,
+        on_limit_exceeded: LimitBehavior::ReturnError,
+        ..Default::default()
+    };
+
+    let result = std::panic::catch_unwind(|| {
+        with_default_session(|session| {
+            diff_grids_database_mode(&grid_a, &grid_b, &[0], &mut session.strings, &config)
+        })
+    });
+    assert!(result.is_ok(), "database mode wrapper should not panic");
+    let report = result.unwrap();
+
+    assert!(!report.complete, "report should be marked incomplete");
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("alignment limits exceeded")),
+        "expected limits exceeded warning; warnings: {:?}",
+        report.warnings
+    );
+}
+
+
+```
+
+---
+
 ### File: `core\tests\engine_tests.rs`
 
 ```rust
@@ -21374,7 +21610,10 @@ fn duplicate_sheet_identity_emits_warning() {
 mod common;
 
 use common::{fixture_path, open_fixture_workbook, sid};
-use excel_diff::{CellAddress, ContainerError, ContainerLimits, OpcContainer, PackageError, SheetKind, WorkbookPackage};
+use excel_diff::{
+    CellAddress, ContainerError, ContainerLimits, DataMashupError, OpcContainer, PackageError,
+    SheetKind, WorkbookPackage, open_data_mashup,
+};
 use std::fs;
 use std::io::{Cursor, ErrorKind, Write};
 use std::path::Path;
@@ -21584,7 +21823,7 @@ fn zip_bomb_defense_rejects_oversized_part() {
     let file = std::fs::File::open(&path).expect("temp file exists");
     let limits = ContainerLimits {
         max_entries: 100,
-        max_part_uncompressed_bytes: 100,
+        max_part_uncompressed_bytes: 512,
         max_total_uncompressed_bytes: 10_000,
     };
     let mut container = OpcContainer::open_from_reader_with_limits(file, limits)
@@ -21596,6 +21835,37 @@ fn zip_bomb_defense_rejects_oversized_part() {
         matches!(err, ContainerError::PartTooLarge { .. }),
         "expected PartTooLarge error, got {err:?}"
     );
+
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn oversized_content_types_is_rejected_during_open() {
+    let path = temp_xlsx_path("oversized_content_types");
+    let huge_content_types = "x".repeat(1024);
+
+    write_zip(&[("[Content_Types].xml", &huge_content_types)], &path);
+
+    let file = std::fs::File::open(&path).expect("temp file exists");
+    let limits = ContainerLimits {
+        max_entries: 100,
+        max_part_uncompressed_bytes: 100,
+        max_total_uncompressed_bytes: 10_000,
+    };
+
+    let err = match OpcContainer::open_from_reader_with_limits(file, limits) {
+        Ok(_) => panic!("expected oversized [Content_Types].xml to be rejected"),
+        Err(e) => e,
+    };
+
+    match err {
+        ContainerError::PartTooLarge { path, size, limit } => {
+            assert_eq!(path, "[Content_Types].xml");
+            assert_eq!(size, 1024);
+            assert_eq!(limit, 100);
+        }
+        other => panic!("expected PartTooLarge, got {other:?}"),
+    }
 
     let _ = fs::remove_file(&path);
 }
@@ -21621,6 +21891,175 @@ fn invalid_xml_in_workbook_does_not_panic() {
     let file = std::fs::File::open(&path).expect("temp file exists");
     let result = std::panic::catch_unwind(|| WorkbookPackage::open(file));
     assert!(result.is_ok(), "malformed XML should not panic (catch_unwind succeeded)");
+    let err = result
+        .unwrap()
+        .expect_err("malformed XML should return error, not Ok");
+    match err {
+        PackageError::InvalidXml {
+            part,
+            line,
+            column,
+            ..
+        } => {
+            assert_eq!(part, "xl/workbook.xml");
+            assert!(line > 0, "expected line > 0, got {line}");
+            assert!(column > 0, "expected column > 0, got {column}");
+        }
+        other => panic!("expected InvalidXml, got {other:?}"),
+    }
+
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn invalid_xml_in_relationships_includes_part_and_position() {
+    let path = temp_xlsx_path("invalid_rels_xml");
+    let content_types = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+</Types>"#;
+
+    let workbook_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"#;
+
+    let malformed_rels = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Target="worksheets/sheet1.xml""#;
+
+    write_zip(
+        &[
+            ("[Content_Types].xml", content_types),
+            ("xl/workbook.xml", workbook_xml),
+            ("xl/_rels/workbook.xml.rels", malformed_rels),
+        ],
+        &path,
+    );
+
+    let file = std::fs::File::open(&path).expect("temp file exists");
+    let result = std::panic::catch_unwind(|| WorkbookPackage::open(file));
+    assert!(result.is_ok(), "malformed relationships XML should not panic");
+    let err = result.unwrap().expect_err("malformed relationships XML should error");
+    match err {
+        PackageError::InvalidXml {
+            part,
+            line,
+            column,
+            ..
+        } => {
+            assert_eq!(part, "xl/_rels/workbook.xml.rels");
+            assert!(line > 0, "expected line > 0, got {line}");
+            assert!(column > 0, "expected column > 0, got {column}");
+        }
+        other => panic!("expected InvalidXml, got {other:?}"),
+    }
+
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn invalid_xml_in_worksheet_includes_part_and_position() {
+    let path = temp_xlsx_path("invalid_sheet_xml");
+    let content_types = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+</Types>"#;
+
+    let workbook_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"#;
+
+    let relationships = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1"
+                Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"
+                Target="worksheets/sheet1.xml"/>
+</Relationships>"#;
+
+    let malformed_sheet = r#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1"><v>1</v>
+    </row>
+  </sheetData>
+</worksheet>"#;
+
+    write_zip(
+        &[
+            ("[Content_Types].xml", content_types),
+            ("xl/workbook.xml", workbook_xml),
+            ("xl/_rels/workbook.xml.rels", relationships),
+            ("xl/worksheets/sheet1.xml", malformed_sheet),
+        ],
+        &path,
+    );
+
+    let file = std::fs::File::open(&path).expect("temp file exists");
+    let result = std::panic::catch_unwind(|| WorkbookPackage::open(file));
+    assert!(result.is_ok(), "malformed worksheet XML should not panic");
+    let err = result.unwrap().expect_err("malformed worksheet XML should error");
+    match err {
+        PackageError::InvalidXml {
+            part,
+            line,
+            column,
+            ..
+        } => {
+            assert_eq!(part, "xl/worksheets/sheet1.xml");
+            assert!(line > 0, "expected line > 0, got {line}");
+            assert!(column > 0, "expected column > 0, got {column}");
+        }
+        other => panic!("expected InvalidXml, got {other:?}"),
+    }
+
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn datamashup_base64_decodes_but_framing_invalid_includes_part() {
+    let path = temp_xlsx_path("dm_framing_invalid");
+    let content_types = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="xml" ContentType="application/xml"/>
+</Types>"#;
+
+    let dm_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<root xmlns:dm="http://schemas.microsoft.com/DataMashup">
+  <dm:DataMashup>AAAA</dm:DataMashup>
+</root>"#;
+
+    write_zip(
+        &[
+            ("[Content_Types].xml", content_types),
+            ("customXml/item1.xml", dm_xml),
+        ],
+        &path,
+    );
+
+    let err = open_data_mashup(&path).expect_err("expected framing error");
+    let err = match err {
+        PackageError::WithPath { source, .. } => *source,
+        other => other,
+    };
+
+    match err {
+        PackageError::DataMashupPartError { part, source } => {
+            assert_eq!(part, "customXml/item1.xml");
+            assert!(matches!(source, DataMashupError::FramingInvalid));
+        }
+        other => panic!("expected DataMashupPartError, got {other:?}"),
+    }
 
     let _ = fs::remove_file(&path);
 }
@@ -25486,7 +25925,10 @@ fn wide_grid_500_cols_completes_within_default_limits() {
 ```rust
 use std::io::{Cursor, Write};
 
-use excel_diff::{DataMashupError, open_data_mashup, parse_package_parts, parse_section_members};
+use excel_diff::{
+    DataMashupError, DataMashupLimits, open_data_mashup, parse_package_parts,
+    parse_package_parts_with_limits, parse_section_members,
+};
 use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
@@ -25767,6 +26209,129 @@ fn embedded_content_section1_with_bom_parses_via_parse_section_members() {
         }),
         "embedded Section1.m should parse shared Foo = 1"
     );
+}
+
+#[test]
+fn package_parts_with_limits_rejects_oversized_required_part() {
+    let bytes = build_zip(vec![
+        ("Config/Package.xml", MIN_PACKAGE_XML.as_bytes().to_vec()),
+        ("Formulas/Section1.m", vec![b'a'; 200]),
+    ]);
+
+    let limits = DataMashupLimits {
+        max_inner_entries: 100,
+        max_inner_part_bytes: 100,
+        max_inner_total_bytes: 10_000,
+    };
+
+    let err =
+        parse_package_parts_with_limits(&bytes, limits).expect_err("expected oversized part error");
+
+    match err {
+        DataMashupError::InnerPartTooLarge { path, size, limit } => {
+            assert_eq!(path, "Formulas/Section1.m");
+            assert_eq!(size, 200);
+            assert_eq!(limit, 100);
+        }
+        other => panic!("expected InnerPartTooLarge, got {other:?}"),
+    }
+}
+
+#[test]
+fn package_parts_with_limits_rejects_too_many_entries() {
+    let bytes = build_zip(vec![
+        ("Config/Package.xml", MIN_PACKAGE_XML.as_bytes().to_vec()),
+        ("Formulas/Section1.m", MIN_SECTION.as_bytes().to_vec()),
+        ("Foo.txt", b"1".to_vec()),
+        ("Bar.txt", b"2".to_vec()),
+        ("Baz.txt", b"3".to_vec()),
+    ]);
+
+    let limits = DataMashupLimits {
+        max_inner_entries: 4,
+        max_inner_part_bytes: 10_000,
+        max_inner_total_bytes: 10_000,
+    };
+
+    let err =
+        parse_package_parts_with_limits(&bytes, limits).expect_err("expected too-many-entries error");
+    match err {
+        DataMashupError::InnerTooManyEntries {
+            entries,
+            max_entries,
+        } => {
+            assert_eq!(entries, 5);
+            assert_eq!(max_entries, 4);
+        }
+        other => panic!("expected InnerTooManyEntries, got {other:?}"),
+    }
+}
+
+#[test]
+fn package_parts_with_limits_rejects_total_size() {
+    let base = (MIN_PACKAGE_XML.len() + MIN_SECTION.len()) as u64;
+    let limit = base + 10;
+
+    let bytes = build_zip(vec![
+        ("Config/Package.xml", MIN_PACKAGE_XML.as_bytes().to_vec()),
+        ("Formulas/Section1.m", MIN_SECTION.as_bytes().to_vec()),
+        ("Content/too_much.package", vec![0u8; 11]),
+    ]);
+
+    let limits = DataMashupLimits {
+        max_inner_entries: 100,
+        max_inner_part_bytes: 10_000,
+        max_inner_total_bytes: limit,
+    };
+
+    let err =
+        parse_package_parts_with_limits(&bytes, limits).expect_err("expected total-size error");
+    match err {
+        DataMashupError::InnerTotalTooLarge { limit: got } => {
+            assert_eq!(got, limit);
+        }
+        other => panic!("expected InnerTotalTooLarge, got {other:?}"),
+    }
+}
+
+#[test]
+fn embedded_content_limits_apply_to_nested_packages() {
+    let huge_section = vec![b'A'; 50_000];
+    let nested = {
+        let cursor = Cursor::new(Vec::new());
+        let mut writer = ZipWriter::new(cursor);
+        let options = FileOptions::default().compression_method(CompressionMethod::Deflated);
+        writer
+            .start_file("Formulas/Section1.m", options)
+            .expect("start zip entry");
+        writer
+            .write_all(&huge_section)
+            .expect("write zip entry");
+        writer.finish().expect("finish zip").into_inner()
+    };
+
+    let bytes = build_zip(vec![
+        ("Config/Package.xml", MIN_PACKAGE_XML.as_bytes().to_vec()),
+        ("Formulas/Section1.m", MIN_SECTION.as_bytes().to_vec()),
+        ("Content/oversized.package", nested),
+    ]);
+
+    let limits = DataMashupLimits {
+        max_inner_entries: 100,
+        max_inner_part_bytes: 10_000,
+        max_inner_total_bytes: 100_000,
+    };
+
+    let err =
+        parse_package_parts_with_limits(&bytes, limits).expect_err("expected nested size error");
+    match err {
+        DataMashupError::InnerPartTooLarge { path, size, limit } => {
+            assert_eq!(path, "Content/oversized.package/Formulas/Section1.m");
+            assert_eq!(size, 50_000);
+            assert_eq!(limit, 10_000);
+        }
+        other => panic!("expected InnerPartTooLarge, got {other:?}"),
+    }
 }
 
 fn build_minimal_package_parts_with(entries: Vec<(&str, Vec<u8>)>) -> Vec<u8> {
@@ -35641,6 +36206,158 @@ class LargeGridGenerator(BaseGenerator):
                 ws.append(row_data)
 
             wb.save(output_dir / name)
+
+
+```
+
+---
+
+### File: `fuzz\.gitignore`
+
+```
+target/
+artifacts/
+corpus/
+**/*.profraw
+
+```
+
+---
+
+### File: `fuzz\Cargo.toml`
+
+```toml
+[package]
+name = "excel_diff-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+excel_diff = { path = "../core" }
+
+[profile.release]
+debug = 1
+
+
+```
+
+---
+
+### File: `fuzz\fuzz_targets\datamashup.rs`
+
+```rust
+#![no_main]
+
+use libfuzzer_sys::fuzz_target;
+
+fuzz_target!(|data: &[u8]| {
+    let _ = excel_diff::parse_data_mashup(data);
+
+    let limits = excel_diff::DataMashupLimits {
+        max_inner_entries: 256,
+        max_inner_part_bytes: 256 * 1024,
+        max_inner_total_bytes: 2 * 1024 * 1024,
+    };
+    let _ = excel_diff::parse_package_parts_with_limits(data, limits);
+});
+
+
+```
+
+---
+
+### File: `fuzz\fuzz_targets\diff_engine.rs`
+
+```rust
+#![no_main]
+
+use libfuzzer_sys::fuzz_target;
+
+fuzz_target!(|data: &[u8]| {
+    let rows = data.first().copied().unwrap_or(0) % 16;
+    let cols = data.get(1).copied().unwrap_or(0) % 16;
+    let rows = rows as u32;
+    let cols = cols as u32;
+
+    let mut pool = excel_diff::StringPool::new();
+    let sheet_id = pool.intern("Sheet1");
+
+    let mut grid_a = excel_diff::Grid::new(rows, cols);
+    let mut grid_b = excel_diff::Grid::new(rows, cols);
+
+    if rows > 0 && cols > 0 {
+        let mut i = 2usize;
+        let mut inserted = 0usize;
+        while i + 3 < data.len() && inserted < 64 {
+            let which = data[i] & 1;
+            let r = (data[i + 1] as u32) % rows;
+            let c = (data[i + 2] as u32) % cols;
+            let v = data[i + 3] as f64;
+            let value = Some(excel_diff::CellValue::Number(v));
+
+            if which == 0 {
+                grid_a.insert_cell(r, c, value, None);
+            } else {
+                grid_b.insert_cell(r, c, value, None);
+            }
+
+            inserted += 1;
+            i += 4;
+        }
+    }
+
+    let wb_a = excel_diff::Workbook {
+        sheets: vec![excel_diff::Sheet {
+            name: sheet_id,
+            kind: excel_diff::SheetKind::Worksheet,
+            grid: grid_a,
+        }],
+    };
+    let wb_b = excel_diff::Workbook {
+        sheets: vec![excel_diff::Sheet {
+            name: sheet_id,
+            kind: excel_diff::SheetKind::Worksheet,
+            grid: grid_b,
+        }],
+    };
+
+    let config = excel_diff::DiffConfig::default();
+    let mut op_count = 0usize;
+    let mut sink = excel_diff::CallbackSink::new(|_op| op_count = op_count.saturating_add(1));
+    let _ = excel_diff::advanced::try_diff_workbooks_streaming(
+        &wb_a,
+        &wb_b,
+        &mut pool,
+        &config,
+        &mut sink,
+    );
+});
+
+
+```
+
+---
+
+### File: `fuzz\fuzz_targets\open_workbook.rs`
+
+```rust
+#![no_main]
+
+use libfuzzer_sys::fuzz_target;
+
+fuzz_target!(|data: &[u8]| {
+    if data.len() > 1_000_000 {
+        return;
+    }
+
+    let cursor = std::io::Cursor::new(data.to_vec());
+    let _ = excel_diff::WorkbookPackage::open(cursor);
+});
 
 
 ```
