@@ -30,23 +30,23 @@ impl Default for ContainerLimits {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ContainerError {
-    #[error("I/O error: {0}")]
+    #[error("[EXDIFF_CTR_001] I/O error: {0}. Suggestion: check the file path and permissions.")]
     Io(#[from] std::io::Error),
-    #[error("ZIP error: {0}")]
+    #[error("[EXDIFF_CTR_002] ZIP error: {0}. Suggestion: verify the file is a valid .xlsx and not corrupt.")]
     Zip(String),
-    #[error("not a ZIP container")]
+    #[error("[EXDIFF_CTR_003] not a ZIP container. Suggestion: verify the input is a ZIP-based .xlsx file.")]
     NotZipContainer,
-    #[error("not an OPC package (missing [Content_Types].xml)")]
+    #[error("[EXDIFF_CTR_004] not an OPC package (missing [Content_Types].xml). Suggestion: verify the file is a valid .xlsx workbook.")]
     NotOpcPackage,
-    #[error("archive has too many entries: {entries} (limit: {max_entries})")]
+    #[error("[EXDIFF_CTR_005] archive has too many entries: {entries} (limit: {max_entries}). Suggestion: possible ZIP bomb; increase limits only for trusted files.")]
     TooManyEntries { entries: usize, max_entries: usize },
-    #[error("part '{path}' is too large: {size} bytes (limit: {limit} bytes)")]
+    #[error("[EXDIFF_CTR_006] part '{path}' is too large: {size} bytes (limit: {limit} bytes). Suggestion: possible ZIP bomb; increase limits only for trusted files.")]
     PartTooLarge { path: String, size: u64, limit: u64 },
-    #[error("total uncompressed size exceeds limit: would exceed {limit} bytes")]
+    #[error("[EXDIFF_CTR_007] total uncompressed size exceeds limit: would exceed {limit} bytes. Suggestion: possible ZIP bomb; increase limits only for trusted files.")]
     TotalTooLarge { limit: u64 },
-    #[error("failed to read ZIP entry '{path}': {reason}")]
+    #[error("[EXDIFF_CTR_002] failed to read ZIP entry '{path}': {reason}. Suggestion: the file may be corrupt or truncated.")]
     ZipRead { path: String, reason: String },
-    #[error("file not found in archive: {path}")]
+    #[error("[EXDIFF_CTR_002] file not found in archive: {path}. Suggestion: the file may be corrupt or incomplete.")]
     FileNotFound { path: String },
 }
 
@@ -91,11 +91,13 @@ impl OpcContainer {
             ZipError::InvalidArchive(_) | ZipError::UnsupportedArchive(_) => {
                 ContainerError::NotZipContainer
             }
-            ZipError::Io(e) => ContainerError::Io(e),
-            other => ContainerError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                other.to_string(),
-            )),
+            ZipError::Io(e) => match e.kind() {
+                std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::InvalidData => {
+                    ContainerError::NotZipContainer
+                }
+                _ => ContainerError::Io(e),
+            },
+            other => ContainerError::Zip(other.to_string()),
         })?;
 
         if archive.len() > limits.max_entries {
@@ -111,8 +113,20 @@ impl OpcContainer {
             total_read: 0,
         };
 
-        if container.archive.by_name("[Content_Types].xml").is_err() {
-            return Err(ContainerError::NotOpcPackage);
+        match container.archive.by_name("[Content_Types].xml") {
+            Ok(file) => {
+                let size = file.size();
+                if size > container.limits.max_part_uncompressed_bytes {
+                    return Err(ContainerError::PartTooLarge {
+                        path: "[Content_Types].xml".to_string(),
+                        size,
+                        limit: container.limits.max_part_uncompressed_bytes,
+                    });
+                }
+            }
+            Err(ZipError::FileNotFound) => return Err(ContainerError::NotOpcPackage),
+            Err(ZipError::Io(e)) => return Err(ContainerError::Io(e)),
+            Err(other) => return Err(ContainerError::Zip(other.to_string())),
         }
 
         Ok(container)

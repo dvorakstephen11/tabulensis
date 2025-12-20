@@ -47,13 +47,12 @@ where
         }
     }
 
-    if piles.is_empty() {
+    let Some(&last) = piles.last() else {
         return Vec::new();
-    }
+    };
 
     let mut result: Vec<usize> = Vec::new();
-    #[allow(clippy::unwrap_used)]
-    let mut current = *piles.last().unwrap();
+    let mut current = last;
     loop {
         result.push(current);
         if let Some(prev) = predecessors[current] {

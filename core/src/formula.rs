@@ -401,8 +401,10 @@ impl<'a> Parser<'a> {
         self.skip_ws();
 
         let mut lhs = if matches!(self.peek(), Some(b'+' | b'-')) {
-            #[allow(clippy::unwrap_used)]
-            let op = match self.bump().unwrap() {
+            let op_byte = self
+                .bump()
+                .ok_or_else(|| self.err("unexpected EOF after unary op"))?;
+            let op = match op_byte {
                 b'+' => UnaryOperator::Plus,
                 b'-' => UnaryOperator::Minus,
                 _ => return Err(self.err("invalid unary op")),
@@ -556,9 +558,8 @@ impl<'a> Parser<'a> {
                 let start = self.pos;
                 while let Some(b) = self.peek() {
                     if b == b'!' {
-                        #[allow(clippy::unwrap_used)]
                         let sheet = std::str::from_utf8(&self.s[start..self.pos])
-                            .unwrap()
+                            .map_err(|_| self.err("invalid utf-8 in sheet name"))?
                             .to_string();
                         self.bump();
                         return Ok(Some(sheet));
@@ -608,24 +609,22 @@ impl<'a> Parser<'a> {
 
         if matches!(self.peek(), Some(b'$' | b'A'..=b'Z' | b'a'..=b'z')) {
             let start = self.pos;
-            if let Some(r) = self.try_parse_a1_cell_ref(sheet.clone())? {
-                let mut expr = FormulaExpr::CellRef(r);
-                self.skip_ws();
-                if self.peek() == Some(b':') {
-                    self.bump();
-                    let rhs = self.try_parse_a1_cell_ref(None)?;
-                    if let Some(end) = rhs {
-                        expr = FormulaExpr::RangeRef(RangeReference {
-                            sheet,
-                            start: match expr {
-                                FormulaExpr::CellRef(c) => c,
-                                _ => unreachable!(),
-                            },
-                            end,
-                        });
+                if let Some(r) = self.try_parse_a1_cell_ref(sheet.clone())? {
+                    let start_ref = r.clone();
+                    let mut expr = FormulaExpr::CellRef(r);
+                    self.skip_ws();
+                    if self.peek() == Some(b':') {
+                        self.bump();
+                        let rhs = self.try_parse_a1_cell_ref(None)?;
+                        if let Some(end) = rhs {
+                            expr = FormulaExpr::RangeRef(RangeReference {
+                                sheet,
+                                start: start_ref,
+                                end,
+                            });
+                        }
                     }
-                }
-                return Ok(expr);
+                    return Ok(expr);
             }
             self.pos = start;
         }
@@ -845,8 +844,8 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
             }
         }
-        #[allow(clippy::unwrap_used)]
-        let txt = std::str::from_utf8(&self.s[start..self.pos]).unwrap();
+        let txt = std::str::from_utf8(&self.s[start..self.pos])
+            .map_err(|_| self.err("invalid utf-8 in number"))?;
         let n: f64 = txt.parse().map_err(|_| self.err("invalid number"))?;
         Ok(FormulaExpr::Number(n))
     }
@@ -869,9 +868,8 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        #[allow(clippy::unwrap_used)]
         let ident = std::str::from_utf8(&self.s[start..self.pos])
-            .unwrap()
+            .map_err(|_| self.err("invalid utf-8 in identifier"))?
             .to_string();
         Ok(ident)
     }
@@ -887,9 +885,8 @@ impl<'a> Parser<'a> {
                     self.pos += 1;
                     continue;
                 }
-                #[allow(clippy::unwrap_used)]
                 let name = std::str::from_utf8(&self.s[start..self.pos - 1])
-                    .unwrap()
+                    .map_err(|_| self.err("invalid utf-8 in sheet name"))?
                     .replace("''", "'");
                 return Ok(name);
             }
@@ -954,8 +951,8 @@ impl<'a> Parser<'a> {
         while matches!(self.peek(), Some(b'0'..=b'9')) {
             self.pos += 1;
         }
-        #[allow(clippy::unwrap_used)]
-        let txt = std::str::from_utf8(&self.s[start..self.pos]).unwrap();
+        let txt = std::str::from_utf8(&self.s[start..self.pos])
+            .map_err(|_| self.err("invalid utf-8 in signed int"))?;
         txt.parse::<i32>()
             .map_err(|_| self.err("invalid signed int"))
     }
@@ -966,8 +963,8 @@ impl<'a> Parser<'a> {
         while matches!(self.peek(), Some(b'0'..=b'9')) {
             self.pos += 1;
         }
-        #[allow(clippy::unwrap_used)]
-        let txt = std::str::from_utf8(&self.s[start..self.pos]).unwrap();
+        let txt = std::str::from_utf8(&self.s[start..self.pos])
+            .map_err(|_| self.err("invalid utf-8 in number"))?;
         txt.parse::<u32>().map_err(|_| self.err("invalid number"))
     }
 
@@ -995,8 +992,8 @@ impl<'a> Parser<'a> {
             return Ok(None);
         }
 
-        #[allow(clippy::unwrap_used)]
-        let col_txt = std::str::from_utf8(&self.s[col_start..self.pos]).unwrap();
+        let col_txt = std::str::from_utf8(&self.s[col_start..self.pos])
+            .map_err(|_| self.err("invalid utf-8 in column"))?;
         if col_txt.len() > 3 {
             self.pos = start;
             return Ok(None);
@@ -1014,8 +1011,8 @@ impl<'a> Parser<'a> {
             return Ok(None);
         }
 
-        #[allow(clippy::unwrap_used)]
-        let row_txt = std::str::from_utf8(&self.s[row_start..self.pos]).unwrap();
+        let row_txt = std::str::from_utf8(&self.s[row_start..self.pos])
+            .map_err(|_| self.err("invalid utf-8 in row"))?;
         let row_num = row_txt
             .parse::<u32>()
             .map_err(|_| self.err("invalid row"))?;

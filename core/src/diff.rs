@@ -48,7 +48,7 @@ pub enum QueryMetadataField {
 #[non_exhaustive]
 pub enum DiffError {
     #[error(
-        "alignment limits exceeded for sheet '{sheet}': rows={rows}, cols={cols} (limits: rows={max_rows}, cols={max_cols})"
+        "[EXDIFF_DIFF_001] alignment limits exceeded for sheet '{sheet}': rows={rows}, cols={cols} (limits: rows={max_rows}, cols={max_cols}). Suggestion: increase `max_align_rows`/`max_align_cols` or change `on_limit_exceeded`."
     )]
     LimitsExceeded {
         sheet: StringId,
@@ -58,16 +58,16 @@ pub enum DiffError {
         max_cols: u32,
     },
 
-    #[error("sink error: {message}")]
+    #[error("[EXDIFF_DIFF_002] sink error: {message}. Suggestion: check the output destination and retry.")]
     SinkError { message: String },
 
-    #[error("sheet '{requested}' not found. Available sheets: {}", available.join(", "))]
+    #[error("[EXDIFF_DIFF_003] sheet '{requested}' not found. Available sheets: {}. Suggestion: check the sheet name and casing.", available.join(", "))]
     SheetNotFound {
         requested: String,
         available: Vec<String>,
     },
 
-    #[error("internal error: {message}")]
+    #[error("[EXDIFF_DIFF_004] internal error: {message}. Suggestion: report a bug with the input file if possible.")]
     InternalError { message: String },
 }
 

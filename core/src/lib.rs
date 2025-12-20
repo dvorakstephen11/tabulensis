@@ -133,7 +133,8 @@ pub use datamashup::{
 };
 pub use datamashup_framing::{DataMashupError, RawDataMashup, parse_data_mashup};
 pub use datamashup_package::{
-    EmbeddedContent, PackageParts, PackageXml, SectionDocument, parse_package_parts,
+    DataMashupLimits, EmbeddedContent, PackageParts, PackageXml, SectionDocument,
+    parse_package_parts, parse_package_parts_with_limits,
 };
 pub use diff::{
     DiffError, DiffOp, DiffReport, DiffSummary, FormulaDiffResult, QueryChangeKind,

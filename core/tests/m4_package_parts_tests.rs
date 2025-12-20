@@ -1,6 +1,9 @@
 use std::io::{Cursor, Write};
 
-use excel_diff::{DataMashupError, open_data_mashup, parse_package_parts, parse_section_members};
+use excel_diff::{
+    DataMashupError, DataMashupLimits, open_data_mashup, parse_package_parts,
+    parse_package_parts_with_limits, parse_section_members,
+};
 use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
@@ -281,6 +284,129 @@ fn embedded_content_section1_with_bom_parses_via_parse_section_members() {
         }),
         "embedded Section1.m should parse shared Foo = 1"
     );
+}
+
+#[test]
+fn package_parts_with_limits_rejects_oversized_required_part() {
+    let bytes = build_zip(vec![
+        ("Config/Package.xml", MIN_PACKAGE_XML.as_bytes().to_vec()),
+        ("Formulas/Section1.m", vec![b'a'; 200]),
+    ]);
+
+    let limits = DataMashupLimits {
+        max_inner_entries: 100,
+        max_inner_part_bytes: 100,
+        max_inner_total_bytes: 10_000,
+    };
+
+    let err =
+        parse_package_parts_with_limits(&bytes, limits).expect_err("expected oversized part error");
+
+    match err {
+        DataMashupError::InnerPartTooLarge { path, size, limit } => {
+            assert_eq!(path, "Formulas/Section1.m");
+            assert_eq!(size, 200);
+            assert_eq!(limit, 100);
+        }
+        other => panic!("expected InnerPartTooLarge, got {other:?}"),
+    }
+}
+
+#[test]
+fn package_parts_with_limits_rejects_too_many_entries() {
+    let bytes = build_zip(vec![
+        ("Config/Package.xml", MIN_PACKAGE_XML.as_bytes().to_vec()),
+        ("Formulas/Section1.m", MIN_SECTION.as_bytes().to_vec()),
+        ("Foo.txt", b"1".to_vec()),
+        ("Bar.txt", b"2".to_vec()),
+        ("Baz.txt", b"3".to_vec()),
+    ]);
+
+    let limits = DataMashupLimits {
+        max_inner_entries: 4,
+        max_inner_part_bytes: 10_000,
+        max_inner_total_bytes: 10_000,
+    };
+
+    let err =
+        parse_package_parts_with_limits(&bytes, limits).expect_err("expected too-many-entries error");
+    match err {
+        DataMashupError::InnerTooManyEntries {
+            entries,
+            max_entries,
+        } => {
+            assert_eq!(entries, 5);
+            assert_eq!(max_entries, 4);
+        }
+        other => panic!("expected InnerTooManyEntries, got {other:?}"),
+    }
+}
+
+#[test]
+fn package_parts_with_limits_rejects_total_size() {
+    let base = (MIN_PACKAGE_XML.len() + MIN_SECTION.len()) as u64;
+    let limit = base + 10;
+
+    let bytes = build_zip(vec![
+        ("Config/Package.xml", MIN_PACKAGE_XML.as_bytes().to_vec()),
+        ("Formulas/Section1.m", MIN_SECTION.as_bytes().to_vec()),
+        ("Content/too_much.package", vec![0u8; 11]),
+    ]);
+
+    let limits = DataMashupLimits {
+        max_inner_entries: 100,
+        max_inner_part_bytes: 10_000,
+        max_inner_total_bytes: limit,
+    };
+
+    let err =
+        parse_package_parts_with_limits(&bytes, limits).expect_err("expected total-size error");
+    match err {
+        DataMashupError::InnerTotalTooLarge { limit: got } => {
+            assert_eq!(got, limit);
+        }
+        other => panic!("expected InnerTotalTooLarge, got {other:?}"),
+    }
+}
+
+#[test]
+fn embedded_content_limits_apply_to_nested_packages() {
+    let huge_section = vec![b'A'; 50_000];
+    let nested = {
+        let cursor = Cursor::new(Vec::new());
+        let mut writer = ZipWriter::new(cursor);
+        let options = FileOptions::default().compression_method(CompressionMethod::Deflated);
+        writer
+            .start_file("Formulas/Section1.m", options)
+            .expect("start zip entry");
+        writer
+            .write_all(&huge_section)
+            .expect("write zip entry");
+        writer.finish().expect("finish zip").into_inner()
+    };
+
+    let bytes = build_zip(vec![
+        ("Config/Package.xml", MIN_PACKAGE_XML.as_bytes().to_vec()),
+        ("Formulas/Section1.m", MIN_SECTION.as_bytes().to_vec()),
+        ("Content/oversized.package", nested),
+    ]);
+
+    let limits = DataMashupLimits {
+        max_inner_entries: 100,
+        max_inner_part_bytes: 10_000,
+        max_inner_total_bytes: 100_000,
+    };
+
+    let err =
+        parse_package_parts_with_limits(&bytes, limits).expect_err("expected nested size error");
+    match err {
+        DataMashupError::InnerPartTooLarge { path, size, limit } => {
+            assert_eq!(path, "Content/oversized.package/Formulas/Section1.m");
+            assert_eq!(size, 50_000);
+            assert_eq!(limit, 10_000);
+        }
+        other => panic!("expected InnerPartTooLarge, got {other:?}"),
+    }
 }
 
 fn build_minimal_package_parts_with(entries: Vec<(&str, Vec<u8>)>) -> Vec<u8> {

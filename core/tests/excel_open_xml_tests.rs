@@ -1,7 +1,10 @@
 mod common;
 
 use common::{fixture_path, open_fixture_workbook, sid};
-use excel_diff::{CellAddress, ContainerError, ContainerLimits, OpcContainer, PackageError, SheetKind, WorkbookPackage};
+use excel_diff::{
+    CellAddress, ContainerError, ContainerLimits, DataMashupError, OpcContainer, PackageError,
+    SheetKind, WorkbookPackage, open_data_mashup,
+};
 use std::fs;
 use std::io::{Cursor, ErrorKind, Write};
 use std::path::Path;
@@ -211,7 +214,7 @@ fn zip_bomb_defense_rejects_oversized_part() {
     let file = std::fs::File::open(&path).expect("temp file exists");
     let limits = ContainerLimits {
         max_entries: 100,
-        max_part_uncompressed_bytes: 100,
+        max_part_uncompressed_bytes: 512,
         max_total_uncompressed_bytes: 10_000,
     };
     let mut container = OpcContainer::open_from_reader_with_limits(file, limits)
@@ -223,6 +226,37 @@ fn zip_bomb_defense_rejects_oversized_part() {
         matches!(err, ContainerError::PartTooLarge { .. }),
         "expected PartTooLarge error, got {err:?}"
     );
+
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn oversized_content_types_is_rejected_during_open() {
+    let path = temp_xlsx_path("oversized_content_types");
+    let huge_content_types = "x".repeat(1024);
+
+    write_zip(&[("[Content_Types].xml", &huge_content_types)], &path);
+
+    let file = std::fs::File::open(&path).expect("temp file exists");
+    let limits = ContainerLimits {
+        max_entries: 100,
+        max_part_uncompressed_bytes: 100,
+        max_total_uncompressed_bytes: 10_000,
+    };
+
+    let err = match OpcContainer::open_from_reader_with_limits(file, limits) {
+        Ok(_) => panic!("expected oversized [Content_Types].xml to be rejected"),
+        Err(e) => e,
+    };
+
+    match err {
+        ContainerError::PartTooLarge { path, size, limit } => {
+            assert_eq!(path, "[Content_Types].xml");
+            assert_eq!(size, 1024);
+            assert_eq!(limit, 100);
+        }
+        other => panic!("expected PartTooLarge, got {other:?}"),
+    }
 
     let _ = fs::remove_file(&path);
 }
@@ -248,6 +282,175 @@ fn invalid_xml_in_workbook_does_not_panic() {
     let file = std::fs::File::open(&path).expect("temp file exists");
     let result = std::panic::catch_unwind(|| WorkbookPackage::open(file));
     assert!(result.is_ok(), "malformed XML should not panic (catch_unwind succeeded)");
+    let err = result
+        .unwrap()
+        .expect_err("malformed XML should return error, not Ok");
+    match err {
+        PackageError::InvalidXml {
+            part,
+            line,
+            column,
+            ..
+        } => {
+            assert_eq!(part, "xl/workbook.xml");
+            assert!(line > 0, "expected line > 0, got {line}");
+            assert!(column > 0, "expected column > 0, got {column}");
+        }
+        other => panic!("expected InvalidXml, got {other:?}"),
+    }
+
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn invalid_xml_in_relationships_includes_part_and_position() {
+    let path = temp_xlsx_path("invalid_rels_xml");
+    let content_types = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+</Types>"#;
+
+    let workbook_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"#;
+
+    let malformed_rels = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Target="worksheets/sheet1.xml""#;
+
+    write_zip(
+        &[
+            ("[Content_Types].xml", content_types),
+            ("xl/workbook.xml", workbook_xml),
+            ("xl/_rels/workbook.xml.rels", malformed_rels),
+        ],
+        &path,
+    );
+
+    let file = std::fs::File::open(&path).expect("temp file exists");
+    let result = std::panic::catch_unwind(|| WorkbookPackage::open(file));
+    assert!(result.is_ok(), "malformed relationships XML should not panic");
+    let err = result.unwrap().expect_err("malformed relationships XML should error");
+    match err {
+        PackageError::InvalidXml {
+            part,
+            line,
+            column,
+            ..
+        } => {
+            assert_eq!(part, "xl/_rels/workbook.xml.rels");
+            assert!(line > 0, "expected line > 0, got {line}");
+            assert!(column > 0, "expected column > 0, got {column}");
+        }
+        other => panic!("expected InvalidXml, got {other:?}"),
+    }
+
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn invalid_xml_in_worksheet_includes_part_and_position() {
+    let path = temp_xlsx_path("invalid_sheet_xml");
+    let content_types = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+</Types>"#;
+
+    let workbook_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"#;
+
+    let relationships = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1"
+                Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"
+                Target="worksheets/sheet1.xml"/>
+</Relationships>"#;
+
+    let malformed_sheet = r#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1"><v>1</v>
+    </row>
+  </sheetData>
+</worksheet>"#;
+
+    write_zip(
+        &[
+            ("[Content_Types].xml", content_types),
+            ("xl/workbook.xml", workbook_xml),
+            ("xl/_rels/workbook.xml.rels", relationships),
+            ("xl/worksheets/sheet1.xml", malformed_sheet),
+        ],
+        &path,
+    );
+
+    let file = std::fs::File::open(&path).expect("temp file exists");
+    let result = std::panic::catch_unwind(|| WorkbookPackage::open(file));
+    assert!(result.is_ok(), "malformed worksheet XML should not panic");
+    let err = result.unwrap().expect_err("malformed worksheet XML should error");
+    match err {
+        PackageError::InvalidXml {
+            part,
+            line,
+            column,
+            ..
+        } => {
+            assert_eq!(part, "xl/worksheets/sheet1.xml");
+            assert!(line > 0, "expected line > 0, got {line}");
+            assert!(column > 0, "expected column > 0, got {column}");
+        }
+        other => panic!("expected InvalidXml, got {other:?}"),
+    }
+
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn datamashup_base64_decodes_but_framing_invalid_includes_part() {
+    let path = temp_xlsx_path("dm_framing_invalid");
+    let content_types = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="xml" ContentType="application/xml"/>
+</Types>"#;
+
+    let dm_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<root xmlns:dm="http://schemas.microsoft.com/DataMashup">
+  <dm:DataMashup>AAAA</dm:DataMashup>
+</root>"#;
+
+    write_zip(
+        &[
+            ("[Content_Types].xml", content_types),
+            ("customXml/item1.xml", dm_xml),
+        ],
+        &path,
+    );
+
+    let err = open_data_mashup(&path).expect_err("expected framing error");
+    let err = match err {
+        PackageError::WithPath { source, .. } => *source,
+        other => other,
+    };
+
+    match err {
+        PackageError::DataMashupPartError { part, source } => {
+            assert_eq!(part, "customXml/item1.xml");
+            assert!(matches!(source, DataMashupError::FramingInvalid));
+        }
+        other => panic!("expected DataMashupPartError, got {other:?}"),
+    }
 
     let _ = fs::remove_file(&path);
 }

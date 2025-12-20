@@ -46,6 +46,8 @@ This document lists all error codes returned by excel_diff, their meanings, like
 | `EXDIFF_DM_004` | XML error | Invalid XML in DataMashup | Re-save the file in Excel |
 | `EXDIFF_DM_005` | Inner part too large | Embedded package part too large | Potential nested ZIP bomb |
 | `EXDIFF_DM_006` | Invalid header | DataMashup header malformed | File may be corrupt |
+| `EXDIFF_DM_007` | Inner package too many entries | Embedded package contains too many entries | Potential nested ZIP bomb |
+| `EXDIFF_DM_008` | Inner package total too large | Embedded package total uncompressed size too large | Potential nested ZIP bomb |
 
 ## Diff Errors (EXDIFF_DIFF_xxx)
 

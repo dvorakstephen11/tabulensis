@@ -26,6 +26,8 @@ pub const DM_FRAMING_INVALID: &str = "EXDIFF_DM_003";
 pub const DM_XML_ERROR: &str = "EXDIFF_DM_004";
 pub const DM_INNER_PART_TOO_LARGE: &str = "EXDIFF_DM_005";
 pub const DM_INVALID_HEADER: &str = "EXDIFF_DM_006";
+pub const DM_INNER_TOO_MANY_ENTRIES: &str = "EXDIFF_DM_007";
+pub const DM_INNER_TOTAL_TOO_LARGE: &str = "EXDIFF_DM_008";
 
 pub const DIFF_LIMITS_EXCEEDED: &str = "EXDIFF_DIFF_001";
 pub const DIFF_SINK_ERROR: &str = "EXDIFF_DIFF_002";

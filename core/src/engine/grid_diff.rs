@@ -259,7 +259,7 @@ pub fn diff_grids_database_mode(
                 strings,
                 ops: sink.into_ops(),
                 complete: false,
-                warnings: vec![format!("[{}] {}", e.code(), e)],
+                warnings: vec![e.to_string()],
                 #[cfg(feature = "perf-metrics")]
                 metrics: None,
             }

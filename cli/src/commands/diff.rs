@@ -109,7 +109,7 @@ pub fn run(
                 json::write_json_report(&mut handle, &report)?;
             }
             OutputFormat::Jsonl => {
-                unreachable!("JSONL handled by streaming path");
+                bail!("Internal error: JSONL format should be handled by the streaming path");
             }
         }
     }
@@ -202,7 +202,7 @@ fn run_database_mode(
                 json::write_json_report(&mut handle, &report)?;
             }
             OutputFormat::Jsonl => {
-                unreachable!("JSONL handled by streaming path");
+                bail!("Internal error: JSONL format should be handled by the streaming path");
             }
         }
     }

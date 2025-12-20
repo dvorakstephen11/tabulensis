@@ -22,28 +22,28 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum PackageError {
-    #[error("container error: {0}")]
+    #[error("{0}")]
     Container(#[from] ContainerError),
-    #[error("grid parse error: {0}")]
+    #[error("{0}")]
     GridParse(#[from] GridParseError),
-    #[error("DataMashup error: {0}")]
+    #[error("{0}")]
     DataMashup(#[from] DataMashupError),
-    #[error("workbook.xml missing or unreadable")]
+    #[error("[EXDIFF_PKG_003] workbook.xml missing or unreadable. Suggestion: re-save the file in Excel or verify it is a valid .xlsx.")]
     WorkbookXmlMissing,
-    #[error("worksheet XML missing for sheet {sheet_name}")]
+    #[error("[EXDIFF_PKG_003] worksheet XML missing for sheet {sheet_name}. Suggestion: re-save the file in Excel or verify it is a valid .xlsx.")]
     WorksheetXmlMissing { sheet_name: String },
-    #[error("diff error: {0}")]
+    #[error("{0}")]
     Diff(#[from] crate::diff::DiffError),
-    #[error("serialization error: {0}")]
+    #[error("[EXDIFF_PKG_009] serialization error: {0}. Suggestion: verify the workbook is a standard .xlsx saved by Excel.")]
     SerializationError(String),
 
-    #[error("not a valid ZIP file: {message}")]
+    #[error("[EXDIFF_PKG_001] not a valid ZIP file: {message}. Suggestion: verify the input is a .xlsx workbook.")]
     NotAZip { message: String },
 
-    #[error("missing required part: {path}")]
+    #[error("[EXDIFF_PKG_003] missing required part: {path}. Suggestion: the workbook may be corrupt; re-save the file in Excel.")]
     MissingPart { path: String },
 
-    #[error("invalid XML in '{part}' at line {line}, column {column}: {message}")]
+    #[error("[EXDIFF_PKG_004] invalid XML in '{part}' at line {line}, column {column}: {message}. Suggestion: re-save the file in Excel.")]
     InvalidXml {
         part: String,
         line: usize,
@@ -51,13 +51,13 @@ pub enum PackageError {
         message: String,
     },
 
-    #[error("unsupported format: {message}")]
+    #[error("[EXDIFF_PKG_009] unsupported format: {message}. Suggestion: verify the workbook is a standard .xlsx saved by Excel.")]
     UnsupportedFormat { message: String },
 
-    #[error("failed to read part '{part}': {message}")]
+    #[error("[EXDIFF_PKG_008] failed to read part '{part}': {message}")]
     ReadPartFailed { part: String, message: String },
 
-    #[error("DataMashup error in part '{part}': {source}")]
+    #[error("{source} (in part '{part}')")]
     DataMashupPartError { part: String, source: DataMashupError },
 
     #[error("[{path}] {source}")]

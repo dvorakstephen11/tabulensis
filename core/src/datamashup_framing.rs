@@ -9,18 +9,22 @@ use crate::error_codes;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum DataMashupError {
-    #[error("base64 decoding failed")]
+    #[error("[EXDIFF_DM_001] base64 decoding failed. Suggestion: the workbook may be corrupt; re-save the file in Excel.")]
     Base64Invalid,
-    #[error("unsupported version: {0}")]
+    #[error("[EXDIFF_DM_002] unsupported DataMashup version: {0}. Suggestion: update excel_diff or re-save the file in Excel.")]
     UnsupportedVersion(u32),
-    #[error("invalid framing structure")]
+    #[error("[EXDIFF_DM_003] invalid framing structure. Suggestion: the workbook may be corrupt.")]
     FramingInvalid,
-    #[error("XML parse error: {0}")]
+    #[error("[EXDIFF_DM_004] XML parse error: {0}. Suggestion: re-save the file in Excel.")]
     XmlError(String),
-    #[error("invalid header: {0}")]
+    #[error("[EXDIFF_DM_006] invalid header: {0}. Suggestion: the workbook may be corrupt.")]
     InvalidHeader(String),
-    #[error("inner package part too large: '{path}' ({size} bytes, limit {limit} bytes)")]
+    #[error("[EXDIFF_DM_005] inner package part too large: '{path}' ({size} bytes, limit {limit} bytes). Suggestion: possible nested ZIP bomb; increase limits only for trusted files.")]
     InnerPartTooLarge { path: String, size: u64, limit: u64 },
+    #[error("[EXDIFF_DM_007] inner package has too many entries: {entries} (limit: {max_entries}). Suggestion: possible nested ZIP bomb; increase limits only for trusted files.")]
+    InnerTooManyEntries { entries: usize, max_entries: usize },
+    #[error("[EXDIFF_DM_008] inner package total uncompressed size exceeds limit: would exceed {limit} bytes. Suggestion: possible nested ZIP bomb; increase limits only for trusted files.")]
+    InnerTotalTooLarge { limit: u64 },
 }
 
 impl DataMashupError {
@@ -32,6 +36,8 @@ impl DataMashupError {
             DataMashupError::XmlError(_) => error_codes::DM_XML_ERROR,
             DataMashupError::InvalidHeader(_) => error_codes::DM_INVALID_HEADER,
             DataMashupError::InnerPartTooLarge { .. } => error_codes::DM_INNER_PART_TOO_LARGE,
+            DataMashupError::InnerTooManyEntries { .. } => error_codes::DM_INNER_TOO_MANY_ENTRIES,
+            DataMashupError::InnerTotalTooLarge { .. } => error_codes::DM_INNER_TOTAL_TOO_LARGE,
         }
     }
 }

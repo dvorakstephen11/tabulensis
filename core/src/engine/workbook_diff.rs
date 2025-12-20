@@ -49,7 +49,7 @@ pub fn diff_workbooks(
                 strings,
                 ops: Vec::new(),
                 complete: false,
-                warnings: vec![format!("[{}] {}", e.code(), e)],
+                warnings: vec![e.to_string()],
                 #[cfg(feature = "perf-metrics")]
                 metrics: None,
             }
@@ -68,7 +68,7 @@ pub fn diff_workbooks_streaming<S: DiffSink>(
         Ok(summary) => summary,
         Err(e) => DiffSummary {
             complete: false,
-            warnings: vec![format!("[{}] {}", e.code(), e)],
+            warnings: vec![e.to_string()],
             op_count: 0,
             #[cfg(feature = "perf-metrics")]
             metrics: None,
@@ -113,11 +113,14 @@ pub fn try_diff_workbooks_streaming<S: DiffSink>(
     let mut old_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
     for sheet in &old.sheets {
         let key = make_sheet_key(sheet, pool);
-        if old_sheets.insert(key.clone(), sheet).is_some() {
+        if let Some(previous) = old_sheets.insert(key.clone(), sheet) {
             ctx.warnings.push(format!(
                 "duplicate sheet identity in old workbook: '{}' ({:?}); \
-                 later definition overwrites earlier one. The file may be corrupt.",
-                key.name_lower, key.kind
+                 later definition '{}' overwrites earlier one '{}'. The file may be corrupt.",
+                key.name_lower,
+                key.kind,
+                pool.resolve(sheet.name),
+                pool.resolve(previous.name)
             ));
         }
     }
@@ -125,11 +128,14 @@ pub fn try_diff_workbooks_streaming<S: DiffSink>(
     let mut new_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
     for sheet in &new.sheets {
         let key = make_sheet_key(sheet, pool);
-        if new_sheets.insert(key.clone(), sheet).is_some() {
+        if let Some(previous) = new_sheets.insert(key.clone(), sheet) {
             ctx.warnings.push(format!(
                 "duplicate sheet identity in new workbook: '{}' ({:?}); \
-                 later definition overwrites earlier one. The file may be corrupt.",
-                key.name_lower, key.kind
+                 later definition '{}' overwrites earlier one '{}'. The file may be corrupt.",
+                key.name_lower,
+                key.kind,
+                pool.resolve(sheet.name),
+                pool.resolve(previous.name)
             ));
         }
     }
