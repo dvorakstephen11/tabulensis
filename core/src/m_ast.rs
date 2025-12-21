@@ -3,6 +3,9 @@ use std::str::Chars;
 
 use thiserror::Error;
 
+mod step_model;
+pub(crate) use step_model::{extract_steps, MStep, StepKind, StepPipeline};
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MModuleAst {
     root: MExpr,
