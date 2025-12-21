@@ -12,21 +12,32 @@ use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum QueryChangeKind {
+    /// A semantic change (meaningfully different after canonicalization).
     Semantic,
+    /// Only formatting changed (whitespace/comments); meaning is unchanged.
     FormattingOnly,
+    /// The query was renamed (definition may be unchanged).
     Renamed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FormulaDiffResult {
+    /// Unknown or not computed.
     Unknown,
+    /// Formula/value is unchanged.
     Unchanged,
+    /// Formula/value was added.
     Added,
+    /// Formula/value was removed.
     Removed,
+    /// Only formatting changed (whitespace/casing), semantics unchanged.
     FormattingOnly,
+    /// Filled down/across (shift-equivalent).
     Filled,
+    /// Semantic change.
     SemanticChange,
+    /// Textual change (different text but semantics not computed/unknown).
     TextChange,
 }
 
@@ -38,12 +49,17 @@ impl Default for FormulaDiffResult {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum QueryMetadataField {
+    /// Whether the query loads to a sheet.
     LoadToSheet,
+    /// Whether the query loads to the data model.
     LoadToModel,
+    /// Query group path.
     GroupPath,
+    /// Whether the query is connection-only.
     ConnectionOnly,
 }
 
+/// Errors produced by diffing APIs.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum DiffError {
@@ -87,10 +103,14 @@ pub type SheetId = StringId;
 /// Summary metadata about a diff run emitted alongside streamed ops.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiffSummary {
+    /// Whether the diff completed without early aborts/fallbacks.
     pub complete: bool,
+    /// Warnings explaining why results are incomplete (when `complete == false`).
     pub warnings: Vec<String>,
+    /// Total number of ops emitted.
     pub op_count: usize,
     #[cfg(feature = "perf-metrics")]
+    /// Optional performance metrics when the `perf-metrics` feature is enabled.
     pub metrics: Option<crate::perf::DiffMetrics>,
 }
 
@@ -243,6 +263,15 @@ pub enum DiffOp {
 /// A versioned collection of diff operations between two workbooks.
 ///
 /// The `version` field indicates the schema version for forwards compatibility.
+///
+/// # Incomplete results
+///
+/// Some safety rails and limit behaviors can produce partial results. In that case:
+///
+/// - `complete == false`
+/// - `warnings` contains at least one human-readable explanation
+///
+/// The CLI prints warnings to stderr as `Warning: ...`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DiffReport {
     /// Schema version (currently "1").
@@ -317,6 +346,18 @@ impl DiffReport {
         self.complete = false;
     }
 
+    /// Resolve an interned [`StringId`] into a string slice using this report's `strings` table.
+    ///
+    /// Many fields in [`DiffOp`] are `StringId`s (sheet names, query names, etc.). The returned
+    /// string is owned by the report.
+    ///
+    /// ```
+    /// # use excel_diff::{DiffReport, StringId};
+    /// # fn demo(report: &DiffReport, id: StringId) {
+    /// let text = report.resolve(id).unwrap_or("<unknown>");
+    /// # let _ = text;
+    /// # }
+    /// ```
     pub fn resolve(&self, id: StringId) -> Option<&str> {
         self.strings.get(id.0 as usize).map(|s| s.as_str())
     }

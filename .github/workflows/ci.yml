@@ -31,6 +31,9 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+      - name: Build examples
+        run: cargo build --workspace --examples
+
       - name: Run clippy (deny unwrap/expect)
         run: cargo clippy --workspace -- -D clippy::unwrap_used -D clippy::expect_used
 

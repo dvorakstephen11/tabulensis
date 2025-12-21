@@ -2,6 +2,15 @@ use crate::diff::{DiffError, DiffOp};
 use crate::string_pool::StringPool;
 
 /// Trait for streaming diff operations to a consumer.
+///
+/// Streaming entry points call sinks in this order:
+///
+/// 1. `begin(pool)` once (before any ops)
+/// 2. `emit(op)` zero or more times
+/// 3. `finish()` once (even on most error paths)
+///
+/// Sinks can use `begin` to access the string table (via `pool.strings()`), e.g. to write a
+/// header before streaming ops.
 pub trait DiffSink {
     /// Called once before any ops are emitted.
     ///
@@ -10,8 +19,10 @@ pub trait DiffSink {
         Ok(())
     }
 
+    /// Emit one diff operation.
     fn emit(&mut self, op: DiffOp) -> Result<(), DiffError>;
 
+    /// Finish the stream (flush/close output destinations).
     fn finish(&mut self) -> Result<(), DiffError> {
         Ok(())
     }

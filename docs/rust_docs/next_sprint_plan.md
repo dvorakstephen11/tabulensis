@@ -1,788 +1,463 @@
-# Excel Diff Engine: 7-Branch Sprint Plan to 90% MVP Completion
+Below is a 7‑branch delivery plan that focuses on the *actual* gaps implied by the current implementation + the testing/spec roadmap:
 
-## Executive Summary
-
-This plan identifies the remaining work needed to bring the Excel Diff engine from its current ~70% completion state to at least 90% MVP completion. The codebase has strong foundations in grid diffing, M parsing, formula parsing, and API design. The remaining work focuses on:
-
-1. **Database Mode at workbook level** (critical for competitor parity)
-2. **CLI tool with Git integration** (required for developer adoption)
-3. **Robustness and error handling** (production readiness)
-4. **Cross-platform packaging** (Mac/Win/Web)
-5. **VBA and named range diffing** (object graph completeness)
-6. **Documentation and polish** (developer experience)
-7. **Performance hardening** (large file reliability)
+* **PBIX/PBIT inputs aren’t supported yet** because your container layer hard‑requires `[Content_Types].xml` (OPC) and your DataMashup extraction path only scans Excel `customXml/item*.xml` for base64 content.
+* The **M parser is intentionally shallow**: anything beyond `let`, record/list literals, basic calls, and primitives falls back to `Opaque(...)`.
+* Your M diff logic can currently classify **FormattingOnly vs Semantic** by canonical AST hash, but it cannot yet emit **step‑aware structured semantic detail**, which the testing plan explicitly calls for.
+* You already have **embedded mini‑packages extracted** in `PackageParts` (and tests around BOM stripping), but the domain diff still needs to explicitly diff embedded contents as a first‑class surface.
+* Benchmarks show at least one “should be faster” scenario: **50k dense single edit ~7.8s** in latest results, while the target plan calls out tighter budgets for dense near‑identical cases.
 
 ---
 
-## Current State Assessment
+## Branch map (7 feature branches)
 
-### Completed Components (from old_next_sprint_plan.md branches)
+|  # | Branch name (suggested)                    | Primary goal                                                                         | Depends on                       |
+| -: | ------------------------------------------ | ------------------------------------------------------------------------------------ | -------------------------------- |
+|  1 | `2025-12-22-pbix-host-support`             | Open `.pbix/.pbit`, extract root `DataMashup`, diff M+metadata                       | —                                |
+|  2 | `2025-12-23-m-parser-tier1-ident-access`   | Parse identifiers + access chains + `if`/`each` into structured AST                  | —                                |
+|  3 | `2025-12-24-m-parser-tier2-ops-fn-types`   | Add operators, lambdas, type ascription, `try/otherwise`, precedence                 | #2                               |
+|  4 | `2025-12-26-m-step-model-extraction`       | Build an M “step pipeline” model from `let` bindings                                 | #2–#3                            |
+|  5 | `2025-12-28-m-semantic-diff-details`       | Step-aware semantic diffs + hybrid AST fallback + report UX                          | #4                               |
+|  6 | `2025-12-30-datamashup-embedded-hardening` | Embedded content diff + robust PackageParts/Content variants + fuzz/golden           | #1 (optional) + #2–#3 (optional) |
+|  7 | `2026-01-02-perf-metrics-release-gates`    | Hit perf budgets (esp. dense-near-equal), add parse/memory metrics, tighten CI gates | after major schema work (#5)     |
 
-| Component | Status | Notes |
-|-----------|--------|-------|
-| **Grid Diff Engine** | ✅ Complete | AMR alignment, move detection, multi-gap handling |
-| **DiffConfig** | ✅ Complete | Full builder, presets, serde serialization |
-| **StringPool/Interning** | ✅ Complete | Memory-efficient string handling |
-| **Streaming Output** | ✅ Complete | DiffSink trait, VecSink, JsonLinesSink |
-| **WorkbookPackage API** | ✅ Complete | Unified entry point for parsing and diffing |
-| **M Parser** | ✅ Complete | let/in, records, lists, function calls, canonicalization |
-| **Formula Parser** | ✅ Complete | Full AST, canonicalization, shift detection |
-| **Database Mode (grid level)** | ✅ Complete | `diff_grids_database_mode` implemented |
-| **Performance Infrastructure** | ✅ Complete | Metrics, benchmarks, CI integration |
-| **WASM Compilation** | ✅ Partial | Core compiles, smoke test exists |
+### Dependency sketch
 
-### Missing for 90% MVP
-
-| Component | Priority | Difficulty | Notes |
-|-----------|----------|------------|-------|
-| **CLI Tool** | Critical | Medium | No binary distribution exists |
-| **Git Integration** | Critical | Medium | difftool/mergetool configuration |
-| **Database Mode (workbook level)** | Critical | Low | API exists but not exposed via WorkbookPackage |
-| **Error Handling** | High | Medium | Many unwraps, panics in edge cases |
-| **VBA Module Diffing** | High | Medium | Currently ignored |
-| **Named Range Diffing** | High | Low | Currently ignored |
-| **Chart Object Diffing** | Medium | Medium | Currently ignored |
-| **Three-way Merge** | Medium | High | Not implemented |
-| **Mac/Win Packaging** | High | Medium | No installers/packages |
-| **Web Demo** | Medium | Medium | WASM exists but no frontend |
+* **PBIX support** can ship early and unlock real-world testing.
+* **M parser maturity** (branches 2–3) feeds **step model** (4), which feeds **semantic diff details** (5).
+* **Embedded + fuzz hardening** (6) becomes far more valuable once PBIX exists (1) and M parsing is richer (2–3).
+* **Perf/metrics** (7) should land after (5) so you aren’t chasing shifting baselines.
 
 ---
 
-## Branch Dependency Graph
+## Branch 1 — `2025-12-22-pbix-host-support`
 
-```
-                    ┌─────────────────────────┐
-                    │  Branch 1: CLI Tool &   │
-                    │  Git Integration        │
-                    └───────────┬─────────────┘
-                                │
-           ┌────────────────────┼────────────────────┐
-           │                    │                    │
-           ▼                    ▼                    ▼
-┌─────────────────────┐ ┌─────────────────┐ ┌─────────────────────┐
-│ Branch 2: Database  │ │ Branch 3: Error │ │ Branch 7: Web Demo  │
-│ Mode API            │ │ Hardening       │ │ (WASM Frontend)     │
-└──────────┬──────────┘ └────────┬────────┘ └─────────────────────┘
-           │                     │
-           │                     │
-           │                     ▼
-           │            ┌─────────────────────┐
-           └───────────►│ Branch 4: Object    │
-                        │ Graph Completion    │
-                        └──────────┬──────────┘
-                                   │
-              ┌────────────────────┼────────────────────┐
-              │                                         │
-              ▼                                         ▼
-┌─────────────────────┐                    ┌─────────────────────┐
-│ Branch 5: Packaging │                    │ Branch 6: Perf &    │
-│ & Distribution      │                    │ Robustness          │
-└─────────────────────┘                    └─────────────────────┘
-```
+### Objective
 
-**Critical Path:** Branch 1 → Branch 2 → Branch 4 → Branch 5
+Add first-class `.pbix` / `.pbit` support *for the “legacy PBIX with DataMashup” path* (and a clear error for “no DataMashup → needs tabular model path”), aligned with Phase 3.5 in the testing plan.
 
-**Parallel Work:** Branches 3, 6, 7 can proceed independently after Branch 1.
+### Why this is needed (current behavior)
 
----
+* `OpcContainer` rejects ZIPs without `[Content_Types].xml`. PBIX files commonly won’t have that, so they currently trip `NotOpcPackage`.
+* DataMashup extraction is Excel-specific: scan `customXml/item*.xml`, parse XML, base64 decode. PBIX instead stores `DataMashup` at the ZIP root (per spec).
 
-## Branch 1: CLI Tool & Git Integration
+### Scope of work
 
-**Goal:** Create a usable command-line tool that can be integrated with Git as a difftool.
+1. **Introduce a ZIP container abstraction that does not require OPC**
 
-**Depends on:** Nothing (uses existing library)
+   * Add `ZipContainer` (or similar) that:
 
-**MVP Importance:** Critical — without a CLI, the library cannot be used.
+     * Opens arbitrary ZIP.
+     * Enforces the existing limits pattern: `max_entries`, `max_part_uncompressed_bytes`, `max_total_uncompressed_bytes` (reuse `ContainerLimits`).
+   * Refactor `OpcContainer` to be a thin wrapper around `ZipContainer` that performs the `[Content_Types].xml` requirement for Excel only.
 
-### 1.1 Create CLI Binary Crate
+2. **Implement PBIX/PBIT package open**
 
-**Technical Specification:**
+   * New type: `PbixPackage` (parallel to `WorkbookPackage`) or a general `HostPackage` enum.
+   * Implement:
 
-Create `cli/` directory with a new crate:
+     * `PbixPackage::open(reader)` → `ZipContainer` → read `DataMashup` file at root.
+     * If `DataMashup` missing but PBIX-like markers exist → return `NoDataMashupUseTabularModel` (spec already contemplates this as a dedicated error).
 
-```
-cli/
-  Cargo.toml
-  src/
-    main.rs
-    commands/
-      mod.rs
-      diff.rs
-      info.rs
-    output/
-      mod.rs
-      text.rs
-      json.rs
-```
+3. **Wire diff pipeline**
 
-```rust
-// cli/src/main.rs
-use clap::{Parser, Subcommand};
+   * For PBIX host: diff should emit:
 
-#[derive(Parser)]
-#[command(name = "excel-diff")]
-#[command(about = "Compare Excel workbooks semantically")]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
-}
+     * Query add/remove/rename/change ops.
+     * Query metadata changes where metadata exists in the mashup.
+   * No grid diff ops (PBIX has no Excel sheets) — report should remain valid.
 
-#[derive(Subcommand)]
-enum Commands {
-    Diff {
-        #[arg(help = "Old workbook path")]
-        old: PathBuf,
-        #[arg(help = "New workbook path")]
-        new: PathBuf,
-        #[arg(long, help = "Output format: text, json, jsonl")]
-        format: Option<String>,
-        #[arg(long, help = "Use database mode with specified key columns")]
-        key_columns: Option<String>,
-        #[arg(long, help = "Use fastest preset")]
-        fast: bool,
-        #[arg(long, help = "Use most precise preset")]
-        precise: bool,
-    },
-    Info {
-        #[arg(help = "Workbook path")]
-        path: PathBuf,
-        #[arg(long, help = "Show Power Query information")]
-        queries: bool,
-    },
-}
-```
+4. **CLI behavior**
 
-**Deliverables:**
-- [ ] Create `cli/Cargo.toml` with clap dependency
-- [ ] Implement `diff` subcommand with text output
-- [ ] Implement `diff` subcommand with JSON output
-- [ ] Implement `diff` subcommand with JSON Lines output
-- [ ] Implement `info` subcommand showing workbook structure
-- [ ] Add `--key-columns` flag for database mode
-- [ ] Add config preset flags (`--fast`, `--precise`)
-- [ ] Add exit codes (0 = identical, 1 = different, 2 = error)
-- [ ] Write CLI usage documentation
+   * CLI currently expects `WorkbookPackage::open(file)` in its flow. 
+   * Add host selection:
 
-### 1.2 Git Integration
+     * Extension-based: `.xlsx/.xlsm/.xltx/...` → Excel; `.pbix/.pbit` → PBIX. (This is simplest and avoids guessing ZIP contents.)
+     * Optional future: inspect ZIP entries when extension is unknown.
+   * Enforce option rules:
 
-**Technical Specification:**
+     * `--sheet/--database/...` invalid for PBIX (or ignored with warning).
 
-The CLI must work as a Git difftool:
+5. **Fixtures + tests**
 
-```bash
-# .gitconfig
-[difftool "excel-diff"]
-    cmd = excel-diff diff \"$LOCAL\" \"$REMOTE\"
+   * Add minimal PBIX fixtures:
 
-[diff "xlsx"]
-    textconv = excel-diff info
-    binary = true
-```
+     * `pbix_legacy_one_query_{a,b}.pbix` (DataMashup at root, single query modified)
+     * `pbix_legacy_multi_query_{a,b}.pbix` (query add/remove)
+     * `pbix_no_datamashup.pbix` (contains PBIX markers but no `DataMashup`)
+   * Integration tests:
 
-**Deliverables:**
-- [ ] Document Git configuration in README
-- [ ] Add `--git-diff` output mode (unified diff-style)
-- [ ] Test with actual Git repositories
-- [ ] Add `.gitattributes` example for xlsx files
+     * `open_pbix_extracts_datamashup`
+     * `diff_pbix_emits_query_ops`
+     * `pbix_no_datamashup_is_clear_error`
 
-### 1.3 Human-Readable Text Output
+### Definition of done
 
-**Technical Specification:**
-
-```
-Comparing: old.xlsx → new.xlsx
-
-Sheet "Data":
-  Row 5: ADDED
-  Row 12: REMOVED
-  Cell C7: 100 → 150
-  Cell D7: "old" → "new"
-  Block moved: rows 10-15 → rows 20-25
-
-Power Query:
-  Query "SalesData": DEFINITION CHANGED (semantic)
-  Query "Transform": FORMATTING ONLY
-  Query "NewQuery": ADDED
-```
-
-**Deliverables:**
-- [ ] Implement text formatter for DiffOps
-- [ ] Color-coded output (optional, detect TTY)
-- [ ] Summary statistics at end
-- [ ] Configurable verbosity levels
-
-### Acceptance Criteria for Branch 1
-
-- [ ] `excel-diff diff old.xlsx new.xlsx` produces readable output
-- [ ] `excel-diff diff --format=json` produces valid JSON
-- [ ] Exit code 0 when files identical, 1 when different
-- [ ] Git difftool integration documented and tested
-- [ ] `--help` output is clear and complete
+* `excel_diff_cli diff old.pbix new.pbix` produces a valid `DiffReport` with query ops (no crash, no “NotOpcPackage” false negative).
+* Unit + integration tests pass in CI including wasm build gates (core crate already has wasm workflows).
 
 ---
 
-## Branch 2: Database Mode API Integration
+## Branch 2 — `2025-12-23-m-parser-tier1-ident-access`
 
-**Goal:** Expose database mode through WorkbookPackage API and CLI.
+### Objective
 
-**Depends on:** Branch 1 (CLI infrastructure)
+Turn the most common currently‑opaque constructs into structured AST nodes, so canonicalization and semantics can work beyond “token soup.”
 
-**MVP Importance:** Critical — this is a key differentiator from competitors.
+Your current parser intentionally falls back to `Opaque(tokens)` for many core constructs (identifier refs, `if`, `each`, access chains, etc.).
 
-### 2.1 Add Database Mode to WorkbookPackage
+### Scope of work (Tier 1)
 
-**Technical Specification:**
+Implement structured parsing for:
 
-```rust
-impl WorkbookPackage {
-    pub fn diff_database_mode(
-        &self,
-        other: &Self,
-        sheet_name: &str,
-        key_columns: &[u32],
-        config: &DiffConfig,
-    ) -> DiffReport {
-        // Find sheets by name
-        // Call diff_grids_database_mode
-        // Return unified report
-    }
-}
-```
+1. **Identifier references**
 
-**Deliverables:**
-- [ ] Add `diff_database_mode` method to WorkbookPackage
-- [ ] Add sheet name matching (case-insensitive)
-- [ ] Return error if sheet not found
-- [ ] Add streaming variant `diff_database_mode_streaming`
+   * `Source`
+   * `#"Previous Step"` (quoted identifiers)
+2. **Access chains**
 
-### 2.2 Integrate with CLI
+   * Field access: `Source[Field]`
+   * Item access: `Source{0}`
+   * Chained: `Source{0}[Content]`
+3. **Conditionals**
 
-**Technical Specification:**
+   * `if <cond> then <a> else <b>`
+4. **Each**
 
-```bash
-excel-diff diff --database --sheet=Data --keys=A old.xlsx new.xlsx
-excel-diff diff --database --sheet=Data --keys=A,B,C old.xlsx new.xlsx
-```
+   * `each <expr>` as a real node (not opaque); eventually treated as a lambda.
 
-**Deliverables:**
-- [ ] Add `--database` flag to diff command
-- [ ] Add `--sheet` argument for sheet selection
-- [ ] Add `--keys` argument parsing (comma-separated column letters)
-- [ ] Convert column letters to indices (A=0, B=1, AA=26, etc.)
-- [ ] Add helpful error messages for invalid columns
+These are explicitly called out as “currently opaque” by your coverage audit test.
 
-### 2.3 Auto-Key Detection (Stretch Goal)
+### Implementation notes
 
-**Technical Specification:**
+* Keep your current “best-effort” parser shape, but extend it from the current decision tree:
 
-Heuristically detect likely key columns:
-- First column with unique values
-- Column named "ID", "Key", "SKU", etc.
+  * `let`, parens stripping, record/list literals, call, primitive, else opaque. 
+* Add AST variants (examples):
 
-```rust
-pub fn suggest_key_columns(grid: &Grid, pool: &StringPool) -> Vec<u32> {
-    // Check column 0 for uniqueness
-    // Check header row for common key names
-}
-```
+  * `MExpr::Ident { name }`
+  * `MExpr::If { cond, then_branch, else_branch }`
+  * `MExpr::Each { body }`
+  * `MExpr::Access { base, kind: Field/Item, key }` with support for chaining
+* Canonicalization updates:
 
-**Deliverables:**
-- [ ] Implement `suggest_key_columns` function
-- [ ] Add `--auto-keys` flag to CLI
-- [ ] Print suggested keys when database mode fails due to duplicates
+  * Normalize boolean/null tokens should move from “opaque-token canonicalization” to “real AST canonicalization” where possible (you already canonicalize `true/false/null` inside `Opaque`).
 
-### Acceptance Criteria for Branch 2
+### Tests to add/modify
 
-- [ ] `excel-diff diff --database --keys=A` works correctly
-- [ ] Reordered rows with same keys produce no diff
-- [ ] Changed values in non-key columns reported correctly
-- [ ] Multi-column keys work (`--keys=A,C,E`)
-- [ ] Integration tests with D1-D4 fixtures pass
+* Update `m8_m_parser_coverage_audit_tests`:
+
+  * Those Tier-1 cases should **stop** being opaque and assert the correct `MAstKind` instead. 
+* Add new focused unit tests:
+
+  * `parse_ident_ref`
+  * `parse_field_access`
+  * `parse_item_access`
+  * `parse_access_chain`
+  * `parse_if_then_else`
+  * `parse_each_expr`
+
+### Definition of done
+
+* Coverage audit no longer expects these constructs to be `Opaque`.
+* Canonicalization + equality still preserve formatting-only invariants where already tested.
 
 ---
 
-## Branch 3: Error Handling & Robustness
+## Branch 3 — `2025-12-24-m-parser-tier2-ops-fn-types`
 
-**Goal:** Replace panics with proper error handling, improve resilience to malformed files.
+### Objective
 
-**Depends on:** Nothing (can proceed in parallel)
+Complete the “expression grammar backbone” needed for real semantic diffs: operators, lambdas, type ascription, and error-handling constructs.
 
-**MVP Importance:** High — production code must not panic.
+Your current audit test lists these as opaque today: `(x) => x`, `1 + 2`, `not true`, `x as number`. 
 
-### 3.1 Audit and Fix Panics
+### Scope of work (Tier 2)
 
-**Technical Specification:**
+1. **Function literals**
 
-Search for `.unwrap()`, `.expect()`, `panic!()`, and `unreachable!()` in non-test code:
+   * `(x) => x`
+   * `(x, y) => x + y` (if you support multi-arg)
+2. **Unary operators**
 
-```bash
-rg '\.unwrap\(\)|\.expect\(|panic!\(|unreachable!\(' core/src --type rust
-```
+   * `not <expr>`
+   * `-<expr>` / `+<expr>`
+3. **Binary operators with precedence**
 
-**Deliverables:**
-- [ ] Audit all unwraps in `core/src`
-- [ ] Replace with `?` operator where possible
-- [ ] Add context to errors using `thiserror` or `anyhow`
-- [ ] Document remaining intentional panics (logic errors)
+   * arithmetic: `+ - * /`
+   * comparisons: `= <> < <= > >=`
+   * boolean: `and/or`
+   * concatenation: `&`
+4. **Type ascription**
 
-### 3.2 Graceful Handling of Malformed Files
+   * `<expr> as <type>`
+   * Minimal type grammar to start (identifiers like `number`, `text`, etc.)
+5. **Try/otherwise**
 
-**Technical Specification:**
+   * `try <expr> otherwise <expr>` (if you go that far in this branch)
 
-The parser should not crash on:
-- Truncated ZIP files
-- Missing required XML parts
-- Invalid XML
-- Unexpected DataMashup formats
+### Implementation notes
 
-```rust
-pub enum PackageError {
-    NotAZip(std::io::Error),
-    MissingPart { path: String },
-    InvalidXml { part: String, error: String },
-    UnsupportedFormat { message: String },
-    // ...
-}
-```
+* At this point, the ad-hoc “try parse X” stack should become a **proper precedence parser** (Pratt or precedence-climbing), otherwise operators + nested constructs will become fragile.
+* Ensure node identity for canonicalization:
 
-**Deliverables:**
-- [ ] Create comprehensive `PackageError` enum
-- [ ] Add tests with corrupt fixture files
-- [ ] Ensure all XML parsing has try/catch
-- [ ] Add validation for ZIP entry sizes (prevent zip bombs)
+  * Operator nodes should canonicalize whitespace and parenthesis-only variance.
+  * Preserve associativity rules correctly.
 
-### 3.3 Improve Error Messages
+### Tests
 
-**Technical Specification:**
+* Operator precedence tests (`1 + 2 * 3` parses as `+(1, *(2,3))`).
+* Round-trip semantic equality tests where formatting differs.
+* Regression tests that `Opaque` only remains for truly unsupported constructs.
 
-Errors should include:
-- File path (when available)
-- XML path within the package
-- Line/column for parse errors
-- Actionable suggestions
+### Definition of done
 
-**Deliverables:**
-- [ ] Add context to all error types
-- [ ] Implement `Display` with helpful messages
-- [ ] Add error code constants for programmatic handling
-- [ ] Document error codes in user documentation
-
-### Acceptance Criteria for Branch 3
-
-- [ ] No panics when processing corrupt fixtures
-- [ ] All errors include actionable context
-- [ ] `clippy::unwrap_used` lint passes (or exceptions documented)
-- [ ] Fuzzing with `cargo-fuzz` finds no crashes
+* The earlier “opaque” Tier‑2 cases parse into structured nodes.
+* Canonical AST hash becomes much more stable for semantically equivalent code (important for `FormattingOnly` classification).
 
 ---
 
-## Branch 4: Object Graph Completion
+## Branch 4 — `2025-12-26-m-step-model-extraction`
 
-**Goal:** Add diffing for VBA modules, named ranges, and chart objects.
+### Objective
 
-**Depends on:** Branch 2 (database mode), Branch 3 (error handling)
+Extract an M “pipeline” model from `let … in …` queries so you can talk about changes as “step added/removed/changed,” not “some hash changed.”
 
-**MVP Importance:** High — competitors diff these objects.
+The testing plan explicitly wants step-aware assertions and structured detail for semantic changes. 
 
-### 4.1 VBA Module Diffing
+### Scope of work
 
-**Technical Specification:**
+1. **Define the step model**
 
-VBA modules are stored in `xl/vbaProject.bin` (OLE compound document).
+   * New internal types (example shape):
 
-```rust
-pub struct VbaModule {
-    pub name: StringId,
-    pub module_type: VbaModuleType,
-    pub code: String,
-}
+     * `MStep { name, kind, source_refs, params, output_ref }`
+     * `StepKind` enum (start with the big ones)
 
-pub enum VbaModuleType {
-    Standard,
-    Class,
-    Form,
-    Document,
-}
+2. **Implement `extract_steps(expr_m) -> StepPipeline`**
 
-// New DiffOps
-pub enum DiffOp {
-    // ... existing ops ...
-    VbaModuleAdded { name: StringId },
-    VbaModuleRemoved { name: StringId },
-    VbaModuleChanged { name: StringId },
-}
-```
+   * Parse → canonicalize → walk AST.
+   * Identify:
 
-**Deliverables:**
-- [ ] Add `oletools` or implement OLE parsing
-- [ ] Extract VBA module source code
-- [ ] Implement VBA module comparison (text diff)
-- [ ] Add `VbaModule*` DiffOp variants
-- [ ] Update WorkbookPackage to include VBA modules
-- [ ] Add tests with `.xlsm` fixtures
+     * binding order (step order)
+     * dependencies: which step references which prior step (needs identifier parsing from branches 2–3)
 
-### 4.2 Named Range Diffing
+3. **Step classification (start small, high value)**
 
-**Technical Specification:**
+   * Recognize common transforms:
 
-Named ranges are defined in `xl/workbook.xml`:
+     * `Table.SelectRows`
+     * `Table.RemoveColumns`
+     * `Table.RenameColumns`
+     * `Table.TransformColumnTypes`
+     * `Table.NestedJoin` / `Table.Join`
+   * Everything else is `StepKind::Other { function_name_hash, arity, ... }`
 
-```xml
-<definedNames>
-  <definedName name="SalesData">Sheet1!$A$1:$Z$100</definedName>
-</definedNames>
-```
+4. **Stable step signatures**
 
-```rust
-pub struct NamedRange {
-    pub name: StringId,
-    pub refers_to: StringId,
-    pub scope: Option<StringId>, // Sheet-scoped or workbook-scoped
-}
+   * Per-step hash/signature that:
 
-pub enum DiffOp {
-    // ... existing ops ...
-    NamedRangeAdded { name: StringId },
-    NamedRangeRemoved { name: StringId },
-    NamedRangeChanged { name: StringId, old_ref: StringId, new_ref: StringId },
-}
-```
+     * Is resilient to formatting and superficial renames
+     * Extracts the key semantic bits (e.g., removed column list, join keys)
 
-**Deliverables:**
-- [ ] Parse named ranges from workbook.xml
-- [ ] Add NamedRange to Workbook struct
-- [ ] Implement named range comparison
-- [ ] Add `NamedRange*` DiffOp variants
-- [ ] Add tests with named range fixtures
+### Tests
 
-### 4.3 Chart Object Diffing (Basic)
+* Unit tests over raw M snippets (fast, deterministic).
+* Add fixtures for at least:
 
-**Technical Specification:**
+  * one filter step
+  * one remove columns step
+  * step rename + same body
+* Ensure your domain layer still builds queries from `Section1.m` the same way (no breakage).
 
-Charts are complex objects. For MVP, detect add/remove/change at chart level:
+### Definition of done
 
-```rust
-pub struct ChartInfo {
-    pub name: StringId,
-    pub chart_type: StringId,
-    pub data_range: Option<StringId>,
-}
-
-pub enum DiffOp {
-    // ... existing ops ...
-    ChartAdded { sheet: StringId, name: StringId },
-    ChartRemoved { sheet: StringId, name: StringId },
-    ChartChanged { sheet: StringId, name: StringId },
-}
-```
-
-**Deliverables:**
-- [ ] Parse chart metadata from `xl/charts/*.xml`
-- [ ] Detect chart add/remove at sheet level
-- [ ] Compute hash of chart XML for change detection
-- [ ] Add `Chart*` DiffOp variants
-- [ ] Document limitations (no deep chart diffing)
-
-### Acceptance Criteria for Branch 4
-
-- [ ] VBA module changes detected and reported
-- [ ] Named range add/remove/change detected
-- [ ] Chart add/remove/change detected
-- [ ] No regressions in existing grid/M diff tests
-- [ ] New DiffOps serialize correctly to JSON
+* Given a typical Power Query `let` expression, you can output an ordered list of steps with types and key parameters.
 
 ---
 
-## Branch 5: Packaging & Distribution
+## Branch 5 — `2025-12-28-m-semantic-diff-details`
 
-**Goal:** Create distributable packages for Windows, macOS, and web.
+### Objective
 
-**Depends on:** Branch 4 (feature completeness)
+Upgrade M diffs from “Semantic vs FormattingOnly” to **actionable semantic detail** and scalable AST diffs for complex refactors.
 
-**MVP Importance:** High — users need to install it.
+Right now the diff path computes canonical AST hashes and emits `QueryDefinitionChanged { change_kind, old_hash, new_hash }` but provides no structured semantic explanation.
+The testing plan calls for step-aware reporting and (eventually) hybrid AST strategies (move-aware and deep-tree robust).
 
-### 5.1 Windows Packaging
+### Scope of work
 
-**Technical Specification:**
+1. **Extend the diff report schema for query definition changes**
 
-Options:
-1. **MSI installer** (via `cargo-wix`)
-2. **Portable ZIP** (single .exe)
-3. **Scoop/Chocolatey** package
+   * Keep the current `QueryChangeKind` logic (it’s already working).
+   * Add an optional “semantic detail” payload when semantic diff is enabled:
 
-```yaml
-# .github/workflows/release.yml
-jobs:
-  build-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: cargo build --release -p excel_diff_cli
-      - uses: actions/upload-artifact@v4
-        with:
-          name: excel-diff-windows
-          path: target/release/excel-diff.exe
-```
+     * step diffs (`StepAdded/Removed/Modified/Reordered`)
+     * fallback AST edit script summary when steps can’t explain it
 
-**Deliverables:**
-- [ ] Set up GitHub Actions release workflow
-- [ ] Build Windows x64 binary
-- [ ] Create portable ZIP package
-- [ ] (Optional) Create MSI installer
-- [ ] Add to Scoop bucket
+2. **Step-aware diff**
 
-### 5.2 macOS Packaging
+   * Using `StepPipeline` from branch 4:
 
-**Technical Specification:**
+     * Align steps (start with order-based alignment + signature similarity).
+     * Produce:
 
-Options:
-1. **Homebrew tap**
-2. **DMG with CLI**
-3. **Universal binary** (x64 + ARM64)
+       * added/removed steps
+       * modified step with “what changed”
+   * Ensure the output can support tests like:
 
-**Deliverables:**
-- [ ] Build macOS x64 binary
-- [ ] Build macOS ARM64 binary (Apple Silicon)
-- [ ] Create universal binary
-- [ ] Create Homebrew formula
-- [ ] Test on macOS Sequoia
+     * “exactly one semantically significant change”
+     * “mentions the step name or type” 
 
-### 5.3 Web Demo (WASM)
+3. **Hybrid AST diff fallback**
 
-**Technical Specification:**
+   * Implement two modes:
 
-Simple web page that:
-1. Accepts two file uploads
-2. Runs diff in browser via WASM
-3. Displays results
+     * **Small AST**: exact tree edit distance (APTED/Zhang‑Shasha style)
+     * **Large AST**: move-aware mapping (GumTree-like heuristics)
+   * You can start by defining a generic `TreeNode` view over `MExpr` and then:
 
-```
-web/
-  index.html
-  main.js
-  wasm/
-    excel_diff_wasm.js
-    excel_diff_wasm_bg.wasm
-```
+     * compute subtree hashes
+     * match identical subtrees to detect moves
+     * compute edits on the reduced unmatched regions
 
-**Deliverables:**
-- [ ] Create `wasm/` crate with wasm-bindgen exports
-- [ ] Build with `wasm-pack`
-- [ ] Create minimal HTML/JS frontend
-- [ ] Deploy to GitHub Pages
-- [ ] Test with various file sizes
+4. **Fixtures + tests for the hybrid strategy**
 
-### Acceptance Criteria for Branch 5
+   * Add the fixtures described in the testing plan (or equivalent):
 
-- [ ] Windows .exe downloadable from GitHub Releases
-- [ ] macOS binary downloadable and runs on M1+
-- [ ] Web demo functional at https://[user].github.io/excel_diff
-- [ ] Installation instructions in README for all platforms
-- [ ] CI builds all platforms on release tags
+     * deep skewed IF tree
+     * large refactor with moved block
+     * wrap/unwrap function scenario 
+   * Tests should assert:
+
+     * completes under a bounded time
+     * produces move/insert semantics rather than “replace whole query”
+
+5. **CLI + web viewer presentation**
+
+   * CLI: show a compact semantic summary under each changed query.
+   * Web: expand/collapse per query with step details.
+
+### Definition of done
+
+* When semantic M diffs are enabled:
+
+  * most real-world “Power Query editor” edits show as step-level diffs.
+  * big refactors still produce a usable structural diff rather than a monolithic “changed.”
 
 ---
 
-## Branch 6: Performance Hardening
+## Branch 6 — `2025-12-30-datamashup-embedded-hardening`
 
-**Goal:** Ensure reliable performance on large files, add safeguards.
+### Objective
 
-**Depends on:** Nothing (can proceed in parallel)
+Make the DataMashup surface “complete” for diffing by:
 
-**MVP Importance:** Medium — must not regress, should handle edge cases.
+* treating embedded mini-packages as diffable entities,
+* hardening PackageParts parsing against more real-world variability,
+* expanding fuzz/golden coverage.
 
-### 6.1 Memory Budgeting
+You already extract embedded contents in `PackageParts` and have tests around BOM stripping for both main and embedded `Section1.m`.
+But the testing plan expects explicit diffs when only embedded contents change. 
 
-**Technical Specification:**
+### Scope of work
 
-Add memory limits to prevent OOM:
+1. **Decide and implement the domain model for embedded contents**
 
-```rust
-pub struct DiffConfig {
-    // ... existing fields ...
-    pub max_memory_mb: Option<u32>,
-}
-```
+   * Option A: treat each embedded `Content/{GUID}/Formulas/Section1.m` as its own “namespace” of queries.
+   * Option B: attach embedded diffs as children of the queries that reference them.
+   * Start with A (simpler + deterministic), and upgrade later.
 
-When limit approached:
-1. Emit partial result
-2. Add warning to DiffSummary
-3. Fall back to positional diff
+2. **Diff embedded contents**
 
-**Deliverables:**
-- [ ] Add memory tracking (via allocator stats or estimation)
-- [ ] Implement memory limit check in hot paths
-- [ ] Add `--max-memory` CLI flag
-- [ ] Test with fixtures that exceed limits
+   * Extend the “build queries” surface:
 
-### 6.2 Progress Reporting
+     * today it reads only `dm.package_parts.main_section.source`. 
+   * Add:
 
-**Technical Specification:**
+     * `build_embedded_queries(dm) -> Vec<Query>` with synthetic names like `Embedded/<content-name>/Section1/<Member>`
+   * Feed those queries through the existing query diff path. 
 
-For long-running operations, emit progress:
+3. **Hardening for PackageParts variants**
 
-```rust
-pub trait ProgressCallback: Send {
-    fn on_progress(&self, phase: &str, percent: f32);
-}
+   * Expand parsing tolerance for:
 
-pub fn diff_workbooks_with_progress<P: ProgressCallback>(
-    old: &Workbook,
-    new: &Workbook,
-    config: &DiffConfig,
-    progress: &P,
-) -> DiffReport
-```
+     * additional entries
+     * slightly different paths
+     * multiple embedded packages
+   * Enforce resource ceilings via `DataMashupLimits` (already present) and add regression tests for “near the limit” cases.
 
-**Deliverables:**
-- [ ] Define ProgressCallback trait
-- [ ] Add progress hooks to major phases
-- [ ] Add `--progress` flag to CLI
-- [ ] Show progress bar in terminal
+4. **Fuzz + regression**
 
-### 6.3 Timeout Support
+   * You already have fuzz targets for DataMashup framing/build and grid diff.
+   * Add:
 
-**Technical Specification:**
+     * a fuzz target for `parse_section_members` + `parse_m_expression` together (to catch parser panics early)
+     * corpus seeds based on real world mashups (if you maintain a private corpus, wire it locally even if CI doesn’t ship it)
 
-Allow callers to set a timeout:
+### Definition of done
 
-```rust
-pub struct DiffConfig {
-    // ... existing fields ...
-    pub timeout_seconds: Option<u32>,
-}
-```
+* A change isolated to embedded `Content/*.package` yields:
 
-**Deliverables:**
-- [ ] Add timeout field to DiffConfig
-- [ ] Check elapsed time in hot loops
-- [ ] Return partial result on timeout
-- [ ] Add `--timeout` CLI flag
-
-### Acceptance Criteria for Branch 6
-
-- [ ] 50K×100 grid completes in <10s
-- [ ] Memory stays under 1GB for 100K row files
-- [ ] Progress callback fires at reasonable intervals
-- [ ] Timeout triggers graceful partial result
+  * an embedded query diff and **no** spurious diffs on unrelated top-level queries.
+* Fuzz runs don’t uncover panics in embedded parsing pipelines.
 
 ---
 
-## Branch 7: Documentation & Polish
+## Branch 7 — `2026-01-02-perf-metrics-release-gates`
 
-**Goal:** Comprehensive documentation, examples, and developer experience.
+### Objective
 
-**Depends on:** Branches 1-5 for accurate documentation
+Finish the “ship it” work: performance, instrumentation, and CI gates.
 
-**MVP Importance:** Medium — affects adoption but not functionality.
+Bench results show:
 
-### 7.1 User Documentation
+* `perf_50k_dense_single_edit` ≈ **7821ms** total. 
+  And your code comments indicate some metrics like parse time / peak memory are still “future phase.”
 
-**Deliverables:**
-- [ ] README with quick start guide
-- [ ] CLI reference documentation
-- [ ] Configuration guide (DiffConfig options)
-- [ ] Git integration tutorial
-- [ ] Database mode guide with examples
-- [ ] FAQ section
+### Scope of work
 
-### 7.2 API Documentation
+1. **Dense near-equal speedup (P1 class)**
 
-**Deliverables:**
-- [ ] Complete rustdoc for all public types
-- [ ] Code examples in doc comments
-- [ ] Architecture overview document
-- [ ] Migration guide from old APIs
+   * Implement a “skip unchanged rows” fast-path:
 
-### 7.3 Example Programs
+     * If alignment is identity and a row signature hash matches, avoid per-cell compare for that row.
+   * This targets exactly the “single edit in huge dense grid” case where most rows are unchanged.
 
-**Deliverables:**
-- [ ] `examples/basic_diff.rs` - Simple file comparison
-- [ ] `examples/streaming.rs` - Large file streaming
-- [ ] `examples/database_mode.rs` - Key-based diffing
-- [ ] `examples/custom_config.rs` - Configuration options
+2. **Instrument parse vs diff time**
 
-### Acceptance Criteria for Branch 7
+   * Add `parse_time_ms` and `diff_time_ms` in `DiffMetrics`/report.
+   * Make it available in CLI JSON output for benchmarking pipelines.
 
-- [ ] README has clear installation and usage instructions
-- [ ] `cargo doc --open` produces useful documentation
-- [ ] All examples compile and run
-- [ ] No broken links in documentation
+3. **Peak memory tracking**
 
----
+   * Add a gated allocator counter (feature-flagged) or integrate an existing lightweight approach, and plumb `peak_memory_bytes` into metrics.
 
-## Execution Timeline
+4. **Tighten perf CI gates**
 
-### Week 1-2: Foundation
-- **Branch 1: CLI Tool** (primary focus)
-- **Branch 3: Error Handling** (parallel)
+   * Update `scripts/check_perf_thresholds.py` / perf workflow to enforce:
 
-### Week 3-4: Core Features
-- **Branch 2: Database Mode API** (depends on Branch 1)
-- **Branch 6: Performance** (parallel)
+     * “no regressions vs baseline”
+     * and optionally absolute caps for the key scenarios.
+   * Add a “full-scale perf” scheduled job if not already present (your repo already stores fullscale benchmark history).
 
-### Week 5-6: Completeness
-- **Branch 4: Object Graph** (depends on Branch 2, 3)
-- **Branch 7: Documentation** (start in parallel)
+5. **Release readiness checklist updates**
 
-### Week 7: Distribution
-- **Branch 5: Packaging** (depends on Branch 4)
-- **Branch 7: Documentation** (complete)
+   * Document:
+
+     * PBIX support limits (“legacy DataMashup only”)
+     * semantic M diff behavior and how to enable it
+     * resource ceilings knobs (`max_memory`, `timeout`, etc. already exist in config)
+
+### Definition of done
+
+* P1 dense-near-equal benchmark improves materially (goal: <5s target, or at least a clear downward step + no regressions).
+* Metrics are emitted and used to gate perf PRs.
+* Memory ceilings are measurable, not just estimated.
 
 ---
 
-## Risk Mitigation
+## What this 7-branch plan deliberately does *not* fully solve
 
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| VBA parsing complexity | High | Use existing `oletools` crate or defer to Phase 2 |
-| WASM bundle size | Medium | Feature-gate heavy components, measure early |
-| macOS code signing | Medium | Use ad-hoc signing initially, add notarization later |
-| Cross-platform testing | Medium | Use GitHub Actions matrix builds |
-| Documentation debt | Low | Write docs alongside code, not after |
+You’ll have a clean PBIX story for **“PBIX with DataMashup”**, and a correct/clear error for **“PBIX without DataMashup”** (tabular model path). Implementing full tabular model/DAX diff is a separate post‑MVP epic in the testing plan.
 
----
-
-## Definition of Done (All Branches)
-
-- [ ] All new code has unit tests
-- [ ] All public APIs documented with rustdoc
-- [ ] No new clippy warnings
-- [ ] CI passes on all platforms
-- [ ] Integration tests cover happy path and error cases
-- [ ] README updated if user-facing changes
-
----
-
-## Post-90% MVP Roadmap
-
-Features deferred beyond 90% MVP:
-
-1. **Three-way merge** - Complex, needs design
-2. **DAX/Data Model parsing** - Large effort (H5, difficulty 14)
-3. **Step-level M diff** - Nice to have, not critical
-4. **GUI application** - Significant investment
-5. **Cloud/SaaS version** - Business decision
-6. **Concurrent diffing** - Performance optimization
-7. **Custom output templates** - User request driven
-
----
-
-## Appendix: Completion Estimation
-
-| Branch | Estimated Effort | MVP Contribution |
-|--------|-----------------|------------------|
-| Branch 1: CLI | 1-2 weeks | +8% |
-| Branch 2: Database Mode | 3-4 days | +3% |
-| Branch 3: Error Handling | 1 week | +4% |
-| Branch 4: Object Graph | 1-2 weeks | +6% |
-| Branch 5: Packaging | 1 week | +4% |
-| Branch 6: Performance | 3-4 days | +2% |
-| Branch 7: Documentation | 3-4 days | +3% |
-
-**Total: ~6-8 weeks for +30% completion (70% → 100%)**
-
-Current state: ~70% complete
-After this sprint: ~100% of MVP scope
-
-Note: "100% MVP" means all core features needed for a usable product. Advanced features (DAX, three-way merge, GUI) are Phase 2.
-
+If you want, I can also append an “8th (post‑MVP) branch” proposal for DX1+ (tabular model parsing + minimal measure diff), but the 7 above are the most direct path to a shippable PBIX+semantic‑M upgrade without exploding merge conflicts.

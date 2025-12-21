@@ -11,6 +11,10 @@ struct JsonLinesHeader<'a> {
     strings: &'a [String],
 }
 
+/// A [`DiffSink`] that writes a JSON Lines stream.
+///
+/// The first line is a header containing the schema version and the string table. Each
+/// subsequent line is a JSON-serialized [`DiffOp`].
 pub struct JsonLinesSink<W: Write> {
     w: W,
     wrote_header: bool,
@@ -18,6 +22,14 @@ pub struct JsonLinesSink<W: Write> {
 }
 
 impl<W: Write> JsonLinesSink<W> {
+    /// Create a JSON Lines sink that writes to `w`.
+    ///
+    /// The output format is:
+    ///
+    /// 1. A header line: `{ "kind": "Header", "version": "...", "strings": [...] }`
+    /// 2. One JSON-serialized [`DiffOp`] per line
+    ///
+    /// Ops contain interned [`crate::StringId`] values that index into the header's `strings` table.
     pub fn new(w: W) -> Self {
         Self {
             w,
@@ -26,6 +38,7 @@ impl<W: Write> JsonLinesSink<W> {
         }
     }
 
+    /// Write the header line (idempotent).
     pub fn begin(&mut self, pool: &StringPool) -> Result<(), DiffError> {
         if self.wrote_header {
             return Ok(());

@@ -1,23 +1,64 @@
-//! Excel Diff: A library for comparing Excel workbooks.
+//! Excel Diff: a library for comparing Excel workbooks.
 //!
-//! This crate provides functionality for:
-//! - Opening and parsing Excel workbooks (`.xlsx` files)
-//! - Computing structural and cell-level differences between workbooks
-//! - Serializing diff reports to JSON
-//! - Parsing Power Query (M) code from DataMashup sections
+//! The main entry point is [`WorkbookPackage`], which can parse a workbook (when the
+//! `excel-open-xml` feature is enabled) and then diff it against another workbook.
 //!
-//! # Quick Start
+//! The diff includes:
+//! - sheet/grid ops (cell edits, row/column adds/removes, block moves)
+//! - object ops (named ranges, charts, VBA modules)
+//! - Power Query ops (M query add/remove/rename and definition/metadata changes)
 //!
-//! ```ignore
-//! use excel_diff::WorkbookPackage;
+//! # Quick start
 //!
-//! let pkg_a = WorkbookPackage::open(std::fs::File::open("file_a.xlsx")?)?;
-//! let pkg_b = WorkbookPackage::open(std::fs::File::open("file_b.xlsx")?)?;
-//! let report = pkg_a.diff(&pkg_b, &excel_diff::DiffConfig::default());
+//! ```no_run
+//! use excel_diff::{DiffConfig, WorkbookPackage};
+//! use std::fs::File;
 //!
-//! for op in &report.ops {
-//!     println!("{:?}", op);
-//! }
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let old_pkg = WorkbookPackage::open(File::open("old.xlsx")?)?;
+//! let new_pkg = WorkbookPackage::open(File::open("new.xlsx")?)?;
+//!
+//! let report = old_pkg.diff(&new_pkg, &DiffConfig::default());
+//! println!("ops={}", report.ops.len());
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Streaming (JSON Lines)
+//!
+//! ```no_run
+//! use excel_diff::{DiffConfig, JsonLinesSink, WorkbookPackage};
+//! use std::fs::File;
+//! use std::io::{self, BufWriter};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let old_pkg = WorkbookPackage::open(File::open("old.xlsx")?)?;
+//! let new_pkg = WorkbookPackage::open(File::open("new.xlsx")?)?;
+//!
+//! let stdout = io::stdout();
+//! let mut sink = JsonLinesSink::new(BufWriter::new(stdout.lock()));
+//! let summary = old_pkg.diff_streaming(&new_pkg, &DiffConfig::default(), &mut sink)?;
+//! eprintln!("complete={} ops={}", summary.complete, summary.op_count);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Database mode (key-based diff)
+//!
+//! ```no_run
+//! use excel_diff::{DiffConfig, WorkbookPackage};
+//! use std::fs::File;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let old_pkg = WorkbookPackage::open(File::open("old.xlsx")?)?;
+//! let new_pkg = WorkbookPackage::open(File::open("new.xlsx")?)?;
+//!
+//! // Key columns are 0-based indices (A=0, B=1, ...).
+//! let keys: Vec<u32> = vec![0, 2]; // A,C
+//! let report = old_pkg.diff_database_mode(&new_pkg, "Data", &keys, &DiffConfig::default())?;
+//! println!("ops={}", report.ops.len());
+//! # Ok(())
+//! # }
 //! ```
 
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]

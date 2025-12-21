@@ -10,6 +10,7 @@ homepage = "https://github.com/dvora/excel_diff"
 [[bin]]
 name = "excel-diff"
 path = "src/main.rs"
+doc = false
 
 [dependencies]
 excel_diff = { path = "../core" }

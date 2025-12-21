@@ -17,7 +17,7 @@ use std::str::FromStr;
 
 /// A snapshot of a cell's logical content for comparison purposes.
 ///
-/// Used in [`DiffOp::CellEdited`] to represent the "before" and "after" states.
+/// Used in [`crate::diff::DiffOp::CellEdited`] to represent the "before" and "after" states.
 /// Equality comparison intentionally ignores `addr` and compares only `(value, formula)`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CellSnapshot {

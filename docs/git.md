@@ -1,40 +1,50 @@
-# Git integration
+# Git Integration
 
-## Configure difftool (cell-level diff output)
+[Docs index](index.md)
 
-Add this to your ~/.gitconfig:
+Git can't diff binary `.xlsx` / `.xlsm` directly. Excel Diff supports two practical integrations:
 
+1. **Textconv** (best for `git diff`): converts a single workbook into stable text.
+2. **Difftool** (best for workbook-vs-workbook): compares two versions and emits a unified diff.
+
+## 1) Textconv (recommended for `git diff`)
+
+Add file patterns to `.gitattributes` (in your repo):
+
+```gitattributes
+*.xlsx diff=xlsx
+*.xlsm diff=xlsx
 ```
+
+Add a diff driver to `~/.gitconfig` (or `.git/config`):
+
+```gitconfig
+[diff "xlsx"]
+    textconv = excel-diff info
+    cachetextconv = true
+    binary = true
+```
+
+Now `git diff` will show a stable text view (workbook name, sheets, dimensions, and optionally queries if you run `excel-diff info --queries` manually).
+
+## 2) True diff via difftool (recommended for workbook-vs-workbook)
+
+Add this to `~/.gitconfig`:
+
+```gitconfig
 [difftool "excel-diff"]
     cmd = excel-diff diff --git-diff "$LOCAL" "$REMOTE"
 ```
 
 Then run:
 
-```
-git difftool --tool=excel-diff
-```
-
-## Configure diff driver (structure-only textconv)
-
-Add this to your ~/.gitconfig:
-
-```
-[diff "xlsx"]
-    textconv = excel-diff info
-    binary = true
+```bash
+git difftool --tool=excel-diff -- path/to/file.xlsx
 ```
 
-Add this to your repo's .gitattributes:
+## Notes / edge cases
 
-```
-*.xlsx diff=xlsx
-*.xlsm diff=xlsx
-```
-
-Then run:
-
-```
-git diff --textconv
-```
+- `--git-diff` cannot be combined with `--format json` or `--format jsonl`.
+- `.xlsx` files are binary; textconv is useful even if you don't want a full workbook-vs-workbook diff.
+- For large workbooks, consider using a wrapper script/alias that adds `--max-memory` and `--timeout` and reference that wrapper from your `textconv`/`difftool` config.
 

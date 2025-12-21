@@ -1,10 +1,32 @@
 # Excel Diff
 
-A fast, cross-platform tool for comparing Excel workbooks. Works with `.xlsx` and `.xlsm` files.
+Excel Diff compares two Excel workbooks (`.xlsx` / `.xlsm`) and emits a structured diff: cell edits, sheet structure, named ranges, charts/VBA modules (shallow), and Power Query (M) changes.
+
+Use it via:
+- CLI: `excel-diff`
+- Rust library: `excel_diff` crate (`WorkbookPackage`)
 
 ## Installation
 
-### Windows
+### From GitHub Releases
+
+Download a prebuilt binary from https://github.com/dvora/excel_diff/releases (Windows `.exe` / `.zip`, macOS universal `.tar.gz`).
+
+### From Source (Rust)
+
+Requires [Rust](https://rustup.rs/) 1.85+:
+
+```bash
+cargo install --locked --path cli
+```
+
+### Web Demo
+
+Try it in your browser at https://dvora.github.io/excel_diff (files are processed locally in your browser via WebAssembly).
+
+---
+
+### Windows (details)
 
 **Option 1: Download from GitHub Releases**
 
@@ -55,42 +77,9 @@ mv excel-diff ~/.local/bin/
 > xattr -d com.apple.quarantine /usr/local/bin/excel-diff
 > ```
 
-### Build from Source
-
-Requires [Rust](https://rustup.rs/) 1.85+:
-
-```bash
-cargo install --path cli
-# Or:
-cargo build --release -p excel_diff_cli
-```
-
-### Web Demo
-
-Try Excel Diff directly in your browser at **[dvora.github.io/excel_diff](https://dvora.github.io/excel_diff)**
-
-No installation required. Files are processed entirely in your browser using WebAssembly.
-
 ---
 
-## Directory Structure
-
-- **`core/`**: The Rust library for comparing Excel workbooks.
-- **`cli/`**: Command-line interface for the diff engine.
-- **`wasm/`**: WebAssembly bindings for the web demo.
-- **`web/`**: Web demo frontend.
-- **`fixtures/`**: Python tools to generate Excel file fixtures for testing.
-- **`docs/`**: Project documentation, plans, and meta-programming logs.
-
 ## Quick Start
-
-### Building
-
-```bash
-cargo build --release
-```
-
-The `excel-diff` binary will be available at `target/release/excel-diff`.
 
 ### CLI Usage
 
@@ -100,13 +89,12 @@ Compare two workbooks:
 excel-diff diff old.xlsx new.xlsx
 ```
 
-Output formats:
+Copy/paste starters:
 
 ```bash
-excel-diff diff old.xlsx new.xlsx --format text   # Human-readable (default)
-excel-diff diff old.xlsx new.xlsx --format json   # Full JSON report
-excel-diff diff old.xlsx new.xlsx --format jsonl  # Streaming JSON lines
-excel-diff diff old.xlsx new.xlsx --git-diff      # Unified diff style
+excel-diff diff old.xlsx new.xlsx                       # Human-readable (default)
+excel-diff diff old.xlsx new.xlsx --format json > out.json  # Full JSON report
+excel-diff diff old.xlsx new.xlsx --git-diff            # Unified diff style (for Git tools)
 ```
 
 Diff presets:
@@ -115,6 +103,10 @@ Diff presets:
 excel-diff diff old.xlsx new.xlsx --fast     # Faster, less precise move detection
 excel-diff diff old.xlsx new.xlsx --precise  # More accurate, slower
 ```
+
+Notes:
+- `--git-diff` cannot be combined with `--format json|jsonl`.
+- `--fast` and `--precise` are mutually exclusive.
 
 Show workbook information:
 
@@ -126,82 +118,40 @@ excel-diff info workbook.xlsx --queries  # Include Power Query info
 ### Exit Codes
 
 - `0`: Files are identical
-- `1`: Files differ
+- `1`: Files differ (or results are incomplete)
 - `2`: Error (file not found, parse error, invalid arguments)
-
-## Git Integration
-
-The CLI integrates with Git in two ways:
-
-### Git Difftool
-
-Use `excel-diff` as an external diff viewer for Excel files:
-
-```gitconfig
-# ~/.gitconfig or .git/config
-[diff]
-    tool = excel-diff
-
-[difftool "excel-diff"]
-    cmd = excel-diff diff \"$LOCAL\" \"$REMOTE\"
-```
-
-Then run:
-
-```bash
-git difftool --tool=excel-diff -- path/to/file.xlsx
-```
-
-### Git Textconv (for `git diff`)
-
-Convert Excel files to text for line-by-line diff with `git diff`:
-
-```gitconfig
-# ~/.gitconfig or .git/config
-[diff "xlsx"]
-    textconv = excel-diff info
-    cachetextconv = true
-    binary = true
-```
-
-Add to `.gitattributes`:
-
-```gitattributes
-*.xlsx diff=xlsx
-*.xlsm diff=xlsx
-```
-
-Now `git diff` will show structural changes in Excel files:
-
-```bash
-git diff HEAD~1 -- data.xlsx
-```
-
-### Git Diff Driver with Full Diff
-
-For detailed diff output instead of just structural info:
-
-```gitconfig
-[diff "xlsx-full"]
-    textconv = "excel-diff diff --git-diff /dev/null"
-    cachetextconv = true
-    binary = true
-```
 
 ## Library Usage (Rust)
 
 ```rust
-use excel_diff::{WorkbookPackage, DiffConfig};
+use excel_diff::{DiffConfig, WorkbookPackage};
 
-let old = WorkbookPackage::open(std::fs::File::open("old.xlsx")?)?;
-let new = WorkbookPackage::open(std::fs::File::open("new.xlsx")?)?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let old = WorkbookPackage::open(std::fs::File::open("old.xlsx")?)?;
+    let new = WorkbookPackage::open(std::fs::File::open("new.xlsx")?)?;
 
-let report = old.diff(&new, &DiffConfig::default());
+    let report = old.diff(&new, &DiffConfig::default());
 
-for op in &report.ops {
-    println!("{:?}", op);
+    for op in &report.ops {
+        println!("{:?}", op);
+    }
+
+    Ok(())
 }
 ```
+
+For large workbooks, prefer streaming output (`diff_streaming`) and consider setting `DiffConfig.max_memory_mb` / `DiffConfig.timeout_seconds`.
+
+## Documentation
+
+- Start here: [docs/index.md](docs/index.md)
+- CLI: [docs/cli.md](docs/cli.md)
+- Configuration: [docs/config.md](docs/config.md)
+- Git integration: [docs/git.md](docs/git.md)
+- Database mode: [docs/database_mode.md](docs/database_mode.md)
+- FAQ: [docs/faq.md](docs/faq.md)
+- Architecture: [docs/architecture.md](docs/architecture.md)
+- Migration guide: [docs/migration.md](docs/migration.md)
 
 ## Testing
 
@@ -218,8 +168,4 @@ cd fixtures
 uv pip install -r requirements.txt
 python src/generate.py
 ```
-
-## Documentation
-
-See `docs/` for detailed architectural plans and design documents.
 
