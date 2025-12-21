@@ -14,6 +14,11 @@ pub enum MAstKind {
     Record { field_count: usize },
     List { item_count: usize },
     FunctionCall { name: String, arg_count: usize },
+    FunctionLiteral { param_count: usize },
+    UnaryOp,
+    BinaryOp,
+    TypeAscription,
+    TryOtherwise,
     Primitive,
     Ident { name: String },
     If,
@@ -35,6 +40,41 @@ enum AccessKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum MUnaryOp {
+    Not,
+    Plus,
+    Minus,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum MBinaryOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Concat,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    And,
+    Or,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct MTypeRef {
+    name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct MParam {
+    name: String,
+    ty: Option<MTypeRef>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum MExpr {
     Let {
         bindings: Vec<LetBinding>,
@@ -49,6 +89,28 @@ enum MExpr {
     FunctionCall {
         name: String,
         args: Vec<MExpr>,
+    },
+    FunctionLiteral {
+        params: Vec<MParam>,
+        return_type: Option<MTypeRef>,
+        body: Box<MExpr>,
+    },
+    UnaryOp {
+        op: MUnaryOp,
+        expr: Box<MExpr>,
+    },
+    BinaryOp {
+        op: MBinaryOp,
+        left: Box<MExpr>,
+        right: Box<MExpr>,
+    },
+    TypeAscription {
+        expr: Box<MExpr>,
+        ty: MTypeRef,
+    },
+    TryOtherwise {
+        expr: Box<MExpr>,
+        otherwise: Box<MExpr>,
     },
     Ident {
         name: String,
@@ -181,6 +243,13 @@ impl MModuleAst {
                 name: name.clone(),
                 arg_count: args.len(),
             },
+            MExpr::FunctionLiteral { params, .. } => MAstKind::FunctionLiteral {
+                param_count: params.len(),
+            },
+            MExpr::UnaryOp { .. } => MAstKind::UnaryOp,
+            MExpr::BinaryOp { .. } => MAstKind::BinaryOp,
+            MExpr::TypeAscription { .. } => MAstKind::TypeAscription,
+            MExpr::TryOtherwise { .. } => MAstKind::TryOtherwise,
             MExpr::Primitive(_) => MAstKind::Primitive,
             MExpr::Ident { name } => MAstKind::Ident { name: name.clone() },
             MExpr::If { .. } => MAstKind::If,
@@ -213,12 +282,14 @@ pub fn tokenize_for_testing(source: &str) -> Result<Vec<MTokenDebug>, MParseErro
 /// Parse a Power Query M expression into a minimal AST.
 ///
 /// Supports top-level `let ... in ...` expressions, record and list literals,
-/// qualified function calls, primitive literals, identifier references, `if`
-/// expressions, `each` expressions, and access chains. Inputs that do not match
-/// those forms are preserved as opaque token sequences. The lexer recognizes
-/// `let`/`in`/`if`/`then`/`else`/`each`, quoted identifiers (`#"Foo"`), and
-/// hash-prefixed literals like `#date`/`#datetime` as single identifiers; other
-/// M constructs are parsed best-effort and may be treated as generic tokens.
+/// qualified function calls, function literals, unary/binary ops, type
+/// ascription, `try ... otherwise ...`, primitive literals, identifier
+/// references, `if` expressions, `each` expressions, and access chains. Inputs
+/// that do not match those forms are preserved as opaque token sequences. The
+/// lexer recognizes `let`/`in`/`if`/`then`/`else`/`each`, quoted identifiers
+/// (`#"Foo"`), and hash-prefixed literals like `#date`/`#datetime` as single
+/// identifiers; other M constructs are parsed best-effort and may be treated as
+/// generic tokens.
 pub fn parse_m_expression(source: &str) -> Result<MModuleAst, MParseError> {
     let tokens = tokenize(source)?;
     if tokens.is_empty() {
@@ -261,6 +332,36 @@ fn canonicalize_expr(expr: &mut MExpr) {
                 canonicalize_expr(arg);
             }
         }
+        MExpr::FunctionLiteral {
+            params,
+            return_type,
+            body,
+        } => {
+            for param in params.iter_mut() {
+                if let Some(ty) = param.ty.as_mut() {
+                    ty.name = ty.name.to_ascii_lowercase();
+                }
+            }
+            if let Some(ty) = return_type.as_mut() {
+                ty.name = ty.name.to_ascii_lowercase();
+            }
+            canonicalize_expr(body);
+        }
+        MExpr::UnaryOp { expr, .. } => {
+            canonicalize_expr(expr);
+        }
+        MExpr::BinaryOp { left, right, .. } => {
+            canonicalize_expr(left);
+            canonicalize_expr(right);
+        }
+        MExpr::TypeAscription { expr, ty } => {
+            canonicalize_expr(expr);
+            ty.name = ty.name.to_ascii_lowercase();
+        }
+        MExpr::TryOtherwise { expr, otherwise } => {
+            canonicalize_expr(expr);
+            canonicalize_expr(otherwise);
+        }
         MExpr::Ident { .. } => {}
         MExpr::If {
             cond,
@@ -299,6 +400,358 @@ fn canonicalize_tokens(tokens: &mut Vec<MToken>) {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InfixSplit {
+    Binary(MBinaryOp),
+    Ascription,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SplitPoint {
+    idx: usize,
+    len: usize,
+    prec: u8,
+    kind: InfixSplit,
+}
+
+const PREC_OR: u8 = 10;
+const PREC_AND: u8 = 20;
+const PREC_CMP: u8 = 30;
+const PREC_CONCAT: u8 = 40;
+const PREC_ADD: u8 = 50;
+const PREC_MUL: u8 = 60;
+
+fn is_tail_keyword(tok: &MToken) -> bool {
+    matches!(
+        tok,
+        MToken::KeywordIf | MToken::KeywordLet | MToken::KeywordEach
+    )
+}
+
+fn is_try_head(tok: &MToken) -> bool {
+    matches!(tok, MToken::Identifier(v) if v.eq_ignore_ascii_case("try"))
+}
+
+fn lambda_starts_at(tokens: &[MToken], i: usize) -> bool {
+    if tokens.get(i) != Some(&MToken::Symbol('(')) {
+        return false;
+    }
+
+    let mut depth = 0i32;
+    let mut close: Option<usize> = None;
+    for j in i..tokens.len() {
+        match &tokens[j] {
+            MToken::Symbol('(') => depth += 1,
+            MToken::Symbol(')') => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(j);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let Some(close) = close else {
+        return false;
+    };
+    matches!(tokens.get(close + 1), Some(MToken::Symbol('=')))
+        && matches!(tokens.get(close + 2), Some(MToken::Symbol('>')))
+}
+
+fn scan_cutoff_for_tail_expr(tokens: &[MToken]) -> usize {
+    let mut depth = 0i32;
+
+    for (i, tok) in tokens.iter().enumerate() {
+        match tok {
+            MToken::Symbol('(') | MToken::Symbol('[') | MToken::Symbol('{') => depth += 1,
+            MToken::Symbol(')') | MToken::Symbol(']') | MToken::Symbol('}') => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            _ if depth == 0 && i > 0 => {
+                if is_tail_keyword(tok) || is_try_head(tok) || lambda_starts_at(tokens, i) {
+                    return i;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    tokens.len()
+}
+
+fn consider_best(best: &mut Option<SplitPoint>, cand: SplitPoint, full_len: usize) {
+    if cand.idx == 0 || cand.idx + cand.len >= full_len {
+        return;
+    }
+    match best {
+        None => *best = Some(cand),
+        Some(b) => {
+            if cand.prec < b.prec || (cand.prec == b.prec && cand.idx > b.idx) {
+                *best = Some(cand);
+            }
+        }
+    }
+}
+
+fn find_best_infix_split(tokens: &[MToken]) -> Option<SplitPoint> {
+    let full_len = tokens.len();
+    let cutoff = scan_cutoff_for_tail_expr(tokens);
+    let tokens = &tokens[..cutoff];
+
+    let mut best: Option<SplitPoint> = None;
+    let mut depth = 0i32;
+
+    let mut i = 0usize;
+    while i < tokens.len() {
+        match &tokens[i] {
+            MToken::Symbol('(') | MToken::Symbol('[') | MToken::Symbol('{') => depth += 1,
+            MToken::Symbol(')') | MToken::Symbol(']') | MToken::Symbol('}') => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            _ if depth == 0 => {
+                if i + 1 < tokens.len() {
+                    if tokens[i] == MToken::Symbol('<') && tokens[i + 1] == MToken::Symbol('>') {
+                        consider_best(
+                            &mut best,
+                            SplitPoint {
+                                idx: i,
+                                len: 2,
+                                prec: PREC_CMP,
+                                kind: InfixSplit::Binary(MBinaryOp::Ne),
+                            },
+                            full_len,
+                        );
+                        i += 2;
+                        continue;
+                    }
+                    if tokens[i] == MToken::Symbol('<') && tokens[i + 1] == MToken::Symbol('=') {
+                        consider_best(
+                            &mut best,
+                            SplitPoint {
+                                idx: i,
+                                len: 2,
+                                prec: PREC_CMP,
+                                kind: InfixSplit::Binary(MBinaryOp::Le),
+                            },
+                            full_len,
+                        );
+                        i += 2;
+                        continue;
+                    }
+                    if tokens[i] == MToken::Symbol('>') && tokens[i + 1] == MToken::Symbol('=') {
+                        consider_best(
+                            &mut best,
+                            SplitPoint {
+                                idx: i,
+                                len: 2,
+                                prec: PREC_CMP,
+                                kind: InfixSplit::Binary(MBinaryOp::Ge),
+                            },
+                            full_len,
+                        );
+                        i += 2;
+                        continue;
+                    }
+                }
+
+                match &tokens[i] {
+                    MToken::Symbol('+') => consider_best(
+                        &mut best,
+                        SplitPoint {
+                            idx: i,
+                            len: 1,
+                            prec: PREC_ADD,
+                            kind: InfixSplit::Binary(MBinaryOp::Add),
+                        },
+                        full_len,
+                    ),
+                    MToken::Symbol('-') => consider_best(
+                        &mut best,
+                        SplitPoint {
+                            idx: i,
+                            len: 1,
+                            prec: PREC_ADD,
+                            kind: InfixSplit::Binary(MBinaryOp::Sub),
+                        },
+                        full_len,
+                    ),
+                    MToken::Symbol('*') => consider_best(
+                        &mut best,
+                        SplitPoint {
+                            idx: i,
+                            len: 1,
+                            prec: PREC_MUL,
+                            kind: InfixSplit::Binary(MBinaryOp::Mul),
+                        },
+                        full_len,
+                    ),
+                    MToken::Symbol('/') => consider_best(
+                        &mut best,
+                        SplitPoint {
+                            idx: i,
+                            len: 1,
+                            prec: PREC_MUL,
+                            kind: InfixSplit::Binary(MBinaryOp::Div),
+                        },
+                        full_len,
+                    ),
+                    MToken::Symbol('&') => consider_best(
+                        &mut best,
+                        SplitPoint {
+                            idx: i,
+                            len: 1,
+                            prec: PREC_CONCAT,
+                            kind: InfixSplit::Binary(MBinaryOp::Concat),
+                        },
+                        full_len,
+                    ),
+                    MToken::Symbol('=') => consider_best(
+                        &mut best,
+                        SplitPoint {
+                            idx: i,
+                            len: 1,
+                            prec: PREC_CMP,
+                            kind: InfixSplit::Binary(MBinaryOp::Eq),
+                        },
+                        full_len,
+                    ),
+                    MToken::Symbol('<') => consider_best(
+                        &mut best,
+                        SplitPoint {
+                            idx: i,
+                            len: 1,
+                            prec: PREC_CMP,
+                            kind: InfixSplit::Binary(MBinaryOp::Lt),
+                        },
+                        full_len,
+                    ),
+                    MToken::Symbol('>') => consider_best(
+                        &mut best,
+                        SplitPoint {
+                            idx: i,
+                            len: 1,
+                            prec: PREC_CMP,
+                            kind: InfixSplit::Binary(MBinaryOp::Gt),
+                        },
+                        full_len,
+                    ),
+                    _ => {}
+                }
+
+                if let MToken::Identifier(v) = &tokens[i] {
+                    if v.eq_ignore_ascii_case("and") {
+                        consider_best(
+                            &mut best,
+                            SplitPoint {
+                                idx: i,
+                                len: 1,
+                                prec: PREC_AND,
+                                kind: InfixSplit::Binary(MBinaryOp::And),
+                            },
+                            full_len,
+                        );
+                    } else if v.eq_ignore_ascii_case("or") {
+                        consider_best(
+                            &mut best,
+                            SplitPoint {
+                                idx: i,
+                                len: 1,
+                                prec: PREC_OR,
+                                kind: InfixSplit::Binary(MBinaryOp::Or),
+                            },
+                            full_len,
+                        );
+                    } else if v.eq_ignore_ascii_case("as") {
+                        consider_best(
+                            &mut best,
+                            SplitPoint {
+                                idx: i,
+                                len: 1,
+                                prec: PREC_CMP,
+                                kind: InfixSplit::Ascription,
+                            },
+                            full_len,
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        i += 1;
+    }
+
+    best
+}
+
+fn parse_tier2_ops(tokens: &[MToken]) -> Result<Option<MExpr>, MParseError> {
+    if let Some(split) = find_best_infix_split(tokens) {
+        let left_tokens = &tokens[..split.idx];
+        let right_tokens = &tokens[split.idx + split.len..];
+
+        if !left_tokens.is_empty() && !right_tokens.is_empty() {
+            let left = parse_expression(left_tokens)?;
+            match split.kind {
+                InfixSplit::Binary(op) => {
+                    let right = parse_expression(right_tokens)?;
+                    return Ok(Some(MExpr::BinaryOp {
+                        op,
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    }));
+                }
+                InfixSplit::Ascription => {
+                    let ty = match parse_type_ref(right_tokens) {
+                        Some(ty) => ty,
+                        None => return Ok(None),
+                    };
+                    return Ok(Some(MExpr::TypeAscription {
+                        expr: Box::new(left),
+                        ty,
+                    }));
+                }
+            }
+        }
+    }
+
+    if tokens.len() >= 2 {
+        if matches!(&tokens[0], MToken::Identifier(v) if v.eq_ignore_ascii_case("not")) {
+            let inner = parse_expression(&tokens[1..])?;
+            return Ok(Some(MExpr::UnaryOp {
+                op: MUnaryOp::Not,
+                expr: Box::new(inner),
+            }));
+        }
+
+        if tokens[0] == MToken::Symbol('+') {
+            let inner = parse_expression(&tokens[1..])?;
+            return Ok(Some(MExpr::UnaryOp {
+                op: MUnaryOp::Plus,
+                expr: Box::new(inner),
+            }));
+        }
+
+        if tokens[0] == MToken::Symbol('-') {
+            if let Some(prim) = parse_primitive(tokens) {
+                return Ok(Some(prim));
+            }
+            let inner = parse_expression(&tokens[1..])?;
+            return Ok(Some(MExpr::UnaryOp {
+                op: MUnaryOp::Minus,
+                expr: Box::new(inner),
+            }));
+        }
+    }
+
+    Ok(None)
+}
+
 fn parse_expression(tokens: &[MToken]) -> Result<MExpr, MParseError> {
     if tokens.is_empty() {
         return Err(MParseError::Empty);
@@ -320,6 +773,18 @@ fn parse_expression(tokens: &[MToken]) -> Result<MExpr, MParseError> {
 
     if let Some(each_expr) = parse_each_expr(tokens)? {
         return Ok(each_expr);
+    }
+
+    if let Some(try_expr) = parse_try_otherwise(tokens)? {
+        return Ok(try_expr);
+    }
+
+    if let Some(fn_lit) = parse_function_literal(tokens)? {
+        return Ok(fn_lit);
+    }
+
+    if let Some(op_expr) = parse_tier2_ops(tokens)? {
+        return Ok(op_expr);
     }
 
     if let Some(rec) = parse_record_literal(tokens)? {
@@ -374,6 +839,34 @@ fn strip_wrapping_parens(tokens: &[MToken]) -> Option<&[MToken]> {
     }
 
     Some(&tokens[1..tokens.len() - 1])
+}
+
+fn is_wrapped_by(tokens: &[MToken], open: char, close: char) -> bool {
+    if tokens.len() < 2 {
+        return false;
+    }
+    if !matches!(tokens.first(), Some(MToken::Symbol(c)) if *c == open) {
+        return false;
+    }
+    if !matches!(tokens.last(), Some(MToken::Symbol(c)) if *c == close) {
+        return false;
+    }
+
+    let mut depth = 0i32;
+    for (i, tok) in tokens.iter().enumerate() {
+        match tok {
+            MToken::Symbol('(') | MToken::Symbol('[') | MToken::Symbol('{') => depth += 1,
+            MToken::Symbol(')') | MToken::Symbol(']') | MToken::Symbol('}') => {
+                depth -= 1;
+                if depth == 0 && i != tokens.len() - 1 {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    depth == 0
 }
 
 fn split_top_level(tokens: &[MToken], delimiter: char) -> Vec<&[MToken]> {
@@ -529,6 +1022,187 @@ fn parse_if_then_else(tokens: &[MToken]) -> Result<Option<MExpr>, MParseError> {
     }))
 }
 
+fn find_top_level_otherwise(tokens: &[MToken]) -> Option<usize> {
+    let mut depth = 0i32;
+    for (i, tok) in tokens.iter().enumerate() {
+        match tok {
+            MToken::Symbol('(') | MToken::Symbol('[') | MToken::Symbol('{') => depth += 1,
+            MToken::Symbol(')') | MToken::Symbol(']') | MToken::Symbol('}') => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            MToken::Identifier(v) if depth == 0 && v.eq_ignore_ascii_case("otherwise") => {
+                return Some(i);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn parse_try_otherwise(tokens: &[MToken]) -> Result<Option<MExpr>, MParseError> {
+    if tokens.is_empty() {
+        return Ok(None);
+    }
+    if !matches!(&tokens[0], MToken::Identifier(v) if v.eq_ignore_ascii_case("try")) {
+        return Ok(None);
+    }
+
+    let otherwise_idx = match find_top_level_otherwise(&tokens[1..]) {
+        Some(i) => i + 1,
+        None => return Ok(None),
+    };
+
+    let expr_tokens = &tokens[1..otherwise_idx];
+    let otherwise_tokens = &tokens[otherwise_idx + 1..];
+
+    if expr_tokens.is_empty() || otherwise_tokens.is_empty() {
+        return Ok(None);
+    }
+
+    let expr = parse_expression(expr_tokens)?;
+    let otherwise = parse_expression(otherwise_tokens)?;
+
+    Ok(Some(MExpr::TryOtherwise {
+        expr: Box::new(expr),
+        otherwise: Box::new(otherwise),
+    }))
+}
+
+fn is_ident_token(tok: &MToken, s: &str) -> bool {
+    matches!(tok, MToken::Identifier(v) if v.eq_ignore_ascii_case(s))
+}
+
+fn find_top_level_arrow(tokens: &[MToken]) -> Option<usize> {
+    let mut depth = 0i32;
+    for i in 0..tokens.len().saturating_sub(1) {
+        match &tokens[i] {
+            MToken::Symbol('(') | MToken::Symbol('[') | MToken::Symbol('{') => depth += 1,
+            MToken::Symbol(')') | MToken::Symbol(']') | MToken::Symbol('}') => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            MToken::Symbol('=') if depth == 0 => {
+                if matches!(tokens.get(i + 1), Some(MToken::Symbol('>'))) {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn parse_param(tokens: &[MToken]) -> Option<MParam> {
+    if tokens.is_empty() {
+        return None;
+    }
+
+    if tokens.len() == 1 {
+        let name = token_as_name(&tokens[0])?;
+        return Some(MParam { name, ty: None });
+    }
+
+    for i in 1..tokens.len() {
+        if is_ident_token(&tokens[i], "as") {
+            let name = token_as_name(&tokens[0])?;
+            let ty_tokens = &tokens[i + 1..];
+            let ty = parse_type_ref(ty_tokens)?;
+            return Some(MParam {
+                name,
+                ty: Some(ty),
+            });
+        }
+    }
+
+    None
+}
+
+fn parse_function_literal(tokens: &[MToken]) -> Result<Option<MExpr>, MParseError> {
+    let arrow_idx = match find_top_level_arrow(tokens) {
+        Some(i) => i,
+        None => return Ok(None),
+    };
+
+    if tokens.first() != Some(&MToken::Symbol('(')) {
+        return Ok(None);
+    }
+    if arrow_idx < 2 {
+        return Ok(None);
+    }
+
+    let mut depth = 0i32;
+    let mut close_paren: Option<usize> = None;
+    for i in 0..arrow_idx {
+        match &tokens[i] {
+            MToken::Symbol('(') => depth += 1,
+            MToken::Symbol(')') => {
+                depth -= 1;
+                if depth == 0 {
+                    close_paren = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let close_paren = match close_paren {
+        Some(i) => i,
+        None => return Ok(None),
+    };
+
+    let params_tokens = &tokens[1..close_paren];
+    let param_slices = if params_tokens.is_empty() {
+        Vec::new()
+    } else {
+        split_top_level(params_tokens, ',')
+    };
+
+    let mut params = Vec::new();
+    for slice in param_slices {
+        if slice.is_empty() {
+            return Ok(None);
+        }
+        let p = match parse_param(slice) {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+        params.push(p);
+    }
+
+    let mut return_type: Option<MTypeRef> = None;
+    let between = &tokens[close_paren + 1..arrow_idx];
+    if !between.is_empty() {
+        if between.len() >= 2 && is_ident_token(&between[0], "as") {
+            let ty = match parse_type_ref(&between[1..]) {
+                Some(ty) => ty,
+                None => return Ok(None),
+            };
+            return_type = Some(ty);
+        } else {
+            return Ok(None);
+        }
+    }
+
+    if tokens.len() <= arrow_idx + 1 {
+        return Ok(None);
+    }
+
+    let body_tokens = &tokens[arrow_idx + 2..];
+    if body_tokens.is_empty() {
+        return Ok(None);
+    }
+    let body = parse_expression(body_tokens)?;
+
+    Ok(Some(MExpr::FunctionLiteral {
+        params,
+        return_type,
+        body: Box::new(body),
+    }))
+}
+
 fn parse_access_chain(tokens: &[MToken]) -> Result<Option<MExpr>, MParseError> {
     if tokens.len() < 3 {
         return Ok(None);
@@ -606,13 +1280,7 @@ fn parse_access_chain(tokens: &[MToken]) -> Result<Option<MExpr>, MParseError> {
 }
 
 fn parse_record_literal(tokens: &[MToken]) -> Result<Option<MExpr>, MParseError> {
-    if tokens.len() < 2 {
-        return Ok(None);
-    }
-    if !matches!(tokens.first(), Some(MToken::Symbol('['))) {
-        return Ok(None);
-    }
-    if !matches!(tokens.last(), Some(MToken::Symbol(']'))) {
+    if !is_wrapped_by(tokens, '[', ']') {
         return Ok(None);
     }
 
@@ -657,13 +1325,7 @@ fn parse_record_literal(tokens: &[MToken]) -> Result<Option<MExpr>, MParseError>
 }
 
 fn parse_list_literal(tokens: &[MToken]) -> Result<Option<MExpr>, MParseError> {
-    if tokens.len() < 2 {
-        return Ok(None);
-    }
-    if !matches!(tokens.first(), Some(MToken::Symbol('{'))) {
-        return Ok(None);
-    }
-    if !matches!(tokens.last(), Some(MToken::Symbol('}'))) {
+    if !is_wrapped_by(tokens, '{', '}') {
         return Ok(None);
     }
 
@@ -798,6 +1460,13 @@ fn parse_qualified_name(tokens: &[MToken]) -> Option<String> {
     }
 
     Some(parts.join("."))
+}
+
+fn parse_type_ref(tokens: &[MToken]) -> Option<MTypeRef> {
+    let name = parse_qualified_name(tokens)?;
+    Some(MTypeRef {
+        name: name.to_ascii_lowercase(),
+    })
 }
 
 fn parse_primitive(tokens: &[MToken]) -> Option<MExpr> {

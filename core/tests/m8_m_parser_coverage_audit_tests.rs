@@ -6,13 +6,6 @@ fn parse_kind(expr: &str) -> MAstKind {
     ast.root_kind_for_testing()
 }
 
-fn assert_opaque(expr: &str) {
-    match parse_kind(expr) {
-        MAstKind::Opaque { token_count } => assert!(token_count > 0),
-        other => panic!("expected Opaque, got {:?}", other),
-    }
-}
-
 fn assert_kind(expr: &str, expected: MAstKind) {
     let got = parse_kind(expr);
     assert_eq!(got, expected);
@@ -60,9 +53,13 @@ fn coverage_audit_tier1_cases_are_structured() {
 }
 
 #[test]
-fn coverage_audit_tier2_cases_remain_opaque() {
-    let cases = ["(x) => x", "1 + 2", "not true", "x as number"];
-    for expr in cases {
-        assert_opaque(expr);
-    }
+fn coverage_audit_tier2_cases_are_structured() {
+    assert_kind(
+        "(x) => x",
+        MAstKind::FunctionLiteral { param_count: 1 },
+    );
+    assert_kind("1 + 2", MAstKind::BinaryOp);
+    assert_kind("not true", MAstKind::UnaryOp);
+    assert_kind("x as number", MAstKind::TypeAscription);
+    assert_kind("try 1 otherwise 0", MAstKind::TryOtherwise);
 }
