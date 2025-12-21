@@ -31,7 +31,7 @@ pub(super) fn compute_formula_diff(
 }
 
 pub(super) fn emit_cell_edit<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     addr: CellAddress,
     old_cell: Option<&Cell>,
     new_cell: Option<&Cell>,
@@ -76,7 +76,7 @@ pub(super) fn snapshot_with_addr(cell: Option<&Cell>, addr: CellAddress) -> Cell
 }
 
 pub(super) fn emit_row_block_move<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     mv: RowBlockMove,
 ) -> Result<(), DiffError> {
     ctx.emit(DiffOp::BlockMovedRows {
@@ -89,7 +89,7 @@ pub(super) fn emit_row_block_move<S: DiffSink>(
 }
 
 pub(super) fn emit_column_block_move<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     mv: ColumnBlockMove,
 ) -> Result<(), DiffError> {
     ctx.emit(DiffOp::BlockMovedColumns {
@@ -102,7 +102,7 @@ pub(super) fn emit_column_block_move<S: DiffSink>(
 }
 
 pub(super) fn emit_rect_block_move<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     mv: RectBlockMove,
 ) -> Result<(), DiffError> {
     ctx.emit(DiffOp::BlockMovedRect {
@@ -118,7 +118,7 @@ pub(super) fn emit_rect_block_move<S: DiffSink>(
 }
 
 pub(super) fn emit_moved_row_block_edits<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     old_view: &GridView,
     new_view: &GridView,
     mv: RowBlockMove,
@@ -147,7 +147,7 @@ pub(super) fn emit_moved_row_block_edits<S: DiffSink>(
 }
 
 pub(super) fn diff_row_pair_sparse<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     row_a: u32,
     row_b: u32,
     overlap_cols: u32,
@@ -199,7 +199,7 @@ pub(super) fn diff_row_pair_sparse<S: DiffSink>(
 }
 
 pub(super) fn diff_row_pair<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     old: &Grid,
     new: &Grid,
     row_a: u32,
@@ -222,7 +222,7 @@ pub(super) fn diff_row_pair<S: DiffSink>(
 }
 
 pub(super) fn emit_row_aligned_diffs<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     old_view: &GridView,
     new_view: &GridView,
     alignment: &RowAlignment,
@@ -272,7 +272,7 @@ pub(super) fn emit_row_aligned_diffs<S: DiffSink>(
 }
 
 pub(super) fn emit_column_aligned_diffs<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     old: &Grid,
     new: &Grid,
     alignment: &ColumnAlignment,
@@ -306,33 +306,64 @@ pub(super) fn emit_column_aligned_diffs<S: DiffSink>(
 }
 
 pub(super) fn positional_diff<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     old: &Grid,
     new: &Grid,
 ) -> Result<(), DiffError> {
     let overlap_rows = old.nrows.min(new.nrows);
     let overlap_cols = old.ncols.min(new.ncols);
 
+    ctx.hardening.progress("cell_diff", 0.0);
+
     for row in 0..overlap_rows {
+        if ctx.hardening.check_timeout(ctx.warnings) {
+            return Ok(());
+        }
+
+        if overlap_rows > 0 && row % 256 == 0 {
+            ctx.hardening
+                .progress("cell_diff", row as f32 / overlap_rows as f32);
+        }
+
         diff_row_pair(ctx, old, new, row, row, overlap_cols)?;
+    }
+
+    if overlap_rows > 0 {
+        ctx.hardening.progress("cell_diff", 1.0);
+    }
+
+    if ctx.hardening.check_timeout(ctx.warnings) {
+        return Ok(());
     }
 
     if new.nrows > old.nrows {
         for row_idx in old.nrows..new.nrows {
+            if row_idx % 4096 == 0 && ctx.hardening.check_timeout(ctx.warnings) {
+                return Ok(());
+            }
             ctx.emit(DiffOp::row_added(ctx.sheet_id, row_idx, None))?;
         }
     } else if old.nrows > new.nrows {
         for row_idx in new.nrows..old.nrows {
+            if row_idx % 4096 == 0 && ctx.hardening.check_timeout(ctx.warnings) {
+                return Ok(());
+            }
             ctx.emit(DiffOp::row_removed(ctx.sheet_id, row_idx, None))?;
         }
     }
 
     if new.ncols > old.ncols {
         for col_idx in old.ncols..new.ncols {
+            if col_idx % 4096 == 0 && ctx.hardening.check_timeout(ctx.warnings) {
+                return Ok(());
+            }
             ctx.emit(DiffOp::column_added(ctx.sheet_id, col_idx, None))?;
         }
     } else if old.ncols > new.ncols {
         for col_idx in new.ncols..old.ncols {
+            if col_idx % 4096 == 0 && ctx.hardening.check_timeout(ctx.warnings) {
+                return Ok(());
+            }
             ctx.emit(DiffOp::column_removed(ctx.sheet_id, col_idx, None))?;
         }
     }
@@ -349,7 +380,7 @@ pub(super) fn cells_in_overlap(old: &Grid, new: &Grid) -> u64 {
 
 #[cfg(feature = "perf-metrics")]
 pub(super) fn run_positional_diff_with_metrics<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     old: &Grid,
     new: &Grid,
     mut metrics: Option<&mut DiffMetrics>,
@@ -371,7 +402,7 @@ pub(super) fn run_positional_diff_with_metrics<S: DiffSink>(
 
 #[cfg(not(feature = "perf-metrics"))]
 pub(super) fn run_positional_diff_with_metrics<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     old: &Grid,
     new: &Grid,
 ) -> Result<(), DiffError> {
@@ -379,7 +410,7 @@ pub(super) fn run_positional_diff_with_metrics<S: DiffSink>(
 }
 
 pub(super) fn try_row_alignment_internal<S: DiffSink>(
-    emit_ctx: &mut EmitCtx<'_, S>,
+    emit_ctx: &mut EmitCtx<'_, '_, S>,
     old_view: &GridView,
     new_view: &GridView,
     #[cfg(feature = "perf-metrics")] metrics: &mut Option<&mut DiffMetrics>,
@@ -387,6 +418,8 @@ pub(super) fn try_row_alignment_internal<S: DiffSink>(
     let Some(alignment) = align_row_changes_from_views(old_view, new_view, emit_ctx.config) else {
         return Ok(false);
     };
+
+    emit_ctx.hardening.progress("cell_diff", 0.0);
 
     #[cfg(feature = "perf-metrics")]
     let compared = {
@@ -397,6 +430,8 @@ pub(super) fn try_row_alignment_internal<S: DiffSink>(
     };
     #[cfg(not(feature = "perf-metrics"))]
     let compared = emit_row_aligned_diffs(emit_ctx, old_view, new_view, &alignment)?;
+
+    emit_ctx.hardening.progress("cell_diff", 1.0);
 
     #[cfg(feature = "perf-metrics")]
     if let Some(m) = metrics.as_deref_mut() {
@@ -409,7 +444,7 @@ pub(super) fn try_row_alignment_internal<S: DiffSink>(
 }
 
 pub(super) fn try_single_column_alignment_internal<S: DiffSink>(
-    emit_ctx: &mut EmitCtx<'_, S>,
+    emit_ctx: &mut EmitCtx<'_, '_, S>,
     old: &Grid,
     new: &Grid,
     old_view: &GridView,
@@ -422,6 +457,8 @@ pub(super) fn try_single_column_alignment_internal<S: DiffSink>(
         return Ok(false);
     };
 
+    emit_ctx.hardening.progress("cell_diff", 0.0);
+
     #[cfg(feature = "perf-metrics")]
     {
         let _phase = metrics
@@ -431,6 +468,8 @@ pub(super) fn try_single_column_alignment_internal<S: DiffSink>(
     }
     #[cfg(not(feature = "perf-metrics"))]
     emit_column_aligned_diffs(emit_ctx, old, new, &alignment)?;
+
+    emit_ctx.hardening.progress("cell_diff", 1.0);
 
     #[cfg(feature = "perf-metrics")]
     if let Some(m) = metrics.as_deref_mut() {

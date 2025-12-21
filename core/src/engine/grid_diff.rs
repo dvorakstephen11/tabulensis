@@ -21,7 +21,7 @@ use crate::database_alignment::{KeyColumnSpec, diff_table_by_key};
 const DATABASE_MODE_SHEET_ID: &str = "<database>";
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn try_diff_grids<S: DiffSink>(
+pub(super) fn try_diff_grids<'p, S: DiffSink>(
     sheet_id: SheetId,
     old: &Grid,
     new: &Grid,
@@ -30,9 +30,14 @@ pub(super) fn try_diff_grids<S: DiffSink>(
     sink: &mut S,
     op_count: &mut usize,
     ctx: &mut DiffContext,
+    hardening: &mut super::hardening::HardeningController<'p>,
     #[cfg(feature = "perf-metrics")] mut metrics: Option<&mut DiffMetrics>,
 ) -> Result<(), DiffError> {
     if old.nrows == 0 && new.nrows == 0 {
+        return Ok(());
+    }
+
+    if hardening.check_timeout(&mut ctx.warnings) {
         return Ok(());
     }
 
@@ -79,6 +84,8 @@ pub(super) fn try_diff_grids<S: DiffSink>(
                     &mut ctx.formula_cache,
                     sink,
                     op_count,
+                    &mut ctx.warnings,
+                    hardening,
                 );
 
                 #[cfg(feature = "perf-metrics")]
@@ -100,6 +107,7 @@ pub(super) fn try_diff_grids<S: DiffSink>(
         sink,
         op_count,
         ctx,
+        hardening,
         #[cfg(feature = "perf-metrics")]
         metrics,
     )?;
@@ -108,7 +116,7 @@ pub(super) fn try_diff_grids<S: DiffSink>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn diff_grids_core<S: DiffSink>(
+fn diff_grids_core<'p, S: DiffSink>(
     sheet_id: SheetId,
     old: &Grid,
     new: &Grid,
@@ -117,6 +125,7 @@ fn diff_grids_core<S: DiffSink>(
     sink: &mut S,
     op_count: &mut usize,
     ctx: &mut DiffContext,
+    hardening: &mut super::hardening::HardeningController<'p>,
     #[cfg(feature = "perf-metrics")] mut metrics: Option<&mut DiffMetrics>,
 ) -> Result<(), DiffError> {
     if old.nrows == new.nrows && old.ncols == new.ncols && grids_non_blank_cells_equal(old, new) {
@@ -124,6 +133,34 @@ fn diff_grids_core<S: DiffSink>(
         if let Some(m) = metrics.as_mut() {
             m.add_cells_compared(cells_in_overlap(old, new));
         }
+        return Ok(());
+    }
+
+    if hardening.check_timeout(&mut ctx.warnings) {
+        return Ok(());
+    }
+
+    let sheet_name = pool.resolve(sheet_id);
+    let context = format!("sheet '{sheet_name}'");
+    if hardening.memory_guard_or_warn(
+        super::hardening::estimate_advanced_sheet_diff_peak(old, new),
+        &mut ctx.warnings,
+        &context,
+    ) {
+        let mut emit_ctx = EmitCtx::new(
+            sheet_id,
+            pool,
+            config,
+            &mut ctx.formula_cache,
+            sink,
+            op_count,
+            &mut ctx.warnings,
+            hardening,
+        );
+        #[cfg(feature = "perf-metrics")]
+        run_positional_diff_with_metrics(&mut emit_ctx, old, new, metrics.as_deref_mut())?;
+        #[cfg(not(feature = "perf-metrics"))]
+        run_positional_diff_with_metrics(&mut emit_ctx, old, new)?;
         return Ok(());
     }
 
@@ -143,6 +180,8 @@ fn diff_grids_core<S: DiffSink>(
             &mut ctx.formula_cache,
             sink,
             op_count,
+            &mut ctx.warnings,
+            hardening,
         );
         #[cfg(feature = "perf-metrics")]
         run_positional_diff_with_metrics(&mut emit_ctx, old, new, metrics.as_deref_mut())?;
@@ -151,15 +190,23 @@ fn diff_grids_core<S: DiffSink>(
         return Ok(());
     }
 
-    let mut differ = SheetGridDiffer::new(
+    let emit_ctx = EmitCtx::new(
         sheet_id,
-        old,
-        new,
-        config,
         pool,
+        config,
         &mut ctx.formula_cache,
         sink,
         op_count,
+        &mut ctx.warnings,
+        hardening,
+    );
+
+    let mut differ = SheetGridDiffer::from_views(
+        emit_ctx,
+        old,
+        new,
+        old_view,
+        new_view,
         #[cfg(feature = "perf-metrics")]
         metrics.as_deref_mut(),
     );
@@ -169,14 +216,24 @@ fn diff_grids_core<S: DiffSink>(
         m.start_phase(Phase::MoveDetection);
     }
 
+    differ.emit_ctx.hardening.progress("move_detection", 0.0);
+    if differ.emit_ctx.hardening.check_timeout(differ.emit_ctx.warnings) {
+        return Ok(());
+    }
     differ.detect_moves()?;
+    differ.emit_ctx.hardening.progress("move_detection", 1.0);
 
     #[cfg(feature = "perf-metrics")]
     if let Some(m) = differ.metrics.as_mut() {
         m.end_phase(Phase::MoveDetection);
     }
 
+    if differ.emit_ctx.hardening.should_abort() {
+        return Ok(());
+    }
+
     if differ.has_mask_exclusions() {
+        differ.emit_ctx.hardening.progress("alignment", 1.0);
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = differ.metrics.as_mut() {
             m.start_phase(Phase::CellDiff);
@@ -194,7 +251,12 @@ fn diff_grids_core<S: DiffSink>(
         m.start_phase(Phase::Alignment);
     }
 
+    differ.emit_ctx.hardening.progress("alignment", 0.0);
+    if differ.emit_ctx.hardening.check_timeout(differ.emit_ctx.warnings) {
+        return Ok(());
+    }
     if differ.try_amr()? {
+        differ.emit_ctx.hardening.progress("alignment", 1.0);
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = differ.metrics.as_mut() {
             m.end_phase(Phase::Alignment);
@@ -203,6 +265,7 @@ fn diff_grids_core<S: DiffSink>(
     }
 
     if differ.try_row_alignment()? {
+        differ.emit_ctx.hardening.progress("alignment", 1.0);
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = differ.metrics.as_mut() {
             m.end_phase(Phase::Alignment);
@@ -211,6 +274,7 @@ fn diff_grids_core<S: DiffSink>(
     }
 
     if differ.try_single_column_alignment()? {
+        differ.emit_ctx.hardening.progress("alignment", 1.0);
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = differ.metrics.as_mut() {
             m.end_phase(Phase::Alignment);
@@ -219,6 +283,8 @@ fn diff_grids_core<S: DiffSink>(
     }
 
     differ.positional()?;
+
+    differ.emit_ctx.hardening.progress("alignment", 1.0);
 
     #[cfg(feature = "perf-metrics")]
     if let Some(m) = differ.metrics.as_mut() {
@@ -277,16 +343,32 @@ pub(crate) fn try_diff_grids_database_mode_streaming<S: DiffSink>(
     sink: &mut S,
     op_count: &mut usize,
 ) -> Result<DiffSummary, DiffError> {
+    let mut warnings: Vec<String> = Vec::new();
+    let mut hardening = super::hardening::HardeningController::new(config, None);
     let mut formula_cache = FormulaParseCache::default();
     let spec = KeyColumnSpec::new(key_columns.to_vec());
+
+    sink.begin(pool)?;
+    if hardening.check_timeout(&mut warnings) {
+        sink.finish()?;
+        return Ok(DiffSummary {
+            complete: false,
+            warnings,
+            op_count: *op_count,
+            #[cfg(feature = "perf-metrics")]
+            metrics: None,
+        });
+    }
+
     let alignment = match diff_table_by_key(old, new, key_columns) {
         Ok(alignment) => alignment,
         Err(_) => {
-            sink.begin(pool)?;
             let mut ctx = DiffContext::default();
-            ctx.warnings.push(
-                "database-mode: duplicate keys for requested columns; falling back to spreadsheet mode".to_string()
+            warnings.push(
+                "database-mode: duplicate keys for requested columns; falling back to spreadsheet mode"
+                    .to_string(),
             );
+            ctx.warnings = warnings;
             try_diff_grids(
                 sheet_id,
                 old,
@@ -296,6 +378,7 @@ pub(crate) fn try_diff_grids_database_mode_streaming<S: DiffSink>(
                 sink,
                 op_count,
                 &mut ctx,
+                &mut hardening,
                 #[cfg(feature = "perf-metrics")]
                 None,
             )?;
@@ -311,10 +394,12 @@ pub(crate) fn try_diff_grids_database_mode_streaming<S: DiffSink>(
         }
     };
 
-    sink.begin(pool)?;
     let max_cols = old.ncols.max(new.ncols);
 
     for row_idx in &alignment.left_only_rows {
+        if hardening.check_timeout(&mut warnings) {
+            break;
+        }
         emit_op(
             sink,
             op_count,
@@ -323,10 +408,16 @@ pub(crate) fn try_diff_grids_database_mode_streaming<S: DiffSink>(
     }
 
     for row_idx in &alignment.right_only_rows {
+        if hardening.check_timeout(&mut warnings) {
+            break;
+        }
         emit_op(sink, op_count, DiffOp::row_added(sheet_id, *row_idx, None))?;
     }
 
     for (row_a, row_b) in &alignment.matched_rows {
+        if hardening.check_timeout(&mut warnings) {
+            break;
+        }
         for col in 0..max_cols {
             if spec.is_key_column(col) {
                 continue;
@@ -363,8 +454,8 @@ pub(crate) fn try_diff_grids_database_mode_streaming<S: DiffSink>(
 
     sink.finish()?;
     Ok(DiffSummary {
-        complete: true,
-        warnings: Vec::new(),
+        complete: warnings.is_empty(),
+        warnings,
         op_count: *op_count,
         #[cfg(feature = "perf-metrics")]
         metrics: None,
@@ -546,6 +637,8 @@ mod tests {
         let mut sink = VecSink::new();
         let mut op_count = 0usize;
         let mut cache = FormulaParseCache::default();
+        let mut warnings: Vec<String> = Vec::new();
+        let mut hardening = super::super::hardening::HardeningController::new(&config, None);
 
         let old_cells_storage = [numbered_cell(1.0), numbered_cell(2.0), numbered_cell(3.0)];
         let new_cells_storage = [numbered_cell(1.0), numbered_cell(2.0), numbered_cell(4.0)];
@@ -568,6 +661,8 @@ mod tests {
             &mut cache,
             &mut sink,
             &mut op_count,
+            &mut warnings,
+            &mut hardening,
         );
         let compared = diff_row_pair_sparse(&mut emit_ctx, 0, 0, 3, &old_cells, &new_cells)
             .expect("diff should succeed");
@@ -586,6 +681,8 @@ mod tests {
         let mut sink = VecSink::new();
         let mut op_count = 0usize;
         let mut cache = FormulaParseCache::default();
+        let mut warnings: Vec<String> = Vec::new();
+        let mut hardening = super::super::hardening::HardeningController::new(&config, None);
 
         let old_cells_storage = [numbered_cell(1.0)];
         let new_cells_storage = [numbered_cell(2.0)];
@@ -600,6 +697,8 @@ mod tests {
             &mut cache,
             &mut sink,
             &mut op_count,
+            &mut warnings,
+            &mut hardening,
         );
         let compared = diff_row_pair_sparse(&mut emit_ctx, 0, 0, 3, &old_cells, &new_cells)
             .expect("diff should succeed");

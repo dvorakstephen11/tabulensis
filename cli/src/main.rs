@@ -41,6 +41,12 @@ pub enum Commands {
         keys: Option<String>,
         #[arg(long, help = "Auto-detect key columns for database mode")]
         auto_keys: bool,
+        #[arg(long, help = "Show a progress bar on stderr")]
+        progress: bool,
+        #[arg(long, value_name = "MB", help = "Soft memory budget (MB) for advanced strategies")]
+        max_memory: Option<u32>,
+        #[arg(long, value_name = "SECONDS", help = "Abort diff after this many seconds")]
+        timeout: Option<u32>,
     },
     #[command(about = "Show information about a workbook")]
     Info {
@@ -75,6 +81,9 @@ fn main() -> ExitCode {
             sheet,
             keys,
             auto_keys,
+            progress,
+            max_memory,
+            timeout,
         } => commands::diff::run(
             &old,
             &new,
@@ -88,6 +97,9 @@ fn main() -> ExitCode {
             sheet,
             keys,
             auto_keys,
+            progress,
+            max_memory,
+            timeout,
         ),
         Commands::Info { path, queries } => commands::info::run(&path, queries),
     };

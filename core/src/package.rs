@@ -1,6 +1,7 @@
 use crate::config::DiffConfig;
 use crate::datamashup::DataMashup;
 use crate::diff::{DiffError, DiffReport, DiffSummary, SheetId};
+use crate::progress::ProgressCallback;
 use crate::sink::{DiffSink, NoFinishSink, VecSink};
 use crate::string_pool::StringId;
 use crate::string_pool::StringPool;
@@ -70,6 +71,17 @@ impl WorkbookPackage {
         })
     }
 
+    pub fn diff_with_progress(
+        &self,
+        other: &Self,
+        config: &DiffConfig,
+        progress: &dyn ProgressCallback,
+    ) -> DiffReport {
+        crate::with_default_session(|session| {
+            self.diff_with_progress_with_pool(other, &mut session.strings, config, progress)
+        })
+    }
+
     pub fn diff_with_pool(
         &self,
         other: &Self,
@@ -78,6 +90,47 @@ impl WorkbookPackage {
     ) -> DiffReport {
         let mut report =
             crate::engine::diff_workbooks(&self.workbook, &other.workbook, pool, config);
+
+        let mut object_ops =
+            crate::object_diff::diff_named_ranges(&self.workbook, &other.workbook, pool);
+        object_ops.extend(crate::object_diff::diff_charts(
+            &self.workbook,
+            &other.workbook,
+            pool,
+        ));
+        object_ops.extend(crate::object_diff::diff_vba_modules(
+            self.vba_modules.as_deref(),
+            other.vba_modules.as_deref(),
+            pool,
+        ));
+        report.ops.extend(object_ops);
+
+        let m_ops = crate::m_diff::diff_m_ops_for_packages(
+            &self.data_mashup,
+            &other.data_mashup,
+            pool,
+            config,
+        );
+
+        report.ops.extend(m_ops);
+        report.strings = pool.strings().to_vec();
+        report
+    }
+
+    pub fn diff_with_progress_with_pool(
+        &self,
+        other: &Self,
+        pool: &mut crate::string_pool::StringPool,
+        config: &DiffConfig,
+        progress: &dyn ProgressCallback,
+    ) -> DiffReport {
+        let mut report = crate::engine::diff_workbooks_with_progress(
+            &self.workbook,
+            &other.workbook,
+            pool,
+            config,
+            progress,
+        );
 
         let mut object_ops =
             crate::object_diff::diff_named_ranges(&self.workbook, &other.workbook, pool);
@@ -116,6 +169,24 @@ impl WorkbookPackage {
         })
     }
 
+    pub fn diff_streaming_with_progress<S: DiffSink>(
+        &self,
+        other: &Self,
+        config: &DiffConfig,
+        sink: &mut S,
+        progress: &dyn ProgressCallback,
+    ) -> Result<DiffSummary, DiffError> {
+        crate::with_default_session(|session| {
+            self.diff_streaming_with_progress_with_pool(
+                other,
+                &mut session.strings,
+                config,
+                sink,
+                progress,
+            )
+        })
+    }
+
     pub fn diff_streaming_with_pool<S: DiffSink>(
         &self,
         other: &Self,
@@ -151,6 +222,75 @@ impl WorkbookPackage {
                 pool,
                 config,
                 &mut no_finish,
+            )
+        };
+
+        let mut summary = match grid_result {
+            Ok(summary) => summary,
+            Err(e) => {
+                let _ = sink.finish();
+                return Err(e);
+            }
+        };
+
+        for op in object_ops {
+            if let Err(e) = sink.emit(op) {
+                let _ = sink.finish();
+                return Err(e);
+            }
+            summary.op_count = summary.op_count.saturating_add(1);
+        }
+
+        for op in m_ops {
+            if let Err(e) = sink.emit(op) {
+                let _ = sink.finish();
+                return Err(e);
+            }
+            summary.op_count = summary.op_count.saturating_add(1);
+        }
+
+        sink.finish()?;
+
+        Ok(summary)
+    }
+
+    pub fn diff_streaming_with_progress_with_pool<S: DiffSink>(
+        &self,
+        other: &Self,
+        pool: &mut crate::string_pool::StringPool,
+        config: &DiffConfig,
+        sink: &mut S,
+        progress: &dyn ProgressCallback,
+    ) -> Result<DiffSummary, DiffError> {
+        let mut object_ops =
+            crate::object_diff::diff_named_ranges(&self.workbook, &other.workbook, pool);
+        object_ops.extend(crate::object_diff::diff_charts(
+            &self.workbook,
+            &other.workbook,
+            pool,
+        ));
+        object_ops.extend(crate::object_diff::diff_vba_modules(
+            self.vba_modules.as_deref(),
+            other.vba_modules.as_deref(),
+            pool,
+        ));
+
+        let m_ops = crate::m_diff::diff_m_ops_for_packages(
+            &self.data_mashup,
+            &other.data_mashup,
+            pool,
+            config,
+        );
+
+        let grid_result = {
+            let mut no_finish = NoFinishSink::new(sink);
+            crate::engine::try_diff_workbooks_streaming_with_progress(
+                &self.workbook,
+                &other.workbook,
+                pool,
+                config,
+                &mut no_finish,
+                progress,
             )
         };
 

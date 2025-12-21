@@ -64,6 +64,16 @@ pub struct DiffConfig {
     /// Preflight: Jaccard similarity threshold below which grids are considered dissimilar
     /// and move detection/alignment are skipped.
     pub bailout_similarity_threshold: f64,
+    /// Optional soft cap on estimated memory usage (in MB) for advanced strategies.
+    ///
+    /// When the estimate exceeds this cap, the engine falls back to positional diff for the
+    /// affected sheet and marks the overall diff as incomplete with a warning.
+    pub max_memory_mb: Option<u32>,
+    /// Optional timeout (in seconds) for the diff engine.
+    ///
+    /// When exceeded, the engine aborts early, preserving any already-emitted ops, and marks the
+    /// result as incomplete with a warning.
+    pub timeout_seconds: Option<u32>,
 }
 
 impl Default for DiffConfig {
@@ -100,6 +110,8 @@ impl Default for DiffConfig {
             preflight_in_order_mismatch_max: 32,
             preflight_in_order_match_ratio_min: 0.995,
             bailout_similarity_threshold: 0.05,
+            max_memory_mb: None,
+            timeout_seconds: None,
         }
     }
 }
@@ -396,6 +408,16 @@ impl DiffConfigBuilder {
         self
     }
 
+    pub fn max_memory_mb(mut self, value: Option<u32>) -> Self {
+        self.inner.max_memory_mb = value;
+        self
+    }
+
+    pub fn timeout_seconds(mut self, value: Option<u32>) -> Self {
+        self.inner.timeout_seconds = value;
+        self
+    }
+
     pub fn build(self) -> Result<DiffConfig, ConfigError> {
         self.inner.validate()?;
         Ok(self.inner)
@@ -435,6 +457,9 @@ mod tests {
         assert_eq!(cfg.preflight_in_order_mismatch_max, 32);
         assert!((cfg.preflight_in_order_match_ratio_min - 0.995).abs() < f64::EPSILON);
         assert!((cfg.bailout_similarity_threshold - 0.05).abs() < f64::EPSILON);
+
+        assert_eq!(cfg.max_memory_mb, None);
+        assert_eq!(cfg.timeout_seconds, None);
 
         assert!(!cfg.include_unchanged_cells);
         assert_eq!(cfg.max_context_rows, 3);
@@ -540,6 +565,8 @@ mod tests {
             .preflight_in_order_mismatch_max(64)
             .preflight_in_order_match_ratio_min(0.99)
             .bailout_similarity_threshold(0.10)
+            .max_memory_mb(Some(64))
+            .timeout_seconds(Some(5))
             .build()
             .expect("valid config should build");
 
@@ -547,5 +574,7 @@ mod tests {
         assert_eq!(cfg.preflight_in_order_mismatch_max, 64);
         assert!((cfg.preflight_in_order_match_ratio_min - 0.99).abs() < f64::EPSILON);
         assert!((cfg.bailout_similarity_threshold - 0.10).abs() < f64::EPSILON);
+        assert_eq!(cfg.max_memory_mb, Some(64));
+        assert_eq!(cfg.timeout_seconds, Some(5));
     }
 }

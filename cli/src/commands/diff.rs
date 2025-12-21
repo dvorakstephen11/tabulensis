@@ -3,11 +3,12 @@ use crate::OutputFormat;
 use anyhow::{Context, Result, bail};
 use excel_diff::{
     DiffConfig, DiffReport, Grid, JsonLinesSink, WorkbookPackage,
-    index_to_address, suggest_key_columns, with_default_session,
+    ProgressCallback, index_to_address, suggest_key_columns, with_default_session,
 };
 use std::fs::File;
-use std::io::{self, BufWriter, Write};
+use std::io::{self, BufWriter, IsTerminal, Write};
 use std::process::ExitCode;
+use std::sync::Mutex;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Verbosity {
@@ -30,6 +31,9 @@ pub fn run(
     sheet: Option<String>,
     keys: Option<String>,
     auto_keys: bool,
+    progress: bool,
+    max_memory: Option<u32>,
+    timeout: Option<u32>,
 ) -> Result<ExitCode> {
     if fast && precise {
         bail!("Cannot use both --fast and --precise flags together");
@@ -59,7 +63,9 @@ pub fn run(
         Verbosity::Normal
     };
 
-    let config = build_config(fast, precise);
+    let mut config = build_config(fast, precise);
+    config.max_memory_mb = max_memory;
+    config.timeout_seconds = timeout;
 
     let old_file = File::open(old_path)
         .with_context(|| format!("Failed to open old workbook: {}", old_path))?;
@@ -87,11 +93,20 @@ pub fn run(
         );
     }
 
+    let progress = progress.then(CliProgress::new);
+
     if format == OutputFormat::Jsonl && !git_diff_mode {
-        return run_streaming(&old_pkg, &new_pkg, &config);
+        return run_streaming(&old_pkg, &new_pkg, &config, progress.as_ref());
     }
 
-    let report = old_pkg.diff(&new_pkg, &config);
+    let report = match progress.as_ref() {
+        Some(p) => old_pkg.diff_with_progress(&new_pkg, &config, p),
+        None => old_pkg.diff(&new_pkg, &config),
+    };
+
+    if let Some(p) = progress.as_ref() {
+        p.finish();
+    }
 
     print_warnings_to_stderr(&report);
 
@@ -121,17 +136,27 @@ fn run_streaming(
     old_pkg: &WorkbookPackage,
     new_pkg: &WorkbookPackage,
     config: &DiffConfig,
+    progress: Option<&CliProgress>,
 ) -> Result<ExitCode> {
     let stdout = io::stdout();
     let handle = stdout.lock();
     let mut writer = BufWriter::new(handle);
     let mut sink = JsonLinesSink::new(&mut writer);
 
-    let summary = old_pkg
-        .diff_streaming(new_pkg, config, &mut sink)
-        .context("Streaming diff failed")?;
+    let summary = match progress {
+        Some(p) => old_pkg
+            .diff_streaming_with_progress(new_pkg, config, &mut sink, p)
+            .context("Streaming diff failed")?,
+        None => old_pkg
+            .diff_streaming(new_pkg, config, &mut sink)
+            .context("Streaming diff failed")?,
+    };
 
     writer.flush()?;
+
+    if let Some(p) = progress {
+        p.finish();
+    }
 
     for warning in &summary.warnings {
         eprintln!("Warning: {}", warning);
@@ -141,6 +166,80 @@ fn run_streaming(
         Ok(ExitCode::from(0))
     } else {
         Ok(ExitCode::from(1))
+    }
+}
+
+struct CliProgress {
+    state: Mutex<CliProgressState>,
+}
+
+struct CliProgressState {
+    is_tty: bool,
+    last_phase: String,
+    last_percent: f32,
+}
+
+impl CliProgress {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(CliProgressState {
+                is_tty: io::stderr().is_terminal(),
+                last_phase: String::new(),
+                last_percent: -1.0,
+            }),
+        }
+    }
+
+    fn finish(&self) {
+        let is_tty = self.lock_state().is_tty;
+        if is_tty {
+            let mut stderr = io::stderr().lock();
+            let _ = writeln!(stderr);
+        }
+    }
+
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, CliProgressState> {
+        match self.state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    fn render_bar(phase: &str, percent: f32) -> String {
+        let pct = (percent.clamp(0.0, 1.0) * 100.0).clamp(0.0, 100.0);
+        let width = 24usize;
+        let filled = ((pct / 100.0) * width as f32).round() as usize;
+        let filled = filled.min(width);
+        let empty = width - filled;
+        format!(
+            "{:>14} [{}{}] {:>6.1}%",
+            phase,
+            "#".repeat(filled),
+            "-".repeat(empty),
+            pct
+        )
+    }
+}
+
+impl ProgressCallback for CliProgress {
+    fn on_progress(&self, phase: &str, percent: f32) {
+        let mut state = self.lock_state();
+
+        if state.is_tty {
+            let line = Self::render_bar(phase, percent);
+            let mut stderr = io::stderr().lock();
+            let _ = write!(stderr, "\r{}", line);
+            let _ = stderr.flush();
+        } else {
+            let phase_changed = state.last_phase != phase;
+            let pct = percent.clamp(0.0, 1.0);
+            let emit = phase_changed || pct == 0.0 || pct == 1.0 || (pct - state.last_percent) >= 0.25;
+            if emit {
+                eprintln!("Progress: {} {:.0}%", phase, pct * 100.0);
+                state.last_phase = phase.to_string();
+                state.last_percent = pct;
+            }
+        }
     }
 }
 

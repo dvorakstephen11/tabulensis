@@ -10,7 +10,9 @@
   .github/
     workflows/
       ci.yml
+      pages.yml
       perf.yml
+      release.yml
       wasm.yml
   .gitignore
   benchmarks/
@@ -105,6 +107,7 @@
         context.rs
         grid_diff.rs
         grid_primitives.rs
+        hardening.rs
         mod.rs
         move_mask.rs
         workbook_diff.rs
@@ -127,6 +130,7 @@
         mod.rs
       package.rs
       perf.rs
+      progress.rs
       rect_block_move.rs
       region_mask.rs
       row_alignment.rs
@@ -163,6 +167,7 @@
       g9_column_alignment_grid_workbook_tests.rs
       grid_view_hashstats_tests.rs
       grid_view_tests.rs
+      hardening_tests.rs
       integration_test.rs
       limit_behavior_tests.rs
       m4_package_parts_tests.rs
@@ -218,6 +223,11 @@
   logs/
     2025-11-28b-diffop-pg4/
       activity_log.txt
+  packaging/
+    homebrew/
+      excel-diff.rb.template
+    scoop/
+      excel-diff.json.template
   plan_review.md
   README.md
   related_files.txt.md
@@ -226,8 +236,15 @@
     combine_results_to_csv.py
     compare_perf_results.py
     export_perf_metrics.py
+    verify_release_versions.py
     visualize_benchmarks.py
   tmp/
+    _release_test/
+      excel-diff-v0.1.0-windows-x86_64.zip
+      staging/
+        excel-diff-v0.1.0-windows-x86_64/
+          excel-diff.exe
+          README.md
     openpyxl_sdist/
       et_xmlfile-2.0.0.tar.gz
       openpyxl-3.1.5/
@@ -745,6 +762,13 @@
           worksheet.py
           xmlwriter.py
       XlsxWriter-3.2.0.tar.gz
+  wasm/
+    Cargo.toml
+    src/
+      lib.rs
+  web/
+    index.html
+    main.js
 ```
 
 ## File Contents
@@ -793,6 +817,66 @@ jobs:
 
 ---
 
+### File: `.github\workflows\pages.yml`
+
+```yaml
+name: Deploy Web Demo
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build WASM package
+        run: wasm-pack build wasm --release --target web --out-dir ../web/wasm
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: 'web'
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+
+```
+
+---
+
 ### File: `.github\workflows\perf.yml`
 
 ```yaml
@@ -834,6 +918,457 @@ jobs:
 
 ---
 
+### File: `.github\workflows\release.yml`
+
+```yaml
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (do not create release)'
+        required: false
+        default: 'true'
+        type: boolean
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag matches crate versions
+        run: python3 scripts/verify_release_versions.py
+
+  build-windows:
+    needs: validate-release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release --locked -p excel_diff_cli
+
+      - name: Get version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            echo "version=v0.0.0-dev" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create standalone EXE
+        shell: bash
+        run: |
+          cp target/release/excel-diff.exe excel-diff-${{ steps.version.outputs.version }}-windows-x86_64.exe
+
+      - name: Create package directory
+        shell: bash
+        run: |
+          mkdir -p staging/excel-diff-${{ steps.version.outputs.version }}-windows-x86_64
+          cp target/release/excel-diff.exe staging/excel-diff-${{ steps.version.outputs.version }}-windows-x86_64/
+          cp README.md staging/excel-diff-${{ steps.version.outputs.version }}-windows-x86_64/
+
+      - name: Create ZIP archive
+        shell: pwsh
+        run: |
+          Compress-Archive -Path staging/excel-diff-${{ steps.version.outputs.version }}-windows-x86_64 -DestinationPath excel-diff-${{ steps.version.outputs.version }}-windows-x86_64.zip
+
+      - name: Compute SHA256
+        shell: bash
+        run: |
+          sha256sum excel-diff-${{ steps.version.outputs.version }}-windows-x86_64.zip > excel-diff-${{ steps.version.outputs.version }}-windows-x86_64.zip.sha256
+          sha256sum excel-diff-${{ steps.version.outputs.version }}-windows-x86_64.exe > excel-diff-${{ steps.version.outputs.version }}-windows-x86_64.exe.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: |
+            excel-diff-${{ steps.version.outputs.version }}-windows-x86_64.exe
+            excel-diff-${{ steps.version.outputs.version }}-windows-x86_64.exe.sha256
+            excel-diff-${{ steps.version.outputs.version }}-windows-x86_64.zip
+            excel-diff-${{ steps.version.outputs.version }}-windows-x86_64.zip.sha256
+
+  build-macos-x64:
+    needs: validate-release
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release --locked -p excel_diff_cli
+
+      - name: Get version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            echo "version=v0.0.0-dev" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create tarball
+        run: |
+          mkdir -p staging
+          cp target/release/excel-diff staging/
+          cp README.md staging/
+          tar -czvf excel-diff-${{ steps.version.outputs.version }}-macos-x86_64.tar.gz -C staging .
+
+      - name: Compute SHA256
+        run: |
+          shasum -a 256 excel-diff-${{ steps.version.outputs.version }}-macos-x86_64.tar.gz > excel-diff-${{ steps.version.outputs.version }}-macos-x86_64.tar.gz.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-x86_64
+          path: |
+            excel-diff-${{ steps.version.outputs.version }}-macos-x86_64.tar.gz
+            excel-diff-${{ steps.version.outputs.version }}-macos-x86_64.tar.gz.sha256
+
+      - name: Upload raw binary for universal
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-x86_64-binary
+          path: target/release/excel-diff
+
+  build-macos-arm64:
+    needs: validate-release
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release --locked -p excel_diff_cli
+
+      - name: Get version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            echo "version=v0.0.0-dev" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create tarball
+        run: |
+          mkdir -p staging
+          cp target/release/excel-diff staging/
+          cp README.md staging/
+          tar -czvf excel-diff-${{ steps.version.outputs.version }}-macos-arm64.tar.gz -C staging .
+
+      - name: Compute SHA256
+        run: |
+          shasum -a 256 excel-diff-${{ steps.version.outputs.version }}-macos-arm64.tar.gz > excel-diff-${{ steps.version.outputs.version }}-macos-arm64.tar.gz.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: |
+            excel-diff-${{ steps.version.outputs.version }}-macos-arm64.tar.gz
+            excel-diff-${{ steps.version.outputs.version }}-macos-arm64.tar.gz.sha256
+
+      - name: Upload raw binary for universal
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64-binary
+          path: target/release/excel-diff
+
+  build-macos-universal:
+    runs-on: macos-14
+    needs: [build-macos-x64, build-macos-arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            echo "version=v0.0.0-dev" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download x86_64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-x86_64-binary
+          path: x86_64
+
+      - name: Download arm64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-arm64-binary
+          path: arm64
+
+      - name: Create universal binary
+        run: |
+          lipo -create x86_64/excel-diff arm64/excel-diff -output excel-diff
+          file excel-diff
+          codesign -s - excel-diff
+
+      - name: Create tarball
+        run: |
+          mkdir -p staging
+          cp excel-diff staging/
+          cp README.md staging/
+          tar -czvf excel-diff-${{ steps.version.outputs.version }}-macos-universal.tar.gz -C staging .
+
+      - name: Compute SHA256
+        run: |
+          shasum -a 256 excel-diff-${{ steps.version.outputs.version }}-macos-universal.tar.gz > excel-diff-${{ steps.version.outputs.version }}-macos-universal.tar.gz.sha256
+          cat excel-diff-${{ steps.version.outputs.version }}-macos-universal.tar.gz.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal
+          path: |
+            excel-diff-${{ steps.version.outputs.version }}-macos-universal.tar.gz
+            excel-diff-${{ steps.version.outputs.version }}-macos-universal.tar.gz.sha256
+
+  smoke-macos-sequoia:
+    name: Smoke Test (macOS Sequoia)
+    runs-on: macos-15
+    needs: [build-macos-universal]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download macOS universal artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-universal
+          path: artifacts/macos
+
+      - name: Run smoke checks
+        run: |
+          set -euo pipefail
+
+          TARBALL=$(ls artifacts/macos/excel-diff-*-macos-universal.tar.gz | head -n 1)
+          mkdir -p staging
+          tar -xzf "$TARBALL" -C staging
+          chmod +x staging/excel-diff
+
+          staging/excel-diff --version
+          staging/excel-diff --help >/dev/null
+          staging/excel-diff diff fixtures/generated/minimal.xlsx fixtures/generated/minimal.xlsx --format json >/dev/null
+
+          set +e
+          staging/excel-diff diff fixtures/generated/col_append_right_a.xlsx fixtures/generated/col_append_right_b.xlsx >/dev/null
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -ne 1 ]; then
+            echo "Expected exit code 1 for differing files, got $STATUS"
+            exit 1
+          fi
+
+  generate-manifests:
+    runs-on: ubuntu-latest
+    needs: [build-windows, build-macos-universal]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "version_num=${VERSION#v}" >> $GITHUB_OUTPUT
+          else
+            echo "version=v0.0.0-dev" >> $GITHUB_OUTPUT
+            echo "version_num=0.0.0-dev" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-x86_64
+          path: artifacts/windows
+
+      - name: Download macOS universal artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-universal
+          path: artifacts/macos
+
+      - name: Extract checksums
+        id: checksums
+        run: |
+          WINDOWS_SHA=$(cat artifacts/windows/*.zip.sha256 | awk '{print $1}')
+          MACOS_SHA=$(cat artifacts/macos/*.tar.gz.sha256 | awk '{print $1}')
+          echo "windows_sha=$WINDOWS_SHA" >> $GITHUB_OUTPUT
+          echo "macos_sha=$MACOS_SHA" >> $GITHUB_OUTPUT
+
+      - name: Generate Scoop manifest
+        run: |
+          cat > excel-diff.json << EOF
+          {
+            "version": "${{ steps.version.outputs.version_num }}",
+            "description": "A tool for comparing Excel workbooks",
+            "homepage": "https://github.com/dvora/excel_diff",
+            "license": "MIT",
+            "architecture": {
+              "64bit": {
+                "url": "https://github.com/dvora/excel_diff/releases/download/${{ steps.version.outputs.version }}/excel-diff-${{ steps.version.outputs.version }}-windows-x86_64.zip",
+                "hash": "${{ steps.checksums.outputs.windows_sha }}"
+              }
+            },
+            "bin": "excel-diff-${{ steps.version.outputs.version }}-windows-x86_64/excel-diff.exe",
+            "checkver": "github",
+            "autoupdate": {
+              "architecture": {
+                "64bit": {
+                  "url": "https://github.com/dvora/excel_diff/releases/download/v\$version/excel-diff-v\$version-windows-x86_64.zip"
+                }
+              }
+            }
+          }
+          EOF
+
+      - name: Generate Homebrew formula
+        run: |
+          cat > excel-diff.rb << 'EOF'
+          class ExcelDiff < Formula
+            desc "A tool for comparing Excel workbooks"
+            homepage "https://github.com/dvora/excel_diff"
+            version "${{ steps.version.outputs.version_num }}"
+            license "MIT"
+
+            on_macos do
+              url "https://github.com/dvora/excel_diff/releases/download/${{ steps.version.outputs.version }}/excel-diff-${{ steps.version.outputs.version }}-macos-universal.tar.gz"
+              sha256 "${{ steps.checksums.outputs.macos_sha }}"
+            end
+
+            def install
+              bin.install "excel-diff"
+            end
+
+            test do
+              system "#{bin}/excel-diff", "--version"
+            end
+          end
+          EOF
+
+      - name: Upload manifests
+        uses: actions/upload-artifact@v4
+        with:
+          name: manifests
+          path: |
+            excel-diff.json
+            excel-diff.rb
+
+  publish-release:
+    runs-on: ubuntu-latest
+    needs:
+      - build-windows
+      - build-macos-x64
+      - build-macos-arm64
+      - build-macos-universal
+      - smoke-macos-sequoia
+      - generate-manifests
+    if: startsWith(github.ref, 'refs/tags/v') && github.event.inputs.dry_run != 'true'
+    permissions:
+      contents: write
+    steps:
+      - name: Get version
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create checksums file
+        run: |
+          cd artifacts
+          cat windows-x86_64/*.sha256 >> checksums.txt
+          cat macos-x86_64/*.sha256 >> checksums.txt
+          cat macos-arm64/*.sha256 >> checksums.txt
+          cat macos-universal/*.sha256 >> checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: ${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+          files: |
+            artifacts/windows-x86_64/excel-diff-*.exe
+            artifacts/windows-x86_64/excel-diff-*.zip
+            artifacts/macos-x86_64/excel-diff-*.tar.gz
+            artifacts/macos-arm64/excel-diff-*.tar.gz
+            artifacts/macos-universal/excel-diff-*.tar.gz
+            artifacts/manifests/excel-diff.json
+            artifacts/manifests/excel-diff.rb
+            artifacts/checksums.txt
+          body: |
+            ## Installation
+
+            ### Windows
+            Download the standalone `.exe` (or the ZIP) and add it to your PATH.
+
+            Or use Scoop (manifest from this Release):
+            ```powershell
+            # 1) Download `excel-diff.json` from the Release assets
+            # 2) Install:
+            scoop install .\excel-diff.json
+
+            # Or, if you publish a Scoop bucket:
+            # scoop bucket add excel-diff https://github.com/dvora/scoop-excel-diff
+            # scoop install excel-diff
+            ```
+
+            ### macOS
+            Using Homebrew (formula from this Release):
+            ```bash
+            curl -LO https://github.com/dvora/excel_diff/releases/download/${{ steps.version.outputs.version }}/excel-diff.rb
+            brew install --formula ./excel-diff.rb
+
+            # Or, if you publish a Homebrew tap:
+            # brew tap dvora/excel-diff
+            # brew install excel-diff
+            ```
+
+            Or download the universal binary:
+            ```bash
+            curl -LO https://github.com/dvora/excel_diff/releases/download/${{ steps.version.outputs.version }}/excel-diff-${{ steps.version.outputs.version }}-macos-universal.tar.gz
+            tar -xzf excel-diff-${{ steps.version.outputs.version }}-macos-universal.tar.gz
+            sudo mv excel-diff /usr/local/bin/
+            ```
+
+            ### Web Demo
+            Try it in your browser at https://dvora.github.io/excel_diff
+
+            ## Checksums
+            See `checksums.txt` for SHA256 hashes of all artifacts.
+
+
+```
+
+---
+
 ### File: `.github\workflows\wasm.yml`
 
 ```yaml
@@ -852,7 +1387,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
 
@@ -866,6 +1401,31 @@ jobs:
           echo "wasm_smoke.wasm size: $SIZE bytes"
           if [ "$SIZE" -gt 5000000 ]; then
             echo "WASM size $SIZE exceeds 5MB limit"
+            exit 1
+          fi
+
+  wasm-web-demo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build WASM package
+        run: wasm-pack build wasm --release --target web --out-dir ../web/wasm
+
+      - name: Enforce web demo size budget
+        run: |
+          SIZE=$(stat -c%s "web/wasm/excel_diff_wasm_bg.wasm")
+          echo "excel_diff_wasm_bg.wasm size: $SIZE bytes"
+          if [ "$SIZE" -gt 10000000 ]; then
+            echo "Web demo WASM size $SIZE exceeds 10MB limit"
             exit 1
           fi
 
@@ -899,6 +1459,9 @@ fixtures/generated/*.xlsm
 # Docs
 docs/meta/completion_estimates/
 
+# WASM build output
+web/wasm/
+
 ```
 
 ---
@@ -907,7 +1470,7 @@ docs/meta/completion_estimates/
 
 ```toml
 [workspace]
-members = ["core", "cli"]
+members = ["core", "cli", "wasm"]
 resolver = "2"
 
 ```
@@ -921,6 +1484,10 @@ resolver = "2"
 name = "excel_diff_cli"
 version = "0.1.0"
 edition = "2024"
+description = "Command-line interface for comparing Excel workbooks"
+license = "MIT"
+repository = "https://github.com/dvora/excel_diff"
+homepage = "https://github.com/dvora/excel_diff"
 
 [[bin]]
 name = "excel-diff"
@@ -949,11 +1516,12 @@ use crate::OutputFormat;
 use anyhow::{Context, Result, bail};
 use excel_diff::{
     DiffConfig, DiffReport, Grid, JsonLinesSink, WorkbookPackage,
-    index_to_address, suggest_key_columns, with_default_session,
+    ProgressCallback, index_to_address, suggest_key_columns, with_default_session,
 };
 use std::fs::File;
-use std::io::{self, BufWriter, Write};
+use std::io::{self, BufWriter, IsTerminal, Write};
 use std::process::ExitCode;
+use std::sync::Mutex;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Verbosity {
@@ -976,6 +1544,9 @@ pub fn run(
     sheet: Option<String>,
     keys: Option<String>,
     auto_keys: bool,
+    progress: bool,
+    max_memory: Option<u32>,
+    timeout: Option<u32>,
 ) -> Result<ExitCode> {
     if fast && precise {
         bail!("Cannot use both --fast and --precise flags together");
@@ -1005,7 +1576,9 @@ pub fn run(
         Verbosity::Normal
     };
 
-    let config = build_config(fast, precise);
+    let mut config = build_config(fast, precise);
+    config.max_memory_mb = max_memory;
+    config.timeout_seconds = timeout;
 
     let old_file = File::open(old_path)
         .with_context(|| format!("Failed to open old workbook: {}", old_path))?;
@@ -1033,11 +1606,20 @@ pub fn run(
         );
     }
 
+    let progress = progress.then(CliProgress::new);
+
     if format == OutputFormat::Jsonl && !git_diff_mode {
-        return run_streaming(&old_pkg, &new_pkg, &config);
+        return run_streaming(&old_pkg, &new_pkg, &config, progress.as_ref());
     }
 
-    let report = old_pkg.diff(&new_pkg, &config);
+    let report = match progress.as_ref() {
+        Some(p) => old_pkg.diff_with_progress(&new_pkg, &config, p),
+        None => old_pkg.diff(&new_pkg, &config),
+    };
+
+    if let Some(p) = progress.as_ref() {
+        p.finish();
+    }
 
     print_warnings_to_stderr(&report);
 
@@ -1067,17 +1649,27 @@ fn run_streaming(
     old_pkg: &WorkbookPackage,
     new_pkg: &WorkbookPackage,
     config: &DiffConfig,
+    progress: Option<&CliProgress>,
 ) -> Result<ExitCode> {
     let stdout = io::stdout();
     let handle = stdout.lock();
     let mut writer = BufWriter::new(handle);
     let mut sink = JsonLinesSink::new(&mut writer);
 
-    let summary = old_pkg
-        .diff_streaming(new_pkg, config, &mut sink)
-        .context("Streaming diff failed")?;
+    let summary = match progress {
+        Some(p) => old_pkg
+            .diff_streaming_with_progress(new_pkg, config, &mut sink, p)
+            .context("Streaming diff failed")?,
+        None => old_pkg
+            .diff_streaming(new_pkg, config, &mut sink)
+            .context("Streaming diff failed")?,
+    };
 
     writer.flush()?;
+
+    if let Some(p) = progress {
+        p.finish();
+    }
 
     for warning in &summary.warnings {
         eprintln!("Warning: {}", warning);
@@ -1087,6 +1679,80 @@ fn run_streaming(
         Ok(ExitCode::from(0))
     } else {
         Ok(ExitCode::from(1))
+    }
+}
+
+struct CliProgress {
+    state: Mutex<CliProgressState>,
+}
+
+struct CliProgressState {
+    is_tty: bool,
+    last_phase: String,
+    last_percent: f32,
+}
+
+impl CliProgress {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(CliProgressState {
+                is_tty: io::stderr().is_terminal(),
+                last_phase: String::new(),
+                last_percent: -1.0,
+            }),
+        }
+    }
+
+    fn finish(&self) {
+        let is_tty = self.lock_state().is_tty;
+        if is_tty {
+            let mut stderr = io::stderr().lock();
+            let _ = writeln!(stderr);
+        }
+    }
+
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, CliProgressState> {
+        match self.state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    fn render_bar(phase: &str, percent: f32) -> String {
+        let pct = (percent.clamp(0.0, 1.0) * 100.0).clamp(0.0, 100.0);
+        let width = 24usize;
+        let filled = ((pct / 100.0) * width as f32).round() as usize;
+        let filled = filled.min(width);
+        let empty = width - filled;
+        format!(
+            "{:>14} [{}{}] {:>6.1}%",
+            phase,
+            "#".repeat(filled),
+            "-".repeat(empty),
+            pct
+        )
+    }
+}
+
+impl ProgressCallback for CliProgress {
+    fn on_progress(&self, phase: &str, percent: f32) {
+        let mut state = self.lock_state();
+
+        if state.is_tty {
+            let line = Self::render_bar(phase, percent);
+            let mut stderr = io::stderr().lock();
+            let _ = write!(stderr, "\r{}", line);
+            let _ = stderr.flush();
+        } else {
+            let phase_changed = state.last_phase != phase;
+            let pct = percent.clamp(0.0, 1.0);
+            let emit = phase_changed || pct == 0.0 || pct == 1.0 || (pct - state.last_percent) >= 0.25;
+            if emit {
+                eprintln!("Progress: {} {:.0}%", phase, pct * 100.0);
+                state.last_phase = phase.to_string();
+                state.last_percent = pct;
+            }
+        }
     }
 }
 
@@ -1500,6 +2166,12 @@ pub enum Commands {
         keys: Option<String>,
         #[arg(long, help = "Auto-detect key columns for database mode")]
         auto_keys: bool,
+        #[arg(long, help = "Show a progress bar on stderr")]
+        progress: bool,
+        #[arg(long, value_name = "MB", help = "Soft memory budget (MB) for advanced strategies")]
+        max_memory: Option<u32>,
+        #[arg(long, value_name = "SECONDS", help = "Abort diff after this many seconds")]
+        timeout: Option<u32>,
     },
     #[command(about = "Show information about a workbook")]
     Info {
@@ -1534,6 +2206,9 @@ fn main() -> ExitCode {
             sheet,
             keys,
             auto_keys,
+            progress,
+            max_memory,
+            timeout,
         } => commands::diff::run(
             &old,
             &new,
@@ -1547,6 +2222,9 @@ fn main() -> ExitCode {
             sheet,
             keys,
             auto_keys,
+            progress,
+            max_memory,
+            timeout,
         ),
         Commands::Info { path, queries } => commands::info::run(&path, queries),
     };
@@ -2622,6 +3300,64 @@ fn different_files_exit_1() {
 }
 
 #[test]
+fn max_memory_zero_exits_1_and_warns() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--max-memory",
+            "0",
+            &fixture_path("single_cell_value_a.xlsx"),
+            &fixture_path("single_cell_value_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "memory-capped diff should exit 1: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Warning:"), "should print a warning");
+    assert!(
+        stderr.to_lowercase().contains("memory"),
+        "warning should mention memory: {}",
+        stderr
+    );
+}
+
+#[test]
+fn timeout_zero_exits_1_and_warns() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--timeout",
+            "0",
+            &fixture_path("single_cell_value_a.xlsx"),
+            &fixture_path("single_cell_value_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "timeout diff should exit 1: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Warning:"), "should print a warning");
+    assert!(
+        stderr.to_lowercase().contains("timeout"),
+        "warning should mention timeout: {}",
+        stderr
+    );
+}
+
+#[test]
 fn nonexistent_file_exit_2() {
     let output = excel_diff_cmd()
         .args(["diff", "nonexistent_a.xlsx", "nonexistent_b.xlsx"])
@@ -2679,6 +3415,43 @@ fn jsonl_first_line_is_header() {
     assert_eq!(header.get("kind").and_then(|v| v.as_str()), Some("Header"));
     assert!(header.get("version").is_some());
     assert!(header.get("strings").is_some());
+}
+
+#[test]
+fn jsonl_progress_keeps_stdout_jsonl_and_writes_to_stderr() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--format",
+            "jsonl",
+            "--progress",
+            &fixture_path("single_cell_value_a.xlsx"),
+            &fixture_path("single_cell_value_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "diff with progress should exit 1: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for (idx, line) in stdout.lines().enumerate() {
+        serde_json::from_str::<serde_json::Value>(line).unwrap_or_else(|e| {
+            panic!("stdout line {idx} should be valid JSON: {e}; line={line}");
+        });
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.is_empty(),
+        "progress should write to stderr (even in tests): stdout_len={}, stderr_len={}",
+        stdout.len(),
+        stderr.len()
+    );
 }
 
 #[test]
@@ -3415,14 +4188,19 @@ criterion_main!(benches);
 name = "excel_diff"
 version = "0.1.0"
 edition = "2024"
+description = "A library for comparing Excel workbooks"
+license = "MIT"
+repository = "https://github.com/dvora/excel_diff"
+homepage = "https://github.com/dvora/excel_diff"
 
 [lib]
 name = "excel_diff"
 path = "src/lib.rs"
 
 [features]
-default = ["excel-open-xml", "std-fs"]
-excel-open-xml = ["dep:ovba"]
+default = ["excel-open-xml", "std-fs", "vba"]
+excel-open-xml = []
+vba = ["dep:ovba"]
 std-fs = []
 perf-metrics = []
 dev-apis = []
@@ -6404,6 +7182,16 @@ pub struct DiffConfig {
     /// Preflight: Jaccard similarity threshold below which grids are considered dissimilar
     /// and move detection/alignment are skipped.
     pub bailout_similarity_threshold: f64,
+    /// Optional soft cap on estimated memory usage (in MB) for advanced strategies.
+    ///
+    /// When the estimate exceeds this cap, the engine falls back to positional diff for the
+    /// affected sheet and marks the overall diff as incomplete with a warning.
+    pub max_memory_mb: Option<u32>,
+    /// Optional timeout (in seconds) for the diff engine.
+    ///
+    /// When exceeded, the engine aborts early, preserving any already-emitted ops, and marks the
+    /// result as incomplete with a warning.
+    pub timeout_seconds: Option<u32>,
 }
 
 impl Default for DiffConfig {
@@ -6440,6 +7228,8 @@ impl Default for DiffConfig {
             preflight_in_order_mismatch_max: 32,
             preflight_in_order_match_ratio_min: 0.995,
             bailout_similarity_threshold: 0.05,
+            max_memory_mb: None,
+            timeout_seconds: None,
         }
     }
 }
@@ -6736,6 +7526,16 @@ impl DiffConfigBuilder {
         self
     }
 
+    pub fn max_memory_mb(mut self, value: Option<u32>) -> Self {
+        self.inner.max_memory_mb = value;
+        self
+    }
+
+    pub fn timeout_seconds(mut self, value: Option<u32>) -> Self {
+        self.inner.timeout_seconds = value;
+        self
+    }
+
     pub fn build(self) -> Result<DiffConfig, ConfigError> {
         self.inner.validate()?;
         Ok(self.inner)
@@ -6775,6 +7575,9 @@ mod tests {
         assert_eq!(cfg.preflight_in_order_mismatch_max, 32);
         assert!((cfg.preflight_in_order_match_ratio_min - 0.995).abs() < f64::EPSILON);
         assert!((cfg.bailout_similarity_threshold - 0.05).abs() < f64::EPSILON);
+
+        assert_eq!(cfg.max_memory_mb, None);
+        assert_eq!(cfg.timeout_seconds, None);
 
         assert!(!cfg.include_unchanged_cells);
         assert_eq!(cfg.max_context_rows, 3);
@@ -6880,6 +7683,8 @@ mod tests {
             .preflight_in_order_mismatch_max(64)
             .preflight_in_order_match_ratio_min(0.99)
             .bailout_similarity_threshold(0.10)
+            .max_memory_mb(Some(64))
+            .timeout_seconds(Some(5))
             .build()
             .expect("valid config should build");
 
@@ -6887,6 +7692,8 @@ mod tests {
         assert_eq!(cfg.preflight_in_order_mismatch_max, 64);
         assert!((cfg.preflight_in_order_match_ratio_min - 0.99).abs() < f64::EPSILON);
         assert!((cfg.bailout_similarity_threshold - 0.10).abs() < f64::EPSILON);
+        assert_eq!(cfg.max_memory_mb, Some(64));
+        assert_eq!(cfg.timeout_seconds, Some(5));
     }
 }
 
@@ -9462,7 +10269,7 @@ fn inject_moves_from_insert_delete(
 }
 
 pub(super) fn try_diff_with_amr<S: DiffSink>(
-    emit_ctx: &mut EmitCtx<'_, S>,
+    emit_ctx: &mut EmitCtx<'_, '_, S>,
     old: &Grid,
     new: &Grid,
     old_view: &GridView,
@@ -9509,11 +10316,13 @@ pub(super) fn try_diff_with_amr<S: DiffSink>(
         && let Some(col_alignment) =
             align_single_column_change_from_views(old_view, new_view, emit_ctx.config)
     {
+        emit_ctx.hardening.progress("cell_diff", 0.0);
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
             m.start_phase(Phase::CellDiff);
         }
         emit_column_aligned_diffs(emit_ctx, old, new, &col_alignment)?;
+        emit_ctx.hardening.progress("cell_diff", 1.0);
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
             let overlap_rows = old.nrows.min(new.nrows) as u64;
@@ -9536,7 +10345,9 @@ pub(super) fn try_diff_with_amr<S: DiffSink>(
         m.start_phase(Phase::CellDiff);
     }
 
+    emit_ctx.hardening.progress("cell_diff", 0.0);
     let compared = emit_row_aligned_diffs(emit_ctx, old_view, new_view, &alignment)?;
+    emit_ctx.hardening.progress("cell_diff", 1.0);
     #[cfg(feature = "perf-metrics")]
     if let Some(m) = metrics.as_mut() {
         m.add_cells_compared(compared);
@@ -9568,6 +10379,7 @@ use crate::sink::DiffSink;
 use crate::string_pool::StringPool;
 
 use super::SheetId;
+use super::hardening::HardeningController;
 
 #[derive(Debug, Default)]
 pub(super) struct DiffContext {
@@ -9585,16 +10397,18 @@ pub(super) fn emit_op<S: DiffSink>(
     Ok(())
 }
 
-pub(super) struct EmitCtx<'a, S: DiffSink> {
+pub(super) struct EmitCtx<'a, 'p, S: DiffSink> {
     pub(super) sheet_id: SheetId,
     pub(super) pool: &'a StringPool,
     pub(super) config: &'a DiffConfig,
     pub(super) cache: &'a mut FormulaParseCache,
     pub(super) sink: &'a mut S,
     pub(super) op_count: &'a mut usize,
+    pub(super) warnings: &'a mut Vec<String>,
+    pub(super) hardening: &'a mut HardeningController<'p>,
 }
 
-impl<'a, S: DiffSink> EmitCtx<'a, S> {
+impl<'a, 'p, S: DiffSink> EmitCtx<'a, 'p, S> {
     pub(super) fn new(
         sheet_id: SheetId,
         pool: &'a StringPool,
@@ -9602,6 +10416,8 @@ impl<'a, S: DiffSink> EmitCtx<'a, S> {
         cache: &'a mut FormulaParseCache,
         sink: &'a mut S,
         op_count: &'a mut usize,
+        warnings: &'a mut Vec<String>,
+        hardening: &'a mut HardeningController<'p>,
     ) -> Self {
         Self {
             sheet_id,
@@ -9610,6 +10426,8 @@ impl<'a, S: DiffSink> EmitCtx<'a, S> {
             cache,
             sink,
             op_count,
+            warnings,
+            hardening,
         }
     }
 
@@ -9648,7 +10466,7 @@ use crate::database_alignment::{KeyColumnSpec, diff_table_by_key};
 const DATABASE_MODE_SHEET_ID: &str = "<database>";
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn try_diff_grids<S: DiffSink>(
+pub(super) fn try_diff_grids<'p, S: DiffSink>(
     sheet_id: SheetId,
     old: &Grid,
     new: &Grid,
@@ -9657,9 +10475,14 @@ pub(super) fn try_diff_grids<S: DiffSink>(
     sink: &mut S,
     op_count: &mut usize,
     ctx: &mut DiffContext,
+    hardening: &mut super::hardening::HardeningController<'p>,
     #[cfg(feature = "perf-metrics")] mut metrics: Option<&mut DiffMetrics>,
 ) -> Result<(), DiffError> {
     if old.nrows == 0 && new.nrows == 0 {
+        return Ok(());
+    }
+
+    if hardening.check_timeout(&mut ctx.warnings) {
         return Ok(());
     }
 
@@ -9706,6 +10529,8 @@ pub(super) fn try_diff_grids<S: DiffSink>(
                     &mut ctx.formula_cache,
                     sink,
                     op_count,
+                    &mut ctx.warnings,
+                    hardening,
                 );
 
                 #[cfg(feature = "perf-metrics")]
@@ -9727,6 +10552,7 @@ pub(super) fn try_diff_grids<S: DiffSink>(
         sink,
         op_count,
         ctx,
+        hardening,
         #[cfg(feature = "perf-metrics")]
         metrics,
     )?;
@@ -9735,7 +10561,7 @@ pub(super) fn try_diff_grids<S: DiffSink>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn diff_grids_core<S: DiffSink>(
+fn diff_grids_core<'p, S: DiffSink>(
     sheet_id: SheetId,
     old: &Grid,
     new: &Grid,
@@ -9744,6 +10570,7 @@ fn diff_grids_core<S: DiffSink>(
     sink: &mut S,
     op_count: &mut usize,
     ctx: &mut DiffContext,
+    hardening: &mut super::hardening::HardeningController<'p>,
     #[cfg(feature = "perf-metrics")] mut metrics: Option<&mut DiffMetrics>,
 ) -> Result<(), DiffError> {
     if old.nrows == new.nrows && old.ncols == new.ncols && grids_non_blank_cells_equal(old, new) {
@@ -9751,6 +10578,34 @@ fn diff_grids_core<S: DiffSink>(
         if let Some(m) = metrics.as_mut() {
             m.add_cells_compared(cells_in_overlap(old, new));
         }
+        return Ok(());
+    }
+
+    if hardening.check_timeout(&mut ctx.warnings) {
+        return Ok(());
+    }
+
+    let sheet_name = pool.resolve(sheet_id);
+    let context = format!("sheet '{sheet_name}'");
+    if hardening.memory_guard_or_warn(
+        super::hardening::estimate_advanced_sheet_diff_peak(old, new),
+        &mut ctx.warnings,
+        &context,
+    ) {
+        let mut emit_ctx = EmitCtx::new(
+            sheet_id,
+            pool,
+            config,
+            &mut ctx.formula_cache,
+            sink,
+            op_count,
+            &mut ctx.warnings,
+            hardening,
+        );
+        #[cfg(feature = "perf-metrics")]
+        run_positional_diff_with_metrics(&mut emit_ctx, old, new, metrics.as_deref_mut())?;
+        #[cfg(not(feature = "perf-metrics"))]
+        run_positional_diff_with_metrics(&mut emit_ctx, old, new)?;
         return Ok(());
     }
 
@@ -9770,6 +10625,8 @@ fn diff_grids_core<S: DiffSink>(
             &mut ctx.formula_cache,
             sink,
             op_count,
+            &mut ctx.warnings,
+            hardening,
         );
         #[cfg(feature = "perf-metrics")]
         run_positional_diff_with_metrics(&mut emit_ctx, old, new, metrics.as_deref_mut())?;
@@ -9778,15 +10635,23 @@ fn diff_grids_core<S: DiffSink>(
         return Ok(());
     }
 
-    let mut differ = SheetGridDiffer::new(
+    let emit_ctx = EmitCtx::new(
         sheet_id,
-        old,
-        new,
-        config,
         pool,
+        config,
         &mut ctx.formula_cache,
         sink,
         op_count,
+        &mut ctx.warnings,
+        hardening,
+    );
+
+    let mut differ = SheetGridDiffer::from_views(
+        emit_ctx,
+        old,
+        new,
+        old_view,
+        new_view,
         #[cfg(feature = "perf-metrics")]
         metrics.as_deref_mut(),
     );
@@ -9796,14 +10661,24 @@ fn diff_grids_core<S: DiffSink>(
         m.start_phase(Phase::MoveDetection);
     }
 
+    differ.emit_ctx.hardening.progress("move_detection", 0.0);
+    if differ.emit_ctx.hardening.check_timeout(differ.emit_ctx.warnings) {
+        return Ok(());
+    }
     differ.detect_moves()?;
+    differ.emit_ctx.hardening.progress("move_detection", 1.0);
 
     #[cfg(feature = "perf-metrics")]
     if let Some(m) = differ.metrics.as_mut() {
         m.end_phase(Phase::MoveDetection);
     }
 
+    if differ.emit_ctx.hardening.should_abort() {
+        return Ok(());
+    }
+
     if differ.has_mask_exclusions() {
+        differ.emit_ctx.hardening.progress("alignment", 1.0);
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = differ.metrics.as_mut() {
             m.start_phase(Phase::CellDiff);
@@ -9821,7 +10696,12 @@ fn diff_grids_core<S: DiffSink>(
         m.start_phase(Phase::Alignment);
     }
 
+    differ.emit_ctx.hardening.progress("alignment", 0.0);
+    if differ.emit_ctx.hardening.check_timeout(differ.emit_ctx.warnings) {
+        return Ok(());
+    }
     if differ.try_amr()? {
+        differ.emit_ctx.hardening.progress("alignment", 1.0);
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = differ.metrics.as_mut() {
             m.end_phase(Phase::Alignment);
@@ -9830,6 +10710,7 @@ fn diff_grids_core<S: DiffSink>(
     }
 
     if differ.try_row_alignment()? {
+        differ.emit_ctx.hardening.progress("alignment", 1.0);
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = differ.metrics.as_mut() {
             m.end_phase(Phase::Alignment);
@@ -9838,6 +10719,7 @@ fn diff_grids_core<S: DiffSink>(
     }
 
     if differ.try_single_column_alignment()? {
+        differ.emit_ctx.hardening.progress("alignment", 1.0);
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = differ.metrics.as_mut() {
             m.end_phase(Phase::Alignment);
@@ -9846,6 +10728,8 @@ fn diff_grids_core<S: DiffSink>(
     }
 
     differ.positional()?;
+
+    differ.emit_ctx.hardening.progress("alignment", 1.0);
 
     #[cfg(feature = "perf-metrics")]
     if let Some(m) = differ.metrics.as_mut() {
@@ -9904,16 +10788,32 @@ pub(crate) fn try_diff_grids_database_mode_streaming<S: DiffSink>(
     sink: &mut S,
     op_count: &mut usize,
 ) -> Result<DiffSummary, DiffError> {
+    let mut warnings: Vec<String> = Vec::new();
+    let mut hardening = super::hardening::HardeningController::new(config, None);
     let mut formula_cache = FormulaParseCache::default();
     let spec = KeyColumnSpec::new(key_columns.to_vec());
+
+    sink.begin(pool)?;
+    if hardening.check_timeout(&mut warnings) {
+        sink.finish()?;
+        return Ok(DiffSummary {
+            complete: false,
+            warnings,
+            op_count: *op_count,
+            #[cfg(feature = "perf-metrics")]
+            metrics: None,
+        });
+    }
+
     let alignment = match diff_table_by_key(old, new, key_columns) {
         Ok(alignment) => alignment,
         Err(_) => {
-            sink.begin(pool)?;
             let mut ctx = DiffContext::default();
-            ctx.warnings.push(
-                "database-mode: duplicate keys for requested columns; falling back to spreadsheet mode".to_string()
+            warnings.push(
+                "database-mode: duplicate keys for requested columns; falling back to spreadsheet mode"
+                    .to_string(),
             );
+            ctx.warnings = warnings;
             try_diff_grids(
                 sheet_id,
                 old,
@@ -9923,6 +10823,7 @@ pub(crate) fn try_diff_grids_database_mode_streaming<S: DiffSink>(
                 sink,
                 op_count,
                 &mut ctx,
+                &mut hardening,
                 #[cfg(feature = "perf-metrics")]
                 None,
             )?;
@@ -9938,10 +10839,12 @@ pub(crate) fn try_diff_grids_database_mode_streaming<S: DiffSink>(
         }
     };
 
-    sink.begin(pool)?;
     let max_cols = old.ncols.max(new.ncols);
 
     for row_idx in &alignment.left_only_rows {
+        if hardening.check_timeout(&mut warnings) {
+            break;
+        }
         emit_op(
             sink,
             op_count,
@@ -9950,10 +10853,16 @@ pub(crate) fn try_diff_grids_database_mode_streaming<S: DiffSink>(
     }
 
     for row_idx in &alignment.right_only_rows {
+        if hardening.check_timeout(&mut warnings) {
+            break;
+        }
         emit_op(sink, op_count, DiffOp::row_added(sheet_id, *row_idx, None))?;
     }
 
     for (row_a, row_b) in &alignment.matched_rows {
+        if hardening.check_timeout(&mut warnings) {
+            break;
+        }
         for col in 0..max_cols {
             if spec.is_key_column(col) {
                 continue;
@@ -9990,8 +10899,8 @@ pub(crate) fn try_diff_grids_database_mode_streaming<S: DiffSink>(
 
     sink.finish()?;
     Ok(DiffSummary {
-        complete: true,
-        warnings: Vec::new(),
+        complete: warnings.is_empty(),
+        warnings,
         op_count: *op_count,
         #[cfg(feature = "perf-metrics")]
         metrics: None,
@@ -10173,6 +11082,8 @@ mod tests {
         let mut sink = VecSink::new();
         let mut op_count = 0usize;
         let mut cache = FormulaParseCache::default();
+        let mut warnings: Vec<String> = Vec::new();
+        let mut hardening = super::super::hardening::HardeningController::new(&config, None);
 
         let old_cells_storage = [numbered_cell(1.0), numbered_cell(2.0), numbered_cell(3.0)];
         let new_cells_storage = [numbered_cell(1.0), numbered_cell(2.0), numbered_cell(4.0)];
@@ -10195,6 +11106,8 @@ mod tests {
             &mut cache,
             &mut sink,
             &mut op_count,
+            &mut warnings,
+            &mut hardening,
         );
         let compared = diff_row_pair_sparse(&mut emit_ctx, 0, 0, 3, &old_cells, &new_cells)
             .expect("diff should succeed");
@@ -10213,6 +11126,8 @@ mod tests {
         let mut sink = VecSink::new();
         let mut op_count = 0usize;
         let mut cache = FormulaParseCache::default();
+        let mut warnings: Vec<String> = Vec::new();
+        let mut hardening = super::super::hardening::HardeningController::new(&config, None);
 
         let old_cells_storage = [numbered_cell(1.0)];
         let new_cells_storage = [numbered_cell(2.0)];
@@ -10227,6 +11142,8 @@ mod tests {
             &mut cache,
             &mut sink,
             &mut op_count,
+            &mut warnings,
+            &mut hardening,
         );
         let compared = diff_row_pair_sparse(&mut emit_ctx, 0, 0, 3, &old_cells, &new_cells)
             .expect("diff should succeed");
@@ -10275,7 +11192,7 @@ pub(super) fn compute_formula_diff(
 }
 
 pub(super) fn emit_cell_edit<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     addr: CellAddress,
     old_cell: Option<&Cell>,
     new_cell: Option<&Cell>,
@@ -10320,7 +11237,7 @@ pub(super) fn snapshot_with_addr(cell: Option<&Cell>, addr: CellAddress) -> Cell
 }
 
 pub(super) fn emit_row_block_move<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     mv: RowBlockMove,
 ) -> Result<(), DiffError> {
     ctx.emit(DiffOp::BlockMovedRows {
@@ -10333,7 +11250,7 @@ pub(super) fn emit_row_block_move<S: DiffSink>(
 }
 
 pub(super) fn emit_column_block_move<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     mv: ColumnBlockMove,
 ) -> Result<(), DiffError> {
     ctx.emit(DiffOp::BlockMovedColumns {
@@ -10346,7 +11263,7 @@ pub(super) fn emit_column_block_move<S: DiffSink>(
 }
 
 pub(super) fn emit_rect_block_move<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     mv: RectBlockMove,
 ) -> Result<(), DiffError> {
     ctx.emit(DiffOp::BlockMovedRect {
@@ -10362,7 +11279,7 @@ pub(super) fn emit_rect_block_move<S: DiffSink>(
 }
 
 pub(super) fn emit_moved_row_block_edits<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     old_view: &GridView,
     new_view: &GridView,
     mv: RowBlockMove,
@@ -10391,7 +11308,7 @@ pub(super) fn emit_moved_row_block_edits<S: DiffSink>(
 }
 
 pub(super) fn diff_row_pair_sparse<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     row_a: u32,
     row_b: u32,
     overlap_cols: u32,
@@ -10443,7 +11360,7 @@ pub(super) fn diff_row_pair_sparse<S: DiffSink>(
 }
 
 pub(super) fn diff_row_pair<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     old: &Grid,
     new: &Grid,
     row_a: u32,
@@ -10466,7 +11383,7 @@ pub(super) fn diff_row_pair<S: DiffSink>(
 }
 
 pub(super) fn emit_row_aligned_diffs<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     old_view: &GridView,
     new_view: &GridView,
     alignment: &RowAlignment,
@@ -10516,7 +11433,7 @@ pub(super) fn emit_row_aligned_diffs<S: DiffSink>(
 }
 
 pub(super) fn emit_column_aligned_diffs<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     old: &Grid,
     new: &Grid,
     alignment: &ColumnAlignment,
@@ -10550,33 +11467,64 @@ pub(super) fn emit_column_aligned_diffs<S: DiffSink>(
 }
 
 pub(super) fn positional_diff<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     old: &Grid,
     new: &Grid,
 ) -> Result<(), DiffError> {
     let overlap_rows = old.nrows.min(new.nrows);
     let overlap_cols = old.ncols.min(new.ncols);
 
+    ctx.hardening.progress("cell_diff", 0.0);
+
     for row in 0..overlap_rows {
+        if ctx.hardening.check_timeout(ctx.warnings) {
+            return Ok(());
+        }
+
+        if overlap_rows > 0 && row % 256 == 0 {
+            ctx.hardening
+                .progress("cell_diff", row as f32 / overlap_rows as f32);
+        }
+
         diff_row_pair(ctx, old, new, row, row, overlap_cols)?;
+    }
+
+    if overlap_rows > 0 {
+        ctx.hardening.progress("cell_diff", 1.0);
+    }
+
+    if ctx.hardening.check_timeout(ctx.warnings) {
+        return Ok(());
     }
 
     if new.nrows > old.nrows {
         for row_idx in old.nrows..new.nrows {
+            if row_idx % 4096 == 0 && ctx.hardening.check_timeout(ctx.warnings) {
+                return Ok(());
+            }
             ctx.emit(DiffOp::row_added(ctx.sheet_id, row_idx, None))?;
         }
     } else if old.nrows > new.nrows {
         for row_idx in new.nrows..old.nrows {
+            if row_idx % 4096 == 0 && ctx.hardening.check_timeout(ctx.warnings) {
+                return Ok(());
+            }
             ctx.emit(DiffOp::row_removed(ctx.sheet_id, row_idx, None))?;
         }
     }
 
     if new.ncols > old.ncols {
         for col_idx in old.ncols..new.ncols {
+            if col_idx % 4096 == 0 && ctx.hardening.check_timeout(ctx.warnings) {
+                return Ok(());
+            }
             ctx.emit(DiffOp::column_added(ctx.sheet_id, col_idx, None))?;
         }
     } else if old.ncols > new.ncols {
         for col_idx in new.ncols..old.ncols {
+            if col_idx % 4096 == 0 && ctx.hardening.check_timeout(ctx.warnings) {
+                return Ok(());
+            }
             ctx.emit(DiffOp::column_removed(ctx.sheet_id, col_idx, None))?;
         }
     }
@@ -10593,7 +11541,7 @@ pub(super) fn cells_in_overlap(old: &Grid, new: &Grid) -> u64 {
 
 #[cfg(feature = "perf-metrics")]
 pub(super) fn run_positional_diff_with_metrics<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     old: &Grid,
     new: &Grid,
     mut metrics: Option<&mut DiffMetrics>,
@@ -10615,7 +11563,7 @@ pub(super) fn run_positional_diff_with_metrics<S: DiffSink>(
 
 #[cfg(not(feature = "perf-metrics"))]
 pub(super) fn run_positional_diff_with_metrics<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     old: &Grid,
     new: &Grid,
 ) -> Result<(), DiffError> {
@@ -10623,7 +11571,7 @@ pub(super) fn run_positional_diff_with_metrics<S: DiffSink>(
 }
 
 pub(super) fn try_row_alignment_internal<S: DiffSink>(
-    emit_ctx: &mut EmitCtx<'_, S>,
+    emit_ctx: &mut EmitCtx<'_, '_, S>,
     old_view: &GridView,
     new_view: &GridView,
     #[cfg(feature = "perf-metrics")] metrics: &mut Option<&mut DiffMetrics>,
@@ -10631,6 +11579,8 @@ pub(super) fn try_row_alignment_internal<S: DiffSink>(
     let Some(alignment) = align_row_changes_from_views(old_view, new_view, emit_ctx.config) else {
         return Ok(false);
     };
+
+    emit_ctx.hardening.progress("cell_diff", 0.0);
 
     #[cfg(feature = "perf-metrics")]
     let compared = {
@@ -10641,6 +11591,8 @@ pub(super) fn try_row_alignment_internal<S: DiffSink>(
     };
     #[cfg(not(feature = "perf-metrics"))]
     let compared = emit_row_aligned_diffs(emit_ctx, old_view, new_view, &alignment)?;
+
+    emit_ctx.hardening.progress("cell_diff", 1.0);
 
     #[cfg(feature = "perf-metrics")]
     if let Some(m) = metrics.as_deref_mut() {
@@ -10653,7 +11605,7 @@ pub(super) fn try_row_alignment_internal<S: DiffSink>(
 }
 
 pub(super) fn try_single_column_alignment_internal<S: DiffSink>(
-    emit_ctx: &mut EmitCtx<'_, S>,
+    emit_ctx: &mut EmitCtx<'_, '_, S>,
     old: &Grid,
     new: &Grid,
     old_view: &GridView,
@@ -10666,6 +11618,8 @@ pub(super) fn try_single_column_alignment_internal<S: DiffSink>(
         return Ok(false);
     };
 
+    emit_ctx.hardening.progress("cell_diff", 0.0);
+
     #[cfg(feature = "perf-metrics")]
     {
         let _phase = metrics
@@ -10676,6 +11630,8 @@ pub(super) fn try_single_column_alignment_internal<S: DiffSink>(
     #[cfg(not(feature = "perf-metrics"))]
     emit_column_aligned_diffs(emit_ctx, old, new, &alignment)?;
 
+    emit_ctx.hardening.progress("cell_diff", 1.0);
+
     #[cfg(feature = "perf-metrics")]
     if let Some(m) = metrics.as_deref_mut() {
         let overlap_rows = old.nrows.min(new.nrows) as u64;
@@ -10684,6 +11640,200 @@ pub(super) fn try_single_column_alignment_internal<S: DiffSink>(
 
     Ok(true)
 }
+
+```
+
+---
+
+### File: `core\src\engine\hardening.rs`
+
+```rust
+use crate::config::DiffConfig;
+use crate::progress::ProgressCallback;
+use crate::workbook::{Cell, Grid};
+use std::mem::size_of;
+use std::time::{Duration, Instant};
+
+const BYTES_PER_MB: u64 = 1024 * 1024;
+
+const PROGRESS_MIN_DELTA: f32 = 0.01;
+const TIMEOUT_CHECK_EVERY_TICKS: u64 = 256;
+
+pub(super) struct HardeningController<'a> {
+    start: Instant,
+    timeout: Option<Duration>,
+    max_memory_bytes: Option<u64>,
+    aborted: bool,
+    warned_timeout: bool,
+    warned_memory: bool,
+    progress: Option<&'a dyn ProgressCallback>,
+    last_progress_phase: Option<&'static str>,
+    last_progress_percent: Option<f32>,
+    timeout_tick: u64,
+}
+
+impl<'a> HardeningController<'a> {
+    pub(super) fn new(config: &DiffConfig, progress: Option<&'a dyn ProgressCallback>) -> Self {
+        Self {
+            start: Instant::now(),
+            timeout: config
+                .timeout_seconds
+                .map(|secs| Duration::from_secs(secs as u64)),
+            max_memory_bytes: config
+                .max_memory_mb
+                .map(|mb| (mb as u64).saturating_mul(BYTES_PER_MB)),
+            aborted: false,
+            warned_timeout: false,
+            warned_memory: false,
+            progress,
+            last_progress_phase: None,
+            last_progress_percent: None,
+            timeout_tick: 0,
+        }
+    }
+
+    pub(super) fn should_abort(&self) -> bool {
+        self.aborted
+    }
+
+    pub(super) fn check_timeout(&mut self, warnings: &mut Vec<String>) -> bool {
+        if self.aborted {
+            return true;
+        }
+        let Some(timeout) = self.timeout else {
+            return false;
+        };
+
+        self.timeout_tick = self.timeout_tick.saturating_add(1);
+        let should_check = self.timeout_tick == 1 || self.timeout_tick % TIMEOUT_CHECK_EVERY_TICKS == 0;
+        if !should_check {
+            return false;
+        }
+
+        if self.start.elapsed() < timeout {
+            return false;
+        }
+
+        self.aborted = true;
+        if !self.warned_timeout {
+            self.warned_timeout = true;
+            warnings.push(format!(
+                "timeout after {} seconds; diff aborted early; results may be incomplete",
+                timeout.as_secs()
+            ));
+        }
+        true
+    }
+
+    pub(super) fn memory_guard_or_warn(
+        &mut self,
+        estimated_extra_bytes: u64,
+        warnings: &mut Vec<String>,
+        context: &str,
+    ) -> bool {
+        let Some(limit) = self.max_memory_bytes else {
+            return false;
+        };
+
+        if estimated_extra_bytes <= limit {
+            return false;
+        }
+
+        if !self.warned_memory {
+            self.warned_memory = true;
+            warnings.push(format!(
+                "memory budget exceeded in {context} (estimated ~{} MB > limit {} MB); falling back to positional diff; results may be incomplete",
+                bytes_to_mb_ceil(estimated_extra_bytes),
+                bytes_to_mb_ceil(limit),
+            ));
+        }
+
+        true
+    }
+
+    pub(super) fn progress(&mut self, phase: &'static str, percent: f32) {
+        let Some(callback) = self.progress else {
+            return;
+        };
+
+        let mut clamped = if percent.is_finite() { percent } else { 0.0 };
+        if clamped < 0.0 {
+            clamped = 0.0;
+        } else if clamped > 1.0 {
+            clamped = 1.0;
+        }
+
+        let should_emit = match (self.last_progress_phase, self.last_progress_percent) {
+            (Some(last_phase), Some(last_percent)) if last_phase == phase => {
+                clamped == 0.0
+                    || clamped == 1.0
+                    || clamped < last_percent
+                    || (clamped - last_percent) >= PROGRESS_MIN_DELTA
+            }
+            _ => true,
+        };
+
+        if !should_emit {
+            return;
+        }
+
+        self.last_progress_phase = Some(phase);
+        self.last_progress_percent = Some(clamped);
+        callback.on_progress(phase, clamped);
+    }
+}
+
+pub(super) fn estimate_gridview_bytes(grid: &Grid) -> u64 {
+    let nrows = grid.nrows as u64;
+    let ncols = grid.ncols as u64;
+    let cell_count = grid.cell_count() as u64;
+
+    let row_view_bytes = nrows.saturating_mul(size_of::<crate::grid_view::RowView<'static>>() as u64);
+    let row_meta_bytes = nrows.saturating_mul(size_of::<crate::grid_view::RowMeta>() as u64);
+    let col_meta_bytes = ncols.saturating_mul(size_of::<crate::grid_view::ColMeta>() as u64);
+
+    let cell_entry_bytes = cell_count
+        .saturating_mul(size_of::<(u32, &'static Cell)>() as u64)
+        .saturating_mul(5)
+        .saturating_div(4);
+
+    let build_row_counts_bytes = nrows
+        .saturating_mul(size_of::<u32>() as u64)
+        .saturating_add(nrows.saturating_mul(size_of::<Option<u32>>() as u64));
+    let build_col_counts_bytes = ncols
+        .saturating_mul(size_of::<u32>() as u64)
+        .saturating_add(ncols.saturating_mul(size_of::<Option<u32>>() as u64));
+    let build_hashers_bytes =
+        ncols.saturating_mul(size_of::<xxhash_rust::xxh3::Xxh3>() as u64);
+
+    row_view_bytes
+        .saturating_add(row_meta_bytes)
+        .saturating_add(col_meta_bytes)
+        .saturating_add(cell_entry_bytes)
+        .saturating_add(build_row_counts_bytes)
+        .saturating_add(build_col_counts_bytes)
+        .saturating_add(build_hashers_bytes)
+}
+
+pub(super) fn estimate_advanced_sheet_diff_peak(old: &Grid, new: &Grid) -> u64 {
+    let base = estimate_gridview_bytes(old).saturating_add(estimate_gridview_bytes(new));
+    let max_rows = old.nrows.max(new.nrows) as u64;
+    let max_cols = old.ncols.max(new.ncols) as u64;
+
+    let alignment_overhead = max_rows
+        .saturating_add(max_cols)
+        .saturating_mul(size_of::<u32>() as u64)
+        .saturating_mul(8);
+
+    base.saturating_add(alignment_overhead)
+}
+
+fn bytes_to_mb_ceil(bytes: u64) -> u64 {
+    bytes
+        .saturating_add(BYTES_PER_MB.saturating_sub(1))
+        .saturating_div(BYTES_PER_MB)
+}
+
 
 ```
 
@@ -10709,6 +11859,7 @@ mod amr;
 mod context;
 mod grid_diff;
 mod grid_primitives;
+mod hardening;
 mod move_mask;
 mod workbook_diff;
 
@@ -10718,7 +11869,9 @@ use context::emit_op;
 pub use grid_diff::diff_grids_database_mode;
 pub(crate) use grid_diff::try_diff_grids_database_mode_streaming;
 pub use workbook_diff::{
-    diff_workbooks, diff_workbooks_streaming, try_diff_workbooks, try_diff_workbooks_streaming,
+    diff_workbooks, diff_workbooks_streaming, diff_workbooks_streaming_with_progress,
+    diff_workbooks_with_progress, try_diff_workbooks, try_diff_workbooks_streaming,
+    try_diff_workbooks_streaming_with_progress, try_diff_workbooks_with_progress,
 };
 
 ```
@@ -10732,7 +11885,6 @@ use crate::alignment_types::RowBlockMove;
 use crate::column_alignment::{ColumnBlockMove, detect_exact_column_block_move};
 use crate::config::DiffConfig;
 use crate::diff::DiffError;
-use crate::formula_diff::FormulaParseCache;
 use crate::grid_view::GridView;
 #[cfg(feature = "perf-metrics")]
 use crate::perf::DiffMetrics;
@@ -10740,12 +11892,10 @@ use crate::rect_block_move::{RectBlockMove, detect_exact_rect_block_move};
 use crate::region_mask::RegionMask;
 use crate::row_alignment::{detect_exact_row_block_move, detect_fuzzy_row_block_move};
 use crate::sink::DiffSink;
-use crate::string_pool::StringPool;
 use crate::workbook::{CellAddress, ColSignature, Grid, RowSignature};
 
 use std::collections::{BTreeMap, HashSet};
 
-use super::SheetId;
 use super::amr::try_diff_with_amr;
 use super::context::EmitCtx;
 use super::grid_primitives::{
@@ -10754,8 +11904,8 @@ use super::grid_primitives::{
     try_row_alignment_internal, try_single_column_alignment_internal,
 };
 
-pub(super) struct SheetGridDiffer<'a, 'b, S: DiffSink> {
-    pub(super) emit_ctx: EmitCtx<'a, S>,
+pub(super) struct SheetGridDiffer<'a, 'p, 'b, S: DiffSink> {
+    pub(super) emit_ctx: EmitCtx<'a, 'p, S>,
     pub(super) old: &'b Grid,
     pub(super) new: &'b Grid,
     pub(super) old_view: GridView<'b>,
@@ -10766,26 +11916,20 @@ pub(super) struct SheetGridDiffer<'a, 'b, S: DiffSink> {
     pub(super) metrics: Option<&'a mut DiffMetrics>,
 }
 
-impl<'a, 'b, S: DiffSink> SheetGridDiffer<'a, 'b, S> {
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn new(
-        sheet_id: SheetId,
+impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
+    pub(super) fn from_views(
+        emit_ctx: EmitCtx<'a, 'p, S>,
         old: &'b Grid,
         new: &'b Grid,
-        config: &'a DiffConfig,
-        pool: &'a StringPool,
-        cache: &'a mut FormulaParseCache,
-        sink: &'a mut S,
-        op_count: &'a mut usize,
+        old_view: GridView<'b>,
+        new_view: GridView<'b>,
         #[cfg(feature = "perf-metrics")] metrics: Option<&'a mut DiffMetrics>,
     ) -> Self {
-        let old_view = GridView::from_grid_with_config(old, config);
-        let new_view = GridView::from_grid_with_config(new, config);
         let old_mask = RegionMask::all_active(old.nrows, old.ncols);
         let new_mask = RegionMask::all_active(new.nrows, new.ncols);
 
         Self {
-            emit_ctx: EmitCtx::new(sheet_id, pool, config, cache, sink, op_count),
+            emit_ctx,
             old,
             new,
             old_view,
@@ -11620,7 +12764,7 @@ fn detect_fuzzy_row_block_move_masked(
 }
 
 fn diff_aligned_with_masks<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     old: &Grid,
     new: &Grid,
     old_mask: &RegionMask,
@@ -11652,7 +12796,19 @@ fn diff_aligned_with_masks<S: DiffSink>(
         return Ok(false);
     }
 
-    for (row_a, row_b) in rows_a.iter().zip(rows_b.iter()) {
+    ctx.hardening.progress("cell_diff", 0.0);
+
+    let total_rows = rows_a.len();
+    for (idx, (row_a, row_b)) in rows_a.iter().zip(rows_b.iter()).enumerate() {
+        if ctx.hardening.check_timeout(ctx.warnings) {
+            return Ok(true);
+        }
+
+        if total_rows > 0 && idx % 64 == 0 {
+            ctx.hardening
+                .progress("cell_diff", idx as f32 / total_rows as f32);
+        }
+
         for (col_a, col_b) in cols_a.iter().zip(cols_b.iter()) {
             if !old_mask.is_cell_active(*row_a, *col_a) || !new_mask.is_cell_active(*row_b, *col_b)
             {
@@ -11671,6 +12827,8 @@ fn diff_aligned_with_masks<S: DiffSink>(
             emit_cell_edit(ctx, addr, old_cell, new_cell, row_shift, col_shift)?;
         }
     }
+
+    ctx.hardening.progress("cell_diff", 1.0);
 
     let rows_a_set: HashSet<u32> = rows_a.iter().copied().collect();
     let rows_b_set: HashSet<u32> = rows_b.iter().copied().collect();
@@ -11718,7 +12876,7 @@ fn diff_aligned_with_masks<S: DiffSink>(
 }
 
 fn positional_diff_with_masks<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     old: &Grid,
     new: &Grid,
     old_mask: &RegionMask,
@@ -11727,7 +12885,16 @@ fn positional_diff_with_masks<S: DiffSink>(
     let overlap_rows = old.nrows.min(new.nrows);
     let overlap_cols = old.ncols.min(new.ncols);
 
+    ctx.hardening.progress("cell_diff", 0.0);
+
     for row in 0..overlap_rows {
+        if ctx.hardening.check_timeout(ctx.warnings) {
+            return Ok(());
+        }
+        if overlap_rows > 0 && row % 256 == 0 {
+            ctx.hardening
+                .progress("cell_diff", row as f32 / overlap_rows as f32);
+        }
         for col in 0..overlap_cols {
             if !old_mask.is_cell_active(row, col) || !new_mask.is_cell_active(row, col) {
                 continue;
@@ -11744,14 +12911,28 @@ fn positional_diff_with_masks<S: DiffSink>(
         }
     }
 
+    if overlap_rows > 0 {
+        ctx.hardening.progress("cell_diff", 1.0);
+    }
+
+    if ctx.hardening.check_timeout(ctx.warnings) {
+        return Ok(());
+    }
+
     if new.nrows > old.nrows {
         for row_idx in old.nrows..new.nrows {
+            if row_idx % 4096 == 0 && ctx.hardening.check_timeout(ctx.warnings) {
+                return Ok(());
+            }
             if new_mask.is_row_active(row_idx) {
                 ctx.emit(crate::diff::DiffOp::row_added(ctx.sheet_id, row_idx, None))?;
             }
         }
     } else if old.nrows > new.nrows {
         for row_idx in new.nrows..old.nrows {
+            if row_idx % 4096 == 0 && ctx.hardening.check_timeout(ctx.warnings) {
+                return Ok(());
+            }
             if old_mask.is_row_active(row_idx) {
                 ctx.emit(crate::diff::DiffOp::row_removed(
                     ctx.sheet_id,
@@ -11764,6 +12945,9 @@ fn positional_diff_with_masks<S: DiffSink>(
 
     if new.ncols > old.ncols {
         for col_idx in old.ncols..new.ncols {
+            if col_idx % 4096 == 0 && ctx.hardening.check_timeout(ctx.warnings) {
+                return Ok(());
+            }
             if new_mask.is_col_active(col_idx) {
                 ctx.emit(crate::diff::DiffOp::column_added(
                     ctx.sheet_id,
@@ -11774,6 +12958,9 @@ fn positional_diff_with_masks<S: DiffSink>(
         }
     } else if old.ncols > new.ncols {
         for col_idx in new.ncols..old.ncols {
+            if col_idx % 4096 == 0 && ctx.hardening.check_timeout(ctx.warnings) {
+                return Ok(());
+            }
             if old_mask.is_col_active(col_idx) {
                 ctx.emit(crate::diff::DiffOp::column_removed(
                     ctx.sheet_id,
@@ -11788,7 +12975,7 @@ fn positional_diff_with_masks<S: DiffSink>(
 }
 
 fn positional_diff_masked_equal_size<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     old: &Grid,
     new: &Grid,
     old_mask: &RegionMask,
@@ -11806,7 +12993,17 @@ fn positional_diff_masked_equal_size<S: DiffSink>(
         .filter(|&c| !is_in_zone(c, &col_shift_zone))
         .collect();
 
-    for &row in &stable_rows {
+    ctx.hardening.progress("cell_diff", 0.0);
+
+    let total_rows = stable_rows.len();
+    for (idx, &row) in stable_rows.iter().enumerate() {
+        if ctx.hardening.check_timeout(ctx.warnings) {
+            return Ok(());
+        }
+        if total_rows > 0 && idx % 64 == 0 {
+            ctx.hardening
+                .progress("cell_diff", idx as f32 / total_rows as f32);
+        }
         for &col in &stable_cols {
             if !old_mask.is_cell_active(row, col) || !new_mask.is_cell_active(row, col) {
                 continue;
@@ -11822,6 +13019,8 @@ fn positional_diff_masked_equal_size<S: DiffSink>(
             emit_cell_edit(ctx, addr, old_cell, new_cell, 0, 0)?;
         }
     }
+
+    ctx.hardening.progress("cell_diff", 1.0);
 
     Ok(())
 }
@@ -11938,11 +13137,13 @@ use crate::perf::{DiffMetrics, Phase};
 use crate::sink::{DiffSink, VecSink};
 use crate::string_pool::StringPool;
 use crate::workbook::{Sheet, SheetKind, Workbook};
+use crate::progress::ProgressCallback;
 
 use std::collections::HashMap;
 
 use super::context::DiffContext;
 use super::grid_diff::try_diff_grids;
+use super::hardening::HardeningController;
 use super::{SheetId, emit_op};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -11990,6 +13191,30 @@ pub fn diff_workbooks(
     }
 }
 
+pub fn diff_workbooks_with_progress(
+    old: &Workbook,
+    new: &Workbook,
+    pool: &mut StringPool,
+    config: &DiffConfig,
+    progress: &dyn ProgressCallback,
+) -> DiffReport {
+    match try_diff_workbooks_with_progress(old, new, pool, config, progress) {
+        Ok(report) => report,
+        Err(e) => {
+            let strings = pool.strings().to_vec();
+            DiffReport {
+                version: DiffReport::SCHEMA_VERSION.to_string(),
+                strings,
+                ops: Vec::new(),
+                complete: false,
+                warnings: vec![e.to_string()],
+                #[cfg(feature = "perf-metrics")]
+                metrics: None,
+            }
+        }
+    }
+}
+
 pub fn diff_workbooks_streaming<S: DiffSink>(
     old: &Workbook,
     new: &Workbook,
@@ -11998,6 +13223,26 @@ pub fn diff_workbooks_streaming<S: DiffSink>(
     sink: &mut S,
 ) -> DiffSummary {
     match try_diff_workbooks_streaming(old, new, pool, config, sink) {
+        Ok(summary) => summary,
+        Err(e) => DiffSummary {
+            complete: false,
+            warnings: vec![e.to_string()],
+            op_count: 0,
+            #[cfg(feature = "perf-metrics")]
+            metrics: None,
+        },
+    }
+}
+
+pub fn diff_workbooks_streaming_with_progress<S: DiffSink>(
+    old: &Workbook,
+    new: &Workbook,
+    pool: &mut StringPool,
+    config: &DiffConfig,
+    sink: &mut S,
+    progress: &dyn ProgressCallback,
+) -> DiffSummary {
+    match try_diff_workbooks_streaming_with_progress(old, new, pool, config, sink, progress) {
         Ok(summary) => summary,
         Err(e) => DiffSummary {
             complete: false,
@@ -12025,6 +13270,24 @@ pub fn try_diff_workbooks(
     ))
 }
 
+pub fn try_diff_workbooks_with_progress(
+    old: &Workbook,
+    new: &Workbook,
+    pool: &mut StringPool,
+    config: &DiffConfig,
+    progress: &dyn ProgressCallback,
+) -> Result<DiffReport, DiffError> {
+    let mut sink = VecSink::new();
+    let summary =
+        try_diff_workbooks_streaming_with_progress(old, new, pool, config, &mut sink, progress)?;
+    let strings = pool.strings().to_vec();
+    Ok(DiffReport::from_ops_and_summary(
+        sink.into_ops(),
+        summary,
+        strings,
+    ))
+}
+
 pub fn try_diff_workbooks_streaming<S: DiffSink>(
     old: &Workbook,
     new: &Workbook,
@@ -12032,6 +13295,31 @@ pub fn try_diff_workbooks_streaming<S: DiffSink>(
     config: &DiffConfig,
     sink: &mut S,
 ) -> Result<DiffSummary, DiffError> {
+    try_diff_workbooks_streaming_impl(old, new, pool, config, sink, None)
+}
+
+pub fn try_diff_workbooks_streaming_with_progress<S: DiffSink>(
+    old: &Workbook,
+    new: &Workbook,
+    pool: &mut StringPool,
+    config: &DiffConfig,
+    sink: &mut S,
+    progress: &dyn ProgressCallback,
+) -> Result<DiffSummary, DiffError> {
+    try_diff_workbooks_streaming_impl(old, new, pool, config, sink, Some(progress))
+}
+
+fn try_diff_workbooks_streaming_impl<'p, S: DiffSink>(
+    old: &Workbook,
+    new: &Workbook,
+    pool: &mut StringPool,
+    config: &DiffConfig,
+    sink: &mut S,
+    progress: Option<&'p dyn ProgressCallback>,
+) -> Result<DiffSummary, DiffError> {
+    let mut hardening = HardeningController::new(config, progress);
+    hardening.progress("parse", 0.0);
+
     sink.begin(pool)?;
 
     let mut ctx = DiffContext::default();
@@ -12042,6 +13330,17 @@ pub fn try_diff_workbooks_streaming<S: DiffSink>(
         m.start_phase(Phase::Total);
         m
     };
+
+    if hardening.check_timeout(&mut ctx.warnings) {
+        sink.finish()?;
+        return Ok(DiffSummary {
+            complete: false,
+            warnings: ctx.warnings,
+            op_count,
+            #[cfg(feature = "perf-metrics")]
+            metrics: Some(metrics),
+        });
+    }
 
     let mut old_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
     for sheet in &old.sheets {
@@ -12084,7 +13383,13 @@ pub fn try_diff_workbooks_streaming<S: DiffSink>(
     });
     all_keys.dedup();
 
+    hardening.progress("parse", 1.0);
+
     for key in all_keys {
+        if hardening.check_timeout(&mut ctx.warnings) {
+            break;
+        }
+
         match (old_sheets.get(&key), new_sheets.get(&key)) {
             (None, Some(new_sheet)) => {
                 emit_op(
@@ -12115,9 +13420,13 @@ pub fn try_diff_workbooks_streaming<S: DiffSink>(
                     sink,
                     &mut op_count,
                     &mut ctx,
+                    &mut hardening,
                     #[cfg(feature = "perf-metrics")]
                     Some(&mut metrics),
                 )?;
+                if hardening.should_abort() {
+                    break;
+                }
             }
             (None, None) => {
                 debug_assert!(false, "sheet key in all_keys but not in either map");
@@ -12228,11 +13537,14 @@ use crate::grid_parser::{
     GridParseError, parse_defined_names, parse_relationships, parse_relationships_all,
     parse_shared_strings, parse_sheet_xml, parse_workbook_xml, resolve_sheet_target,
 };
-use crate::package::{VbaModule, VbaModuleType};
+use crate::package::VbaModule;
+#[cfg(feature = "vba")]
+use crate::package::VbaModuleType;
 use crate::string_pool::StringId;
 use crate::string_pool::StringPool;
 use crate::workbook::{ChartInfo, ChartObject, Sheet, SheetKind, Workbook};
 use std::collections::HashMap;
+#[cfg(feature = "std-fs")]
 use std::path::Path;
 use thiserror::Error;
 use xxhash_rust::xxh3::Xxh3;
@@ -12465,6 +13777,7 @@ pub(crate) fn open_workbook_from_container(
     })
 }
 
+#[cfg(feature = "vba")]
 pub(crate) fn open_vba_modules_from_container(
     container: &mut OpcContainer,
     pool: &mut StringPool,
@@ -12502,6 +13815,14 @@ pub(crate) fn open_vba_modules_from_container(
     }
 
     Ok(Some(modules))
+}
+
+#[cfg(not(feature = "vba"))]
+pub(crate) fn open_vba_modules_from_container(
+    _container: &mut OpcContainer,
+    _pool: &mut StringPool,
+) -> Result<Option<Vec<VbaModule>>, PackageError> {
+    Ok(None)
 }
 
 #[derive(Debug, Clone)]
@@ -12750,6 +14071,7 @@ fn wrap_grid_parse_error(err: GridParseError, part: &str) -> PackageError {
     }
 }
 
+#[cfg(feature = "std-fs")]
 #[allow(deprecated)]
 pub fn open_workbook(
     path: impl AsRef<Path>,
@@ -12762,6 +14084,7 @@ pub fn open_workbook(
         .map_err(|e| e.with_path(&path_str))
 }
 
+#[cfg(feature = "std-fs")]
 #[allow(deprecated)]
 pub fn open_vba_modules(
     path: impl AsRef<Path>,
@@ -12832,6 +14155,7 @@ pub(crate) fn open_data_mashup_from_container(
     Ok(found)
 }
 
+#[cfg(feature = "std-fs")]
 #[allow(deprecated)]
 pub fn open_data_mashup(path: impl AsRef<Path>) -> Result<Option<RawDataMashup>, PackageError> {
     let path_str = path.as_ref().display().to_string();
@@ -15640,6 +16964,7 @@ mod m_section;
 mod object_diff;
 mod output;
 mod package;
+mod progress;
 #[cfg(feature = "perf-metrics")]
 #[doc(hidden)]
 pub mod perf;
@@ -15685,7 +17010,7 @@ pub fn try_diff_workbooks(
     })
 }
 
-#[cfg(feature = "excel-open-xml")]
+#[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 #[deprecated(note = "use WorkbookPackage::open")]
 #[allow(deprecated)]
 #[doc(hidden)]
@@ -15704,8 +17029,9 @@ pub fn open_workbook(path: impl AsRef<std::path::Path>) -> Result<Workbook, Exce
 pub mod advanced {
     pub use crate::engine::{
         diff_grids_database_mode, diff_workbooks as diff_workbooks_with_pool,
-        diff_workbooks_streaming, try_diff_workbooks as try_diff_workbooks_with_pool,
-        try_diff_workbooks_streaming,
+        diff_workbooks_streaming, diff_workbooks_streaming_with_progress, diff_workbooks_with_progress,
+        try_diff_workbooks as try_diff_workbooks_with_pool, try_diff_workbooks_streaming,
+        try_diff_workbooks_streaming_with_progress, try_diff_workbooks_with_progress,
     };
     pub use crate::session::DiffSession;
     pub use crate::sink::{CallbackSink, DiffSink, VecSink};
@@ -15732,14 +17058,18 @@ pub use diff::{
 #[doc(hidden)]
 pub use engine::{
     diff_grids_database_mode, diff_workbooks as diff_workbooks_with_pool, diff_workbooks_streaming,
+    diff_workbooks_streaming_with_progress, diff_workbooks_with_progress,
     try_diff_workbooks as try_diff_workbooks_with_pool, try_diff_workbooks_streaming,
+    try_diff_workbooks_streaming_with_progress, try_diff_workbooks_with_progress,
 };
 #[cfg(feature = "excel-open-xml")]
 #[allow(deprecated)]
 #[doc(hidden)]
-pub use excel_open_xml::{
-    ExcelOpenError, PackageError, open_data_mashup, open_workbook as open_workbook_with_pool,
-};
+pub use excel_open_xml::{ExcelOpenError, PackageError};
+#[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
+#[allow(deprecated)]
+#[doc(hidden)]
+pub use excel_open_xml::{open_data_mashup, open_workbook as open_workbook_with_pool};
 pub use formula::{
     BinaryOperator, CellReference, ColRef, ExcelError, FormulaExpr, FormulaParseError,
     RangeReference, RowRef, UnaryOperator, formulas_equivalent_modulo_shift, parse_formula,
@@ -15756,12 +17086,13 @@ pub use m_ast::{
 pub use m_section::{SectionMember, SectionParseError, parse_section_members};
 #[doc(hidden)]
 pub use output::json::diff_report_to_cell_diffs;
-#[cfg(feature = "excel-open-xml")]
+#[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 #[doc(hidden)]
 pub use output::json::diff_workbooks_to_json;
 pub use output::json::{CellDiff, serialize_cell_diffs, serialize_diff_report};
 pub use output::json_lines::JsonLinesSink;
 pub use package::{VbaModule, VbaModuleType, WorkbookPackage};
+pub use progress::{NoProgress, ProgressCallback};
 pub use session::DiffSession;
 pub use sink::{CallbackSink, DiffSink, VecSink};
 pub use string_pool::{StringId, StringPool};
@@ -17309,19 +18640,20 @@ pub(crate) fn diff_vba_modules(
 ### File: `core\src\output\json.rs`
 
 ```rust
-#[cfg(feature = "excel-open-xml")]
+#[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 use crate::config::DiffConfig;
-#[cfg(feature = "excel-open-xml")]
+#[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 use crate::datamashup::build_data_mashup;
 use crate::diff::DiffReport;
-#[cfg(feature = "excel-open-xml")]
+#[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 use crate::excel_open_xml::{PackageError, open_data_mashup, open_vba_modules, open_workbook};
+#[allow(unused_imports)]
 use crate::session::DiffSession;
-#[cfg(feature = "excel-open-xml")]
+#[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 use crate::sink::VecSink;
 use serde::Serialize;
 use serde::ser::Error as SerdeError;
-#[cfg(feature = "excel-open-xml")]
+#[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -17347,7 +18679,7 @@ pub fn serialize_diff_report(report: &DiffReport) -> serde_json::Result<String> 
     serde_json::to_string(report)
 }
 
-#[cfg(feature = "excel-open-xml")]
+#[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 pub fn diff_workbooks(
     path_a: impl AsRef<Path>,
     path_b: impl AsRef<Path>,
@@ -17403,7 +18735,7 @@ pub fn diff_workbooks(
     Ok(DiffReport::from_ops_and_summary(ops, summary, strings))
 }
 
-#[cfg(feature = "excel-open-xml")]
+#[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 pub fn diff_workbooks_to_json(
     path_a: impl AsRef<Path>,
     path_b: impl AsRef<Path>,
@@ -17561,6 +18893,7 @@ pub mod json_lines;
 use crate::config::DiffConfig;
 use crate::datamashup::DataMashup;
 use crate::diff::{DiffError, DiffReport, DiffSummary, SheetId};
+use crate::progress::ProgressCallback;
 use crate::sink::{DiffSink, NoFinishSink, VecSink};
 use crate::string_pool::StringId;
 use crate::string_pool::StringPool;
@@ -17630,6 +18963,17 @@ impl WorkbookPackage {
         })
     }
 
+    pub fn diff_with_progress(
+        &self,
+        other: &Self,
+        config: &DiffConfig,
+        progress: &dyn ProgressCallback,
+    ) -> DiffReport {
+        crate::with_default_session(|session| {
+            self.diff_with_progress_with_pool(other, &mut session.strings, config, progress)
+        })
+    }
+
     pub fn diff_with_pool(
         &self,
         other: &Self,
@@ -17638,6 +18982,47 @@ impl WorkbookPackage {
     ) -> DiffReport {
         let mut report =
             crate::engine::diff_workbooks(&self.workbook, &other.workbook, pool, config);
+
+        let mut object_ops =
+            crate::object_diff::diff_named_ranges(&self.workbook, &other.workbook, pool);
+        object_ops.extend(crate::object_diff::diff_charts(
+            &self.workbook,
+            &other.workbook,
+            pool,
+        ));
+        object_ops.extend(crate::object_diff::diff_vba_modules(
+            self.vba_modules.as_deref(),
+            other.vba_modules.as_deref(),
+            pool,
+        ));
+        report.ops.extend(object_ops);
+
+        let m_ops = crate::m_diff::diff_m_ops_for_packages(
+            &self.data_mashup,
+            &other.data_mashup,
+            pool,
+            config,
+        );
+
+        report.ops.extend(m_ops);
+        report.strings = pool.strings().to_vec();
+        report
+    }
+
+    pub fn diff_with_progress_with_pool(
+        &self,
+        other: &Self,
+        pool: &mut crate::string_pool::StringPool,
+        config: &DiffConfig,
+        progress: &dyn ProgressCallback,
+    ) -> DiffReport {
+        let mut report = crate::engine::diff_workbooks_with_progress(
+            &self.workbook,
+            &other.workbook,
+            pool,
+            config,
+            progress,
+        );
 
         let mut object_ops =
             crate::object_diff::diff_named_ranges(&self.workbook, &other.workbook, pool);
@@ -17676,6 +19061,24 @@ impl WorkbookPackage {
         })
     }
 
+    pub fn diff_streaming_with_progress<S: DiffSink>(
+        &self,
+        other: &Self,
+        config: &DiffConfig,
+        sink: &mut S,
+        progress: &dyn ProgressCallback,
+    ) -> Result<DiffSummary, DiffError> {
+        crate::with_default_session(|session| {
+            self.diff_streaming_with_progress_with_pool(
+                other,
+                &mut session.strings,
+                config,
+                sink,
+                progress,
+            )
+        })
+    }
+
     pub fn diff_streaming_with_pool<S: DiffSink>(
         &self,
         other: &Self,
@@ -17711,6 +19114,75 @@ impl WorkbookPackage {
                 pool,
                 config,
                 &mut no_finish,
+            )
+        };
+
+        let mut summary = match grid_result {
+            Ok(summary) => summary,
+            Err(e) => {
+                let _ = sink.finish();
+                return Err(e);
+            }
+        };
+
+        for op in object_ops {
+            if let Err(e) = sink.emit(op) {
+                let _ = sink.finish();
+                return Err(e);
+            }
+            summary.op_count = summary.op_count.saturating_add(1);
+        }
+
+        for op in m_ops {
+            if let Err(e) = sink.emit(op) {
+                let _ = sink.finish();
+                return Err(e);
+            }
+            summary.op_count = summary.op_count.saturating_add(1);
+        }
+
+        sink.finish()?;
+
+        Ok(summary)
+    }
+
+    pub fn diff_streaming_with_progress_with_pool<S: DiffSink>(
+        &self,
+        other: &Self,
+        pool: &mut crate::string_pool::StringPool,
+        config: &DiffConfig,
+        sink: &mut S,
+        progress: &dyn ProgressCallback,
+    ) -> Result<DiffSummary, DiffError> {
+        let mut object_ops =
+            crate::object_diff::diff_named_ranges(&self.workbook, &other.workbook, pool);
+        object_ops.extend(crate::object_diff::diff_charts(
+            &self.workbook,
+            &other.workbook,
+            pool,
+        ));
+        object_ops.extend(crate::object_diff::diff_vba_modules(
+            self.vba_modules.as_deref(),
+            other.vba_modules.as_deref(),
+            pool,
+        ));
+
+        let m_ops = crate::m_diff::diff_m_ops_for_packages(
+            &self.data_mashup,
+            &other.data_mashup,
+            pool,
+            config,
+        );
+
+        let grid_result = {
+            let mut no_finish = NoFinishSink::new(sink);
+            crate::engine::try_diff_workbooks_streaming_with_progress(
+                &self.workbook,
+                &other.workbook,
+                pool,
+                config,
+                &mut no_finish,
+                progress,
             )
         };
 
@@ -18031,6 +19503,31 @@ impl Drop for PhaseGuard<'_> {
         self.metrics.end_phase(self.phase);
     }
 }
+
+```
+
+---
+
+### File: `core\src\progress.rs`
+
+```rust
+/// Progress reporting for long-running diffs.
+///
+/// The diff engine may call the callback at throttled intervals with a best-effort percentage in
+/// the range `[0.0, 1.0]`. Callers should treat progress as advisory and not assume monotonicity
+/// across phases.
+
+pub trait ProgressCallback: Send {
+    fn on_progress(&self, phase: &str, percent: f32);
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoProgress;
+
+impl ProgressCallback for NoProgress {
+    fn on_progress(&self, _phase: &str, _percent: f32) {}
+}
+
 
 ```
 
@@ -27286,6 +28783,155 @@ fn gridview_row_hashes_ignore_small_float_drift() {
         "row signatures should be stable under ULP-level float differences"
     );
 }
+
+```
+
+---
+
+### File: `core\tests\hardening_tests.rs`
+
+```rust
+mod common;
+
+use common::single_sheet_workbook;
+use excel_diff::{CellValue, DiffConfig, DiffOp, Grid, ProgressCallback, WorkbookPackage};
+use std::sync::Mutex;
+
+fn create_simple_grid(nrows: u32, ncols: u32, base_value: i32) -> Grid {
+    let mut grid = Grid::new(nrows, ncols);
+    for row in 0..nrows {
+        for col in 0..ncols {
+            grid.insert_cell(
+                row,
+                col,
+                Some(CellValue::Number(
+                    (base_value as i64 + row as i64 * 1000 + col as i64) as f64,
+                )),
+                None,
+            );
+        }
+    }
+    grid
+}
+
+#[test]
+fn memory_budget_forces_positional_fallback_and_warning() {
+    let grid_a = create_simple_grid(10, 3, 0);
+    let mut grid_b = create_simple_grid(10, 3, 0);
+    grid_b.insert_cell(5, 1, Some(CellValue::Number(999999.0)), None);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let config = DiffConfig {
+        max_memory_mb: Some(0),
+        ..Default::default()
+    };
+
+    let report = WorkbookPackage::from(wb_a).diff(&WorkbookPackage::from(wb_b), &config);
+
+    assert!(!report.complete, "memory fallback should mark report incomplete");
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.to_lowercase().contains("memory")),
+        "expected a memory warning: {:?}",
+        report.warnings
+    );
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.to_lowercase().contains("positional")),
+        "expected warning to mention positional diff: {:?}",
+        report.warnings
+    );
+    assert!(
+        report.ops.iter().any(|op| matches!(op, DiffOp::CellEdited { .. })),
+        "should still emit ops via positional diff"
+    );
+}
+
+#[test]
+fn timeout_yields_partial_report_and_warning() {
+    let grid_a = create_simple_grid(10, 3, 0);
+    let mut grid_b = create_simple_grid(10, 3, 0);
+    grid_b.insert_cell(5, 1, Some(CellValue::Number(999999.0)), None);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let config = DiffConfig {
+        timeout_seconds: Some(0),
+        ..Default::default()
+    };
+
+    let report = WorkbookPackage::from(wb_a).diff(&WorkbookPackage::from(wb_b), &config);
+
+    assert!(!report.complete, "timeout should mark report incomplete");
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.to_lowercase().contains("timeout")),
+        "expected a timeout warning: {:?}",
+        report.warnings
+    );
+}
+
+#[derive(Default)]
+struct CollectProgress {
+    events: Mutex<Vec<(String, f32)>>,
+}
+
+impl ProgressCallback for CollectProgress {
+    fn on_progress(&self, phase: &str, percent: f32) {
+        let mut events = match self.events.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        events.push((phase.to_string(), percent));
+    }
+}
+
+#[test]
+fn progress_callback_fires_for_cell_diff() {
+    let grid_a = create_simple_grid(512, 10, 0);
+    let mut grid_b = create_simple_grid(512, 10, 0);
+    grid_b.insert_cell(500, 5, Some(CellValue::Number(999999.0)), None);
+
+    let wb_a = single_sheet_workbook("Sheet1", grid_a);
+    let wb_b = single_sheet_workbook("Sheet1", grid_b);
+
+    let config = DiffConfig::default();
+    let progress = CollectProgress::default();
+
+    let _report =
+        WorkbookPackage::from(wb_a).diff_with_progress(&WorkbookPackage::from(wb_b), &config, &progress);
+
+    let events = match progress.events.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+
+    assert!(
+        events.iter().any(|(phase, _)| phase == "cell_diff"),
+        "expected at least one cell_diff progress event: {:?}",
+        *events
+    );
+    assert!(
+        events.iter().all(|(_, pct)| *pct >= 0.0 && *pct <= 1.0),
+        "percent should stay within [0.0, 1.0]: {:?}",
+        *events
+    );
+    assert!(
+        events.len() < 10_000,
+        "progress callbacks should be throttled: got {} callbacks",
+        events.len()
+    );
+}
+
 
 ```
 
@@ -39181,6 +40827,125 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+```
+
+---
+
+### File: `scripts\verify_release_versions.py`
+
+```python
+#!/usr/bin/env python3
+"""
+Verify that release tags match crate versions.
+
+Branch 5 packaging expects releases to be tagged as `vX.Y.Z`, and for the
+workspace crate versions to match `X.Y.Z` (without the leading `v`).
+
+This script is designed to be used in GitHub Actions, but can also be run
+locally:
+
+  python scripts/verify_release_versions.py --tag v0.1.0
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import sys
+from pathlib import Path
+
+
+TAG_RE = re.compile(
+    r"^v(?P<version>[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)$"
+)
+
+
+def _read_package_version(cargo_toml_path: Path) -> str:
+    if not cargo_toml_path.exists():
+        raise FileNotFoundError(f"Missing {cargo_toml_path}")
+
+    if sys.version_info >= (3, 11):
+        import tomllib  # type: ignore[import-not-found]
+    else:
+        raise RuntimeError("Python 3.11+ is required (tomllib)")
+
+    data = tomllib.loads(cargo_toml_path.read_text(encoding="utf-8"))
+    package = data.get("package")
+    if not isinstance(package, dict):
+        raise ValueError(f"{cargo_toml_path} has no [package] section")
+
+    version = package.get("version")
+    if not isinstance(version, str) or not version.strip():
+        raise ValueError(f"{cargo_toml_path} has no valid package.version")
+
+    return version.strip()
+
+
+def _resolve_tag(tag_arg: str | None) -> str | None:
+    if tag_arg:
+        return tag_arg.strip()
+
+    ref = os.environ.get("GITHUB_REF", "").strip()
+    if ref.startswith("refs/tags/"):
+        return ref.removeprefix("refs/tags/")
+
+    return None
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Verify tag/version consistency.")
+    parser.add_argument("--tag", help="Tag like v0.1.0 (defaults to GITHUB_REF)")
+    parser.add_argument(
+        "--workspace-root",
+        default=str(Path(__file__).resolve().parent.parent),
+        help="Repository root (default: inferred from script location)",
+    )
+    parser.add_argument(
+        "--crates",
+        nargs="*",
+        default=["core", "cli", "wasm"],
+        help="Crate directories to check (default: core cli wasm)",
+    )
+    args = parser.parse_args()
+
+    tag = _resolve_tag(args.tag)
+    if tag is None:
+        print("No tag detected (not running on refs/tags/*); skipping version check.")
+        return 0
+
+    match = TAG_RE.match(tag)
+    if not match:
+        print(f"ERROR: tag {tag!r} does not match expected format vX.Y.Z", file=sys.stderr)
+        return 2
+
+    expected = match.group("version")
+    root = Path(args.workspace_root)
+
+    mismatches: list[tuple[str, str]] = []
+    for crate_dir in args.crates:
+        cargo_toml = root / crate_dir / "Cargo.toml"
+        actual = _read_package_version(cargo_toml)
+        if actual != expected:
+            mismatches.append((crate_dir, actual))
+
+    if mismatches:
+        print(
+            f"ERROR: tag {tag} expects crate version {expected}, but found mismatches:",
+            file=sys.stderr,
+        )
+        for crate_dir, actual in mismatches:
+            print(f"  - {crate_dir}/Cargo.toml: {actual}", file=sys.stderr)
+        return 1
+
+    print(f"OK: tag {tag} matches crate versions ({expected}).")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
 
 
 ```
@@ -136008,6 +137773,90 @@ class XMLwriter(object):
         data = data.replace("\uFFFE", "_xFFFE_").replace("\uFFFF", "_xFFFF_")
 
         return data
+
+```
+
+---
+
+### File: `wasm\Cargo.toml`
+
+```toml
+[package]
+name = "excel_diff_wasm"
+version = "0.1.0"
+edition = "2024"
+description = "WebAssembly bindings for excel_diff"
+license = "MIT"
+repository = "https://github.com/dvora/excel_diff"
+homepage = "https://github.com/dvora/excel_diff"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+excel_diff = { path = "../core", default-features = false, features = ["excel-open-xml"] }
+wasm-bindgen = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+
+```
+
+---
+
+### File: `wasm\src\lib.rs`
+
+```rust
+use wasm_bindgen::prelude::*;
+use std::io::Cursor;
+
+#[wasm_bindgen]
+pub fn diff_workbooks_json(old_bytes: &[u8], new_bytes: &[u8]) -> Result<String, JsValue> {
+    let old_cursor = Cursor::new(old_bytes.to_vec());
+    let new_cursor = Cursor::new(new_bytes.to_vec());
+
+    let pkg_old = excel_diff::WorkbookPackage::open(old_cursor)
+        .map_err(|e| JsValue::from_str(&format!("Failed to open old file: {}", e)))?;
+    let pkg_new = excel_diff::WorkbookPackage::open(new_cursor)
+        .map_err(|e| JsValue::from_str(&format!("Failed to open new file: {}", e)))?;
+
+    let report = pkg_old.diff(&pkg_new, &excel_diff::DiffConfig::default());
+
+    excel_diff::serialize_diff_report(&report)
+        .map_err(|e| JsValue::from_str(&format!("Failed to serialize report: {}", e)))
+}
+
+#[wasm_bindgen]
+pub fn get_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[wasm_bindgen]
+pub struct DiffSummary {
+    pub op_count: usize,
+    pub sheets_old: usize,
+    pub sheets_new: usize,
+}
+
+#[wasm_bindgen]
+pub fn diff_summary(old_bytes: &[u8], new_bytes: &[u8]) -> Result<DiffSummary, JsValue> {
+    let old_cursor = Cursor::new(old_bytes.to_vec());
+    let new_cursor = Cursor::new(new_bytes.to_vec());
+
+    let pkg_old = excel_diff::WorkbookPackage::open(old_cursor)
+        .map_err(|e| JsValue::from_str(&format!("Failed to open old file: {}", e)))?;
+    let pkg_new = excel_diff::WorkbookPackage::open(new_cursor)
+        .map_err(|e| JsValue::from_str(&format!("Failed to open new file: {}", e)))?;
+
+    let report = pkg_old.diff(&pkg_new, &excel_diff::DiffConfig::default());
+
+    Ok(DiffSummary {
+        op_count: report.ops.len(),
+        sheets_old: pkg_old.workbook.sheets.len(),
+        sheets_new: pkg_new.workbook.sheets.len(),
+    })
+}
+
 
 ```
 

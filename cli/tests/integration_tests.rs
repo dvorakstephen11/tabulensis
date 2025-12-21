@@ -54,6 +54,64 @@ fn different_files_exit_1() {
 }
 
 #[test]
+fn max_memory_zero_exits_1_and_warns() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--max-memory",
+            "0",
+            &fixture_path("single_cell_value_a.xlsx"),
+            &fixture_path("single_cell_value_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "memory-capped diff should exit 1: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Warning:"), "should print a warning");
+    assert!(
+        stderr.to_lowercase().contains("memory"),
+        "warning should mention memory: {}",
+        stderr
+    );
+}
+
+#[test]
+fn timeout_zero_exits_1_and_warns() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--timeout",
+            "0",
+            &fixture_path("single_cell_value_a.xlsx"),
+            &fixture_path("single_cell_value_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "timeout diff should exit 1: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Warning:"), "should print a warning");
+    assert!(
+        stderr.to_lowercase().contains("timeout"),
+        "warning should mention timeout: {}",
+        stderr
+    );
+}
+
+#[test]
 fn nonexistent_file_exit_2() {
     let output = excel_diff_cmd()
         .args(["diff", "nonexistent_a.xlsx", "nonexistent_b.xlsx"])
@@ -111,6 +169,43 @@ fn jsonl_first_line_is_header() {
     assert_eq!(header.get("kind").and_then(|v| v.as_str()), Some("Header"));
     assert!(header.get("version").is_some());
     assert!(header.get("strings").is_some());
+}
+
+#[test]
+fn jsonl_progress_keeps_stdout_jsonl_and_writes_to_stderr() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--format",
+            "jsonl",
+            "--progress",
+            &fixture_path("single_cell_value_a.xlsx"),
+            &fixture_path("single_cell_value_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "diff with progress should exit 1: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for (idx, line) in stdout.lines().enumerate() {
+        serde_json::from_str::<serde_json::Value>(line).unwrap_or_else(|e| {
+            panic!("stdout line {idx} should be valid JSON: {e}; line={line}");
+        });
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.is_empty(),
+        "progress should write to stderr (even in tests): stdout_len={}, stderr_len={}",
+        stdout.len(),
+        stderr.len()
+    );
 }
 
 #[test]

@@ -2,7 +2,6 @@ use crate::alignment_types::RowBlockMove;
 use crate::column_alignment::{ColumnBlockMove, detect_exact_column_block_move};
 use crate::config::DiffConfig;
 use crate::diff::DiffError;
-use crate::formula_diff::FormulaParseCache;
 use crate::grid_view::GridView;
 #[cfg(feature = "perf-metrics")]
 use crate::perf::DiffMetrics;
@@ -10,12 +9,10 @@ use crate::rect_block_move::{RectBlockMove, detect_exact_rect_block_move};
 use crate::region_mask::RegionMask;
 use crate::row_alignment::{detect_exact_row_block_move, detect_fuzzy_row_block_move};
 use crate::sink::DiffSink;
-use crate::string_pool::StringPool;
 use crate::workbook::{CellAddress, ColSignature, Grid, RowSignature};
 
 use std::collections::{BTreeMap, HashSet};
 
-use super::SheetId;
 use super::amr::try_diff_with_amr;
 use super::context::EmitCtx;
 use super::grid_primitives::{
@@ -24,8 +21,8 @@ use super::grid_primitives::{
     try_row_alignment_internal, try_single_column_alignment_internal,
 };
 
-pub(super) struct SheetGridDiffer<'a, 'b, S: DiffSink> {
-    pub(super) emit_ctx: EmitCtx<'a, S>,
+pub(super) struct SheetGridDiffer<'a, 'p, 'b, S: DiffSink> {
+    pub(super) emit_ctx: EmitCtx<'a, 'p, S>,
     pub(super) old: &'b Grid,
     pub(super) new: &'b Grid,
     pub(super) old_view: GridView<'b>,
@@ -36,26 +33,20 @@ pub(super) struct SheetGridDiffer<'a, 'b, S: DiffSink> {
     pub(super) metrics: Option<&'a mut DiffMetrics>,
 }
 
-impl<'a, 'b, S: DiffSink> SheetGridDiffer<'a, 'b, S> {
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn new(
-        sheet_id: SheetId,
+impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
+    pub(super) fn from_views(
+        emit_ctx: EmitCtx<'a, 'p, S>,
         old: &'b Grid,
         new: &'b Grid,
-        config: &'a DiffConfig,
-        pool: &'a StringPool,
-        cache: &'a mut FormulaParseCache,
-        sink: &'a mut S,
-        op_count: &'a mut usize,
+        old_view: GridView<'b>,
+        new_view: GridView<'b>,
         #[cfg(feature = "perf-metrics")] metrics: Option<&'a mut DiffMetrics>,
     ) -> Self {
-        let old_view = GridView::from_grid_with_config(old, config);
-        let new_view = GridView::from_grid_with_config(new, config);
         let old_mask = RegionMask::all_active(old.nrows, old.ncols);
         let new_mask = RegionMask::all_active(new.nrows, new.ncols);
 
         Self {
-            emit_ctx: EmitCtx::new(sheet_id, pool, config, cache, sink, op_count),
+            emit_ctx,
             old,
             new,
             old_view,
@@ -890,7 +881,7 @@ fn detect_fuzzy_row_block_move_masked(
 }
 
 fn diff_aligned_with_masks<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     old: &Grid,
     new: &Grid,
     old_mask: &RegionMask,
@@ -922,7 +913,19 @@ fn diff_aligned_with_masks<S: DiffSink>(
         return Ok(false);
     }
 
-    for (row_a, row_b) in rows_a.iter().zip(rows_b.iter()) {
+    ctx.hardening.progress("cell_diff", 0.0);
+
+    let total_rows = rows_a.len();
+    for (idx, (row_a, row_b)) in rows_a.iter().zip(rows_b.iter()).enumerate() {
+        if ctx.hardening.check_timeout(ctx.warnings) {
+            return Ok(true);
+        }
+
+        if total_rows > 0 && idx % 64 == 0 {
+            ctx.hardening
+                .progress("cell_diff", idx as f32 / total_rows as f32);
+        }
+
         for (col_a, col_b) in cols_a.iter().zip(cols_b.iter()) {
             if !old_mask.is_cell_active(*row_a, *col_a) || !new_mask.is_cell_active(*row_b, *col_b)
             {
@@ -941,6 +944,8 @@ fn diff_aligned_with_masks<S: DiffSink>(
             emit_cell_edit(ctx, addr, old_cell, new_cell, row_shift, col_shift)?;
         }
     }
+
+    ctx.hardening.progress("cell_diff", 1.0);
 
     let rows_a_set: HashSet<u32> = rows_a.iter().copied().collect();
     let rows_b_set: HashSet<u32> = rows_b.iter().copied().collect();
@@ -988,7 +993,7 @@ fn diff_aligned_with_masks<S: DiffSink>(
 }
 
 fn positional_diff_with_masks<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     old: &Grid,
     new: &Grid,
     old_mask: &RegionMask,
@@ -997,7 +1002,16 @@ fn positional_diff_with_masks<S: DiffSink>(
     let overlap_rows = old.nrows.min(new.nrows);
     let overlap_cols = old.ncols.min(new.ncols);
 
+    ctx.hardening.progress("cell_diff", 0.0);
+
     for row in 0..overlap_rows {
+        if ctx.hardening.check_timeout(ctx.warnings) {
+            return Ok(());
+        }
+        if overlap_rows > 0 && row % 256 == 0 {
+            ctx.hardening
+                .progress("cell_diff", row as f32 / overlap_rows as f32);
+        }
         for col in 0..overlap_cols {
             if !old_mask.is_cell_active(row, col) || !new_mask.is_cell_active(row, col) {
                 continue;
@@ -1014,14 +1028,28 @@ fn positional_diff_with_masks<S: DiffSink>(
         }
     }
 
+    if overlap_rows > 0 {
+        ctx.hardening.progress("cell_diff", 1.0);
+    }
+
+    if ctx.hardening.check_timeout(ctx.warnings) {
+        return Ok(());
+    }
+
     if new.nrows > old.nrows {
         for row_idx in old.nrows..new.nrows {
+            if row_idx % 4096 == 0 && ctx.hardening.check_timeout(ctx.warnings) {
+                return Ok(());
+            }
             if new_mask.is_row_active(row_idx) {
                 ctx.emit(crate::diff::DiffOp::row_added(ctx.sheet_id, row_idx, None))?;
             }
         }
     } else if old.nrows > new.nrows {
         for row_idx in new.nrows..old.nrows {
+            if row_idx % 4096 == 0 && ctx.hardening.check_timeout(ctx.warnings) {
+                return Ok(());
+            }
             if old_mask.is_row_active(row_idx) {
                 ctx.emit(crate::diff::DiffOp::row_removed(
                     ctx.sheet_id,
@@ -1034,6 +1062,9 @@ fn positional_diff_with_masks<S: DiffSink>(
 
     if new.ncols > old.ncols {
         for col_idx in old.ncols..new.ncols {
+            if col_idx % 4096 == 0 && ctx.hardening.check_timeout(ctx.warnings) {
+                return Ok(());
+            }
             if new_mask.is_col_active(col_idx) {
                 ctx.emit(crate::diff::DiffOp::column_added(
                     ctx.sheet_id,
@@ -1044,6 +1075,9 @@ fn positional_diff_with_masks<S: DiffSink>(
         }
     } else if old.ncols > new.ncols {
         for col_idx in new.ncols..old.ncols {
+            if col_idx % 4096 == 0 && ctx.hardening.check_timeout(ctx.warnings) {
+                return Ok(());
+            }
             if old_mask.is_col_active(col_idx) {
                 ctx.emit(crate::diff::DiffOp::column_removed(
                     ctx.sheet_id,
@@ -1058,7 +1092,7 @@ fn positional_diff_with_masks<S: DiffSink>(
 }
 
 fn positional_diff_masked_equal_size<S: DiffSink>(
-    ctx: &mut EmitCtx<'_, S>,
+    ctx: &mut EmitCtx<'_, '_, S>,
     old: &Grid,
     new: &Grid,
     old_mask: &RegionMask,
@@ -1076,7 +1110,17 @@ fn positional_diff_masked_equal_size<S: DiffSink>(
         .filter(|&c| !is_in_zone(c, &col_shift_zone))
         .collect();
 
-    for &row in &stable_rows {
+    ctx.hardening.progress("cell_diff", 0.0);
+
+    let total_rows = stable_rows.len();
+    for (idx, &row) in stable_rows.iter().enumerate() {
+        if ctx.hardening.check_timeout(ctx.warnings) {
+            return Ok(());
+        }
+        if total_rows > 0 && idx % 64 == 0 {
+            ctx.hardening
+                .progress("cell_diff", idx as f32 / total_rows as f32);
+        }
         for &col in &stable_cols {
             if !old_mask.is_cell_active(row, col) || !new_mask.is_cell_active(row, col) {
                 continue;
@@ -1092,6 +1136,8 @@ fn positional_diff_masked_equal_size<S: DiffSink>(
             emit_cell_edit(ctx, addr, old_cell, new_cell, 0, 0)?;
         }
     }
+
+    ctx.hardening.progress("cell_diff", 1.0);
 
     Ok(())
 }

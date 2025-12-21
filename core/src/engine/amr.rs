@@ -201,7 +201,7 @@ fn inject_moves_from_insert_delete(
 }
 
 pub(super) fn try_diff_with_amr<S: DiffSink>(
-    emit_ctx: &mut EmitCtx<'_, S>,
+    emit_ctx: &mut EmitCtx<'_, '_, S>,
     old: &Grid,
     new: &Grid,
     old_view: &GridView,
@@ -248,11 +248,13 @@ pub(super) fn try_diff_with_amr<S: DiffSink>(
         && let Some(col_alignment) =
             align_single_column_change_from_views(old_view, new_view, emit_ctx.config)
     {
+        emit_ctx.hardening.progress("cell_diff", 0.0);
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
             m.start_phase(Phase::CellDiff);
         }
         emit_column_aligned_diffs(emit_ctx, old, new, &col_alignment)?;
+        emit_ctx.hardening.progress("cell_diff", 1.0);
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = metrics.as_mut() {
             let overlap_rows = old.nrows.min(new.nrows) as u64;
@@ -275,7 +277,9 @@ pub(super) fn try_diff_with_amr<S: DiffSink>(
         m.start_phase(Phase::CellDiff);
     }
 
+    emit_ctx.hardening.progress("cell_diff", 0.0);
     let compared = emit_row_aligned_diffs(emit_ctx, old_view, new_view, &alignment)?;
+    emit_ctx.hardening.progress("cell_diff", 1.0);
     #[cfg(feature = "perf-metrics")]
     if let Some(m) = metrics.as_mut() {
         m.add_cells_compared(compared);

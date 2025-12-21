@@ -52,6 +52,7 @@ mod m_section;
 mod object_diff;
 mod output;
 mod package;
+mod progress;
 #[cfg(feature = "perf-metrics")]
 #[doc(hidden)]
 pub mod perf;
@@ -116,8 +117,9 @@ pub fn open_workbook(path: impl AsRef<std::path::Path>) -> Result<Workbook, Exce
 pub mod advanced {
     pub use crate::engine::{
         diff_grids_database_mode, diff_workbooks as diff_workbooks_with_pool,
-        diff_workbooks_streaming, try_diff_workbooks as try_diff_workbooks_with_pool,
-        try_diff_workbooks_streaming,
+        diff_workbooks_streaming, diff_workbooks_streaming_with_progress, diff_workbooks_with_progress,
+        try_diff_workbooks as try_diff_workbooks_with_pool, try_diff_workbooks_streaming,
+        try_diff_workbooks_streaming_with_progress, try_diff_workbooks_with_progress,
     };
     pub use crate::session::DiffSession;
     pub use crate::sink::{CallbackSink, DiffSink, VecSink};
@@ -144,7 +146,9 @@ pub use diff::{
 #[doc(hidden)]
 pub use engine::{
     diff_grids_database_mode, diff_workbooks as diff_workbooks_with_pool, diff_workbooks_streaming,
+    diff_workbooks_streaming_with_progress, diff_workbooks_with_progress,
     try_diff_workbooks as try_diff_workbooks_with_pool, try_diff_workbooks_streaming,
+    try_diff_workbooks_streaming_with_progress, try_diff_workbooks_with_progress,
 };
 #[cfg(feature = "excel-open-xml")]
 #[allow(deprecated)]
@@ -176,6 +180,7 @@ pub use output::json::diff_workbooks_to_json;
 pub use output::json::{CellDiff, serialize_cell_diffs, serialize_diff_report};
 pub use output::json_lines::JsonLinesSink;
 pub use package::{VbaModule, VbaModuleType, WorkbookPackage};
+pub use progress::{NoProgress, ProgressCallback};
 pub use session::DiffSession;
 pub use sink::{CallbackSink, DiffSink, VecSink};
 pub use string_pool::{StringId, StringPool};

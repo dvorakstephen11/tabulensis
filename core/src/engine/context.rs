@@ -5,6 +5,7 @@ use crate::sink::DiffSink;
 use crate::string_pool::StringPool;
 
 use super::SheetId;
+use super::hardening::HardeningController;
 
 #[derive(Debug, Default)]
 pub(super) struct DiffContext {
@@ -22,16 +23,18 @@ pub(super) fn emit_op<S: DiffSink>(
     Ok(())
 }
 
-pub(super) struct EmitCtx<'a, S: DiffSink> {
+pub(super) struct EmitCtx<'a, 'p, S: DiffSink> {
     pub(super) sheet_id: SheetId,
     pub(super) pool: &'a StringPool,
     pub(super) config: &'a DiffConfig,
     pub(super) cache: &'a mut FormulaParseCache,
     pub(super) sink: &'a mut S,
     pub(super) op_count: &'a mut usize,
+    pub(super) warnings: &'a mut Vec<String>,
+    pub(super) hardening: &'a mut HardeningController<'p>,
 }
 
-impl<'a, S: DiffSink> EmitCtx<'a, S> {
+impl<'a, 'p, S: DiffSink> EmitCtx<'a, 'p, S> {
     pub(super) fn new(
         sheet_id: SheetId,
         pool: &'a StringPool,
@@ -39,6 +42,8 @@ impl<'a, S: DiffSink> EmitCtx<'a, S> {
         cache: &'a mut FormulaParseCache,
         sink: &'a mut S,
         op_count: &'a mut usize,
+        warnings: &'a mut Vec<String>,
+        hardening: &'a mut HardeningController<'p>,
     ) -> Self {
         Self {
             sheet_id,
@@ -47,6 +52,8 @@ impl<'a, S: DiffSink> EmitCtx<'a, S> {
             cache,
             sink,
             op_count,
+            warnings,
+            hardening,
         }
     }
 
