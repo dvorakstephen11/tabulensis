@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
 
@@ -27,5 +27,30 @@ jobs:
           echo "wasm_smoke.wasm size: $SIZE bytes"
           if [ "$SIZE" -gt 5000000 ]; then
             echo "WASM size $SIZE exceeds 5MB limit"
+            exit 1
+          fi
+
+  wasm-web-demo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build WASM package
+        run: wasm-pack build wasm --release --target web --out-dir ../web/wasm
+
+      - name: Enforce web demo size budget
+        run: |
+          SIZE=$(stat -c%s "web/wasm/excel_diff_wasm_bg.wasm")
+          echo "excel_diff_wasm_bg.wasm size: $SIZE bytes"
+          if [ "$SIZE" -gt 10000000 ]; then
+            echo "Web demo WASM size $SIZE exceeds 10MB limit"
             exit 1
           fi

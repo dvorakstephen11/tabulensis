@@ -2,6 +2,10 @@
 name = "excel_diff_cli"
 version = "0.1.0"
 edition = "2024"
+description = "Command-line interface for comparing Excel workbooks"
+license = "MIT"
+repository = "https://github.com/dvora/excel_diff"
+homepage = "https://github.com/dvora/excel_diff"
 
 [[bin]]
 name = "excel-diff"

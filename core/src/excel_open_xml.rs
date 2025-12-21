@@ -13,11 +13,14 @@ use crate::grid_parser::{
     GridParseError, parse_defined_names, parse_relationships, parse_relationships_all,
     parse_shared_strings, parse_sheet_xml, parse_workbook_xml, resolve_sheet_target,
 };
-use crate::package::{VbaModule, VbaModuleType};
+use crate::package::VbaModule;
+#[cfg(feature = "vba")]
+use crate::package::VbaModuleType;
 use crate::string_pool::StringId;
 use crate::string_pool::StringPool;
 use crate::workbook::{ChartInfo, ChartObject, Sheet, SheetKind, Workbook};
 use std::collections::HashMap;
+#[cfg(feature = "std-fs")]
 use std::path::Path;
 use thiserror::Error;
 use xxhash_rust::xxh3::Xxh3;
@@ -250,6 +253,7 @@ pub(crate) fn open_workbook_from_container(
     })
 }
 
+#[cfg(feature = "vba")]
 pub(crate) fn open_vba_modules_from_container(
     container: &mut OpcContainer,
     pool: &mut StringPool,
@@ -287,6 +291,14 @@ pub(crate) fn open_vba_modules_from_container(
     }
 
     Ok(Some(modules))
+}
+
+#[cfg(not(feature = "vba"))]
+pub(crate) fn open_vba_modules_from_container(
+    _container: &mut OpcContainer,
+    _pool: &mut StringPool,
+) -> Result<Option<Vec<VbaModule>>, PackageError> {
+    Ok(None)
 }
 
 #[derive(Debug, Clone)]
@@ -535,6 +547,7 @@ fn wrap_grid_parse_error(err: GridParseError, part: &str) -> PackageError {
     }
 }
 
+#[cfg(feature = "std-fs")]
 #[allow(deprecated)]
 pub fn open_workbook(
     path: impl AsRef<Path>,
@@ -547,6 +560,7 @@ pub fn open_workbook(
         .map_err(|e| e.with_path(&path_str))
 }
 
+#[cfg(feature = "std-fs")]
 #[allow(deprecated)]
 pub fn open_vba_modules(
     path: impl AsRef<Path>,
@@ -617,6 +631,7 @@ pub(crate) fn open_data_mashup_from_container(
     Ok(found)
 }
 
+#[cfg(feature = "std-fs")]
 #[allow(deprecated)]
 pub fn open_data_mashup(path: impl AsRef<Path>) -> Result<Option<RawDataMashup>, PackageError> {
     let path_str = path.as_ref().display().to_string();

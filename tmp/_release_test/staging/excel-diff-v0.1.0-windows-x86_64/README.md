@@ -8,42 +8,32 @@ A fast, cross-platform tool for comparing Excel workbooks. Works with `.xlsx` an
 
 **Option 1: Download from GitHub Releases**
 
-1. Download the latest Windows asset from [Releases](https://github.com/dvora/excel_diff/releases):
-   - `excel-diff-vX.Y.Z-windows-x86_64.exe` (standalone), or
-   - `excel-diff-vX.Y.Z-windows-x86_64.zip` (portable folder)
-2. Add it (or the extracted folder) to your PATH
+1. Download the latest `excel-diff-vX.Y.Z-windows-x86_64.zip` from [Releases](https://github.com/dvora/excel_diff/releases)
+2. Extract the ZIP file
+3. Add the extracted folder to your PATH, or move `excel-diff.exe` to a folder in your PATH
 
 **Option 2: Scoop**
 
 ```powershell
-# Download `excel-diff.json` from the GitHub Release assets, then:
-scoop install .\excel-diff.json
-
-# Or, if you publish a Scoop bucket:
-# scoop bucket add excel-diff https://github.com/dvora/scoop-excel-diff
-# scoop install excel-diff
+scoop bucket add excel-diff https://github.com/dvora/scoop-excel-diff
+scoop install excel-diff
 ```
 
 ### macOS
 
-**Option 1: Homebrew (formula from Release assets)**
+**Option 1: Homebrew (recommended)**
 
 ```bash
-# Download `excel-diff.rb` from the GitHub Release assets, then:
-brew install --formula ./excel-diff.rb
-
-# Or, if you publish a Homebrew tap:
-# brew tap dvora/excel-diff
-# brew install excel-diff
+brew tap dvora/excel-diff
+brew install excel-diff
 ```
 
 **Option 2: Download from GitHub Releases**
 
 ```bash
 # Download the universal binary (works on both Intel and Apple Silicon)
-VERSION=vX.Y.Z
-curl -LO https://github.com/dvora/excel_diff/releases/download/$VERSION/excel-diff-$VERSION-macos-universal.tar.gz
-tar -xzf excel-diff-$VERSION-macos-universal.tar.gz
+curl -LO https://github.com/dvora/excel_diff/releases/latest/download/excel-diff-vX.Y.Z-macos-universal.tar.gz
+tar -xzf excel-diff-vX.Y.Z-macos-universal.tar.gz
 sudo mv excel-diff /usr/local/bin/
 
 # Or for user-only install:

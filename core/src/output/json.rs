@@ -1,16 +1,17 @@
-#[cfg(feature = "excel-open-xml")]
+#[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 use crate::config::DiffConfig;
-#[cfg(feature = "excel-open-xml")]
+#[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 use crate::datamashup::build_data_mashup;
 use crate::diff::DiffReport;
-#[cfg(feature = "excel-open-xml")]
+#[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 use crate::excel_open_xml::{PackageError, open_data_mashup, open_vba_modules, open_workbook};
+#[allow(unused_imports)]
 use crate::session::DiffSession;
-#[cfg(feature = "excel-open-xml")]
+#[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 use crate::sink::VecSink;
 use serde::Serialize;
 use serde::ser::Error as SerdeError;
-#[cfg(feature = "excel-open-xml")]
+#[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -36,7 +37,7 @@ pub fn serialize_diff_report(report: &DiffReport) -> serde_json::Result<String> 
     serde_json::to_string(report)
 }
 
-#[cfg(feature = "excel-open-xml")]
+#[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 pub fn diff_workbooks(
     path_a: impl AsRef<Path>,
     path_b: impl AsRef<Path>,
@@ -92,7 +93,7 @@ pub fn diff_workbooks(
     Ok(DiffReport::from_ops_and_summary(ops, summary, strings))
 }
 
-#[cfg(feature = "excel-open-xml")]
+#[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 pub fn diff_workbooks_to_json(
     path_a: impl AsRef<Path>,
     path_b: impl AsRef<Path>,

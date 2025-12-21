@@ -97,7 +97,7 @@ pub fn try_diff_workbooks(
     })
 }
 
-#[cfg(feature = "excel-open-xml")]
+#[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 #[deprecated(note = "use WorkbookPackage::open")]
 #[allow(deprecated)]
 #[doc(hidden)]
@@ -149,9 +149,11 @@ pub use engine::{
 #[cfg(feature = "excel-open-xml")]
 #[allow(deprecated)]
 #[doc(hidden)]
-pub use excel_open_xml::{
-    ExcelOpenError, PackageError, open_data_mashup, open_workbook as open_workbook_with_pool,
-};
+pub use excel_open_xml::{ExcelOpenError, PackageError};
+#[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
+#[allow(deprecated)]
+#[doc(hidden)]
+pub use excel_open_xml::{open_data_mashup, open_workbook as open_workbook_with_pool};
 pub use formula::{
     BinaryOperator, CellReference, ColRef, ExcelError, FormulaExpr, FormulaParseError,
     RangeReference, RowRef, UnaryOperator, formulas_equivalent_modulo_shift, parse_formula,
@@ -168,7 +170,7 @@ pub use m_ast::{
 pub use m_section::{SectionMember, SectionParseError, parse_section_members};
 #[doc(hidden)]
 pub use output::json::diff_report_to_cell_diffs;
-#[cfg(feature = "excel-open-xml")]
+#[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 #[doc(hidden)]
 pub use output::json::diff_workbooks_to_json;
 pub use output::json::{CellDiff, serialize_cell_diffs, serialize_diff_report};

@@ -20,3 +20,6 @@ fixtures/generated/*.xlsm
 
 # Docs
 docs/meta/completion_estimates/
+
+# WASM build output
+web/wasm/
