@@ -39,14 +39,14 @@ enum AccessKind {
     Item,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum MUnaryOp {
     Not,
     Plus,
     Minus,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum MBinaryOp {
     Add,
     Sub,
