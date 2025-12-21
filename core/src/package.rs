@@ -1,4 +1,5 @@
 use crate::config::DiffConfig;
+use crate::container::ZipContainer;
 use crate::datamashup::DataMashup;
 use crate::diff::{DiffError, DiffReport, DiffSummary, SheetId};
 use crate::progress::ProgressCallback;
@@ -584,6 +585,129 @@ impl WorkbookPackage {
 
         Ok(summary)
     }
+}
+
+/// A parsed PBIX/PBIT package (Power BI) containing Power Query data.
+#[derive(Debug, Clone)]
+pub struct PbixPackage {
+    pub(crate) data_mashup: Option<DataMashup>,
+}
+
+impl PbixPackage {
+    #[cfg(feature = "excel-open-xml")]
+    pub fn open<R: std::io::Read + std::io::Seek + 'static>(
+        reader: R,
+    ) -> Result<Self, crate::excel_open_xml::PackageError> {
+        let mut container = ZipContainer::open_from_reader(reader)?;
+
+        let bytes = match container.read_file_optional_checked("DataMashup")? {
+            Some(bytes) => bytes,
+            None => {
+                if looks_like_pbix(&container) {
+                    return Err(crate::excel_open_xml::PackageError::NoDataMashupUseTabularModel);
+                }
+                return Err(crate::excel_open_xml::PackageError::UnsupportedFormat {
+                    message: "missing DataMashup at ZIP root".to_string(),
+                });
+            }
+        };
+
+        let raw = crate::datamashup_framing::parse_data_mashup(&bytes)?;
+        let data_mashup = crate::datamashup::build_data_mashup(&raw)?;
+
+        Ok(Self {
+            data_mashup: Some(data_mashup),
+        })
+    }
+
+    pub fn data_mashup(&self) -> Option<&DataMashup> {
+        self.data_mashup.as_ref()
+    }
+
+    pub fn diff(&self, other: &Self, config: &DiffConfig) -> DiffReport {
+        crate::with_default_session(|session| {
+            let ops = crate::m_diff::diff_m_ops_for_packages(
+                &self.data_mashup,
+                &other.data_mashup,
+                &mut session.strings,
+                config,
+            );
+
+            let strings = session.strings.strings().to_vec();
+            let mut report = DiffReport::new(ops);
+            report.strings = strings;
+            report
+        })
+    }
+
+    pub fn diff_streaming<S: DiffSink>(
+        &self,
+        other: &Self,
+        config: &DiffConfig,
+        sink: &mut S,
+    ) -> Result<DiffSummary, DiffError> {
+        crate::with_default_session(|session| {
+            self.diff_streaming_with_pool(other, &mut session.strings, config, sink)
+        })
+    }
+
+    pub fn diff_streaming_with_pool<S: DiffSink>(
+        &self,
+        other: &Self,
+        pool: &mut StringPool,
+        config: &DiffConfig,
+        sink: &mut S,
+    ) -> Result<DiffSummary, DiffError> {
+        sink.begin(pool)?;
+
+        let m_ops = crate::m_diff::diff_m_ops_for_packages(
+            &self.data_mashup,
+            &other.data_mashup,
+            pool,
+            config,
+        );
+
+        let mut op_count = 0usize;
+        for op in m_ops {
+            sink.emit(op)?;
+            op_count = op_count.saturating_add(1);
+        }
+
+        sink.finish()?;
+
+        Ok(DiffSummary {
+            complete: true,
+            warnings: Vec::new(),
+            op_count,
+            #[cfg(feature = "perf-metrics")]
+            metrics: None,
+        })
+    }
+
+    pub fn diff_streaming_with_progress<S: DiffSink>(
+        &self,
+        other: &Self,
+        config: &DiffConfig,
+        sink: &mut S,
+        progress: &dyn ProgressCallback,
+    ) -> Result<DiffSummary, DiffError> {
+        progress.on_progress("m_diff", 0.0);
+        let out = self.diff_streaming(other, config, sink);
+        progress.on_progress("m_diff", 1.0);
+        out
+    }
+}
+
+#[cfg(feature = "excel-open-xml")]
+fn looks_like_pbix(container: &ZipContainer) -> bool {
+    container.file_names().any(|name| {
+        name == "Report/Layout"
+            || name == "Report/Version"
+            || name == "DataModelSchema"
+            || name == "DataModel"
+            || name == "Connections"
+            || name == "DiagramLayout"
+    })
 }
 
 fn find_sheets_case_insensitive<'a>(

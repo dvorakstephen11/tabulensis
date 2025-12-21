@@ -1,7 +1,7 @@
-//! OPC (Open Packaging Conventions) container handling.
+//! ZIP container handling.
 //!
-//! Provides abstraction over ZIP-based Office Open XML packages, validating
-//! that required structural elements like `[Content_Types].xml` are present.
+//! Provides abstraction over ZIP-based packages and validates OPC
+//! requirements for Office Open XML containers.
 
 use std::io::{Read, Seek};
 use thiserror::Error;
@@ -69,23 +69,23 @@ impl ContainerError {
 pub(crate) trait ReadSeek: Read + Seek {}
 impl<T: Read + Seek> ReadSeek for T {}
 
-pub struct OpcContainer {
-    pub(crate) archive: ZipArchive<Box<dyn ReadSeek>>,
+pub struct ZipContainer {
+    archive: ZipArchive<Box<dyn ReadSeek>>,
     limits: ContainerLimits,
     total_read: u64,
 }
 
-impl OpcContainer {
+impl ZipContainer {
     pub fn open_from_reader<R: Read + Seek + 'static>(
         reader: R,
-    ) -> Result<OpcContainer, ContainerError> {
+    ) -> Result<Self, ContainerError> {
         Self::open_from_reader_with_limits(reader, ContainerLimits::default())
     }
 
     pub fn open_from_reader_with_limits<R: Read + Seek + 'static>(
         reader: R,
         limits: ContainerLimits,
-    ) -> Result<OpcContainer, ContainerError> {
+    ) -> Result<Self, ContainerError> {
         let reader: Box<dyn ReadSeek> = Box::new(reader);
         let archive = ZipArchive::new(reader).map_err(|err| match err {
             ZipError::InvalidArchive(_) | ZipError::UnsupportedArchive(_) => {
@@ -107,35 +107,17 @@ impl OpcContainer {
             });
         }
 
-        let mut container = OpcContainer {
+        Ok(Self {
             archive,
             limits,
             total_read: 0,
-        };
-
-        match container.archive.by_name("[Content_Types].xml") {
-            Ok(file) => {
-                let size = file.size();
-                if size > container.limits.max_part_uncompressed_bytes {
-                    return Err(ContainerError::PartTooLarge {
-                        path: "[Content_Types].xml".to_string(),
-                        size,
-                        limit: container.limits.max_part_uncompressed_bytes,
-                    });
-                }
-            }
-            Err(ZipError::FileNotFound) => return Err(ContainerError::NotOpcPackage),
-            Err(ZipError::Io(e)) => return Err(ContainerError::Io(e)),
-            Err(other) => return Err(ContainerError::Zip(other.to_string())),
-        }
-
-        Ok(container)
+        })
     }
 
     #[cfg(feature = "std-fs")]
     pub fn open_from_path(
         path: impl AsRef<std::path::Path>,
-    ) -> Result<OpcContainer, ContainerError> {
+    ) -> Result<Self, ContainerError> {
         Self::open_from_path_with_limits(path, ContainerLimits::default())
     }
 
@@ -143,13 +125,13 @@ impl OpcContainer {
     pub fn open_from_path_with_limits(
         path: impl AsRef<std::path::Path>,
         limits: ContainerLimits,
-    ) -> Result<OpcContainer, ContainerError> {
+    ) -> Result<Self, ContainerError> {
         let file = std::fs::File::open(path)?;
         Self::open_from_reader_with_limits(file, limits)
     }
 
     #[cfg(feature = "std-fs")]
-    pub fn open(path: impl AsRef<std::path::Path>) -> Result<OpcContainer, ContainerError> {
+    pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self, ContainerError> {
         Self::open_from_path(path)
     }
 
@@ -231,7 +213,7 @@ impl OpcContainer {
         }
     }
 
-    pub fn file_names(&self) -> impl Iterator<Item = &str> {
+    pub fn file_names(&self) -> impl Iterator<Item = &str> + '_ {
         self.archive.file_names()
     }
 
@@ -245,5 +227,132 @@ impl OpcContainer {
 
     pub fn limits(&self) -> &ContainerLimits {
         &self.limits
+    }
+}
+
+pub struct OpcContainer {
+    inner: ZipContainer,
+}
+
+impl OpcContainer {
+    pub fn open_from_reader<R: Read + Seek + 'static>(
+        reader: R,
+    ) -> Result<OpcContainer, ContainerError> {
+        Self::open_from_reader_with_limits(reader, ContainerLimits::default())
+    }
+
+    pub fn open_from_reader_with_limits<R: Read + Seek + 'static>(
+        reader: R,
+        limits: ContainerLimits,
+    ) -> Result<OpcContainer, ContainerError> {
+        let mut inner = ZipContainer::open_from_reader_with_limits(reader, limits)?;
+
+        match inner.archive.by_name("[Content_Types].xml") {
+            Ok(file) => {
+                let size = file.size();
+                if size > inner.limits.max_part_uncompressed_bytes {
+                    return Err(ContainerError::PartTooLarge {
+                        path: "[Content_Types].xml".to_string(),
+                        size,
+                        limit: inner.limits.max_part_uncompressed_bytes,
+                    });
+                }
+            }
+            Err(ZipError::FileNotFound) => return Err(ContainerError::NotOpcPackage),
+            Err(ZipError::Io(e)) => return Err(ContainerError::Io(e)),
+            Err(other) => return Err(ContainerError::Zip(other.to_string())),
+        }
+
+        Ok(Self { inner })
+    }
+
+    #[cfg(feature = "std-fs")]
+    pub fn open_from_path(
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<OpcContainer, ContainerError> {
+        Self::open_from_path_with_limits(path, ContainerLimits::default())
+    }
+
+    #[cfg(feature = "std-fs")]
+    pub fn open_from_path_with_limits(
+        path: impl AsRef<std::path::Path>,
+        limits: ContainerLimits,
+    ) -> Result<OpcContainer, ContainerError> {
+        let file = std::fs::File::open(path)?;
+        Self::open_from_reader_with_limits(file, limits)
+    }
+
+    #[cfg(feature = "std-fs")]
+    pub fn open(path: impl AsRef<std::path::Path>) -> Result<OpcContainer, ContainerError> {
+        Self::open_from_path(path)
+    }
+
+    pub fn read_file(&mut self, name: &str) -> Result<Vec<u8>, ZipError> {
+        self.inner.read_file(name)
+    }
+
+    pub fn read_file_checked(&mut self, name: &str) -> Result<Vec<u8>, ContainerError> {
+        self.inner.read_file_checked(name)
+    }
+
+    pub fn read_file_optional(&mut self, name: &str) -> Result<Option<Vec<u8>>, std::io::Error> {
+        self.inner.read_file_optional(name)
+    }
+
+    pub fn read_file_optional_checked(
+        &mut self,
+        name: &str,
+    ) -> Result<Option<Vec<u8>>, ContainerError> {
+        self.inner.read_file_optional_checked(name)
+    }
+
+    pub fn file_names(&self) -> impl Iterator<Item = &str> + '_ {
+        self.inner.file_names()
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    pub fn limits(&self) -> &ContainerLimits {
+        self.inner.limits()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ZipContainer;
+    use std::io::{Cursor, Write};
+    use zip::CompressionMethod;
+    use zip::write::FileOptions;
+    use zip::ZipWriter;
+
+    fn make_zip(entries: &[(&str, &str)]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        {
+            let cursor = Cursor::new(&mut buf);
+            let mut writer = ZipWriter::new(cursor);
+            let options = FileOptions::default().compression_method(CompressionMethod::Stored);
+            for (name, contents) in entries {
+                writer.start_file(*name, options).expect("start zip entry");
+                writer
+                    .write_all(contents.as_bytes())
+                    .expect("write zip entry");
+            }
+            writer.finish().expect("finish zip");
+        }
+        buf
+    }
+
+    #[test]
+    fn zip_container_opens_non_opc_zip() {
+        let bytes = make_zip(&[("hello.txt", "world")]);
+        let cursor = Cursor::new(bytes);
+        let result = ZipContainer::open_from_reader(cursor);
+        assert!(result.is_ok(), "ZipContainer should open non-OPC ZIPs");
     }
 }

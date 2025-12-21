@@ -169,7 +169,7 @@ pub mod advanced {
 
 pub use addressing::{AddressParseError, address_to_index, index_to_address};
 pub use config::{DiffConfig, DiffConfigBuilder, LimitBehavior};
-pub use container::{ContainerError, ContainerLimits, OpcContainer};
+pub use container::{ContainerError, ContainerLimits, OpcContainer, ZipContainer};
 #[doc(hidden)]
 pub use datamashup::parse_metadata;
 pub use datamashup::{
@@ -220,7 +220,7 @@ pub use output::json::diff_report_to_cell_diffs;
 pub use output::json::diff_workbooks_to_json;
 pub use output::json::{CellDiff, serialize_cell_diffs, serialize_diff_report};
 pub use output::json_lines::JsonLinesSink;
-pub use package::{VbaModule, VbaModuleType, WorkbookPackage};
+pub use package::{PbixPackage, VbaModule, VbaModuleType, WorkbookPackage};
 pub use progress::{NoProgress, ProgressCallback};
 pub use session::DiffSession;
 pub use sink::{CallbackSink, DiffSink, VecSink};

@@ -36,6 +36,7 @@ try:
         MashupOneQueryGenerator,
         MashupPermissionsMetadataGenerator,
     )
+    from .generators.pbix import PbixGenerator
     from .generators.objects import ChartsGenerator, CopyTemplateGenerator, NamedRangesGenerator
     from .generators.perf import LargeGridGenerator
 except ImportError:
@@ -69,6 +70,7 @@ except ImportError:
         MashupOneQueryGenerator,
         MashupPermissionsMetadataGenerator,
     )
+    from generators.pbix import PbixGenerator
     from generators.objects import ChartsGenerator, CopyTemplateGenerator, NamedRangesGenerator
     from generators.perf import LargeGridGenerator
 
@@ -99,6 +101,7 @@ GENERATORS: Dict[str, Any] = {
     "mashup:one_query": MashupOneQueryGenerator,
     "mashup:multi_query_with_embedded": MashupMultiEmbeddedGenerator,
     "mashup:permissions_metadata": MashupPermissionsMetadataGenerator,
+    "pbix": PbixGenerator,
     "perf_large": LargeGridGenerator,
     "db_keyed": KeyedTableGenerator,
     "named_ranges": NamedRangesGenerator,

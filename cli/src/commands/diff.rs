@@ -2,11 +2,12 @@ use crate::output::{git_diff, json, text};
 use crate::OutputFormat;
 use anyhow::{Context, Result, bail};
 use excel_diff::{
-    DiffConfig, DiffReport, Grid, JsonLinesSink, WorkbookPackage,
-    ProgressCallback, index_to_address, suggest_key_columns, with_default_session,
+    DiffConfig, DiffReport, Grid, JsonLinesSink, PbixPackage, ProgressCallback,
+    WorkbookPackage, index_to_address, suggest_key_columns, with_default_session,
 };
 use std::fs::File;
 use std::io::{self, BufWriter, IsTerminal, Write};
+use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Mutex;
 
@@ -15,6 +16,44 @@ pub enum Verbosity {
     Quiet,
     Normal,
     Verbose,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HostKind {
+    Workbook,
+    Pbix,
+}
+
+fn host_kind_from_path(path: &Path) -> Option<HostKind> {
+    let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
+    match ext.as_str() {
+        "xlsx" | "xlsm" | "xltx" | "xltm" => Some(HostKind::Workbook),
+        "pbix" | "pbit" => Some(HostKind::Pbix),
+        _ => None,
+    }
+}
+
+enum Host {
+    Workbook(WorkbookPackage),
+    Pbix(PbixPackage),
+}
+
+fn open_host(path: &Path, kind: HostKind, label: &str) -> Result<Host> {
+    let file = File::open(path)
+        .with_context(|| format!("Failed to open {} file: {}", label, path.display()))?;
+
+    let host = match kind {
+        HostKind::Workbook => Host::Workbook(
+            WorkbookPackage::open(file)
+                .with_context(|| format!("Failed to parse {} workbook: {}", label, path.display()))?,
+        ),
+        HostKind::Pbix => Host::Pbix(
+            PbixPackage::open(file)
+                .with_context(|| format!("Failed to parse {} PBIX/PBIT: {}", label, path.display()))?,
+        ),
+    };
+
+    Ok(host)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -43,16 +82,36 @@ pub fn run(
         bail!("Cannot use --git-diff with --format=json or --format=jsonl");
     }
 
-    if !database && (sheet.is_some() || keys.is_some() || auto_keys) {
-        bail!("--sheet, --keys, and --auto-keys require --database flag");
+    let old_path_str = old_path;
+    let new_path_str = new_path;
+    let old_path = Path::new(old_path_str);
+    let new_path = Path::new(new_path_str);
+
+    let old_kind = host_kind_from_path(old_path)
+        .ok_or_else(|| anyhow::anyhow!("unsupported input extension: {}", old_path.display()))?;
+    let new_kind = host_kind_from_path(new_path)
+        .ok_or_else(|| anyhow::anyhow!("unsupported input extension: {}", new_path.display()))?;
+
+    if old_kind != new_kind {
+        bail!("input host types must match");
     }
 
-    if database && keys.is_none() && !auto_keys {
-        bail!("Database mode requires either --keys or --auto-keys");
-    }
+    if old_kind == HostKind::Pbix {
+        if database || sheet.is_some() || keys.is_some() || auto_keys {
+            bail!("database mode and sheet/key options are not supported for PBIX/PBIT");
+        }
+    } else {
+        if !database && (sheet.is_some() || keys.is_some() || auto_keys) {
+            bail!("--sheet, --keys, and --auto-keys require --database flag");
+        }
 
-    if database && keys.is_some() && auto_keys {
-        bail!("Cannot use both --keys and --auto-keys together");
+        if database && keys.is_none() && !auto_keys {
+            bail!("Database mode requires either --keys or --auto-keys");
+        }
+
+        if database && keys.is_some() && auto_keys {
+            bail!("Cannot use both --keys and --auto-keys together");
+        }
     }
 
     let verbosity = if quiet {
@@ -67,22 +126,18 @@ pub fn run(
     config.max_memory_mb = max_memory;
     config.timeout_seconds = timeout;
 
-    let old_file = File::open(old_path)
-        .with_context(|| format!("Failed to open old workbook: {}", old_path))?;
-    let new_file = File::open(new_path)
-        .with_context(|| format!("Failed to open new workbook: {}", new_path))?;
+    let old_host = open_host(old_path, old_kind, "old")?;
+    let new_host = open_host(new_path, new_kind, "new")?;
 
-    let old_pkg = WorkbookPackage::open(old_file)
-        .with_context(|| format!("Failed to parse old workbook: {}", old_path))?;
-    let new_pkg = WorkbookPackage::open(new_file)
-        .with_context(|| format!("Failed to parse new workbook: {}", new_path))?;
-
-    if database {
+    if old_kind == HostKind::Workbook && database {
+        let (Host::Workbook(old_pkg), Host::Workbook(new_pkg)) = (&old_host, &new_host) else {
+            unreachable!();
+        };
         return run_database_mode(
-            &old_pkg,
-            &new_pkg,
-            old_path,
-            new_path,
+            old_pkg,
+            new_pkg,
+            old_path_str,
+            new_path_str,
             format,
             git_diff_mode,
             &config,
@@ -96,12 +151,16 @@ pub fn run(
     let progress = progress.then(CliProgress::new);
 
     if format == OutputFormat::Jsonl && !git_diff_mode {
-        return run_streaming(&old_pkg, &new_pkg, &config, progress.as_ref());
+        return run_streaming_host(&old_host, &new_host, &config, progress.as_ref());
     }
 
-    let report = match progress.as_ref() {
-        Some(p) => old_pkg.diff_with_progress(&new_pkg, &config, p),
-        None => old_pkg.diff(&new_pkg, &config),
+    let report = match (&old_host, &new_host) {
+        (Host::Workbook(old_pkg), Host::Workbook(new_pkg)) => match progress.as_ref() {
+            Some(p) => old_pkg.diff_with_progress(new_pkg, &config, p),
+            None => old_pkg.diff(new_pkg, &config),
+        },
+        (Host::Pbix(old_pkg), Host::Pbix(new_pkg)) => old_pkg.diff(new_pkg, &config),
+        _ => unreachable!(),
     };
 
     if let Some(p) = progress.as_ref() {
@@ -114,11 +173,17 @@ pub fn run(
     let mut handle = stdout.lock();
 
     if git_diff_mode {
-        git_diff::write_git_diff(&mut handle, &report, old_path, new_path)?;
+        git_diff::write_git_diff(&mut handle, &report, old_path_str, new_path_str)?;
     } else {
         match format {
             OutputFormat::Text => {
-                text::write_text_report(&mut handle, &report, old_path, new_path, verbosity)?;
+                text::write_text_report(
+                    &mut handle,
+                    &report,
+                    old_path_str,
+                    new_path_str,
+                    verbosity,
+                )?;
             }
             OutputFormat::Json => {
                 json::write_json_report(&mut handle, &report)?;
@@ -132,9 +197,9 @@ pub fn run(
     Ok(exit_code_from_report(&report))
 }
 
-fn run_streaming(
-    old_pkg: &WorkbookPackage,
-    new_pkg: &WorkbookPackage,
+fn run_streaming_host(
+    old_host: &Host,
+    new_host: &Host,
     config: &DiffConfig,
     progress: Option<&CliProgress>,
 ) -> Result<ExitCode> {
@@ -143,13 +208,20 @@ fn run_streaming(
     let mut writer = BufWriter::new(handle);
     let mut sink = JsonLinesSink::new(&mut writer);
 
-    let summary = match progress {
-        Some(p) => old_pkg
+    let summary = match (old_host, new_host, progress) {
+        (Host::Workbook(old_pkg), Host::Workbook(new_pkg), Some(p)) => old_pkg
             .diff_streaming_with_progress(new_pkg, config, &mut sink, p)
             .context("Streaming diff failed")?,
-        None => old_pkg
+        (Host::Workbook(old_pkg), Host::Workbook(new_pkg), None) => old_pkg
             .diff_streaming(new_pkg, config, &mut sink)
             .context("Streaming diff failed")?,
+        (Host::Pbix(old_pkg), Host::Pbix(new_pkg), Some(p)) => old_pkg
+            .diff_streaming_with_progress(new_pkg, config, &mut sink, p)
+            .context("Streaming diff failed")?,
+        (Host::Pbix(old_pkg), Host::Pbix(new_pkg), None) => old_pkg
+            .diff_streaming(new_pkg, config, &mut sink)
+            .context("Streaming diff failed")?,
+        _ => unreachable!(),
     };
 
     writer.flush()?;

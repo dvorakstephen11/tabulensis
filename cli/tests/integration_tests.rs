@@ -383,6 +383,85 @@ fn power_query_changes_detected() {
 }
 
 #[test]
+fn diff_pbix_power_query_changes_detected() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--format",
+            "json",
+            &fixture_path("pbix_legacy_multi_query_a.pbix"),
+            &fixture_path("pbix_legacy_multi_query_b.pbix"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "pbix diff should detect changes: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+    let ops = parsed.get("ops").and_then(|v| v.as_array()).unwrap();
+    let has_query_op = ops.iter().any(|op| {
+        op.get("kind")
+            .and_then(|k| k.as_str())
+            .map(|k| k.starts_with("Query"))
+            .unwrap_or(false)
+    });
+    assert!(has_query_op, "expected at least one Query op in pbix diff");
+}
+
+#[test]
+fn diff_pbix_jsonl_writes_header_and_ops() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--format",
+            "jsonl",
+            &fixture_path("pbix_legacy_multi_query_a.pbix"),
+            &fixture_path("pbix_legacy_multi_query_b.pbix"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "pbix jsonl diff should detect changes: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut lines = stdout.lines();
+    let first_line = lines.next().expect("jsonl should have a header line");
+    let header: serde_json::Value =
+        serde_json::from_str(first_line).expect("header line should be valid JSON");
+    assert_eq!(header.get("kind").and_then(|v| v.as_str()), Some("Header"));
+    assert!(header.get("strings").is_some(), "header should include string table");
+
+    let mut has_query_op = false;
+    for line in lines {
+        let op: serde_json::Value =
+            serde_json::from_str(line).expect("jsonl op line should be valid JSON");
+        if op
+            .get("kind")
+            .and_then(|k| k.as_str())
+            .map(|k| k.starts_with("Query"))
+            .unwrap_or(false)
+        {
+            has_query_op = true;
+            break;
+        }
+    }
+
+    assert!(has_query_op, "expected at least one Query op in jsonl output");
+}
+
+#[test]
 fn d1_database_reorder_no_diff() {
     let output = excel_diff_cmd()
         .args([

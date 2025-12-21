@@ -43,8 +43,11 @@ pub enum PackageError {
     #[error("[EXDIFF_PKG_009] serialization error: {0}. Suggestion: verify the workbook is a standard .xlsx saved by Excel.")]
     SerializationError(String),
 
-    #[error("[EXDIFF_PKG_001] not a valid ZIP file: {message}. Suggestion: verify the input is a .xlsx workbook.")]
+    #[error("[EXDIFF_PKG_001] not a valid ZIP file: {message}. Suggestion: verify the input is a ZIP-based file and not corrupt.")]
     NotAZip { message: String },
+
+    #[error("[EXDIFF_PKG_010] PBIX/PBIT does not contain DataMashup (likely tabular model)\nSuggestion: export or extract Power Query mashup from a legacy PBIX, or use a tabular-model extraction path.")]
+    NoDataMashupUseTabularModel,
 
     #[error("[EXDIFF_PKG_003] missing required part: {path}. Suggestion: the workbook may be corrupt; re-save the file in Excel.")]
     MissingPart { path: String },
@@ -85,6 +88,9 @@ impl PackageError {
             PackageError::Diff(_) => error_codes::DIFF_INTERNAL_ERROR,
             PackageError::SerializationError(_) => error_codes::PKG_UNSUPPORTED_FORMAT,
             PackageError::NotAZip { .. } => error_codes::PKG_NOT_ZIP,
+            PackageError::NoDataMashupUseTabularModel => {
+                error_codes::PKG_NO_DATAMASHUP_USE_TABULAR_MODEL
+            }
             PackageError::MissingPart { .. } => error_codes::PKG_MISSING_PART,
             PackageError::InvalidXml { .. } => error_codes::PKG_INVALID_XML,
             PackageError::UnsupportedFormat { .. } => error_codes::PKG_UNSUPPORTED_FORMAT,
@@ -576,54 +582,48 @@ pub(crate) fn open_data_mashup_from_container(
     container: &mut OpcContainer,
 ) -> Result<Option<RawDataMashup>, PackageError> {
     let mut found: Option<RawDataMashup> = None;
+    let names: Vec<String> = container.file_names().map(|s| s.to_string()).collect();
 
-    for i in 0..container.len() {
-        let name = {
-            let file = container.archive.by_index(i).ok();
-            file.map(|f| f.name().to_string())
-        };
+    for name in names {
+        if !(name.starts_with("customXml/") && name.ends_with(".xml") && name.contains("item")) {
+            continue;
+        }
 
-        if let Some(name) = name {
-            if !name.starts_with("customXml/") || !name.ends_with(".xml") {
-                continue;
-            }
+        let bytes = container
+            .read_file_checked(&name)
+            .map_err(|e| PackageError::ReadPartFailed {
+                part: name.clone(),
+                message: e.to_string(),
+            })?;
 
-            let bytes = container
-                .read_file_checked(&name)
-                .map_err(|e| PackageError::ReadPartFailed {
-                    part: name.clone(),
-                    message: e.to_string(),
-                })?;
-
-            match read_datamashup_text(&bytes) {
-                Ok(Some(text)) => {
-                    let decoded = decode_datamashup_base64(&text).map_err(|e| {
-                        PackageError::DataMashupPartError {
-                            part: name.clone(),
-                            source: e,
-                        }
-                    })?;
-                    let parsed = parse_data_mashup(&decoded).map_err(|e| {
-                        PackageError::DataMashupPartError {
-                            part: name.clone(),
-                            source: e,
-                        }
-                    })?;
-                    if found.is_some() {
-                        return Err(PackageError::DataMashupPartError {
-                            part: name,
-                            source: DataMashupError::FramingInvalid,
-                        });
+        match read_datamashup_text(&bytes) {
+            Ok(Some(text)) => {
+                let decoded = decode_datamashup_base64(&text).map_err(|e| {
+                    PackageError::DataMashupPartError {
+                        part: name.clone(),
+                        source: e,
                     }
-                    found = Some(parsed);
-                }
-                Ok(None) => {}
-                Err(e) => {
+                })?;
+                let parsed = parse_data_mashup(&decoded).map_err(|e| {
+                    PackageError::DataMashupPartError {
+                        part: name.clone(),
+                        source: e,
+                    }
+                })?;
+                if found.is_some() {
                     return Err(PackageError::DataMashupPartError {
                         part: name,
-                        source: e,
+                        source: DataMashupError::FramingInvalid,
                     });
                 }
+                found = Some(parsed);
+            }
+            Ok(None) => {}
+            Err(e) => {
+                return Err(PackageError::DataMashupPartError {
+                    part: name,
+                    source: e,
+                });
             }
         }
     }

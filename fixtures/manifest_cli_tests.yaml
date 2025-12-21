@@ -71,6 +71,20 @@ scenarios:
       base_file: "templates/base_query.xlsx"
     output: "m_add_query_b.xlsx"
 
+  - id: "m_change_literal_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_change_literal_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_change_literal_a.xlsx"
+
+  - id: "m_change_literal_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_change_literal_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_change_literal_b.xlsx"
+
   - id: "branch4_named_ranges"
     generator: "named_ranges"
     output:
@@ -100,4 +114,38 @@ scenarios:
     args:
       template: "templates/vba_changed.xlsm"
     output: "vba_changed.xlsm"
+
+  - id: "branch1_pbix_legacy_one_query_a"
+    generator: "pbix"
+    args:
+      mode: "from_xlsx"
+      base_file: "generated/m_change_literal_a.xlsx"
+    output: "pbix_legacy_one_query_a.pbix"
+
+  - id: "branch1_pbix_legacy_one_query_b"
+    generator: "pbix"
+    args:
+      mode: "from_xlsx"
+      base_file: "generated/m_change_literal_b.xlsx"
+    output: "pbix_legacy_one_query_b.pbix"
+
+  - id: "branch1_pbix_legacy_multi_query_a"
+    generator: "pbix"
+    args:
+      mode: "from_xlsx"
+      base_file: "generated/m_add_query_a.xlsx"
+    output: "pbix_legacy_multi_query_a.pbix"
+
+  - id: "branch1_pbix_legacy_multi_query_b"
+    generator: "pbix"
+    args:
+      mode: "from_xlsx"
+      base_file: "generated/m_add_query_b.xlsx"
+    output: "pbix_legacy_multi_query_b.pbix"
+
+  - id: "branch1_pbix_no_datamashup"
+    generator: "pbix"
+    args:
+      mode: "no_datamashup"
+    output: "pbix_no_datamashup.pbix"
 
