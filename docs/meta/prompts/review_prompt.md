@@ -75,6 +75,11 @@
       diff_benchmarks.rs
     Cargo.lock
     Cargo.toml
+    examples/
+      basic_diff.rs
+      custom_config.rs
+      database_mode.rs
+      streaming.rs
     fuzz/
       Cargo.toml
       fuzz_targets/
@@ -809,6 +814,9 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+      - name: Build examples
+        run: cargo build --workspace --examples
+
       - name: Run clippy (deny unwrap/expect)
         run: cargo clippy --workspace -- -D clippy::unwrap_used -D clippy::expect_used
 
@@ -1492,6 +1500,7 @@ homepage = "https://github.com/dvora/excel_diff"
 [[bin]]
 name = "excel-diff"
 path = "src/main.rs"
+doc = false
 
 [dependencies]
 excel_diff = { path = "../core" }
@@ -4224,6 +4233,218 @@ criterion = { version = "0.5", features = ["html_reports"] }
 [[bench]]
 name = "diff_benchmarks"
 harness = false
+
+```
+
+---
+
+### File: `core\examples\basic_diff.rs`
+
+```rust
+use excel_diff::{DiffConfig, WorkbookPackage};
+use std::fs::File;
+
+fn usage() -> ! {
+    eprintln!("Usage: basic_diff <OLD.xlsx> <NEW.xlsx> [N]");
+    eprintln!("  N: optionally print the first N ops (debug)");
+    std::process::exit(2);
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = std::env::args().skip(1);
+    let old_path = args.next().unwrap_or_else(|| usage());
+    let new_path = args.next().unwrap_or_else(|| usage());
+    let show_n: Option<usize> = args.next().map(|s| s.parse()).transpose()?;
+
+    let old_pkg = WorkbookPackage::open(File::open(&old_path)?)?;
+    let new_pkg = WorkbookPackage::open(File::open(&new_path)?)?;
+
+    let report = old_pkg.diff(&new_pkg, &DiffConfig::default());
+
+    println!("complete: {}", report.complete);
+    println!("warnings: {}", report.warnings.len());
+    println!("ops: {}", report.ops.len());
+
+    if let Some(n) = show_n {
+        for (i, op) in report.ops.iter().take(n).enumerate() {
+            println!("{:>4}: {:?}", i, op);
+        }
+    }
+
+    Ok(())
+}
+
+
+```
+
+---
+
+### File: `core\examples\custom_config.rs`
+
+```rust
+use excel_diff::{DiffConfig, WorkbookPackage};
+use std::fs::File;
+
+fn usage() -> ! {
+    eprintln!("Usage: custom_config <OLD.xlsx> <NEW.xlsx>");
+    std::process::exit(2);
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = std::env::args().skip(1);
+    let old_path = args.next().unwrap_or_else(|| usage());
+    let new_path = args.next().unwrap_or_else(|| usage());
+
+    let old_pkg = WorkbookPackage::open(File::open(&old_path)?)?;
+    let new_pkg = WorkbookPackage::open(File::open(&new_path)?)?;
+
+    let mut cfg = DiffConfig::fastest();
+    cfg.max_memory_mb = Some(256);
+    cfg.timeout_seconds = Some(10);
+
+    let report = old_pkg.diff(&new_pkg, &cfg);
+
+    for warning in &report.warnings {
+        eprintln!("warning: {}", warning);
+    }
+
+    println!("complete: {}", report.complete);
+    println!("ops: {}", report.ops.len());
+    Ok(())
+}
+
+
+```
+
+---
+
+### File: `core\examples\database_mode.rs`
+
+```rust
+use excel_diff::{DiffConfig, WorkbookPackage};
+use std::fs::File;
+use std::io;
+
+fn usage() -> ! {
+    eprintln!("Usage: database_mode <OLD.xlsx> <NEW.xlsx> <SHEET_NAME> <KEYS>");
+    eprintln!("  KEYS: comma-separated column letters (e.g. A,C,AA)");
+    eprintln!("  Note: key columns are 0-based indices internally (A=0, B=1, ...).");
+    std::process::exit(2);
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = std::env::args().skip(1);
+    let old_path = args.next().unwrap_or_else(|| usage());
+    let new_path = args.next().unwrap_or_else(|| usage());
+    let sheet_name = args.next().unwrap_or_else(|| usage());
+    let keys = args.next().unwrap_or_else(|| usage());
+
+    let key_columns = parse_key_columns(&keys)?;
+
+    let old_pkg = WorkbookPackage::open(File::open(&old_path)?)?;
+    let new_pkg = WorkbookPackage::open(File::open(&new_path)?)?;
+
+    let report = old_pkg.diff_database_mode(&new_pkg, &sheet_name, &key_columns, &DiffConfig::default())?;
+
+    for warning in &report.warnings {
+        eprintln!("warning: {}", warning);
+    }
+
+    println!("complete: {}", report.complete);
+    println!("ops: {}", report.ops.len());
+
+    for (i, op) in report.ops.iter().take(25).enumerate() {
+        println!("{:>4}: {:?}", i, op);
+    }
+
+    Ok(())
+}
+
+fn parse_key_columns(keys: &str) -> io::Result<Vec<u32>> {
+    let mut out = Vec::new();
+    for token in keys.split(',') {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+        out.push(col_letters_to_index(token)?);
+    }
+
+    if out.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "no key columns specified",
+        ));
+    }
+
+    Ok(out)
+}
+
+fn col_letters_to_index(letters: &str) -> io::Result<u32> {
+    let mut col: u32 = 0;
+    for ch in letters.chars() {
+        let upper = ch.to_ascii_uppercase();
+        if !upper.is_ascii_uppercase() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid column token: '{letters}'"),
+            ));
+        }
+        col = col
+            .checked_mul(26)
+            .and_then(|c| c.checked_add((upper as u8 - b'A' + 1) as u32))
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("column '{letters}' is out of range"),
+                )
+            })?;
+    }
+    Ok(col - 1)
+}
+
+```
+
+---
+
+### File: `core\examples\streaming.rs`
+
+```rust
+use excel_diff::{DiffConfig, JsonLinesSink, WorkbookPackage};
+use std::fs::File;
+
+fn usage() -> ! {
+    eprintln!("Usage: streaming <OLD.xlsx> <NEW.xlsx> > out.jsonl");
+    std::process::exit(2);
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = std::env::args().skip(1);
+    let old_path = args.next().unwrap_or_else(|| usage());
+    let new_path = args.next().unwrap_or_else(|| usage());
+
+    let old_pkg = WorkbookPackage::open(File::open(&old_path)?)?;
+    let new_pkg = WorkbookPackage::open(File::open(&new_path)?)?;
+
+    let stdout = std::io::stdout();
+    let handle = stdout.lock();
+    let mut sink = JsonLinesSink::new(handle);
+
+    let summary = old_pkg.diff_streaming(&new_pkg, &DiffConfig::default(), &mut sink)?;
+
+    eprintln!(
+        "complete={} ops={} warnings={}",
+        summary.complete,
+        summary.op_count,
+        summary.warnings.len()
+    );
+    for warning in &summary.warnings {
+        eprintln!("warning: {}", warning);
+    }
+
+    Ok(())
+}
+
 
 ```
 
@@ -9611,21 +9832,32 @@ use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum QueryChangeKind {
+    /// A semantic change (meaningfully different after canonicalization).
     Semantic,
+    /// Only formatting changed (whitespace/comments); meaning is unchanged.
     FormattingOnly,
+    /// The query was renamed (definition may be unchanged).
     Renamed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FormulaDiffResult {
+    /// Unknown or not computed.
     Unknown,
+    /// Formula/value is unchanged.
     Unchanged,
+    /// Formula/value was added.
     Added,
+    /// Formula/value was removed.
     Removed,
+    /// Only formatting changed (whitespace/casing), semantics unchanged.
     FormattingOnly,
+    /// Filled down/across (shift-equivalent).
     Filled,
+    /// Semantic change.
     SemanticChange,
+    /// Textual change (different text but semantics not computed/unknown).
     TextChange,
 }
 
@@ -9637,12 +9869,17 @@ impl Default for FormulaDiffResult {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum QueryMetadataField {
+    /// Whether the query loads to a sheet.
     LoadToSheet,
+    /// Whether the query loads to the data model.
     LoadToModel,
+    /// Query group path.
     GroupPath,
+    /// Whether the query is connection-only.
     ConnectionOnly,
 }
 
+/// Errors produced by diffing APIs.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum DiffError {
@@ -9686,10 +9923,14 @@ pub type SheetId = StringId;
 /// Summary metadata about a diff run emitted alongside streamed ops.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiffSummary {
+    /// Whether the diff completed without early aborts/fallbacks.
     pub complete: bool,
+    /// Warnings explaining why results are incomplete (when `complete == false`).
     pub warnings: Vec<String>,
+    /// Total number of ops emitted.
     pub op_count: usize,
     #[cfg(feature = "perf-metrics")]
+    /// Optional performance metrics when the `perf-metrics` feature is enabled.
     pub metrics: Option<crate::perf::DiffMetrics>,
 }
 
@@ -9842,6 +10083,15 @@ pub enum DiffOp {
 /// A versioned collection of diff operations between two workbooks.
 ///
 /// The `version` field indicates the schema version for forwards compatibility.
+///
+/// # Incomplete results
+///
+/// Some safety rails and limit behaviors can produce partial results. In that case:
+///
+/// - `complete == false`
+/// - `warnings` contains at least one human-readable explanation
+///
+/// The CLI prints warnings to stderr as `Warning: ...`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DiffReport {
     /// Schema version (currently "1").
@@ -9916,6 +10166,18 @@ impl DiffReport {
         self.complete = false;
     }
 
+    /// Resolve an interned [`StringId`] into a string slice using this report's `strings` table.
+    ///
+    /// Many fields in [`DiffOp`] are `StringId`s (sheet names, query names, etc.). The returned
+    /// string is owned by the report.
+    ///
+    /// ```
+    /// # use excel_diff::{DiffReport, StringId};
+    /// # fn demo(report: &DiffReport, id: StringId) {
+    /// let text = report.resolve(id).unwrap_or("<unknown>");
+    /// # let _ = text;
+    /// # }
+    /// ```
     pub fn resolve(&self, id: StringId) -> Option<&str> {
         self.strings.get(id.0 as usize).map(|s| s.as_str())
     }
@@ -16910,26 +17172,67 @@ mod tests {
 ### File: `core\src\lib.rs`
 
 ```rust
-//! Excel Diff: A library for comparing Excel workbooks.
+//! Excel Diff: a library for comparing Excel workbooks.
 //!
-//! This crate provides functionality for:
-//! - Opening and parsing Excel workbooks (`.xlsx` files)
-//! - Computing structural and cell-level differences between workbooks
-//! - Serializing diff reports to JSON
-//! - Parsing Power Query (M) code from DataMashup sections
+//! The main entry point is [`WorkbookPackage`], which can parse a workbook (when the
+//! `excel-open-xml` feature is enabled) and then diff it against another workbook.
 //!
-//! # Quick Start
+//! The diff includes:
+//! - sheet/grid ops (cell edits, row/column adds/removes, block moves)
+//! - object ops (named ranges, charts, VBA modules)
+//! - Power Query ops (M query add/remove/rename and definition/metadata changes)
 //!
-//! ```ignore
-//! use excel_diff::WorkbookPackage;
+//! # Quick start
 //!
-//! let pkg_a = WorkbookPackage::open(std::fs::File::open("file_a.xlsx")?)?;
-//! let pkg_b = WorkbookPackage::open(std::fs::File::open("file_b.xlsx")?)?;
-//! let report = pkg_a.diff(&pkg_b, &excel_diff::DiffConfig::default());
+//! ```no_run
+//! use excel_diff::{DiffConfig, WorkbookPackage};
+//! use std::fs::File;
 //!
-//! for op in &report.ops {
-//!     println!("{:?}", op);
-//! }
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let old_pkg = WorkbookPackage::open(File::open("old.xlsx")?)?;
+//! let new_pkg = WorkbookPackage::open(File::open("new.xlsx")?)?;
+//!
+//! let report = old_pkg.diff(&new_pkg, &DiffConfig::default());
+//! println!("ops={}", report.ops.len());
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Streaming (JSON Lines)
+//!
+//! ```no_run
+//! use excel_diff::{DiffConfig, JsonLinesSink, WorkbookPackage};
+//! use std::fs::File;
+//! use std::io::{self, BufWriter};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let old_pkg = WorkbookPackage::open(File::open("old.xlsx")?)?;
+//! let new_pkg = WorkbookPackage::open(File::open("new.xlsx")?)?;
+//!
+//! let stdout = io::stdout();
+//! let mut sink = JsonLinesSink::new(BufWriter::new(stdout.lock()));
+//! let summary = old_pkg.diff_streaming(&new_pkg, &DiffConfig::default(), &mut sink)?;
+//! eprintln!("complete={} ops={}", summary.complete, summary.op_count);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Database mode (key-based diff)
+//!
+//! ```no_run
+//! use excel_diff::{DiffConfig, WorkbookPackage};
+//! use std::fs::File;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let old_pkg = WorkbookPackage::open(File::open("old.xlsx")?)?;
+//! let new_pkg = WorkbookPackage::open(File::open("new.xlsx")?)?;
+//!
+//! // Key columns are 0-based indices (A=0, B=1, ...).
+//! let keys: Vec<u32> = vec![0, 2]; // A,C
+//! let report = old_pkg.diff_database_mode(&new_pkg, "Data", &keys, &DiffConfig::default())?;
+//! println!("ops={}", report.ops.len());
+//! # Ok(())
+//! # }
 //! ```
 
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
@@ -18813,6 +19116,10 @@ struct JsonLinesHeader<'a> {
     strings: &'a [String],
 }
 
+/// A [`DiffSink`] that writes a JSON Lines stream.
+///
+/// The first line is a header containing the schema version and the string table. Each
+/// subsequent line is a JSON-serialized [`DiffOp`].
 pub struct JsonLinesSink<W: Write> {
     w: W,
     wrote_header: bool,
@@ -18820,6 +19127,14 @@ pub struct JsonLinesSink<W: Write> {
 }
 
 impl<W: Write> JsonLinesSink<W> {
+    /// Create a JSON Lines sink that writes to `w`.
+    ///
+    /// The output format is:
+    ///
+    /// 1. A header line: `{ "kind": "Header", "version": "...", "strings": [...] }`
+    /// 2. One JSON-serialized [`DiffOp`] per line
+    ///
+    /// Ops contain interned [`crate::StringId`] values that index into the header's `strings` table.
     pub fn new(w: W) -> Self {
         Self {
             w,
@@ -18828,6 +19143,7 @@ impl<W: Write> JsonLinesSink<W> {
         }
     }
 
+    /// Write the header line (idempotent).
     pub fn begin(&mut self, pool: &StringPool) -> Result<(), DiffError> {
         if self.wrote_header {
             return Ok(());
@@ -18899,25 +19215,46 @@ use crate::string_pool::StringId;
 use crate::string_pool::StringPool;
 use crate::workbook::{Sheet, Workbook};
 
+/// The kind of VBA module contained in an `.xlsm` workbook.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VbaModuleType {
+    /// A standard module (e.g., `Module1`).
     Standard,
+    /// A class module.
     Class,
+    /// A form module.
     Form,
+    /// A document module (e.g., `ThisWorkbook`, sheet modules).
     Document,
 }
 
+/// A VBA module extracted from a workbook.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VbaModule {
+    /// Module name (interned in the associated string pool).
     pub name: StringId,
+    /// Module type (standard/class/form/document).
     pub module_type: VbaModuleType,
+    /// Raw module source code.
     pub code: String,
 }
 
+/// A parsed workbook plus optional associated content (Power Query and VBA).
+///
+/// This is the recommended high-level entry point for most callers. It wraps the workbook IR
+/// (`Workbook`, `Sheet`, `Grid`) together with:
+/// - optional DataMashup content (Power Query / M)
+/// - optional extracted VBA modules (for `.xlsm`)
+///
+/// Diffs produced via [`WorkbookPackage::diff`] and related APIs include grid ops, object ops
+/// (named ranges, charts, VBA), and M ops when present.
 #[derive(Debug, Clone)]
 pub struct WorkbookPackage {
+    /// Parsed workbook IR (sheets, grids, named ranges, charts).
     pub workbook: Workbook,
+    /// Parsed DataMashup content (Power Query), if present.
     pub data_mashup: Option<DataMashup>,
+    /// Extracted VBA modules, if present and the `vba` feature is enabled.
     pub vba_modules: Option<Vec<VbaModule>>,
 }
 
@@ -18933,6 +19270,21 @@ impl From<Workbook> for WorkbookPackage {
 
 impl WorkbookPackage {
     #[cfg(feature = "excel-open-xml")]
+    /// Parse a workbook from any `Read + Seek` source.
+    ///
+    /// This is available when the `excel-open-xml` feature is enabled (enabled by default).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use excel_diff::WorkbookPackage;
+    /// use std::fs::File;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let _pkg = WorkbookPackage::open(File::open("workbook.xlsx")?)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn open<R: std::io::Read + std::io::Seek + 'static>(
         reader: R,
     ) -> Result<Self, crate::excel_open_xml::PackageError> {
@@ -18957,12 +19309,19 @@ impl WorkbookPackage {
         })
     }
 
+    /// Diff this package against `other`, returning an in-memory [`DiffReport`].
+    ///
+    /// This collects all ops into memory and returns a report containing both the ops and the
+    /// string table required to resolve [`StringId`] values referenced by ops.
+    ///
+    /// For very large workbooks, consider [`WorkbookPackage::diff_streaming`] instead.
     pub fn diff(&self, other: &Self, config: &DiffConfig) -> DiffReport {
         crate::with_default_session(|session| {
             self.diff_with_pool(other, &mut session.strings, config)
         })
     }
 
+    /// Like [`WorkbookPackage::diff`], but reports best-effort progress via `progress`.
     pub fn diff_with_progress(
         &self,
         other: &Self,
@@ -19050,6 +19409,30 @@ impl WorkbookPackage {
         report
     }
 
+    /// Diff this package against `other`, streaming ops into `sink`.
+    ///
+    /// This is the preferred API for very large workbooks because it does not require holding
+    /// the entire op list in memory. Instead, ops are emitted incrementally and a [`DiffSummary`]
+    /// is returned at the end.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use excel_diff::{DiffConfig, JsonLinesSink, WorkbookPackage};
+    /// use std::fs::File;
+    /// use std::io::{self, BufWriter};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let old_pkg = WorkbookPackage::open(File::open("old.xlsx")?)?;
+    /// let new_pkg = WorkbookPackage::open(File::open("new.xlsx")?)?;
+    ///
+    /// let stdout = io::stdout();
+    /// let mut sink = JsonLinesSink::new(BufWriter::new(stdout.lock()));
+    /// let summary = old_pkg.diff_streaming(&new_pkg, &DiffConfig::default(), &mut sink)?;
+    /// eprintln!("complete={} ops={}", summary.complete, summary.op_count);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn diff_streaming<S: DiffSink>(
         &self,
         other: &Self,
@@ -19061,6 +19444,7 @@ impl WorkbookPackage {
         })
     }
 
+    /// Like [`WorkbookPackage::diff_streaming`], but reports best-effort progress via `progress`.
     pub fn diff_streaming_with_progress<S: DiffSink>(
         &self,
         other: &Self,
@@ -19079,6 +19463,10 @@ impl WorkbookPackage {
         })
     }
 
+    /// Streaming variant of [`WorkbookPackage::diff`], using a caller-provided string pool.
+    ///
+    /// Most callers should prefer [`WorkbookPackage::diff_streaming`], which uses the default
+    /// session string pool internally.
     pub fn diff_streaming_with_pool<S: DiffSink>(
         &self,
         other: &Self,
@@ -19215,6 +19603,27 @@ impl WorkbookPackage {
         Ok(summary)
     }
 
+    /// Diff a single sheet using key-based row alignment ("database mode").
+    ///
+    /// `sheet_name` must exist in both workbooks (matching is case-insensitive). `key_columns`
+    /// are 0-based column indices (A=0, B=1, ...).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use excel_diff::{DiffConfig, WorkbookPackage};
+    /// use std::fs::File;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let old_pkg = WorkbookPackage::open(File::open("old.xlsx")?)?;
+    /// let new_pkg = WorkbookPackage::open(File::open("new.xlsx")?)?;
+    ///
+    /// let keys = vec![0u32, 2u32]; // A,C
+    /// let report = old_pkg.diff_database_mode(&new_pkg, "Data", &keys, &DiffConfig::default())?;
+    /// println!("complete={} ops={}", report.complete, report.ops.len());
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn diff_database_mode(
         &self,
         other: &Self,
@@ -19233,6 +19642,7 @@ impl WorkbookPackage {
         })
     }
 
+    /// Like [`WorkbookPackage::diff_database_mode`], but uses a caller-provided string pool.
     pub fn diff_database_mode_with_pool(
         &self,
         other: &Self,
@@ -19286,6 +19696,7 @@ impl WorkbookPackage {
         Ok(DiffReport::from_ops_and_summary(ops, summary, strings))
     }
 
+    /// Streaming database mode diff. Emits ops into `sink` and returns a [`DiffSummary`].
     pub fn diff_database_mode_streaming<S: DiffSink>(
         &self,
         other: &Self,
@@ -19306,6 +19717,7 @@ impl WorkbookPackage {
         })
     }
 
+    /// Like [`WorkbookPackage::diff_database_mode_streaming`], but uses a caller-provided string pool.
     pub fn diff_database_mode_streaming_with_pool<S: DiffSink>(
         &self,
         other: &Self,
@@ -21813,6 +22225,15 @@ use crate::diff::{DiffError, DiffOp};
 use crate::string_pool::StringPool;
 
 /// Trait for streaming diff operations to a consumer.
+///
+/// Streaming entry points call sinks in this order:
+///
+/// 1. `begin(pool)` once (before any ops)
+/// 2. `emit(op)` zero or more times
+/// 3. `finish()` once (even on most error paths)
+///
+/// Sinks can use `begin` to access the string table (via `pool.strings()`), e.g. to write a
+/// header before streaming ops.
 pub trait DiffSink {
     /// Called once before any ops are emitted.
     ///
@@ -21821,8 +22242,10 @@ pub trait DiffSink {
         Ok(())
     }
 
+    /// Emit one diff operation.
     fn emit(&mut self, op: DiffOp) -> Result<(), DiffError>;
 
+    /// Finish the stream (flush/close output destinations).
     fn finish(&mut self) -> Result<(), DiffError> {
         Ok(())
     }
@@ -21980,7 +22403,7 @@ use std::str::FromStr;
 
 /// A snapshot of a cell's logical content for comparison purposes.
 ///
-/// Used in [`DiffOp::CellEdited`] to represent the "before" and "after" states.
+/// Used in [`crate::diff::DiffOp::CellEdited`] to represent the "before" and "after" states.
 /// Equality comparison intentionally ignores `addr` and compares only `(value, formula)`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CellSnapshot {

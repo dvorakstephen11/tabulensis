@@ -1,4 +1,4 @@
-# Completion Estimate Trends (2025-11-26 to 2025-12-22)
+ndsds# Completion Estimate Trends (2025-11-26 to 2025-12-22)
 
 Method: pulled the headline metrics from each `docs/meta/completion_estimates/*.md` summary table.
 
