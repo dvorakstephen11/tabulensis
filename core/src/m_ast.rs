@@ -15,7 +15,23 @@ pub enum MAstKind {
     List { item_count: usize },
     FunctionCall { name: String, arg_count: usize },
     Primitive,
+    Ident { name: String },
+    If,
+    Each,
+    Access { kind: MAstAccessKind, chain_len: usize },
     Opaque { token_count: usize },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MAstAccessKind {
+    Field,
+    Item,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum AccessKind {
+    Field,
+    Item,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -33,6 +49,22 @@ enum MExpr {
     FunctionCall {
         name: String,
         args: Vec<MExpr>,
+    },
+    Ident {
+        name: String,
+    },
+    If {
+        cond: Box<MExpr>,
+        then_branch: Box<MExpr>,
+        else_branch: Box<MExpr>,
+    },
+    Each {
+        body: Box<MExpr>,
+    },
+    Access {
+        base: Box<MExpr>,
+        kind: AccessKind,
+        key: Box<MExpr>,
     },
     Primitive(MPrimitive),
     Opaque(Vec<MToken>),
@@ -62,6 +94,10 @@ enum MPrimitive {
 enum MToken {
     KeywordLet,
     KeywordIn,
+    KeywordIf,
+    KeywordThen,
+    KeywordElse,
+    KeywordEach,
     Identifier(String),
     StringLiteral(String),
     Number(String),
@@ -72,6 +108,10 @@ enum MToken {
 pub enum MTokenDebug {
     KeywordLet,
     KeywordIn,
+    KeywordIf,
+    KeywordThen,
+    KeywordElse,
+    KeywordEach,
     Identifier(String),
     StringLiteral(String),
     Number(String),
@@ -99,6 +139,10 @@ impl From<&MToken> for MTokenDebug {
         match token {
             MToken::KeywordLet => MTokenDebug::KeywordLet,
             MToken::KeywordIn => MTokenDebug::KeywordIn,
+            MToken::KeywordIf => MTokenDebug::KeywordIf,
+            MToken::KeywordThen => MTokenDebug::KeywordThen,
+            MToken::KeywordElse => MTokenDebug::KeywordElse,
+            MToken::KeywordEach => MTokenDebug::KeywordEach,
             MToken::Identifier(v) => MTokenDebug::Identifier(v.clone()),
             MToken::StringLiteral(v) => MTokenDebug::StringLiteral(v.clone()),
             MToken::Number(v) => MTokenDebug::Number(v.clone()),
@@ -113,6 +157,16 @@ impl MModuleAst {
     /// This keeps the AST opaque for production consumers while allowing
     /// tests to assert the expected structure.
     pub fn root_kind_for_testing(&self) -> MAstKind {
+        fn access_chain_len(expr: &MExpr) -> usize {
+            let mut n = 0usize;
+            let mut cur = expr;
+            while let MExpr::Access { base, .. } = cur {
+                n += 1;
+                cur = base;
+            }
+            n
+        }
+
         match &self.root {
             MExpr::Let { bindings, .. } => MAstKind::Let {
                 binding_count: bindings.len(),
@@ -128,6 +182,19 @@ impl MModuleAst {
                 arg_count: args.len(),
             },
             MExpr::Primitive(_) => MAstKind::Primitive,
+            MExpr::Ident { name } => MAstKind::Ident { name: name.clone() },
+            MExpr::If { .. } => MAstKind::If,
+            MExpr::Each { .. } => MAstKind::Each,
+            MExpr::Access { kind, .. } => {
+                let kind = match kind {
+                    AccessKind::Field => MAstAccessKind::Field,
+                    AccessKind::Item => MAstAccessKind::Item,
+                };
+                MAstKind::Access {
+                    kind,
+                    chain_len: access_chain_len(&self.root),
+                }
+            }
             MExpr::Opaque(tokens) => MAstKind::Opaque {
                 token_count: tokens.len(),
             },
@@ -146,11 +213,12 @@ pub fn tokenize_for_testing(source: &str) -> Result<Vec<MTokenDebug>, MParseErro
 /// Parse a Power Query M expression into a minimal AST.
 ///
 /// Supports top-level `let ... in ...` expressions, record and list literals,
-/// qualified function calls, and primitive literals. Inputs that do not match
+/// qualified function calls, primitive literals, identifier references, `if`
+/// expressions, `each` expressions, and access chains. Inputs that do not match
 /// those forms are preserved as opaque token sequences. The lexer recognizes
-/// `let`/`in`, quoted identifiers (`#"Foo"`), and hash-prefixed literals like
-/// `#date`/`#datetime` as single identifiers; other M constructs are parsed
-/// best-effort and may be treated as generic tokens.
+/// `let`/`in`/`if`/`then`/`else`/`each`, quoted identifiers (`#"Foo"`), and
+/// hash-prefixed literals like `#date`/`#datetime` as single identifiers; other
+/// M constructs are parsed best-effort and may be treated as generic tokens.
 pub fn parse_m_expression(source: &str) -> Result<MModuleAst, MParseError> {
     let tokens = tokenize(source)?;
     if tokens.is_empty() {
@@ -193,6 +261,23 @@ fn canonicalize_expr(expr: &mut MExpr) {
                 canonicalize_expr(arg);
             }
         }
+        MExpr::Ident { .. } => {}
+        MExpr::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            canonicalize_expr(cond);
+            canonicalize_expr(then_branch);
+            canonicalize_expr(else_branch);
+        }
+        MExpr::Each { body } => {
+            canonicalize_expr(body);
+        }
+        MExpr::Access { base, key, .. } => {
+            canonicalize_expr(base);
+            canonicalize_expr(key);
+        }
         MExpr::Primitive(_) => {}
         MExpr::Opaque(tokens) => canonicalize_tokens(tokens),
     }
@@ -229,17 +314,31 @@ fn parse_expression(tokens: &[MToken]) -> Result<MExpr, MParseError> {
         }
     }
 
+    if let Some(if_expr) = parse_if_then_else(tokens)? {
+        return Ok(if_expr);
+    }
+
+    if let Some(each_expr) = parse_each_expr(tokens)? {
+        return Ok(each_expr);
+    }
+
     if let Some(rec) = parse_record_literal(tokens)? {
         return Ok(rec);
     }
     if let Some(list) = parse_list_literal(tokens)? {
         return Ok(list);
     }
+    if let Some(access) = parse_access_chain(tokens)? {
+        return Ok(access);
+    }
     if let Some(call) = parse_function_call(tokens)? {
         return Ok(call);
     }
     if let Some(prim) = parse_primitive(tokens) {
         return Ok(prim);
+    }
+    if let Some(ident) = parse_ident_ref(tokens) {
+        return Ok(ident);
     }
 
     Ok(MExpr::Opaque(tokens.to_vec()))
@@ -309,6 +408,203 @@ fn split_top_level(tokens: &[MToken], delimiter: char) -> Vec<&[MToken]> {
     out
 }
 
+fn token_as_name(tok: &MToken) -> Option<String> {
+    match tok {
+        MToken::Identifier(v) => Some(v.clone()),
+        MToken::KeywordIf => Some("if".to_string()),
+        MToken::KeywordThen => Some("then".to_string()),
+        MToken::KeywordElse => Some("else".to_string()),
+        MToken::KeywordEach => Some("each".to_string()),
+        _ => None,
+    }
+}
+
+fn parse_ident_ref(tokens: &[MToken]) -> Option<MExpr> {
+    if tokens.len() != 1 {
+        return None;
+    }
+
+    match &tokens[0] {
+        MToken::Identifier(v) => Some(MExpr::Ident { name: v.clone() }),
+        MToken::KeywordIf => Some(MExpr::Ident {
+            name: "if".to_string(),
+        }),
+        MToken::KeywordThen => Some(MExpr::Ident {
+            name: "then".to_string(),
+        }),
+        MToken::KeywordElse => Some(MExpr::Ident {
+            name: "else".to_string(),
+        }),
+        MToken::KeywordEach => Some(MExpr::Ident {
+            name: "each".to_string(),
+        }),
+        _ => None,
+    }
+}
+
+fn parse_each_expr(tokens: &[MToken]) -> Result<Option<MExpr>, MParseError> {
+    if !matches!(tokens.first(), Some(MToken::KeywordEach)) {
+        return Ok(None);
+    }
+    if tokens.len() < 2 {
+        return Ok(None);
+    }
+
+    let body = parse_expression(&tokens[1..])?;
+    Ok(Some(MExpr::Each {
+        body: Box::new(body),
+    }))
+}
+
+fn parse_if_then_else(tokens: &[MToken]) -> Result<Option<MExpr>, MParseError> {
+    if !matches!(tokens.first(), Some(MToken::KeywordIf)) {
+        return Ok(None);
+    }
+
+    let mut depth = 0i32;
+    let mut let_depth = 0i32;
+    let mut if_depth = 0i32;
+    let mut then_idx: Option<usize> = None;
+    let mut else_idx: Option<usize> = None;
+
+    for i in 1..tokens.len() {
+        match &tokens[i] {
+            MToken::Symbol('(') | MToken::Symbol('[') | MToken::Symbol('{') => depth += 1,
+            MToken::Symbol(')') | MToken::Symbol(']') | MToken::Symbol('}') => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            MToken::KeywordLet => let_depth += 1,
+            MToken::KeywordIn => {
+                if let_depth > 0 {
+                    let_depth -= 1;
+                }
+            }
+            MToken::KeywordIf if depth == 0 && let_depth == 0 => {
+                if_depth += 1;
+            }
+            MToken::KeywordThen
+                if depth == 0 && let_depth == 0 && if_depth == 0 && then_idx.is_none() =>
+            {
+                then_idx = Some(i);
+            }
+            MToken::KeywordElse if depth == 0 && let_depth == 0 => {
+                if if_depth > 0 {
+                    if_depth -= 1;
+                } else {
+                    else_idx = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let Some(then_idx) = then_idx else {
+        return Ok(None);
+    };
+    let Some(else_idx) = else_idx else {
+        return Ok(None);
+    };
+
+    if then_idx <= 1 {
+        return Ok(None);
+    }
+    if else_idx <= then_idx + 1 {
+        return Ok(None);
+    }
+    if else_idx + 1 >= tokens.len() {
+        return Ok(None);
+    }
+
+    let cond = parse_expression(&tokens[1..then_idx])?;
+    let then_branch = parse_expression(&tokens[then_idx + 1..else_idx])?;
+    let else_branch = parse_expression(&tokens[else_idx + 1..])?;
+
+    Ok(Some(MExpr::If {
+        cond: Box::new(cond),
+        then_branch: Box::new(then_branch),
+        else_branch: Box::new(else_branch),
+    }))
+}
+
+fn parse_access_chain(tokens: &[MToken]) -> Result<Option<MExpr>, MParseError> {
+    if tokens.len() < 3 {
+        return Ok(None);
+    }
+
+    let mut end = tokens.len();
+    let mut segments: Vec<(AccessKind, &[MToken])> = Vec::new();
+
+    loop {
+        if end < 2 {
+            break;
+        }
+
+        let (kind, open_ch, close_ch) = match &tokens[end - 1] {
+            MToken::Symbol(']') => (AccessKind::Field, '[', ']'),
+            MToken::Symbol('}') => (AccessKind::Item, '{', '}'),
+            _ => break,
+        };
+
+        let mut depth = 0i32;
+        let mut found_open: Option<usize> = None;
+
+        for i in (0..end - 1).rev() {
+            match &tokens[i] {
+                MToken::Symbol(c) if *c == close_ch => depth += 1,
+                MToken::Symbol(c) if *c == open_ch => {
+                    if depth == 0 {
+                        found_open = Some(i);
+                        break;
+                    } else {
+                        depth -= 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let Some(open_idx) = found_open else {
+            return Ok(None);
+        };
+
+        if open_idx + 1 > end - 1 {
+            return Ok(None);
+        }
+
+        let inner = &tokens[open_idx + 1..end - 1];
+        segments.push((kind, inner));
+        end = open_idx;
+    }
+
+    if segments.is_empty() {
+        return Ok(None);
+    }
+
+    let base_tokens = &tokens[..end];
+    if base_tokens.is_empty() {
+        return Ok(None);
+    }
+
+    let mut expr = parse_expression(base_tokens)?;
+
+    for (kind, key_tokens) in segments.into_iter().rev() {
+        if key_tokens.is_empty() {
+            return Ok(None);
+        }
+        let key = parse_expression(key_tokens)?;
+        expr = MExpr::Access {
+            base: Box::new(expr),
+            kind,
+            key: Box::new(key),
+        };
+    }
+
+    Ok(Some(expr))
+}
+
 fn parse_record_literal(tokens: &[MToken]) -> Result<Option<MExpr>, MParseError> {
     if tokens.len() < 2 {
         return Ok(None);
@@ -334,9 +630,11 @@ fn parse_record_literal(tokens: &[MToken]) -> Result<Option<MExpr>, MParseError>
         }
 
         let name = match &part[0] {
-            MToken::Identifier(v) => v.clone(),
             MToken::StringLiteral(v) => v.clone(),
-            _ => return Ok(None),
+            tok => match token_as_name(tok) {
+                Some(name) => name,
+                None => return Ok(None),
+            },
         };
 
         if !matches!(part[1], MToken::Symbol('=')) {
@@ -686,6 +984,14 @@ fn tokenize(source: &str) -> Result<Vec<MToken>, MParseError> {
                 tokens.push(MToken::KeywordLet);
             } else if ident.eq_ignore_ascii_case("in") {
                 tokens.push(MToken::KeywordIn);
+            } else if ident.eq_ignore_ascii_case("if") {
+                tokens.push(MToken::KeywordIf);
+            } else if ident.eq_ignore_ascii_case("then") {
+                tokens.push(MToken::KeywordThen);
+            } else if ident.eq_ignore_ascii_case("else") {
+                tokens.push(MToken::KeywordElse);
+            } else if ident.eq_ignore_ascii_case("each") {
+                tokens.push(MToken::KeywordEach);
             } else {
                 tokens.push(MToken::Identifier(ident));
             }

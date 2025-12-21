@@ -208,7 +208,7 @@ pub use grid_view::{
     ColHash, ColMeta, FrequencyClass, GridView, HashStats, RowHash, RowMeta, RowView,
 };
 #[doc(hidden)]
-pub use m_ast::{MAstKind, MTokenDebug, tokenize_for_testing};
+pub use m_ast::{MAstAccessKind, MAstKind, MTokenDebug, tokenize_for_testing};
 pub use m_ast::{
     MModuleAst, MParseError, ast_semantically_equal, canonicalize_m_ast, parse_m_expression,
 };

@@ -189,6 +189,7 @@
       metrics_unit_tests.rs
       output_tests.rs
       package_streaming_tests.rs
+      pbix_host_support_tests.rs
       perf_large_grid_tests.rs
       pg1_ir_tests.rs
       pg3_snapshot_tests.rs
@@ -216,6 +217,7 @@
         grid.py
         mashup.py
         objects.py
+        pbix.py
         perf.py
   fuzz/
     .gitignore
@@ -1524,11 +1526,12 @@ use crate::output::{git_diff, json, text};
 use crate::OutputFormat;
 use anyhow::{Context, Result, bail};
 use excel_diff::{
-    DiffConfig, DiffReport, Grid, JsonLinesSink, WorkbookPackage,
-    ProgressCallback, index_to_address, suggest_key_columns, with_default_session,
+    DiffConfig, DiffReport, Grid, JsonLinesSink, PbixPackage, ProgressCallback,
+    WorkbookPackage, index_to_address, suggest_key_columns, with_default_session,
 };
 use std::fs::File;
 use std::io::{self, BufWriter, IsTerminal, Write};
+use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Mutex;
 
@@ -1537,6 +1540,44 @@ pub enum Verbosity {
     Quiet,
     Normal,
     Verbose,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HostKind {
+    Workbook,
+    Pbix,
+}
+
+fn host_kind_from_path(path: &Path) -> Option<HostKind> {
+    let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
+    match ext.as_str() {
+        "xlsx" | "xlsm" | "xltx" | "xltm" => Some(HostKind::Workbook),
+        "pbix" | "pbit" => Some(HostKind::Pbix),
+        _ => None,
+    }
+}
+
+enum Host {
+    Workbook(WorkbookPackage),
+    Pbix(PbixPackage),
+}
+
+fn open_host(path: &Path, kind: HostKind, label: &str) -> Result<Host> {
+    let file = File::open(path)
+        .with_context(|| format!("Failed to open {} file: {}", label, path.display()))?;
+
+    let host = match kind {
+        HostKind::Workbook => Host::Workbook(
+            WorkbookPackage::open(file)
+                .with_context(|| format!("Failed to parse {} workbook: {}", label, path.display()))?,
+        ),
+        HostKind::Pbix => Host::Pbix(
+            PbixPackage::open(file)
+                .with_context(|| format!("Failed to parse {} PBIX/PBIT: {}", label, path.display()))?,
+        ),
+    };
+
+    Ok(host)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1565,16 +1606,36 @@ pub fn run(
         bail!("Cannot use --git-diff with --format=json or --format=jsonl");
     }
 
-    if !database && (sheet.is_some() || keys.is_some() || auto_keys) {
-        bail!("--sheet, --keys, and --auto-keys require --database flag");
+    let old_path_str = old_path;
+    let new_path_str = new_path;
+    let old_path = Path::new(old_path_str);
+    let new_path = Path::new(new_path_str);
+
+    let old_kind = host_kind_from_path(old_path)
+        .ok_or_else(|| anyhow::anyhow!("unsupported input extension: {}", old_path.display()))?;
+    let new_kind = host_kind_from_path(new_path)
+        .ok_or_else(|| anyhow::anyhow!("unsupported input extension: {}", new_path.display()))?;
+
+    if old_kind != new_kind {
+        bail!("input host types must match");
     }
 
-    if database && keys.is_none() && !auto_keys {
-        bail!("Database mode requires either --keys or --auto-keys");
-    }
+    if old_kind == HostKind::Pbix {
+        if database || sheet.is_some() || keys.is_some() || auto_keys {
+            bail!("database mode and sheet/key options are not supported for PBIX/PBIT");
+        }
+    } else {
+        if !database && (sheet.is_some() || keys.is_some() || auto_keys) {
+            bail!("--sheet, --keys, and --auto-keys require --database flag");
+        }
 
-    if database && keys.is_some() && auto_keys {
-        bail!("Cannot use both --keys and --auto-keys together");
+        if database && keys.is_none() && !auto_keys {
+            bail!("Database mode requires either --keys or --auto-keys");
+        }
+
+        if database && keys.is_some() && auto_keys {
+            bail!("Cannot use both --keys and --auto-keys together");
+        }
     }
 
     let verbosity = if quiet {
@@ -1589,22 +1650,18 @@ pub fn run(
     config.max_memory_mb = max_memory;
     config.timeout_seconds = timeout;
 
-    let old_file = File::open(old_path)
-        .with_context(|| format!("Failed to open old workbook: {}", old_path))?;
-    let new_file = File::open(new_path)
-        .with_context(|| format!("Failed to open new workbook: {}", new_path))?;
+    let old_host = open_host(old_path, old_kind, "old")?;
+    let new_host = open_host(new_path, new_kind, "new")?;
 
-    let old_pkg = WorkbookPackage::open(old_file)
-        .with_context(|| format!("Failed to parse old workbook: {}", old_path))?;
-    let new_pkg = WorkbookPackage::open(new_file)
-        .with_context(|| format!("Failed to parse new workbook: {}", new_path))?;
-
-    if database {
+    if old_kind == HostKind::Workbook && database {
+        let (Host::Workbook(old_pkg), Host::Workbook(new_pkg)) = (&old_host, &new_host) else {
+            unreachable!();
+        };
         return run_database_mode(
-            &old_pkg,
-            &new_pkg,
-            old_path,
-            new_path,
+            old_pkg,
+            new_pkg,
+            old_path_str,
+            new_path_str,
             format,
             git_diff_mode,
             &config,
@@ -1618,12 +1675,16 @@ pub fn run(
     let progress = progress.then(CliProgress::new);
 
     if format == OutputFormat::Jsonl && !git_diff_mode {
-        return run_streaming(&old_pkg, &new_pkg, &config, progress.as_ref());
+        return run_streaming_host(&old_host, &new_host, &config, progress.as_ref());
     }
 
-    let report = match progress.as_ref() {
-        Some(p) => old_pkg.diff_with_progress(&new_pkg, &config, p),
-        None => old_pkg.diff(&new_pkg, &config),
+    let report = match (&old_host, &new_host) {
+        (Host::Workbook(old_pkg), Host::Workbook(new_pkg)) => match progress.as_ref() {
+            Some(p) => old_pkg.diff_with_progress(new_pkg, &config, p),
+            None => old_pkg.diff(new_pkg, &config),
+        },
+        (Host::Pbix(old_pkg), Host::Pbix(new_pkg)) => old_pkg.diff(new_pkg, &config),
+        _ => unreachable!(),
     };
 
     if let Some(p) = progress.as_ref() {
@@ -1636,11 +1697,17 @@ pub fn run(
     let mut handle = stdout.lock();
 
     if git_diff_mode {
-        git_diff::write_git_diff(&mut handle, &report, old_path, new_path)?;
+        git_diff::write_git_diff(&mut handle, &report, old_path_str, new_path_str)?;
     } else {
         match format {
             OutputFormat::Text => {
-                text::write_text_report(&mut handle, &report, old_path, new_path, verbosity)?;
+                text::write_text_report(
+                    &mut handle,
+                    &report,
+                    old_path_str,
+                    new_path_str,
+                    verbosity,
+                )?;
             }
             OutputFormat::Json => {
                 json::write_json_report(&mut handle, &report)?;
@@ -1654,9 +1721,9 @@ pub fn run(
     Ok(exit_code_from_report(&report))
 }
 
-fn run_streaming(
-    old_pkg: &WorkbookPackage,
-    new_pkg: &WorkbookPackage,
+fn run_streaming_host(
+    old_host: &Host,
+    new_host: &Host,
     config: &DiffConfig,
     progress: Option<&CliProgress>,
 ) -> Result<ExitCode> {
@@ -1665,13 +1732,20 @@ fn run_streaming(
     let mut writer = BufWriter::new(handle);
     let mut sink = JsonLinesSink::new(&mut writer);
 
-    let summary = match progress {
-        Some(p) => old_pkg
+    let summary = match (old_host, new_host, progress) {
+        (Host::Workbook(old_pkg), Host::Workbook(new_pkg), Some(p)) => old_pkg
             .diff_streaming_with_progress(new_pkg, config, &mut sink, p)
             .context("Streaming diff failed")?,
-        None => old_pkg
+        (Host::Workbook(old_pkg), Host::Workbook(new_pkg), None) => old_pkg
             .diff_streaming(new_pkg, config, &mut sink)
             .context("Streaming diff failed")?,
+        (Host::Pbix(old_pkg), Host::Pbix(new_pkg), Some(p)) => old_pkg
+            .diff_streaming_with_progress(new_pkg, config, &mut sink, p)
+            .context("Streaming diff failed")?,
+        (Host::Pbix(old_pkg), Host::Pbix(new_pkg), None) => old_pkg
+            .diff_streaming(new_pkg, config, &mut sink)
+            .context("Streaming diff failed")?,
+        _ => unreachable!(),
     };
 
     writer.flush()?;
@@ -3635,6 +3709,85 @@ fn power_query_changes_detected() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Power Query") || stdout.contains("Query"));
+}
+
+#[test]
+fn diff_pbix_power_query_changes_detected() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--format",
+            "json",
+            &fixture_path("pbix_legacy_multi_query_a.pbix"),
+            &fixture_path("pbix_legacy_multi_query_b.pbix"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "pbix diff should detect changes: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+    let ops = parsed.get("ops").and_then(|v| v.as_array()).unwrap();
+    let has_query_op = ops.iter().any(|op| {
+        op.get("kind")
+            .and_then(|k| k.as_str())
+            .map(|k| k.starts_with("Query"))
+            .unwrap_or(false)
+    });
+    assert!(has_query_op, "expected at least one Query op in pbix diff");
+}
+
+#[test]
+fn diff_pbix_jsonl_writes_header_and_ops() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--format",
+            "jsonl",
+            &fixture_path("pbix_legacy_multi_query_a.pbix"),
+            &fixture_path("pbix_legacy_multi_query_b.pbix"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "pbix jsonl diff should detect changes: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut lines = stdout.lines();
+    let first_line = lines.next().expect("jsonl should have a header line");
+    let header: serde_json::Value =
+        serde_json::from_str(first_line).expect("header line should be valid JSON");
+    assert_eq!(header.get("kind").and_then(|v| v.as_str()), Some("Header"));
+    assert!(header.get("strings").is_some(), "header should include string table");
+
+    let mut has_query_op = false;
+    for line in lines {
+        let op: serde_json::Value =
+            serde_json::from_str(line).expect("jsonl op line should be valid JSON");
+        if op
+            .get("kind")
+            .and_then(|k| k.as_str())
+            .map(|k| k.starts_with("Query"))
+            .unwrap_or(false)
+        {
+            has_query_op = true;
+            break;
+        }
+    }
+
+    assert!(has_query_op, "expected at least one Query op in jsonl output");
 }
 
 #[test]
@@ -7925,10 +8078,10 @@ mod tests {
 ### File: `core\src\container.rs`
 
 ```rust
-//! OPC (Open Packaging Conventions) container handling.
+//! ZIP container handling.
 //!
-//! Provides abstraction over ZIP-based Office Open XML packages, validating
-//! that required structural elements like `[Content_Types].xml` are present.
+//! Provides abstraction over ZIP-based packages and validates OPC
+//! requirements for Office Open XML containers.
 
 use std::io::{Read, Seek};
 use thiserror::Error;
@@ -7996,23 +8149,23 @@ impl ContainerError {
 pub(crate) trait ReadSeek: Read + Seek {}
 impl<T: Read + Seek> ReadSeek for T {}
 
-pub struct OpcContainer {
-    pub(crate) archive: ZipArchive<Box<dyn ReadSeek>>,
+pub struct ZipContainer {
+    archive: ZipArchive<Box<dyn ReadSeek>>,
     limits: ContainerLimits,
     total_read: u64,
 }
 
-impl OpcContainer {
+impl ZipContainer {
     pub fn open_from_reader<R: Read + Seek + 'static>(
         reader: R,
-    ) -> Result<OpcContainer, ContainerError> {
+    ) -> Result<Self, ContainerError> {
         Self::open_from_reader_with_limits(reader, ContainerLimits::default())
     }
 
     pub fn open_from_reader_with_limits<R: Read + Seek + 'static>(
         reader: R,
         limits: ContainerLimits,
-    ) -> Result<OpcContainer, ContainerError> {
+    ) -> Result<Self, ContainerError> {
         let reader: Box<dyn ReadSeek> = Box::new(reader);
         let archive = ZipArchive::new(reader).map_err(|err| match err {
             ZipError::InvalidArchive(_) | ZipError::UnsupportedArchive(_) => {
@@ -8034,35 +8187,17 @@ impl OpcContainer {
             });
         }
 
-        let mut container = OpcContainer {
+        Ok(Self {
             archive,
             limits,
             total_read: 0,
-        };
-
-        match container.archive.by_name("[Content_Types].xml") {
-            Ok(file) => {
-                let size = file.size();
-                if size > container.limits.max_part_uncompressed_bytes {
-                    return Err(ContainerError::PartTooLarge {
-                        path: "[Content_Types].xml".to_string(),
-                        size,
-                        limit: container.limits.max_part_uncompressed_bytes,
-                    });
-                }
-            }
-            Err(ZipError::FileNotFound) => return Err(ContainerError::NotOpcPackage),
-            Err(ZipError::Io(e)) => return Err(ContainerError::Io(e)),
-            Err(other) => return Err(ContainerError::Zip(other.to_string())),
-        }
-
-        Ok(container)
+        })
     }
 
     #[cfg(feature = "std-fs")]
     pub fn open_from_path(
         path: impl AsRef<std::path::Path>,
-    ) -> Result<OpcContainer, ContainerError> {
+    ) -> Result<Self, ContainerError> {
         Self::open_from_path_with_limits(path, ContainerLimits::default())
     }
 
@@ -8070,13 +8205,13 @@ impl OpcContainer {
     pub fn open_from_path_with_limits(
         path: impl AsRef<std::path::Path>,
         limits: ContainerLimits,
-    ) -> Result<OpcContainer, ContainerError> {
+    ) -> Result<Self, ContainerError> {
         let file = std::fs::File::open(path)?;
         Self::open_from_reader_with_limits(file, limits)
     }
 
     #[cfg(feature = "std-fs")]
-    pub fn open(path: impl AsRef<std::path::Path>) -> Result<OpcContainer, ContainerError> {
+    pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self, ContainerError> {
         Self::open_from_path(path)
     }
 
@@ -8158,7 +8293,7 @@ impl OpcContainer {
         }
     }
 
-    pub fn file_names(&self) -> impl Iterator<Item = &str> {
+    pub fn file_names(&self) -> impl Iterator<Item = &str> + '_ {
         self.archive.file_names()
     }
 
@@ -8172,6 +8307,133 @@ impl OpcContainer {
 
     pub fn limits(&self) -> &ContainerLimits {
         &self.limits
+    }
+}
+
+pub struct OpcContainer {
+    inner: ZipContainer,
+}
+
+impl OpcContainer {
+    pub fn open_from_reader<R: Read + Seek + 'static>(
+        reader: R,
+    ) -> Result<OpcContainer, ContainerError> {
+        Self::open_from_reader_with_limits(reader, ContainerLimits::default())
+    }
+
+    pub fn open_from_reader_with_limits<R: Read + Seek + 'static>(
+        reader: R,
+        limits: ContainerLimits,
+    ) -> Result<OpcContainer, ContainerError> {
+        let mut inner = ZipContainer::open_from_reader_with_limits(reader, limits)?;
+
+        match inner.archive.by_name("[Content_Types].xml") {
+            Ok(file) => {
+                let size = file.size();
+                if size > inner.limits.max_part_uncompressed_bytes {
+                    return Err(ContainerError::PartTooLarge {
+                        path: "[Content_Types].xml".to_string(),
+                        size,
+                        limit: inner.limits.max_part_uncompressed_bytes,
+                    });
+                }
+            }
+            Err(ZipError::FileNotFound) => return Err(ContainerError::NotOpcPackage),
+            Err(ZipError::Io(e)) => return Err(ContainerError::Io(e)),
+            Err(other) => return Err(ContainerError::Zip(other.to_string())),
+        }
+
+        Ok(Self { inner })
+    }
+
+    #[cfg(feature = "std-fs")]
+    pub fn open_from_path(
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<OpcContainer, ContainerError> {
+        Self::open_from_path_with_limits(path, ContainerLimits::default())
+    }
+
+    #[cfg(feature = "std-fs")]
+    pub fn open_from_path_with_limits(
+        path: impl AsRef<std::path::Path>,
+        limits: ContainerLimits,
+    ) -> Result<OpcContainer, ContainerError> {
+        let file = std::fs::File::open(path)?;
+        Self::open_from_reader_with_limits(file, limits)
+    }
+
+    #[cfg(feature = "std-fs")]
+    pub fn open(path: impl AsRef<std::path::Path>) -> Result<OpcContainer, ContainerError> {
+        Self::open_from_path(path)
+    }
+
+    pub fn read_file(&mut self, name: &str) -> Result<Vec<u8>, ZipError> {
+        self.inner.read_file(name)
+    }
+
+    pub fn read_file_checked(&mut self, name: &str) -> Result<Vec<u8>, ContainerError> {
+        self.inner.read_file_checked(name)
+    }
+
+    pub fn read_file_optional(&mut self, name: &str) -> Result<Option<Vec<u8>>, std::io::Error> {
+        self.inner.read_file_optional(name)
+    }
+
+    pub fn read_file_optional_checked(
+        &mut self,
+        name: &str,
+    ) -> Result<Option<Vec<u8>>, ContainerError> {
+        self.inner.read_file_optional_checked(name)
+    }
+
+    pub fn file_names(&self) -> impl Iterator<Item = &str> + '_ {
+        self.inner.file_names()
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    pub fn limits(&self) -> &ContainerLimits {
+        self.inner.limits()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ZipContainer;
+    use std::io::{Cursor, Write};
+    use zip::CompressionMethod;
+    use zip::write::FileOptions;
+    use zip::ZipWriter;
+
+    fn make_zip(entries: &[(&str, &str)]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        {
+            let cursor = Cursor::new(&mut buf);
+            let mut writer = ZipWriter::new(cursor);
+            let options = FileOptions::default().compression_method(CompressionMethod::Stored);
+            for (name, contents) in entries {
+                writer.start_file(*name, options).expect("start zip entry");
+                writer
+                    .write_all(contents.as_bytes())
+                    .expect("write zip entry");
+            }
+            writer.finish().expect("finish zip");
+        }
+        buf
+    }
+
+    #[test]
+    fn zip_container_opens_non_opc_zip() {
+        let bytes = make_zip(&[("hello.txt", "world")]);
+        let cursor = Cursor::new(bytes);
+        let result = ZipContainer::open_from_reader(cursor);
+        assert!(result.is_ok(), "ZipContainer should open non-OPC ZIPs");
     }
 }
 
@@ -13749,6 +14011,7 @@ pub const PKG_ZIP_TOO_MANY_ENTRIES: &str = "EXDIFF_PKG_006";
 pub const PKG_ZIP_TOTAL_TOO_LARGE: &str = "EXDIFF_PKG_007";
 pub const PKG_ZIP_READ: &str = "EXDIFF_PKG_008";
 pub const PKG_UNSUPPORTED_FORMAT: &str = "EXDIFF_PKG_009";
+pub const PKG_NO_DATAMASHUP_USE_TABULAR_MODEL: &str = "EXDIFF_PKG_010";
 
 pub const GRID_XML_ERROR: &str = "EXDIFF_GRID_001";
 pub const GRID_INVALID_ADDRESS: &str = "EXDIFF_GRID_002";
@@ -13829,8 +14092,11 @@ pub enum PackageError {
     #[error("[EXDIFF_PKG_009] serialization error: {0}. Suggestion: verify the workbook is a standard .xlsx saved by Excel.")]
     SerializationError(String),
 
-    #[error("[EXDIFF_PKG_001] not a valid ZIP file: {message}. Suggestion: verify the input is a .xlsx workbook.")]
+    #[error("[EXDIFF_PKG_001] not a valid ZIP file: {message}. Suggestion: verify the input is a ZIP-based file and not corrupt.")]
     NotAZip { message: String },
+
+    #[error("[EXDIFF_PKG_010] PBIX/PBIT does not contain DataMashup (likely tabular model)\nSuggestion: export or extract Power Query mashup from a legacy PBIX, or use a tabular-model extraction path.")]
+    NoDataMashupUseTabularModel,
 
     #[error("[EXDIFF_PKG_003] missing required part: {path}. Suggestion: the workbook may be corrupt; re-save the file in Excel.")]
     MissingPart { path: String },
@@ -13871,6 +14137,9 @@ impl PackageError {
             PackageError::Diff(_) => error_codes::DIFF_INTERNAL_ERROR,
             PackageError::SerializationError(_) => error_codes::PKG_UNSUPPORTED_FORMAT,
             PackageError::NotAZip { .. } => error_codes::PKG_NOT_ZIP,
+            PackageError::NoDataMashupUseTabularModel => {
+                error_codes::PKG_NO_DATAMASHUP_USE_TABULAR_MODEL
+            }
             PackageError::MissingPart { .. } => error_codes::PKG_MISSING_PART,
             PackageError::InvalidXml { .. } => error_codes::PKG_INVALID_XML,
             PackageError::UnsupportedFormat { .. } => error_codes::PKG_UNSUPPORTED_FORMAT,
@@ -14362,54 +14631,48 @@ pub(crate) fn open_data_mashup_from_container(
     container: &mut OpcContainer,
 ) -> Result<Option<RawDataMashup>, PackageError> {
     let mut found: Option<RawDataMashup> = None;
+    let names: Vec<String> = container.file_names().map(|s| s.to_string()).collect();
 
-    for i in 0..container.len() {
-        let name = {
-            let file = container.archive.by_index(i).ok();
-            file.map(|f| f.name().to_string())
-        };
+    for name in names {
+        if !(name.starts_with("customXml/") && name.ends_with(".xml") && name.contains("item")) {
+            continue;
+        }
 
-        if let Some(name) = name {
-            if !name.starts_with("customXml/") || !name.ends_with(".xml") {
-                continue;
-            }
+        let bytes = container
+            .read_file_checked(&name)
+            .map_err(|e| PackageError::ReadPartFailed {
+                part: name.clone(),
+                message: e.to_string(),
+            })?;
 
-            let bytes = container
-                .read_file_checked(&name)
-                .map_err(|e| PackageError::ReadPartFailed {
-                    part: name.clone(),
-                    message: e.to_string(),
-                })?;
-
-            match read_datamashup_text(&bytes) {
-                Ok(Some(text)) => {
-                    let decoded = decode_datamashup_base64(&text).map_err(|e| {
-                        PackageError::DataMashupPartError {
-                            part: name.clone(),
-                            source: e,
-                        }
-                    })?;
-                    let parsed = parse_data_mashup(&decoded).map_err(|e| {
-                        PackageError::DataMashupPartError {
-                            part: name.clone(),
-                            source: e,
-                        }
-                    })?;
-                    if found.is_some() {
-                        return Err(PackageError::DataMashupPartError {
-                            part: name,
-                            source: DataMashupError::FramingInvalid,
-                        });
+        match read_datamashup_text(&bytes) {
+            Ok(Some(text)) => {
+                let decoded = decode_datamashup_base64(&text).map_err(|e| {
+                    PackageError::DataMashupPartError {
+                        part: name.clone(),
+                        source: e,
                     }
-                    found = Some(parsed);
-                }
-                Ok(None) => {}
-                Err(e) => {
+                })?;
+                let parsed = parse_data_mashup(&decoded).map_err(|e| {
+                    PackageError::DataMashupPartError {
+                        part: name.clone(),
+                        source: e,
+                    }
+                })?;
+                if found.is_some() {
                     return Err(PackageError::DataMashupPartError {
                         part: name,
-                        source: e,
+                        source: DataMashupError::FramingInvalid,
                     });
                 }
+                found = Some(parsed);
+            }
+            Ok(None) => {}
+            Err(e) => {
+                return Err(PackageError::DataMashupPartError {
+                    part: name,
+                    source: e,
+                });
             }
         }
     }
@@ -17343,7 +17606,7 @@ pub mod advanced {
 
 pub use addressing::{AddressParseError, address_to_index, index_to_address};
 pub use config::{DiffConfig, DiffConfigBuilder, LimitBehavior};
-pub use container::{ContainerError, ContainerLimits, OpcContainer};
+pub use container::{ContainerError, ContainerLimits, OpcContainer, ZipContainer};
 #[doc(hidden)]
 pub use datamashup::parse_metadata;
 pub use datamashup::{
@@ -17394,7 +17657,7 @@ pub use output::json::diff_report_to_cell_diffs;
 pub use output::json::diff_workbooks_to_json;
 pub use output::json::{CellDiff, serialize_cell_diffs, serialize_diff_report};
 pub use output::json_lines::JsonLinesSink;
-pub use package::{VbaModule, VbaModuleType, WorkbookPackage};
+pub use package::{PbixPackage, VbaModule, VbaModuleType, WorkbookPackage};
 pub use progress::{NoProgress, ProgressCallback};
 pub use session::DiffSession;
 pub use sink::{CallbackSink, DiffSink, VecSink};
@@ -19207,6 +19470,7 @@ pub mod json_lines;
 
 ```rust
 use crate::config::DiffConfig;
+use crate::container::ZipContainer;
 use crate::datamashup::DataMashup;
 use crate::diff::{DiffError, DiffReport, DiffSummary, SheetId};
 use crate::progress::ProgressCallback;
@@ -19792,6 +20056,129 @@ impl WorkbookPackage {
 
         Ok(summary)
     }
+}
+
+/// A parsed PBIX/PBIT package (Power BI) containing Power Query data.
+#[derive(Debug, Clone)]
+pub struct PbixPackage {
+    pub(crate) data_mashup: Option<DataMashup>,
+}
+
+impl PbixPackage {
+    #[cfg(feature = "excel-open-xml")]
+    pub fn open<R: std::io::Read + std::io::Seek + 'static>(
+        reader: R,
+    ) -> Result<Self, crate::excel_open_xml::PackageError> {
+        let mut container = ZipContainer::open_from_reader(reader)?;
+
+        let bytes = match container.read_file_optional_checked("DataMashup")? {
+            Some(bytes) => bytes,
+            None => {
+                if looks_like_pbix(&container) {
+                    return Err(crate::excel_open_xml::PackageError::NoDataMashupUseTabularModel);
+                }
+                return Err(crate::excel_open_xml::PackageError::UnsupportedFormat {
+                    message: "missing DataMashup at ZIP root".to_string(),
+                });
+            }
+        };
+
+        let raw = crate::datamashup_framing::parse_data_mashup(&bytes)?;
+        let data_mashup = crate::datamashup::build_data_mashup(&raw)?;
+
+        Ok(Self {
+            data_mashup: Some(data_mashup),
+        })
+    }
+
+    pub fn data_mashup(&self) -> Option<&DataMashup> {
+        self.data_mashup.as_ref()
+    }
+
+    pub fn diff(&self, other: &Self, config: &DiffConfig) -> DiffReport {
+        crate::with_default_session(|session| {
+            let ops = crate::m_diff::diff_m_ops_for_packages(
+                &self.data_mashup,
+                &other.data_mashup,
+                &mut session.strings,
+                config,
+            );
+
+            let strings = session.strings.strings().to_vec();
+            let mut report = DiffReport::new(ops);
+            report.strings = strings;
+            report
+        })
+    }
+
+    pub fn diff_streaming<S: DiffSink>(
+        &self,
+        other: &Self,
+        config: &DiffConfig,
+        sink: &mut S,
+    ) -> Result<DiffSummary, DiffError> {
+        crate::with_default_session(|session| {
+            self.diff_streaming_with_pool(other, &mut session.strings, config, sink)
+        })
+    }
+
+    pub fn diff_streaming_with_pool<S: DiffSink>(
+        &self,
+        other: &Self,
+        pool: &mut StringPool,
+        config: &DiffConfig,
+        sink: &mut S,
+    ) -> Result<DiffSummary, DiffError> {
+        sink.begin(pool)?;
+
+        let m_ops = crate::m_diff::diff_m_ops_for_packages(
+            &self.data_mashup,
+            &other.data_mashup,
+            pool,
+            config,
+        );
+
+        let mut op_count = 0usize;
+        for op in m_ops {
+            sink.emit(op)?;
+            op_count = op_count.saturating_add(1);
+        }
+
+        sink.finish()?;
+
+        Ok(DiffSummary {
+            complete: true,
+            warnings: Vec::new(),
+            op_count,
+            #[cfg(feature = "perf-metrics")]
+            metrics: None,
+        })
+    }
+
+    pub fn diff_streaming_with_progress<S: DiffSink>(
+        &self,
+        other: &Self,
+        config: &DiffConfig,
+        sink: &mut S,
+        progress: &dyn ProgressCallback,
+    ) -> Result<DiffSummary, DiffError> {
+        progress.on_progress("m_diff", 0.0);
+        let out = self.diff_streaming(other, config, sink);
+        progress.on_progress("m_diff", 1.0);
+        out
+    }
+}
+
+#[cfg(feature = "excel-open-xml")]
+fn looks_like_pbix(container: &ZipContainer) -> bool {
+    container.file_names().any(|name| {
+        name == "Report/Layout"
+            || name == "Report/Version"
+            || name == "DataModelSchema"
+            || name == "DataModel"
+            || name == "Connections"
+            || name == "DiagramLayout"
+    })
 }
 
 fn find_sheets_case_insensitive<'a>(
@@ -32909,6 +33296,49 @@ fn package_streaming_json_lines_header_includes_m_strings() {
 
 ---
 
+### File: `core\tests\pbix_host_support_tests.rs`
+
+```rust
+mod common;
+
+use common::fixture_path;
+use excel_diff::{DiffConfig, DiffOp, PbixPackage, PackageError};
+use std::fs::File;
+
+#[test]
+fn open_pbix_loads_datamashup() {
+    let path = fixture_path("pbix_legacy_one_query_a.pbix");
+    let file = File::open(&path).expect("fixture should exist");
+    let pkg = PbixPackage::open(file).expect("pbix should parse");
+    assert!(pkg.data_mashup().is_some(), "DataMashup should be present");
+}
+
+#[test]
+fn diff_pbix_emits_query_ops() {
+    let path_a = fixture_path("pbix_legacy_multi_query_a.pbix");
+    let path_b = fixture_path("pbix_legacy_multi_query_b.pbix");
+    let pkg_a = PbixPackage::open(File::open(&path_a).expect("fixture should exist"))
+        .expect("pbix A should parse");
+    let pkg_b = PbixPackage::open(File::open(&path_b).expect("fixture should exist"))
+        .expect("pbix B should parse");
+
+    let report = pkg_a.diff(&pkg_b, &DiffConfig::default());
+    let has_m_ops = report.ops.iter().any(DiffOp::is_m_op);
+    assert!(has_m_ops, "expected at least one Power Query op");
+}
+
+#[test]
+fn pbix_missing_datamashup_returns_dedicated_error() {
+    let path = fixture_path("pbix_no_datamashup.pbix");
+    let file = File::open(&path).expect("fixture should exist");
+    let err = PbixPackage::open(file).expect_err("expected missing DataMashup error");
+    assert!(matches!(err, PackageError::NoDataMashupUseTabularModel));
+}
+
+```
+
+---
+
 ### File: `core\tests\perf_large_grid_tests.rs`
 
 ```rust
@@ -37397,6 +37827,20 @@ scenarios:
       base_file: "templates/base_query.xlsx"
     output: "m_add_query_b.xlsx"
 
+  - id: "m_change_literal_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_change_literal_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_change_literal_a.xlsx"
+
+  - id: "m_change_literal_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_change_literal_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_change_literal_b.xlsx"
+
   - id: "branch4_named_ranges"
     generator: "named_ranges"
     output:
@@ -37426,6 +37870,40 @@ scenarios:
     args:
       template: "templates/vba_changed.xlsm"
     output: "vba_changed.xlsm"
+
+  - id: "branch1_pbix_legacy_one_query_a"
+    generator: "pbix"
+    args:
+      mode: "from_xlsx"
+      base_file: "generated/m_change_literal_a.xlsx"
+    output: "pbix_legacy_one_query_a.pbix"
+
+  - id: "branch1_pbix_legacy_one_query_b"
+    generator: "pbix"
+    args:
+      mode: "from_xlsx"
+      base_file: "generated/m_change_literal_b.xlsx"
+    output: "pbix_legacy_one_query_b.pbix"
+
+  - id: "branch1_pbix_legacy_multi_query_a"
+    generator: "pbix"
+    args:
+      mode: "from_xlsx"
+      base_file: "generated/m_add_query_a.xlsx"
+    output: "pbix_legacy_multi_query_a.pbix"
+
+  - id: "branch1_pbix_legacy_multi_query_b"
+    generator: "pbix"
+    args:
+      mode: "from_xlsx"
+      base_file: "generated/m_add_query_b.xlsx"
+    output: "pbix_legacy_multi_query_b.pbix"
+
+  - id: "branch1_pbix_no_datamashup"
+    generator: "pbix"
+    args:
+      mode: "no_datamashup"
+    output: "pbix_no_datamashup.pbix"
 
 
 ```
@@ -37513,6 +37991,7 @@ try:
         MashupOneQueryGenerator,
         MashupPermissionsMetadataGenerator,
     )
+    from .generators.pbix import PbixGenerator
     from .generators.objects import ChartsGenerator, CopyTemplateGenerator, NamedRangesGenerator
     from .generators.perf import LargeGridGenerator
 except ImportError:
@@ -37546,6 +38025,7 @@ except ImportError:
         MashupOneQueryGenerator,
         MashupPermissionsMetadataGenerator,
     )
+    from generators.pbix import PbixGenerator
     from generators.objects import ChartsGenerator, CopyTemplateGenerator, NamedRangesGenerator
     from generators.perf import LargeGridGenerator
 
@@ -37576,6 +38056,7 @@ GENERATORS: Dict[str, Any] = {
     "mashup:one_query": MashupOneQueryGenerator,
     "mashup:multi_query_with_embedded": MashupMultiEmbeddedGenerator,
     "mashup:permissions_metadata": MashupPermissionsMetadataGenerator,
+    "pbix": PbixGenerator,
     "perf_large": LargeGridGenerator,
     "db_keyed": KeyedTableGenerator,
     "named_ranges": NamedRangesGenerator,
@@ -40243,6 +40724,97 @@ class CopyTemplateGenerator(BaseGenerator):
 
         for name in output_names:
             shutil.copyfile(template, output_dir / name)
+
+```
+
+---
+
+### File: `fixtures\src\generators\pbix.py`
+
+```python
+import base64
+import zipfile
+from pathlib import Path
+
+from lxml import etree
+
+from .base import BaseGenerator
+
+
+_NS = {"dm": "http://schemas.microsoft.com/DataMashup"}
+
+
+def _find_datamashup_element(root):
+    if root is None:
+        return None
+    if root.tag.endswith("DataMashup"):
+        return root
+    return root.find(".//dm:DataMashup", namespaces=_NS)
+
+
+def _extract_datamashup_bytes_from_xlsx(path: Path) -> bytes:
+    with zipfile.ZipFile(path, "r") as zin:
+        for info in zin.infolist():
+            name = info.filename
+            if not (name.startswith("customXml/item") and name.endswith(".xml")):
+                continue
+
+            buf = zin.read(name)
+            if (
+                b"DataMashup" not in buf
+                and b"D\x00a\x00t\x00a\x00M\x00a\x00s\x00h\x00u\x00p" not in buf
+            ):
+                continue
+
+            root = etree.fromstring(buf)
+            node = _find_datamashup_element(root)
+            if node is None or node.text is None:
+                continue
+
+            text = node.text.strip()
+            if not text:
+                continue
+
+            return base64.b64decode(text)
+
+    raise ValueError("DataMashup not found in xlsx")
+
+
+class PbixGenerator(BaseGenerator):
+    def generate(self, out_dir: Path, outputs):
+        if isinstance(outputs, str):
+            outputs = [outputs]
+
+        if len(outputs) != 1:
+            raise ValueError("pbix generator expects exactly one output filename")
+
+        out_path = out_dir / outputs[0]
+
+        mode = self.args.get("mode", "from_xlsx")
+        base_file = self.args.get("base_file")
+
+        if mode not in ("from_xlsx", "no_datamashup"):
+            raise ValueError(f"Unsupported pbix generator mode: {mode}")
+
+        include_datamashup = mode == "from_xlsx"
+        include_markers = True
+
+        dm_bytes = b""
+        if include_datamashup:
+            if not base_file:
+                raise ValueError("base_file is required for mode=from_xlsx")
+            base_path = Path(base_file)
+            if not base_path.exists():
+                base_path = Path("fixtures") / base_file
+            dm_bytes = _extract_datamashup_bytes_from_xlsx(base_path)
+
+        with zipfile.ZipFile(out_path, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+            if include_datamashup:
+                zout.writestr("DataMashup", dm_bytes)
+            if include_markers:
+                zout.writestr("Report/Layout", b"{}")
+                zout.writestr("Report/Version", b"1")
+                zout.writestr("DataModelSchema", b"{}")
 
 ```
 
