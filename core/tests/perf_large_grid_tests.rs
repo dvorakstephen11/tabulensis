@@ -70,11 +70,14 @@ fn create_sparse_grid(nrows: u32, ncols: u32, fill_percent: u32, seed: u64) -> G
 
 fn log_perf_metric(name: &str, metrics: &DiffMetrics, tail: &str) {
     println!(
-        "PERF_METRIC {name} total_time_ms={} move_detection_time_ms={} alignment_time_ms={} cell_diff_time_ms={} rows_processed={} cells_compared={} anchors_found={} moves_detected={}{}",
+        "PERF_METRIC {name} total_time_ms={} parse_time_ms={} diff_time_ms={} move_detection_time_ms={} alignment_time_ms={} cell_diff_time_ms={} peak_memory_bytes={} rows_processed={} cells_compared={} anchors_found={} moves_detected={}{}",
         metrics.total_time_ms,
+        metrics.parse_time_ms,
+        metrics.diff_time_ms,
         metrics.move_detection_time_ms,
         metrics.alignment_time_ms,
         metrics.cell_diff_time_ms,
+        metrics.peak_memory_bytes,
         metrics.rows_processed,
         metrics.cells_compared,
         metrics.anchors_found,
@@ -565,5 +568,36 @@ fn preflight_does_not_skip_when_multiset_equal_but_order_differs() {
         "preflight should NOT short-circuit when rows are reordered (multiset equal); expected pipeline to proceed, but alignment_time_ms={}, cell_diff_time_ms={}",
         metrics.alignment_time_ms,
         metrics.cell_diff_time_ms
+    );
+}
+
+#[test]
+fn preflight_cells_compared_skips_unchanged_rows() {
+    let nrows = 60u32;
+    let ncols = 12u32;
+    let grid_a = create_large_grid(nrows, ncols, 0);
+    let mut grid_b = create_large_grid(nrows, ncols, 0);
+    grid_b.insert_cell(25, 7, Some(CellValue::Number(999999.0)), None);
+
+    let wb_a = single_sheet_workbook("Preflight", grid_a);
+    let wb_b = single_sheet_workbook("Preflight", grid_b);
+
+    let config = DiffConfig::builder()
+        .preflight_min_rows(0)
+        .preflight_in_order_mismatch_max(4)
+        .preflight_in_order_match_ratio_min(0.9)
+        .build()
+        .expect("valid config");
+
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
+    assert!(report.complete, "report should complete");
+
+    let metrics = report.metrics.expect("should have metrics");
+    let expected_max = (ncols as u64).saturating_mul(2);
+    assert!(
+        metrics.cells_compared <= expected_max,
+        "cells_compared should reflect skipped rows (<= {}), got {}",
+        expected_max,
+        metrics.cells_compared
     );
 }

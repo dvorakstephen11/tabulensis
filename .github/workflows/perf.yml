@@ -18,16 +18,20 @@ jobs:
       - name: Build with perf metrics
         run: cargo build --release --features perf-metrics
         working-directory: core
-        
-      - name: Run perf test suite
-        run: cargo test --release --features perf-metrics perf_ -- --nocapture
-        working-directory: core
-        
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           
-      - name: Check perf thresholds
-        run: python scripts/check_perf_thresholds.py
+      - name: Check perf thresholds (quick suite)
+        run: python scripts/check_perf_thresholds.py --export-csv benchmarks/latest_quick.csv --export-json benchmarks/latest_quick.json
+
+      - name: Upload perf artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-quick
+          path: |
+            benchmarks/latest_quick.csv
+            benchmarks/latest_quick.json
 

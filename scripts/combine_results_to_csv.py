@@ -19,9 +19,12 @@ from pathlib import Path
 
 ALL_TEST_FIELDS = [
     "total_time_ms",
+    "parse_time_ms",
+    "diff_time_ms",
     "move_detection_time_ms",
     "alignment_time_ms",
     "cell_diff_time_ms",
+    "peak_memory_bytes",
     "rows_processed",
     "cells_compared",
     "anchors_found",

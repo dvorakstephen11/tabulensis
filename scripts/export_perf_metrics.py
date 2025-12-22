@@ -94,9 +94,9 @@ def run_perf_tests(full_scale: bool = False) -> tuple[dict, bool]:
     ]
 
     if full_scale:
-        cmd.extend(["--", "--ignored", "--nocapture"])
+        cmd.extend(["--", "--ignored", "--nocapture", "--test-threads=1"])
     else:
-        cmd.extend(["perf_", "--", "--nocapture"])
+        cmd.extend(["perf_", "--", "--nocapture", "--test-threads=1"])
 
     print(f"Running: {' '.join(cmd)}")
     print(f"Working directory: {core_dir}")

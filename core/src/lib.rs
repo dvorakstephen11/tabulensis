@@ -94,6 +94,8 @@ mod m_semantic_detail;
 mod object_diff;
 mod output;
 mod package;
+#[cfg(all(feature = "perf-metrics", not(target_arch = "wasm32")))]
+mod memory_metrics;
 mod progress;
 #[cfg(feature = "perf-metrics")]
 #[doc(hidden)]
@@ -105,6 +107,11 @@ mod session;
 mod sink;
 mod string_pool;
 mod workbook;
+
+#[cfg(all(feature = "perf-metrics", not(target_arch = "wasm32")))]
+#[global_allocator]
+static GLOBAL_ALLOC: memory_metrics::CountingAllocator<std::alloc::System> =
+    memory_metrics::CountingAllocator::new(std::alloc::System);
 
 thread_local! {
     static DEFAULT_SESSION: RefCell<DiffSession> = RefCell::new(DiffSession::new());

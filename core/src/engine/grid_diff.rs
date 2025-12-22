@@ -12,7 +12,8 @@ use std::collections::HashSet;
 use super::SheetId;
 use super::context::{DiffContext, EmitCtx, emit_op};
 use super::grid_primitives::{
-    cells_content_equal, compute_formula_diff, run_positional_diff_with_metrics, snapshot_with_addr,
+    cells_content_equal, compute_formula_diff, run_positional_diff_from_views_with_metrics,
+    run_positional_diff_with_metrics, snapshot_with_addr,
 };
 use super::move_mask::SheetGridDiffer;
 
@@ -164,10 +165,18 @@ fn diff_grids_core<'p, S: DiffSink>(
         return Ok(());
     }
 
+    #[cfg(feature = "perf-metrics")]
+    if let Some(m) = metrics.as_mut() {
+        m.start_phase(Phase::Parse);
+    }
     let old_view = GridView::from_grid_with_config(old, config);
     let new_view = GridView::from_grid_with_config(new, config);
 
     let preflight = should_short_circuit_to_positional(&old_view, &new_view, config);
+    #[cfg(feature = "perf-metrics")]
+    if let Some(m) = metrics.as_mut() {
+        m.end_phase(Phase::Parse);
+    }
 
     if matches!(
         preflight,
@@ -184,9 +193,22 @@ fn diff_grids_core<'p, S: DiffSink>(
             hardening,
         );
         #[cfg(feature = "perf-metrics")]
-        run_positional_diff_with_metrics(&mut emit_ctx, old, new, metrics.as_deref_mut())?;
+        run_positional_diff_from_views_with_metrics(
+            &mut emit_ctx,
+            old,
+            new,
+            &old_view,
+            &new_view,
+            metrics.as_deref_mut(),
+        )?;
         #[cfg(not(feature = "perf-metrics"))]
-        run_positional_diff_with_metrics(&mut emit_ctx, old, new)?;
+        run_positional_diff_from_views_with_metrics(
+            &mut emit_ctx,
+            old,
+            new,
+            &old_view,
+            &new_view,
+        )?;
         return Ok(());
     }
 

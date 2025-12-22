@@ -17,7 +17,7 @@ use super::amr::try_diff_with_amr;
 use super::context::EmitCtx;
 use super::grid_primitives::{
     cells_content_equal, emit_cell_edit, emit_column_block_move, emit_moved_row_block_edits,
-    emit_rect_block_move, emit_row_block_move, run_positional_diff_with_metrics,
+    emit_rect_block_move, emit_row_block_move, run_positional_diff_from_views_with_metrics,
     try_row_alignment_internal, try_single_column_alignment_internal,
 };
 
@@ -287,14 +287,22 @@ impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
 
     pub(super) fn positional(&mut self) -> Result<(), DiffError> {
         #[cfg(feature = "perf-metrics")]
-        run_positional_diff_with_metrics(
+        run_positional_diff_from_views_with_metrics(
             &mut self.emit_ctx,
             self.old,
             self.new,
+            &self.old_view,
+            &self.new_view,
             self.metrics.as_deref_mut(),
         )?;
         #[cfg(not(feature = "perf-metrics"))]
-        run_positional_diff_with_metrics(&mut self.emit_ctx, self.old, self.new)?;
+        run_positional_diff_from_views_with_metrics(
+            &mut self.emit_ctx,
+            self.old,
+            self.new,
+            &self.old_view,
+            &self.new_view,
+        )?;
         Ok(())
     }
 }

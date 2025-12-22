@@ -9,10 +9,13 @@ fn metrics_starts_with_zero_counts() {
     assert_eq!(metrics.cells_compared, 0);
     assert_eq!(metrics.anchors_found, 0);
     assert_eq!(metrics.moves_detected, 0);
+    assert_eq!(metrics.parse_time_ms, 0);
     assert_eq!(metrics.alignment_time_ms, 0);
     assert_eq!(metrics.move_detection_time_ms, 0);
     assert_eq!(metrics.cell_diff_time_ms, 0);
     assert_eq!(metrics.total_time_ms, 0);
+    assert_eq!(metrics.diff_time_ms, 0);
+    assert_eq!(metrics.peak_memory_bytes, 0);
 }
 
 #[test]
@@ -109,15 +112,32 @@ fn metrics_end_phase_without_start_is_safe() {
 }
 
 #[test]
-fn metrics_parse_phase_is_no_op() {
+fn metrics_parse_phase_tracks_time() {
     let mut metrics = DiffMetrics::default();
     metrics.start_phase(Phase::Parse);
-    std::thread::sleep(std::time::Duration::from_millis(5));
+    std::thread::sleep(std::time::Duration::from_millis(10));
     metrics.end_phase(Phase::Parse);
-    assert_eq!(metrics.alignment_time_ms, 0);
-    assert_eq!(metrics.move_detection_time_ms, 0);
-    assert_eq!(metrics.cell_diff_time_ms, 0);
-    assert_eq!(metrics.total_time_ms, 0);
+    assert!(metrics.parse_time_ms > 0, "parse_time_ms should be non-zero");
+}
+
+#[test]
+fn metrics_diff_time_derived_from_total_minus_parse() {
+    let mut metrics = DiffMetrics::default();
+    metrics.start_phase(Phase::Total);
+    metrics.start_phase(Phase::Parse);
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    metrics.end_phase(Phase::Parse);
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    metrics.end_phase(Phase::Total);
+
+    assert!(
+        metrics.total_time_ms >= metrics.parse_time_ms,
+        "total should include parse time"
+    );
+    assert_eq!(
+        metrics.diff_time_ms,
+        metrics.total_time_ms.saturating_sub(metrics.parse_time_ms)
+    );
 }
 
 #[test]

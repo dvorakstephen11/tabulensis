@@ -1244,10 +1244,13 @@ fn pg4_diff_report_json_shape_with_metrics() {
     }];
     let mut report = DiffReport::new(ops);
     let mut metrics = DiffMetrics::default();
+    metrics.parse_time_ms = 6;
     metrics.move_detection_time_ms = 10;
     metrics.alignment_time_ms = 20;
     metrics.cell_diff_time_ms = 30;
     metrics.total_time_ms = 60;
+    metrics.diff_time_ms = 54;
+    metrics.peak_memory_bytes = 4242;
     metrics.rows_processed = 1000;
     metrics.cells_compared = 5000;
     metrics.anchors_found = 50;
@@ -1269,23 +1272,17 @@ fn pg4_diff_report_json_shape_with_metrics() {
         .and_then(Value::as_object)
         .expect("metrics object");
 
+    assert!(metrics_obj.contains_key("parse_time_ms"));
     assert!(metrics_obj.contains_key("move_detection_time_ms"));
     assert!(metrics_obj.contains_key("alignment_time_ms"));
     assert!(metrics_obj.contains_key("cell_diff_time_ms"));
     assert!(metrics_obj.contains_key("total_time_ms"));
+    assert!(metrics_obj.contains_key("diff_time_ms"));
+    assert!(metrics_obj.contains_key("peak_memory_bytes"));
     assert!(metrics_obj.contains_key("rows_processed"));
     assert!(metrics_obj.contains_key("cells_compared"));
     assert!(metrics_obj.contains_key("anchors_found"));
     assert!(metrics_obj.contains_key("moves_detected"));
-
-    assert!(
-        !metrics_obj.contains_key("parse_time_ms"),
-        "parse_time_ms is planned for future phase"
-    );
-    assert!(
-        !metrics_obj.contains_key("peak_memory_bytes"),
-        "peak_memory_bytes is planned for future phase"
-    );
 
     assert_eq!(
         metrics_obj.get("rows_processed").and_then(Value::as_u64),

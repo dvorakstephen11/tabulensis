@@ -596,10 +596,13 @@ fn serialize_diff_report_with_metrics_includes_metrics_object() {
 
     let mut report = attach_strings(DiffReport::new(ops), pool);
     let mut metrics = DiffMetrics::default();
+    metrics.parse_time_ms = 5;
     metrics.move_detection_time_ms = 5;
     metrics.alignment_time_ms = 10;
     metrics.cell_diff_time_ms = 15;
     metrics.total_time_ms = 30;
+    metrics.diff_time_ms = 25;
+    metrics.peak_memory_bytes = 12345;
     metrics.rows_processed = 500;
     metrics.cells_compared = 2500;
     metrics.anchors_found = 25;
@@ -622,6 +625,10 @@ fn serialize_diff_report_with_metrics_includes_metrics_object() {
         .expect("metrics should be an object");
 
     assert!(
+        metrics_obj.contains_key("parse_time_ms"),
+        "metrics should contain parse_time_ms"
+    );
+    assert!(
         metrics_obj.contains_key("move_detection_time_ms"),
         "metrics should contain move_detection_time_ms"
     );
@@ -636,6 +643,14 @@ fn serialize_diff_report_with_metrics_includes_metrics_object() {
     assert!(
         metrics_obj.contains_key("total_time_ms"),
         "metrics should contain total_time_ms"
+    );
+    assert!(
+        metrics_obj.contains_key("diff_time_ms"),
+        "metrics should contain diff_time_ms"
+    );
+    assert!(
+        metrics_obj.contains_key("peak_memory_bytes"),
+        "metrics should contain peak_memory_bytes"
     );
     assert!(
         metrics_obj.contains_key("rows_processed"),
@@ -657,6 +672,14 @@ fn serialize_diff_report_with_metrics_includes_metrics_object() {
     assert_eq!(
         metrics_obj.get("rows_processed").and_then(Value::as_u64),
         Some(500)
+    );
+    assert_eq!(
+        metrics_obj.get("parse_time_ms").and_then(Value::as_u64),
+        Some(5)
+    );
+    assert_eq!(
+        metrics_obj.get("diff_time_ms").and_then(Value::as_u64),
+        Some(25)
     );
     assert_eq!(
         metrics_obj.get("cells_compared").and_then(Value::as_u64),

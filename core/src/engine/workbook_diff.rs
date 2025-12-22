@@ -186,20 +186,26 @@ fn try_diff_workbooks_streaming_impl<'p, S: DiffSink>(
     progress: Option<&'p dyn ProgressCallback>,
 ) -> Result<DiffSummary, DiffError> {
     let mut hardening = HardeningController::new(config, progress);
+    #[cfg(feature = "perf-metrics")]
+    let mut metrics = {
+        let mut m = DiffMetrics::default();
+        m.start_phase(Phase::Total);
+        m.start_phase(Phase::Parse);
+        m
+    };
     hardening.progress("parse", 0.0);
 
     sink.begin(pool)?;
 
     let mut ctx = DiffContext::default();
     let mut op_count = 0usize;
-    #[cfg(feature = "perf-metrics")]
-    let mut metrics = {
-        let mut m = DiffMetrics::default();
-        m.start_phase(Phase::Total);
-        m
-    };
 
     if hardening.check_timeout(&mut ctx.warnings) {
+        #[cfg(feature = "perf-metrics")]
+        {
+            metrics.end_phase(Phase::Parse);
+            metrics.end_phase(Phase::Total);
+        }
         sink.finish()?;
         return Ok(DiffSummary {
             complete: false,
@@ -252,6 +258,10 @@ fn try_diff_workbooks_streaming_impl<'p, S: DiffSink>(
     all_keys.dedup();
 
     hardening.progress("parse", 1.0);
+    #[cfg(feature = "perf-metrics")]
+    {
+        metrics.end_phase(Phase::Parse);
+    }
 
     for key in all_keys {
         if hardening.check_timeout(&mut ctx.warnings) {

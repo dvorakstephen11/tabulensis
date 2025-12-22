@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::context::EmitCtx;
 use super::grid_primitives::{
-    emit_column_aligned_diffs, emit_row_aligned_diffs, run_positional_diff_with_metrics,
+    emit_column_aligned_diffs, emit_row_aligned_diffs, run_positional_diff_from_views_with_metrics,
 };
 use super::move_mask::row_signature_at;
 
@@ -230,17 +230,31 @@ pub(super) fn try_diff_with_amr<S: DiffSink>(
 
     if amr_should_fallback_no_matched_rows(&alignment) {
         #[cfg(feature = "perf-metrics")]
-        run_positional_diff_with_metrics(emit_ctx, old, new, metrics.as_deref_mut())?;
+        run_positional_diff_from_views_with_metrics(
+            emit_ctx,
+            old,
+            new,
+            old_view,
+            new_view,
+            metrics.as_deref_mut(),
+        )?;
         #[cfg(not(feature = "perf-metrics"))]
-        run_positional_diff_with_metrics(emit_ctx, old, new)?;
+        run_positional_diff_from_views_with_metrics(emit_ctx, old, new, old_view, new_view)?;
         return Ok(true);
     }
 
     if amr_should_fallback_row_edits_with_structural(old, new, &alignment, emit_ctx.config) {
         #[cfg(feature = "perf-metrics")]
-        run_positional_diff_with_metrics(emit_ctx, old, new, metrics.as_deref_mut())?;
+        run_positional_diff_from_views_with_metrics(
+            emit_ctx,
+            old,
+            new,
+            old_view,
+            new_view,
+            metrics.as_deref_mut(),
+        )?;
         #[cfg(not(feature = "perf-metrics"))]
-        run_positional_diff_with_metrics(emit_ctx, old, new)?;
+        run_positional_diff_from_views_with_metrics(emit_ctx, old, new, old_view, new_view)?;
         return Ok(true);
     }
 
@@ -266,9 +280,16 @@ pub(super) fn try_diff_with_amr<S: DiffSink>(
 
     if amr_should_fallback_multiset_reorder(old, new, &alignment, emit_ctx.config) {
         #[cfg(feature = "perf-metrics")]
-        run_positional_diff_with_metrics(emit_ctx, old, new, metrics.as_deref_mut())?;
+        run_positional_diff_from_views_with_metrics(
+            emit_ctx,
+            old,
+            new,
+            old_view,
+            new_view,
+            metrics.as_deref_mut(),
+        )?;
         #[cfg(not(feature = "perf-metrics"))]
-        run_positional_diff_with_metrics(emit_ctx, old, new)?;
+        run_positional_diff_from_views_with_metrics(emit_ctx, old, new, old_view, new_view)?;
         return Ok(true);
     }
 

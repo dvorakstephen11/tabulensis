@@ -142,6 +142,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 For large workbooks, prefer streaming output (`diff_streaming`) and consider setting `DiffConfig.max_memory_mb` / `DiffConfig.timeout_seconds`.
 
+## Limits and Knobs
+
+- PBIX/PBIT support is limited to legacy DataMashup extraction. Tabular-only PBIX files return
+  `NoDataMashupUseTabularModel` (`EXDIFF_PKG_010`).
+- Semantic M diff is enabled by default. The CLI `--fast` preset disables it; use default or
+  `--precise` to keep semantic detail.
+- Resource ceilings:
+  - `--max-memory` (`DiffConfig.max_memory_mb`) can trigger a positional fallback with warnings.
+  - `--timeout` (`DiffConfig.timeout_seconds`) aborts with a partial report and warnings.
+  - Alignment limits (`max_align_rows` / `max_align_cols`) are enforced via `on_limit_exceeded`.
+
 ## Documentation
 
 - Start here: [docs/index.md](docs/index.md)
@@ -152,6 +163,7 @@ For large workbooks, prefer streaming output (`diff_streaming`) and consider set
 - FAQ: [docs/faq.md](docs/faq.md)
 - Architecture: [docs/architecture.md](docs/architecture.md)
 - Migration guide: [docs/migration.md](docs/migration.md)
+- Release readiness: [docs/release_readiness.md](docs/release_readiness.md)
 
 ## Testing
 
