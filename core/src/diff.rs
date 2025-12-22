@@ -11,6 +11,7 @@ use crate::workbook::{CellAddress, CellSnapshot, ColSignature, RowSignature};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum QueryChangeKind {
     /// A semantic change (meaningfully different after canonicalization).
     Semantic,
@@ -18,6 +19,163 @@ pub enum QueryChangeKind {
     FormattingOnly,
     /// The query was renamed (definition may be unchanged).
     Renamed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct QuerySemanticDetail {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub step_diffs: Vec<StepDiff>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ast_summary: Option<AstDiffSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StepDiff {
+    StepAdded { step: StepSnapshot },
+    StepRemoved { step: StepSnapshot },
+    StepReordered {
+        name: StringId,
+        from_index: u32,
+        to_index: u32,
+    },
+    StepModified {
+        before: StepSnapshot,
+        after: StepSnapshot,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        changes: Vec<StepChange>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StepSnapshot {
+    pub name: StringId,
+    pub index: u32,
+    pub step_type: StepType,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_refs: Vec<StringId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub params: Option<StepParams>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StepType {
+    TableSelectRows,
+    TableRemoveColumns,
+    TableRenameColumns,
+    TableTransformColumnTypes,
+    TableNestedJoin,
+    TableJoin,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StepParams {
+    TableSelectRows { predicate_hash: u64 },
+    TableRemoveColumns { columns: ExtractedStringList },
+    TableRenameColumns { renames: ExtractedRenamePairs },
+    TableTransformColumnTypes { transforms: ExtractedColumnTypeChanges },
+    TableNestedJoin {
+        left_keys: ExtractedStringList,
+        right_keys: ExtractedStringList,
+        new_column: ExtractedString,
+        join_kind_hash: Option<u64>,
+    },
+    TableJoin {
+        left_keys: ExtractedStringList,
+        right_keys: ExtractedStringList,
+        join_kind_hash: Option<u64>,
+    },
+    Other {
+        function_name_hash: Option<u64>,
+        arity: Option<u32>,
+        expr_hash: u64,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ExtractedString {
+    Known { value: StringId },
+    Unknown { hash: u64 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ExtractedStringList {
+    Known { values: Vec<StringId> },
+    Unknown { hash: u64 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ExtractedRenamePairs {
+    Known { pairs: Vec<RenamePair> },
+    Unknown { hash: u64 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RenamePair {
+    pub from: StringId,
+    pub to: StringId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ExtractedColumnTypeChanges {
+    Known { changes: Vec<ColumnTypeChange> },
+    Unknown { hash: u64 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ColumnTypeChange {
+    pub column: StringId,
+    pub ty_hash: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StepChange {
+    Renamed { from: StringId, to: StringId },
+    SourceRefsChanged {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        removed: Vec<StringId>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        added: Vec<StringId>,
+    },
+    ParamsChanged,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AstDiffMode {
+    SmallExact,
+    LargeHeuristic,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AstDiffSummary {
+    pub mode: AstDiffMode,
+    pub node_count_old: u32,
+    pub node_count_new: u32,
+    pub inserted: u32,
+    pub deleted: u32,
+    pub updated: u32,
+    pub moved: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub move_hints: Vec<AstMoveHint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AstMoveHint {
+    pub subtree_hash: u64,
+    pub from_preorder: u32,
+    pub to_preorder: u32,
+    pub subtree_size: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -247,6 +405,8 @@ pub enum DiffOp {
         change_kind: QueryChangeKind,
         old_hash: u64,
         new_hash: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        semantic_detail: Option<QuerySemanticDetail>,
     },
     QueryMetadataChanged {
         name: StringId,

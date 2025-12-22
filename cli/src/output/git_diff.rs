@@ -1,6 +1,7 @@
 use anyhow::Result;
 use excel_diff::{
-    CellValue, DiffOp, DiffReport, QueryChangeKind, QueryMetadataField, index_to_address,
+    CellValue, DiffOp, DiffReport, QueryChangeKind, QueryMetadataField, StepChange, StepDiff,
+    StepType, index_to_address,
 };
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -218,7 +219,10 @@ fn write_op_diff_lines<W: Write>(w: &mut W, report: &DiffReport, op: &DiffOp) ->
             )?;
         }
         DiffOp::QueryDefinitionChanged {
-            name, change_kind, ..
+            name,
+            change_kind,
+            semantic_detail,
+            ..
         } => {
             let kind_str = match change_kind {
                 QueryChangeKind::Semantic => "semantic change",
@@ -231,6 +235,44 @@ fn write_op_diff_lines<W: Write>(w: &mut W, report: &DiffReport, op: &DiffOp) ->
                 report.resolve(*name).unwrap_or("<unknown>"),
                 kind_str
             )?;
+
+            if let Some(detail) = semantic_detail {
+                if !detail.step_diffs.is_empty() {
+                    let mut added = 0usize;
+                    let mut removed = 0usize;
+                    let mut modified = 0usize;
+                    let mut reordered = 0usize;
+
+                    for d in &detail.step_diffs {
+                        match d {
+                            StepDiff::StepAdded { .. } => added += 1,
+                            StepDiff::StepRemoved { .. } => removed += 1,
+                            StepDiff::StepModified { .. } => modified += 1,
+                            StepDiff::StepReordered { .. } => reordered += 1,
+                        }
+                    }
+
+                    writeln!(w, "~   steps: +{} -{} ~{} r{}", added, removed, modified, reordered)?;
+
+                    let max_lines = 3;
+                    for d in detail.step_diffs.iter().take(max_lines) {
+                        writeln!(w, "~   {}", format_step_diff(report, d))?;
+                    }
+                    if detail.step_diffs.len() > max_lines {
+                        writeln!(
+                            w,
+                            "~   ... ({} more)",
+                            detail.step_diffs.len() - max_lines
+                        )?;
+                    }
+                } else if let Some(ast) = &detail.ast_summary {
+                    writeln!(
+                        w,
+                        "~   ast: moved={} inserted={} deleted={} updated={}",
+                        ast.moved, ast.inserted, ast.deleted, ast.updated
+                    )?;
+                }
+            }
         }
         DiffOp::QueryMetadataChanged {
             name,
@@ -394,5 +436,73 @@ fn escape_string(s: &str) -> String {
         .replace('\r', "\\r")
         .replace('\t', "\\t")
         .replace('"', "\\\"")
+}
+
+fn format_step_diff(report: &DiffReport, d: &StepDiff) -> String {
+    match d {
+        StepDiff::StepAdded { step } => format!(
+            "+ {} ({})",
+            report.resolve(step.name).unwrap_or("<unknown>"),
+            format_step_type(step.step_type)
+        ),
+        StepDiff::StepRemoved { step } => format!(
+            "- {} ({})",
+            report.resolve(step.name).unwrap_or("<unknown>"),
+            format_step_type(step.step_type)
+        ),
+        StepDiff::StepReordered {
+            name,
+            from_index,
+            to_index,
+        } => format!(
+            "r {} {} -> {}",
+            report.resolve(*name).unwrap_or("<unknown>"),
+            from_index,
+            to_index
+        ),
+        StepDiff::StepModified {
+            before: _,
+            after,
+            changes,
+        } => {
+            let mut line = format!(
+                "~ {} ({})",
+                report.resolve(after.name).unwrap_or("<unknown>"),
+                format_step_type(after.step_type)
+            );
+            if !changes.is_empty() {
+                let mut parts = Vec::new();
+                for change in changes {
+                    match change {
+                        StepChange::Renamed { from, to } => parts.push(format!(
+                            "renamed {} -> {}",
+                            report.resolve(*from).unwrap_or("<unknown>"),
+                            report.resolve(*to).unwrap_or("<unknown>")
+                        )),
+                        StepChange::SourceRefsChanged { removed, added } => parts.push(format!(
+                            "refs -{} +{}",
+                            removed.len(),
+                            added.len()
+                        )),
+                        StepChange::ParamsChanged => parts.push("params".to_string()),
+                    }
+                }
+                line.push_str(&format!(" [{}]", parts.join(", ")));
+            }
+            line
+        }
+    }
+}
+
+fn format_step_type(t: StepType) -> &'static str {
+    match t {
+        StepType::TableSelectRows => "Table.SelectRows",
+        StepType::TableRemoveColumns => "Table.RemoveColumns",
+        StepType::TableRenameColumns => "Table.RenameColumns",
+        StepType::TableTransformColumnTypes => "Table.TransformColumnTypes",
+        StepType::TableNestedJoin => "Table.NestedJoin",
+        StepType::TableJoin => "Table.Join",
+        StepType::Other => "Other",
+    }
 }
 

@@ -241,11 +241,24 @@ fn diff_queries_to_ops(
                     &new_q.expression_m,
                     config.enable_m_semantic_diff,
                 ) {
+                    let semantic_detail =
+                        if config.enable_m_semantic_diff && kind == DiffQueryChangeKind::Semantic
+                        {
+                            crate::m_semantic_detail::build_query_semantic_detail(
+                                &old_q.expression_m,
+                                &new_q.expression_m,
+                                pool,
+                            )
+                        } else {
+                            None
+                        };
+
                     ops.push(DiffOp::QueryDefinitionChanged {
                         name: name_id,
                         change_kind: kind,
                         old_hash: old_h,
                         new_hash: new_h,
+                        semantic_detail,
                     });
                 }
 

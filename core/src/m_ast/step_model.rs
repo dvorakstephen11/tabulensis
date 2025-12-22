@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 
 use crate::hashing::XXH64_SEED;
 
-use super::{MExpr, MParam, MPrimitive, MToken};
+use super::{MExpr, MPrimitive, MToken};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StepPipeline {

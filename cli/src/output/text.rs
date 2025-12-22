@@ -1,8 +1,8 @@
 use crate::commands::diff::Verbosity;
 use anyhow::Result;
 use excel_diff::{
-    CellValue, DiffOp, DiffReport, QueryChangeKind, QueryMetadataField, StringId,
-    index_to_address,
+    CellValue, DiffOp, DiffReport, QueryChangeKind, QueryMetadataField, StepChange, StepDiff,
+    StepType, StringId, index_to_address,
 };
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -262,18 +262,77 @@ fn render_op(report: &DiffReport, op: &DiffOp, verbosity: Verbosity) -> Vec<Stri
             )]
         }
         DiffOp::QueryDefinitionChanged {
-            name, change_kind, ..
+            name,
+            change_kind,
+            semantic_detail,
+            ..
         } => {
             let kind_str = match change_kind {
                 QueryChangeKind::Semantic => "semantic change",
                 QueryChangeKind::FormattingOnly => "formatting only",
                 QueryChangeKind::Renamed => "renamed",
             };
-            vec![format!(
+
+            let mut lines = vec![format!(
                 "Query \"{}\": definition changed ({})",
                 report.resolve(*name).unwrap_or("<unknown>"),
                 kind_str
-            )]
+            )];
+
+            let Some(detail) = semantic_detail else {
+                return lines;
+            };
+
+            if !detail.step_diffs.is_empty() {
+                let mut added = 0usize;
+                let mut removed = 0usize;
+                let mut modified = 0usize;
+                let mut reordered = 0usize;
+
+                for d in &detail.step_diffs {
+                    match d {
+                        StepDiff::StepAdded { .. } => added += 1,
+                        StepDiff::StepRemoved { .. } => removed += 1,
+                        StepDiff::StepModified { .. } => modified += 1,
+                        StepDiff::StepReordered { .. } => reordered += 1,
+                    }
+                }
+
+                lines.push(format!(
+                    "  steps: +{} -{} ~{} r{}",
+                    added, removed, modified, reordered
+                ));
+
+                let max_lines = if verbosity == Verbosity::Verbose { 50 } else { 5 };
+                for d in detail.step_diffs.iter().take(max_lines) {
+                    lines.push(format!("  {}", format_step_diff(report, d)));
+                }
+                if detail.step_diffs.len() > max_lines {
+                    lines.push(format!(
+                        "  ... ({} more)",
+                        detail.step_diffs.len() - max_lines
+                    ));
+                }
+
+                return lines;
+            }
+
+            if let Some(ast) = &detail.ast_summary {
+                lines.push(format!(
+                    "  ast: mode={:?} moved={} inserted={} deleted={} updated={}",
+                    ast.mode, ast.moved, ast.inserted, ast.deleted, ast.updated
+                ));
+                if verbosity == Verbosity::Verbose && !ast.move_hints.is_empty() {
+                    for mh in ast.move_hints.iter().take(8) {
+                        lines.push(format!(
+                            "  ast_move: hash={} size={} from={} to={}",
+                            mh.subtree_hash, mh.subtree_size, mh.from_preorder, mh.to_preorder
+                        ));
+                    }
+                }
+            }
+
+            lines
         }
         DiffOp::QueryMetadataChanged {
             name,
@@ -368,6 +427,74 @@ fn col_letter(col: u32) -> String {
         .chars()
         .take_while(|c| c.is_ascii_alphabetic())
         .collect()
+}
+
+fn format_step_diff(report: &DiffReport, d: &StepDiff) -> String {
+    match d {
+        StepDiff::StepAdded { step } => format!(
+            "+ {} ({})",
+            report.resolve(step.name).unwrap_or("<unknown>"),
+            format_step_type(step.step_type)
+        ),
+        StepDiff::StepRemoved { step } => format!(
+            "- {} ({})",
+            report.resolve(step.name).unwrap_or("<unknown>"),
+            format_step_type(step.step_type)
+        ),
+        StepDiff::StepReordered {
+            name,
+            from_index,
+            to_index,
+        } => format!(
+            "r {} {} -> {}",
+            report.resolve(*name).unwrap_or("<unknown>"),
+            from_index,
+            to_index
+        ),
+        StepDiff::StepModified {
+            before: _,
+            after,
+            changes,
+        } => {
+            let mut line = format!(
+                "~ {} ({})",
+                report.resolve(after.name).unwrap_or("<unknown>"),
+                format_step_type(after.step_type)
+            );
+            if !changes.is_empty() {
+                let mut parts = Vec::new();
+                for change in changes {
+                    match change {
+                        StepChange::Renamed { from, to } => parts.push(format!(
+                            "renamed {} -> {}",
+                            report.resolve(*from).unwrap_or("<unknown>"),
+                            report.resolve(*to).unwrap_or("<unknown>")
+                        )),
+                        StepChange::SourceRefsChanged { removed, added } => parts.push(format!(
+                            "refs -{} +{}",
+                            removed.len(),
+                            added.len()
+                        )),
+                        StepChange::ParamsChanged => parts.push("params".to_string()),
+                    }
+                }
+                line.push_str(&format!(" [{}]", parts.join(", ")));
+            }
+            line
+        }
+    }
+}
+
+fn format_step_type(t: StepType) -> &'static str {
+    match t {
+        StepType::TableSelectRows => "Table.SelectRows",
+        StepType::TableRemoveColumns => "Table.RemoveColumns",
+        StepType::TableRenameColumns => "Table.RenameColumns",
+        StepType::TableTransformColumnTypes => "Table.TransformColumnTypes",
+        StepType::TableNestedJoin => "Table.NestedJoin",
+        StepType::TableJoin => "Table.Join",
+        StepType::Other => "Other",
+    }
 }
 
 fn format_range(start_row: u32, start_col: u32, row_count: u32, col_count: u32) -> String {

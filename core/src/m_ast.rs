@@ -1,10 +1,15 @@
+use std::hash::{Hash, Hasher};
 use std::iter::Peekable;
 use std::str::Chars;
 
 use thiserror::Error;
 
 mod step_model;
-pub(crate) use step_model::{extract_steps, MStep, StepKind, StepPipeline};
+#[allow(unused_imports)]
+pub(crate) use step_model::{
+    extract_steps, ColumnTypeChange as StepColumnTypeChange, Extracted as StepExtracted, MStep,
+    RenamePair as StepRenamePair, StepKind, StepPipeline,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MModuleAst {
@@ -37,20 +42,20 @@ pub enum MAstAccessKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum AccessKind {
+pub(crate) enum AccessKind {
     Field,
     Item,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum MUnaryOp {
+pub(crate) enum MUnaryOp {
     Not,
     Plus,
     Minus,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum MBinaryOp {
+pub(crate) enum MBinaryOp {
     Add,
     Sub,
     Mul,
@@ -67,18 +72,18 @@ enum MBinaryOp {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct MTypeRef {
+pub(crate) struct MTypeRef {
     name: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct MParam {
+pub(crate) struct MParam {
     name: String,
     ty: Option<MTypeRef>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum MExpr {
+pub(crate) enum MExpr {
     Let {
         bindings: Vec<LetBinding>,
         body: Box<MExpr>,
@@ -136,19 +141,19 @@ enum MExpr {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct LetBinding {
+pub(crate) struct LetBinding {
     name: String,
     value: Box<MExpr>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct RecordField {
+pub(crate) struct RecordField {
     name: String,
     value: Box<MExpr>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum MPrimitive {
+pub(crate) enum MPrimitive {
     String(String),
     Number(String),
     Boolean(bool),
@@ -156,7 +161,7 @@ enum MPrimitive {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum MToken {
+pub(crate) enum MToken {
     KeywordLet,
     KeywordIn,
     KeywordIf,
@@ -271,6 +276,149 @@ impl MModuleAst {
                 token_count: tokens.len(),
             },
         }
+    }
+
+    pub(crate) fn root_expr(&self) -> &MExpr {
+        &self.root
+    }
+}
+
+impl MExpr {
+    pub(crate) fn diff_label_hash(&self) -> u64 {
+        use crate::hashing::XXH64_SEED;
+        let mut h = xxhash_rust::xxh64::Xxh64::new(XXH64_SEED);
+        match self {
+            MExpr::Let { bindings, .. } => {
+                0u8.hash(&mut h);
+                bindings.len().hash(&mut h);
+            }
+            MExpr::Record { fields } => {
+                1u8.hash(&mut h);
+                fields.len().hash(&mut h);
+            }
+            MExpr::List { items } => {
+                2u8.hash(&mut h);
+                items.len().hash(&mut h);
+            }
+            MExpr::FunctionCall { name, args } => {
+                3u8.hash(&mut h);
+                name.to_ascii_lowercase().hash(&mut h);
+                args.len().hash(&mut h);
+            }
+            MExpr::FunctionLiteral {
+                params,
+                return_type,
+                ..
+            } => {
+                4u8.hash(&mut h);
+                params.len().hash(&mut h);
+                if let Some(rt) = return_type {
+                    rt.name.to_ascii_lowercase().hash(&mut h);
+                }
+            }
+            MExpr::UnaryOp { op, .. } => {
+                5u8.hash(&mut h);
+                op.hash(&mut h);
+            }
+            MExpr::BinaryOp { op, .. } => {
+                6u8.hash(&mut h);
+                op.hash(&mut h);
+            }
+            MExpr::TypeAscription { ty, .. } => {
+                7u8.hash(&mut h);
+                ty.name.to_ascii_lowercase().hash(&mut h);
+            }
+            MExpr::TryOtherwise { .. } => {
+                8u8.hash(&mut h);
+            }
+            MExpr::Ident { name } => {
+                9u8.hash(&mut h);
+                name.hash(&mut h);
+            }
+            MExpr::If { .. } => {
+                10u8.hash(&mut h);
+            }
+            MExpr::Each { .. } => {
+                11u8.hash(&mut h);
+            }
+            MExpr::Access { kind, .. } => {
+                12u8.hash(&mut h);
+                kind.hash(&mut h);
+            }
+            MExpr::Primitive(p) => {
+                13u8.hash(&mut h);
+                p.hash(&mut h);
+            }
+            MExpr::Opaque(tokens) => {
+                14u8.hash(&mut h);
+                tokens.hash(&mut h);
+            }
+        }
+        h.finish()
+    }
+
+    pub(crate) fn diff_children(&self) -> Vec<&MExpr> {
+        let mut out = Vec::new();
+        match self {
+            MExpr::Let { bindings, body } => {
+                for b in bindings {
+                    out.push(b.value.as_ref());
+                }
+                out.push(body.as_ref());
+            }
+            MExpr::Record { fields } => {
+                for f in fields {
+                    out.push(&f.value);
+                }
+            }
+            MExpr::List { items } => {
+                for it in items {
+                    out.push(it);
+                }
+            }
+            MExpr::FunctionCall { args, .. } => {
+                for a in args {
+                    out.push(a);
+                }
+            }
+            MExpr::FunctionLiteral { body, .. } => {
+                out.push(body.as_ref());
+            }
+            MExpr::UnaryOp { expr, .. } => {
+                out.push(expr.as_ref());
+            }
+            MExpr::BinaryOp { left, right, .. } => {
+                out.push(left.as_ref());
+                out.push(right.as_ref());
+            }
+            MExpr::TypeAscription { expr, .. } => {
+                out.push(expr.as_ref());
+            }
+            MExpr::TryOtherwise { expr, otherwise } => {
+                out.push(expr.as_ref());
+                out.push(otherwise.as_ref());
+            }
+            MExpr::Ident { .. } => {}
+            MExpr::If {
+                cond,
+                then_branch,
+                else_branch,
+            } => {
+                out.push(cond.as_ref());
+                out.push(then_branch.as_ref());
+                out.push(else_branch.as_ref());
+            }
+            MExpr::Each { body } => {
+                out.push(body.as_ref());
+            }
+            MExpr::Access { base, key, .. } => {
+                out.push(base.as_ref());
+                out.push(key.as_ref());
+            }
+            MExpr::Primitive(_) => {}
+            MExpr::Opaque(_) => {}
+        }
+        out
     }
 }
 

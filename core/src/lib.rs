@@ -90,6 +90,7 @@ pub(crate) mod hashing;
 mod m_ast;
 mod m_diff;
 mod m_section;
+mod m_semantic_detail;
 mod object_diff;
 mod output;
 mod package;
@@ -181,8 +182,11 @@ pub use datamashup_package::{
     parse_package_parts, parse_package_parts_with_limits,
 };
 pub use diff::{
-    DiffError, DiffOp, DiffReport, DiffSummary, FormulaDiffResult, QueryChangeKind,
-    QueryMetadataField, SheetId,
+    AstDiffMode, AstDiffSummary, AstMoveHint, ColumnTypeChange, DiffError, DiffOp, DiffReport,
+    DiffSummary, ExtractedColumnTypeChanges, ExtractedRenamePairs, ExtractedString,
+    ExtractedStringList, FormulaDiffResult, QueryChangeKind, QueryMetadataField,
+    QuerySemanticDetail, RenamePair, SheetId, StepChange, StepDiff, StepParams, StepSnapshot,
+    StepType,
 };
 #[doc(hidden)]
 pub use engine::{

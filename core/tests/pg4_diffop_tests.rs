@@ -1004,12 +1004,14 @@ fn pg4_diffop_roundtrip_each_variant() {
             change_kind: QueryChangeKind::Semantic,
             old_hash: 0x1234567890ABCDEF,
             new_hash: 0xFEDCBA0987654321,
+            semantic_detail: None,
         },
         DiffOp::QueryDefinitionChanged {
             name: sid("Section1/Query2"),
             change_kind: QueryChangeKind::FormattingOnly,
             old_hash: 0xAAAABBBBCCCCDDDD,
             new_hash: 0xAAAABBBBCCCCDDDD,
+            semantic_detail: None,
         },
         DiffOp::QueryMetadataChanged {
             name: sid("Section1/Query3"),
