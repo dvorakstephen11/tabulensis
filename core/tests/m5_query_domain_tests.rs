@@ -1,6 +1,9 @@
 use std::collections::HashSet;
 
-use excel_diff::{build_data_mashup, build_queries, open_data_mashup, parse_section_members};
+use excel_diff::{
+    build_data_mashup, build_embedded_queries, build_queries, open_data_mashup,
+    parse_section_members,
+};
 
 mod common;
 use common::fixture_path;
@@ -109,4 +112,22 @@ fn queries_preserve_section_member_order() {
             idx
         );
     }
+}
+
+#[test]
+fn build_embedded_queries_include_expected_name() {
+    let dm = load_datamashup("m_embedded_change_a.xlsx");
+    let queries = build_embedded_queries(&dm);
+
+    assert!(queries.iter().any(|q| {
+        q.name == "Embedded/Content/efgh.package/Section1/Inner"
+    }));
+}
+
+#[test]
+fn build_queries_excludes_embedded_prefix() {
+    let dm = load_datamashup("m_embedded_change_a.xlsx");
+    let queries = build_queries(&dm).expect("queries should build");
+
+    assert!(queries.iter().all(|q| !q.name.starts_with("Embedded/")));
 }

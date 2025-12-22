@@ -85,6 +85,32 @@ scenarios:
       base_file: "templates/base_query.xlsx"
     output: "m_change_literal_b.xlsx"
 
+  - id: "m_embedded_change_a"
+    generator: "mashup:multi_query_with_embedded"
+    args:
+      base_file: "templates/base_query.xlsx"
+      embedded_guid: "efgh"
+      embedded_section: |
+        section Section1;
+        shared Inner = let
+          Source = 1
+        in
+          Source;
+    output: "m_embedded_change_a.xlsx"
+
+  - id: "m_embedded_change_b"
+    generator: "mashup:multi_query_with_embedded"
+    args:
+      base_file: "templates/base_query.xlsx"
+      embedded_guid: "efgh"
+      embedded_section: |
+        section Section1;
+        shared Inner = let
+          Source = 2
+        in
+          Source;
+    output: "m_embedded_change_b.xlsx"
+
   - id: "branch4_named_ranges"
     generator: "named_ranges"
     output:

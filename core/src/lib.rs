@@ -174,7 +174,8 @@ pub use container::{ContainerError, ContainerLimits, OpcContainer, ZipContainer}
 #[doc(hidden)]
 pub use datamashup::parse_metadata;
 pub use datamashup::{
-    DataMashup, Metadata, Permissions, Query, QueryMetadata, build_data_mashup, build_queries,
+    DataMashup, Metadata, Permissions, Query, QueryMetadata, build_data_mashup,
+    build_embedded_queries, build_queries,
 };
 pub use datamashup_framing::{DataMashupError, RawDataMashup, parse_data_mashup};
 pub use datamashup_package::{

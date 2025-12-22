@@ -157,6 +157,23 @@ fn embedded_content_partial_failure_retains_valid_entries() {
 }
 
 #[test]
+fn unpacked_embedded_section_is_extracted() {
+    let bytes = build_zip(vec![
+        ("Config/Package.xml", MIN_PACKAGE_XML.as_bytes().to_vec()),
+        ("Formulas/Section1.m", MIN_SECTION.as_bytes().to_vec()),
+        ("Content/abcd/Formulas/Section1.m", MIN_SECTION.as_bytes().to_vec()),
+    ]);
+
+    let parts = parse_package_parts(&bytes).expect("outer package should parse");
+    assert_eq!(parts.embedded_contents.len(), 1);
+    assert_eq!(parts.embedded_contents[0].name, "Content/abcd");
+    assert!(parts.embedded_contents[0]
+        .section
+        .source
+        .contains("shared Foo = 1;"));
+}
+
+#[test]
 fn leading_slash_paths_are_accepted() {
     let embedded =
         build_embedded_section_zip("section Section1;\nshared Bar = 2;".as_bytes().to_vec());
@@ -186,6 +203,22 @@ fn leading_slash_paths_are_accepted() {
             .source
             .contains("shared Bar = 2;")
     );
+}
+
+#[test]
+fn backslash_paths_are_normalized_for_embedded() {
+    let bytes = build_zip(vec![
+        ("Config/Package.xml", MIN_PACKAGE_XML.as_bytes().to_vec()),
+        ("Formulas/Section1.m", MIN_SECTION.as_bytes().to_vec()),
+        (
+            "Content\\abcd\\Formulas\\Section1.m",
+            MIN_SECTION.as_bytes().to_vec(),
+        ),
+    ]);
+
+    let parts = parse_package_parts(&bytes).expect("backslash paths should parse");
+    assert_eq!(parts.embedded_contents.len(), 1);
+    assert_eq!(parts.embedded_contents[0].name, "Content/abcd");
 }
 
 #[test]
@@ -367,6 +400,50 @@ fn package_parts_with_limits_rejects_total_size() {
         }
         other => panic!("expected InnerTotalTooLarge, got {other:?}"),
     }
+}
+
+#[test]
+fn package_parts_with_limits_accepts_part_at_limit() {
+    let section_bytes = MIN_SECTION.as_bytes().to_vec();
+    let max_part = section_bytes.len() as u64;
+    let total = max_part + MIN_PACKAGE_XML.len() as u64;
+
+    let bytes = build_zip(vec![
+        ("Config/Package.xml", MIN_PACKAGE_XML.as_bytes().to_vec()),
+        ("Formulas/Section1.m", section_bytes),
+    ]);
+
+    let limits = DataMashupLimits {
+        max_inner_entries: 100,
+        max_inner_part_bytes: max_part,
+        max_inner_total_bytes: total,
+    };
+
+    let parts = parse_package_parts_with_limits(&bytes, limits)
+        .expect("part size equal to limit should pass");
+    assert!(parts.main_section.source.contains("shared Foo = 1;"));
+}
+
+#[test]
+fn package_parts_with_limits_accepts_total_at_limit() {
+    let extra = vec![b'a'; 10];
+    let total =
+        MIN_PACKAGE_XML.len() as u64 + MIN_SECTION.len() as u64 + extra.len() as u64;
+
+    let bytes = build_zip(vec![
+        ("Config/Package.xml", MIN_PACKAGE_XML.as_bytes().to_vec()),
+        ("Formulas/Section1.m", MIN_SECTION.as_bytes().to_vec()),
+        ("Content/extra.package", extra),
+    ]);
+
+    let limits = DataMashupLimits {
+        max_inner_entries: 100,
+        max_inner_part_bytes: 10_000,
+        max_inner_total_bytes: total,
+    };
+
+    parse_package_parts_with_limits(&bytes, limits)
+        .expect("total size equal to limit should pass");
 }
 
 #[test]

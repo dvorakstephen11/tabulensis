@@ -37,6 +37,13 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "fuzz_m_section_and_ast"
+path = "fuzz_targets/fuzz_m_section_and_ast.rs"
+test = false
+doc = false
+bench = false
+
 [profile.release]
 debug = 1
 

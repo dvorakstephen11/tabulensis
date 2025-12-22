@@ -131,6 +131,47 @@ pub fn build_queries(dm: &DataMashup) -> Result<Vec<Query>, SectionParseError> {
     Ok(queries)
 }
 
+pub fn build_embedded_queries(dm: &DataMashup) -> Vec<Query> {
+    let mut queries: Vec<Query> = Vec::new();
+    let mut positions: HashMap<String, usize> = HashMap::new();
+
+    for embedded in &dm.package_parts.embedded_contents {
+        let members = match parse_section_members(&embedded.section.source) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        for member in members {
+            let section_name = format!("Embedded/{}/{}", embedded.name, member.section_name);
+            let name = format!("{}/{}", section_name, member.member_name);
+
+            let q = Query {
+                name: name.clone(),
+                section_member: member.member_name.clone(),
+                expression_m: member.expression_m,
+                metadata: QueryMetadata {
+                    item_path: name.clone(),
+                    section_name,
+                    formula_name: member.member_name,
+                    load_to_sheet: false,
+                    load_to_model: false,
+                    is_connection_only: true,
+                    group_path: None,
+                },
+            };
+
+            if let Some(idx) = positions.get(&q.name).copied() {
+                queries[idx] = q;
+            } else {
+                positions.insert(q.name.clone(), queries.len());
+                queries.push(q);
+            }
+        }
+    }
+
+    queries
+}
+
 pub fn parse_permissions(xml_bytes: &[u8]) -> Permissions {
     if xml_bytes.is_empty() {
         return Permissions::default();

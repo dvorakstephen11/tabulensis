@@ -2,11 +2,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
 use crate::config::DiffConfig;
-use crate::datamashup::{DataMashup, Query, build_queries};
+use crate::datamashup::{DataMashup, Query, build_embedded_queries, build_queries};
 use crate::diff::{DiffOp, QueryChangeKind as DiffQueryChangeKind, QueryMetadataField};
 use crate::hashing::XXH64_SEED;
 use crate::m_ast::{MModuleAst, canonicalize_m_ast, parse_m_expression};
 use crate::string_pool::{StringId, StringPool};
+use crate::m_section::SectionParseError;
 
 #[deprecated(note = "use WorkbookPackage::diff instead")]
 #[cfg(any(test, feature = "dev-apis"))]
@@ -271,6 +272,12 @@ fn diff_queries_to_ops(
     ops
 }
 
+fn build_all_queries(dm: &DataMashup) -> Result<Vec<Query>, SectionParseError> {
+    let mut q = build_queries(dm)?;
+    q.extend(build_embedded_queries(dm));
+    Ok(q)
+}
+
 pub(crate) fn diff_m_ops_for_packages(
     old_dm: &Option<DataMashup>,
     new_dm: &Option<DataMashup>,
@@ -280,7 +287,7 @@ pub(crate) fn diff_m_ops_for_packages(
     match (old_dm.as_ref(), new_dm.as_ref()) {
         (None, None) => Vec::new(),
         (Some(old_dm), None) => {
-            let old_q = match build_queries(old_dm) {
+            let old_q = match build_all_queries(old_dm) {
                 Ok(v) => v,
                 Err(_) => return Vec::new(),
             };
@@ -293,7 +300,7 @@ pub(crate) fn diff_m_ops_for_packages(
             ops
         }
         (None, Some(new_dm)) => {
-            let new_q = match build_queries(new_dm) {
+            let new_q = match build_all_queries(new_dm) {
                 Ok(v) => v,
                 Err(_) => return Vec::new(),
             };
@@ -306,11 +313,11 @@ pub(crate) fn diff_m_ops_for_packages(
             ops
         }
         (Some(old_dm), Some(new_dm)) => {
-            let old_q = match build_queries(old_dm) {
+            let old_q = match build_all_queries(old_dm) {
                 Ok(v) => v,
                 Err(_) => return Vec::new(),
             };
-            let new_q = match build_queries(new_dm) {
+            let new_q = match build_all_queries(new_dm) {
                 Ok(v) => v,
                 Err(_) => return Vec::new(),
             };

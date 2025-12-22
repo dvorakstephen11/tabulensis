@@ -74,35 +74,47 @@ pub fn parse_package_parts_with_limits(
             continue;
         }
 
-        let raw_name = file.name().to_string();
-        let name = normalize_path(&raw_name);
+        let name = normalize_path(file.name());
         if package_xml.is_none() && name == "Config/Package.xml" {
-            reserve_inner_read_budget(&mut total_read, name, file.size(), limits)?;
+            reserve_inner_read_budget(&mut total_read, &name, file.size(), limits)?;
             let text = read_file_to_string(&mut file)?;
             package_xml = Some(PackageXml { raw_xml: text });
             continue;
         }
         if main_section.is_none() && name == "Formulas/Section1.m" {
-            reserve_inner_read_budget(&mut total_read, name, file.size(), limits)?;
+            reserve_inner_read_budget(&mut total_read, &name, file.size(), limits)?;
             let text = strip_leading_bom(read_file_to_string(&mut file)?);
             main_section = Some(SectionDocument { source: text });
             continue;
         }
         if name.starts_with("Content/") {
-            reserve_inner_read_budget(&mut total_read, name, file.size(), limits)?;
+            reserve_inner_read_budget(&mut total_read, &name, file.size(), limits)?;
             let mut content_bytes = Vec::new();
             if file.read_to_end(&mut content_bytes).is_err() {
                 continue;
             }
 
-            match extract_embedded_section(&content_bytes, limits, name)? {
-                Some(section) => {
-                    embedded_contents.push(EmbeddedContent {
-                        name: normalize_path(&raw_name).to_string(),
-                        section: SectionDocument { source: section },
-                    });
+            let unpacked_suffix = "/Formulas/Section1.m";
+            if name.ends_with(unpacked_suffix) {
+                if let Some(root) = name.strip_suffix(unpacked_suffix) {
+                    if embedded_contents.iter().all(|e| e.name != root) {
+                        if let Ok(text) = std::str::from_utf8(&content_bytes) {
+                            let s = strip_leading_bom(text.to_string());
+                            embedded_contents.push(EmbeddedContent {
+                                name: root.to_string(),
+                                section: SectionDocument { source: s },
+                            });
+                        }
+                    }
                 }
-                None => {}
+                continue;
+            }
+
+            if let Some(section) = extract_embedded_section(&content_bytes, limits, &name)? {
+                embedded_contents.push(EmbeddedContent {
+                    name: name.clone(),
+                    section: SectionDocument { source: section },
+                });
             }
         }
     }
@@ -117,8 +129,9 @@ pub fn parse_package_parts_with_limits(
     })
 }
 
-fn normalize_path(name: &str) -> &str {
-    name.trim_start_matches('/')
+fn normalize_path(name: &str) -> String {
+    let trimmed = name.trim_start_matches(|c| c == '/' || c == '\\');
+    trimmed.replace('\\', "/")
 }
 
 fn read_file_to_string(file: &mut zip::read::ZipFile<'_>) -> Result<String, DataMashupError> {
