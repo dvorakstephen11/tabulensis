@@ -93,7 +93,7 @@ pub enum SheetKind {
     Other,
 }
 
-/// A sparse 2D grid of cells representing sheet data.
+/// A 2D grid of cells representing sheet data, stored as sparse or dense data.
 ///
 /// # Invariants
 ///
@@ -104,16 +104,31 @@ pub struct Grid {
     pub nrows: u32,
     /// Number of columns in the grid's bounding rectangle.
     pub ncols: u32,
-    /// Sparse storage of non-empty cells, keyed by (row, col).
-    pub cells: FxHashMap<(u32, u32), CellContent>,
+    /// Cell storage (sparse or dense).
+    pub cells: GridStorage,
     /// Optional precomputed row signatures for alignment.
     pub row_signatures: Option<Vec<RowSignature>>,
     /// Optional precomputed column signatures for alignment.
     pub col_signatures: Option<Vec<ColSignature>>,
 }
 
-/// A single cell's logical content (coordinates live in the `Grid` key).
+/// Storage backend for grid cells.
 #[derive(Debug, Clone, PartialEq)]
+pub enum GridStorage {
+    Sparse(FxHashMap<(u32, u32), CellContent>),
+    Dense(DenseGrid),
+}
+
+/// Dense row-major storage for grid cells.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DenseGrid {
+    ncols: u32,
+    cells: Vec<CellContent>,
+    non_empty: usize,
+}
+
+/// A single cell's logical content (coordinates live in the `Grid` key).
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct CellContent {
     /// The cell's value, if any.
     pub value: Option<CellValue>,
@@ -131,6 +146,186 @@ pub struct CellRef<'a> {
     pub address: CellAddress,
     pub value: &'a Option<CellValue>,
     pub formula: &'a Option<StringId>,
+}
+
+fn cell_is_non_empty(cell: &CellContent) -> bool {
+    cell.value.is_some() || cell.formula.is_some()
+}
+
+impl DenseGrid {
+    fn new(nrows: u32, ncols: u32) -> Self {
+        let size = nrows.saturating_mul(ncols) as usize;
+        Self {
+            ncols,
+            cells: vec![CellContent::default(); size],
+            non_empty: 0,
+        }
+    }
+
+    fn capacity(&self) -> usize {
+        self.cells.capacity()
+    }
+
+    fn index(&self, row: u32, col: u32) -> Option<usize> {
+        if self.ncols == 0 {
+            return None;
+        }
+        let idx = row.saturating_mul(self.ncols).saturating_add(col) as usize;
+        self.cells.get(idx).map(|_| idx)
+    }
+
+    fn get(&self, row: u32, col: u32) -> Option<&CellContent> {
+        let idx = self.index(row, col)?;
+        let cell = &self.cells[idx];
+        cell_is_non_empty(cell).then_some(cell)
+    }
+
+    fn get_mut(&mut self, row: u32, col: u32) -> Option<&mut CellContent> {
+        let idx = self.index(row, col)?;
+        if !cell_is_non_empty(&self.cells[idx]) {
+            return None;
+        }
+        Some(&mut self.cells[idx])
+    }
+
+    fn set(&mut self, row: u32, col: u32, value: Option<CellValue>, formula: Option<StringId>) {
+        if let Some(idx) = self.index(row, col) {
+            let was_non_empty = cell_is_non_empty(&self.cells[idx]);
+            let new_cell = CellContent { value, formula };
+            let is_non_empty = cell_is_non_empty(&new_cell);
+            if !was_non_empty && is_non_empty {
+                self.non_empty = self.non_empty.saturating_add(1);
+            } else if was_non_empty && !is_non_empty {
+                self.non_empty = self.non_empty.saturating_sub(1);
+            }
+            self.cells[idx] = new_cell;
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.non_empty
+    }
+
+    fn iter(&self) -> DenseCellIter<'_> {
+        DenseCellIter {
+            cells: &self.cells,
+            idx: 0,
+            ncols: self.ncols,
+        }
+    }
+}
+
+impl GridStorage {
+    fn new_sparse() -> Self {
+        GridStorage::Sparse(FxHashMap::default())
+    }
+
+    fn new_dense(nrows: u32, ncols: u32) -> Self {
+        GridStorage::Dense(DenseGrid::new(nrows, ncols))
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            GridStorage::Sparse(map) => map.len(),
+            GridStorage::Dense(grid) => grid.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn get(&self, row: u32, col: u32) -> Option<&CellContent> {
+        match self {
+            GridStorage::Sparse(map) => map.get(&(row, col)),
+            GridStorage::Dense(grid) => grid.get(row, col),
+        }
+    }
+
+    pub fn get_mut(&mut self, row: u32, col: u32) -> Option<&mut CellContent> {
+        match self {
+            GridStorage::Sparse(map) => map.get_mut(&(row, col)),
+            GridStorage::Dense(grid) => grid.get_mut(row, col),
+        }
+    }
+
+    pub fn insert(&mut self, row: u32, col: u32, cell: CellContent) {
+        if !cell_is_non_empty(&cell) {
+            match self {
+                GridStorage::Sparse(map) => {
+                    map.remove(&(row, col));
+                }
+                GridStorage::Dense(grid) => {
+                    grid.set(row, col, None, None);
+                }
+            }
+            return;
+        }
+        match self {
+            GridStorage::Sparse(map) => {
+                map.insert((row, col), cell);
+            }
+            GridStorage::Dense(grid) => {
+                grid.set(row, col, cell.value, cell.formula);
+            }
+        }
+    }
+
+    pub fn iter(&self) -> GridCellIter<'_> {
+        match self {
+            GridStorage::Sparse(map) => GridCellIter::Sparse(map.iter()),
+            GridStorage::Dense(grid) => GridCellIter::Dense(grid.iter()),
+        }
+    }
+}
+
+pub enum GridCellIter<'a> {
+    Sparse(std::collections::hash_map::Iter<'a, (u32, u32), CellContent>),
+    Dense(DenseCellIter<'a>),
+}
+
+impl<'a> Iterator for GridCellIter<'a> {
+    type Item = ((u32, u32), &'a CellContent);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            GridCellIter::Sparse(iter) => iter.next().map(|(coord, cell)| (*coord, cell)),
+            GridCellIter::Dense(iter) => iter.next(),
+        }
+    }
+}
+
+pub struct DenseCellIter<'a> {
+    cells: &'a [CellContent],
+    idx: usize,
+    ncols: u32,
+}
+
+impl<'a> Iterator for DenseCellIter<'a> {
+    type Item = ((u32, u32), &'a CellContent);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.idx < self.cells.len() {
+            let idx = self.idx;
+            self.idx += 1;
+            let cell = &self.cells[idx];
+            if !cell_is_non_empty(cell) {
+                continue;
+            }
+            let row = if self.ncols == 0 {
+                0
+            } else {
+                (idx as u32) / self.ncols
+            };
+            let col = if self.ncols == 0 {
+                0
+            } else {
+                (idx as u32) % self.ncols
+            };
+            return Some(((row, col), cell));
+        }
+        None
+    }
 }
 
 /// A cell address representing a position in a grid.
@@ -281,18 +476,29 @@ mod signature_hex {
 }
 
 impl Grid {
+    const DENSE_RATIO_THRESHOLD: f64 = 0.40;
+    const DENSE_MIN_CELLS: usize = 4096;
+
     pub fn new(nrows: u32, ncols: u32) -> Grid {
+        Grid::new_with_storage(nrows, ncols, GridStorage::new_sparse())
+    }
+
+    pub fn new_dense(nrows: u32, ncols: u32) -> Grid {
+        Grid::new_with_storage(nrows, ncols, GridStorage::new_dense(nrows, ncols))
+    }
+
+    fn new_with_storage(nrows: u32, ncols: u32, cells: GridStorage) -> Grid {
         Grid {
             nrows,
             ncols,
-            cells: FxHashMap::default(),
+            cells,
             row_signatures: None,
             col_signatures: None,
         }
     }
 
     pub fn get(&self, row: u32, col: u32) -> Option<&CellContent> {
-        self.cells.get(&(row, col))
+        self.cells.get(row, col)
     }
 
     pub fn get_ref(&self, row: u32, col: u32) -> Option<CellRef<'_>> {
@@ -308,7 +514,7 @@ impl Grid {
     pub fn get_mut(&mut self, row: u32, col: u32) -> Option<&mut CellContent> {
         self.row_signatures = None;
         self.col_signatures = None;
-        self.cells.get_mut(&(row, col))
+        self.cells.get_mut(row, col)
     }
 
     pub fn insert_cell(
@@ -325,11 +531,36 @@ impl Grid {
         self.row_signatures = None;
         self.col_signatures = None;
         self.cells
-            .insert((row, col), CellContent { value, formula });
+            .insert(row, col, CellContent { value, formula });
+        self.maybe_upgrade_to_dense();
     }
 
     pub fn cell_count(&self) -> usize {
         self.cells.len()
+    }
+
+    pub fn estimated_bytes(&self) -> u64 {
+        use std::mem::size_of;
+
+        let cell_bytes = match &self.cells {
+            GridStorage::Sparse(map) => {
+                let cell_entry = size_of::<((u32, u32), CellContent)>();
+                map.capacity().saturating_mul(cell_entry)
+            }
+            GridStorage::Dense(grid) => grid.capacity().saturating_mul(size_of::<CellContent>()),
+        };
+        let row_sig_bytes = self
+            .row_signatures
+            .as_ref()
+            .map(|v| v.capacity().saturating_mul(size_of::<RowSignature>()))
+            .unwrap_or(0);
+        let col_sig_bytes = self
+            .col_signatures
+            .as_ref()
+            .map(|v| v.capacity().saturating_mul(size_of::<ColSignature>()))
+            .unwrap_or(0);
+
+        (cell_bytes + row_sig_bytes + col_sig_bytes) as u64
     }
 
     pub fn is_empty(&self) -> bool {
@@ -337,14 +568,14 @@ impl Grid {
     }
 
     pub fn iter_cells(&self) -> impl Iterator<Item = ((u32, u32), &CellContent)> {
-        self.cells.iter().map(|(coords, cell)| (*coords, cell))
+        self.cells.iter()
     }
 
     pub fn iter_cell_refs(&self) -> impl Iterator<Item = CellRef<'_>> {
         self.cells.iter().map(|((row, col), cell)| CellRef {
-            row: *row,
-            col: *col,
-            address: CellAddress::from_indices(*row, *col),
+            row,
+            col,
+            address: CellAddress::from_indices(row, col),
             value: &cell.value,
             formula: &cell.formula,
         })
@@ -365,30 +596,41 @@ impl Grid {
 
         let mut hasher = Xxh3::new();
 
-        if (self.ncols as usize) <= self.cells.len() {
-            for col in 0..self.ncols {
-                if let Some(cell) = self.cells.get(&(row, col)) {
-                    if cell.value.is_none() && cell.formula.is_none() {
-                        continue;
+        match &self.cells {
+            GridStorage::Dense(grid) => {
+                for col in 0..self.ncols {
+                    if let Some(cell) = grid.get(row, col) {
+                        hash_cell_value(&cell.value, &mut hasher);
+                        cell.formula.hash(&mut hasher);
                     }
-                    hash_cell_value(&cell.value, &mut hasher);
-                    cell.formula.hash(&mut hasher);
                 }
             }
-        } else {
-            let mut row_cells: Vec<(u32, &CellContent)> = self
-                .cells
-                .iter()
-                .filter(|((r, _), _)| *r == row)
-                .map(|((_, c), cell)| (*c, cell))
-                .collect();
-            row_cells.sort_by_key(|(c, _)| *c);
-            for (_, cell) in row_cells {
-                if cell.value.is_none() && cell.formula.is_none() {
-                    continue;
+            GridStorage::Sparse(map) => {
+                if (self.ncols as usize) <= map.len() {
+                    for col in 0..self.ncols {
+                        if let Some(cell) = map.get(&(row, col)) {
+                            if cell.value.is_none() && cell.formula.is_none() {
+                                continue;
+                            }
+                            hash_cell_value(&cell.value, &mut hasher);
+                            cell.formula.hash(&mut hasher);
+                        }
+                    }
+                } else {
+                    let mut row_cells: Vec<(u32, &CellContent)> = map
+                        .iter()
+                        .filter(|((r, _), _)| *r == row)
+                        .map(|((_, c), cell)| (*c, cell))
+                        .collect();
+                    row_cells.sort_by_key(|(c, _)| *c);
+                    for (_, cell) in row_cells {
+                        if cell.value.is_none() && cell.formula.is_none() {
+                            continue;
+                        }
+                        hash_cell_value(&cell.value, &mut hasher);
+                        cell.formula.hash(&mut hasher);
+                    }
                 }
-                hash_cell_value(&cell.value, &mut hasher);
-                cell.formula.hash(&mut hasher);
             }
         }
 
@@ -404,30 +646,41 @@ impl Grid {
 
         let mut hasher = Xxh3::new();
 
-        if (self.nrows as usize) <= self.cells.len() {
-            for row in 0..self.nrows {
-                if let Some(cell) = self.cells.get(&(row, col)) {
-                    if cell.value.is_none() && cell.formula.is_none() {
-                        continue;
+        match &self.cells {
+            GridStorage::Dense(grid) => {
+                for row in 0..self.nrows {
+                    if let Some(cell) = grid.get(row, col) {
+                        hash_cell_value(&cell.value, &mut hasher);
+                        cell.formula.hash(&mut hasher);
                     }
-                    hash_cell_value(&cell.value, &mut hasher);
-                    cell.formula.hash(&mut hasher);
                 }
             }
-        } else {
-            let mut col_cells: Vec<(u32, &CellContent)> = self
-                .cells
-                .iter()
-                .filter(|((_, c), _)| *c == col)
-                .map(|((r, _), cell)| (*r, cell))
-                .collect();
-            col_cells.sort_by_key(|(r, _)| *r);
-            for (_, cell) in col_cells {
-                if cell.value.is_none() && cell.formula.is_none() {
-                    continue;
+            GridStorage::Sparse(map) => {
+                if (self.nrows as usize) <= map.len() {
+                    for row in 0..self.nrows {
+                        if let Some(cell) = map.get(&(row, col)) {
+                            if cell.value.is_none() && cell.formula.is_none() {
+                                continue;
+                            }
+                            hash_cell_value(&cell.value, &mut hasher);
+                            cell.formula.hash(&mut hasher);
+                        }
+                    }
+                } else {
+                    let mut col_cells: Vec<(u32, &CellContent)> = map
+                        .iter()
+                        .filter(|((_, c), _)| *c == col)
+                        .map(|((r, _), cell)| (*r, cell))
+                        .collect();
+                    col_cells.sort_by_key(|(r, _)| *r);
+                    for (_, cell) in col_cells {
+                        if cell.value.is_none() && cell.formula.is_none() {
+                            continue;
+                        }
+                        hash_cell_value(&cell.value, &mut hasher);
+                        cell.formula.hash(&mut hasher);
+                    }
                 }
-                hash_cell_value(&cell.value, &mut hasher);
-                cell.formula.hash(&mut hasher);
             }
         }
 
@@ -440,48 +693,116 @@ impl Grid {
         use crate::hashing::{hash_cell_value, hash_row_content_128};
         use xxhash_rust::xxh3::Xxh3;
 
-        let mut row_cells: Vec<Vec<(u32, &CellContent)>> = vec![Vec::new(); self.nrows as usize];
-
-        for ((row, col), cell) in self.cells.iter() {
-            let row_idx = *row as usize;
-            if row_idx >= row_cells.len() || *col >= self.ncols {
-                continue;
-            }
-            row_cells[row_idx].push((*col, cell));
-        }
-
-        for row in row_cells.iter_mut() {
-            row.sort_by_key(|(col, _)| *col);
-        }
-
-        let row_signatures: Vec<RowSignature> = row_cells
-            .iter()
-            .map(|row| RowSignature {
-                hash: hash_row_content_128(row),
-            })
-            .collect();
-
-        let mut col_hashers: Vec<Xxh3> = (0..self.ncols).map(|_| Xxh3::new()).collect();
-        for row in row_cells.iter() {
-            for (col, cell) in row.iter() {
-                let idx = *col as usize;
-                if idx >= col_hashers.len() {
-                    continue;
+        match &self.cells {
+            GridStorage::Dense(grid) => {
+                let mut row_signatures = Vec::with_capacity(self.nrows as usize);
+                for row in 0..self.nrows {
+                    let mut row_cells: Vec<(u32, &CellContent)> = Vec::new();
+                    for col in 0..self.ncols {
+                        if let Some(cell) = grid.get(row, col) {
+                            row_cells.push((col, cell));
+                        }
+                    }
+                    row_signatures.push(RowSignature {
+                        hash: hash_row_content_128(&row_cells),
+                    });
                 }
-                hash_cell_value(&cell.value, &mut col_hashers[idx]);
-                cell.formula.hash(&mut col_hashers[idx]);
+
+                let mut col_hashers: Vec<Xxh3> = (0..self.ncols).map(|_| Xxh3::new()).collect();
+                for row in 0..self.nrows {
+                    for col in 0..self.ncols {
+                        if let Some(cell) = grid.get(row, col) {
+                            let idx = col as usize;
+                            if idx >= col_hashers.len() {
+                                continue;
+                            }
+                            hash_cell_value(&cell.value, &mut col_hashers[idx]);
+                            cell.formula.hash(&mut col_hashers[idx]);
+                        }
+                    }
+                }
+
+                let col_signatures: Vec<ColSignature> = col_hashers
+                    .into_iter()
+                    .map(|hasher| ColSignature {
+                        hash: hasher.digest128(),
+                    })
+                    .collect();
+
+                self.row_signatures = Some(row_signatures);
+                self.col_signatures = Some(col_signatures);
+            }
+            GridStorage::Sparse(map) => {
+                let mut row_cells: Vec<Vec<(u32, &CellContent)>> =
+                    vec![Vec::new(); self.nrows as usize];
+
+                for ((row, col), cell) in map.iter() {
+                    let row_idx = *row as usize;
+                    if row_idx >= row_cells.len() || *col >= self.ncols {
+                        continue;
+                    }
+                    row_cells[row_idx].push((*col, cell));
+                }
+
+                for row in row_cells.iter_mut() {
+                    row.sort_by_key(|(col, _)| *col);
+                }
+
+                let row_signatures: Vec<RowSignature> = row_cells
+                    .iter()
+                    .map(|row| RowSignature {
+                        hash: hash_row_content_128(row),
+                    })
+                    .collect();
+
+                let mut col_hashers: Vec<Xxh3> = (0..self.ncols).map(|_| Xxh3::new()).collect();
+                for row in row_cells.iter() {
+                    for (col, cell) in row.iter() {
+                        let idx = *col as usize;
+                        if idx >= col_hashers.len() {
+                            continue;
+                        }
+                        hash_cell_value(&cell.value, &mut col_hashers[idx]);
+                        cell.formula.hash(&mut col_hashers[idx]);
+                    }
+                }
+
+                let col_signatures: Vec<ColSignature> = col_hashers
+                    .into_iter()
+                    .map(|hasher| ColSignature {
+                        hash: hasher.digest128(),
+                    })
+                    .collect();
+
+                self.row_signatures = Some(row_signatures);
+                self.col_signatures = Some(col_signatures);
             }
         }
+    }
 
-        let col_signatures: Vec<ColSignature> = col_hashers
-            .into_iter()
-            .map(|hasher| ColSignature {
-                hash: hasher.digest128(),
-            })
-            .collect();
+    pub(crate) fn should_use_dense(nrows: u32, ncols: u32, filled_cells: usize) -> bool {
+        let total_cells = nrows.saturating_mul(ncols) as usize;
+        if total_cells == 0 || total_cells < Self::DENSE_MIN_CELLS {
+            return false;
+        }
+        let ratio = filled_cells as f64 / total_cells as f64;
+        ratio >= Self::DENSE_RATIO_THRESHOLD
+    }
 
-        self.row_signatures = Some(row_signatures);
-        self.col_signatures = Some(col_signatures);
+    fn maybe_upgrade_to_dense(&mut self) {
+        let GridStorage::Sparse(map) = &self.cells else {
+            return;
+        };
+
+        if !Self::should_use_dense(self.nrows, self.ncols, map.len()) {
+            return;
+        }
+
+        let mut dense = DenseGrid::new(self.nrows, self.ncols);
+        for ((row, col), cell) in map.iter() {
+            dense.set(*row, *col, cell.value.clone(), cell.formula);
+        }
+        self.cells = GridStorage::Dense(dense);
     }
 }
 

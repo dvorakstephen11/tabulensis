@@ -7,7 +7,7 @@ use crate::diff::{DiffError, DiffOp, FormulaDiffResult};
 use crate::formula_diff::{FormulaParseCache, diff_cell_formulas_ids};
 use crate::grid_view::GridView;
 #[cfg(feature = "perf-metrics")]
-use crate::perf::{DiffMetrics, Phase};
+use crate::perf::Phase;
 use crate::rect_block_move::RectBlockMove;
 use crate::row_alignment::align_row_changes_from_views;
 use crate::sink::DiffSink;
@@ -311,6 +311,10 @@ pub(super) fn emit_column_aligned_diffs<S: DiffSink>(
         ctx.emit(DiffOp::column_removed(ctx.sheet_id, *col_idx, None))?;
     }
 
+    for mv in &alignment.moves {
+        emit_column_block_move(ctx, *mv)?;
+    }
+
     Ok(())
 }
 
@@ -471,6 +475,96 @@ pub(super) fn positional_diff_from_views<S: DiffSink>(
     Ok(compared)
 }
 
+pub(super) fn positional_diff_from_views_for_rows<S: DiffSink>(
+    ctx: &mut EmitCtx<'_, '_, S>,
+    old: &Grid,
+    new: &Grid,
+    old_view: &GridView,
+    new_view: &GridView,
+    rows: &[u32],
+) -> Result<u64, DiffError> {
+    let overlap_rows = old.nrows.min(new.nrows);
+    let overlap_cols = old.ncols.min(new.ncols);
+    let mut compared: u64 = 0;
+
+    ctx.hardening.progress("cell_diff", 0.0);
+
+    let mut rows_sorted: Vec<u32> = rows.to_vec();
+    rows_sorted.sort_unstable();
+    rows_sorted.dedup();
+
+    let total_rows = rows_sorted.len();
+    for (idx, &row) in rows_sorted.iter().enumerate() {
+        if ctx.hardening.check_timeout(ctx.warnings) {
+            break;
+        }
+        if total_rows > 0 && idx % 64 == 0 {
+            ctx.hardening
+                .progress("cell_diff", idx as f32 / total_rows as f32);
+        }
+
+        if row >= overlap_rows {
+            continue;
+        }
+
+        let old_cells = old_view
+            .rows
+            .get(row as usize)
+            .map(|r| r.cells.as_slice())
+            .unwrap_or(&[]);
+        let new_cells = new_view
+            .rows
+            .get(row as usize)
+            .map(|r| r.cells.as_slice())
+            .unwrap_or(&[]);
+
+        compared = compared.saturating_add(diff_row_pair_sparse(
+            ctx,
+            row,
+            row,
+            overlap_cols,
+            old_cells,
+            new_cells,
+        )?);
+    }
+
+    if old.nrows > new.nrows {
+        for row in new.nrows..old.nrows {
+            if ctx.hardening.check_timeout(ctx.warnings) {
+                break;
+            }
+            ctx.emit(DiffOp::row_removed(ctx.sheet_id, row, None))?;
+        }
+    } else if new.nrows > old.nrows {
+        for row in old.nrows..new.nrows {
+            if ctx.hardening.check_timeout(ctx.warnings) {
+                break;
+            }
+            ctx.emit(DiffOp::row_added(ctx.sheet_id, row, None))?;
+        }
+    }
+
+    if old.ncols > new.ncols {
+        for col in new.ncols..old.ncols {
+            if ctx.hardening.check_timeout(ctx.warnings) {
+                break;
+            }
+            ctx.emit(DiffOp::column_removed(ctx.sheet_id, col, None))?;
+        }
+    } else if new.ncols > old.ncols {
+        for col in old.ncols..new.ncols {
+            if ctx.hardening.check_timeout(ctx.warnings) {
+                break;
+            }
+            ctx.emit(DiffOp::column_added(ctx.sheet_id, col, None))?;
+        }
+    }
+
+    ctx.hardening.progress("cell_diff", 1.0);
+
+    Ok(compared)
+}
+
 #[cfg(feature = "perf-metrics")]
 pub(super) fn cells_in_overlap(old: &Grid, new: &Grid) -> u64 {
     let overlap_rows = old.nrows.min(new.nrows) as u64;
@@ -485,14 +579,14 @@ pub(super) fn run_positional_diff_from_views_with_metrics<S: DiffSink>(
     new: &Grid,
     old_view: &GridView,
     new_view: &GridView,
-    mut metrics: Option<&mut DiffMetrics>,
 ) -> Result<(), DiffError> {
-    let compared = {
-        let _guard = metrics.as_deref_mut().map(|m| m.phase_guard(Phase::CellDiff));
-        positional_diff_from_views(ctx, old, new, old_view, new_view)?
-    };
-    if let Some(m) = metrics.as_deref_mut() {
+    if let Some(m) = ctx.metrics.as_deref_mut() {
+        m.start_phase(Phase::CellDiff);
+    }
+    let compared = positional_diff_from_views(ctx, old, new, old_view, new_view)?;
+    if let Some(m) = ctx.metrics.as_deref_mut() {
         m.add_cells_compared(compared);
+        m.end_phase(Phase::CellDiff);
     }
     Ok(())
 }
@@ -514,18 +608,14 @@ pub(super) fn run_positional_diff_with_metrics<S: DiffSink>(
     ctx: &mut EmitCtx<'_, '_, S>,
     old: &Grid,
     new: &Grid,
-    mut metrics: Option<&mut DiffMetrics>,
 ) -> Result<(), DiffError> {
-    {
-        let _phase = metrics
-            .as_deref_mut()
-            .map(|m| m.phase_guard(Phase::CellDiff));
-
-        positional_diff(ctx, old, new)?;
+    if let Some(m) = ctx.metrics.as_deref_mut() {
+        m.start_phase(Phase::CellDiff);
     }
-
-    if let Some(m) = metrics.as_deref_mut() {
+    positional_diff(ctx, old, new)?;
+    if let Some(m) = ctx.metrics.as_deref_mut() {
         m.add_cells_compared(cells_in_overlap(old, new));
+        m.end_phase(Phase::CellDiff);
     }
 
     Ok(())
@@ -544,7 +634,6 @@ pub(super) fn try_row_alignment_internal<S: DiffSink>(
     emit_ctx: &mut EmitCtx<'_, '_, S>,
     old_view: &GridView,
     new_view: &GridView,
-    #[cfg(feature = "perf-metrics")] metrics: &mut Option<&mut DiffMetrics>,
 ) -> Result<bool, DiffError> {
     let Some(alignment) = align_row_changes_from_views(old_view, new_view, emit_ctx.config) else {
         return Ok(false);
@@ -553,21 +642,18 @@ pub(super) fn try_row_alignment_internal<S: DiffSink>(
     emit_ctx.hardening.progress("cell_diff", 0.0);
 
     #[cfg(feature = "perf-metrics")]
-    let compared = {
-        let _phase = metrics
-            .as_deref_mut()
-            .map(|m| m.phase_guard(Phase::CellDiff));
-        emit_row_aligned_diffs(emit_ctx, old_view, new_view, &alignment)?
-    };
-    #[cfg(not(feature = "perf-metrics"))]
+    if let Some(m) = emit_ctx.metrics.as_deref_mut() {
+        m.start_phase(Phase::CellDiff);
+    }
     let compared = emit_row_aligned_diffs(emit_ctx, old_view, new_view, &alignment)?;
+    #[cfg(feature = "perf-metrics")]
+    if let Some(m) = emit_ctx.metrics.as_deref_mut() {
+        m.add_cells_compared(compared);
+        m.end_phase(Phase::CellDiff);
+    }
 
     emit_ctx.hardening.progress("cell_diff", 1.0);
 
-    #[cfg(feature = "perf-metrics")]
-    if let Some(m) = metrics.as_deref_mut() {
-        m.add_cells_compared(compared);
-    }
     #[cfg(not(feature = "perf-metrics"))]
     let _ = compared;
 
@@ -580,7 +666,6 @@ pub(super) fn try_single_column_alignment_internal<S: DiffSink>(
     new: &Grid,
     old_view: &GridView,
     new_view: &GridView,
-    #[cfg(feature = "perf-metrics")] metrics: &mut Option<&mut DiffMetrics>,
 ) -> Result<bool, DiffError> {
     let Some(alignment) =
         align_single_column_change_from_views(old_view, new_view, emit_ctx.config)
@@ -591,22 +676,18 @@ pub(super) fn try_single_column_alignment_internal<S: DiffSink>(
     emit_ctx.hardening.progress("cell_diff", 0.0);
 
     #[cfg(feature = "perf-metrics")]
-    {
-        let _phase = metrics
-            .as_deref_mut()
-            .map(|m| m.phase_guard(Phase::CellDiff));
-        emit_column_aligned_diffs(emit_ctx, old, new, &alignment)?;
+    if let Some(m) = emit_ctx.metrics.as_deref_mut() {
+        m.start_phase(Phase::CellDiff);
     }
-    #[cfg(not(feature = "perf-metrics"))]
     emit_column_aligned_diffs(emit_ctx, old, new, &alignment)?;
-
-    emit_ctx.hardening.progress("cell_diff", 1.0);
-
     #[cfg(feature = "perf-metrics")]
-    if let Some(m) = metrics.as_deref_mut() {
+    if let Some(m) = emit_ctx.metrics.as_deref_mut() {
         let overlap_rows = old.nrows.min(new.nrows) as u64;
         m.add_cells_compared(overlap_rows.saturating_mul(alignment.matched.len() as u64));
+        m.end_phase(Phase::CellDiff);
     }
+
+    emit_ctx.hardening.progress("cell_diff", 1.0);
 
     Ok(true)
 }

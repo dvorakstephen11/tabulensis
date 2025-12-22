@@ -650,7 +650,12 @@ fn dimension_from_ref(reference: &str) -> Option<(u32, u32)> {
 }
 
 fn build_grid(nrows: u32, ncols: u32, cells: Vec<ParsedCell>) -> Result<Grid, GridParseError> {
-    let mut grid = Grid::new(nrows, ncols);
+    let filled = cells.len();
+    let mut grid = if Grid::should_use_dense(nrows, ncols, filled) {
+        Grid::new_dense(nrows, ncols)
+    } else {
+        Grid::new(nrows, ncols)
+    };
 
     for parsed in cells {
         grid.insert_cell(parsed.row, parsed.col, parsed.value, parsed.formula);

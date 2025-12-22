@@ -14,6 +14,13 @@ pub enum LimitBehavior {
     ReturnError,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticNoisePolicy {
+    SuppressFormattingOnly,
+    ReportFormattingOnly,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DiffConfig {
@@ -39,6 +46,8 @@ pub struct DiffConfig {
     pub enable_fuzzy_moves: bool,
     pub enable_m_semantic_diff: bool,
     pub enable_formula_semantic_diff: bool,
+    /// Policy for handling formatting-only M changes when semantic diff is enabled.
+    pub semantic_noise_policy: SemanticNoisePolicy,
     /// When true, emits CellEdited ops even when values are unchanged (diagnostic);
     /// downstream consumers should treat edits as semantic only if from != to.
     pub include_unchanged_cells: bool,
@@ -95,6 +104,7 @@ impl Default for DiffConfig {
             enable_fuzzy_moves: true,
             enable_m_semantic_diff: true,
             enable_formula_semantic_diff: false,
+            semantic_noise_policy: SemanticNoisePolicy::ReportFormattingOnly,
             include_unchanged_cells: false,
             max_context_rows: 3,
             min_block_size_for_move: 3,
@@ -333,6 +343,11 @@ impl DiffConfigBuilder {
         self
     }
 
+    pub fn semantic_noise_policy(mut self, value: SemanticNoisePolicy) -> Self {
+        self.inner.semantic_noise_policy = value;
+        self
+    }
+
     pub fn include_unchanged_cells(mut self, value: bool) -> Self {
         self.inner.include_unchanged_cells = value;
         self
@@ -467,6 +482,10 @@ mod tests {
         assert!(cfg.enable_fuzzy_moves);
         assert!(cfg.enable_m_semantic_diff);
         assert!(!cfg.enable_formula_semantic_diff);
+        assert!(matches!(
+            cfg.semantic_noise_policy,
+            SemanticNoisePolicy::ReportFormattingOnly
+        ));
     }
 
     #[test]
@@ -567,6 +586,7 @@ mod tests {
             .bailout_similarity_threshold(0.10)
             .max_memory_mb(Some(64))
             .timeout_seconds(Some(5))
+            .semantic_noise_policy(SemanticNoisePolicy::SuppressFormattingOnly)
             .build()
             .expect("valid config should build");
 
@@ -576,5 +596,9 @@ mod tests {
         assert!((cfg.bailout_similarity_threshold - 0.10).abs() < f64::EPSILON);
         assert_eq!(cfg.max_memory_mb, Some(64));
         assert_eq!(cfg.timeout_seconds, Some(5));
+        assert!(matches!(
+            cfg.semantic_noise_policy,
+            SemanticNoisePolicy::SuppressFormattingOnly
+        ));
     }
 }

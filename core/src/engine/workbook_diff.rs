@@ -8,6 +8,8 @@ use crate::workbook::{Sheet, SheetKind, Workbook};
 use crate::progress::ProgressCallback;
 
 use std::collections::HashMap;
+#[cfg(feature = "perf-metrics")]
+use std::mem::size_of;
 
 use super::context::DiffContext;
 use super::grid_diff::try_diff_grids;
@@ -200,15 +202,16 @@ fn try_diff_workbooks_streaming_impl<'p, S: DiffSink>(
     let mut ctx = DiffContext::default();
     let mut op_count = 0usize;
 
-    if hardening.check_timeout(&mut ctx.warnings) {
-        #[cfg(feature = "perf-metrics")]
-        {
-            metrics.end_phase(Phase::Parse);
-            metrics.end_phase(Phase::Total);
-        }
-        sink.finish()?;
-        return Ok(DiffSummary {
-            complete: false,
+        if hardening.check_timeout(&mut ctx.warnings) {
+            #[cfg(feature = "perf-metrics")]
+            {
+                metrics.end_phase(Phase::Parse);
+                metrics.end_phase(Phase::Total);
+                apply_accounted_peak(&mut metrics, old, new, pool);
+            }
+            sink.finish()?;
+            return Ok(DiffSummary {
+                complete: false,
             warnings: ctx.warnings,
             op_count,
             #[cfg(feature = "perf-metrics")]
@@ -316,6 +319,7 @@ fn try_diff_workbooks_streaming_impl<'p, S: DiffSink>(
     #[cfg(feature = "perf-metrics")]
     {
         metrics.end_phase(Phase::Total);
+        apply_accounted_peak(&mut metrics, old, new, pool);
     }
     sink.finish()?;
     let complete = ctx.warnings.is_empty();
@@ -326,6 +330,33 @@ fn try_diff_workbooks_streaming_impl<'p, S: DiffSink>(
         #[cfg(feature = "perf-metrics")]
         metrics: Some(metrics),
     })
+}
+
+#[cfg(feature = "perf-metrics")]
+fn estimate_workbook_bytes(workbook: &Workbook) -> u64 {
+    let sheet_bytes: u64 = workbook
+        .sheets
+        .iter()
+        .map(|sheet| sheet.grid.estimated_bytes())
+        .sum();
+    let named_ranges = workbook.named_ranges.len() as u64 * size_of::<crate::workbook::NamedRange>() as u64;
+    let charts = workbook.charts.len() as u64 * size_of::<crate::workbook::ChartObject>() as u64;
+    sheet_bytes.saturating_add(named_ranges).saturating_add(charts)
+}
+
+#[cfg(feature = "perf-metrics")]
+fn apply_accounted_peak(
+    metrics: &mut DiffMetrics,
+    old: &Workbook,
+    new: &Workbook,
+    pool: &StringPool,
+) {
+    let estimated = estimate_workbook_bytes(old)
+        .saturating_add(estimate_workbook_bytes(new))
+        .saturating_add(pool.estimated_bytes());
+    if estimated > metrics.peak_memory_bytes {
+        metrics.peak_memory_bytes = estimated;
+    }
 }
 
 #[cfg(test)]

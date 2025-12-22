@@ -10,12 +10,17 @@ fn metrics_starts_with_zero_counts() {
     assert_eq!(metrics.anchors_found, 0);
     assert_eq!(metrics.moves_detected, 0);
     assert_eq!(metrics.parse_time_ms, 0);
+    assert_eq!(metrics.signature_build_time_ms, 0);
     assert_eq!(metrics.alignment_time_ms, 0);
     assert_eq!(metrics.move_detection_time_ms, 0);
     assert_eq!(metrics.cell_diff_time_ms, 0);
+    assert_eq!(metrics.op_emit_time_ms, 0);
+    assert_eq!(metrics.report_serialize_time_ms, 0);
     assert_eq!(metrics.total_time_ms, 0);
     assert_eq!(metrics.diff_time_ms, 0);
     assert_eq!(metrics.peak_memory_bytes, 0);
+    assert_eq!(metrics.hash_lookups_est, 0);
+    assert_eq!(metrics.allocations_est, 0);
 }
 
 #[test]

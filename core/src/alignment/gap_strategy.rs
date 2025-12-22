@@ -9,6 +9,7 @@
 //! - **DeleteAll**: New side empty, all old rows are deletions
 //! - **SmallEdit**: Both sides small enough for O(n*m) LCS alignment
 //! - **MoveCandidate**: Gap contains matching unique signatures that may indicate moves
+//! - **ConsumeGlobalMoves**: Gap contains validated global moves; consume them first
 //! - **RecursiveAlign**: Gap is large; recursively apply AMR with rare anchors
 //! - **HashFallback**: Monotone hash/LIS fallback for large gaps
 
@@ -24,6 +25,7 @@ pub enum GapStrategy {
     DeleteAll,
     SmallEdit,
     MoveCandidate,
+    ConsumeGlobalMoves,
     RecursiveAlign,
     HashFallback,
 }
@@ -33,6 +35,7 @@ pub fn select_gap_strategy(
     new_slice: &[RowMeta],
     config: &DiffConfig,
     has_recursed: bool,
+    has_global_moves: bool,
 ) -> GapStrategy {
     let old_len = old_slice.len() as u32;
     let new_len = new_slice.len() as u32;
@@ -45,6 +48,10 @@ pub fn select_gap_strategy(
     }
     if new_len == 0 {
         return GapStrategy::DeleteAll;
+    }
+
+    if has_global_moves {
+        return GapStrategy::ConsumeGlobalMoves;
     }
 
     let is_move_candidate = has_matching_signatures(old_slice, new_slice);
@@ -116,7 +123,7 @@ mod tests {
         let rows_a = vec![meta(0, 1), meta(1, 2), meta(2, 3)];
         let rows_b = vec![meta(0, 4), meta(1, 5), meta(2, 6)];
 
-        let strategy = select_gap_strategy(&rows_a, &rows_b, &config, false);
+        let strategy = select_gap_strategy(&rows_a, &rows_b, &config, false, false);
         assert_eq!(strategy, GapStrategy::HashFallback);
     }
 }

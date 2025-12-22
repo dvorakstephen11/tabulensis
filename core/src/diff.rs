@@ -414,10 +414,20 @@ pub enum DiffOp {
         old: Option<StringId>,
         new: Option<StringId>,
     },
-    // Future: DAX operations
-    // MeasureAdded { name: StringId }
-    // MeasureRemoved { name: StringId }
-    // MeasureDefinitionChanged { name: StringId, change_kind: QueryChangeKind }
+    #[cfg(feature = "model-diff")]
+    MeasureAdded {
+        name: StringId,
+    },
+    #[cfg(feature = "model-diff")]
+    MeasureRemoved {
+        name: StringId,
+    },
+    #[cfg(feature = "model-diff")]
+    MeasureDefinitionChanged {
+        name: StringId,
+        old_hash: u64,
+        new_hash: u64,
+    },
 }
 
 /// A versioned collection of diff operations between two workbooks.

@@ -18,6 +18,7 @@ vba = ["dep:ovba"]
 std-fs = []
 perf-metrics = []
 dev-apis = []
+model-diff = []
 
 [dependencies]
 quick-xml = "0.32"

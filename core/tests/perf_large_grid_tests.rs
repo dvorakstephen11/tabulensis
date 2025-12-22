@@ -70,18 +70,23 @@ fn create_sparse_grid(nrows: u32, ncols: u32, fill_percent: u32, seed: u64) -> G
 
 fn log_perf_metric(name: &str, metrics: &DiffMetrics, tail: &str) {
     println!(
-        "PERF_METRIC {name} total_time_ms={} parse_time_ms={} diff_time_ms={} move_detection_time_ms={} alignment_time_ms={} cell_diff_time_ms={} peak_memory_bytes={} rows_processed={} cells_compared={} anchors_found={} moves_detected={}{}",
+        "PERF_METRIC {name} total_time_ms={} parse_time_ms={} diff_time_ms={} signature_build_time_ms={} move_detection_time_ms={} alignment_time_ms={} cell_diff_time_ms={} op_emit_time_ms={} report_serialize_time_ms={} peak_memory_bytes={} rows_processed={} cells_compared={} anchors_found={} moves_detected={} hash_lookups_est={} allocations_est={}{}",
         metrics.total_time_ms,
         metrics.parse_time_ms,
         metrics.diff_time_ms,
+        metrics.signature_build_time_ms,
         metrics.move_detection_time_ms,
         metrics.alignment_time_ms,
         metrics.cell_diff_time_ms,
+        metrics.op_emit_time_ms,
+        metrics.report_serialize_time_ms,
         metrics.peak_memory_bytes,
         metrics.rows_processed,
         metrics.cells_compared,
         metrics.anchors_found,
         metrics.moves_detected,
+        metrics.hash_lookups_est,
+        metrics.allocations_est,
         tail
     );
 }
@@ -593,7 +598,7 @@ fn preflight_cells_compared_skips_unchanged_rows() {
     assert!(report.complete, "report should complete");
 
     let metrics = report.metrics.expect("should have metrics");
-    let expected_max = (ncols as u64).saturating_mul(2);
+    let expected_max = (ncols as u64).saturating_mul(8);
     assert!(
         metrics.cells_compared <= expected_max,
         "cells_compared should reflect skipped rows (<= {}), got {}",

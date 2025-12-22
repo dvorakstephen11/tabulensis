@@ -1,0 +1,46 @@
+name: Fuzzing
+
+on:
+  schedule:
+    - cron: "0 4 * * 0"
+  workflow_dispatch: {}
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (nightly)
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: nightly
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
+      - name: Fuzz core datamashup framing
+        run: cargo fuzz run fuzz_datamashup_parse -max_total_time=60
+        working-directory: core/fuzz
+
+      - name: Fuzz core grid diff
+        run: cargo fuzz run fuzz_diff_grids -max_total_time=60
+        working-directory: core/fuzz
+
+      - name: Fuzz datamashup framing (top-level)
+        run: cargo fuzz run datamashup -max_total_time=60
+        working-directory: fuzz
+
+      - name: Fuzz diff engine (top-level)
+        run: cargo fuzz run diff_engine -max_total_time=60
+        working-directory: fuzz
+
+      - name: Upload fuzz artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fuzz-artifacts
+          path: |
+            core/fuzz/artifacts
+            fuzz/artifacts
+          if-no-files-found: ignore

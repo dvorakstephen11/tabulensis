@@ -78,6 +78,7 @@ mod datamashup_framing;
 mod datamashup_package;
 pub mod error_codes;
 mod diff;
+mod diffable;
 mod engine;
 #[cfg(feature = "excel-open-xml")]
 mod excel_open_xml;
@@ -87,10 +88,16 @@ mod grid_metadata;
 mod grid_parser;
 mod grid_view;
 pub(crate) mod hashing;
+mod matching;
 mod m_ast;
+mod m_ast_diff;
 mod m_diff;
 mod m_section;
 mod m_semantic_detail;
+#[cfg(feature = "model-diff")]
+mod model;
+#[cfg(feature = "model-diff")]
+mod model_diff;
 mod object_diff;
 mod output;
 mod package;
@@ -176,7 +183,7 @@ pub mod advanced {
 }
 
 pub use addressing::{AddressParseError, address_to_index, index_to_address};
-pub use config::{DiffConfig, DiffConfigBuilder, LimitBehavior};
+pub use config::{DiffConfig, DiffConfigBuilder, LimitBehavior, SemanticNoisePolicy};
 pub use container::{ContainerError, ContainerLimits, OpcContainer, ZipContainer};
 #[doc(hidden)]
 pub use datamashup::parse_metadata;
@@ -196,6 +203,7 @@ pub use diff::{
     QuerySemanticDetail, RenamePair, SheetId, StepChange, StepDiff, StepParams, StepSnapshot,
     StepType,
 };
+pub use diffable::{DiffContext, Diffable};
 #[doc(hidden)]
 pub use engine::{
     diff_grids_database_mode, diff_workbooks as diff_workbooks_with_pool, diff_workbooks_streaming,
@@ -225,6 +233,10 @@ pub use m_ast::{
     MModuleAst, MParseError, ast_semantically_equal, canonicalize_m_ast, parse_m_expression,
 };
 pub use m_section::{SectionMember, SectionParseError, parse_section_members};
+#[cfg(feature = "model-diff")]
+pub use model::{Measure, Model, ModelColumn, ModelTable};
+#[cfg(feature = "model-diff")]
+pub use model_diff::diff_models;
 #[doc(hidden)]
 pub use output::json::diff_report_to_cell_diffs;
 #[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]

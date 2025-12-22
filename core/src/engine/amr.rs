@@ -1,12 +1,16 @@
 use crate::alignment::align_rows_amr_with_signatures_from_views;
+#[cfg(feature = "perf-metrics")]
+use crate::alignment::align_rows_amr_with_signatures_from_views_with_metrics;
 use crate::alignment::move_extraction::moves_from_matched_pairs;
 use crate::alignment_types::RowAlignment;
-use crate::column_alignment::align_single_column_change_from_views;
+use crate::column_alignment::{
+    align_columns_amr_from_views, align_single_column_change_from_views,
+};
 use crate::config::DiffConfig;
 use crate::diff::DiffError;
 use crate::grid_view::GridView;
 #[cfg(feature = "perf-metrics")]
-use crate::perf::{DiffMetrics, Phase};
+use crate::perf::Phase;
 use crate::sink::DiffSink;
 use crate::workbook::{Grid, RowSignature};
 
@@ -119,11 +123,8 @@ fn amr_should_fallback_multiset_reorder(
         && config.max_move_iterations > 0
 }
 
-fn amr_can_try_column_alignment(old: &Grid, new: &Grid, alignment: &RowAlignment) -> bool {
-    alignment.moves.is_empty()
-        && alignment.inserted.is_empty()
-        && alignment.deleted.is_empty()
-        && old.ncols != new.ncols
+fn amr_can_try_column_alignment(alignment: &RowAlignment) -> bool {
+    alignment.moves.is_empty() && alignment.inserted.is_empty() && alignment.deleted.is_empty()
 }
 
 fn inject_moves_from_insert_delete(
@@ -206,11 +207,24 @@ pub(super) fn try_diff_with_amr<S: DiffSink>(
     new: &Grid,
     old_view: &GridView,
     new_view: &GridView,
-    #[cfg(feature = "perf-metrics")] mut metrics: Option<&mut DiffMetrics>,
 ) -> Result<bool, DiffError> {
-    let Some(amr_result) =
-        align_rows_amr_with_signatures_from_views(old_view, new_view, emit_ctx.config)
-    else {
+    #[cfg(feature = "perf-metrics")]
+    let amr_result = {
+        if let Some(m) = emit_ctx.metrics.as_deref_mut() {
+            align_rows_amr_with_signatures_from_views_with_metrics(
+                old_view,
+                new_view,
+                emit_ctx.config,
+                m,
+            )
+        } else {
+            align_rows_amr_with_signatures_from_views(old_view, new_view, emit_ctx.config)
+        }
+    };
+    #[cfg(not(feature = "perf-metrics"))]
+    let amr_result = align_rows_amr_with_signatures_from_views(old_view, new_view, emit_ctx.config);
+
+    let Some(amr_result) = amr_result else {
         return Ok(false);
     };
 
@@ -229,72 +243,46 @@ pub(super) fn try_diff_with_amr<S: DiffSink>(
     }
 
     if amr_should_fallback_no_matched_rows(&alignment) {
-        #[cfg(feature = "perf-metrics")]
-        run_positional_diff_from_views_with_metrics(
-            emit_ctx,
-            old,
-            new,
-            old_view,
-            new_view,
-            metrics.as_deref_mut(),
-        )?;
-        #[cfg(not(feature = "perf-metrics"))]
         run_positional_diff_from_views_with_metrics(emit_ctx, old, new, old_view, new_view)?;
         return Ok(true);
     }
 
     if amr_should_fallback_row_edits_with_structural(old, new, &alignment, emit_ctx.config) {
-        #[cfg(feature = "perf-metrics")]
-        run_positional_diff_from_views_with_metrics(
-            emit_ctx,
-            old,
-            new,
-            old_view,
-            new_view,
-            metrics.as_deref_mut(),
-        )?;
-        #[cfg(not(feature = "perf-metrics"))]
         run_positional_diff_from_views_with_metrics(emit_ctx, old, new, old_view, new_view)?;
         return Ok(true);
     }
 
-    if amr_can_try_column_alignment(old, new, &alignment)
-        && let Some(col_alignment) =
-            align_single_column_change_from_views(old_view, new_view, emit_ctx.config)
-    {
-        emit_ctx.hardening.progress("cell_diff", 0.0);
-        #[cfg(feature = "perf-metrics")]
-        if let Some(m) = metrics.as_mut() {
-            m.start_phase(Phase::CellDiff);
+    if amr_can_try_column_alignment(&alignment) {
+        let col_alignment = align_columns_amr_from_views(old_view, new_view, emit_ctx.config)
+            .or_else(|| align_single_column_change_from_views(old_view, new_view, emit_ctx.config));
+
+        if let Some(col_alignment) = col_alignment {
+            emit_ctx.hardening.progress("cell_diff", 0.0);
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = emit_ctx.metrics.as_deref_mut() {
+                m.start_phase(Phase::CellDiff);
+            }
+            emit_column_aligned_diffs(emit_ctx, old, new, &col_alignment)?;
+            emit_ctx.hardening.progress("cell_diff", 1.0);
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = emit_ctx.metrics.as_deref_mut() {
+                let overlap_rows = old.nrows.min(new.nrows) as u64;
+                m.add_cells_compared(
+                    overlap_rows.saturating_mul(col_alignment.matched.len() as u64),
+                );
+                m.end_phase(Phase::CellDiff);
+            }
+            return Ok(true);
         }
-        emit_column_aligned_diffs(emit_ctx, old, new, &col_alignment)?;
-        emit_ctx.hardening.progress("cell_diff", 1.0);
-        #[cfg(feature = "perf-metrics")]
-        if let Some(m) = metrics.as_mut() {
-            let overlap_rows = old.nrows.min(new.nrows) as u64;
-            m.add_cells_compared(overlap_rows.saturating_mul(col_alignment.matched.len() as u64));
-            m.end_phase(Phase::CellDiff);
-        }
-        return Ok(true);
     }
 
     if amr_should_fallback_multiset_reorder(old, new, &alignment, emit_ctx.config) {
-        #[cfg(feature = "perf-metrics")]
-        run_positional_diff_from_views_with_metrics(
-            emit_ctx,
-            old,
-            new,
-            old_view,
-            new_view,
-            metrics.as_deref_mut(),
-        )?;
-        #[cfg(not(feature = "perf-metrics"))]
         run_positional_diff_from_views_with_metrics(emit_ctx, old, new, old_view, new_view)?;
         return Ok(true);
     }
 
     #[cfg(feature = "perf-metrics")]
-    if let Some(m) = metrics.as_mut() {
+    if let Some(m) = emit_ctx.metrics.as_deref_mut() {
         m.start_phase(Phase::CellDiff);
     }
 
@@ -302,7 +290,7 @@ pub(super) fn try_diff_with_amr<S: DiffSink>(
     let compared = emit_row_aligned_diffs(emit_ctx, old_view, new_view, &alignment)?;
     emit_ctx.hardening.progress("cell_diff", 1.0);
     #[cfg(feature = "perf-metrics")]
-    if let Some(m) = metrics.as_mut() {
+    if let Some(m) = emit_ctx.metrics.as_deref_mut() {
         m.add_cells_compared(compared);
         m.anchors_found = m
             .anchors_found

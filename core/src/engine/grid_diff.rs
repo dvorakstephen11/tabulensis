@@ -13,7 +13,7 @@ use super::SheetId;
 use super::context::{DiffContext, EmitCtx, emit_op};
 use super::grid_primitives::{
     cells_content_equal, compute_formula_diff, run_positional_diff_from_views_with_metrics,
-    run_positional_diff_with_metrics, snapshot_with_addr,
+    run_positional_diff_with_metrics, snapshot_with_addr, positional_diff_from_views_for_rows,
 };
 use super::move_mask::SheetGridDiffer;
 
@@ -87,11 +87,10 @@ pub(super) fn try_diff_grids<'p, S: DiffSink>(
                     op_count,
                     &mut ctx.warnings,
                     hardening,
+                    #[cfg(feature = "perf-metrics")]
+                    metrics.as_deref_mut(),
                 );
 
-                #[cfg(feature = "perf-metrics")]
-                run_positional_diff_with_metrics(&mut emit_ctx, old, new, metrics.as_deref_mut())?;
-                #[cfg(not(feature = "perf-metrics"))]
                 run_positional_diff_with_metrics(&mut emit_ctx, old, new)?;
 
                 return Ok(());
@@ -157,25 +156,34 @@ fn diff_grids_core<'p, S: DiffSink>(
             op_count,
             &mut ctx.warnings,
             hardening,
+            #[cfg(feature = "perf-metrics")]
+            metrics.as_deref_mut(),
         );
-        #[cfg(feature = "perf-metrics")]
-        run_positional_diff_with_metrics(&mut emit_ctx, old, new, metrics.as_deref_mut())?;
-        #[cfg(not(feature = "perf-metrics"))]
         run_positional_diff_with_metrics(&mut emit_ctx, old, new)?;
         return Ok(());
     }
 
     #[cfg(feature = "perf-metrics")]
     if let Some(m) = metrics.as_mut() {
-        m.start_phase(Phase::Parse);
+        m.start_phase(Phase::SignatureBuild);
     }
     let old_view = GridView::from_grid_with_config(old, config);
     let new_view = GridView::from_grid_with_config(new, config);
+    #[cfg(feature = "perf-metrics")]
+    if let Some(m) = metrics.as_mut() {
+        let lookups = old.cell_count() as u64 + new.cell_count() as u64;
+        let allocations = old.nrows as u64
+            + old.ncols as u64
+            + new.nrows as u64
+            + new.ncols as u64;
+        m.add_hash_lookups_est(lookups);
+        m.add_allocations_est(allocations);
+    }
 
     let preflight = should_short_circuit_to_positional(&old_view, &new_view, config);
     #[cfg(feature = "perf-metrics")]
     if let Some(m) = metrics.as_mut() {
-        m.end_phase(Phase::Parse);
+        m.end_phase(Phase::SignatureBuild);
     }
 
     if matches!(
@@ -191,24 +199,48 @@ fn diff_grids_core<'p, S: DiffSink>(
             op_count,
             &mut ctx.warnings,
             hardening,
-        );
-        #[cfg(feature = "perf-metrics")]
-        run_positional_diff_from_views_with_metrics(
-            &mut emit_ctx,
-            old,
-            new,
-            &old_view,
-            &new_view,
+            #[cfg(feature = "perf-metrics")]
             metrics.as_deref_mut(),
-        )?;
-        #[cfg(not(feature = "perf-metrics"))]
-        run_positional_diff_from_views_with_metrics(
-            &mut emit_ctx,
-            old,
-            new,
-            &old_view,
-            &new_view,
-        )?;
+        );
+
+        if preflight == PreflightDecision::ShortCircuitNearIdentical
+            && old.nrows == new.nrows
+            && old.ncols == new.ncols
+        {
+            let rows = rows_with_context(
+                &mismatched_rows(&old_view, &new_view),
+                config.max_context_rows,
+                old.nrows,
+            );
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = emit_ctx.metrics.as_deref_mut() {
+                m.start_phase(Phase::CellDiff);
+            }
+            let compared = positional_diff_from_views_for_rows(
+                &mut emit_ctx,
+                old,
+                new,
+                &old_view,
+                &new_view,
+                &rows,
+            )?;
+            #[cfg(feature = "perf-metrics")]
+            if let Some(m) = emit_ctx.metrics.as_deref_mut() {
+                m.add_cells_compared(compared);
+                m.end_phase(Phase::CellDiff);
+            }
+            #[cfg(not(feature = "perf-metrics"))]
+            let _ = compared;
+        } else {
+            run_positional_diff_from_views_with_metrics(
+                &mut emit_ctx,
+                old,
+                new,
+                &old_view,
+                &new_view,
+            )?;
+        }
+
         return Ok(());
     }
 
@@ -221,6 +253,8 @@ fn diff_grids_core<'p, S: DiffSink>(
         op_count,
         &mut ctx.warnings,
         hardening,
+        #[cfg(feature = "perf-metrics")]
+        metrics.as_deref_mut(),
     );
 
     let mut differ = SheetGridDiffer::from_views(
@@ -229,12 +263,10 @@ fn diff_grids_core<'p, S: DiffSink>(
         new,
         old_view,
         new_view,
-        #[cfg(feature = "perf-metrics")]
-        metrics.as_deref_mut(),
     );
 
     #[cfg(feature = "perf-metrics")]
-    if let Some(m) = differ.metrics.as_mut() {
+    if let Some(m) = differ.emit_ctx.metrics.as_deref_mut() {
         m.start_phase(Phase::MoveDetection);
     }
 
@@ -246,7 +278,7 @@ fn diff_grids_core<'p, S: DiffSink>(
     differ.emit_ctx.hardening.progress("move_detection", 1.0);
 
     #[cfg(feature = "perf-metrics")]
-    if let Some(m) = differ.metrics.as_mut() {
+    if let Some(m) = differ.emit_ctx.metrics.as_deref_mut() {
         m.end_phase(Phase::MoveDetection);
     }
 
@@ -257,19 +289,19 @@ fn diff_grids_core<'p, S: DiffSink>(
     if differ.has_mask_exclusions() {
         differ.emit_ctx.hardening.progress("alignment", 1.0);
         #[cfg(feature = "perf-metrics")]
-        if let Some(m) = differ.metrics.as_mut() {
+        if let Some(m) = differ.emit_ctx.metrics.as_deref_mut() {
             m.start_phase(Phase::CellDiff);
         }
         differ.diff_with_masks()?;
         #[cfg(feature = "perf-metrics")]
-        if let Some(m) = differ.metrics.as_mut() {
+        if let Some(m) = differ.emit_ctx.metrics.as_deref_mut() {
             m.end_phase(Phase::CellDiff);
         }
         return Ok(());
     }
 
     #[cfg(feature = "perf-metrics")]
-    if let Some(m) = differ.metrics.as_mut() {
+    if let Some(m) = differ.emit_ctx.metrics.as_deref_mut() {
         m.start_phase(Phase::Alignment);
     }
 
@@ -280,7 +312,7 @@ fn diff_grids_core<'p, S: DiffSink>(
     if differ.try_amr()? {
         differ.emit_ctx.hardening.progress("alignment", 1.0);
         #[cfg(feature = "perf-metrics")]
-        if let Some(m) = differ.metrics.as_mut() {
+        if let Some(m) = differ.emit_ctx.metrics.as_deref_mut() {
             m.end_phase(Phase::Alignment);
         }
         return Ok(());
@@ -289,7 +321,7 @@ fn diff_grids_core<'p, S: DiffSink>(
     if differ.try_row_alignment()? {
         differ.emit_ctx.hardening.progress("alignment", 1.0);
         #[cfg(feature = "perf-metrics")]
-        if let Some(m) = differ.metrics.as_mut() {
+        if let Some(m) = differ.emit_ctx.metrics.as_deref_mut() {
             m.end_phase(Phase::Alignment);
         }
         return Ok(());
@@ -298,7 +330,7 @@ fn diff_grids_core<'p, S: DiffSink>(
     if differ.try_single_column_alignment()? {
         differ.emit_ctx.hardening.progress("alignment", 1.0);
         #[cfg(feature = "perf-metrics")]
-        if let Some(m) = differ.metrics.as_mut() {
+        if let Some(m) = differ.emit_ctx.metrics.as_deref_mut() {
             m.end_phase(Phase::Alignment);
         }
         return Ok(());
@@ -309,7 +341,7 @@ fn diff_grids_core<'p, S: DiffSink>(
     differ.emit_ctx.hardening.progress("alignment", 1.0);
 
     #[cfg(feature = "perf-metrics")]
-    if let Some(m) = differ.metrics.as_mut() {
+    if let Some(m) = differ.emit_ctx.metrics.as_deref_mut() {
         m.end_phase(Phase::Alignment);
     }
 
@@ -485,12 +517,12 @@ pub(crate) fn try_diff_grids_database_mode_streaming<S: DiffSink>(
 }
 
 fn grids_non_blank_cells_equal(old: &Grid, new: &Grid) -> bool {
-    if old.cells.len() != new.cells.len() {
+    if old.cell_count() != new.cell_count() {
         return false;
     }
 
-    for (coord, cell_a) in old.cells.iter() {
-        let Some(cell_b) = new.cells.get(coord) else {
+    for ((row, col), cell_a) in old.iter_cells() {
+        let Some(cell_b) = new.get(row, col) else {
             return false;
         };
         if cell_a.value != cell_b.value || cell_a.formula != cell_b.formula {
@@ -601,6 +633,38 @@ fn are_multisets_equal(old_view: &GridView<'_>, new_view: &GridView<'_>) -> bool
     old_freq == new_freq
 }
 
+fn mismatched_rows(old_view: &GridView<'_>, new_view: &GridView<'_>) -> Vec<u32> {
+    let mut rows = Vec::new();
+    let count = old_view.row_meta.len().min(new_view.row_meta.len());
+    for idx in 0..count {
+        let a = old_view.row_meta[idx].signature;
+        let b = new_view.row_meta[idx].signature;
+        if a != b {
+            rows.push(idx as u32);
+        }
+    }
+    rows
+}
+
+fn rows_with_context(rows: &[u32], context: u32, max_rows: u32) -> Vec<u32> {
+    if rows.is_empty() || context == 0 {
+        return rows.to_vec();
+    }
+
+    let mut out = Vec::new();
+    for &row in rows {
+        let start = row.saturating_sub(context);
+        let end = row.saturating_add(context).min(max_rows.saturating_sub(1));
+        for r in start..=end {
+            out.push(r);
+        }
+    }
+
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 #[cfg(feature = "perf-metrics")]
 fn cells_in_overlap(old: &Grid, new: &Grid) -> u64 {
     let overlap_rows = old.nrows.min(new.nrows) as u64;
@@ -643,7 +707,7 @@ mod tests {
 
         assert!(!grids_non_blank_cells_equal(&grid_a, &grid_b_changed));
 
-        grid_a.insert_cell(1, 1, None, None);
+        grid_a.insert_cell(1, 1, Some(CellValue::Blank), None);
 
         assert!(!grids_non_blank_cells_equal(&grid_a, &grid_b));
     }
@@ -685,6 +749,8 @@ mod tests {
             &mut op_count,
             &mut warnings,
             &mut hardening,
+            #[cfg(feature = "perf-metrics")]
+            None,
         );
         let compared = diff_row_pair_sparse(&mut emit_ctx, 0, 0, 3, &old_cells, &new_cells)
             .expect("diff should succeed");
@@ -721,6 +787,8 @@ mod tests {
             &mut op_count,
             &mut warnings,
             &mut hardening,
+            #[cfg(feature = "perf-metrics")]
+            None,
         );
         let compared = diff_row_pair_sparse(&mut emit_ctx, 0, 0, 3, &old_cells, &new_cells)
             .expect("diff should succeed");

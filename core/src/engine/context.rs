@@ -1,6 +1,8 @@
 use crate::config::DiffConfig;
 use crate::diff::{DiffError, DiffOp};
 use crate::formula_diff::FormulaParseCache;
+#[cfg(feature = "perf-metrics")]
+use crate::perf::{DiffMetrics, Phase};
 use crate::sink::DiffSink;
 use crate::string_pool::StringPool;
 
@@ -32,6 +34,8 @@ pub(super) struct EmitCtx<'a, 'p, S: DiffSink> {
     pub(super) op_count: &'a mut usize,
     pub(super) warnings: &'a mut Vec<String>,
     pub(super) hardening: &'a mut HardeningController<'p>,
+    #[cfg(feature = "perf-metrics")]
+    pub(super) metrics: Option<&'a mut DiffMetrics>,
 }
 
 impl<'a, 'p, S: DiffSink> EmitCtx<'a, 'p, S> {
@@ -44,6 +48,7 @@ impl<'a, 'p, S: DiffSink> EmitCtx<'a, 'p, S> {
         op_count: &'a mut usize,
         warnings: &'a mut Vec<String>,
         hardening: &'a mut HardeningController<'p>,
+        #[cfg(feature = "perf-metrics")] metrics: Option<&'a mut DiffMetrics>,
     ) -> Self {
         Self {
             sheet_id,
@@ -54,10 +59,17 @@ impl<'a, 'p, S: DiffSink> EmitCtx<'a, 'p, S> {
             op_count,
             warnings,
             hardening,
+            #[cfg(feature = "perf-metrics")]
+            metrics,
         }
     }
 
     pub(super) fn emit(&mut self, op: DiffOp) -> Result<(), DiffError> {
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = self.metrics.as_deref_mut() {
+            let _guard = m.phase_guard(Phase::OpEmit);
+            return emit_op(self.sink, self.op_count, op);
+        }
         emit_op(self.sink, self.op_count, op)
     }
 }

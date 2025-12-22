@@ -2,7 +2,7 @@ use crate::output::{git_diff, json, text};
 use crate::OutputFormat;
 use anyhow::{Context, Result, bail};
 use excel_diff::{
-    DiffConfig, DiffReport, Grid, JsonLinesSink, PbixPackage, ProgressCallback,
+    DiffConfig, DiffReport, DiffSummary, Grid, JsonLinesSink, PbixPackage, ProgressCallback,
     WorkbookPackage, index_to_address, suggest_key_columns, with_default_session,
 };
 use std::fs::File;
@@ -73,6 +73,7 @@ pub fn run(
     progress: bool,
     max_memory: Option<u32>,
     timeout: Option<u32>,
+    metrics_json: Option<String>,
 ) -> Result<ExitCode> {
     if fast && precise {
         bail!("Cannot use both --fast and --precise flags together");
@@ -145,13 +146,14 @@ pub fn run(
             sheet,
             keys,
             auto_keys,
+            metrics_json,
         );
     }
 
     let progress = progress.then(CliProgress::new);
 
     if format == OutputFormat::Jsonl && !git_diff_mode {
-        return run_streaming_host(&old_host, &new_host, &config, progress.as_ref());
+        return run_streaming_host(&old_host, &new_host, &config, progress.as_ref(), metrics_json.as_deref());
     }
 
     let report = match (&old_host, &new_host) {
@@ -168,6 +170,10 @@ pub fn run(
     }
 
     print_warnings_to_stderr(&report);
+
+    if let Some(path) = metrics_json.as_deref() {
+        write_metrics_json_report(Path::new(path), &report)?;
+    }
 
     let stdout = io::stdout();
     let mut handle = stdout.lock();
@@ -202,6 +208,7 @@ fn run_streaming_host(
     new_host: &Host,
     config: &DiffConfig,
     progress: Option<&CliProgress>,
+    metrics_json: Option<&str>,
 ) -> Result<ExitCode> {
     let stdout = io::stdout();
     let handle = stdout.lock();
@@ -228,6 +235,10 @@ fn run_streaming_host(
 
     if let Some(p) = progress {
         p.finish();
+    }
+
+    if let Some(path) = metrics_json {
+        write_metrics_json_summary(Path::new(path), &summary)?;
     }
 
     for warning in &summary.warnings {
@@ -328,6 +339,7 @@ fn run_database_mode(
     sheet: Option<String>,
     keys: Option<String>,
     auto_keys: bool,
+    metrics_json: Option<String>,
 ) -> Result<ExitCode> {
     let sheet_name = determine_sheet_name(&old_pkg.workbook, &new_pkg.workbook, sheet)?;
     
@@ -349,7 +361,14 @@ fn run_database_mode(
     };
 
     if format == OutputFormat::Jsonl && !git_diff_mode {
-        return run_database_streaming(old_pkg, new_pkg, &sheet_name, &key_columns, config);
+        return run_database_streaming(
+            old_pkg,
+            new_pkg,
+            &sheet_name,
+            &key_columns,
+            config,
+            metrics_json.as_deref(),
+        );
     }
 
     let report = old_pkg
@@ -358,6 +377,10 @@ fn run_database_mode(
 
     print_warnings_to_stderr(&report);
     print_fallback_suggestions(&report, auto_keys, &sheet_name, old_pkg);
+
+    if let Some(path) = metrics_json.as_deref() {
+        write_metrics_json_report(Path::new(path), &report)?;
+    }
 
     let stdout = io::stdout();
     let mut handle = stdout.lock();
@@ -387,6 +410,7 @@ fn run_database_streaming(
     sheet_name: &str,
     key_columns: &[u32],
     config: &DiffConfig,
+    metrics_json: Option<&str>,
 ) -> Result<ExitCode> {
     let stdout = io::stdout();
     let handle = stdout.lock();
@@ -398,6 +422,10 @@ fn run_database_streaming(
         .context("Database mode streaming diff failed")?;
 
     writer.flush()?;
+
+    if let Some(path) = metrics_json {
+        write_metrics_json_summary(Path::new(path), &summary)?;
+    }
 
     for warning in &summary.warnings {
         eprintln!("Warning: {}", warning);
@@ -549,6 +577,50 @@ fn print_warnings_to_stderr(report: &DiffReport) {
     for warning in &report.warnings {
         eprintln!("Warning: {}", warning);
     }
+}
+
+#[cfg(feature = "perf-metrics")]
+fn write_metrics_json_report(path: &Path, report: &DiffReport) -> Result<()> {
+    let metrics = report
+        .metrics
+        .as_ref()
+        .context("Perf metrics not available; build with --features perf-metrics")?;
+    write_metrics_json(path, metrics)
+}
+
+#[cfg(feature = "perf-metrics")]
+fn write_metrics_json_summary(path: &Path, summary: &DiffSummary) -> Result<()> {
+    let metrics = summary
+        .metrics
+        .as_ref()
+        .context("Perf metrics not available; build with --features perf-metrics")?;
+    write_metrics_json(path, metrics)
+}
+
+#[cfg(feature = "perf-metrics")]
+fn write_metrics_json(
+    path: &Path,
+    metrics: &excel_diff::perf::DiffMetrics,
+) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create metrics directory: {}", parent.display()))?;
+    }
+    let mut file = File::create(path)
+        .with_context(|| format!("Failed to create metrics file: {}", path.display()))?;
+    serde_json::to_writer_pretty(&mut file, metrics)?;
+    writeln!(file)?;
+    Ok(())
+}
+
+#[cfg(not(feature = "perf-metrics"))]
+fn write_metrics_json_report(_path: &Path, _report: &DiffReport) -> Result<()> {
+    bail!("--metrics-json requires excel-diff to be built with --features perf-metrics")
+}
+
+#[cfg(not(feature = "perf-metrics"))]
+fn write_metrics_json_summary(_path: &Path, _summary: &DiffSummary) -> Result<()> {
+    bail!("--metrics-json requires excel-diff to be built with --features perf-metrics")
 }
 
 fn exit_code_from_report(report: &DiffReport) -> ExitCode {

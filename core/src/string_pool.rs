@@ -51,4 +51,14 @@ impl StringPool {
     pub fn len(&self) -> usize {
         self.strings.len()
     }
+
+    pub fn estimated_bytes(&self) -> u64 {
+        use std::mem::size_of;
+
+        let strings_overhead = self.strings.capacity().saturating_mul(size_of::<String>());
+        let strings_payload: usize = self.strings.iter().map(|s| s.capacity()).sum();
+        let index_overhead = self.index.capacity().saturating_mul(size_of::<(String, StringId)>());
+
+        (strings_overhead + strings_payload + index_overhead) as u64
+    }
 }

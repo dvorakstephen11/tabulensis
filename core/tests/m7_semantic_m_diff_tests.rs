@@ -1,4 +1,6 @@
-use excel_diff::{DiffConfig, DiffOp, DiffReport, QueryChangeKind, WorkbookPackage};
+use excel_diff::{
+    DiffConfig, DiffOp, DiffReport, QueryChangeKind, SemanticNoisePolicy, WorkbookPackage,
+};
 use std::fs::File;
 
 mod common;
@@ -152,6 +154,34 @@ fn formatting_variant_with_real_change_still_reports_semantic() {
         _ => unreachable!(),
     }
     assert_eq!(resolve_name(&report, def_changed[0]), "Section1/FormatTest");
+}
+
+#[test]
+fn formatting_only_can_be_suppressed_by_policy() {
+    let pkg_a = load_package("m_formatting_only_a.xlsx");
+    let pkg_b = load_package("m_formatting_only_b.xlsx");
+
+    let config = DiffConfig {
+        semantic_noise_policy: SemanticNoisePolicy::SuppressFormattingOnly,
+        ..DiffConfig::default()
+    };
+
+    let report = pkg_a.diff(&pkg_b, &config);
+    let ops = m_ops(&report);
+
+    let def_changed: Vec<_> = ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::QueryDefinitionChanged { .. }))
+        .collect();
+
+    assert!(
+        def_changed.is_empty(),
+        "formatting-only changes should be suppressed under SuppressFormattingOnly"
+    );
+    assert!(
+        ops.is_empty(),
+        "suppressed formatting-only diff should emit no M ops"
+    );
 }
 
 #[test]

@@ -2,19 +2,18 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
 use crate::diff::{
-    AstDiffMode, AstDiffSummary, AstMoveHint, ColumnTypeChange, ExtractedColumnTypeChanges,
-    ExtractedRenamePairs, ExtractedString, ExtractedStringList, QuerySemanticDetail, RenamePair,
-    StepChange, StepDiff, StepParams, StepSnapshot, StepType,
+    ColumnTypeChange, ExtractedColumnTypeChanges, ExtractedRenamePairs, ExtractedString,
+    ExtractedStringList, QuerySemanticDetail, RenamePair, StepChange, StepDiff, StepParams,
+    StepSnapshot, StepType,
 };
+#[cfg(test)]
+use crate::diff::AstDiffMode;
 use crate::m_ast::{
-    canonicalize_m_ast, extract_steps, parse_m_expression, MExpr, MModuleAst, MStep,
-    StepColumnTypeChange, StepExtracted, StepKind, StepRenamePair,
+    canonicalize_m_ast, extract_steps, parse_m_expression, MStep, StepColumnTypeChange,
+    StepExtracted, StepKind, StepRenamePair,
 };
+use crate::m_ast_diff;
 use crate::string_pool::{StringId, StringPool};
-
-const SMALL_AST_NODE_LIMIT: usize = 240;
-const REDUCED_TED_MAX_NODES: usize = 320;
-const MOVE_SUBTREE_MIN_SIZE: u32 = 6;
 
 pub(crate) fn build_query_semantic_detail(
     old_expr: &str,
@@ -41,7 +40,7 @@ pub(crate) fn build_query_semantic_detail(
     canonicalize_m_ast(&mut old_ast);
     canonicalize_m_ast(&mut new_ast);
 
-    detail.ast_summary = Some(ast_diff_summary(&old_ast, &new_ast));
+    detail.ast_summary = Some(m_ast_diff::diff_summary(&old_ast, &new_ast));
     Some(detail)
 }
 
@@ -140,56 +139,303 @@ fn step_diff_sort_key(d: &StepDiff) -> u32 {
 }
 
 fn align_steps(old_steps: &[MStep], new_steps: &[MStep]) -> Vec<(usize, usize)> {
-    let mut out = Vec::new();
+    let mut matches = align_steps_dp(old_steps, new_steps);
 
-    let mut new_by_name: HashMap<&str, usize> = HashMap::new();
-    for (i, s) in new_steps.iter().enumerate() {
-        new_by_name.insert(s.name.as_str(), i);
+    let mut matched_old = vec![false; old_steps.len()];
+    let mut matched_new = vec![false; new_steps.len()];
+    for (oi, ni) in &matches {
+        matched_old[*oi] = true;
+        matched_new[*ni] = true;
     }
 
-    let mut used_old: HashSet<usize> = HashSet::new();
-    let mut used_new: HashSet<usize> = HashSet::new();
-
-    for (oi, s) in old_steps.iter().enumerate() {
-        if let Some(&ni) = new_by_name.get(s.name.as_str()) {
-            out.push((oi, ni));
-            used_old.insert(oi);
-            used_new.insert(ni);
-        }
+    let mut extra = match_unordered_steps(old_steps, new_steps, &matched_old, &matched_new);
+    for (oi, ni) in &extra {
+        matched_old[*oi] = true;
+        matched_new[*ni] = true;
     }
 
-    let mut old_by_sig: HashMap<u64, Vec<usize>> = HashMap::new();
-    let mut new_by_sig: HashMap<u64, Vec<usize>> = HashMap::new();
+    matches.append(&mut extra);
+    matches.sort_by_key(|(oi, _)| *oi);
+    matches
+}
 
-    for (oi, s) in old_steps.iter().enumerate() {
-        if used_old.contains(&oi) {
-            continue;
-        }
-        old_by_sig.entry(s.signature).or_default().push(oi);
-    }
-    for (ni, s) in new_steps.iter().enumerate() {
-        if used_new.contains(&ni) {
-            continue;
-        }
-        new_by_sig.entry(s.signature).or_default().push(ni);
+#[derive(Clone, Copy)]
+enum AlignOp {
+    Match,
+    Insert,
+    Delete,
+    None,
+}
+
+#[derive(Clone, Copy)]
+struct AlignCell {
+    cost: u32,
+    matches: u32,
+    op: AlignOp,
+}
+
+fn align_steps_dp(old_steps: &[MStep], new_steps: &[MStep]) -> Vec<(usize, usize)> {
+    let m = old_steps.len();
+    let n = new_steps.len();
+    if m == 0 || n == 0 {
+        return Vec::new();
     }
 
-    for (sig, ois) in &old_by_sig {
-        let nis = match new_by_sig.get(sig) {
-            Some(v) => v,
-            None => continue,
+    const COST_INSERT: u32 = 1;
+    const COST_DELETE: u32 = 1;
+
+    let idx = |i: usize, j: usize, n: usize| -> usize { i * (n + 1) + j };
+    let mut dp = vec![
+        AlignCell {
+            cost: 0,
+            matches: 0,
+            op: AlignOp::None,
         };
-        if ois.len() == 1 && nis.len() == 1 {
-            let oi = ois[0];
-            let ni = nis[0];
-            out.push((oi, ni));
+        (m + 1) * (n + 1)
+    ];
+
+    for i in 1..=m {
+        let prev = dp[idx(i - 1, 0, n)];
+        dp[idx(i, 0, n)] = AlignCell {
+            cost: prev.cost + COST_DELETE,
+            matches: prev.matches,
+            op: AlignOp::Delete,
+        };
+    }
+    for j in 1..=n {
+        let prev = dp[idx(0, j - 1, n)];
+        dp[idx(0, j, n)] = AlignCell {
+            cost: prev.cost + COST_INSERT,
+            matches: prev.matches,
+            op: AlignOp::Insert,
+        };
+    }
+
+    for i in 1..=m {
+        for j in 1..=n {
+            let mut best = dp[idx(i - 1, j, n)];
+            best.cost = best.cost.saturating_add(COST_DELETE);
+            best.op = AlignOp::Delete;
+
+            let ins = {
+                let prev = dp[idx(i, j - 1, n)];
+                AlignCell {
+                    cost: prev.cost.saturating_add(COST_INSERT),
+                    matches: prev.matches,
+                    op: AlignOp::Insert,
+                }
+            };
+            if is_better(ins, best) {
+                best = ins;
+            }
+
+            if let Some(match_cost) = step_match_cost(&old_steps[i - 1], &new_steps[j - 1]) {
+                let prev = dp[idx(i - 1, j - 1, n)];
+                let mat = AlignCell {
+                    cost: prev.cost.saturating_add(match_cost),
+                    matches: prev.matches.saturating_add(1),
+                    op: AlignOp::Match,
+                };
+                if is_better(mat, best) {
+                    best = mat;
+                }
+            }
+
+            dp[idx(i, j, n)] = best;
+        }
+    }
+
+    let mut out = Vec::new();
+    let mut i = m;
+    let mut j = n;
+    while i > 0 || j > 0 {
+        match dp[idx(i, j, n)].op {
+            AlignOp::Match => {
+                out.push((i - 1, j - 1));
+                i -= 1;
+                j -= 1;
+            }
+            AlignOp::Delete => {
+                i = i.saturating_sub(1);
+            }
+            AlignOp::Insert => {
+                j = j.saturating_sub(1);
+            }
+            AlignOp::None => break,
+        }
+    }
+
+    out.reverse();
+    out
+}
+
+fn is_better(a: AlignCell, b: AlignCell) -> bool {
+    if a.cost != b.cost {
+        return a.cost < b.cost;
+    }
+    if a.matches != b.matches {
+        return a.matches > b.matches;
+    }
+    align_op_priority(a.op) > align_op_priority(b.op)
+}
+
+fn align_op_priority(op: AlignOp) -> u8 {
+    match op {
+        AlignOp::Match => 2,
+        AlignOp::Delete => 1,
+        AlignOp::Insert => 0,
+        AlignOp::None => 0,
+    }
+}
+
+fn match_unordered_steps(
+    old_steps: &[MStep],
+    new_steps: &[MStep],
+    matched_old: &[bool],
+    matched_new: &[bool],
+) -> Vec<(usize, usize)> {
+    let mut extra = Vec::new();
+
+    let mut sig_old: HashMap<u64, Vec<usize>> = HashMap::new();
+    let mut sig_new: HashMap<u64, Vec<usize>> = HashMap::new();
+
+    for (idx, step) in old_steps.iter().enumerate() {
+        if matched_old.get(idx).copied().unwrap_or(false) {
+            continue;
+        }
+        sig_old.entry(step.signature).or_default().push(idx);
+    }
+    for (idx, step) in new_steps.iter().enumerate() {
+        if matched_new.get(idx).copied().unwrap_or(false) {
+            continue;
+        }
+        sig_new.entry(step.signature).or_default().push(idx);
+    }
+
+    let mut used_old = HashSet::new();
+    let mut used_new = HashSet::new();
+
+    for (sig, old_idxs) in &sig_old {
+        let Some(new_idxs) = sig_new.get(sig) else {
+            continue;
+        };
+        if old_idxs.len() == 1 && new_idxs.len() == 1 {
+            let oi = old_idxs[0];
+            let ni = new_idxs[0];
+            extra.push((oi, ni));
             used_old.insert(oi);
             used_new.insert(ni);
         }
     }
 
-    out.sort_by_key(|(oi, _)| *oi);
-    out
+    let mut name_old: HashMap<&str, Vec<usize>> = HashMap::new();
+    let mut name_new: HashMap<&str, Vec<usize>> = HashMap::new();
+
+    for (idx, step) in old_steps.iter().enumerate() {
+        if matched_old.get(idx).copied().unwrap_or(false) || used_old.contains(&idx) {
+            continue;
+        }
+        name_old.entry(step.name.as_str()).or_default().push(idx);
+    }
+    for (idx, step) in new_steps.iter().enumerate() {
+        if matched_new.get(idx).copied().unwrap_or(false) || used_new.contains(&idx) {
+            continue;
+        }
+        name_new.entry(step.name.as_str()).or_default().push(idx);
+    }
+
+    for (name, old_idxs) in name_old {
+        let Some(new_idxs) = name_new.get(name) else {
+            continue;
+        };
+        if old_idxs.len() == 1 && new_idxs.len() == 1 {
+            extra.push((old_idxs[0], new_idxs[0]));
+        }
+    }
+
+    extra
+}
+
+fn step_match_cost(a: &MStep, b: &MStep) -> Option<u32> {
+    let kind_a = step_kind_id(&a.kind);
+    let kind_b = step_kind_id(&b.kind);
+
+    if kind_a == kind_b {
+        let key_a = step_key_hash(&a.kind);
+        let key_b = step_key_hash(&b.kind);
+        if key_a == key_b {
+            return Some(0);
+        }
+        return Some(1);
+    }
+
+    if a.name == b.name {
+        return Some(2);
+    }
+
+    None
+}
+
+fn step_kind_id(kind: &StepKind) -> u8 {
+    match kind {
+        StepKind::TableSelectRows { .. } => 1,
+        StepKind::TableRemoveColumns { .. } => 2,
+        StepKind::TableRenameColumns { .. } => 3,
+        StepKind::TableTransformColumnTypes { .. } => 4,
+        StepKind::TableNestedJoin { .. } => 5,
+        StepKind::TableJoin { .. } => 6,
+        StepKind::Other { .. } => 7,
+    }
+}
+
+fn step_key_hash(kind: &StepKind) -> u64 {
+    let mut h = xxhash_rust::xxh64::Xxh64::new(crate::hashing::XXH64_SEED);
+    step_kind_id(kind).hash(&mut h);
+    match kind {
+        StepKind::TableSelectRows { predicate_hash, .. } => {
+            predicate_hash.hash(&mut h);
+        }
+        StepKind::TableRemoveColumns { columns, .. } => {
+            columns.hash(&mut h);
+        }
+        StepKind::TableRenameColumns { renames, .. } => {
+            renames.hash(&mut h);
+        }
+        StepKind::TableTransformColumnTypes { transforms, .. } => {
+            transforms.hash(&mut h);
+        }
+        StepKind::TableNestedJoin {
+            left_keys,
+            right_keys,
+            new_column,
+            join_kind_hash,
+            ..
+        } => {
+            left_keys.hash(&mut h);
+            right_keys.hash(&mut h);
+            new_column.hash(&mut h);
+            join_kind_hash.hash(&mut h);
+        }
+        StepKind::TableJoin {
+            left_keys,
+            right_keys,
+            join_kind_hash,
+            ..
+        } => {
+            left_keys.hash(&mut h);
+            right_keys.hash(&mut h);
+            join_kind_hash.hash(&mut h);
+        }
+        StepKind::Other {
+            function_name_hash,
+            arity,
+            ..
+        } => {
+            function_name_hash.hash(&mut h);
+            arity.hash(&mut h);
+        }
+    }
+    h.finish()
 }
 
 fn snapshot_step(s: &MStep, index: u32, pool: &mut StringPool) -> StepSnapshot {
@@ -357,506 +603,6 @@ fn diff_string_sets(
     (removed, added)
 }
 
-fn ast_diff_summary(old_ast: &MModuleAst, new_ast: &MModuleAst) -> AstDiffSummary {
-    let mut old_tree = build_flat_tree(old_ast);
-    let mut new_tree = build_flat_tree(new_ast);
-
-    if !old_tree.nodes.is_empty() {
-        compute_subtree_hashes(0, &mut old_tree.nodes);
-    }
-    if !new_tree.nodes.is_empty() {
-        compute_subtree_hashes(0, &mut new_tree.nodes);
-    }
-
-    let old_count = old_tree.nodes.len();
-    let new_count = new_tree.nodes.len();
-    if old_count.max(new_count) <= SMALL_AST_NODE_LIMIT {
-        return small_exact_ast_summary(&old_tree, &new_tree);
-    }
-
-    large_heuristic_ast_summary(&old_tree, &new_tree)
-}
-
-#[derive(Clone)]
-struct FlatNode {
-    label: u64,
-    parent: Option<usize>,
-    child_index: u32,
-    children: Vec<usize>,
-    subtree_hash: u64,
-    subtree_size: u32,
-}
-
-#[derive(Clone)]
-struct FlatTree {
-    nodes: Vec<FlatNode>,
-}
-
-fn build_flat_tree(ast: &MModuleAst) -> FlatTree {
-    let mut nodes = Vec::new();
-    let root = ast.root_expr();
-    build_flat_tree_inner(root, None, 0, &mut nodes);
-    FlatTree { nodes }
-}
-
-fn build_flat_tree_inner(
-    expr: &MExpr,
-    parent: Option<usize>,
-    child_index: u32,
-    nodes: &mut Vec<FlatNode>,
-) -> usize {
-    let idx = nodes.len();
-    nodes.push(FlatNode {
-        label: expr.diff_label_hash(),
-        parent,
-        child_index,
-        children: Vec::new(),
-        subtree_hash: 0,
-        subtree_size: 0,
-    });
-
-    let children = expr.diff_children();
-    for (i, child) in children.iter().enumerate() {
-        let child_idx = build_flat_tree_inner(child, Some(idx), i as u32, nodes);
-        nodes[idx].children.push(child_idx);
-    }
-
-    idx
-}
-
-fn compute_subtree_hashes(root: usize, nodes: &mut [FlatNode]) -> (u64, u32) {
-    use crate::hashing::XXH64_SEED;
-    let mut h = xxhash_rust::xxh64::Xxh64::new(XXH64_SEED);
-    nodes[root].label.hash(&mut h);
-
-    let mut size: u32 = 1;
-    let children = nodes[root].children.clone();
-    for c in children {
-        let (ch, cs) = compute_subtree_hashes(c, nodes);
-        ch.hash(&mut h);
-        size += cs;
-    }
-    let hash = h.finish();
-    nodes[root].subtree_hash = hash;
-    nodes[root].subtree_size = size;
-    (hash, size)
-}
-
-fn small_exact_ast_summary(old_tree: &FlatTree, new_tree: &FlatTree) -> AstDiffSummary {
-    let node_count_old = old_tree.nodes.len() as u32;
-    let node_count_new = new_tree.nodes.len() as u32;
-
-    let old_simple = simple_tree_from_flat(old_tree);
-    let new_simple = simple_tree_from_flat(new_tree);
-    let counts = tree_edit_counts(&old_simple, &new_simple);
-
-    AstDiffSummary {
-        mode: AstDiffMode::SmallExact,
-        node_count_old,
-        node_count_new,
-        inserted: counts.inserted,
-        deleted: counts.deleted,
-        updated: counts.updated,
-        moved: 0,
-        move_hints: Vec::new(),
-    }
-}
-
-fn large_heuristic_ast_summary(old_tree: &FlatTree, new_tree: &FlatTree) -> AstDiffSummary {
-    let node_count_old = old_tree.nodes.len() as u32;
-    let node_count_new = new_tree.nodes.len() as u32;
-
-    let candidates = unique_subtree_candidates(old_tree, new_tree);
-    let mut matches: Vec<SubtreeMatch> = Vec::new();
-
-    let mut covered_old = vec![false; old_tree.nodes.len()];
-    let mut covered_new = vec![false; new_tree.nodes.len()];
-
-    for cand in candidates {
-        if range_overlaps(&covered_old, cand.old_idx, cand.size)
-            || range_overlaps(&covered_new, cand.new_idx, cand.size)
-        {
-            continue;
-        }
-        mark_range(&mut covered_old, cand.old_idx, cand.size);
-        mark_range(&mut covered_new, cand.new_idx, cand.size);
-        matches.push(cand);
-    }
-
-    let mut move_hints = Vec::new();
-    for m in &matches {
-        let old_node = &old_tree.nodes[m.old_idx];
-        let new_node = &new_tree.nodes[m.new_idx];
-        if m.size < MOVE_SUBTREE_MIN_SIZE {
-            continue;
-        }
-        let (Some(op), Some(np)) = (old_node.parent, new_node.parent) else {
-            continue;
-        };
-        let old_parent_hash = old_tree.nodes[op].subtree_hash;
-        let new_parent_hash = new_tree.nodes[np].subtree_hash;
-        if old_parent_hash != new_parent_hash || old_node.child_index != new_node.child_index {
-            move_hints.push(AstMoveHint {
-                subtree_hash: old_node.subtree_hash,
-                from_preorder: m.old_idx as u32,
-                to_preorder: m.new_idx as u32,
-                subtree_size: m.size,
-            });
-        }
-    }
-
-    let reduced_old = build_reduced_tree(old_tree, &covered_old);
-    let reduced_new = build_reduced_tree(new_tree, &covered_new);
-
-    let counts = if reduced_old.labels.len().max(reduced_new.labels.len()) <= REDUCED_TED_MAX_NODES
-    {
-        tree_edit_counts(&reduced_old, &reduced_new)
-    } else {
-        approximate_counts(&reduced_old, &reduced_new)
-    };
-
-    AstDiffSummary {
-        mode: AstDiffMode::LargeHeuristic,
-        node_count_old,
-        node_count_new,
-        inserted: counts.inserted,
-        deleted: counts.deleted,
-        updated: counts.updated,
-        moved: move_hints.len() as u32,
-        move_hints,
-    }
-}
-
-#[derive(Clone)]
-struct SimpleTree {
-    labels: Vec<u64>,
-    children: Vec<Vec<usize>>,
-    subtree_size: Vec<u32>,
-}
-
-fn simple_tree_from_flat(tree: &FlatTree) -> SimpleTree {
-    let mut labels = Vec::with_capacity(tree.nodes.len());
-    let mut children = Vec::with_capacity(tree.nodes.len());
-    for node in &tree.nodes {
-        labels.push(node.label);
-        children.push(node.children.clone());
-    }
-    let mut out = SimpleTree {
-        labels,
-        children,
-        subtree_size: vec![0; tree.nodes.len()],
-    };
-    if !out.labels.is_empty() {
-        compute_simple_subtree_sizes(&mut out, 0);
-    }
-    out
-}
-
-fn build_reduced_tree(tree: &FlatTree, covered: &[bool]) -> SimpleTree {
-    let mut labels = Vec::new();
-    let mut children: Vec<Vec<usize>> = Vec::new();
-
-    fn visit(
-        idx: usize,
-        tree: &FlatTree,
-        covered: &[bool],
-        parent_covered: bool,
-        labels: &mut Vec<u64>,
-        children: &mut Vec<Vec<usize>>,
-    ) -> Option<usize> {
-        let is_covered = covered.get(idx).copied().unwrap_or(false);
-        if is_covered && !parent_covered {
-            let new_idx = labels.len();
-            labels.push(atom_label(tree.nodes[idx].subtree_hash));
-            children.push(Vec::new());
-            return Some(new_idx);
-        }
-        if is_covered && parent_covered {
-            return None;
-        }
-
-        let new_idx = labels.len();
-        labels.push(tree.nodes[idx].label);
-        children.push(Vec::new());
-        for &child in &tree.nodes[idx].children {
-            if let Some(child_idx) = visit(child, tree, covered, is_covered, labels, children) {
-                children[new_idx].push(child_idx);
-            }
-        }
-        Some(new_idx)
-    }
-
-    let _root = visit(0, tree, covered, false, &mut labels, &mut children);
-
-    let labels_len = labels.len();
-    let mut out = SimpleTree {
-        labels,
-        children,
-        subtree_size: vec![0; labels_len],
-    };
-    if !out.labels.is_empty() {
-        compute_simple_subtree_sizes(&mut out, 0);
-    }
-    out
-}
-
-fn atom_label(subtree_hash: u64) -> u64 {
-    use crate::hashing::XXH64_SEED;
-    let mut h = xxhash_rust::xxh64::Xxh64::new(XXH64_SEED);
-    0xA7u8.hash(&mut h);
-    subtree_hash.hash(&mut h);
-    h.finish()
-}
-
-fn compute_simple_subtree_sizes(tree: &mut SimpleTree, idx: usize) -> u32 {
-    let mut size: u32 = 1;
-    let children = tree.children[idx].clone();
-    for child in children {
-        size += compute_simple_subtree_sizes(tree, child);
-    }
-    tree.subtree_size[idx] = size;
-    size
-}
-
-#[derive(Clone, Copy)]
-struct EditCounts {
-    cost: u32,
-    inserted: u32,
-    deleted: u32,
-    updated: u32,
-}
-
-impl EditCounts {
-    fn zero() -> Self {
-        EditCounts {
-            cost: 0,
-            inserted: 0,
-            deleted: 0,
-            updated: 0,
-        }
-    }
-
-    fn add(self, other: EditCounts) -> EditCounts {
-        EditCounts {
-            cost: self.cost + other.cost,
-            inserted: self.inserted + other.inserted,
-            deleted: self.deleted + other.deleted,
-            updated: self.updated + other.updated,
-        }
-    }
-}
-
-fn better(a: EditCounts, b: EditCounts) -> EditCounts {
-    if a.cost != b.cost {
-        return if a.cost < b.cost { a } else { b };
-    }
-    if a.updated != b.updated {
-        return if a.updated < b.updated { a } else { b };
-    }
-    let a_id = a.inserted + a.deleted;
-    let b_id = b.inserted + b.deleted;
-    if a_id != b_id {
-        return if a_id < b_id { a } else { b };
-    }
-    a
-}
-
-fn tree_edit_counts(old: &SimpleTree, new: &SimpleTree) -> EditCounts {
-    if old.labels.is_empty() {
-        return EditCounts {
-            cost: new.labels.len() as u32,
-            inserted: new.labels.len() as u32,
-            deleted: 0,
-            updated: 0,
-        };
-    }
-    if new.labels.is_empty() {
-        return EditCounts {
-            cost: old.labels.len() as u32,
-            inserted: 0,
-            deleted: old.labels.len() as u32,
-            updated: 0,
-        };
-    }
-
-    let mut memo: HashMap<(usize, usize), EditCounts> = HashMap::new();
-    tree_edit_counts_at(old, new, 0, 0, &mut memo)
-}
-
-fn tree_edit_counts_at(
-    old: &SimpleTree,
-    new: &SimpleTree,
-    oi: usize,
-    ni: usize,
-    memo: &mut HashMap<(usize, usize), EditCounts>,
-) -> EditCounts {
-    if let Some(v) = memo.get(&(oi, ni)) {
-        return *v;
-    }
-
-    let mut base = if old.labels[oi] == new.labels[ni] {
-        EditCounts::zero()
-    } else {
-        EditCounts {
-            cost: 1,
-            inserted: 0,
-            deleted: 0,
-            updated: 1,
-        }
-    };
-
-    let children_cost = align_children(old, new, &old.children[oi], &new.children[ni], memo);
-    base = base.add(children_cost);
-    memo.insert((oi, ni), base);
-    base
-}
-
-fn align_children(
-    old: &SimpleTree,
-    new: &SimpleTree,
-    old_children: &[usize],
-    new_children: &[usize],
-    memo: &mut HashMap<(usize, usize), EditCounts>,
-) -> EditCounts {
-    let m = old_children.len();
-    let n = new_children.len();
-    let mut dp = vec![EditCounts::zero(); (m + 1) * (n + 1)];
-
-    let idx = |i: usize, j: usize, n: usize| -> usize { i * (n + 1) + j };
-
-    for i in 1..=m {
-        let del = delete_cost(old, old_children[i - 1]);
-        let prev = dp[idx(i - 1, 0, n)];
-        dp[idx(i, 0, n)] = prev.add(del);
-    }
-    for j in 1..=n {
-        let ins = insert_cost(new, new_children[j - 1]);
-        let prev = dp[idx(0, j - 1, n)];
-        dp[idx(0, j, n)] = prev.add(ins);
-    }
-
-    for i in 1..=m {
-        for j in 1..=n {
-            let del = dp[idx(i - 1, j, n)].add(delete_cost(old, old_children[i - 1]));
-            let ins = dp[idx(i, j - 1, n)].add(insert_cost(new, new_children[j - 1]));
-            let sub = dp[idx(i - 1, j - 1, n)].add(tree_edit_counts_at(
-                old,
-                new,
-                old_children[i - 1],
-                new_children[j - 1],
-                memo,
-            ));
-            dp[idx(i, j, n)] = better(better(del, ins), sub);
-        }
-    }
-
-    dp[idx(m, n, n)]
-}
-
-fn delete_cost(tree: &SimpleTree, idx: usize) -> EditCounts {
-    let size = tree.subtree_size[idx];
-    EditCounts {
-        cost: size,
-        inserted: 0,
-        deleted: size,
-        updated: 0,
-    }
-}
-
-fn insert_cost(tree: &SimpleTree, idx: usize) -> EditCounts {
-    let size = tree.subtree_size[idx];
-    EditCounts {
-        cost: size,
-        inserted: size,
-        deleted: 0,
-        updated: 0,
-    }
-}
-
-fn approximate_counts(old: &SimpleTree, new: &SimpleTree) -> EditCounts {
-    let old_count = old.labels.len() as u32;
-    let new_count = new.labels.len() as u32;
-
-    let mut old_hist: HashMap<u64, u32> = HashMap::new();
-    for label in &old.labels {
-        *old_hist.entry(*label).or_default() += 1;
-    }
-
-    let mut common: u32 = 0;
-    for label in &new.labels {
-        let Some(v) = old_hist.get_mut(label) else {
-            continue;
-        };
-        if *v > 0 {
-            *v -= 1;
-            common += 1;
-        }
-    }
-
-    let min_nodes = old_count.min(new_count);
-    let updated = min_nodes.saturating_sub(common);
-    let deleted = old_count.saturating_sub(min_nodes);
-    let inserted = new_count.saturating_sub(min_nodes);
-
-    EditCounts {
-        cost: inserted + deleted + updated,
-        inserted,
-        deleted,
-        updated,
-    }
-}
-
-#[derive(Clone, Copy)]
-struct SubtreeMatch {
-    old_idx: usize,
-    new_idx: usize,
-    size: u32,
-}
-
-fn unique_subtree_candidates(old_tree: &FlatTree, new_tree: &FlatTree) -> Vec<SubtreeMatch> {
-    let mut old_map: HashMap<u64, Vec<usize>> = HashMap::new();
-    let mut new_map: HashMap<u64, Vec<usize>> = HashMap::new();
-
-    for (i, n) in old_tree.nodes.iter().enumerate() {
-        old_map.entry(n.subtree_hash).or_default().push(i);
-    }
-    for (i, n) in new_tree.nodes.iter().enumerate() {
-        new_map.entry(n.subtree_hash).or_default().push(i);
-    }
-
-    let mut out = Vec::new();
-    for (h, ois) in old_map {
-        let Some(nis) = new_map.get(&h) else {
-            continue;
-        };
-        if ois.len() == 1 && nis.len() == 1 {
-            let oi = ois[0];
-            let ni = nis[0];
-            let size = old_tree.nodes[oi].subtree_size;
-            out.push(SubtreeMatch {
-                old_idx: oi,
-                new_idx: ni,
-                size,
-            });
-        }
-    }
-
-    out.sort_by(|a, b| b.size.cmp(&a.size));
-    out
-}
-
-fn range_overlaps(covered: &[bool], start: usize, size: u32) -> bool {
-    let end = start.saturating_add(size as usize);
-    covered[start..end].iter().any(|v| *v)
-}
-
-fn mark_range(covered: &mut [bool], start: usize, size: u32) {
-    let end = start.saturating_add(size as usize);
-    for v in covered.iter_mut().take(end).skip(start) {
-        *v = true;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -988,6 +734,62 @@ mod tests {
     }
 
     #[test]
+    fn filter_change_reports_params_changed() {
+        let old_expr = r#"
+            let
+                Source = Excel.CurrentWorkbook(){[Name="Table1"]}[Content],
+                #"Filtered Rows" = Table.SelectRows(Source, each [Amount] > 0)
+            in
+                #"Filtered Rows"
+        "#;
+        let new_expr = r#"
+            let
+                Source = Excel.CurrentWorkbook(){[Name="Table1"]}[Content],
+                #"Filtered Rows" = Table.SelectRows(Source, each [Amount] > 10)
+            in
+                #"Filtered Rows"
+        "#;
+
+        let detail = detail_for(old_expr, new_expr);
+        assert_eq!(detail.step_diffs.len(), 1);
+        match &detail.step_diffs[0] {
+            StepDiff::StepModified { after, changes, .. } => {
+                assert_eq!(after.step_type, StepType::TableSelectRows);
+                assert!(changes.iter().any(|c| matches!(c, StepChange::ParamsChanged)));
+            }
+            other => panic!("expected StepModified, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn join_change_reports_params_changed() {
+        let old_expr = r#"
+            let
+                Source = Excel.CurrentWorkbook(){[Name="Table1"]}[Content],
+                #"Joined" = Table.Join(Source, {"A"}, Source, {"A"}, JoinKind.Inner)
+            in
+                #"Joined"
+        "#;
+        let new_expr = r#"
+            let
+                Source = Excel.CurrentWorkbook(){[Name="Table1"]}[Content],
+                #"Joined" = Table.Join(Source, {"B"}, Source, {"B"}, JoinKind.Inner)
+            in
+                #"Joined"
+        "#;
+
+        let detail = detail_for(old_expr, new_expr);
+        assert_eq!(detail.step_diffs.len(), 1);
+        match &detail.step_diffs[0] {
+            StepDiff::StepModified { after, changes, .. } => {
+                assert_eq!(after.step_type, StepType::TableJoin);
+                assert!(changes.iter().any(|c| matches!(c, StepChange::ParamsChanged)));
+            }
+            other => panic!("expected StepModified, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn small_exact_ast_summary_handles_deep_if_change() {
         fn nested_if(depth: usize, leaf: &str) -> String {
             let mut expr = leaf.to_string();
@@ -1031,5 +833,15 @@ mod tests {
             summary.move_hints.iter().any(|mh| mh.subtree_size > 50),
             "expected a large moved subtree hint"
         );
+    }
+
+    #[test]
+    fn wrap_unwrap_reports_structural_insert() {
+        let old_expr = "1";
+        let new_expr = "if cond then 1 else 0";
+
+        let detail = detail_for(old_expr, new_expr);
+        let summary = detail.ast_summary.expect("ast summary");
+        assert!(summary.inserted > 0, "expected inserted nodes for wrap");
     }
 }

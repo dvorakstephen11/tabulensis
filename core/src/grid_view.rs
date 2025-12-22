@@ -52,25 +52,25 @@ impl<'a> GridView<'a> {
         let mut col_counts = vec![0u32; ncols];
         let mut col_first_non_blank: Vec<Option<u32>> = vec![None; ncols];
 
-        for ((row, col), cell) in &grid.cells {
-            let r = *row as usize;
-            let c = *col as usize;
+        for ((row, col), cell) in grid.iter_cells() {
+            let r = row as usize;
+            let c = col as usize;
 
             debug_assert!(
                 r < nrows && c < ncols,
                 "cell coordinates must lie within the grid bounds"
             );
 
-            rows[r].cells.push((*col, cell));
+            rows[r].cells.push((col, cell));
 
             if is_non_blank(cell) {
                 row_counts[r] = row_counts[r].saturating_add(1);
                 col_counts[c] = col_counts[c].saturating_add(1);
 
                 row_first_non_blank[r] =
-                    Some(row_first_non_blank[r].map_or(*col, |cur| cur.min(*col)));
+                    Some(row_first_non_blank[r].map_or(col, |cur| cur.min(col)));
                 col_first_non_blank[c] =
-                    Some(col_first_non_blank[c].map_or(*row, |cur| cur.min(*row)));
+                    Some(col_first_non_blank[c].map_or(row, |cur| cur.min(row)));
             }
         }
 

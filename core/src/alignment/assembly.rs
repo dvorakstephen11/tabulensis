@@ -10,6 +10,7 @@
 //! The main entry point is `align_rows_amr` which returns an `Option<RowAlignment>`.
 //! Returns `None` when alignment cannot be determined (falls back to positional diff).
 
+use std::collections::HashSet;
 use std::ops::Range;
 
 use crate::alignment::anchor_chain::build_anchor_chain;
@@ -17,7 +18,9 @@ use crate::alignment::anchor_discovery::{
     Anchor, discover_anchors_from_meta, discover_context_anchors, discover_local_anchors,
 };
 use crate::alignment::gap_strategy::{GapStrategy, select_gap_strategy};
-use crate::alignment::move_extraction::{find_block_move, moves_from_matched_pairs};
+use crate::alignment::move_extraction::{
+    extract_global_moves, find_block_move, moves_from_matched_pairs,
+};
 use crate::alignment::runs::{RowRun, compress_to_runs};
 use crate::alignment_types::{RowAlignment, RowBlockMove};
 use crate::config::DiffConfig;
@@ -26,6 +29,8 @@ use crate::grid_view::GridView;
 #[cfg(any(test, feature = "dev-apis"))]
 use crate::workbook::Grid;
 use crate::workbook::RowSignature;
+#[cfg(feature = "perf-metrics")]
+use crate::perf::{DiffMetrics, Phase};
 
 #[derive(Default)]
 struct GapAlignmentResult {
@@ -102,7 +107,52 @@ pub fn align_rows_amr_with_signatures_from_views(
     view_b: &GridView,
     config: &DiffConfig,
 ) -> Option<RowAlignmentWithSignatures> {
-    let alignment = align_rows_from_meta(&view_a.row_meta, &view_b.row_meta, config)?;
+    align_rows_amr_with_signatures_from_views_internal(
+        view_a,
+        view_b,
+        config,
+        #[cfg(feature = "perf-metrics")]
+        None,
+    )
+}
+
+pub(crate) fn align_meta_with_amr(
+    rows_a: &[RowMeta],
+    rows_b: &[RowMeta],
+    config: &DiffConfig,
+) -> Option<RowAlignment> {
+    align_rows_from_meta(
+        rows_a,
+        rows_b,
+        config,
+        #[cfg(feature = "perf-metrics")]
+        None,
+    )
+}
+
+#[cfg(feature = "perf-metrics")]
+pub fn align_rows_amr_with_signatures_from_views_with_metrics(
+    view_a: &GridView,
+    view_b: &GridView,
+    config: &DiffConfig,
+    metrics: &mut DiffMetrics,
+) -> Option<RowAlignmentWithSignatures> {
+    align_rows_amr_with_signatures_from_views_internal(view_a, view_b, config, Some(metrics))
+}
+
+fn align_rows_amr_with_signatures_from_views_internal(
+    view_a: &GridView,
+    view_b: &GridView,
+    config: &DiffConfig,
+    #[cfg(feature = "perf-metrics")] mut metrics: Option<&mut DiffMetrics>,
+) -> Option<RowAlignmentWithSignatures> {
+    let alignment = align_rows_from_meta(
+        &view_a.row_meta,
+        &view_b.row_meta,
+        config,
+        #[cfg(feature = "perf-metrics")]
+        metrics.as_deref_mut(),
+    )?;
     let row_signatures_a: Vec<RowSignature> =
         view_a.row_meta.iter().map(|meta| meta.signature).collect();
     let row_signatures_b: Vec<RowSignature> =
@@ -119,6 +169,7 @@ fn align_rows_from_meta(
     rows_a: &[RowMeta],
     rows_b: &[RowMeta],
     config: &DiffConfig,
+    #[cfg(feature = "perf-metrics")] mut metrics: Option<&mut DiffMetrics>,
 ) -> Option<RowAlignment> {
     if rows_a.len() == rows_b.len()
         && rows_a
@@ -174,7 +225,23 @@ fn align_rows_from_meta(
     }
 
     let anchors = build_anchor_chain(discover_anchors_from_meta(rows_a, rows_b));
-    Some(assemble_from_meta(rows_a, rows_b, anchors, config, 0))
+    let global_moves = if config.max_move_iterations > 0 {
+        #[cfg(feature = "perf-metrics")]
+        let _guard = metrics
+            .as_deref_mut()
+            .map(|m| m.phase_guard(Phase::MoveDetection));
+        extract_global_moves(rows_a, rows_b, &anchors, config)
+    } else {
+        Vec::new()
+    };
+    Some(assemble_from_meta(
+        rows_a,
+        rows_b,
+        anchors,
+        config,
+        0,
+        &global_moves,
+    ))
 }
 
 fn assemble_from_meta(
@@ -183,6 +250,7 @@ fn assemble_from_meta(
     anchors: Vec<Anchor>,
     config: &DiffConfig,
     depth: u32,
+    global_moves: &[RowBlockMove],
 ) -> RowAlignment {
     if old_meta.is_empty() && new_meta.is_empty() {
         return RowAlignment::default();
@@ -199,7 +267,15 @@ fn assemble_from_meta(
     for anchor in anchors.iter() {
         let gap_old = prev_old..anchor.old_row;
         let gap_new = prev_new..anchor.new_row;
-        let gap_result = fill_gap(gap_old, gap_new, old_meta, new_meta, config, depth);
+        let gap_result = fill_gap(
+            gap_old,
+            gap_new,
+            old_meta,
+            new_meta,
+            config,
+            depth,
+            global_moves,
+        );
         matched.extend(gap_result.matched);
         inserted.extend(gap_result.inserted);
         deleted.extend(gap_result.deleted);
@@ -219,6 +295,7 @@ fn assemble_from_meta(
         new_meta,
         config,
         depth,
+        global_moves,
     );
     matched.extend(tail_result.matched);
     inserted.extend(tail_result.inserted);
@@ -245,10 +322,18 @@ fn fill_gap(
     new_meta: &[RowMeta],
     config: &DiffConfig,
     depth: u32,
+    global_moves: &[RowBlockMove],
 ) -> GapAlignmentResult {
     let ctx = GapCtx::new(old_meta, new_meta, old_gap, new_gap);
+    let moves_in_gap = moves_within_gap(&ctx.old_range, &ctx.new_range, global_moves);
     let has_recursed = depth >= config.max_recursion_depth;
-    let strategy = select_gap_strategy(ctx.old_slice, ctx.new_slice, config, has_recursed);
+    let strategy = select_gap_strategy(
+        ctx.old_slice,
+        ctx.new_slice,
+        config,
+        has_recursed,
+        !moves_in_gap.is_empty(),
+    );
 
     match strategy {
         GapStrategy::Empty => GapAlignmentResult::default(),
@@ -257,10 +342,112 @@ fn fill_gap(
         GapStrategy::SmallEdit => align_gap_default(ctx.old_slice, ctx.new_slice, config),
         GapStrategy::HashFallback => align_gap_hash(ctx.old_slice, ctx.new_slice),
         GapStrategy::MoveCandidate => align_gap_with_moves(ctx.old_slice, ctx.new_slice, config),
+        GapStrategy::ConsumeGlobalMoves => align_gap_with_global_moves(
+            ctx.old_slice,
+            ctx.new_slice,
+            &moves_in_gap,
+            config,
+            depth,
+        ),
         GapStrategy::RecursiveAlign => {
-            align_gap_recursive(ctx.old_slice, ctx.new_slice, config, depth)
+            align_gap_recursive(ctx.old_slice, ctx.new_slice, config, depth, global_moves)
         }
     }
+}
+
+fn moves_within_gap(
+    old_range: &Range<u32>,
+    new_range: &Range<u32>,
+    moves: &[RowBlockMove],
+) -> Vec<RowBlockMove> {
+    moves
+        .iter()
+        .copied()
+        .filter(|mv| {
+            range_contains(old_range, mv.src_start_row, mv.row_count)
+                && range_contains(new_range, mv.dst_start_row, mv.row_count)
+        })
+        .collect()
+}
+
+fn range_contains(range: &Range<u32>, start: u32, len: u32) -> bool {
+    if len == 0 {
+        return false;
+    }
+    let end = start.saturating_add(len);
+    range.start <= start && end <= range.end
+}
+
+fn align_gap_without_global(
+    old_slice: &[RowMeta],
+    new_slice: &[RowMeta],
+    config: &DiffConfig,
+    depth: u32,
+) -> GapAlignmentResult {
+    let has_recursed = depth >= config.max_recursion_depth;
+    let strategy = select_gap_strategy(old_slice, new_slice, config, has_recursed, false);
+
+    match strategy {
+        GapStrategy::Empty => GapAlignmentResult::default(),
+        GapStrategy::InsertAll => GapAlignmentResult {
+            inserted: new_slice.iter().map(|m| m.row_idx).collect(),
+            ..Default::default()
+        },
+        GapStrategy::DeleteAll => GapAlignmentResult {
+            deleted: old_slice.iter().map(|m| m.row_idx).collect(),
+            ..Default::default()
+        },
+        GapStrategy::SmallEdit => align_gap_default(old_slice, new_slice, config),
+        GapStrategy::HashFallback => align_gap_hash(old_slice, new_slice),
+        GapStrategy::MoveCandidate => align_gap_with_moves(old_slice, new_slice, config),
+        GapStrategy::ConsumeGlobalMoves => align_gap_default(old_slice, new_slice, config),
+        GapStrategy::RecursiveAlign => align_gap_recursive(old_slice, new_slice, config, depth, &[]),
+    }
+}
+
+fn align_gap_with_global_moves(
+    old_slice: &[RowMeta],
+    new_slice: &[RowMeta],
+    moves_in_gap: &[RowBlockMove],
+    config: &DiffConfig,
+    depth: u32,
+) -> GapAlignmentResult {
+    let mut result = GapAlignmentResult::default();
+    if moves_in_gap.is_empty() {
+        return align_gap_without_global(old_slice, new_slice, config, depth);
+    }
+
+    let mut skip_old: HashSet<u32> = HashSet::new();
+    let mut skip_new: HashSet<u32> = HashSet::new();
+
+    for mv in moves_in_gap {
+        result.moves.push(*mv);
+        for offset in 0..mv.row_count {
+            let src = mv.src_start_row.saturating_add(offset);
+            let dst = mv.dst_start_row.saturating_add(offset);
+            result.matched.push((src, dst));
+            skip_old.insert(src);
+            skip_new.insert(dst);
+        }
+    }
+
+    let filtered_old: Vec<RowMeta> = old_slice
+        .iter()
+        .copied()
+        .filter(|m| !skip_old.contains(&m.row_idx))
+        .collect();
+    let filtered_new: Vec<RowMeta> = new_slice
+        .iter()
+        .copied()
+        .filter(|m| !skip_new.contains(&m.row_idx))
+        .collect();
+
+    let mut remainder = align_gap_without_global(&filtered_old, &filtered_new, config, depth);
+    result.matched.append(&mut remainder.matched);
+    result.inserted.append(&mut remainder.inserted);
+    result.deleted.append(&mut remainder.deleted);
+    result.moves.append(&mut remainder.moves);
+    result
 }
 
 fn align_gap_default(
@@ -352,6 +539,7 @@ fn align_gap_recursive(
     new_slice: &[RowMeta],
     config: &DiffConfig,
     depth: u32,
+    global_moves: &[RowBlockMove],
 ) -> GapAlignmentResult {
     let at_limit = depth >= config.max_recursion_depth;
     if at_limit {
@@ -366,7 +554,14 @@ fn align_gap_recursive(
         return align_gap_default(old_slice, new_slice, config);
     }
 
-    let alignment = assemble_from_meta(old_slice, new_slice, anchors, config, depth + 1);
+    let alignment = assemble_from_meta(
+        old_slice,
+        new_slice,
+        anchors,
+        config,
+        depth + 1,
+        global_moves,
+    );
     GapAlignmentResult {
         matched: alignment.matched,
         inserted: alignment.inserted,

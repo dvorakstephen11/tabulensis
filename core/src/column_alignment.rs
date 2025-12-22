@@ -1,13 +1,16 @@
+use crate::alignment::align_meta_with_amr;
 use crate::config::DiffConfig;
+use crate::grid_metadata::{FrequencyClass, RowMeta, classify_row_frequencies};
 use crate::grid_view::{ColHash, ColMeta, GridView, HashStats};
 use crate::hashing::hash_col_content_unordered_128;
-use crate::workbook::{ColSignature, Grid};
+use crate::workbook::{ColSignature, Grid, RowSignature};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ColumnAlignment {
     pub(crate) matched: Vec<(u32, u32)>, // (col_idx_a, col_idx_b)
     pub(crate) inserted: Vec<u32>,       // columns present only in B
     pub(crate) deleted: Vec<u32>,        // columns present only in A
+    pub(crate) moves: Vec<ColumnBlockMove>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -244,6 +247,87 @@ pub(crate) fn align_single_column_change_from_views(
     }
 }
 
+pub(crate) fn align_columns_amr_from_views(
+    view_a: &GridView,
+    view_b: &GridView,
+    config: &DiffConfig,
+) -> Option<ColumnAlignment> {
+    let stats = HashStats::from_col_meta(&view_a.col_meta, &view_b.col_meta);
+    if stats.has_heavy_repetition(config.max_hash_repeat) {
+        return None;
+    }
+
+    if view_a.col_meta.len() == view_b.col_meta.len()
+        && view_a
+            .col_meta
+            .iter()
+            .zip(view_b.col_meta.iter())
+            .all(|(a, b)| a.hash == b.hash)
+    {
+        return None;
+    }
+
+    let meta_a = build_column_alignment_meta(view_a, config);
+    let meta_b = build_column_alignment_meta(view_b, config);
+
+    let alignment = align_meta_with_amr(&meta_a, &meta_b, config)?;
+    let moves: Vec<ColumnBlockMove> = alignment
+        .moves
+        .iter()
+        .map(|mv| ColumnBlockMove {
+            src_start_col: mv.src_start_row,
+            dst_start_col: mv.dst_start_row,
+            col_count: mv.row_count,
+        })
+        .collect();
+
+    let col_alignment = ColumnAlignment {
+        matched: alignment.matched,
+        inserted: alignment.inserted,
+        deleted: alignment.deleted,
+        moves,
+    };
+
+    let has_structural = !col_alignment.inserted.is_empty() || !col_alignment.deleted.is_empty();
+    if has_structural {
+        let has_column_edits = col_alignment.matched.iter().any(|(a, b)| {
+            let sig_a = view_a.col_meta.get(*a as usize).map(|m| m.hash);
+            let sig_b = view_b.col_meta.get(*b as usize).map(|m| m.hash);
+            sig_a.is_some() && sig_b.is_some() && sig_a != sig_b
+        });
+        if has_column_edits {
+            return None;
+        }
+    }
+
+    if col_alignment.moves.is_empty()
+        && col_alignment.inserted.is_empty()
+        && col_alignment.deleted.is_empty()
+    {
+        return None;
+    }
+
+    Some(col_alignment)
+}
+
+fn build_column_alignment_meta(view: &GridView, config: &DiffConfig) -> Vec<RowMeta> {
+    let mut meta: Vec<RowMeta> = view
+        .col_meta
+        .iter()
+        .map(|col| RowMeta {
+            row_idx: col.col_idx,
+            signature: RowSignature { hash: col.hash.hash },
+            non_blank_count: col.non_blank_count,
+            first_non_blank_col: col.first_non_blank_row,
+            frequency_class: FrequencyClass::Common,
+            is_low_info: false,
+        })
+        .collect();
+
+    classify_row_frequencies(&mut meta, config);
+    meta
+}
+
 enum ColumnChange {
     Insert,
     Delete,
@@ -330,6 +414,7 @@ fn find_single_gap_alignment(
         matched,
         inserted,
         deleted,
+        moves: Vec::new(),
     };
 
     debug_assert!(

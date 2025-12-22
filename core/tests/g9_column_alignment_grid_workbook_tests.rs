@@ -142,9 +142,9 @@ fn find_header_col(workbook: &Workbook, header: &str) -> u32 {
     workbook
         .sheets
         .iter()
-        .flat_map(|sheet| sheet.grid.cells.iter())
+        .flat_map(|sheet| sheet.grid.iter_cells())
         .find_map(|((row, col), cell)| match &cell.value {
-            Some(CellValue::Text(text)) if *row == 0 && *text == header_id => Some(*col),
+            Some(CellValue::Text(text)) if row == 0 && *text == header_id => Some(col),
             _ => None,
         })
         .expect("header column should exist in fixture")

@@ -3,8 +3,6 @@ use crate::column_alignment::{ColumnBlockMove, detect_exact_column_block_move};
 use crate::config::DiffConfig;
 use crate::diff::DiffError;
 use crate::grid_view::GridView;
-#[cfg(feature = "perf-metrics")]
-use crate::perf::DiffMetrics;
 use crate::rect_block_move::{RectBlockMove, detect_exact_rect_block_move};
 use crate::region_mask::RegionMask;
 use crate::row_alignment::{detect_exact_row_block_move, detect_fuzzy_row_block_move};
@@ -29,8 +27,6 @@ pub(super) struct SheetGridDiffer<'a, 'p, 'b, S: DiffSink> {
     pub(super) new_view: GridView<'b>,
     pub(super) old_mask: RegionMask,
     pub(super) new_mask: RegionMask,
-    #[cfg(feature = "perf-metrics")]
-    pub(super) metrics: Option<&'a mut DiffMetrics>,
 }
 
 impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
@@ -40,7 +36,6 @@ impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
         new: &'b Grid,
         old_view: GridView<'b>,
         new_view: GridView<'b>,
-        #[cfg(feature = "perf-metrics")] metrics: Option<&'a mut DiffMetrics>,
     ) -> Self {
         let old_mask = RegionMask::all_active(old.nrows, old.ncols);
         let new_mask = RegionMask::all_active(new.nrows, new.ncols);
@@ -53,8 +48,6 @@ impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
             new_view,
             old_mask,
             new_mask,
-            #[cfg(feature = "perf-metrics")]
-            metrics,
         }
     }
 
@@ -91,7 +84,7 @@ impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
             ) {
                 emit_rect_block_move(&mut self.emit_ctx, mv)?;
                 #[cfg(feature = "perf-metrics")]
-                if let Some(m) = self.metrics.as_mut() {
+                if let Some(m) = self.emit_ctx.metrics.as_deref_mut() {
                     m.moves_detected = m.moves_detected.saturating_add(1);
                 }
                 self.old_mask.exclude_rect_cells(
@@ -133,7 +126,7 @@ impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
             {
                 emit_row_block_move(&mut self.emit_ctx, mv)?;
                 #[cfg(feature = "perf-metrics")]
-                if let Some(m) = self.metrics.as_mut() {
+                if let Some(m) = self.emit_ctx.metrics.as_deref_mut() {
                     m.moves_detected = m.moves_detected.saturating_add(1);
                 }
                 self.old_mask.exclude_rows(mv.src_start_row, mv.row_count);
@@ -153,7 +146,7 @@ impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
             {
                 emit_column_block_move(&mut self.emit_ctx, mv)?;
                 #[cfg(feature = "perf-metrics")]
-                if let Some(m) = self.metrics.as_mut() {
+                if let Some(m) = self.emit_ctx.metrics.as_deref_mut() {
                     m.moves_detected = m.moves_detected.saturating_add(1);
                 }
                 self.old_mask.exclude_cols(mv.src_start_col, mv.col_count);
@@ -175,7 +168,7 @@ impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
                 emit_row_block_move(&mut self.emit_ctx, mv)?;
                 emit_moved_row_block_edits(&mut self.emit_ctx, &self.old_view, &self.new_view, mv)?;
                 #[cfg(feature = "perf-metrics")]
-                if let Some(m) = self.metrics.as_mut() {
+                if let Some(m) = self.emit_ctx.metrics.as_deref_mut() {
                     m.moves_detected = m.moves_detected.saturating_add(1);
                 }
                 self.old_mask.exclude_rows(mv.src_start_row, mv.row_count);
@@ -233,49 +226,16 @@ impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
     }
 
     pub(super) fn try_amr(&mut self) -> Result<bool, DiffError> {
-        #[cfg(feature = "perf-metrics")]
-        let handled = try_diff_with_amr(
-            &mut self.emit_ctx,
-            self.old,
-            self.new,
-            &self.old_view,
-            &self.new_view,
-            self.metrics.as_deref_mut(),
-        )?;
-        #[cfg(not(feature = "perf-metrics"))]
-        let handled = try_diff_with_amr(
-            &mut self.emit_ctx,
-            self.old,
-            self.new,
-            &self.old_view,
-            &self.new_view,
-        )?;
+        let handled =
+            try_diff_with_amr(&mut self.emit_ctx, self.old, self.new, &self.old_view, &self.new_view)?;
         Ok(handled)
     }
 
     pub(super) fn try_row_alignment(&mut self) -> Result<bool, DiffError> {
-        #[cfg(feature = "perf-metrics")]
-        return try_row_alignment_internal(
-            &mut self.emit_ctx,
-            &self.old_view,
-            &self.new_view,
-            &mut self.metrics,
-        );
-        #[cfg(not(feature = "perf-metrics"))]
         return try_row_alignment_internal(&mut self.emit_ctx, &self.old_view, &self.new_view);
     }
 
     pub(super) fn try_single_column_alignment(&mut self) -> Result<bool, DiffError> {
-        #[cfg(feature = "perf-metrics")]
-        return try_single_column_alignment_internal(
-            &mut self.emit_ctx,
-            self.old,
-            self.new,
-            &self.old_view,
-            &self.new_view,
-            &mut self.metrics,
-        );
-        #[cfg(not(feature = "perf-metrics"))]
         return try_single_column_alignment_internal(
             &mut self.emit_ctx,
             self.old,
@@ -286,16 +246,6 @@ impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
     }
 
     pub(super) fn positional(&mut self) -> Result<(), DiffError> {
-        #[cfg(feature = "perf-metrics")]
-        run_positional_diff_from_views_with_metrics(
-            &mut self.emit_ctx,
-            self.old,
-            self.new,
-            &self.old_view,
-            &self.new_view,
-            self.metrics.as_deref_mut(),
-        )?;
-        #[cfg(not(feature = "perf-metrics"))]
         run_positional_diff_from_views_with_metrics(
             &mut self.emit_ctx,
             self.old,

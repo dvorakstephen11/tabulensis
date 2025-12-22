@@ -23,15 +23,9 @@
 //!
 //! The current implementation simplifies the full AMR spec in the following ways:
 //!
-//! - **No global move-candidate extraction phase**: The full spec (Sections 9.5-9.7, 11)
-//!   describes a global phase that extracts out-of-order matches before gap filling.
-//!   This implementation instead detects moves opportunistically within gaps via
-//!   `GapStrategy::MoveCandidate` and `find_block_move`. This is simpler but may miss
-//!   some complex multi-block move patterns that the full spec would detect.
-//!
-//! - **No explicit move validation phase**: The spec describes validating move candidates
-//!   (Section 11) to resolve conflicts. The current implementation accepts the first
-//!   valid move found within each gap.
+//! - **Global move extraction is bounded**: The implementation performs global
+//!   unanchored match extraction with LAP assignment and validation, but caps
+//!   candidate counts for determinism and performance.
 //!
 //! - **RLE fast path**: For highly repetitive grids (>50% compression), the implementation
 //!   uses a run-length encoded alignment path (`runs.rs`) that bypasses full AMR.
@@ -44,8 +38,12 @@ pub(crate) mod anchor_chain;
 pub(crate) mod anchor_discovery;
 pub(crate) mod assembly;
 pub(crate) mod gap_strategy;
+pub(crate) mod lap;
 pub(crate) mod move_extraction;
 pub(crate) mod runs;
 
 pub(crate) use crate::alignment_types::RowBlockMove;
 pub(crate) use assembly::align_rows_amr_with_signatures_from_views;
+pub(crate) use assembly::align_meta_with_amr;
+#[cfg(feature = "perf-metrics")]
+pub(crate) use assembly::align_rows_amr_with_signatures_from_views_with_metrics;

@@ -2,11 +2,14 @@ use crate::config::DiffConfig;
 use crate::container::ZipContainer;
 use crate::datamashup::DataMashup;
 use crate::diff::{DiffError, DiffReport, DiffSummary, SheetId};
+use crate::diffable::{DiffContext, Diffable};
 use crate::progress::ProgressCallback;
 use crate::sink::{DiffSink, NoFinishSink, VecSink};
 use crate::string_pool::StringId;
 use crate::string_pool::StringPool;
 use crate::workbook::{Sheet, Workbook};
+#[cfg(feature = "perf-metrics")]
+use crate::perf::DiffMetrics;
 
 /// The kind of VBA module contained in an `.xlsm` workbook.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +52,9 @@ pub struct WorkbookPackage {
     pub data_mashup: Option<DataMashup>,
     /// Extracted VBA modules, if present and the `vba` feature is enabled.
     pub vba_modules: Option<Vec<VbaModule>>,
+    #[cfg(feature = "perf-metrics")]
+    /// Parse time for this package (ms), captured when opening from bytes.
+    pub parse_time_ms: u64,
 }
 
 impl From<Workbook> for WorkbookPackage {
@@ -57,6 +63,8 @@ impl From<Workbook> for WorkbookPackage {
             workbook,
             data_mashup: None,
             vba_modules: None,
+            #[cfg(feature = "perf-metrics")]
+            parse_time_ms: 0,
         }
     }
 }
@@ -82,6 +90,8 @@ impl WorkbookPackage {
         reader: R,
     ) -> Result<Self, crate::excel_open_xml::PackageError> {
         crate::with_default_session(|session| {
+            #[cfg(feature = "perf-metrics")]
+            let start = std::time::Instant::now();
             let mut container = crate::container::OpcContainer::open_from_reader(reader)?;
             let workbook = crate::excel_open_xml::open_workbook_from_container(
                 &mut container,
@@ -98,6 +108,8 @@ impl WorkbookPackage {
                 workbook,
                 data_mashup,
                 vba_modules,
+                #[cfg(feature = "perf-metrics")]
+                parse_time_ms: start.elapsed().as_millis() as u64,
             })
         })
     }
@@ -132,8 +144,10 @@ impl WorkbookPackage {
         pool: &mut crate::string_pool::StringPool,
         config: &DiffConfig,
     ) -> DiffReport {
-        let mut report =
-            crate::engine::diff_workbooks(&self.workbook, &other.workbook, pool, config);
+        let mut report = {
+            let mut ctx = DiffContext::new(pool, config);
+            self.workbook.diff(&other.workbook, &mut ctx)
+        };
 
         let mut object_ops =
             crate::object_diff::diff_named_ranges(&self.workbook, &other.workbook, pool);
@@ -158,6 +172,8 @@ impl WorkbookPackage {
 
         report.ops.extend(m_ops);
         report.strings = pool.strings().to_vec();
+        #[cfg(feature = "perf-metrics")]
+        apply_parse_metrics(self, other, &mut report.metrics);
         report
     }
 
@@ -199,6 +215,8 @@ impl WorkbookPackage {
 
         report.ops.extend(m_ops);
         report.strings = pool.strings().to_vec();
+        #[cfg(feature = "perf-metrics")]
+        apply_parse_metrics(self, other, &mut report.metrics);
         report
     }
 
@@ -324,6 +342,9 @@ impl WorkbookPackage {
 
         sink.finish()?;
 
+        #[cfg(feature = "perf-metrics")]
+        apply_parse_metrics(self, other, &mut summary.metrics);
+
         Ok(summary)
     }
 
@@ -392,6 +413,9 @@ impl WorkbookPackage {
         }
 
         sink.finish()?;
+
+        #[cfg(feature = "perf-metrics")]
+        apply_parse_metrics(self, other, &mut summary.metrics);
 
         Ok(summary)
     }
@@ -696,6 +720,23 @@ impl PbixPackage {
         progress.on_progress("m_diff", 1.0);
         out
     }
+}
+
+#[cfg(feature = "perf-metrics")]
+fn apply_parse_metrics(
+    old_pkg: &WorkbookPackage,
+    new_pkg: &WorkbookPackage,
+    metrics: &mut Option<DiffMetrics>,
+) {
+    let Some(m) = metrics.as_mut() else {
+        return;
+    };
+
+    let added = old_pkg
+        .parse_time_ms
+        .saturating_add(new_pkg.parse_time_ms);
+    m.parse_time_ms = m.parse_time_ms.saturating_add(added);
+    m.diff_time_ms = m.total_time_ms.saturating_sub(m.parse_time_ms);
 }
 
 #[cfg(feature = "excel-open-xml")]

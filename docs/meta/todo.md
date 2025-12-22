@@ -1,35 +1,20 @@
 # todo
 
-- Branch 2 completion:
-    - Implement code changes with GPT-5.2-Pro until it has no more major suggestions.
-    - Write a summary of what has happened in this branch:
-        - Did a design evaluation of the product at what felt like 50% of the way through the product development process and various AI agents found some major issues with the product. The evaluation is in unified_eval_draft.md (rename)
-        - Wrote 7-branch plan to resolve those issues, which is in next_sprint_plan.md
-        - I appear to have completed everything described in Branch 1.
-        - Started on what was included in Branch 2
-        - Ran into some major performance issues so I set up benchmarking and made some major changes in how alignments work. 
-        - Experienced some major performance improvements in several of my hardest benchmarks. 
-        - I appear to have completed everything described in Branch 2, but I made so many major changes in the process that I wonder how accurate much of the documentation is now.
-        - I would like to consolidate, correct, and clean documentation before moving on to Branch 3 (if Branch 3 is even still needed). 
-    - Documentation consolidation:
-        - I have the following files that describe many of the same things:
-            - excel_diff_difficulty_analysis.md
-            - excel_diff_meta_programming.md
-            - excel_diff_product_differentiation_plan.md
-            - excel_diff_specification.md
-            - excel_diff_testing_plan.md
-            - next_sprint_plan.md
-            - unified_grid_diff_algorithm_specification.md
-        - There is probably a lot of information that is now inconsistent between the codebase and the documentation, where the codebase is superior.
-        - Have GPT-5.2-Thinking-Heavy figure out what of next_sprint_plan.md is already accomplished, and what is still missing.
-        - Figure out what is completely redundant between excel_diff_specification.md and unified_grid_diff_algorithm_specification.md and just remove it from whichever file is inferior
-        - unified_grid_diff_algorithm_specification.md reads as a bit of a low-level implementation plan. Opus 4.5 wrote it, so I'm not entirely sure it's top-quality for something as complicated as this project. Probably need to do several rounds of reading, understanding, and paring this down, with the goal of taking the best parts, removing the worst, and making everything as concise as possible without losing useful information.
-        - How useful is excel_diff_testing_plan.md now?
-        - *_difficulty_analysis.md, *_meta_programming.md, and *_product_differentiation_plan.md can be kept as is, although it may be useful to consolidate difficulty analysis and product differentiation plan into a single file.
-            - Either way, might be useful to see if there's anything in there that is no longer relevant.
-    - Figure out what should be changed in next_sprint_plan.md 
-    - Present the consolidated documentation and the new codebase to GPT-5.2-Pro and Google 3 Deepthink to get their estimate of percent completion.
-        - I'll do another one after next_sprint_plan.md is complete, then I'll also do another design evaluation.
+- Improve design (current)
+- Introduce parallelization
+    - Compare performce metrics before and after parallelization
+- Add PBIX diff feature
+- Ask about WASM/Web, and desktop UI, and make a decision on that score
+- Identify ways to make the performance even better (GPT-5.2-Pro mentioned some fallback logic that essentially defers sophisticated alignment to the future)
+- Figure out where fluff exists in the codebase
+- Start understanding the codebase and the product
+    - Read the README.md file
+    - Create two excel files and compare them
+    - Download a publicly available .xlsx file, make some changes, and compare the two files
+- Figure out a name for the product
+- Create a full marketing plan
+    - Initial GPT-5.2-Pro plan then have it propose incremental improvements, and ask questions until you feel like you know everything about how you'll proceed with marketing, legal, and distribution.
+
 
 
 

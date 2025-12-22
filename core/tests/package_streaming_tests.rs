@@ -74,11 +74,15 @@ fn package_diff_streaming_does_not_emit_after_finish_and_finishes_once() {
         workbook: wb.clone(),
         data_mashup: Some(dm_a),
         vba_modules: None,
+        #[cfg(feature = "perf-metrics")]
+        parse_time_ms: 0,
     };
     let pkg_b = WorkbookPackage {
         workbook: wb,
         data_mashup: Some(dm_b),
         vba_modules: None,
+        #[cfg(feature = "perf-metrics")]
+        parse_time_ms: 0,
     };
 
     let mut sink = StrictSink::default();
@@ -163,11 +167,15 @@ fn package_diff_streaming_finishes_on_error() {
         workbook: wb_a,
         data_mashup: None,
         vba_modules: None,
+        #[cfg(feature = "perf-metrics")]
+        parse_time_ms: 0,
     };
     let pkg_b = WorkbookPackage {
         workbook: wb_b,
         data_mashup: None,
         vba_modules: None,
+        #[cfg(feature = "perf-metrics")]
+        parse_time_ms: 0,
     };
 
     let mut sink = FailingSink {
@@ -216,11 +224,15 @@ fn package_diff_streaming_finishes_on_m_emit_error() {
         workbook: wb.clone(),
         data_mashup: Some(dm_a),
         vba_modules: None,
+        #[cfg(feature = "perf-metrics")]
+        parse_time_ms: 0,
     };
     let pkg_b = WorkbookPackage {
         workbook: wb,
         data_mashup: Some(dm_b),
         vba_modules: None,
+        #[cfg(feature = "perf-metrics")]
+        parse_time_ms: 0,
     };
 
     let mut sink = FailOnMOpSink {
@@ -306,11 +318,15 @@ fn package_streaming_json_lines_header_includes_m_strings() {
         workbook: wb.clone(),
         data_mashup: Some(dm_a),
         vba_modules: None,
+        #[cfg(feature = "perf-metrics")]
+        parse_time_ms: 0,
     };
     let pkg_b = WorkbookPackage {
         workbook: wb,
         data_mashup: Some(dm_b),
         vba_modules: None,
+        #[cfg(feature = "perf-metrics")]
+        parse_time_ms: 0,
     };
 
     let mut out = Vec::<u8>::new();

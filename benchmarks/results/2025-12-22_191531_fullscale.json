@@ -1,0 +1,79 @@
+{
+  "timestamp": "2025-12-22T19:15:31.959567+00:00",
+  "git_commit": "ff46f641851b",
+  "git_branch": "2025-12-24a-design-improvements",
+  "full_scale": true,
+  "tests": {
+    "perf_50k_99_percent_blank": {
+      "total_time_ms": 155,
+      "parse_time_ms": 0,
+      "diff_time_ms": 155,
+      "move_detection_time_ms": 0,
+      "alignment_time_ms": 0,
+      "cell_diff_time_ms": 0,
+      "peak_memory_bytes": 26002562,
+      "rows_processed": 100000,
+      "cells_compared": 10,
+      "anchors_found": 0,
+      "moves_detected": 0
+    },
+    "perf_50k_adversarial_repetitive": {
+      "total_time_ms": 2101,
+      "parse_time_ms": 0,
+      "diff_time_ms": 2101,
+      "move_detection_time_ms": 0,
+      "alignment_time_ms": 0,
+      "cell_diff_time_ms": 0,
+      "peak_memory_bytes": 350257784,
+      "rows_processed": 100000,
+      "cells_compared": 350,
+      "anchors_found": 0,
+      "moves_detected": 0
+    },
+    "perf_50k_completely_different": {
+      "total_time_ms": 6092,
+      "parse_time_ms": 0,
+      "diff_time_ms": 6092,
+      "move_detection_time_ms": 0,
+      "alignment_time_ms": 0,
+      "cell_diff_time_ms": 3009,
+      "peak_memory_bytes": 1629946214,
+      "rows_processed": 100000,
+      "cells_compared": 5000000,
+      "anchors_found": 0,
+      "moves_detected": 0
+    },
+    "perf_50k_dense_single_edit": {
+      "total_time_ms": 3486,
+      "parse_time_ms": 0,
+      "diff_time_ms": 3486,
+      "move_detection_time_ms": 0,
+      "alignment_time_ms": 0,
+      "cell_diff_time_ms": 0,
+      "peak_memory_bytes": 698057139,
+      "rows_processed": 100000,
+      "cells_compared": 700,
+      "anchors_found": 0,
+      "moves_detected": 0
+    },
+    "perf_50k_identical": {
+      "total_time_ms": 714,
+      "parse_time_ms": 0,
+      "diff_time_ms": 714,
+      "move_detection_time_ms": 0,
+      "alignment_time_ms": 0,
+      "cell_diff_time_ms": 0,
+      "peak_memory_bytes": 480015686,
+      "rows_processed": 100000,
+      "cells_compared": 5000000,
+      "anchors_found": 0,
+      "moves_detected": 0
+    }
+  },
+  "summary": {
+    "total_tests": 5,
+    "total_time_ms": 12548,
+    "total_rows_processed": 500000,
+    "total_cells_compared": 10001060
+  }
+}

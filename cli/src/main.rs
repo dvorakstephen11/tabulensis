@@ -2,6 +2,9 @@ mod commands;
 mod output;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use excel_diff::{
+    ContainerError, DataMashupError, DiffError, GridParseError, PackageError, SectionParseError,
+};
 use std::process::ExitCode;
 
 #[derive(Parser)]
@@ -47,6 +50,8 @@ pub enum Commands {
         max_memory: Option<u32>,
         #[arg(long, value_name = "SECONDS", help = "Abort diff after this many seconds")]
         timeout: Option<u32>,
+        #[arg(long, value_name = "PATH", help = "Write perf metrics JSON to this path")]
+        metrics_json: Option<String>,
     },
     #[command(about = "Show information about a workbook")]
     Info {
@@ -84,6 +89,7 @@ fn main() -> ExitCode {
             progress,
             max_memory,
             timeout,
+            metrics_json,
         } => commands::diff::run(
             &old,
             &new,
@@ -100,6 +106,7 @@ fn main() -> ExitCode {
             progress,
             max_memory,
             timeout,
+            metrics_json,
         ),
         Commands::Info { path, queries } => commands::info::run(&path, queries),
     };
@@ -108,8 +115,29 @@ fn main() -> ExitCode {
         Ok(code) => code,
         Err(e) => {
             eprintln!("Error: {:#}", e);
-            ExitCode::from(2)
+            exit_code_for_error(&e)
         }
     }
+}
+
+fn exit_code_for_error(err: &anyhow::Error) -> ExitCode {
+    if is_internal_error(err) {
+        ExitCode::from(3)
+    } else {
+        ExitCode::from(2)
+    }
+}
+
+fn is_internal_error(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        if let Some(diff_err) = cause.downcast_ref::<DiffError>() {
+            return !matches!(diff_err, DiffError::SheetNotFound { .. });
+        }
+        cause.is::<PackageError>()
+            || cause.is::<ContainerError>()
+            || cause.is::<GridParseError>()
+            || cause.is::<DataMashupError>()
+            || cause.is::<SectionParseError>()
+    })
 }
 
