@@ -17,19 +17,16 @@ jobs:
           toolchain: nightly
 
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
 
-      - name: Fuzz core datamashup framing
-        run: cargo fuzz run fuzz_datamashup_parse -max_total_time=60
+      - name: Fuzz core targets
         working-directory: core/fuzz
-
-      - name: Fuzz core grid diff
-        run: cargo fuzz run fuzz_diff_grids -max_total_time=60
-        working-directory: core/fuzz
-
-      - name: Fuzz M parser + AST diff
-        run: cargo fuzz run fuzz_m_section_and_ast -max_total_time=60
-        working-directory: core/fuzz
+        run: |
+          set -e
+          for target in fuzz_datamashup_parse fuzz_diff_grids fuzz_m_section_and_ast; do
+            echo "Running $target"
+            cargo fuzz run "$target" -max_total_time=60
+          done
 
       - name: Upload fuzz artifacts
         uses: actions/upload-artifact@v4

@@ -22,8 +22,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install fixture generator deps
+        run: python -m pip install -r fixtures/requirements.txt
+
       - name: Install fixture generator
-        run: python -m pip install -e fixtures
+        run: python -m pip install -e fixtures --no-deps
 
       - name: Generate test fixtures
         run: generate-fixtures --manifest fixtures/manifest_cli_tests.yaml --force

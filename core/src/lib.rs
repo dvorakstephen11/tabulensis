@@ -134,6 +134,7 @@ pub fn with_default_session<T>(f: impl FnOnce(&mut DiffSession) -> T) -> T {
     })
 }
 
+#[cfg(feature = "legacy-api")]
 #[deprecated(note = "use WorkbookPackage::diff")]
 #[doc(hidden)]
 pub fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> DiffReport {
@@ -143,6 +144,7 @@ pub fn diff_workbooks(old: &Workbook, new: &Workbook, config: &DiffConfig) -> Di
     })
 }
 
+#[cfg(feature = "legacy-api")]
 #[deprecated(note = "use WorkbookPackage::diff")]
 #[doc(hidden)]
 pub fn try_diff_workbooks(
@@ -156,7 +158,7 @@ pub fn try_diff_workbooks(
     })
 }
 
-#[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
+#[cfg(all(feature = "legacy-api", feature = "excel-open-xml", feature = "std-fs"))]
 #[deprecated(note = "use WorkbookPackage::open")]
 #[allow(deprecated)]
 #[doc(hidden)]

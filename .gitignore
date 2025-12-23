@@ -10,6 +10,9 @@ __pycache__/
 *.pyc
 *.egg-info/
 
+# Local scratch
+tmp/
+
 # Shared Generated Data
 fixtures/generated/*.xlsx
 fixtures/generated/*.pbix
