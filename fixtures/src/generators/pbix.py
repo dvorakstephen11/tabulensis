@@ -59,11 +59,23 @@ class PbixGenerator(BaseGenerator):
         mode = self.args.get("mode", "from_xlsx")
         base_file = self.args.get("base_file")
 
-        if mode not in ("from_xlsx", "no_datamashup"):
+        if mode not in ("from_xlsx", "no_datamashup", "no_schema"):
             raise ValueError(f"Unsupported pbix generator mode: {mode}")
 
         include_datamashup = mode == "from_xlsx"
         include_markers = True
+        include_schema = mode != "no_schema"
+
+        schema_bytes = None
+        model_schema = self.args.get("model_schema")
+        model_schema_file = self.args.get("model_schema_file")
+        if model_schema_file:
+            model_schema_path = Path(model_schema_file)
+            if not model_schema_path.exists():
+                model_schema_path = Path("fixtures") / model_schema_file
+            schema_bytes = model_schema_path.read_bytes()
+        elif model_schema is not None:
+            schema_bytes = str(model_schema).encode("utf-8")
 
         dm_bytes = b""
         if include_datamashup:
@@ -80,4 +92,5 @@ class PbixGenerator(BaseGenerator):
             if include_markers:
                 zout.writestr("Report/Layout", b"{}")
                 zout.writestr("Report/Version", b"1")
-                zout.writestr("DataModelSchema", b"{}")
+                if include_schema:
+                    zout.writestr("DataModelSchema", schema_bytes or b"{}")

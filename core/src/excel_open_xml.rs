@@ -46,7 +46,7 @@ pub enum PackageError {
     #[error("[EXDIFF_PKG_001] not a valid ZIP file: {message}. Suggestion: verify the input is a ZIP-based file and not corrupt.")]
     NotAZip { message: String },
 
-    #[error("[EXDIFF_PKG_010] PBIX/PBIT does not contain DataMashup (likely tabular model)\nSuggestion: export or extract Power Query mashup from a legacy PBIX, or use a tabular-model extraction path.")]
+    #[error("[EXDIFF_PKG_010] PBIX/PBIT does not contain DataMashup.\nSuggestion: if this is an enhanced-metadata PBIX, export as PBIT to expose DataModelSchema. If this is a legacy PBIX, ensure DataMashup is present.")]
     NoDataMashupUseTabularModel,
 
     #[error("[EXDIFF_PKG_003] missing required part: {path}. Suggestion: the workbook may be corrupt; re-save the file in Excel.")]

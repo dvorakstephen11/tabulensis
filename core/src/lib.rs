@@ -98,6 +98,8 @@ mod m_semantic_detail;
 mod model;
 #[cfg(feature = "model-diff")]
 mod model_diff;
+#[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+mod tabular_schema;
 mod object_diff;
 mod output;
 mod package;

@@ -280,6 +280,108 @@
             color: var(--text-muted);
         }
 
+        .semantic-output {
+            padding: 1.5rem;
+            display: grid;
+            gap: 1.5rem;
+        }
+
+        .semantic-output h2 {
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-muted);
+        }
+
+        .cards {
+            display: grid;
+            gap: 0.75rem;
+        }
+
+        .card {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 0.75rem 1rem;
+        }
+
+        .card summary {
+            list-style: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+        }
+
+        .card summary::-webkit-details-marker {
+            display: none;
+        }
+
+        .card .title {
+            font-weight: 600;
+        }
+
+        .card .tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.15rem 0.5rem;
+            border-radius: 999px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+
+        .card .body {
+            margin-top: 0.75rem;
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+        }
+
+        .card .body ul {
+            margin: 0.5rem 0 0 1.2rem;
+        }
+
+        .q-detail {
+            margin-bottom: 0.75rem;
+        }
+
+        .ast-summary {
+            margin-top: 0.35rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        .muted {
+            color: var(--text-muted);
+        }
+
+        .error {
+            color: var(--danger);
+        }
+
+        .raw-ops {
+            border-top: 1px solid var(--border-subtle);
+            padding: 1rem 1.5rem 1.5rem;
+        }
+
+        .raw-ops summary {
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .raw-ops-body {
+            margin-top: 0.75rem;
+            color: var(--text-secondary);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
         .diff-output {
             padding: 1.5rem;
             max-height: 500px;
@@ -442,32 +544,32 @@
 
         <div class="upload-section">
             <div class="upload-box" id="oldFileBox">
-                <input type="file" id="oldFile" accept=".xlsx,.xlsm">
+                <input type="file" id="oldFile" accept=".xlsx,.xlsm,.xltx,.xltm,.pbix,.pbit">
                 <span class="upload-label">Old File</span>
                 <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke-width="1.5">
                     <path d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
                 <p class="upload-text">Drop file or click to browse</p>
-                <p class="upload-hint">.xlsx or .xlsm</p>
+                <p class="upload-hint">.xlsx, .xlsm, .pbix, or .pbit</p>
                 <p class="file-name" id="oldFileName"></p>
             </div>
 
             <span class="vs-divider">VS</span>
 
             <div class="upload-box" id="newFileBox">
-                <input type="file" id="newFile" accept=".xlsx,.xlsm">
+                <input type="file" id="newFile" accept=".xlsx,.xlsm,.xltx,.xltm,.pbix,.pbit">
                 <span class="upload-label">New File</span>
                 <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke-width="1.5">
                     <path d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
                 <p class="upload-text">Drop file or click to browse</p>
-                <p class="upload-hint">.xlsx or .xlsm</p>
+                <p class="upload-hint">.xlsx, .xlsm, .pbix, or .pbit</p>
                 <p class="file-name" id="newFileName"></p>
             </div>
         </div>
 
         <button class="diff-button" id="diffBtn" disabled>
-            Compare Workbooks
+            Compare Files
         </button>
 
         <div id="error" class="error-message" style="display: none;"></div>
@@ -482,35 +584,33 @@
             <div class="summary-grid" id="summaryGrid">
                 <div class="summary-item">
                     <div class="summary-value" id="opCount">0</div>
-                    <div class="summary-label">Changes</div>
+                    <div class="summary-label">Ops</div>
                 </div>
                 <div class="summary-item">
-                    <div class="summary-value" id="sheetsOld">0</div>
-                    <div class="summary-label">Old Sheets</div>
+                    <div class="summary-value" id="warningCount">0</div>
+                    <div class="summary-label">Warnings</div>
                 </div>
                 <div class="summary-item">
-                    <div class="summary-value" id="sheetsNew">0</div>
-                    <div class="summary-label">New Sheets</div>
+                    <div class="summary-value" id="completeStatus">true</div>
+                    <div class="summary-label">Complete</div>
                 </div>
             </div>
-            <div class="query-details" id="queryDetails" style="display: none;">
-                <div class="query-details-header">Power Query Details</div>
-                <div class="query-details-body" id="queryDetailsBody"></div>
-            </div>
-            <div class="diff-output">
-                <pre id="diffOutput"></pre>
-            </div>
+            <div class="semantic-output" id="semanticOutput"></div>
+            <details class="raw-ops" id="rawOps" style="display: none;">
+                <summary>Raw ops</summary>
+                <div class="raw-ops-body" id="rawOpsBody"></div>
+            </details>
         </div>
 
         <div class="empty-state" id="emptyState">
             <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke-width="1.5">
                 <path d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
-            <p>Select two Excel files to compare</p>
+            <p>Select two files to compare</p>
         </div>
 
         <footer>
-            <p>Powered by <a href="https://github.com/dvora/excel_diff" target="_blank">excel_diff</a> • Runs entirely in your browser</p>
+            <p>Powered by <a href="https://github.com/dvora/excel_diff" target="_blank">excel_diff</a> • Version <span id="version">-</span></p>
         </footer>
     </div>
 

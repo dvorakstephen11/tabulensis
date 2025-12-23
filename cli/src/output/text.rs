@@ -38,7 +38,7 @@ pub fn write_text_report<W: Write>(
         return Ok(());
     }
 
-    let (workbook_ops, sheet_ops, m_ops) = partition_ops(report);
+    let (workbook_ops, sheet_ops, query_ops, measure_ops) = partition_ops(report);
 
     if !workbook_ops.is_empty() {
         writeln!(w, "Workbook:")?;
@@ -62,9 +62,20 @@ pub fn write_text_report<W: Write>(
         writeln!(w)?;
     }
 
-    if !m_ops.is_empty() {
+    if !query_ops.is_empty() {
         writeln!(w, "Power Query:")?;
-        for op in &m_ops {
+        for op in &query_ops {
+            let lines = render_op(report, op, verbosity);
+            for line in lines {
+                writeln!(w, "  {}", line)?;
+            }
+        }
+        writeln!(w)?;
+    }
+
+    if !measure_ops.is_empty() {
+        writeln!(w, "Measures:")?;
+        for op in &measure_ops {
             let lines = render_op(report, op, verbosity);
             for line in lines {
                 writeln!(w, "  {}", line)?;
@@ -79,14 +90,22 @@ pub fn write_text_report<W: Write>(
 
 fn partition_ops(
     report: &DiffReport,
-) -> (Vec<&DiffOp>, BTreeMap<String, Vec<&DiffOp>>, Vec<&DiffOp>) {
+) -> (
+    Vec<&DiffOp>,
+    BTreeMap<String, Vec<&DiffOp>>,
+    Vec<&DiffOp>,
+    Vec<&DiffOp>,
+) {
     let mut workbook_ops: Vec<&DiffOp> = Vec::new();
     let mut sheet_ops: BTreeMap<String, Vec<&DiffOp>> = BTreeMap::new();
-    let mut m_ops: Vec<&DiffOp> = Vec::new();
+    let mut query_ops: Vec<&DiffOp> = Vec::new();
+    let mut measure_ops: Vec<&DiffOp> = Vec::new();
 
     for op in &report.ops {
         if op.is_m_op() {
-            m_ops.push(op);
+            query_ops.push(op);
+        } else if is_measure_op(op) {
+            measure_ops.push(op);
         } else if let Some(sheet_id) = get_sheet_id(op) {
             let sheet_name = report
                 .resolve(sheet_id)
@@ -98,7 +117,16 @@ fn partition_ops(
         }
     }
 
-    (workbook_ops, sheet_ops, m_ops)
+    (workbook_ops, sheet_ops, query_ops, measure_ops)
+}
+
+fn is_measure_op(op: &DiffOp) -> bool {
+    matches!(
+        op,
+        DiffOp::MeasureAdded { .. }
+            | DiffOp::MeasureRemoved { .. }
+            | DiffOp::MeasureDefinitionChanged { .. }
+    )
 }
 
 fn get_sheet_id(op: &DiffOp) -> Option<StringId> {
@@ -433,6 +461,18 @@ fn render_op(report: &DiffReport, op: &DiffOp, verbosity: Verbosity) -> Vec<Stri
             "Chart \"{}\": CHANGED",
             report.resolve(*name).unwrap_or("<unknown>")
         )],
+        DiffOp::MeasureAdded { name } => vec![format!(
+            "Measure \"{}\": ADDED",
+            report.resolve(*name).unwrap_or("<unknown>")
+        )],
+        DiffOp::MeasureRemoved { name } => vec![format!(
+            "Measure \"{}\": REMOVED",
+            report.resolve(*name).unwrap_or("<unknown>")
+        )],
+        DiffOp::MeasureDefinitionChanged { name, .. } => vec![format!(
+            "Measure \"{}\": definition changed",
+            report.resolve(*name).unwrap_or("<unknown>")
+        )],
         _ => vec![format!("{:?}", op)],
     }
 }
@@ -579,6 +619,9 @@ fn write_summary<W: Write>(w: &mut W, report: &DiffReport) -> Result<()> {
     if counts.queries > 0 {
         writeln!(w, "  Query changes: {}", counts.queries)?;
     }
+    if counts.measures > 0 {
+        writeln!(w, "  Measure changes: {}", counts.measures)?;
+    }
 
     if !report.complete {
         writeln!(w, "  Status: INCOMPLETE (some changes may be missing)")?;
@@ -596,6 +639,7 @@ struct OpCounts {
     blocks: usize,
     cells: usize,
     queries: usize,
+    measures: usize,
 }
 
 fn count_ops(report: &DiffReport) -> OpCounts {
@@ -606,6 +650,7 @@ fn count_ops(report: &DiffReport) -> OpCounts {
         blocks: 0,
         cells: 0,
         queries: 0,
+        measures: 0,
     };
 
     for op in &report.ops {
@@ -625,6 +670,9 @@ fn count_ops(report: &DiffReport) -> OpCounts {
             | DiffOp::QueryRenamed { .. }
             | DiffOp::QueryDefinitionChanged { .. }
             | DiffOp::QueryMetadataChanged { .. } => counts.queries += 1,
+            DiffOp::MeasureAdded { .. }
+            | DiffOp::MeasureRemoved { .. }
+            | DiffOp::MeasureDefinitionChanged { .. } => counts.measures += 1,
             _ => {}
         }
     }

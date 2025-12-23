@@ -615,6 +615,8 @@ impl WorkbookPackage {
 #[derive(Debug, Clone)]
 pub struct PbixPackage {
     pub(crate) data_mashup: Option<DataMashup>,
+    #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+    pub(crate) model_schema: Option<crate::tabular_schema::RawTabularModel>,
 }
 
 impl PbixPackage {
@@ -624,23 +626,44 @@ impl PbixPackage {
     ) -> Result<Self, crate::excel_open_xml::PackageError> {
         let mut container = ZipContainer::open_from_reader(reader)?;
 
-        let bytes = match container.read_file_optional_checked("DataMashup")? {
-            Some(bytes) => bytes,
-            None => {
-                if looks_like_pbix(&container) {
-                    return Err(crate::excel_open_xml::PackageError::NoDataMashupUseTabularModel);
-                }
-                return Err(crate::excel_open_xml::PackageError::UnsupportedFormat {
-                    message: "missing DataMashup at ZIP root".to_string(),
-                });
-            }
+        let data_mashup_opt = container.read_file_optional_checked("DataMashup")?;
+
+        let data_mashup = if let Some(bytes) = data_mashup_opt {
+            let raw = crate::datamashup_framing::parse_data_mashup(&bytes)?;
+            Some(crate::datamashup::build_data_mashup(&raw)?)
+        } else {
+            None
         };
 
-        let raw = crate::datamashup_framing::parse_data_mashup(&bytes)?;
-        let data_mashup = crate::datamashup::build_data_mashup(&raw)?;
+        #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+        let mut model_schema = None;
+
+        if data_mashup.is_none() {
+            if looks_like_pbix(&container) {
+                #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+                {
+                    if let Some(bytes) = container.read_file_optional_checked("DataModelSchema")? {
+                        model_schema =
+                            Some(crate::tabular_schema::parse_data_model_schema(&bytes)?);
+                        return Ok(Self {
+                            data_mashup,
+                            model_schema,
+                        });
+                    }
+                }
+
+                return Err(crate::excel_open_xml::PackageError::NoDataMashupUseTabularModel);
+            }
+
+            return Err(crate::excel_open_xml::PackageError::UnsupportedFormat {
+                message: "missing DataMashup at ZIP root".to_string(),
+            });
+        }
 
         Ok(Self {
-            data_mashup: Some(data_mashup),
+            data_mashup,
+            #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+            model_schema,
         })
     }
 
@@ -650,16 +673,37 @@ impl PbixPackage {
 
     pub fn diff(&self, other: &Self, config: &DiffConfig) -> DiffReport {
         crate::with_default_session(|session| {
-            let ops = crate::m_diff::diff_m_ops_for_packages(
+            let mut report = DiffReport::new(Vec::new());
+            let mut ops = crate::m_diff::diff_m_ops_for_packages(
                 &self.data_mashup,
                 &other.data_mashup,
                 &mut session.strings,
                 config,
             );
 
-            let strings = session.strings.strings().to_vec();
-            let mut report = DiffReport::new(ops);
-            report.strings = strings;
+            report.ops.append(&mut ops);
+
+            #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+            {
+                let old_raw = self.model_schema.as_ref();
+                let new_raw = other.model_schema.as_ref();
+
+                if old_raw.is_some() || new_raw.is_some() {
+                    let old_model = old_raw
+                        .map(|r| crate::tabular_schema::build_model(r, &mut session.strings))
+                        .unwrap_or_default();
+
+                    let new_model = new_raw
+                        .map(|r| crate::tabular_schema::build_model(r, &mut session.strings))
+                        .unwrap_or_default();
+
+                    let mut model_ops =
+                        crate::model_diff::diff_models(&old_model, &new_model, &mut session.strings);
+                    report.ops.append(&mut model_ops);
+                }
+            }
+
+            report.strings = session.strings.strings().to_vec();
             report
         })
     }
@@ -695,6 +739,28 @@ impl PbixPackage {
         for op in m_ops {
             sink.emit(op)?;
             op_count = op_count.saturating_add(1);
+        }
+
+        #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+        {
+            let old_raw = self.model_schema.as_ref();
+            let new_raw = other.model_schema.as_ref();
+
+            if old_raw.is_some() || new_raw.is_some() {
+                let old_model = old_raw
+                    .map(|r| crate::tabular_schema::build_model(r, pool))
+                    .unwrap_or_default();
+
+                let new_model = new_raw
+                    .map(|r| crate::tabular_schema::build_model(r, pool))
+                    .unwrap_or_default();
+
+                let model_ops = crate::model_diff::diff_models(&old_model, &new_model, pool);
+                for op in model_ops {
+                    sink.emit(op)?;
+                    op_count = op_count.saturating_add(1);
+                }
+            }
         }
 
         sink.finish()?;

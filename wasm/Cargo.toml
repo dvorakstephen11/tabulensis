@@ -11,7 +11,7 @@ homepage = "https://github.com/dvora/excel_diff"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-excel_diff = { path = "../core", default-features = false, features = ["excel-open-xml"] }
+excel_diff = { path = "../core", default-features = false, features = ["excel-open-xml", "model-diff"] }
 wasm-bindgen = "0.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

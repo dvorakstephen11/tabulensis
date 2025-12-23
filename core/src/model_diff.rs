@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
 use crate::diff::DiffOp;
@@ -26,16 +26,20 @@ pub fn diff_models(old: &Model, new: &Model, pool: &mut StringPool) -> Vec<DiffO
         new_by_name.insert(measure.name, measure.expression);
     }
 
-    for name in old_by_name.keys().chain(new_by_name.keys()) {
-        match (old_by_name.get(name), new_by_name.get(name)) {
-            (Some(_old_expr), None) => ops.push(DiffOp::MeasureRemoved { name: *name }),
-            (None, Some(_new_expr)) => ops.push(DiffOp::MeasureAdded { name: *name }),
+    let mut names: BTreeSet<StringId> = BTreeSet::new();
+    names.extend(old_by_name.keys().copied());
+    names.extend(new_by_name.keys().copied());
+
+    for name in names {
+        match (old_by_name.get(&name), new_by_name.get(&name)) {
+            (Some(_old_expr), None) => ops.push(DiffOp::MeasureRemoved { name }),
+            (None, Some(_new_expr)) => ops.push(DiffOp::MeasureAdded { name }),
             (Some(old_expr), Some(new_expr)) => {
                 if old_expr != new_expr {
                     let old_hash = hash64(&pool.resolve(*old_expr));
                     let new_hash = hash64(&pool.resolve(*new_expr));
                     ops.push(DiffOp::MeasureDefinitionChanged {
-                        name: *name,
+                        name,
                         old_hash,
                         new_hash,
                     });

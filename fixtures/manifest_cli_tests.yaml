@@ -175,3 +175,48 @@ scenarios:
       mode: "no_datamashup"
     output: "pbix_no_datamashup.pbix"
 
+  - id: "branch1_pbix_no_datamashup_no_schema"
+    generator: "pbix"
+    args:
+      mode: "no_schema"
+    output: "pbix_no_datamashup_no_schema.pbix"
+
+  - id: "branch1_pbit_model_a"
+    generator: "pbix"
+    args:
+      mode: "no_datamashup"
+      model_schema: |
+        {
+          "model": {
+            "tables": [
+              {
+                "name": "Sales",
+                "measures": [
+                  { "name": "Total Sales", "expression": "SUM(Sales[Amount])" }
+                ]
+              }
+            ]
+          }
+        }
+    output: "pbit_model_a.pbit"
+
+  - id: "branch1_pbit_model_b"
+    generator: "pbix"
+    args:
+      mode: "no_datamashup"
+      model_schema: |
+        {
+          "model": {
+            "tables": [
+              {
+                "name": "Sales",
+                "measures": [
+                  { "name": "Total Sales", "expression": "SUMX(Sales, Sales[Amount])" },
+                  { "name": "Net Sales", "expression": "SUM(Sales[Net])" }
+                ]
+              }
+            ]
+          }
+        }
+    output: "pbit_model_b.pbit"
+

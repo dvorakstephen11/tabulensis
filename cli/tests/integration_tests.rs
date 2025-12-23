@@ -462,6 +462,39 @@ fn diff_pbix_jsonl_writes_header_and_ops() {
 }
 
 #[test]
+fn diff_pbit_measure_changes_detected() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--format",
+            "json",
+            &fixture_path("pbit_model_a.pbit"),
+            &fixture_path("pbit_model_b.pbit"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "pbit diff should detect changes: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+    let ops = parsed.get("ops").and_then(|v| v.as_array()).unwrap();
+    let has_measure_op = ops.iter().any(|op| {
+        op.get("kind")
+            .and_then(|k| k.as_str())
+            .map(|k| k.starts_with("Measure"))
+            .unwrap_or(false)
+    });
+    assert!(has_measure_op, "expected at least one Measure op in pbit diff");
+}
+
+#[test]
 fn d1_database_reorder_no_diff() {
     let output = excel_diff_cmd()
         .args([

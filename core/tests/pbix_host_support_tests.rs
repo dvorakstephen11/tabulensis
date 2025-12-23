@@ -27,8 +27,16 @@ fn diff_pbix_emits_query_ops() {
 }
 
 #[test]
-fn pbix_missing_datamashup_returns_dedicated_error() {
+fn pbix_missing_datamashup_uses_model_schema() {
     let path = fixture_path("pbix_no_datamashup.pbix");
+    let file = File::open(&path).expect("fixture should exist");
+    let pkg = PbixPackage::open(file).expect("pbix should parse with DataModelSchema");
+    assert!(pkg.data_mashup().is_none(), "DataMashup should be missing");
+}
+
+#[test]
+fn pbix_missing_datamashup_and_schema_returns_dedicated_error() {
+    let path = fixture_path("pbix_no_datamashup_no_schema.pbix");
     let file = File::open(&path).expect("fixture should exist");
     let err = PbixPackage::open(file).expect_err("expected missing DataMashup error");
     assert!(matches!(err, PackageError::NoDataMashupUseTabularModel));

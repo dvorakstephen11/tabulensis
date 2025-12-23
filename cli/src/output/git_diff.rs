@@ -21,7 +21,7 @@ pub fn write_git_diff<W: Write>(
         return Ok(());
     }
 
-    let (workbook_ops, sheet_ops, m_ops) = partition_ops(report);
+    let (workbook_ops, sheet_ops, query_ops, measure_ops) = partition_ops(report);
 
     if !workbook_ops.is_empty() {
         writeln!(w, "@@ Workbook @@")?;
@@ -37,9 +37,16 @@ pub fn write_git_diff<W: Write>(
         }
     }
 
-    if !m_ops.is_empty() {
+    if !query_ops.is_empty() {
         writeln!(w, "@@ Power Query @@")?;
-        for op in &m_ops {
+        for op in &query_ops {
+            write_op_diff_lines(w, report, op)?;
+        }
+    }
+
+    if !measure_ops.is_empty() {
+        writeln!(w, "@@ Measures @@")?;
+        for op in &measure_ops {
             write_op_diff_lines(w, report, op)?;
         }
     }
@@ -49,14 +56,22 @@ pub fn write_git_diff<W: Write>(
 
 fn partition_ops(
     report: &DiffReport,
-) -> (Vec<&DiffOp>, BTreeMap<String, Vec<&DiffOp>>, Vec<&DiffOp>) {
+) -> (
+    Vec<&DiffOp>,
+    BTreeMap<String, Vec<&DiffOp>>,
+    Vec<&DiffOp>,
+    Vec<&DiffOp>,
+) {
     let mut workbook_ops: Vec<&DiffOp> = Vec::new();
     let mut sheet_ops: BTreeMap<String, Vec<&DiffOp>> = BTreeMap::new();
-    let mut m_ops: Vec<&DiffOp> = Vec::new();
+    let mut query_ops: Vec<&DiffOp> = Vec::new();
+    let mut measure_ops: Vec<&DiffOp> = Vec::new();
 
     for op in &report.ops {
         if op.is_m_op() {
-            m_ops.push(op);
+            query_ops.push(op);
+        } else if is_measure_op(op) {
+            measure_ops.push(op);
         } else if let Some(sheet_id) = get_sheet_id(op) {
             let sheet_name = report
                 .resolve(sheet_id)
@@ -68,7 +83,16 @@ fn partition_ops(
         }
     }
 
-    (workbook_ops, sheet_ops, m_ops)
+    (workbook_ops, sheet_ops, query_ops, measure_ops)
+}
+
+fn is_measure_op(op: &DiffOp) -> bool {
+    matches!(
+        op,
+        DiffOp::MeasureAdded { .. }
+            | DiffOp::MeasureRemoved { .. }
+            | DiffOp::MeasureDefinitionChanged { .. }
+    )
 }
 
 fn get_sheet_id(op: &DiffOp) -> Option<excel_diff::StringId> {
@@ -393,6 +417,27 @@ fn write_op_diff_lines<W: Write>(w: &mut W, report: &DiffReport, op: &DiffOp) ->
             writeln!(
                 w,
                 "~ Chart \"{}\": CHANGED",
+                report.resolve(*name).unwrap_or("<unknown>")
+            )?;
+        }
+        DiffOp::MeasureAdded { name } => {
+            writeln!(
+                w,
+                "+ Measure \"{}\": ADDED",
+                report.resolve(*name).unwrap_or("<unknown>")
+            )?;
+        }
+        DiffOp::MeasureRemoved { name } => {
+            writeln!(
+                w,
+                "- Measure \"{}\": REMOVED",
+                report.resolve(*name).unwrap_or("<unknown>")
+            )?;
+        }
+        DiffOp::MeasureDefinitionChanged { name, .. } => {
+            writeln!(
+                w,
+                "~ Measure \"{}\": definition changed",
                 report.resolve(*name).unwrap_or("<unknown>")
             )?;
         }

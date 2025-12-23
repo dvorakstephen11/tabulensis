@@ -1,34 +1,37 @@
-# Release Readiness
+# Release readiness
 
-This checklist covers the branch-7 release readiness items.
+This document summarizes what the tool supports today, how semantic M diffs are reported, and the resource ceilings that can affect completeness.
 
-## PBIX/PBIT support limits
+## Support boundaries
 
-- Only legacy DataMashup-based extraction is supported.
-- If a PBIX has no DataMashup (Tabular-only model), the diff returns
-  `NoDataMashupUseTabularModel` with error code `EXDIFF_PKG_010`.
+- Excel workbooks (.xlsx/.xlsm): grid diffs, named ranges, charts, and VBA modules (when the `vba` feature is enabled).
+- Power Query M diffs: extracted from DataMashup in workbooks and legacy PBIX/PBIT files; embedded queries are included.
+- PBIX/PBIT enhanced metadata: when DataMashup is missing, the engine falls back to DataModelSchema and emits measure-level diffs only.
+- Not supported: report visuals/layout diffs in PBIX/PBIT, and deeper model diffs beyond measures.
 
-## Semantic M diff behavior
+## Semantic M diff
 
-- `DiffConfig.enable_m_semantic_diff` defaults to `true`.
-- The CLI `--fast` preset sets it to `false`, so semantic M detail is disabled when
-  `--fast` is used.
-- Use the default or `--precise` presets to include semantic M diffs.
+- `QueryChangeKind` values:
+  - `semantic`: canonicalized AST differs (meaningful change).
+  - `formatting_only`: whitespace/comments changed but meaning is the same.
+  - `renamed`: query name changed (definition may be unchanged).
+- Step diffs: a human-friendly Applied Steps view derived from the M AST, reporting added/removed/modified/reordered steps and common Table.* step types.
+- AST fallback summary: if step extraction is incomplete, the report includes `AstDiffSummary` with counts and diff mode.
 
-## Resource ceilings and limits
+## Resource ceilings
 
-- `DiffConfig.max_memory_mb` enables a memory guard and can force a fallback to
-  positional diff with a warning.
-- `DiffConfig.timeout_seconds` aborts the diff and returns a partial report with
-  warnings.
-- Alignment limits (`max_align_rows`, `max_align_cols`) are enforced; behavior is controlled
-  by `DiffConfig.on_limit_exceeded` (error vs partial result).
+These knobs bound time and memory for large diffs. When a limit is hit, the report sets `complete=false` and emits warnings.
 
-## Release checklist
+- `DiffConfig.max_memory_mb`: soft memory cap for advanced alignment strategies.
+- `DiffConfig.timeout_seconds`: overall timeout for the diff engine.
+- `DiffConfig.max_ops`: stops emitting ops after the limit is reached.
+- `DiffConfig.on_limit_exceeded`:
+  - `FallbackToPositional`: continue with a cheaper positional diff and warn.
+  - `ReturnPartialResult`: return whatever was emitted so far and warn.
+  - `ReturnError`: abort with an error.
 
-- [ ] PBIX/PBIT: legacy DataMashup extraction verified; Tabular-only PBIX returns
-  `EXDIFF_PKG_010`.
-- [ ] Semantic M diff: default includes semantic detail; `--fast` disables it.
-- [ ] Resource ceilings: `--timeout` aborts cleanly with partial warnings; `--max-memory`
-  triggers memory guard and positional fallback.
-- [ ] Perf gates: quick suite baseline + caps pass; full-scale scheduled job green.
+Suggested presets:
+- Fast: `DiffConfig::fastest()` (smaller limits, fewer semantic features).
+- Precise: `DiffConfig::most_precise()` (more detailed output, higher cost).
+
+Pick the preset that matches the expected file size and desired fidelity; tune `max_ops` and `timeout_seconds` for hard ceilings in CI or web usage.

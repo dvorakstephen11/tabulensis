@@ -1,21 +1,32 @@
-# M parser coverage (Branch 6)
+# M parser coverage
 
-## Parsed structural forms
-- let ... in ...
-- record literal: [Field = Expr, ...]
-- list literal: {Expr, ...}
-- function call: Name(...) where Name is Identifier(.Identifier)*
-- primitive: string, number, true/false/null
+This document describes the current syntax coverage in the M parser and how it maps to semantic diff output.
 
-## Opaque fallback
-Everything else is represented as an opaque token sequence.
-Examples:
-- field access: [Content]
-- indexing: Source{0}[Column]
-- operators: 1 + 2
-- if/then/else
-- each/lambda
-- type annotations
+## Tier 1 (core syntax)
 
-## Prioritization by frequency
-Most workbook queries start with let bindings and frequently build records, lists, and table-producing function calls (Excel.CurrentWorkbook, Table.*, Value.*). Branch 6 targets these common non-let roots and adds canonicalization wins such as record field ordering; less frequent constructs (operators, indexing, control flow) remain opaque for now.
+| Construct | Coverage | Notes |
+| --- | --- | --- |
+| Identifiers and dotted access | Parsed | Includes `Foo` and `Foo.Bar` chains. |
+| `let ... in ...` blocks | Parsed | Primary shape used for Applied Steps extraction. |
+| Record literals | Parsed | `[Field = Expr, ...]`. |
+| List literals | Parsed | `{Expr, ...}`. |
+| Function calls | Parsed | Identifier and qualified calls (e.g., `Table.SelectRows`). |
+| `if/then/else` | Parsed | Supported in expressions and steps. |
+| `each` shorthand | Parsed | Treated as a lambda. |
+| Operators | Parsed | Arithmetic, comparison, and logical operators. |
+
+## Tier 2 (expanded syntax)
+
+| Construct | Coverage | Notes |
+| --- | --- | --- |
+| Explicit lambdas | Parsed | `(x) => ...` and multi-arg lambdas. |
+| `try ... otherwise ...` | Parsed | Error-handling expressions. |
+| Type ascription | Parsed | `value as type` (including nullable). |
+
+## Known gaps that fall back to AST summary
+
+Step extraction can fall back to `AstDiffSummary` when the query does not match the Applied Steps shape or when metadata is too dynamic. Known cases include:
+
+- Dynamic step names (computed identifiers) that prevent stable step identity.
+- Queries that do not resolve to a linear `let` step pipeline (custom functions or nested transforms).
+- Table transformations outside the recognized set (SelectRows, RemoveColumns, RenameColumns, TransformColumnTypes, NestedJoin, Join) that are classified as `Other` steps.
