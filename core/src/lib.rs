@@ -64,6 +64,9 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 #![cfg_attr(not(test), deny(clippy::expect_used))]
 
+#[cfg(all(feature = "parallel", target_arch = "wasm32"))]
+compile_error!("feature \"parallel\" is not supported on wasm32");
+
 use std::cell::RefCell;
 
 mod addressing;

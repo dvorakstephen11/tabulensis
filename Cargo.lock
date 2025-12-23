@@ -330,6 +330,7 @@ dependencies = [
  "ovba",
  "pretty_assertions",
  "quick-xml",
+ "rayon",
  "rustc-hash",
  "serde",
  "serde_json",

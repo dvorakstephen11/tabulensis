@@ -34,6 +34,9 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+      - name: Run parallel feature tests
+        run: cargo test -p excel_diff --features parallel
+
       - name: Build examples
         run: cargo build --workspace --examples
 

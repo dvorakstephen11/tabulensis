@@ -137,6 +137,13 @@ struct MoveCandidate {
     similarity: f64,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct CandidateSeed {
+    src_start_row: u32,
+    dst_start_row: u32,
+    row_count: u32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct BlockRange {
     start: u32,
@@ -267,7 +274,7 @@ fn build_candidate_blocks(
         .collect();
     sorted.sort_by_key(|p| (p.a, p.b));
 
-    let mut candidates: Vec<MoveCandidate> = Vec::new();
+    let mut seeds: Vec<CandidateSeed> = Vec::new();
     let mut seen: HashSet<(u32, u32, u32)> = HashSet::new();
 
     let mut start = sorted[0];
@@ -281,15 +288,12 @@ fn build_candidate_blocks(
             continue;
         }
 
-        push_candidate(
+        push_candidate_seed(
             start,
             prev,
-            old_meta,
-            new_meta,
             min_len,
             max_len,
-            threshold,
-            &mut candidates,
+            &mut seeds,
             &mut seen,
         );
 
@@ -298,30 +302,33 @@ fn build_candidate_blocks(
         offset = pair.offset;
     }
 
-    push_candidate(
+    push_candidate_seed(
         start,
         prev,
-        old_meta,
-        new_meta,
         min_len,
         max_len,
-        threshold,
-        &mut candidates,
+        &mut seeds,
         &mut seen,
     );
 
+    let mut candidates = score_candidates(old_meta, new_meta, threshold, &seeds);
+    candidates.sort_by(|a, b| {
+        b.similarity
+            .partial_cmp(&a.similarity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.src_start_row.cmp(&b.src_start_row))
+            .then_with(|| a.dst_start_row.cmp(&b.dst_start_row))
+            .then_with(|| b.row_count.cmp(&a.row_count))
+    });
     candidates
 }
 
-fn push_candidate(
+fn push_candidate_seed(
     start: MatchPair,
     end: MatchPair,
-    old_meta: &[RowMeta],
-    new_meta: &[RowMeta],
     min_len: u32,
     max_len: u32,
-    threshold: f64,
-    candidates: &mut Vec<MoveCandidate>,
+    seeds: &mut Vec<CandidateSeed>,
     seen: &mut HashSet<(u32, u32, u32)>,
 ) {
     if end.a < start.a {
@@ -332,22 +339,79 @@ fn push_candidate(
         return;
     }
 
-    let similarity = block_similarity(old_meta, new_meta, start.a, start.b, row_count);
-    if similarity < threshold {
-        return;
-    }
-
     let key = (start.a, start.b, row_count);
     if !seen.insert(key) {
         return;
     }
 
-    candidates.push(MoveCandidate {
+    seeds.push(CandidateSeed {
         src_start_row: start.a,
         dst_start_row: start.b,
         row_count,
-        similarity,
     });
+}
+
+fn score_candidates(
+    old_meta: &[RowMeta],
+    new_meta: &[RowMeta],
+    threshold: f64,
+    seeds: &[CandidateSeed],
+) -> Vec<MoveCandidate> {
+    if seeds.is_empty() {
+        return Vec::new();
+    }
+
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
+        let scored: Vec<Option<MoveCandidate>> = seeds
+            .par_iter()
+            .map(|seed| {
+                let similarity = block_similarity(
+                    old_meta,
+                    new_meta,
+                    seed.src_start_row,
+                    seed.dst_start_row,
+                    seed.row_count,
+                );
+                if similarity < threshold {
+                    None
+                } else {
+                    Some(MoveCandidate {
+                        src_start_row: seed.src_start_row,
+                        dst_start_row: seed.dst_start_row,
+                        row_count: seed.row_count,
+                        similarity,
+                    })
+                }
+            })
+            .collect();
+        scored.into_iter().flatten().collect()
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    let mut out = Vec::new();
+    #[cfg(not(feature = "parallel"))]
+    for seed in seeds {
+        let similarity = block_similarity(
+            old_meta,
+            new_meta,
+            seed.src_start_row,
+            seed.dst_start_row,
+            seed.row_count,
+        );
+        if similarity < threshold {
+            continue;
+        }
+        out.push(MoveCandidate {
+            src_start_row: seed.src_start_row,
+            dst_start_row: seed.dst_start_row,
+            row_count: seed.row_count,
+            similarity,
+        });
+    }
+    #[cfg(not(feature = "parallel"))]
+    out
 }
 
 fn assign_moves(candidates: &[MoveCandidate], config: &DiffConfig) -> Vec<MoveCandidate> {

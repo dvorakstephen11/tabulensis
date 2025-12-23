@@ -6,16 +6,16 @@ This script runs the performance test suite and captures the PERF_METRIC output,
 saving timestamped results to benchmarks/results/ for historical tracking.
 
 Usage:
-    python scripts/export_perf_metrics.py [--full-scale] [--output-dir DIR]
+    python scripts/export_perf_metrics.py [--full-scale] [--parallel] [--output-dir DIR]
 
 Options:
     --full-scale    Run the 50K row tests (slower but comprehensive)
+    --parallel      Enable parallel feature (uses Rayon for multi-threaded execution)
     --output-dir    Override the output directory (default: benchmarks/results)
 """
 
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
@@ -79,24 +79,31 @@ def parse_perf_metrics(stdout: str) -> dict:
     return metrics
 
 
-def run_perf_tests(full_scale: bool = False) -> tuple[dict, bool]:
+def run_perf_tests(full_scale: bool = False, parallel: bool = False) -> tuple[dict, bool]:
     """Run performance tests and return parsed metrics."""
     core_dir = Path(__file__).parent.parent / "core"
     if not core_dir.exists():
         core_dir = Path("core")
+
+    features = ["perf-metrics"]
+    if parallel:
+        features.append("parallel")
 
     cmd = [
         "cargo",
         "test",
         "--release",
         "--features",
-        "perf-metrics",
+        ",".join(features),
+        "--test",
+        "perf_large_grid_tests",
+        "--",
+        "--nocapture",
+        "--test-threads=1",
     ]
 
     if full_scale:
-        cmd.extend(["--", "--ignored", "--nocapture", "--test-threads=1"])
-    else:
-        cmd.extend(["perf_", "--", "--nocapture", "--test-threads=1"])
+        cmd.append("--ignored")
 
     print(f"Running: {' '.join(cmd)}")
     print(f"Working directory: {core_dir}")
@@ -124,12 +131,14 @@ def run_perf_tests(full_scale: bool = False) -> tuple[dict, bool]:
     return metrics, success
 
 
-def save_results(metrics: dict, output_dir: Path, full_scale: bool):
+def save_results(metrics: dict, output_dir: Path, full_scale: bool, parallel: bool):
     """Save metrics to a timestamped JSON file."""
     timestamp = datetime.now(timezone.utc)
     filename = timestamp.strftime("%Y-%m-%d_%H%M%S")
     if full_scale:
         filename += "_fullscale"
+    if parallel:
+        filename += "_parallel"
     filename += ".json"
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -140,6 +149,7 @@ def save_results(metrics: dict, output_dir: Path, full_scale: bool):
         "git_commit": get_git_commit(),
         "git_branch": get_git_branch(),
         "full_scale": full_scale,
+        "parallel": parallel,
         "tests": metrics,
         "summary": {
             "total_tests": len(metrics),
@@ -197,6 +207,11 @@ def main():
         help="Run the 50K row tests (slower but comprehensive)",
     )
     parser.add_argument(
+        "--parallel",
+        action="store_true",
+        help="Enable parallel feature (uses Rayon for multi-threaded execution)",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=Path(__file__).parent.parent / "benchmarks" / "results",
@@ -208,19 +223,20 @@ def main():
     print("Excel Diff Performance Metrics Export")
     print("=" * 70)
     print(f"Mode: {'Full-scale (50K rows)' if args.full_scale else 'Quick (1K rows)'}")
+    print(f"Parallel: {'Enabled (Rayon)' if args.parallel else 'Disabled'}")
     print(f"Output: {args.output_dir}")
     print(f"Git commit: {get_git_commit()}")
     print(f"Git branch: {get_git_branch()}")
     print()
 
-    metrics, success = run_perf_tests(args.full_scale)
+    metrics, success = run_perf_tests(args.full_scale, args.parallel)
 
     if not metrics:
         print("ERROR: No metrics captured from test output")
         return 1
 
     print_summary(metrics)
-    save_results(metrics, args.output_dir, args.full_scale)
+    save_results(metrics, args.output_dir, args.full_scale, args.parallel)
 
     if not success:
         print("\nWARNING: Some tests may have failed")
