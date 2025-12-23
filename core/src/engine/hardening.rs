@@ -13,9 +13,11 @@ pub(super) struct HardeningController<'a> {
     start: Instant,
     timeout: Option<Duration>,
     max_memory_bytes: Option<u64>,
+    max_ops: Option<usize>,
     aborted: bool,
     warned_timeout: bool,
     warned_memory: bool,
+    warned_ops: bool,
     progress: Option<&'a dyn ProgressCallback>,
     last_progress_phase: Option<&'static str>,
     last_progress_percent: Option<f32>,
@@ -32,9 +34,11 @@ impl<'a> HardeningController<'a> {
             max_memory_bytes: config
                 .max_memory_mb
                 .map(|mb| (mb as u64).saturating_mul(BYTES_PER_MB)),
+            max_ops: config.max_ops,
             aborted: false,
             warned_timeout: false,
             warned_memory: false,
+            warned_ops: false,
             progress,
             last_progress_phase: None,
             last_progress_percent: None,
@@ -70,6 +74,29 @@ impl<'a> HardeningController<'a> {
             warnings.push(format!(
                 "timeout after {} seconds; diff aborted early; results may be incomplete",
                 timeout.as_secs()
+            ));
+        }
+        true
+    }
+
+    pub(super) fn check_op_limit(&mut self, current_op_count: usize, warnings: &mut Vec<String>) -> bool {
+        if self.aborted {
+            return true;
+        }
+        let Some(limit) = self.max_ops else {
+            return false;
+        };
+
+        if current_op_count < limit {
+            return false;
+        }
+
+        self.aborted = true;
+        if !self.warned_ops {
+            self.warned_ops = true;
+            warnings.push(format!(
+                "op limit reached ({} ops); diff stopped early; results may be incomplete",
+                limit
             ));
         }
         true

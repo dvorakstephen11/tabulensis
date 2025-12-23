@@ -855,19 +855,32 @@ When the `perf-metrics` feature is enabled, the diff engine collects timing and 
 
 ```rust
 pub struct DiffMetrics {
-    pub alignment_time_ms: u64,       // Time spent in alignment stage (may include nested cell diff time)
-    pub move_detection_time_ms: u64,  // Time spent in fingerprinting + masked move detection
-    pub cell_diff_time_ms: u64,       // Time spent emitting cell diffs
-    pub total_time_ms: u64,           // Total diff operation time
-    pub rows_processed: u64,          // Number of rows examined
-    pub cells_compared: u64,          // Number of cell pairs compared
-    pub anchors_found: u32,           // Anchor count from AMR alignment
-    pub moves_detected: u32,          // Block moves detected
+    pub parse_time_ms: u64,              // Parse time for input packages (best-effort)
+    pub signature_build_time_ms: u64,    // Time spent constructing row/column signatures
+    pub move_detection_time_ms: u64,     // Time spent in fingerprinting + masked move detection
+    pub alignment_time_ms: u64,          // Time spent in alignment stage (may include nested cell diff time)
+    pub cell_diff_time_ms: u64,          // Time spent emitting cell diffs
+    pub op_emit_time_ms: u64,            // Time spent emitting ops to sinks
+    pub report_serialize_time_ms: u64,   // Time spent serializing the final report
+    pub total_time_ms: u64,              // Total diff operation time
+    pub diff_time_ms: u64,               // total_time_ms - parse_time_ms
+    pub peak_memory_bytes: u64,          // Allocator peak when available (best-effort)
+    pub grid_storage_bytes: u64,         // Estimated bytes for grid storage
+    pub string_pool_bytes: u64,          // Estimated bytes for string pool intern table
+    pub op_buffer_bytes: u64,            // Estimated Vec<DiffOp> buffer bytes (0 for streaming)
+    pub alignment_buffer_bytes: u64,     // Estimated transient alignment/matching buffers
+    pub rows_processed: u64,             // Number of rows examined
+    pub cells_compared: u64,             // Number of cell pairs compared
+    pub anchors_found: u32,              // Anchor count from AMR alignment
+    pub moves_detected: u32,             // Block moves detected
+    pub hash_lookups_est: u64,           // Estimated hash lookups (logical counter)
+    pub allocations_est: u64,            // Estimated allocations (logical counter)
 }
 ```
 
-**Deferred metrics**: `parse_time_ms` and `peak_memory_bytes` are planned for future phases
-when parser instrumentation and memory allocator integration are ready.
+**Best-effort fields**: parse-time and memory values can be zero on some targets (e.g., WASM)
+or when instrumentation is unavailable. Memory breakdown values are estimates intended for
+profiling and regression detection rather than exact accounting.
 
 ### 17.2 Limit Handling
 

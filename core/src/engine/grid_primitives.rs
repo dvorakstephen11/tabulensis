@@ -16,6 +16,24 @@ use crate::workbook::{Cell, CellAddress, CellSnapshot, Grid};
 
 use super::context::EmitCtx;
 
+struct PendingCell<'a> {
+    col: u32,
+    old_cell: Option<&'a Cell>,
+    new_cell: Option<&'a Cell>,
+}
+
+pub(super) struct RowDiffResult<'a> {
+    pub(super) compared: u64,
+    pub(super) replaced: bool,
+    pending: Vec<PendingCell<'a>>,
+}
+
+struct PendingRect {
+    start_old: u32,
+    start_new: u32,
+    row_count: u32,
+}
+
 pub(super) fn compute_formula_diff(
     pool: &StringPool,
     cache: &mut FormulaParseCache,
@@ -50,6 +68,72 @@ pub(super) fn emit_cell_edit<S: DiffSink>(
         to,
         formula_diff,
     ))
+}
+
+fn dense_row_replace_threshold(config: &DiffConfig, total_cols: u32) -> Option<usize> {
+    if config.include_unchanged_cells || total_cols == 0 {
+        return None;
+    }
+
+    let ratio = config.dense_row_replace_ratio;
+    if !ratio.is_finite() || ratio <= 0.0 {
+        return None;
+    }
+
+    if config.dense_row_replace_min_cols > 0 && total_cols < config.dense_row_replace_min_cols {
+        return None;
+    }
+
+    let threshold = (ratio * total_cols as f64).ceil() as usize;
+    Some(threshold.max(1))
+}
+
+fn flush_pending_rect<S: DiffSink>(
+    ctx: &mut EmitCtx<'_, '_, S>,
+    pending: &mut Option<PendingRect>,
+    overlap_cols: u32,
+) -> Result<(), DiffError> {
+    let Some(rect) = pending.take() else {
+        return Ok(());
+    };
+
+    if overlap_cols == 0 {
+        return Ok(());
+    }
+
+    let min_rows = ctx.config.dense_rect_replace_min_rows;
+    if min_rows > 0 && rect.row_count >= min_rows {
+        ctx.emit(DiffOp::RectReplaced {
+            sheet: ctx.sheet_id,
+            start_row: rect.start_new,
+            row_count: rect.row_count,
+            start_col: 0,
+            col_count: overlap_cols,
+        })?;
+    } else {
+        for offset in 0..rect.row_count {
+            ctx.emit(DiffOp::RowReplaced {
+                sheet: ctx.sheet_id,
+                row_idx: rect.start_new + offset,
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
+fn emit_pending_cells<'a, S: DiffSink>(
+    ctx: &mut EmitCtx<'_, '_, S>,
+    row_a: u32,
+    row_b: u32,
+    pending: Vec<PendingCell<'a>>,
+) -> Result<(), DiffError> {
+    let row_shift = row_b as i32 - row_a as i32;
+    for cell in pending {
+        let addr = CellAddress::from_indices(row_b, cell.col);
+        emit_cell_edit(ctx, addr, cell.old_cell, cell.new_cell, row_shift, 0)?;
+    }
+    Ok(())
 }
 
 pub(super) fn cells_content_equal(a: Option<&Cell>, b: Option<&Cell>) -> bool {
@@ -134,7 +218,7 @@ pub(super) fn emit_moved_row_block_edits<S: DiffSink>(
             continue;
         };
 
-        let _ = diff_row_pair_sparse(
+        let result = diff_row_pair_sparse(
             ctx,
             mv.src_start_row + offset,
             mv.dst_start_row + offset,
@@ -142,23 +226,37 @@ pub(super) fn emit_moved_row_block_edits<S: DiffSink>(
             &old_row.cells,
             &new_row.cells,
         )?;
+        if result.replaced {
+            ctx.emit(DiffOp::RowReplaced {
+                sheet: ctx.sheet_id,
+                row_idx: mv.dst_start_row + offset,
+            })?;
+        } else {
+            emit_pending_cells(
+                ctx,
+                mv.src_start_row + offset,
+                mv.dst_start_row + offset,
+                result.pending,
+            )?;
+        }
     }
     Ok(())
 }
 
-pub(super) fn diff_row_pair_sparse<S: DiffSink>(
+pub(super) fn diff_row_pair_sparse<'a, S: DiffSink>(
     ctx: &mut EmitCtx<'_, '_, S>,
     row_a: u32,
     row_b: u32,
     overlap_cols: u32,
-    old_cells: &[(u32, &Cell)],
-    new_cells: &[(u32, &Cell)],
-) -> Result<u64, DiffError> {
+    old_cells: &[(u32, &'a Cell)],
+    new_cells: &[(u32, &'a Cell)],
+) -> Result<RowDiffResult<'a>, DiffError> {
     let mut i = 0usize;
     let mut j = 0usize;
     let mut compared = 0u64;
-
-    let row_shift = row_b as i32 - row_a as i32;
+    let mut changed_cells = 0usize;
+    let mut pending: Vec<PendingCell<'a>> = Vec::new();
+    let threshold = dense_row_replace_threshold(ctx.config, overlap_cols);
 
     while i < old_cells.len() || j < new_cells.len() {
         let col_a = old_cells.get(i).map(|(c, _)| *c).unwrap_or(u32::MAX);
@@ -188,37 +286,81 @@ pub(super) fn diff_row_pair_sparse<S: DiffSink>(
         };
 
         let changed = !cells_content_equal(old_cell, new_cell);
+        if changed {
+            changed_cells = changed_cells.saturating_add(1);
+            if let Some(limit) = threshold {
+                if changed_cells >= limit {
+                    return Ok(RowDiffResult {
+                        compared,
+                        replaced: true,
+                        pending: Vec::new(),
+                    });
+                }
+            }
+        }
 
         if changed || ctx.config.include_unchanged_cells {
-            let addr = CellAddress::from_indices(row_b, col);
-            emit_cell_edit(ctx, addr, old_cell, new_cell, row_shift, 0)?;
+            pending.push(PendingCell {
+                col,
+                old_cell,
+                new_cell,
+            });
         }
     }
 
-    Ok(compared)
+    Ok(RowDiffResult {
+        compared,
+        replaced: false,
+        pending,
+    })
 }
 
-pub(super) fn diff_row_pair<S: DiffSink>(
+pub(super) fn diff_row_pair<'a, S: DiffSink>(
     ctx: &mut EmitCtx<'_, '_, S>,
-    old: &Grid,
-    new: &Grid,
+    old: &'a Grid,
+    new: &'a Grid,
     row_a: u32,
     row_b: u32,
     overlap_cols: u32,
-) -> Result<(), DiffError> {
-    let row_shift = row_b as i32 - row_a as i32;
+) -> Result<RowDiffResult<'a>, DiffError> {
+    let mut compared = 0u64;
+    let mut changed_cells = 0usize;
+    let mut pending: Vec<PendingCell<'a>> = Vec::new();
+    let threshold = dense_row_replace_threshold(ctx.config, overlap_cols);
+
     for col in 0..overlap_cols {
         let old_cell = old.get(row_a, col);
         let new_cell = new.get(row_b, col);
+        compared = compared.saturating_add(1);
 
-        if cells_content_equal(old_cell, new_cell) {
-            continue;
+        let changed = !cells_content_equal(old_cell, new_cell);
+        if changed {
+            changed_cells = changed_cells.saturating_add(1);
+            if let Some(limit) = threshold {
+                if changed_cells >= limit {
+                    return Ok(RowDiffResult {
+                        compared,
+                        replaced: true,
+                        pending: Vec::new(),
+                    });
+                }
+            }
         }
 
-        let addr = CellAddress::from_indices(row_b, col);
-        emit_cell_edit(ctx, addr, old_cell, new_cell, row_shift, 0)?;
+        if changed || ctx.config.include_unchanged_cells {
+            pending.push(PendingCell {
+                col,
+                old_cell,
+                new_cell,
+            });
+        }
     }
-    Ok(())
+
+    Ok(RowDiffResult {
+        compared,
+        replaced: false,
+        pending,
+    })
 }
 
 pub(super) fn emit_row_aligned_diffs<S: DiffSink>(
@@ -229,6 +371,7 @@ pub(super) fn emit_row_aligned_diffs<S: DiffSink>(
 ) -> Result<u64, DiffError> {
     let overlap_cols = old_view.source.ncols.min(new_view.source.ncols);
     let mut compared = 0u64;
+    let mut pending_rect: Option<PendingRect> = None;
 
     for (row_a, row_b) in &alignment.matched {
         if !ctx.config.include_unchanged_cells {
@@ -236,6 +379,7 @@ pub(super) fn emit_row_aligned_diffs<S: DiffSink>(
             let new_sig = new_view.row_meta.get(*row_b as usize).map(|m| m.signature);
             if let (Some(a), Some(b)) = (old_sig, new_sig) {
                 if a == b {
+                    flush_pending_rect(ctx, &mut pending_rect, overlap_cols)?;
                     continue;
                 }
             }
@@ -244,16 +388,44 @@ pub(super) fn emit_row_aligned_diffs<S: DiffSink>(
             old_view.rows.get(*row_a as usize),
             new_view.rows.get(*row_b as usize),
         ) {
-            compared = compared.saturating_add(diff_row_pair_sparse(
+            let result = diff_row_pair_sparse(
                 ctx,
                 *row_a,
                 *row_b,
                 overlap_cols,
                 &old_row.cells,
                 &new_row.cells,
-            )?);
+            )?;
+            compared = compared.saturating_add(result.compared);
+            if result.replaced {
+                if let Some(existing) = pending_rect.as_mut() {
+                    let expected_old = existing.start_old + existing.row_count;
+                    let expected_new = existing.start_new + existing.row_count;
+                    if *row_a == expected_old && *row_b == expected_new {
+                        existing.row_count = existing.row_count.saturating_add(1);
+                    } else {
+                        flush_pending_rect(ctx, &mut pending_rect, overlap_cols)?;
+                        pending_rect = Some(PendingRect {
+                            start_old: *row_a,
+                            start_new: *row_b,
+                            row_count: 1,
+                        });
+                    }
+                } else {
+                    pending_rect = Some(PendingRect {
+                        start_old: *row_a,
+                        start_new: *row_b,
+                        row_count: 1,
+                    });
+                }
+            } else {
+                flush_pending_rect(ctx, &mut pending_rect, overlap_cols)?;
+                emit_pending_cells(ctx, *row_a, *row_b, result.pending)?;
+            }
         }
     }
+
+    flush_pending_rect(ctx, &mut pending_rect, overlap_cols)?;
 
     for row_idx in &alignment.inserted {
         ctx.emit(DiffOp::row_added(ctx.sheet_id, *row_idx, None))?;
@@ -325,11 +497,13 @@ pub(super) fn positional_diff<S: DiffSink>(
 ) -> Result<(), DiffError> {
     let overlap_rows = old.nrows.min(new.nrows);
     let overlap_cols = old.ncols.min(new.ncols);
+    let mut pending_rect: Option<PendingRect> = None;
 
     ctx.hardening.progress("cell_diff", 0.0);
 
     for row in 0..overlap_rows {
         if ctx.hardening.check_timeout(ctx.warnings) {
+            flush_pending_rect(ctx, &mut pending_rect, overlap_cols)?;
             return Ok(());
         }
 
@@ -338,8 +512,34 @@ pub(super) fn positional_diff<S: DiffSink>(
                 .progress("cell_diff", row as f32 / overlap_rows as f32);
         }
 
-        diff_row_pair(ctx, old, new, row, row, overlap_cols)?;
+        let result = diff_row_pair(ctx, old, new, row, row, overlap_cols)?;
+        if result.replaced {
+            if let Some(existing) = pending_rect.as_mut() {
+                let expected_row = existing.start_new + existing.row_count;
+                if row == expected_row {
+                    existing.row_count = existing.row_count.saturating_add(1);
+                } else {
+                    flush_pending_rect(ctx, &mut pending_rect, overlap_cols)?;
+                    pending_rect = Some(PendingRect {
+                        start_old: row,
+                        start_new: row,
+                        row_count: 1,
+                    });
+                }
+            } else {
+                pending_rect = Some(PendingRect {
+                    start_old: row,
+                    start_new: row,
+                    row_count: 1,
+                });
+            }
+        } else {
+            flush_pending_rect(ctx, &mut pending_rect, overlap_cols)?;
+            emit_pending_cells(ctx, row, row, result.pending)?;
+        }
     }
+
+    flush_pending_rect(ctx, &mut pending_rect, overlap_cols)?;
 
     if overlap_rows > 0 {
         ctx.hardening.progress("cell_diff", 1.0);
@@ -397,9 +597,11 @@ pub(super) fn positional_diff_from_views<S: DiffSink>(
     ctx.hardening.progress("cell_diff", 0.0);
 
     let mut compared: u64 = 0;
+    let mut pending_rect: Option<PendingRect> = None;
 
     for row in 0..overlap_rows {
         if ctx.hardening.check_timeout(ctx.warnings) {
+            flush_pending_rect(ctx, &mut pending_rect, overlap_cols)?;
             break;
         }
         if overlap_rows > 0 {
@@ -412,6 +614,7 @@ pub(super) fn positional_diff_from_views<S: DiffSink>(
             let new_sig = new_view.row_meta.get(row as usize).map(|m| m.signature);
             if let (Some(a), Some(b)) = (old_sig, new_sig) {
                 if a == b {
+                    flush_pending_rect(ctx, &mut pending_rect, overlap_cols)?;
                     continue;
                 }
             }
@@ -428,15 +631,42 @@ pub(super) fn positional_diff_from_views<S: DiffSink>(
             .map(|r| r.cells.as_slice())
             .unwrap_or(&[]);
 
-        compared = compared.saturating_add(diff_row_pair_sparse(
+        let result = diff_row_pair_sparse(
             ctx,
             row,
             row,
             overlap_cols,
             old_cells,
             new_cells,
-        )?);
+        )?;
+        compared = compared.saturating_add(result.compared);
+        if result.replaced {
+            if let Some(existing) = pending_rect.as_mut() {
+                let expected_row = existing.start_new + existing.row_count;
+                if row == expected_row {
+                    existing.row_count = existing.row_count.saturating_add(1);
+                } else {
+                    flush_pending_rect(ctx, &mut pending_rect, overlap_cols)?;
+                    pending_rect = Some(PendingRect {
+                        start_old: row,
+                        start_new: row,
+                        row_count: 1,
+                    });
+                }
+            } else {
+                pending_rect = Some(PendingRect {
+                    start_old: row,
+                    start_new: row,
+                    row_count: 1,
+                });
+            }
+        } else {
+            flush_pending_rect(ctx, &mut pending_rect, overlap_cols)?;
+            emit_pending_cells(ctx, row, row, result.pending)?;
+        }
     }
+
+    flush_pending_rect(ctx, &mut pending_rect, overlap_cols)?;
 
     if old.nrows > new.nrows {
         for row in new.nrows..old.nrows {
@@ -486,6 +716,7 @@ pub(super) fn positional_diff_from_views_for_rows<S: DiffSink>(
     let overlap_rows = old.nrows.min(new.nrows);
     let overlap_cols = old.ncols.min(new.ncols);
     let mut compared: u64 = 0;
+    let mut pending_rect: Option<PendingRect> = None;
 
     ctx.hardening.progress("cell_diff", 0.0);
 
@@ -496,6 +727,7 @@ pub(super) fn positional_diff_from_views_for_rows<S: DiffSink>(
     let total_rows = rows_sorted.len();
     for (idx, &row) in rows_sorted.iter().enumerate() {
         if ctx.hardening.check_timeout(ctx.warnings) {
+            flush_pending_rect(ctx, &mut pending_rect, overlap_cols)?;
             break;
         }
         if total_rows > 0 && idx % 64 == 0 {
@@ -504,6 +736,7 @@ pub(super) fn positional_diff_from_views_for_rows<S: DiffSink>(
         }
 
         if row >= overlap_rows {
+            flush_pending_rect(ctx, &mut pending_rect, overlap_cols)?;
             continue;
         }
 
@@ -518,15 +751,42 @@ pub(super) fn positional_diff_from_views_for_rows<S: DiffSink>(
             .map(|r| r.cells.as_slice())
             .unwrap_or(&[]);
 
-        compared = compared.saturating_add(diff_row_pair_sparse(
+        let result = diff_row_pair_sparse(
             ctx,
             row,
             row,
             overlap_cols,
             old_cells,
             new_cells,
-        )?);
+        )?;
+        compared = compared.saturating_add(result.compared);
+        if result.replaced {
+            if let Some(existing) = pending_rect.as_mut() {
+                let expected_row = existing.start_new + existing.row_count;
+                if row == expected_row {
+                    existing.row_count = existing.row_count.saturating_add(1);
+                } else {
+                    flush_pending_rect(ctx, &mut pending_rect, overlap_cols)?;
+                    pending_rect = Some(PendingRect {
+                        start_old: row,
+                        start_new: row,
+                        row_count: 1,
+                    });
+                }
+            } else {
+                pending_rect = Some(PendingRect {
+                    start_old: row,
+                    start_new: row,
+                    row_count: 1,
+                });
+            }
+        } else {
+            flush_pending_rect(ctx, &mut pending_rect, overlap_cols)?;
+            emit_pending_cells(ctx, row, row, result.pending)?;
+        }
     }
+
+    flush_pending_rect(ctx, &mut pending_rect, overlap_cols)?;
 
     if old.nrows > new.nrows {
         for row in new.nrows..old.nrows {

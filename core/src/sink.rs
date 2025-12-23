@@ -62,6 +62,14 @@ impl VecSink {
         Self { ops: Vec::new() }
     }
 
+    pub fn op_capacity(&self) -> usize {
+        self.ops.capacity()
+    }
+
+    pub fn op_len(&self) -> usize {
+        self.ops.len()
+    }
+
     pub fn into_ops(self) -> Vec<DiffOp> {
         self.ops
     }

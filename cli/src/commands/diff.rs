@@ -3,8 +3,10 @@ use crate::OutputFormat;
 use anyhow::{Context, Result, bail};
 use excel_diff::{
     DiffConfig, DiffReport, DiffSummary, Grid, JsonLinesSink, PbixPackage, ProgressCallback,
-    WorkbookPackage, index_to_address, suggest_key_columns, with_default_session,
+    SheetKind, Workbook, WorkbookPackage, index_to_address, suggest_key_columns,
+    with_default_session,
 };
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufWriter, IsTerminal, Write};
 use std::path::Path;
@@ -22,6 +24,14 @@ pub enum Verbosity {
 enum HostKind {
     Workbook,
     Pbix,
+}
+
+const AUTO_STREAM_CELL_THRESHOLD: u64 = 1_000_000;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SheetKey {
+    name_lower: String,
+    kind: SheetKind,
 }
 
 fn host_kind_from_path(path: &Path) -> Option<HostKind> {
@@ -61,6 +71,7 @@ pub fn run(
     old_path: &str,
     new_path: &str,
     format: OutputFormat,
+    force_json: bool,
     git_diff_mode: bool,
     fast: bool,
     precise: bool,
@@ -73,6 +84,7 @@ pub fn run(
     progress: bool,
     max_memory: Option<u32>,
     timeout: Option<u32>,
+    max_ops: Option<usize>,
     metrics_json: Option<String>,
 ) -> Result<ExitCode> {
     if fast && precise {
@@ -82,6 +94,8 @@ pub fn run(
     if git_diff_mode && (format == OutputFormat::Json || format == OutputFormat::Jsonl) {
         bail!("Cannot use --git-diff with --format=json or --format=jsonl");
     }
+
+    let mut format = format;
 
     let old_path_str = old_path;
     let new_path_str = new_path;
@@ -126,9 +140,28 @@ pub fn run(
     let mut config = build_config(fast, precise);
     config.max_memory_mb = max_memory;
     config.timeout_seconds = timeout;
+    config.max_ops = max_ops;
 
     let old_host = open_host(old_path, old_kind, "old")?;
     let new_host = open_host(new_path, new_kind, "new")?;
+
+    if !database {
+        let estimated_cells = match (&old_host, &new_host) {
+            (Host::Workbook(old_pkg), Host::Workbook(new_pkg)) => {
+                Some(estimate_diff_cell_volume(&old_pkg.workbook, &new_pkg.workbook))
+            }
+            _ => None,
+        };
+        let (new_format, switched_cells) =
+            maybe_auto_switch_jsonl(format, force_json, git_diff_mode, estimated_cells);
+        if let Some(cells) = switched_cells {
+            eprintln!(
+                "Warning: estimated {} cells; switching to JSONL output. Use --force-json to keep JSON.",
+                cells
+            );
+        }
+        format = new_format;
+    }
 
     if old_kind == HostKind::Workbook && database {
         let (Host::Workbook(old_pkg), Host::Workbook(new_pkg)) = (&old_host, &new_host) else {
@@ -141,6 +174,7 @@ pub fn run(
             new_path_str,
             format,
             git_diff_mode,
+            force_json,
             &config,
             verbosity,
             sheet,
@@ -334,6 +368,7 @@ fn run_database_mode(
     new_path: &str,
     format: OutputFormat,
     git_diff_mode: bool,
+    force_json: bool,
     config: &DiffConfig,
     verbosity: Verbosity,
     sheet: Option<String>,
@@ -342,6 +377,19 @@ fn run_database_mode(
     metrics_json: Option<String>,
 ) -> Result<ExitCode> {
     let sheet_name = determine_sheet_name(&old_pkg.workbook, &new_pkg.workbook, sheet)?;
+
+    let mut format = format;
+    let estimated_cells = estimate_sheet_cell_volume(old_pkg, new_pkg, &sheet_name)?;
+    let (new_format, switched_cells) =
+        maybe_auto_switch_jsonl(format, force_json, git_diff_mode, Some(estimated_cells));
+    if let Some(cells) = switched_cells {
+        eprintln!(
+            "Warning: estimated {} cells in sheet '{}'; switching to JSONL output. Use --force-json to keep JSON.",
+            cells,
+            sheet_name
+        );
+    }
+    format = new_format;
     
     let key_columns = if let Some(keys_str) = keys {
         parse_key_columns(&keys_str)?
@@ -571,6 +619,56 @@ fn build_config(fast: bool, precise: bool) -> DiffConfig {
     } else {
         DiffConfig::default()
     }
+}
+
+fn estimate_diff_cell_volume(old: &Workbook, new: &Workbook) -> u64 {
+    with_default_session(|session| {
+        let mut max_counts: HashMap<SheetKey, u64> = HashMap::new();
+        for sheet in old.sheets.iter().chain(new.sheets.iter()) {
+            let name_lower = session.strings.resolve(sheet.name).to_lowercase();
+            let key = SheetKey {
+                name_lower,
+                kind: sheet.kind.clone(),
+            };
+            let cell_count = sheet.grid.cell_count() as u64;
+            max_counts
+                .entry(key)
+                .and_modify(|v| {
+                    if cell_count > *v {
+                        *v = cell_count;
+                    }
+                })
+                .or_insert(cell_count);
+        }
+
+        max_counts.values().copied().sum()
+    })
+}
+
+fn estimate_sheet_cell_volume(
+    old_pkg: &WorkbookPackage,
+    new_pkg: &WorkbookPackage,
+    sheet_name: &str,
+) -> Result<u64> {
+    let old_cells = find_sheet_grid(&old_pkg.workbook, sheet_name)?.cell_count() as u64;
+    let new_cells = find_sheet_grid(&new_pkg.workbook, sheet_name)?.cell_count() as u64;
+    Ok(old_cells.max(new_cells))
+}
+
+fn maybe_auto_switch_jsonl(
+    format: OutputFormat,
+    force_json: bool,
+    git_diff_mode: bool,
+    estimated_cells: Option<u64>,
+) -> (OutputFormat, Option<u64>) {
+    if format == OutputFormat::Json && !force_json && !git_diff_mode {
+        if let Some(cells) = estimated_cells {
+            if cells >= AUTO_STREAM_CELL_THRESHOLD {
+                return (OutputFormat::Jsonl, Some(cells));
+            }
+        }
+    }
+    (format, None)
 }
 
 fn print_warnings_to_stderr(report: &DiffReport) {

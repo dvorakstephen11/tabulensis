@@ -77,11 +77,13 @@ fn get_sheet_id(op: &DiffOp) -> Option<excel_diff::StringId> {
         DiffOp::SheetRemoved { sheet } => Some(*sheet),
         DiffOp::RowAdded { sheet, .. } => Some(*sheet),
         DiffOp::RowRemoved { sheet, .. } => Some(*sheet),
+        DiffOp::RowReplaced { sheet, .. } => Some(*sheet),
         DiffOp::ColumnAdded { sheet, .. } => Some(*sheet),
         DiffOp::ColumnRemoved { sheet, .. } => Some(*sheet),
         DiffOp::BlockMovedRows { sheet, .. } => Some(*sheet),
         DiffOp::BlockMovedColumns { sheet, .. } => Some(*sheet),
         DiffOp::BlockMovedRect { sheet, .. } => Some(*sheet),
+        DiffOp::RectReplaced { sheet, .. } => Some(*sheet),
         DiffOp::CellEdited { sheet, .. } => Some(*sheet),
         DiffOp::ChartAdded { sheet, .. } => Some(*sheet),
         DiffOp::ChartRemoved { sheet, .. } => Some(*sheet),
@@ -111,6 +113,9 @@ fn write_op_diff_lines<W: Write>(w: &mut W, report: &DiffReport, op: &DiffOp) ->
         }
         DiffOp::RowRemoved { row_idx, .. } => {
             writeln!(w, "- Row {}: REMOVED", row_idx + 1)?;
+        }
+        DiffOp::RowReplaced { row_idx, .. } => {
+            writeln!(w, "~ Row {}: REPLACED", row_idx + 1)?;
         }
         DiffOp::ColumnAdded { col_idx, .. } => {
             writeln!(w, "+ Column {}: ADDED", col_letter(*col_idx))?;
@@ -183,6 +188,16 @@ fn write_op_diff_lines<W: Write>(w: &mut W, report: &DiffReport, op: &DiffOp) ->
             );
             writeln!(w, "- Block: {} (moved)", src_range)?;
             writeln!(w, "+ Block: {} (moved)", dst_range)?;
+        }
+        DiffOp::RectReplaced {
+            start_row,
+            row_count,
+            start_col,
+            col_count,
+            ..
+        } => {
+            let range = format_range(*start_row, *start_col, *row_count, *col_count);
+            writeln!(w, "~ Rect replaced: {}", range)?;
         }
         DiffOp::CellEdited {
             addr, from, to, ..

@@ -107,11 +107,13 @@ fn get_sheet_id(op: &DiffOp) -> Option<StringId> {
         DiffOp::SheetRemoved { sheet } => Some(*sheet),
         DiffOp::RowAdded { sheet, .. } => Some(*sheet),
         DiffOp::RowRemoved { sheet, .. } => Some(*sheet),
+        DiffOp::RowReplaced { sheet, .. } => Some(*sheet),
         DiffOp::ColumnAdded { sheet, .. } => Some(*sheet),
         DiffOp::ColumnRemoved { sheet, .. } => Some(*sheet),
         DiffOp::BlockMovedRows { sheet, .. } => Some(*sheet),
         DiffOp::BlockMovedColumns { sheet, .. } => Some(*sheet),
         DiffOp::BlockMovedRect { sheet, .. } => Some(*sheet),
+        DiffOp::RectReplaced { sheet, .. } => Some(*sheet),
         DiffOp::CellEdited { sheet, .. } => Some(*sheet),
         DiffOp::ChartAdded { sheet, .. } => Some(*sheet),
         DiffOp::ChartRemoved { sheet, .. } => Some(*sheet),
@@ -139,6 +141,9 @@ fn render_op(report: &DiffReport, op: &DiffOp, verbosity: Verbosity) -> Vec<Stri
         }
         DiffOp::RowRemoved { row_idx, .. } => {
             vec![format!("Row {}: REMOVED", row_idx + 1)]
+        }
+        DiffOp::RowReplaced { row_idx, .. } => {
+            vec![format!("Row {}: REPLACED", row_idx + 1)]
         }
         DiffOp::ColumnAdded { col_idx, .. } => {
             vec![format!("Column {}: ADDED", col_letter(*col_idx))]
@@ -221,6 +226,16 @@ fn render_op(report: &DiffReport, op: &DiffOp, verbosity: Verbosity) -> Vec<Stri
                 }
             }
             result
+        }
+        DiffOp::RectReplaced {
+            start_row,
+            row_count,
+            start_col,
+            col_count,
+            ..
+        } => {
+            let range = format_range(*start_row, *start_col, *row_count, *col_count);
+            vec![format!("Rect replaced: {}", range)]
         }
         DiffOp::CellEdited {
             addr, from, to, ..
@@ -596,11 +611,14 @@ fn count_ops(report: &DiffReport) -> OpCounts {
     for op in &report.ops {
         match op {
             DiffOp::SheetAdded { .. } | DiffOp::SheetRemoved { .. } => counts.sheets += 1,
-            DiffOp::RowAdded { .. } | DiffOp::RowRemoved { .. } => counts.rows += 1,
+            DiffOp::RowAdded { .. } | DiffOp::RowRemoved { .. } | DiffOp::RowReplaced { .. } => {
+                counts.rows += 1
+            }
             DiffOp::ColumnAdded { .. } | DiffOp::ColumnRemoved { .. } => counts.cols += 1,
             DiffOp::BlockMovedRows { .. }
             | DiffOp::BlockMovedColumns { .. }
-            | DiffOp::BlockMovedRect { .. } => counts.blocks += 1,
+            | DiffOp::BlockMovedRect { .. }
+            | DiffOp::RectReplaced { .. } => counts.blocks += 1,
             DiffOp::CellEdited { .. } => counts.cells += 1,
             DiffOp::QueryAdded { .. }
             | DiffOp::QueryRemoved { .. }

@@ -68,9 +68,48 @@ fn create_sparse_grid(nrows: u32, ncols: u32, fill_percent: u32, seed: u64) -> G
     grid
 }
 
+fn create_grid_with_row_block_move(
+    nrows: u32,
+    ncols: u32,
+    src_start: u32,
+    row_count: u32,
+    dst_start: u32,
+) -> (Grid, Grid) {
+    let grid_a = create_large_grid(nrows, ncols, 0);
+
+    let mut order: Vec<u32> = (0..nrows).collect();
+    let src_end = src_start.saturating_add(row_count).min(nrows);
+    let block: Vec<u32> = order
+        .drain(src_start as usize..src_end as usize)
+        .collect();
+
+    let mut insert_at = dst_start;
+    if insert_at > src_start {
+        insert_at = insert_at.saturating_sub(block.len() as u32);
+    }
+    insert_at = insert_at.min(order.len() as u32);
+
+    order.splice(
+        insert_at as usize..insert_at as usize,
+        block.into_iter(),
+    );
+
+    let mut grid_b = Grid::new(nrows, ncols);
+    for (new_row, &old_row) in order.iter().enumerate() {
+        let old_row = old_row as u32;
+        for col in 0..ncols {
+            if let Some(cell) = grid_a.get(old_row, col) {
+                grid_b.insert_cell(new_row as u32, col, cell.value.clone(), cell.formula);
+            }
+        }
+    }
+
+    (grid_a, grid_b)
+}
+
 fn log_perf_metric(name: &str, metrics: &DiffMetrics, tail: &str) {
     println!(
-        "PERF_METRIC {name} total_time_ms={} parse_time_ms={} diff_time_ms={} signature_build_time_ms={} move_detection_time_ms={} alignment_time_ms={} cell_diff_time_ms={} op_emit_time_ms={} report_serialize_time_ms={} peak_memory_bytes={} rows_processed={} cells_compared={} anchors_found={} moves_detected={} hash_lookups_est={} allocations_est={}{}",
+        "PERF_METRIC {name} total_time_ms={} parse_time_ms={} diff_time_ms={} signature_build_time_ms={} move_detection_time_ms={} alignment_time_ms={} cell_diff_time_ms={} op_emit_time_ms={} report_serialize_time_ms={} peak_memory_bytes={} grid_storage_bytes={} string_pool_bytes={} op_buffer_bytes={} alignment_buffer_bytes={} rows_processed={} cells_compared={} anchors_found={} moves_detected={} hash_lookups_est={} allocations_est={}{}",
         metrics.total_time_ms,
         metrics.parse_time_ms,
         metrics.diff_time_ms,
@@ -81,6 +120,10 @@ fn log_perf_metric(name: &str, metrics: &DiffMetrics, tail: &str) {
         metrics.op_emit_time_ms,
         metrics.report_serialize_time_ms,
         metrics.peak_memory_bytes,
+        metrics.grid_storage_bytes,
+        metrics.string_pool_bytes,
+        metrics.op_buffer_bytes,
+        metrics.alignment_buffer_bytes,
         metrics.rows_processed,
         metrics.cells_compared,
         metrics.anchors_found,
@@ -326,6 +369,37 @@ fn perf_50k_adversarial_repetitive() {
     assert_eq!(
         metrics.alignment_time_ms, 0,
         "50k adversarial repetitive should skip alignment (preflight bailout), got {}ms",
+        metrics.alignment_time_ms
+    );
+}
+
+#[test]
+#[ignore = "Long-running test: run with `cargo test --features perf-metrics -- --ignored` to execute"]
+fn perf_50k_alignment_block_move() {
+    let (grid_a, grid_b) = create_grid_with_row_block_move(50000, 50, 1000, 200, 40000);
+
+    let wb_a = single_sheet_workbook("Performance", grid_a);
+    let wb_b = single_sheet_workbook("Performance", grid_b);
+
+    let config = DiffConfig::builder()
+        .preflight_min_rows(u32::MAX)
+        .max_move_detection_rows(100_000)
+        .build()
+        .expect("valid config");
+
+    let report = diff_workbooks(&wb_a, &wb_b, &config);
+
+    assert!(report.complete, "50k block move should complete");
+    let metrics = report.metrics.expect("should have metrics");
+    log_perf_metric(
+        "perf_50k_alignment_block_move",
+        &metrics,
+        " (alignment/move coverage)",
+    );
+    assert!(
+        metrics.move_detection_time_ms > 0 || metrics.alignment_time_ms > 0,
+        "expected alignment or move detection time to be non-zero (move_detection_time_ms={}, alignment_time_ms={})",
+        metrics.move_detection_time_ms,
         metrics.alignment_time_ms
     );
 }

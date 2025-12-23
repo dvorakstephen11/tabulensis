@@ -131,7 +131,11 @@ pub fn try_diff_workbooks(
     config: &DiffConfig,
 ) -> Result<DiffReport, DiffError> {
     let mut sink = VecSink::new();
-    let summary = try_diff_workbooks_streaming(old, new, pool, config, &mut sink)?;
+    let mut summary = try_diff_workbooks_streaming(old, new, pool, config, &mut sink)?;
+    #[cfg(feature = "perf-metrics")]
+    if let Some(metrics) = summary.metrics.as_mut() {
+        metrics.op_buffer_bytes = estimate_op_buffer_bytes(&sink);
+    }
     let strings = pool.strings().to_vec();
     Ok(DiffReport::from_ops_and_summary(
         sink.into_ops(),
@@ -148,8 +152,12 @@ pub fn try_diff_workbooks_with_progress(
     progress: &dyn ProgressCallback,
 ) -> Result<DiffReport, DiffError> {
     let mut sink = VecSink::new();
-    let summary =
+    let mut summary =
         try_diff_workbooks_streaming_with_progress(old, new, pool, config, &mut sink, progress)?;
+    #[cfg(feature = "perf-metrics")]
+    if let Some(metrics) = summary.metrics.as_mut() {
+        metrics.op_buffer_bytes = estimate_op_buffer_bytes(&sink);
+    }
     let strings = pool.strings().to_vec();
     Ok(DiffReport::from_ops_and_summary(
         sink.into_ops(),
@@ -345,15 +353,68 @@ fn estimate_workbook_bytes(workbook: &Workbook) -> u64 {
 }
 
 #[cfg(feature = "perf-metrics")]
+fn estimate_grid_storage_bytes(workbook: &Workbook) -> u64 {
+    workbook
+        .sheets
+        .iter()
+        .map(|sheet| sheet.grid.estimated_bytes())
+        .sum()
+}
+
+#[cfg(feature = "perf-metrics")]
+fn estimate_alignment_buffer_bytes(
+    old: &Workbook,
+    new: &Workbook,
+    pool: &StringPool,
+) -> u64 {
+    let mut old_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
+    for sheet in &old.sheets {
+        old_sheets.insert(make_sheet_key(sheet, pool), sheet);
+    }
+
+    let mut new_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
+    for sheet in &new.sheets {
+        new_sheets.insert(make_sheet_key(sheet, pool), sheet);
+    }
+
+    let mut max_estimate = 0u64;
+    for (key, old_sheet) in &old_sheets {
+        if let Some(new_sheet) = new_sheets.get(key) {
+            let estimate = super::hardening::estimate_advanced_sheet_diff_peak(
+                &old_sheet.grid,
+                &new_sheet.grid,
+            );
+            max_estimate = max_estimate.max(estimate);
+        }
+    }
+
+    max_estimate
+}
+
+#[cfg(feature = "perf-metrics")]
+fn estimate_op_buffer_bytes(sink: &VecSink) -> u64 {
+    (sink.op_capacity() as u64).saturating_mul(size_of::<DiffOp>() as u64)
+}
+
+#[cfg(feature = "perf-metrics")]
 fn apply_accounted_peak(
     metrics: &mut DiffMetrics,
     old: &Workbook,
     new: &Workbook,
     pool: &StringPool,
 ) {
+    let grid_storage_bytes = estimate_grid_storage_bytes(old)
+        .saturating_add(estimate_grid_storage_bytes(new));
+    let string_pool_bytes = pool.estimated_bytes();
+    let alignment_buffer_bytes = estimate_alignment_buffer_bytes(old, new, pool);
+
+    metrics.grid_storage_bytes = grid_storage_bytes;
+    metrics.string_pool_bytes = string_pool_bytes;
+    metrics.alignment_buffer_bytes = alignment_buffer_bytes;
+
     let estimated = estimate_workbook_bytes(old)
         .saturating_add(estimate_workbook_bytes(new))
-        .saturating_add(pool.estimated_bytes());
+        .saturating_add(string_pool_bytes);
     if estimated > metrics.peak_memory_bytes {
         metrics.peak_memory_bytes = estimated;
     }

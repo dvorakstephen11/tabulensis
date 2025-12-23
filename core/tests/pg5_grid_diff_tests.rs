@@ -123,6 +123,46 @@ fn pg5_5_grid_diff_same_shape_scattered_cell_edits() {
 }
 
 #[test]
+fn pg5_dense_row_replacement_emits_row_replaced() {
+    let old = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[1, 2, 3, 4, 5]]));
+    let new = single_sheet_workbook("Sheet1", grid_from_numbers(&[&[10, 20, 30, 40, 50]]));
+
+    let config = DiffConfig::builder()
+        .dense_row_replace_ratio(0.5)
+        .dense_row_replace_min_cols(1)
+        .dense_rect_replace_min_rows(0)
+        .build()
+        .expect("valid config should build");
+
+    let report = diff_workbooks(&old, &new, &config);
+    assert_eq!(report.ops.len(), 1);
+    assert!(matches!(report.ops[0], DiffOp::RowReplaced { .. }));
+}
+
+#[test]
+fn pg5_dense_rect_replacement_emits_rect_replaced() {
+    let old = single_sheet_workbook(
+        "Sheet1",
+        grid_from_numbers(&[&[1, 2, 3], &[4, 5, 6]]),
+    );
+    let new = single_sheet_workbook(
+        "Sheet1",
+        grid_from_numbers(&[&[10, 20, 30], &[40, 50, 60]]),
+    );
+
+    let config = DiffConfig::builder()
+        .dense_row_replace_ratio(0.5)
+        .dense_row_replace_min_cols(1)
+        .dense_rect_replace_min_rows(2)
+        .build()
+        .expect("valid config should build");
+
+    let report = diff_workbooks(&old, &new, &config);
+    assert_eq!(report.ops.len(), 1);
+    assert!(matches!(report.ops[0], DiffOp::RectReplaced { .. }));
+}
+
+#[test]
 fn pg5_6_grid_diff_degenerate_grids() {
     let empty_old = single_sheet_workbook("Sheet1", Grid::new(0, 0));
     let empty_new = single_sheet_workbook("Sheet1", Grid::new(0, 0));

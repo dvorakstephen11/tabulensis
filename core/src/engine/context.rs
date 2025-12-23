@@ -65,6 +65,9 @@ impl<'a, 'p, S: DiffSink> EmitCtx<'a, 'p, S> {
     }
 
     pub(super) fn emit(&mut self, op: DiffOp) -> Result<(), DiffError> {
+        if self.hardening.check_op_limit(*self.op_count, self.warnings) {
+            return Ok(());
+        }
         #[cfg(feature = "perf-metrics")]
         if let Some(m) = self.metrics.as_deref_mut() {
             let _guard = m.phase_guard(Phase::OpEmit);

@@ -51,6 +51,13 @@ pub struct DiffConfig {
     /// When true, emits CellEdited ops even when values are unchanged (diagnostic);
     /// downstream consumers should treat edits as semantic only if from != to.
     pub include_unchanged_cells: bool,
+    /// Ratio of differing cells required to emit dense row/rect replacement ops.
+    /// Set to 0.0 to disable dense replacement.
+    pub dense_row_replace_ratio: f64,
+    /// Minimum column count to consider dense row replacement.
+    pub dense_row_replace_min_cols: u32,
+    /// Minimum consecutive replaced rows to emit a RectReplaced op.
+    pub dense_rect_replace_min_rows: u32,
     pub max_context_rows: u32,
     pub min_block_size_for_move: u32,
     pub max_lcs_gap_size: u32,
@@ -83,6 +90,12 @@ pub struct DiffConfig {
     /// When exceeded, the engine aborts early, preserving any already-emitted ops, and marks the
     /// result as incomplete with a warning.
     pub timeout_seconds: Option<u32>,
+    /// Optional maximum number of operations to emit.
+    ///
+    /// When the limit is reached, the engine stops emitting further ops and marks the result
+    /// as incomplete with a warning. This bounds both time and memory for pathological "everything
+    /// changed" cases.
+    pub max_ops: Option<usize>,
 }
 
 impl Default for DiffConfig {
@@ -106,6 +119,9 @@ impl Default for DiffConfig {
             enable_formula_semantic_diff: false,
             semantic_noise_policy: SemanticNoisePolicy::ReportFormattingOnly,
             include_unchanged_cells: false,
+            dense_row_replace_ratio: 0.90,
+            dense_row_replace_min_cols: 64,
+            dense_rect_replace_min_rows: 4,
             max_context_rows: 3,
             min_block_size_for_move: 3,
             max_lcs_gap_size: 1_500,
@@ -122,6 +138,7 @@ impl Default for DiffConfig {
             bailout_similarity_threshold: 0.05,
             max_memory_mb: None,
             timeout_seconds: None,
+            max_ops: None,
         }
     }
 }
@@ -212,6 +229,15 @@ impl DiffConfig {
             });
         }
 
+        if !self.dense_row_replace_ratio.is_finite()
+            || self.dense_row_replace_ratio < 0.0
+            || self.dense_row_replace_ratio > 1.0
+        {
+            return Err(ConfigError::InvalidDenseRowReplaceRatio {
+                value: self.dense_row_replace_ratio,
+            });
+        }
+
         if !self.bailout_similarity_threshold.is_finite()
             || self.bailout_similarity_threshold < 0.0
             || self.bailout_similarity_threshold > 1.0
@@ -233,6 +259,8 @@ pub enum ConfigError {
     NonPositiveLimit { field: &'static str, value: u64 },
     #[error("preflight_in_order_match_ratio_min must be in [0.0, 1.0] and finite (got {value})")]
     InvalidPreflightRatio { value: f64 },
+    #[error("dense_row_replace_ratio must be in [0.0, 1.0] and finite (got {value})")]
+    InvalidDenseRowReplaceRatio { value: f64 },
     #[error("bailout_similarity_threshold must be in [0.0, 1.0] and finite (got {value})")]
     InvalidBailoutSimilarity { value: f64 },
 }
@@ -353,6 +381,21 @@ impl DiffConfigBuilder {
         self
     }
 
+    pub fn dense_row_replace_ratio(mut self, value: f64) -> Self {
+        self.inner.dense_row_replace_ratio = value;
+        self
+    }
+
+    pub fn dense_row_replace_min_cols(mut self, value: u32) -> Self {
+        self.inner.dense_row_replace_min_cols = value;
+        self
+    }
+
+    pub fn dense_rect_replace_min_rows(mut self, value: u32) -> Self {
+        self.inner.dense_rect_replace_min_rows = value;
+        self
+    }
+
     pub fn max_context_rows(mut self, value: u32) -> Self {
         self.inner.max_context_rows = value;
         self
@@ -433,6 +476,11 @@ impl DiffConfigBuilder {
         self
     }
 
+    pub fn max_ops(mut self, value: Option<usize>) -> Self {
+        self.inner.max_ops = value;
+        self
+    }
+
     pub fn build(self) -> Result<DiffConfig, ConfigError> {
         self.inner.validate()?;
         Ok(self.inner)
@@ -477,6 +525,9 @@ mod tests {
         assert_eq!(cfg.timeout_seconds, None);
 
         assert!(!cfg.include_unchanged_cells);
+        assert!((cfg.dense_row_replace_ratio - 0.90).abs() < f64::EPSILON);
+        assert_eq!(cfg.dense_row_replace_min_cols, 64);
+        assert_eq!(cfg.dense_rect_replace_min_rows, 4);
         assert_eq!(cfg.max_context_rows, 3);
 
         assert!(cfg.enable_fuzzy_moves);
@@ -560,6 +611,24 @@ mod tests {
     }
 
     #[test]
+    fn builder_rejects_invalid_dense_row_replace_ratio() {
+        let err = DiffConfig::builder()
+            .dense_row_replace_ratio(2.0)
+            .build()
+            .expect_err("builder should reject invalid dense row replace ratio");
+        assert!(matches!(
+            err,
+            ConfigError::InvalidDenseRowReplaceRatio { value } if (value - 2.0).abs() < f64::EPSILON
+        ));
+
+        let err = DiffConfig::builder()
+            .dense_row_replace_ratio(-0.5)
+            .build()
+            .expect_err("builder should reject negative dense row replace ratio");
+        assert!(matches!(err, ConfigError::InvalidDenseRowReplaceRatio { .. }));
+    }
+
+    #[test]
     fn builder_rejects_invalid_bailout_similarity() {
         let err = DiffConfig::builder()
             .bailout_similarity_threshold(2.0)
@@ -586,6 +655,9 @@ mod tests {
             .bailout_similarity_threshold(0.10)
             .max_memory_mb(Some(64))
             .timeout_seconds(Some(5))
+            .dense_row_replace_ratio(0.75)
+            .dense_row_replace_min_cols(16)
+            .dense_rect_replace_min_rows(2)
             .semantic_noise_policy(SemanticNoisePolicy::SuppressFormattingOnly)
             .build()
             .expect("valid config should build");
@@ -596,6 +668,9 @@ mod tests {
         assert!((cfg.bailout_similarity_threshold - 0.10).abs() < f64::EPSILON);
         assert_eq!(cfg.max_memory_mb, Some(64));
         assert_eq!(cfg.timeout_seconds, Some(5));
+        assert!((cfg.dense_row_replace_ratio - 0.75).abs() < f64::EPSILON);
+        assert_eq!(cfg.dense_row_replace_min_cols, 16);
+        assert_eq!(cfg.dense_rect_replace_min_rows, 2);
         assert!(matches!(
             cfg.semantic_noise_policy,
             SemanticNoisePolicy::SuppressFormattingOnly

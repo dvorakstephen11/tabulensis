@@ -91,6 +91,7 @@ pub fn align_rows_amr(old: &Grid, new: &Grid, config: &DiffConfig) -> Option<Row
     align_rows_amr_with_signatures(old, new, config).map(|result| result.alignment)
 }
 
+#[allow(dead_code)]
 #[cfg(any(test, feature = "dev-apis"))]
 pub fn align_rows_amr_with_signatures(
     old: &Grid,

@@ -19,6 +19,10 @@ fn metrics_starts_with_zero_counts() {
     assert_eq!(metrics.total_time_ms, 0);
     assert_eq!(metrics.diff_time_ms, 0);
     assert_eq!(metrics.peak_memory_bytes, 0);
+    assert_eq!(metrics.grid_storage_bytes, 0);
+    assert_eq!(metrics.string_pool_bytes, 0);
+    assert_eq!(metrics.op_buffer_bytes, 0);
+    assert_eq!(metrics.alignment_buffer_bytes, 0);
     assert_eq!(metrics.hash_lookups_est, 0);
     assert_eq!(metrics.allocations_est, 0);
 }

@@ -278,13 +278,16 @@ fn package_streaming_json_lines_header_includes_m_strings() {
         let mut ids = Vec::new();
         match op {
             DiffOp::SheetAdded { sheet } | DiffOp::SheetRemoved { sheet } => ids.push(*sheet),
-            DiffOp::RowAdded { sheet, .. } | DiffOp::RowRemoved { sheet, .. } => ids.push(*sheet),
+            DiffOp::RowAdded { sheet, .. }
+            | DiffOp::RowRemoved { sheet, .. }
+            | DiffOp::RowReplaced { sheet, .. } => ids.push(*sheet),
             DiffOp::ColumnAdded { sheet, .. } | DiffOp::ColumnRemoved { sheet, .. } => {
                 ids.push(*sheet);
             }
             DiffOp::BlockMovedRows { sheet, .. }
             | DiffOp::BlockMovedColumns { sheet, .. }
-            | DiffOp::BlockMovedRect { sheet, .. } => ids.push(*sheet),
+            | DiffOp::BlockMovedRect { sheet, .. }
+            | DiffOp::RectReplaced { sheet, .. } => ids.push(*sheet),
             DiffOp::CellEdited {
                 sheet, from, to, ..
             } => {

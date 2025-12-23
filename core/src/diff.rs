@@ -298,6 +298,10 @@ pub enum DiffOp {
         #[serde(skip_serializing_if = "Option::is_none")]
         row_signature: Option<RowSignature>,
     },
+    RowReplaced {
+        sheet: SheetId,
+        row_idx: u32,
+    },
     ColumnAdded {
         sheet: SheetId,
         col_idx: u32,
@@ -336,6 +340,13 @@ pub enum DiffOp {
         dst_start_col: u32,
         #[serde(skip_serializing_if = "Option::is_none")]
         block_hash: Option<u64>,
+    },
+    RectReplaced {
+        sheet: SheetId,
+        start_row: u32,
+        row_count: u32,
+        start_col: u32,
+        col_count: u32,
     },
     /// Logical change to a single cell.
     ///
@@ -591,6 +602,10 @@ impl DiffOp {
         }
     }
 
+    pub fn row_replaced(sheet: SheetId, row_idx: u32) -> DiffOp {
+        DiffOp::RowReplaced { sheet, row_idx }
+    }
+
     pub fn column_added(
         sheet: SheetId,
         col_idx: u32,
@@ -667,6 +682,22 @@ impl DiffOp {
             dst_start_row,
             dst_start_col,
             block_hash,
+        }
+    }
+
+    pub fn rect_replaced(
+        sheet: SheetId,
+        start_row: u32,
+        row_count: u32,
+        start_col: u32,
+        col_count: u32,
+    ) -> DiffOp {
+        DiffOp::RectReplaced {
+            sheet,
+            start_row,
+            row_count,
+            start_col,
+            col_count,
         }
     }
 }

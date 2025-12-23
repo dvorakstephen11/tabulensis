@@ -567,6 +567,10 @@ impl Grid {
         self.cells.is_empty()
     }
 
+    pub fn cells_equal(&self, other: &GridStorage) -> bool {
+        self.cells == *other
+    }
+
     pub fn iter_cells(&self) -> impl Iterator<Item = ((u32, u32), &CellContent)> {
         self.cells.iter()
     }

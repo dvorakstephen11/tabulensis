@@ -61,11 +61,13 @@ fn op_kind(op: &DiffOp) -> &'static str {
         DiffOp::SheetRemoved { .. } => "SheetRemoved",
         DiffOp::RowAdded { .. } => "RowAdded",
         DiffOp::RowRemoved { .. } => "RowRemoved",
+        DiffOp::RowReplaced { .. } => "RowReplaced",
         DiffOp::ColumnAdded { .. } => "ColumnAdded",
         DiffOp::ColumnRemoved { .. } => "ColumnRemoved",
         DiffOp::BlockMovedRows { .. } => "BlockMovedRows",
         DiffOp::BlockMovedColumns { .. } => "BlockMovedColumns",
         DiffOp::BlockMovedRect { .. } => "BlockMovedRect",
+        DiffOp::RectReplaced { .. } => "RectReplaced",
         DiffOp::CellEdited { .. } => "CellEdited",
         _ => "Unknown",
     }

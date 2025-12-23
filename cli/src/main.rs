@@ -26,6 +26,8 @@ pub enum Commands {
         new: String,
         #[arg(long, short, value_enum, default_value = "text", help = "Output format")]
         format: OutputFormat,
+        #[arg(long, help = "Force JSON output even for large diffs (disable auto-switch to JSONL)")]
+        force_json: bool,
         #[arg(long, help = "Produce unified diff-style output for Git")]
         git_diff: bool,
         #[arg(long, help = "Use fastest diff preset (less precise move detection)")]
@@ -50,6 +52,8 @@ pub enum Commands {
         max_memory: Option<u32>,
         #[arg(long, value_name = "SECONDS", help = "Abort diff after this many seconds")]
         timeout: Option<u32>,
+        #[arg(long, value_name = "COUNT", help = "Maximum number of ops to emit before stopping")]
+        max_ops: Option<usize>,
         #[arg(long, value_name = "PATH", help = "Write perf metrics JSON to this path")]
         metrics_json: Option<String>,
     },
@@ -77,6 +81,7 @@ fn main() -> ExitCode {
             old,
             new,
             format,
+            force_json,
             git_diff,
             fast,
             precise,
@@ -89,11 +94,13 @@ fn main() -> ExitCode {
             progress,
             max_memory,
             timeout,
+            max_ops,
             metrics_json,
         } => commands::diff::run(
             &old,
             &new,
             format,
+            force_json,
             git_diff,
             fast,
             precise,
@@ -106,6 +113,7 @@ fn main() -> ExitCode {
             progress,
             max_memory,
             timeout,
+            max_ops,
             metrics_json,
         ),
         Commands::Info { path, queries } => commands::info::run(&path, queries),

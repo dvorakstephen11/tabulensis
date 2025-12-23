@@ -521,16 +521,11 @@ fn grids_non_blank_cells_equal(old: &Grid, new: &Grid) -> bool {
         return false;
     }
 
-    for ((row, col), cell_a) in old.iter_cells() {
-        let Some(cell_b) = new.get(row, col) else {
-            return false;
-        };
-        if cell_a.value != cell_b.value || cell_a.formula != cell_b.formula {
-            return false;
-        }
+    if old.cell_count() == 0 {
+        return true;
     }
 
-    true
+    old.cells_equal(&new.cells)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -577,11 +572,15 @@ pub(super) fn should_short_circuit_to_positional(
         1.0
     };
 
-    let multiset_equal = are_multisets_equal(old_view, new_view);
+    let (multiset_equal, multiset_edit_distance_rows) =
+        multiset_equal_and_edit_distance(old_view, new_view);
+
+    let reorder_suspected = (in_order_mismatches as u64) > multiset_edit_distance_rows;
 
     let near_identical = in_order_mismatches <= config.preflight_in_order_mismatch_max as usize
         && in_order_match_ratio >= config.preflight_in_order_match_ratio_min
-        && !multiset_equal;
+        && !multiset_equal
+        && !reorder_suspected;
 
     if near_identical {
         return PreflightDecision::ShortCircuitNearIdentical;
@@ -613,24 +612,27 @@ fn compute_row_signature_stats(
     (in_order_matches, old_sig_set, new_sig_set)
 }
 
-fn are_multisets_equal(old_view: &GridView<'_>, new_view: &GridView<'_>) -> bool {
+fn multiset_equal_and_edit_distance(old_view: &GridView<'_>, new_view: &GridView<'_>) -> (bool, u64) {
     use std::collections::HashMap;
 
-    if old_view.row_meta.len() != new_view.row_meta.len() {
-        return false;
-    }
-
-    let mut old_freq: HashMap<RowSignature, u32> = HashMap::new();
+    let mut delta: HashMap<RowSignature, i32> = HashMap::new();
     for meta in &old_view.row_meta {
-        *old_freq.entry(meta.signature).or_insert(0) += 1;
+        *delta.entry(meta.signature).or_insert(0) += 1;
     }
-
-    let mut new_freq: HashMap<RowSignature, u32> = HashMap::new();
     for meta in &new_view.row_meta {
-        *new_freq.entry(meta.signature).or_insert(0) += 1;
+        *delta.entry(meta.signature).or_insert(0) -= 1;
     }
 
-    old_freq == new_freq
+    let mut equal = true;
+    let mut sum_abs: u64 = 0;
+    for (_sig, d) in delta {
+        if d != 0 {
+            equal = false;
+            sum_abs = sum_abs.saturating_add(d.unsigned_abs() as u64);
+        }
+    }
+
+    (equal, sum_abs / 2)
 }
 
 fn mismatched_rows(old_view: &GridView<'_>, new_view: &GridView<'_>) -> Vec<u32> {
@@ -752,10 +754,11 @@ mod tests {
             #[cfg(feature = "perf-metrics")]
             None,
         );
-        let compared = diff_row_pair_sparse(&mut emit_ctx, 0, 0, 3, &old_cells, &new_cells)
+        let result = diff_row_pair_sparse(&mut emit_ctx, 0, 0, 3, &old_cells, &new_cells)
             .expect("diff should succeed");
 
-        assert_eq!(compared, 3);
+        assert_eq!(result.compared, 3);
+        assert!(!result.replaced);
     }
 
     #[test]
@@ -790,9 +793,81 @@ mod tests {
             #[cfg(feature = "perf-metrics")]
             None,
         );
-        let compared = diff_row_pair_sparse(&mut emit_ctx, 0, 0, 3, &old_cells, &new_cells)
+        let result = diff_row_pair_sparse(&mut emit_ctx, 0, 0, 3, &old_cells, &new_cells)
             .expect("diff should succeed");
 
-        assert_eq!(compared, 2);
+        assert_eq!(result.compared, 2);
+        assert!(!result.replaced);
+    }
+
+    #[test]
+    fn preflight_detects_row_swap_with_edit_as_not_near_identical() {
+        let mut grid_a = Grid::new(6000, 10);
+        let mut grid_b = Grid::new(6000, 10);
+
+        for row in 0..6000u32 {
+            for col in 0..10u32 {
+                let value = (row * 1000 + col) as f64;
+                grid_a.insert_cell(row, col, Some(CellValue::Number(value)), None);
+                grid_b.insert_cell(row, col, Some(CellValue::Number(value)), None);
+            }
+        }
+
+        let row_0_cells: Vec<_> = (0..10u32).map(|c| c as f64).collect();
+        let row_1_cells: Vec<_> = (0..10u32).map(|c| 1000.0 + c as f64).collect();
+
+        for col in 0..10u32 {
+            grid_b.insert_cell(0, col, Some(CellValue::Number(row_1_cells[col as usize])), None);
+            grid_b.insert_cell(1, col, Some(CellValue::Number(row_0_cells[col as usize])), None);
+        }
+
+        grid_b.insert_cell(2999, 5, Some(CellValue::Number(999999.0)), None);
+
+        let config = DiffConfig::default();
+        let old_view = GridView::from_grid_with_config(&grid_a, &config);
+        let new_view = GridView::from_grid_with_config(&grid_b, &config);
+
+        let decision = should_short_circuit_to_positional(&old_view, &new_view, &config);
+
+        assert_eq!(
+            decision,
+            PreflightDecision::RunFullPipeline,
+            "small row swap + edit should NOT short-circuit to near-identical"
+        );
+    }
+
+    #[test]
+    fn multiset_edit_distance_computes_correctly() {
+        let mut grid_a = Grid::new(10, 5);
+        let mut grid_b = Grid::new(10, 5);
+
+        for row in 0..10u32 {
+            for col in 0..5u32 {
+                grid_a.insert_cell(row, col, Some(CellValue::Number((row * 100 + col) as f64)), None);
+            }
+        }
+
+        for row in 0..10u32 {
+            for col in 0..5u32 {
+                grid_b.insert_cell(row, col, Some(CellValue::Number((row * 100 + col) as f64)), None);
+            }
+        }
+
+        let config = DiffConfig::default();
+        let old_view = GridView::from_grid_with_config(&grid_a, &config);
+        let new_view = GridView::from_grid_with_config(&grid_b, &config);
+
+        let (equal, edit_distance) = multiset_equal_and_edit_distance(&old_view, &new_view);
+        assert!(equal);
+        assert_eq!(edit_distance, 0);
+
+        for col in 0..5u32 {
+            grid_b.insert_cell(0, col, Some(CellValue::Number(99999.0 + col as f64)), None);
+        }
+
+        let new_view_edited = GridView::from_grid_with_config(&grid_b, &config);
+        let (equal2, edit_distance2) = multiset_equal_and_edit_distance(&old_view, &new_view_edited);
+        assert!(!equal2);
+        assert_eq!(edit_distance2, 1);
     }
 }

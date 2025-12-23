@@ -258,6 +258,76 @@ fn bench_row_insertion(c: &mut Criterion) {
     group.finish();
 }
 
+fn create_grid_with_block_move(nrows: u32, ncols: u32, move_start: u32, move_size: u32) -> (Grid, Grid) {
+    let mut grid_a = Grid::new(nrows, ncols);
+    let mut grid_b = Grid::new(nrows, ncols);
+
+    for row in 0..nrows {
+        for col in 0..ncols {
+            let value = (row * 1000 + col) as f64;
+            grid_a.insert_cell(row, col, Some(CellValue::Number(value)), None);
+        }
+    }
+
+    let move_end = move_start + move_size;
+    let dest_start = nrows - move_size - 100;
+
+    for row in 0..move_start {
+        for col in 0..ncols {
+            let value = (row * 1000 + col) as f64;
+            grid_b.insert_cell(row, col, Some(CellValue::Number(value)), None);
+        }
+    }
+
+    for row in move_end..nrows {
+        for col in 0..ncols {
+            let value = (row * 1000 + col) as f64;
+            let new_row = row - move_size + (dest_start - move_start + move_size);
+            if new_row < nrows && new_row != dest_start && (new_row < dest_start || new_row >= dest_start + move_size) {
+                grid_b.insert_cell(row - move_size, col, Some(CellValue::Number(value)), None);
+            }
+        }
+    }
+
+    for i in 0..move_size {
+        for col in 0..ncols {
+            let value = ((move_start + i) * 1000 + col) as f64;
+            grid_b.insert_cell(dest_start + i, col, Some(CellValue::Number(value)), None);
+        }
+    }
+
+    (grid_a, grid_b)
+}
+
+fn bench_block_move_alignment(c: &mut Criterion) {
+    let mut group = c.benchmark_group("block_move_alignment");
+    group.measurement_time(Duration::from_secs(60));
+    group.warm_up_time(Duration::from_secs(5));
+    group.sample_size(10);
+
+    for size in [5000u32, 10000].iter() {
+        let mut session = DiffSession::new();
+        let (grid_a, grid_b) = create_grid_with_block_move(*size, 20, 100, 50);
+        let wb_a = single_sheet_workbook(&mut session, "Bench", grid_a);
+        let wb_b = single_sheet_workbook(&mut session, "Bench", grid_b);
+
+        let config = DiffConfig::builder()
+            .preflight_min_rows(u32::MAX)
+            .max_move_detection_rows(20000)
+            .build()
+            .expect("valid config");
+
+        group.throughput(Throughput::Elements(*size as u64 * 20));
+        group.bench_with_input(BenchmarkId::new("rows", size), size, move |b, _| {
+            b.iter(|| {
+                let _ = try_diff_workbooks_with_pool(&wb_a, &wb_b, &mut session.strings, &config)
+                    .expect("diff should succeed");
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_identical_grids,
@@ -268,4 +338,10 @@ criterion_group!(
     bench_row_insertion,
 );
 
-criterion_main!(benches);
+criterion_group!(
+    name = alignment_benches;
+    config = Criterion::default().sample_size(10);
+    targets = bench_block_move_alignment,
+);
+
+criterion_main!(benches, alignment_benches);
