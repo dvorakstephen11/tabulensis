@@ -13,6 +13,7 @@ use crate::m_section::SectionParseError;
 
 #[deprecated(note = "use WorkbookPackage::diff instead")]
 #[cfg(any(test, feature = "dev-apis"))]
+#[allow(dead_code)]
 pub fn diff_m_queries(
     old_queries: &[Query],
     new_queries: &[Query],

@@ -180,6 +180,7 @@ impl RegionMask {
     }
 
     #[cfg(any(test, feature = "dev-apis"))]
+    #[allow(dead_code)]
     pub fn is_row_in_shift_zone(&self, row: u32) -> bool {
         match (self.row_shift_min, self.row_shift_max) {
             (Some(min), Some(max)) => row >= min && row <= max,
@@ -188,6 +189,7 @@ impl RegionMask {
     }
 
     #[cfg(any(test, feature = "dev-apis"))]
+    #[allow(dead_code)]
     pub fn is_col_in_shift_zone(&self, col: u32) -> bool {
         match (self.col_shift_min, self.col_shift_max) {
             (Some(min), Some(max)) => col >= min && col <= max,

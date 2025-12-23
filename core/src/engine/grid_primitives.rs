@@ -245,8 +245,8 @@ pub(super) fn emit_moved_row_block_edits<S: DiffSink>(
 
 pub(super) fn diff_row_pair_sparse<'a, S: DiffSink>(
     ctx: &mut EmitCtx<'_, '_, S>,
-    row_a: u32,
-    row_b: u32,
+    _row_a: u32,
+    _row_b: u32,
     overlap_cols: u32,
     old_cells: &[(u32, &'a Cell)],
     new_cells: &[(u32, &'a Cell)],

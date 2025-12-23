@@ -525,6 +525,19 @@ fn grids_non_blank_cells_equal(old: &Grid, new: &Grid) -> bool {
         return true;
     }
 
+    if let (Some(old_sigs), Some(new_sigs)) = (&old.row_signatures, &new.row_signatures) {
+        if old_sigs != new_sigs {
+            return false;
+        }
+        if let (Some(old_col_sigs), Some(new_col_sigs)) = (&old.col_signatures, &new.col_signatures)
+        {
+            if old_col_sigs != new_col_sigs {
+                return false;
+            }
+            return true;
+        }
+    }
+
     old.cells_equal(&new.cells)
 }
 

@@ -25,6 +25,7 @@ pub struct Anchor {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub fn discover_anchors(old: &GridView<'_>, new: &GridView<'_>) -> Vec<Anchor> {
     discover_anchors_from_meta(&old.row_meta, &new.row_meta)
 }

@@ -891,6 +891,9 @@ pub struct DiffConfig {
     pub max_align_rows: u32,      // Default: 500,000
     pub max_align_cols: u32,      // Default: 16,384
     pub max_recursion_depth: u32, // Default: 10
+    pub max_memory_mb: Option<u32>,   // Memory budget in MB (None = unlimited)
+    pub timeout: Option<Duration>,    // Timeout for diff operation (None = unlimited)
+    pub max_ops: Option<usize>,       // Maximum operations to emit (None = unlimited)
     pub on_limit_exceeded: LimitBehavior,
 }
 
@@ -900,6 +903,19 @@ pub enum LimitBehavior {
     ReturnError,           // Return structured DiffError
 }
 ```
+
+**Memory and timeout controls**: When `max_memory_mb` is set, the engine estimates memory
+usage before expensive operations and falls back to positional diff if the budget would be
+exceeded. When `timeout` is set, the engine periodically checks elapsed time and aborts
+with a partial result if exceeded. Both controls emit warnings and mark the report incomplete.
+
+**Output cap**: When `max_ops` is set, the engine stops emitting operations after the limit
+is reached. This bounds both time and memory for pathological "everything changed" cases.
+
+**Known limitation**: Even with memory controls, worst-case scenarios (e.g., 50k rows where
+every cell differs) can consume significant memory (~1.5GB) because the full grid must be
+loaded for comparison. For memory-constrained environments, consider using streaming output
+(`JsonLinesSink`) and setting conservative `max_memory_mb` values.
 
 When limits are exceeded:
 
@@ -925,7 +941,7 @@ and intentional spec deviations.
 
 ---
 
-Last updated: 2025-12-10
+Last updated: 2025-12-23
 
 [1]: https://bengribaudo.com/blog/2020/04/22/5198/data-mashup-binary-stream "The Data Mashup Binary Stream: How Power Queries Are Stored | Ben Gribaudo"
 [2]: https://community.powerbi.com/t5/Desktop/DataMashup-file-no-longer-exists/td-p/1145141?utm_source=chatgpt.com "DataMashup file no longer exists"

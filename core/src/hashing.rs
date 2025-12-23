@@ -28,6 +28,7 @@ use crate::workbook::{ColSignature, RowSignature};
 
 pub(crate) const XXH64_SEED: u64 = 0;
 #[cfg(any(test, feature = "dev-apis"))]
+#[allow(dead_code)]
 const HASH_MIX_CONSTANT: u64 = 0x9e3779b97f4a7c15;
 const CANONICAL_NAN_BITS: u64 = 0x7FF8_0000_0000_0000;
 
@@ -72,6 +73,7 @@ pub(crate) fn hash_cell_value<H: Hasher>(value: &Option<CellValue>, state: &mut 
 }
 
 #[cfg(any(test, feature = "dev-apis"))]
+#[allow(dead_code)]
 pub(crate) fn hash_cell_content(cell: &CellContent) -> u64 {
     let mut hasher = Xxh64::new(XXH64_SEED);
     hash_cell_value(&cell.value, &mut hasher);
@@ -80,6 +82,7 @@ pub(crate) fn hash_cell_content(cell: &CellContent) -> u64 {
 }
 
 #[cfg(any(test, feature = "dev-apis"))]
+#[allow(dead_code)]
 pub(crate) fn hash_cell_content_128(cell: &CellContent) -> u128 {
     let mut hasher = Xxh3::new();
     hash_cell_value(&cell.value, &mut hasher);
@@ -97,6 +100,7 @@ pub(crate) fn hash_row_content_128(cells: &[(u32, &CellContent)]) -> u128 {
 }
 
 #[cfg(any(test, feature = "dev-apis"))]
+#[allow(dead_code)]
 pub(crate) fn hash_col_content_128(cells: &[&CellContent]) -> u128 {
     let mut hasher = Xxh3::new();
     for cell in cells.iter() {
@@ -131,26 +135,31 @@ pub(crate) fn hash_col_content_unordered_128(cells: &[&CellContent]) -> u128 {
 }
 
 #[cfg(any(test, feature = "dev-apis"))]
+#[allow(dead_code)]
 pub(crate) fn mix_hash(hash: u64) -> u64 {
     hash.rotate_left(13) ^ HASH_MIX_CONSTANT
 }
 
 #[cfg(any(test, feature = "dev-apis"))]
+#[allow(dead_code)]
 pub(crate) fn mix_hash_128(hash: u128) -> u128 {
     hash.rotate_left(47) ^ (HASH_MIX_CONSTANT as u128)
 }
 
 #[cfg(any(test, feature = "dev-apis"))]
+#[allow(dead_code)]
 pub(crate) fn combine_hashes(current: u64, contribution: u64) -> u64 {
     current.wrapping_add(mix_hash(contribution))
 }
 
 #[cfg(any(test, feature = "dev-apis"))]
+#[allow(dead_code)]
 pub(crate) fn combine_hashes_128(current: u128, contribution: u128) -> u128 {
     current.wrapping_add(mix_hash_128(contribution))
 }
 
 #[cfg(any(test, feature = "dev-apis"))]
+#[allow(dead_code)]
 pub(crate) fn compute_row_signature<'a>(
     cells: impl Iterator<Item = ((u32, u32), &'a CellContent)>,
     row: u32,
@@ -165,6 +174,7 @@ pub(crate) fn compute_row_signature<'a>(
 }
 
 #[cfg(any(test, feature = "dev-apis"))]
+#[allow(dead_code)]
 pub(crate) fn compute_col_signature<'a>(
     cells: impl Iterator<Item = ((u32, u32), &'a CellContent)>,
     col: u32,

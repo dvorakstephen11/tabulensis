@@ -131,6 +131,7 @@ pub fn try_diff_workbooks(
     config: &DiffConfig,
 ) -> Result<DiffReport, DiffError> {
     let mut sink = VecSink::new();
+    #[allow(unused_mut)]
     let mut summary = try_diff_workbooks_streaming(old, new, pool, config, &mut sink)?;
     #[cfg(feature = "perf-metrics")]
     if let Some(metrics) = summary.metrics.as_mut() {
@@ -152,6 +153,7 @@ pub fn try_diff_workbooks_with_progress(
     progress: &dyn ProgressCallback,
 ) -> Result<DiffReport, DiffError> {
     let mut sink = VecSink::new();
+    #[allow(unused_mut)]
     let mut summary =
         try_diff_workbooks_streaming_with_progress(old, new, pool, config, &mut sink, progress)?;
     #[cfg(feature = "perf-metrics")]

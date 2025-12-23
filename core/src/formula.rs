@@ -128,6 +128,7 @@ pub fn parse_formula(formula: &str) -> Result<FormulaExpr, FormulaParseError> {
 pub(crate) enum ShiftMode {
     RelativeOnly,
     #[cfg(any(test, feature = "dev-apis"))]
+    #[allow(dead_code)]
     All,
 }
 
