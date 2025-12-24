@@ -1,10 +1,10 @@
+use crate::commands::host::{host_kind_from_path, open_host, Host, HostKind};
 use crate::output::{git_diff, json, text};
 use crate::OutputFormat;
 use anyhow::{Context, Result, bail};
 use excel_diff::{
-    DiffConfig, DiffReport, DiffSummary, Grid, JsonLinesSink, PbixPackage, ProgressCallback,
-    SheetKind, Workbook, WorkbookPackage, index_to_address, suggest_key_columns,
-    with_default_session,
+    DiffConfig, DiffReport, DiffSummary, Grid, JsonLinesSink, ProgressCallback, SheetKind,
+    Workbook, WorkbookPackage, index_to_address, suggest_key_columns, with_default_session,
 };
 use std::collections::HashMap;
 use std::fs::File;
@@ -20,12 +20,6 @@ pub enum Verbosity {
     Verbose,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum HostKind {
-    Workbook,
-    Pbix,
-}
-
 const AUTO_STREAM_CELL_THRESHOLD: u64 = 1_000_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -34,37 +28,7 @@ struct SheetKey {
     kind: SheetKind,
 }
 
-fn host_kind_from_path(path: &Path) -> Option<HostKind> {
-    let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
-    match ext.as_str() {
-        "xlsx" | "xlsm" | "xltx" | "xltm" => Some(HostKind::Workbook),
-        "pbix" | "pbit" => Some(HostKind::Pbix),
-        _ => None,
-    }
-}
-
-enum Host {
-    Workbook(WorkbookPackage),
-    Pbix(PbixPackage),
-}
-
-fn open_host(path: &Path, kind: HostKind, label: &str) -> Result<Host> {
-    let file = File::open(path)
-        .with_context(|| format!("Failed to open {} file: {}", label, path.display()))?;
-
-    let host = match kind {
-        HostKind::Workbook => Host::Workbook(
-            WorkbookPackage::open(file)
-                .with_context(|| format!("Failed to parse {} workbook: {}", label, path.display()))?,
-        ),
-        HostKind::Pbix => Host::Pbix(
-            PbixPackage::open(file)
-                .with_context(|| format!("Failed to parse {} PBIX/PBIT: {}", label, path.display()))?,
-        ),
-    };
-
-    Ok(host)
-}
+ 
 
 #[allow(clippy::too_many_arguments)]
 pub fn run(

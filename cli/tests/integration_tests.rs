@@ -763,3 +763,33 @@ fn database_auto_keys() {
     );
 }
 
+#[test]
+fn info_pbix_includes_embedded_queries() {
+    let output = excel_diff_cmd()
+        .args([
+            "info",
+            "--queries",
+            &fixture_path("pbix_embedded_queries.pbix"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert!(
+        output.status.success(),
+        "info should succeed for pbix: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("PBIX/PBIT:"),
+        "expected pbix header, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Embedded/"),
+        "expected embedded queries to be listed, got: {}",
+        stdout
+    );
+}
+

@@ -2,32 +2,41 @@ use crate::config::DiffConfig;
 use crate::progress::ProgressCallback;
 use crate::workbook::{Cell, Grid};
 use std::mem::size_of;
+
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::{Duration, Instant};
 
 const BYTES_PER_MB: u64 = 1024 * 1024;
 
 const PROGRESS_MIN_DELTA: f32 = 0.01;
+#[cfg(not(target_arch = "wasm32"))]
 const TIMEOUT_CHECK_EVERY_TICKS: u64 = 256;
 
 pub(super) struct HardeningController<'a> {
+    #[cfg(not(target_arch = "wasm32"))]
     start: Instant,
+    #[cfg(not(target_arch = "wasm32"))]
     timeout: Option<Duration>,
     max_memory_bytes: Option<u64>,
     max_ops: Option<usize>,
     aborted: bool,
+    #[cfg(not(target_arch = "wasm32"))]
     warned_timeout: bool,
     warned_memory: bool,
     warned_ops: bool,
     progress: Option<&'a dyn ProgressCallback>,
     last_progress_phase: Option<&'static str>,
     last_progress_percent: Option<f32>,
+    #[cfg(not(target_arch = "wasm32"))]
     timeout_tick: u64,
 }
 
 impl<'a> HardeningController<'a> {
     pub(super) fn new(config: &DiffConfig, progress: Option<&'a dyn ProgressCallback>) -> Self {
         Self {
+            #[cfg(not(target_arch = "wasm32"))]
             start: Instant::now(),
+            #[cfg(not(target_arch = "wasm32"))]
             timeout: config
                 .timeout_seconds
                 .map(|secs| Duration::from_secs(secs as u64)),
@@ -36,12 +45,14 @@ impl<'a> HardeningController<'a> {
                 .map(|mb| (mb as u64).saturating_mul(BYTES_PER_MB)),
             max_ops: config.max_ops,
             aborted: false,
+            #[cfg(not(target_arch = "wasm32"))]
             warned_timeout: false,
             warned_memory: false,
             warned_ops: false,
             progress,
             last_progress_phase: None,
             last_progress_percent: None,
+            #[cfg(not(target_arch = "wasm32"))]
             timeout_tick: 0,
         }
     }
@@ -50,6 +61,7 @@ impl<'a> HardeningController<'a> {
         self.aborted
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn check_timeout(&mut self, warnings: &mut Vec<String>) -> bool {
         if self.aborted {
             return true;
@@ -77,6 +89,11 @@ impl<'a> HardeningController<'a> {
             ));
         }
         true
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn check_timeout(&mut self, _warnings: &mut Vec<String>) -> bool {
+        self.aborted
     }
 
     pub(super) fn check_op_limit(&mut self, current_op_count: usize, warnings: &mut Vec<String>) -> bool {

@@ -220,3 +220,10 @@ scenarios:
         }
     output: "pbit_model_b.pbit"
 
+  - id: "branch2_pbix_embedded_queries"
+    generator: "pbix"
+    args:
+      mode: "from_xlsx"
+      base_file: "generated/m_embedded_change_a.xlsx"
+    output: "pbix_embedded_queries.pbix"
+

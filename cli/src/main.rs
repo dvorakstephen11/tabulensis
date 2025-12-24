@@ -18,11 +18,11 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    #[command(about = "Compare two Excel workbooks")]
+    #[command(about = "Compare two Excel workbooks or PBIX/PBIT packages")]
     Diff {
-        #[arg(help = "Path to the old/base workbook")]
+        #[arg(help = "Path to the old/base file (.xlsx, .xlsm, .xltx, .xltm, .pbix, .pbit)")]
         old: String,
-        #[arg(help = "Path to the new/changed workbook")]
+        #[arg(help = "Path to the new/changed file (.xlsx, .xlsm, .xltx, .xltm, .pbix, .pbit)")]
         new: String,
         #[arg(long, short, value_enum, default_value = "text", help = "Output format")]
         format: OutputFormat,
@@ -57,9 +57,9 @@ pub enum Commands {
         #[arg(long, value_name = "PATH", help = "Write perf metrics JSON to this path")]
         metrics_json: Option<String>,
     },
-    #[command(about = "Show information about a workbook")]
+    #[command(about = "Show information about a workbook or PBIX/PBIT package")]
     Info {
-        #[arg(help = "Path to the workbook")]
+        #[arg(help = "Path to the file (.xlsx, .xlsm, .xltx, .xltm, .pbix, .pbit)")]
         path: String,
         #[arg(long, help = "Include Power Query information")]
         queries: bool,

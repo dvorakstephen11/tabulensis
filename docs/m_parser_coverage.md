@@ -1,32 +1,30 @@
-# M parser coverage
+# Semantic M parser coverage
 
-This document describes the current syntax coverage in the M parser and how it maps to semantic diff output.
+This doc describes which Power Query (M) constructs are parsed semantically versus treated as opaque text.
 
-## Tier 1 (core syntax)
+## Terms
 
-| Construct | Coverage | Notes |
-| --- | --- | --- |
-| Identifiers and dotted access | Parsed | Includes `Foo` and `Foo.Bar` chains. |
-| `let ... in ...` blocks | Parsed | Primary shape used for Applied Steps extraction. |
-| Record literals | Parsed | `[Field = Expr, ...]`. |
-| List literals | Parsed | `{Expr, ...}`. |
-| Function calls | Parsed | Identifier and qualified calls (e.g., `Table.SelectRows`). |
-| `if/then/else` | Parsed | Supported in expressions and steps. |
-| `each` shorthand | Parsed | Treated as a lambda. |
-| Operators | Parsed | Arithmetic, comparison, and logical operators. |
+- Semantic parse: the code builds an AST and can reason about structure (steps, references).
+- Opaque: the code treats the query definition as a string blob and only reports text/format changes.
 
-## Tier 2 (expanded syntax)
+## Supported constructs
 
-| Construct | Coverage | Notes |
-| --- | --- | --- |
-| Explicit lambdas | Parsed | `(x) => ...` and multi-arg lambdas. |
-| `try ... otherwise ...` | Parsed | Error-handling expressions. |
-| Type ascription | Parsed | `value as type` (including nullable). |
+The semantic parser supports:
+- Records, lists
+- let/in expressions
+- if/then/else expressions
+- Binary operators (arithmetic, comparisons, logical)
+- Function definitions (lambdas)
+- try/otherwise
+- Type ascription
 
-## Known gaps that fall back to AST summary
+## Not yet semantic
 
-Step extraction can fall back to `AstDiffSummary` when the query does not match the Applied Steps shape or when metadata is too dynamic. Known cases include:
+Anything not in the supported list is treated as opaque. In those cases:
+- the diff can still detect that the query changed
+- step-level diffs may be missing
+- AST summary may be unknown or absent
 
-- Dynamic step names (computed identifiers) that prevent stable step identity.
-- Queries that do not resolve to a linear `let` step pipeline (custom functions or nested transforms).
-- Table transformations outside the recognized set (SelectRows, RemoveColumns, RenameColumns, TransformColumnTypes, NestedJoin, Join) that are classified as `Other` steps.
+## How to update this doc
+
+Whenever new M syntax becomes semantic, add it to Supported constructs and add a fixture + test that exercises it.

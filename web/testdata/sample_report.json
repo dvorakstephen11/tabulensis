@@ -1,0 +1,26 @@
+{
+  "version": "1",
+  "strings": ["Query1", "StepA", "StepB", "Measure1"],
+  "ops": [
+    {
+      "kind": "QueryDefinitionChanged",
+      "name": 0,
+      "change_kind": "semantic",
+      "semantic_detail": {
+        "step_diffs": [
+          { "kind": "step_added", "step": { "name": 1, "index": 0, "step_type": "other", "source_refs": [], "params": null, "signature": null } },
+          {
+            "kind": "step_modified",
+            "before": { "name": 1, "index": 0, "step_type": "other", "source_refs": [], "params": null, "signature": null },
+            "after": { "name": 2, "index": 1, "step_type": "other", "source_refs": [], "params": null, "signature": null },
+            "changes": [{ "kind": "renamed", "from": 1, "to": 2 }]
+          }
+        ],
+        "ast_summary": { "mode": "unknown", "node_count_old": 10, "node_count_new": 11, "inserted": 1, "deleted": 0, "updated": 0, "moved": 0, "move_hints": [] }
+      }
+    },
+    { "kind": "MeasureDefinitionChanged", "name": 3 }
+  ],
+  "complete": true,
+  "warnings": []
+}
