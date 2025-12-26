@@ -16,6 +16,7 @@
       perf_fullscale.yml
       release.yml
       wasm.yml
+      web_ui_tests.yml
   .gitignore
   benchmarks/
     README.md
@@ -72,6 +73,7 @@
     src/
       commands/
         diff.rs
+        host.rs
         info.rs
         mod.rs
       main.rs
@@ -291,6 +293,11 @@
   web/
     index.html
     main.js
+    package.json
+    render.js
+    test_render.js
+    testdata/
+      sample_report.json
 ```
 
 ## File Contents
@@ -1053,6 +1060,31 @@ jobs:
 
 ---
 
+### File: `.github\workflows\web_ui_tests.yml`
+
+```yaml
+name: Web UI Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+jobs:
+  web-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Render test
+        run: node web/test_render.js
+
+```
+
+---
+
 ### File: `.gitignore`
 
 ```
@@ -1139,13 +1171,13 @@ tempfile = "3"
 ### File: `cli\src\commands\diff.rs`
 
 ```rust
+use crate::commands::host::{host_kind_from_path, open_host, Host, HostKind};
 use crate::output::{git_diff, json, text};
 use crate::OutputFormat;
 use anyhow::{Context, Result, bail};
 use excel_diff::{
-    DiffConfig, DiffReport, DiffSummary, Grid, JsonLinesSink, PbixPackage, ProgressCallback,
-    SheetKind, Workbook, WorkbookPackage, index_to_address, suggest_key_columns,
-    with_default_session,
+    DiffConfig, DiffReport, DiffSummary, Grid, JsonLinesSink, ProgressCallback, SheetKind,
+    Workbook, WorkbookPackage, index_to_address, suggest_key_columns, with_default_session,
 };
 use std::collections::HashMap;
 use std::fs::File;
@@ -1161,12 +1193,6 @@ pub enum Verbosity {
     Verbose,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum HostKind {
-    Workbook,
-    Pbix,
-}
-
 const AUTO_STREAM_CELL_THRESHOLD: u64 = 1_000_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1175,37 +1201,7 @@ struct SheetKey {
     kind: SheetKind,
 }
 
-fn host_kind_from_path(path: &Path) -> Option<HostKind> {
-    let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
-    match ext.as_str() {
-        "xlsx" | "xlsm" | "xltx" | "xltm" => Some(HostKind::Workbook),
-        "pbix" | "pbit" => Some(HostKind::Pbix),
-        _ => None,
-    }
-}
-
-enum Host {
-    Workbook(WorkbookPackage),
-    Pbix(PbixPackage),
-}
-
-fn open_host(path: &Path, kind: HostKind, label: &str) -> Result<Host> {
-    let file = File::open(path)
-        .with_context(|| format!("Failed to open {} file: {}", label, path.display()))?;
-
-    let host = match kind {
-        HostKind::Workbook => Host::Workbook(
-            WorkbookPackage::open(file)
-                .with_context(|| format!("Failed to parse {} workbook: {}", label, path.display()))?,
-        ),
-        HostKind::Pbix => Host::Pbix(
-            PbixPackage::open(file)
-                .with_context(|| format!("Failed to parse {} PBIX/PBIT: {}", label, path.display()))?,
-        ),
-    };
-
-    Ok(host)
-}
+ 
 
 #[allow(clippy::too_many_arguments)]
 pub fn run(
@@ -1875,85 +1871,162 @@ fn exit_code_from_report(report: &DiffReport) -> ExitCode {
 
 ---
 
+### File: `cli\src\commands\host.rs`
+
+```rust
+use anyhow::{Context, Result};
+use excel_diff::{PbixPackage, WorkbookPackage};
+use std::fs::File;
+use std::path::Path;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HostKind {
+    Workbook,
+    Pbix,
+}
+
+pub(crate) enum Host {
+    Workbook(WorkbookPackage),
+    Pbix(PbixPackage),
+}
+
+pub(crate) fn host_kind_from_path(path: &Path) -> Option<HostKind> {
+    let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
+    match ext.as_str() {
+        "xlsx" | "xlsm" | "xltx" | "xltm" => Some(HostKind::Workbook),
+        "pbix" | "pbit" => Some(HostKind::Pbix),
+        _ => None,
+    }
+}
+
+pub(crate) fn open_host(path: &Path, kind: HostKind, label: &str) -> Result<Host> {
+    let file = File::open(path)
+        .with_context(|| format!("Failed to open {} file: {}", label, path.display()))?;
+
+    let host = match kind {
+        HostKind::Workbook => Host::Workbook(
+            WorkbookPackage::open(file)
+                .with_context(|| format!("Failed to parse {} workbook: {}", label, path.display()))?,
+        ),
+        HostKind::Pbix => Host::Pbix(
+            PbixPackage::open(file)
+                .with_context(|| format!("Failed to parse {} PBIX/PBIT: {}", label, path.display()))?,
+        ),
+    };
+
+    Ok(host)
+}
+
+```
+
+---
+
 ### File: `cli\src\commands\info.rs`
 
 ```rust
 use anyhow::{Context, Result};
-use excel_diff::{SheetKind, WorkbookPackage, build_queries};
-use std::fs::File;
+use excel_diff::{build_embedded_queries, build_queries, DataMashup, SheetKind};
 use std::io::{self, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
-pub fn run(path: &str, show_queries: bool) -> Result<ExitCode> {
-    let file = File::open(path).with_context(|| format!("Failed to open workbook: {}", path))?;
+use crate::commands::host::{host_kind_from_path, open_host, Host};
 
-    let pkg = WorkbookPackage::open(file)
-        .with_context(|| format!("Failed to parse workbook: {}", path))?;
+pub fn run(path: &str, show_queries: bool) -> Result<ExitCode> {
+    let path = Path::new(path);
+    let kind = host_kind_from_path(path)
+        .with_context(|| format!("Unsupported input extension: {}", path.display()))?;
+
+    let host = open_host(path, kind, "input")?;
 
     let stdout = io::stdout();
     let mut handle = stdout.lock();
 
-    let filename = Path::new(path)
+    let filename = path
         .file_name()
-        .map(|s| s.to_string_lossy())
-        .unwrap_or_else(|| path.into());
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.display().to_string());
 
-    writeln!(handle, "Workbook: {}", filename)?;
-    writeln!(handle, "Sheets: {}", pkg.workbook.sheets.len())?;
-
-    for sheet in &pkg.workbook.sheets {
-        let name = excel_diff::with_default_session(|session| {
-            session.strings.resolve(sheet.name).to_string()
-        });
-        let kind_str = match sheet.kind {
-            SheetKind::Worksheet => "worksheet",
-            SheetKind::Chart => "chart",
-            SheetKind::Macro => "macro",
-            SheetKind::Other => "other",
-        };
-        writeln!(
-            handle,
-            "  - \"{}\" ({}) {}x{}, {} cells",
-            name,
-            kind_str,
-            sheet.grid.nrows,
-            sheet.grid.ncols,
-            sheet.grid.cell_count()
-        )?;
-    }
-
-    if show_queries {
-        writeln!(handle)?;
-        match &pkg.data_mashup {
-            None => {
-                writeln!(handle, "Power Query: none")?;
+    match host {
+        Host::Workbook(pkg) => {
+            writeln!(handle, "Workbook: {}", filename)?;
+            writeln!(handle, "Sheets: {}", pkg.workbook.sheets.len())?;
+            for sheet in &pkg.workbook.sheets {
+                let sheet_name =
+                    excel_diff::with_default_session(|session| session.strings.resolve(sheet.name).to_string());
+                let kind_str = match sheet.kind {
+                    SheetKind::Worksheet => "worksheet",
+                    SheetKind::Chart => "chart",
+                    SheetKind::Macro => "macro",
+                    SheetKind::Other => "other",
+                };
+                writeln!(handle, "- {} ({})", sheet_name, kind_str)?;
             }
-            Some(dm) => {
-                match build_queries(dm) {
-                    Ok(mut queries) => {
-                        queries.sort_by(|a, b| a.name.cmp(&b.name));
-                        writeln!(handle, "Power Query: {} queries", queries.len())?;
-                        for query in &queries {
-                            let load_flags = format_load_flags(&query.metadata);
-                            let group = query
-                                .metadata
-                                .group_path
-                                .as_deref()
-                                .map(|g| format!(" [group: {}]", g))
-                                .unwrap_or_default();
-                            writeln!(handle, "  - \"{}\"{}{}", query.name, load_flags, group)?;
-                        }
-                    }
-                    Err(e) => {
-                        writeln!(handle, "Power Query: error parsing queries: {}", e)?;
-                    }
-                }
+
+            if show_queries {
+                write_power_query_section(&mut handle, pkg.data_mashup.as_ref())?;
+            }
+        }
+        Host::Pbix(pkg) => {
+            writeln!(handle, "PBIX/PBIT: {}", filename)?;
+            if show_queries {
+                write_power_query_section(&mut handle, pkg.data_mashup())?;
             }
         }
     }
 
     Ok(ExitCode::from(0))
+}
+
+fn write_power_query_section<W: Write>(w: &mut W, dm_opt: Option<&DataMashup>) -> Result<()> {
+    writeln!(w)?;
+
+    let Some(dm) = dm_opt else {
+        writeln!(w, "Power Query: none")?;
+        return Ok(());
+    };
+
+    writeln!(w, "Power Query:")?;
+
+    match build_queries(dm) {
+        Ok(mut top) => {
+            top.sort_by(|a, b| a.name.cmp(&b.name));
+            writeln!(w, "  Top-level: {}", top.len())?;
+            for q in top {
+                write_query_line(w, &q)?;
+            }
+        }
+        Err(e) => {
+            writeln!(w, "  Top-level: error parsing queries: {}", e)?;
+        }
+    }
+
+    let mut embedded = build_embedded_queries(dm);
+    embedded.sort_by(|a, b| a.name.cmp(&b.name));
+    writeln!(w, "  Embedded: {}", embedded.len())?;
+    for q in embedded {
+        write_query_line(w, &q)?;
+    }
+
+    Ok(())
+}
+
+fn write_query_line<W: Write>(w: &mut W, q: &excel_diff::Query) -> Result<()> {
+    let load_flags = format_load_flags(&q.metadata);
+    let group_path = q
+        .metadata
+        .group_path
+        .as_ref()
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "(none)".to_string());
+
+    if load_flags.is_empty() {
+        writeln!(w, "  - {}  [group={}]", q.name, group_path)?;
+    } else {
+        writeln!(w, "  - {}  [{}]  [group={}]", q.name, load_flags, group_path)?;
+    }
+
+    Ok(())
 }
 
 fn format_load_flags(meta: &excel_diff::QueryMetadata) -> String {
@@ -1967,13 +2040,8 @@ fn format_load_flags(meta: &excel_diff::QueryMetadata) -> String {
     if meta.is_connection_only {
         flags.push("connection-only");
     }
-    if flags.is_empty() {
-        String::new()
-    } else {
-        format!(" ({})", flags.join(", "))
-    }
+    flags.join(",")
 }
-
 
 ```
 
@@ -1983,6 +2051,7 @@ fn format_load_flags(meta: &excel_diff::QueryMetadata) -> String {
 
 ```rust
 pub mod diff;
+pub mod host;
 pub mod info;
 
 
@@ -2013,11 +2082,11 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    #[command(about = "Compare two Excel workbooks")]
+    #[command(about = "Compare two Excel workbooks or PBIX/PBIT packages")]
     Diff {
-        #[arg(help = "Path to the old/base workbook")]
+        #[arg(help = "Path to the old/base file (.xlsx, .xlsm, .xltx, .xltm, .pbix, .pbit)")]
         old: String,
-        #[arg(help = "Path to the new/changed workbook")]
+        #[arg(help = "Path to the new/changed file (.xlsx, .xlsm, .xltx, .xltm, .pbix, .pbit)")]
         new: String,
         #[arg(long, short, value_enum, default_value = "text", help = "Output format")]
         format: OutputFormat,
@@ -2052,9 +2121,9 @@ pub enum Commands {
         #[arg(long, value_name = "PATH", help = "Write perf metrics JSON to this path")]
         metrics_json: Option<String>,
     },
-    #[command(about = "Show information about a workbook")]
+    #[command(about = "Show information about a workbook or PBIX/PBIT package")]
     Info {
-        #[arg(help = "Path to the workbook")]
+        #[arg(help = "Path to the file (.xlsx, .xlsm, .xltx, .xltm, .pbix, .pbit)")]
         path: String,
         #[arg(long, help = "Include Power Query information")]
         queries: bool,
@@ -4275,6 +4344,36 @@ fn database_auto_keys() {
     assert!(
         stderr.contains("Auto-detected") || stderr.is_empty(),
         "Should print auto-detected message or be silent"
+    );
+}
+
+#[test]
+fn info_pbix_includes_embedded_queries() {
+    let output = excel_diff_cmd()
+        .args([
+            "info",
+            "--queries",
+            &fixture_path("pbix_embedded_queries.pbix"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert!(
+        output.status.success(),
+        "info should succeed for pbix: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("PBIX/PBIT:"),
+        "expected pbix header, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Embedded/"),
+        "expected embedded queries to be listed, got: {}",
+        stdout
     );
 }
 
@@ -14782,32 +14881,41 @@ use crate::config::DiffConfig;
 use crate::progress::ProgressCallback;
 use crate::workbook::{Cell, Grid};
 use std::mem::size_of;
+
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::{Duration, Instant};
 
 const BYTES_PER_MB: u64 = 1024 * 1024;
 
 const PROGRESS_MIN_DELTA: f32 = 0.01;
+#[cfg(not(target_arch = "wasm32"))]
 const TIMEOUT_CHECK_EVERY_TICKS: u64 = 256;
 
 pub(super) struct HardeningController<'a> {
+    #[cfg(not(target_arch = "wasm32"))]
     start: Instant,
+    #[cfg(not(target_arch = "wasm32"))]
     timeout: Option<Duration>,
     max_memory_bytes: Option<u64>,
     max_ops: Option<usize>,
     aborted: bool,
+    #[cfg(not(target_arch = "wasm32"))]
     warned_timeout: bool,
     warned_memory: bool,
     warned_ops: bool,
     progress: Option<&'a dyn ProgressCallback>,
     last_progress_phase: Option<&'static str>,
     last_progress_percent: Option<f32>,
+    #[cfg(not(target_arch = "wasm32"))]
     timeout_tick: u64,
 }
 
 impl<'a> HardeningController<'a> {
     pub(super) fn new(config: &DiffConfig, progress: Option<&'a dyn ProgressCallback>) -> Self {
         Self {
+            #[cfg(not(target_arch = "wasm32"))]
             start: Instant::now(),
+            #[cfg(not(target_arch = "wasm32"))]
             timeout: config
                 .timeout_seconds
                 .map(|secs| Duration::from_secs(secs as u64)),
@@ -14816,12 +14924,14 @@ impl<'a> HardeningController<'a> {
                 .map(|mb| (mb as u64).saturating_mul(BYTES_PER_MB)),
             max_ops: config.max_ops,
             aborted: false,
+            #[cfg(not(target_arch = "wasm32"))]
             warned_timeout: false,
             warned_memory: false,
             warned_ops: false,
             progress,
             last_progress_phase: None,
             last_progress_percent: None,
+            #[cfg(not(target_arch = "wasm32"))]
             timeout_tick: 0,
         }
     }
@@ -14830,6 +14940,7 @@ impl<'a> HardeningController<'a> {
         self.aborted
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn check_timeout(&mut self, warnings: &mut Vec<String>) -> bool {
         if self.aborted {
             return true;
@@ -14857,6 +14968,11 @@ impl<'a> HardeningController<'a> {
             ));
         }
         true
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn check_timeout(&mut self, _warnings: &mut Vec<String>) -> bool {
+        self.aborted
     }
 
     pub(super) fn check_op_limit(&mut self, current_op_count: usize, warnings: &mut Vec<String>) -> bool {
@@ -46126,6 +46242,13 @@ scenarios:
         }
     output: "pbit_model_b.pbit"
 
+  - id: "branch2_pbix_embedded_queries"
+    generator: "pbix"
+    args:
+      mode: "from_xlsx"
+      base_file: "generated/m_embedded_change_a.xlsx"
+    output: "pbix_embedded_queries.pbix"
+
 
 ```
 
@@ -50761,6 +50884,7 @@ excel_diff = { path = "../core", default-features = false, features = ["excel-op
 wasm-bindgen = "0.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+console_error_panic_hook = "0.1"
 
 
 ```
@@ -50770,13 +50894,53 @@ serde_json = "1.0"
 ### File: `wasm\src\lib.rs`
 
 ```rust
+use std::collections::HashSet;
 use std::io::Cursor;
+use serde::Serialize;
 use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen(start)]
+pub fn init_panic_hook() {
+    console_error_panic_hook::set_once();
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum HostKind {
     Workbook,
     Pbix,
+}
+
+#[derive(Serialize)]
+struct SheetCell {
+    row: u32,
+    col: u32,
+    value: Option<String>,
+    formula: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SheetSnapshot {
+    name: String,
+    nrows: u32,
+    ncols: u32,
+    cells: Vec<SheetCell>,
+}
+
+#[derive(Serialize)]
+struct WorkbookSnapshot {
+    sheets: Vec<SheetSnapshot>,
+}
+
+#[derive(Serialize)]
+struct SheetPairSnapshot {
+    old: WorkbookSnapshot,
+    new: WorkbookSnapshot,
+}
+
+#[derive(Serialize)]
+struct DiffWithSheets {
+    report: excel_diff::DiffReport,
+    sheets: SheetPairSnapshot,
 }
 
 fn host_kind_from_name(name: &str) -> Option<HostKind> {
@@ -50787,6 +50951,94 @@ fn host_kind_from_name(name: &str) -> Option<HostKind> {
         "pbix" | "pbit" => Some(HostKind::Pbix),
         _ => None,
     }
+}
+
+fn collect_sheet_ids(ops: &[excel_diff::DiffOp]) -> HashSet<excel_diff::StringId> {
+    let mut sheets = HashSet::new();
+    for op in ops {
+        let sheet = match op {
+            excel_diff::DiffOp::SheetAdded { sheet }
+            | excel_diff::DiffOp::SheetRemoved { sheet }
+            | excel_diff::DiffOp::RowAdded { sheet, .. }
+            | excel_diff::DiffOp::RowRemoved { sheet, .. }
+            | excel_diff::DiffOp::RowReplaced { sheet, .. }
+            | excel_diff::DiffOp::ColumnAdded { sheet, .. }
+            | excel_diff::DiffOp::ColumnRemoved { sheet, .. }
+            | excel_diff::DiffOp::BlockMovedRows { sheet, .. }
+            | excel_diff::DiffOp::BlockMovedColumns { sheet, .. }
+            | excel_diff::DiffOp::BlockMovedRect { sheet, .. }
+            | excel_diff::DiffOp::RectReplaced { sheet, .. }
+            | excel_diff::DiffOp::CellEdited { sheet, .. } => Some(*sheet),
+            _ => None,
+        };
+        if let Some(sheet_id) = sheet {
+            sheets.insert(sheet_id);
+        }
+    }
+    sheets
+}
+
+fn render_cell_value(
+    pool: &excel_diff::StringPool,
+    value: &Option<excel_diff::CellValue>,
+) -> Option<String> {
+    match value {
+        None => None,
+        Some(excel_diff::CellValue::Blank) => Some(String::new()),
+        Some(excel_diff::CellValue::Number(n)) => Some(n.to_string()),
+        Some(excel_diff::CellValue::Text(id)) => Some(pool.resolve(*id).to_string()),
+        Some(excel_diff::CellValue::Bool(b)) => {
+            Some(if *b { "TRUE".to_string() } else { "FALSE".to_string() })
+        }
+        Some(excel_diff::CellValue::Error(id)) => Some(pool.resolve(*id).to_string()),
+    }
+}
+
+fn snapshot_sheet(
+    sheet: &excel_diff::Sheet,
+    pool: &excel_diff::StringPool,
+) -> SheetSnapshot {
+    let name = pool.resolve(sheet.name).to_string();
+    let mut cells = Vec::with_capacity(sheet.grid.cell_count());
+    for ((row, col), cell) in sheet.grid.iter_cells() {
+        let value = render_cell_value(pool, &cell.value);
+        let formula = cell
+            .formula
+            .map(|id| format!("={}", pool.resolve(id)));
+        cells.push(SheetCell {
+            row,
+            col,
+            value,
+            formula,
+        });
+    }
+
+    SheetSnapshot {
+        name,
+        nrows: sheet.grid.nrows,
+        ncols: sheet.grid.ncols,
+        cells,
+    }
+}
+
+fn snapshot_workbook(
+    workbook: &excel_diff::Workbook,
+    sheet_ids: &HashSet<excel_diff::StringId>,
+    pool: &excel_diff::StringPool,
+) -> WorkbookSnapshot {
+    if sheet_ids.is_empty() {
+        return WorkbookSnapshot { sheets: Vec::new() };
+    }
+
+    let mut sheets = Vec::new();
+    for sheet in &workbook.sheets {
+        if !sheet_ids.contains(&sheet.name) {
+            continue;
+        }
+        sheets.push(snapshot_sheet(sheet, pool));
+    }
+
+    WorkbookSnapshot { sheets }
 }
 
 #[wasm_bindgen]
@@ -50832,6 +51084,66 @@ pub fn diff_files_json(
 }
 
 #[wasm_bindgen]
+pub fn diff_files_with_sheets_json(
+    old_bytes: &[u8],
+    new_bytes: &[u8],
+    old_name: &str,
+    new_name: &str,
+) -> Result<String, JsValue> {
+    let kind_old = host_kind_from_name(old_name)
+        .ok_or_else(|| JsValue::from_str("Unsupported old file extension"))?;
+    let kind_new = host_kind_from_name(new_name)
+        .ok_or_else(|| JsValue::from_str("Unsupported new file extension"))?;
+
+    if kind_old != kind_new {
+        return Err(JsValue::from_str("Old/new files must be the same type"));
+    }
+
+    let old_cursor = Cursor::new(old_bytes.to_vec());
+    let new_cursor = Cursor::new(new_bytes.to_vec());
+    let cfg = excel_diff::DiffConfig::default();
+
+    match kind_old {
+        HostKind::Workbook => {
+            let pkg_old = excel_diff::WorkbookPackage::open(old_cursor)
+                .map_err(|e| JsValue::from_str(&format!("Failed to open old workbook: {}", e)))?;
+            let pkg_new = excel_diff::WorkbookPackage::open(new_cursor)
+                .map_err(|e| JsValue::from_str(&format!("Failed to open new workbook: {}", e)))?;
+
+            let report = pkg_old.diff(&pkg_new, &cfg);
+            let sheet_ids = collect_sheet_ids(&report.ops);
+
+            let sheets = excel_diff::with_default_session(|session| SheetPairSnapshot {
+                old: snapshot_workbook(&pkg_old.workbook, &sheet_ids, &session.strings),
+                new: snapshot_workbook(&pkg_new.workbook, &sheet_ids, &session.strings),
+            });
+
+            let payload = DiffWithSheets { report, sheets };
+            serde_json::to_string(&payload)
+                .map_err(|e| JsValue::from_str(&format!("Failed to serialize report: {}", e)))
+        }
+        HostKind::Pbix => {
+            let pkg_old = excel_diff::PbixPackage::open(old_cursor)
+                .map_err(|e| JsValue::from_str(&format!("Failed to open old PBIX/PBIT: {}", e)))?;
+            let pkg_new = excel_diff::PbixPackage::open(new_cursor)
+                .map_err(|e| JsValue::from_str(&format!("Failed to open new PBIX/PBIT: {}", e)))?;
+
+            let report = pkg_old.diff(&pkg_new, &cfg);
+            let empty = WorkbookSnapshot { sheets: Vec::new() };
+            let payload = DiffWithSheets {
+                report,
+                sheets: SheetPairSnapshot {
+                    old: empty,
+                    new: WorkbookSnapshot { sheets: Vec::new() },
+                },
+            };
+            serde_json::to_string(&payload)
+                .map_err(|e| JsValue::from_str(&format!("Failed to serialize report: {}", e)))
+        }
+    }
+}
+
+#[wasm_bindgen]
 pub fn diff_workbooks_json(old_bytes: &[u8], new_bytes: &[u8]) -> Result<String, JsValue> {
     diff_files_json(old_bytes, new_bytes, "old.xlsx", "new.xlsx")
 }
@@ -50867,6 +51179,2011 @@ pub fn diff_summary(old_bytes: &[u8], new_bytes: &[u8]) -> Result<DiffSummary, J
     })
 }
 
+
+```
+
+---
+
+### File: `web\index.html`
+
+```html
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Excel Diff</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+      :root {
+        --bg-primary: #0d1117;
+        --bg-secondary: #161b22;
+        --bg-tertiary: #21262d;
+        --bg-hover: #30363d;
+        --border-primary: #30363d;
+        --border-secondary: #21262d;
+        --text-primary: #e6edf3;
+        --text-secondary: #8b949e;
+        --text-muted: #6e7681;
+        --accent-blue: #58a6ff;
+        --accent-green: #3fb950;
+        --accent-red: #f85149;
+        --accent-yellow: #d29922;
+        --accent-purple: #a371f7;
+        --diff-add-bg: rgba(46, 160, 67, 0.15);
+        --diff-add-border: rgba(46, 160, 67, 0.4);
+        --diff-remove-bg: rgba(248, 81, 73, 0.15);
+        --diff-remove-border: rgba(248, 81, 73, 0.4);
+        --diff-modify-bg: rgba(210, 153, 34, 0.15);
+        --diff-modify-border: rgba(210, 153, 34, 0.4);
+        --diff-move-bg: rgba(163, 113, 247, 0.15);
+        --diff-move-border: rgba(163, 113, 247, 0.4);
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+        background: var(--bg-primary);
+        color: var(--text-primary);
+        min-height: 100vh;
+        line-height: 1.5;
+      }
+
+      .container {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 32px 24px;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 32px;
+        padding-bottom: 24px;
+        border-bottom: 1px solid var(--border-primary);
+      }
+
+      .logo {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .logo-icon {
+        width: 40px;
+        height: 40px;
+        background: linear-gradient(135deg, var(--accent-green), var(--accent-blue));
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 18px;
+      }
+
+      .logo h1 {
+        font-size: 24px;
+        font-weight: 700;
+        background: linear-gradient(135deg, var(--text-primary), var(--text-secondary));
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+      }
+
+      .version {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+        color: var(--text-muted);
+        background: var(--bg-tertiary);
+        padding: 4px 8px;
+        border-radius: 6px;
+      }
+
+      .upload-section {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-primary);
+        border-radius: 16px;
+        padding: 32px;
+        margin-bottom: 32px;
+      }
+
+      .upload-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr auto;
+        gap: 20px;
+        align-items: end;
+      }
+
+      .upload-box {
+        min-width: 0;
+      }
+
+      @media (max-width: 800px) {
+        .upload-grid {
+          grid-template-columns: 1fr;
+        }
+        .diff-btn {
+          width: 100%;
+          justify-content: center;
+        }
+      }
+
+      .upload-box label {
+        display: block;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        margin-bottom: 8px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      .file-drop {
+        position: relative;
+        border: 2px dashed var(--border-primary);
+        border-radius: 12px;
+        padding: 20px 16px;
+        text-align: center;
+        transition: all 0.2s ease;
+        cursor: pointer;
+        background: var(--bg-primary);
+        min-height: 100px;
+      }
+
+      .file-drop:hover {
+        border-color: var(--accent-blue);
+        background: rgba(88, 166, 255, 0.05);
+      }
+
+      .file-drop.dragover {
+        border-color: var(--accent-green);
+        background: rgba(63, 185, 80, 0.1);
+      }
+
+      .file-drop.has-file {
+        border-style: solid;
+        border-color: var(--accent-green);
+      }
+
+      .file-drop input[type="file"] {
+        position: absolute;
+        inset: 0;
+        opacity: 0;
+        cursor: pointer;
+      }
+
+      .file-drop-icon {
+        font-size: 24px;
+        margin-bottom: 6px;
+      }
+
+      .file-drop-text {
+        color: var(--text-secondary);
+        font-size: 14px;
+      }
+
+      .file-drop-text strong {
+        color: var(--accent-blue);
+      }
+
+      .file-name {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 13px;
+        color: var(--accent-green);
+        margin-top: 8px;
+        word-break: break-all;
+      }
+
+      .diff-btn {
+        background: linear-gradient(135deg, var(--accent-blue), #1f6feb);
+        color: white;
+        border: none;
+        padding: 16px 32px;
+        border-radius: 12px;
+        font-size: 15px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-family: inherit;
+      }
+
+      .diff-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 24px rgba(88, 166, 255, 0.3);
+      }
+
+      .diff-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        transform: none;
+        box-shadow: none;
+      }
+
+      #status {
+        text-align: center;
+        padding: 16px;
+        color: var(--text-secondary);
+        font-size: 14px;
+      }
+
+      #status.loading {
+        color: var(--accent-blue);
+      }
+
+      #status.error {
+        color: var(--accent-red);
+      }
+
+      .results {
+        display: none;
+      }
+
+      .results.visible {
+        display: block;
+      }
+
+      .summary-cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 16px;
+        margin-bottom: 32px;
+      }
+
+      .summary-card {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-primary);
+        border-radius: 12px;
+        padding: 20px;
+        text-align: center;
+      }
+
+      .summary-card.added {
+        border-color: var(--diff-add-border);
+        background: var(--diff-add-bg);
+      }
+
+      .summary-card.removed {
+        border-color: var(--diff-remove-border);
+        background: var(--diff-remove-bg);
+      }
+
+      .summary-card.modified {
+        border-color: var(--diff-modify-border);
+        background: var(--diff-modify-bg);
+      }
+
+      .summary-card.moved {
+        border-color: var(--diff-move-border);
+        background: var(--diff-move-bg);
+      }
+
+      .summary-card .count {
+        font-size: 36px;
+        font-weight: 700;
+        font-family: 'JetBrains Mono', monospace;
+      }
+
+      .summary-card.added .count { color: var(--accent-green); }
+      .summary-card.removed .count { color: var(--accent-red); }
+      .summary-card.modified .count { color: var(--accent-yellow); }
+      .summary-card.moved .count { color: var(--accent-purple); }
+
+      .summary-card .label {
+        font-size: 13px;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-top: 4px;
+      }
+
+      .no-changes {
+        text-align: center;
+        padding: 64px 32px;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-primary);
+        border-radius: 16px;
+      }
+
+      .no-changes-icon {
+        font-size: 64px;
+        margin-bottom: 16px;
+      }
+
+      .no-changes h2 {
+        font-size: 24px;
+        margin-bottom: 8px;
+        color: var(--accent-green);
+      }
+
+      .no-changes p {
+        color: var(--text-secondary);
+      }
+
+      .sheet-section {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-primary);
+        border-radius: 16px;
+        margin-bottom: 24px;
+        overflow: hidden;
+      }
+
+      .sheet-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 20px 24px;
+        background: var(--bg-tertiary);
+        cursor: pointer;
+        transition: background 0.2s ease;
+      }
+
+      .sheet-header:hover {
+        background: var(--bg-hover);
+      }
+
+      .sheet-title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .sheet-icon {
+        width: 36px;
+        height: 36px;
+        background: var(--bg-primary);
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 18px;
+      }
+
+      .sheet-name {
+        font-size: 18px;
+        font-weight: 600;
+      }
+
+      .sheet-badge {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+        padding: 4px 10px;
+        border-radius: 20px;
+        background: var(--bg-primary);
+        color: var(--text-secondary);
+      }
+
+      .sheet-content {
+        display: none;
+        padding: 24px;
+      }
+
+      .sheet-section.expanded .sheet-content {
+        display: block;
+      }
+
+      .sheet-section.expanded .sheet-header .expand-icon {
+        transform: rotate(180deg);
+      }
+
+      .expand-icon {
+        transition: transform 0.2s ease;
+        color: var(--text-muted);
+      }
+
+      .change-group {
+        margin-bottom: 24px;
+      }
+
+      .change-group:last-child {
+        margin-bottom: 0;
+      }
+
+      .change-group-title {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 12px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .change-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .change-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 16px;
+        border-radius: 8px;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 13px;
+      }
+
+      .change-item.added {
+        background: var(--diff-add-bg);
+        border: 1px solid var(--diff-add-border);
+      }
+
+      .change-item.removed {
+        background: var(--diff-remove-bg);
+        border: 1px solid var(--diff-remove-border);
+      }
+
+      .change-item.modified {
+        background: var(--diff-modify-bg);
+        border: 1px solid var(--diff-modify-border);
+      }
+
+      .change-item.moved {
+        background: var(--diff-move-bg);
+        border: 1px solid var(--diff-move-border);
+      }
+
+      .change-icon {
+        width: 24px;
+        height: 24px;
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        flex-shrink: 0;
+      }
+
+      .change-item.added .change-icon {
+        background: var(--accent-green);
+        color: var(--bg-primary);
+      }
+
+      .change-item.removed .change-icon {
+        background: var(--accent-red);
+        color: var(--bg-primary);
+      }
+
+      .change-item.modified .change-icon {
+        background: var(--accent-yellow);
+        color: var(--bg-primary);
+      }
+
+      .change-item.moved .change-icon {
+        background: var(--accent-purple);
+        color: var(--bg-primary);
+      }
+
+      .change-location {
+        color: var(--text-secondary);
+        min-width: 80px;
+      }
+
+      .change-detail {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .change-value {
+        padding: 4px 8px;
+        border-radius: 4px;
+        background: var(--bg-primary);
+      }
+
+      .change-value.old {
+        text-decoration: line-through;
+        opacity: 0.7;
+      }
+
+      .change-arrow {
+        color: var(--text-muted);
+      }
+
+      .cell-grid {
+        display: grid;
+        gap: 1px;
+        background: var(--border-primary);
+        border: 1px solid var(--border-primary);
+        border-radius: 8px;
+        overflow: hidden;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+      }
+
+      .cell-grid-row {
+        display: contents;
+      }
+
+      .cell {
+        padding: 8px 12px;
+        background: var(--bg-primary);
+        min-width: 80px;
+      }
+
+      .cell.header {
+        background: var(--bg-tertiary);
+        font-weight: 600;
+        color: var(--text-secondary);
+        text-align: center;
+      }
+
+      .cell.row-header {
+        background: var(--bg-tertiary);
+        font-weight: 600;
+        color: var(--text-secondary);
+        text-align: right;
+        min-width: 50px;
+      }
+
+      .cell.added {
+        background: var(--diff-add-bg);
+        color: var(--accent-green);
+      }
+
+      .cell.removed {
+        background: var(--diff-remove-bg);
+        color: var(--accent-red);
+        text-decoration: line-through;
+      }
+
+      .cell.modified {
+        background: var(--diff-modify-bg);
+      }
+
+      .raw-json-section {
+        margin-top: 32px;
+      }
+
+      .raw-json-toggle {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: none;
+        border: 1px solid var(--border-primary);
+        padding: 12px 20px;
+        border-radius: 8px;
+        color: var(--text-secondary);
+        cursor: pointer;
+        font-family: inherit;
+        font-size: 14px;
+        transition: all 0.2s ease;
+      }
+
+      .raw-json-toggle:hover {
+        background: var(--bg-secondary);
+        border-color: var(--text-muted);
+      }
+
+      .raw-json-content {
+        display: none;
+        margin-top: 16px;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-primary);
+        border-radius: 12px;
+        padding: 20px;
+        overflow-x: auto;
+      }
+
+      .raw-json-content.visible {
+        display: block;
+      }
+
+      .raw-json-content pre {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+        line-height: 1.6;
+        color: var(--text-secondary);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .warnings-section {
+        background: rgba(248, 81, 73, 0.1);
+        border: 1px solid rgba(248, 81, 73, 0.3);
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 24px;
+      }
+
+      .warnings-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 600;
+        color: var(--accent-red);
+        margin-bottom: 12px;
+      }
+
+      .warnings-list {
+        list-style: none;
+      }
+
+      .warnings-list li {
+        padding: 8px 0;
+        color: var(--text-secondary);
+        border-bottom: 1px solid rgba(248, 81, 73, 0.2);
+      }
+
+      .warnings-list li:last-child {
+        border-bottom: none;
+        padding-bottom: 0;
+      }
+
+      .other-changes {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-primary);
+        border-radius: 16px;
+        padding: 24px;
+        margin-bottom: 24px;
+      }
+
+      .other-changes-title {
+        font-size: 18px;
+        font-weight: 600;
+        margin-bottom: 16px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .other-changes-title .icon {
+        font-size: 24px;
+      }
+
+      /* Structural Changes */
+      .structural-changes {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-bottom: 20px;
+      }
+
+      .structural-change {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 16px;
+        border-radius: 8px;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 13px;
+        font-weight: 500;
+      }
+
+      .structural-change.added {
+        background: var(--diff-add-bg);
+        border: 1px solid var(--diff-add-border);
+        color: var(--accent-green);
+      }
+
+      .structural-change.removed {
+        background: var(--diff-remove-bg);
+        border: 1px solid var(--diff-remove-border);
+        color: var(--accent-red);
+      }
+
+      .structural-icon {
+        font-size: 16px;
+        font-weight: 700;
+      }
+
+      /* Visual Grid Styles */
+      .sheet-grid-container {
+        overflow-x: auto;
+        margin: 16px 0;
+        border-radius: 12px;
+        background: var(--bg-primary);
+        border: 1px solid var(--border-primary);
+      }
+
+      .sheet-grid {
+        display: grid;
+        min-width: fit-content;
+      }
+
+      .grid-cell {
+        padding: 8px 12px;
+        border-right: 1px solid var(--border-secondary);
+        border-bottom: 1px solid var(--border-secondary);
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+        min-height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 0.15s ease;
+      }
+
+      .grid-corner {
+        background: var(--bg-tertiary);
+        position: sticky;
+        left: 0;
+        z-index: 2;
+      }
+
+      .grid-col-header {
+        background: var(--bg-tertiary);
+        color: var(--text-secondary);
+        font-weight: 600;
+        text-align: center;
+        position: sticky;
+        top: 0;
+        z-index: 1;
+      }
+
+      .grid-row-header {
+        background: var(--bg-tertiary);
+        color: var(--text-secondary);
+        font-weight: 600;
+        text-align: right;
+        justify-content: flex-end;
+        position: sticky;
+        left: 0;
+        z-index: 1;
+      }
+
+      .grid-col-header.col-added,
+      .grid-row-header.row-added {
+        background: var(--diff-add-bg);
+        color: var(--accent-green);
+      }
+
+      .grid-col-header.col-removed,
+      .grid-row-header.row-removed {
+        background: var(--diff-remove-bg);
+        color: var(--accent-red);
+      }
+
+      .cell-added {
+        background: var(--diff-add-bg);
+      }
+
+      .cell-removed {
+        background: var(--diff-remove-bg);
+      }
+
+      .cell-edited {
+        background: var(--diff-modify-bg);
+        flex-direction: column;
+        gap: 2px;
+        padding: 4px 8px;
+      }
+
+      .cell-unchanged {
+        background: var(--bg-primary);
+      }
+
+      .cell-unchanged:hover {
+        background: var(--bg-secondary);
+      }
+
+      .cell-in-added-row,
+      .cell-in-added-col {
+        background: var(--diff-add-bg);
+      }
+
+      .cell-in-removed-row,
+      .cell-in-removed-col {
+        background: var(--diff-remove-bg);
+      }
+
+      .cell-change {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        width: 100%;
+      }
+
+      .cell-old {
+        color: var(--accent-red);
+        font-size: 11px;
+        text-decoration: line-through;
+        opacity: 0.7;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .cell-new {
+        color: var(--accent-green);
+        font-size: 12px;
+        font-weight: 500;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .grid-legend {
+        display: flex;
+        gap: 20px;
+        padding: 12px 16px;
+        background: var(--bg-secondary);
+        border-top: 1px solid var(--border-primary);
+        border-radius: 0 0 12px 12px;
+        font-size: 12px;
+        color: var(--text-secondary);
+        flex-wrap: wrap;
+      }
+
+      .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .legend-box {
+        width: 14px;
+        height: 14px;
+        border-radius: 3px;
+      }
+
+      .legend-added {
+        background: var(--diff-add-bg);
+        border: 1px solid var(--diff-add-border);
+      }
+
+      .legend-removed {
+        background: var(--diff-remove-bg);
+        border: 1px solid var(--diff-remove-border);
+      }
+
+      .legend-edited {
+        background: var(--diff-modify-bg);
+        border: 1px solid var(--diff-modify-border);
+      }
+
+      .legend-dot {
+        font-size: 16px;
+        color: var(--text-muted);
+        line-height: 1;
+      }
+
+      .details-section {
+        margin-top: 20px;
+        border: 1px solid var(--border-primary);
+        border-radius: 10px;
+        overflow: hidden;
+      }
+
+      .details-toggle {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 14px 18px;
+        background: var(--bg-tertiary);
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text-secondary);
+        transition: all 0.2s ease;
+        list-style: none;
+      }
+
+      .details-toggle::-webkit-details-marker {
+        display: none;
+      }
+
+      .details-toggle::before {
+        content: "▶";
+        font-size: 10px;
+        transition: transform 0.2s ease;
+      }
+
+      details[open] .details-toggle::before {
+        transform: rotate(90deg);
+      }
+
+      .details-toggle:hover {
+        background: var(--bg-hover);
+        color: var(--text-primary);
+      }
+
+      .details-content {
+        padding: 16px;
+        background: var(--bg-primary);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <div class="logo">
+          <div class="logo-icon">⇄</div>
+          <h1>Excel Diff</h1>
+        </div>
+        <div class="version">v<span id="version">...</span></div>
+      </header>
+
+      <section class="upload-section">
+        <div class="upload-grid">
+          <div class="upload-box">
+            <label>Old File (Before)</label>
+            <div class="file-drop" id="dropOld">
+              <input id="fileOld" type="file" accept=".xlsx,.xlsm,.xltx,.xltm,.pbix,.pbit" />
+              <div class="file-drop-icon">📄</div>
+              <div class="file-drop-text">Drop file or <strong>browse</strong></div>
+              <div class="file-name" id="nameOld"></div>
+            </div>
+          </div>
+          <div class="upload-box">
+            <label>New File (After)</label>
+            <div class="file-drop" id="dropNew">
+              <input id="fileNew" type="file" accept=".xlsx,.xlsm,.xltx,.xltm,.pbix,.pbit" />
+              <div class="file-drop-icon">📄</div>
+              <div class="file-drop-text">Drop file or <strong>browse</strong></div>
+              <div class="file-name" id="nameNew"></div>
+            </div>
+          </div>
+          <button class="diff-btn" id="run">
+            <span>Compare</span>
+            <span>→</span>
+          </button>
+        </div>
+      </section>
+
+      <div id="status"></div>
+
+      <div id="results" class="results"></div>
+
+      <div class="raw-json-section">
+        <button class="raw-json-toggle" id="toggleJson">
+          <span>{ }</span>
+          <span>View Raw JSON</span>
+        </button>
+        <div class="raw-json-content" id="rawJsonContent">
+          <pre id="raw"></pre>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
+
+```
+
+---
+
+### File: `web\main.js`
+
+```javascript
+import init, { diff_files_with_sheets_json, get_version } from "./wasm/excel_diff_wasm.js";
+import { renderReportHtml } from "./render.js";
+
+function byId(id) {
+  const el = document.getElementById(id);
+  if (!el) throw new Error("Missing element: " + id);
+  return el;
+}
+
+function setStatus(msg, type = "") {
+  const status = byId("status");
+  status.textContent = msg;
+  status.className = type;
+}
+
+async function readFileBytes(file) {
+  return new Uint8Array(await file.arrayBuffer());
+}
+
+function setupFileDrop(dropId, inputId, nameId) {
+  const drop = byId(dropId);
+  const input = byId(inputId);
+  const nameEl = byId(nameId);
+
+  function updateDisplay(file) {
+    if (file) {
+      nameEl.textContent = file.name;
+      drop.classList.add("has-file");
+    } else {
+      nameEl.textContent = "";
+      drop.classList.remove("has-file");
+    }
+  }
+
+  input.addEventListener("change", () => {
+    updateDisplay(input.files[0]);
+  });
+
+  drop.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    drop.classList.add("dragover");
+  });
+
+  drop.addEventListener("dragleave", () => {
+    drop.classList.remove("dragover");
+  });
+
+  drop.addEventListener("drop", (e) => {
+    e.preventDefault();
+    drop.classList.remove("dragover");
+    if (e.dataTransfer.files.length > 0) {
+      input.files = e.dataTransfer.files;
+      updateDisplay(e.dataTransfer.files[0]);
+    }
+  });
+}
+
+async function runDiff() {
+  const oldFile = byId("fileOld").files[0];
+  const newFile = byId("fileNew").files[0];
+
+  if (!oldFile || !newFile) {
+    setStatus("Please select both files to compare.", "error");
+    return;
+  }
+
+  setStatus("Comparing files...", "loading");
+  byId("results").innerHTML = "";
+  byId("results").classList.remove("visible");
+  byId("raw").textContent = "";
+  byId("rawJsonContent").classList.remove("visible");
+
+  try {
+    const oldBytes = await readFileBytes(oldFile);
+    const newBytes = await readFileBytes(newFile);
+
+    const json = diff_files_with_sheets_json(oldBytes, newBytes, oldFile.name, newFile.name);
+    const payload = JSON.parse(json);
+    const report = payload.report || payload;
+    const sheets = payload.sheets || null;
+
+    byId("results").innerHTML = renderReportHtml(report, sheets);
+    byId("results").classList.add("visible");
+    byId("raw").textContent = JSON.stringify(report, null, 2);
+
+    const opCount = report.ops ? report.ops.length : 0;
+    if (opCount === 0) {
+      setStatus("✓ Files are identical", "");
+    } else {
+      setStatus(`Found ${opCount} difference${opCount !== 1 ? "s" : ""}`, "");
+    }
+    
+    const firstSheet = document.querySelector(".sheet-section");
+    if (firstSheet) {
+      firstSheet.classList.add("expanded");
+    }
+  } catch (e) {
+    setStatus("Error: " + (e.message || String(e)), "error");
+    byId("results").innerHTML = `
+      <div class="warnings-section">
+        <div class="warnings-title">
+          <span>❌</span>
+          <span>Error</span>
+        </div>
+        <p style="color: var(--text-secondary); margin-top: 8px;">${String(e.message || e)}</p>
+      </div>
+    `;
+    byId("results").classList.add("visible");
+  }
+}
+
+async function main() {
+  setStatus("Loading...", "loading");
+  
+  try {
+    await init();
+    byId("version").textContent = get_version();
+    setStatus("");
+    
+    setupFileDrop("dropOld", "fileOld", "nameOld");
+    setupFileDrop("dropNew", "fileNew", "nameNew");
+    
+    byId("run").addEventListener("click", runDiff);
+    
+    byId("toggleJson").addEventListener("click", () => {
+      byId("rawJsonContent").classList.toggle("visible");
+    });
+  } catch (e) {
+    setStatus("Failed to load: " + String(e), "error");
+  }
+}
+
+main();
+
+```
+
+---
+
+### File: `web\render.js`
+
+```javascript
+function esc(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function resolveString(report, id) {
+  if (typeof id !== "number") return String(id);
+  if (!report || !Array.isArray(report.strings)) return "<unknown>";
+  return report.strings[id] != null ? report.strings[id] : "<unknown>";
+}
+
+function colToLetter(col) {
+  let result = "";
+  let c = col;
+  while (c >= 0) {
+    result = String.fromCharCode((c % 26) + 65) + result;
+    c = Math.floor(c / 26) - 1;
+  }
+  return result;
+}
+
+function formatCellAddress(row, col) {
+  return colToLetter(col) + (row + 1);
+}
+
+function parseCellAddress(addr) {
+  if (!addr) return null;
+  if (typeof addr === "object" && Number.isInteger(addr.row) && Number.isInteger(addr.col)) {
+    return { row: addr.row, col: addr.col };
+  }
+  const match = /^([A-Z]+)(\d+)$/i.exec(String(addr).trim());
+  if (!match) return null;
+  const letters = match[1].toUpperCase();
+  let col = 0;
+  for (let i = 0; i < letters.length; i++) {
+    col = col * 26 + (letters.charCodeAt(i) - 64);
+  }
+  const row = parseInt(match[2], 10) - 1;
+  return { row, col: col - 1 };
+}
+
+function formatValue(report, val) {
+  if (val === null || val === undefined) return "";
+  if (val === "Blank") return "";
+  if (typeof val === "object") {
+    if (val.Number !== undefined) return String(val.Number);
+    if (val.Text !== undefined) return resolveString(report, val.Text);
+    if (val.Bool !== undefined) return val.Bool ? "TRUE" : "FALSE";
+    if (val.Error !== undefined) return resolveString(report, val.Error);
+    if (val.Formula !== undefined) return String(val.Formula);
+    return JSON.stringify(val);
+  }
+  return String(val);
+}
+
+function truncateText(text, maxLen = 20) {
+  const str = String(text ?? "");
+  if (str.length > maxLen) return str.substring(0, maxLen - 3) + "...";
+  return str;
+}
+
+function formatValueShort(report, val) {
+  return truncateText(formatValue(report, val));
+}
+
+function resolveFormula(report, id) {
+  if (id === null || id === undefined) return "";
+  const text = resolveString(report, id);
+  if (!text) return "";
+  return text.startsWith("=") ? text : `=${text}`;
+}
+
+function buildCellMap(sheet) {
+  const map = new Map();
+  if (!sheet || !Array.isArray(sheet.cells)) return map;
+  for (const cell of sheet.cells) {
+    map.set(`${cell.row},${cell.col}`, cell);
+  }
+  return map;
+}
+
+function buildSheetLookup(sheets) {
+  const map = new Map();
+  if (!Array.isArray(sheets)) return map;
+  for (const sheet of sheets) {
+    map.set(sheet.name, sheet);
+  }
+  return map;
+}
+
+function buildSheetGridData(report, ops, oldSheet, newSheet) {
+  const cellEdits = new Map();
+  const addedRows = new Set();
+  const removedRows = new Set();
+  const addedCols = new Set();
+  const removedCols = new Set();
+
+  let minRow = Infinity, maxRow = -1;
+  let minCol = Infinity, maxCol = -1;
+  let hasSheetOp = false;
+
+  for (const op of ops) {
+    if (op.kind === "CellEdited") {
+      const addr = parseCellAddress(op.addr);
+      if (!addr) continue;
+      const r = addr.row;
+      const c = addr.col;
+      cellEdits.set(`${r},${c}`, {
+        fromValue: op.from ? formatValue(report, op.from.value) : "",
+        toValue: op.to ? formatValue(report, op.to.value) : "",
+        fromFormula: resolveFormula(report, op.from?.formula),
+        toFormula: resolveFormula(report, op.to?.formula)
+      });
+      minRow = Math.min(minRow, r);
+      maxRow = Math.max(maxRow, r);
+      minCol = Math.min(minCol, c);
+      maxCol = Math.max(maxCol, c);
+    } else if (op.kind === "RowAdded") {
+      addedRows.add(op.row_idx);
+      minRow = Math.min(minRow, op.row_idx);
+      maxRow = Math.max(maxRow, op.row_idx);
+    } else if (op.kind === "RowRemoved") {
+      removedRows.add(op.row_idx);
+      minRow = Math.min(minRow, op.row_idx);
+      maxRow = Math.max(maxRow, op.row_idx);
+    } else if (op.kind === "ColumnAdded") {
+      addedCols.add(op.col_idx);
+      minCol = Math.min(minCol, op.col_idx);
+      maxCol = Math.max(maxCol, op.col_idx);
+    } else if (op.kind === "ColumnRemoved") {
+      removedCols.add(op.col_idx);
+      minCol = Math.min(minCol, op.col_idx);
+      maxCol = Math.max(maxCol, op.col_idx);
+    } else if (op.kind === "RectReplaced") {
+      minRow = Math.min(minRow, op.start_row);
+      maxRow = Math.max(maxRow, op.start_row + op.row_count - 1);
+      minCol = Math.min(minCol, op.start_col);
+      maxCol = Math.max(maxCol, op.start_col + op.col_count - 1);
+    } else if (op.kind === "BlockMovedRows") {
+      minRow = Math.min(minRow, op.src_start_row, op.dst_start_row);
+      maxRow = Math.max(maxRow, op.src_start_row + op.row_count - 1, op.dst_start_row + op.row_count - 1);
+    } else if (op.kind === "BlockMovedColumns") {
+      minCol = Math.min(minCol, op.src_start_col, op.dst_start_col);
+      maxCol = Math.max(maxCol, op.src_start_col + op.col_count - 1, op.dst_start_col + op.col_count - 1);
+    } else if (op.kind === "BlockMovedRect") {
+      minRow = Math.min(minRow, op.src_start_row, op.dst_start_row);
+      maxRow = Math.max(maxRow, op.src_start_row + op.src_row_count - 1, op.dst_start_row + op.src_row_count - 1);
+      minCol = Math.min(minCol, op.src_start_col, op.dst_start_col);
+      maxCol = Math.max(maxCol, op.src_start_col + op.src_col_count - 1, op.dst_start_col + op.src_col_count - 1);
+    } else if (op.kind === "SheetAdded" || op.kind === "SheetRemoved") {
+      hasSheetOp = true;
+    }
+  }
+
+  const hasChanges = hasSheetOp || cellEdits.size > 0 || addedRows.size > 0 || removedRows.size > 0 || addedCols.size > 0 || removedCols.size > 0;
+  if (!hasChanges) {
+    return { hasData: false };
+  }
+
+  const oldCells = buildCellMap(oldSheet);
+  const newCells = buildCellMap(newSheet);
+
+  const sheetRows = Math.max(oldSheet?.nrows || 0, newSheet?.nrows || 0);
+  const sheetCols = Math.max(oldSheet?.ncols || 0, newSheet?.ncols || 0);
+  if (sheetRows > 0 && sheetCols > 0) {
+    return {
+      cellEdits,
+      addedRows,
+      removedRows,
+      addedCols,
+      removedCols,
+      oldCells,
+      newCells,
+      startRow: 0,
+      endRow: sheetRows - 1,
+      startCol: 0,
+      endCol: sheetCols - 1,
+      hasData: true
+    };
+  }
+
+  if (minRow === Infinity) minRow = 0;
+  if (maxRow === -1) maxRow = 0;
+  if (minCol === Infinity) minCol = 0;
+  if (maxCol === -1) maxCol = 0;
+
+  const contextRows = 1;
+  const contextCols = 1;
+  const startRow = Math.max(0, minRow - contextRows);
+  const endRow = maxRow + contextRows;
+  const startCol = Math.max(0, minCol - contextCols);
+  const endCol = maxCol + contextCols;
+
+  return {
+    cellEdits,
+    addedRows,
+    removedRows,
+    addedCols,
+    removedCols,
+    oldCells,
+    newCells,
+    startRow,
+    endRow,
+    startCol,
+    endCol,
+    hasData: true
+  };
+}
+
+function renderSheetGrid(report, gridData) {
+  if (!gridData.hasData) return "";
+
+  const { cellEdits, addedRows, removedRows, addedCols, removedCols, startRow, endRow, startCol, endCol, oldCells, newCells } = gridData;
+
+  const numCols = endCol - startCol + 1;
+
+  function cellText(cell) {
+    if (!cell) return "";
+    const value = cell.value ?? "";
+    const formula = cell.formula ?? "";
+    return value || formula || "";
+  }
+
+  function cellTitle(label, value, formula) {
+    const parts = [];
+    if (value) parts.push(value);
+    if (formula && formula != value) parts.push(formula);
+    if (!parts.length) return "";
+    return label ? `${label}: ${parts.join(" | ")}` : parts.join(" | ");
+  }
+
+  let html = `<div class="sheet-grid-container">
+    <div class="sheet-grid" style="grid-template-columns: 50px repeat(${numCols}, minmax(100px, 1fr));">`;
+
+  html += `<div class="grid-cell grid-corner"></div>`;
+  for (let c = startCol; c <= endCol; c++) {
+    const isAdded = addedCols.has(c);
+    const isRemoved = removedCols.has(c);
+    let cls = "grid-cell grid-col-header";
+    if (isAdded) cls += " col-added";
+    if (isRemoved) cls += " col-removed";
+    html += `<div class="${cls}">${colToLetter(c)}${isAdded ? " ?os" : ""}${isRemoved ? " ?o" : ""}</div>`;
+  }
+
+  for (let r = startRow; r <= endRow; r++) {
+    const rowAdded = addedRows.has(r);
+    const rowRemoved = removedRows.has(r);
+
+    let rowHeaderCls = "grid-cell grid-row-header";
+    if (rowAdded) rowHeaderCls += " row-added";
+    if (rowRemoved) rowHeaderCls += " row-removed";
+    html += `<div class="${rowHeaderCls}">${r + 1}${rowAdded ? " ?os" : ""}${rowRemoved ? " ?o" : ""}</div>`;
+
+    for (let c = startCol; c <= endCol; c++) {
+      const key = `${r},${c}`;
+      const edit = cellEdits.get(key);
+      const colAdded = addedCols.has(c);
+      const colRemoved = removedCols.has(c);
+      const oldCell = oldCells.get(key);
+      const newCell = newCells.get(key);
+
+      let cls = "grid-cell";
+      let content = "";
+      let title = "";
+
+      if (edit) {
+        cls += " cell-edited";
+        const fromText = edit.fromValue || edit.fromFormula || "(empty)";
+        const toText = edit.toValue || edit.toFormula || "(empty)";
+        content = `<div class="cell-change"><span class="cell-old">${esc(truncateText(fromText))}</span><span class="cell-new">${esc(truncateText(toText))}</span></div>`;
+        title = `Changed: ${fromText} ?+' ${toText}`;
+      } else if ((rowRemoved || colRemoved) && (cellText(oldCell) || oldCell?.formula)) {
+        cls += " cell-removed";
+        const oldValue = oldCell?.value ?? "";
+        const oldFormula = oldCell?.formula ?? "";
+        const display = cellText(oldCell);
+        content = esc(truncateText(display));
+        title = cellTitle("Removed", oldValue, oldFormula);
+      } else if ((rowAdded || colAdded) && (cellText(newCell) || newCell?.formula)) {
+        cls += " cell-added";
+        const newValue = newCell?.value ?? "";
+        const newFormula = newCell?.formula ?? "";
+        const display = cellText(newCell);
+        content = esc(truncateText(display));
+        title = cellTitle("Added", newValue, newFormula);
+      } else if (cellText(newCell) || cellText(oldCell)) {
+        cls += " cell-unchanged";
+        const newValue = newCell?.value ?? "";
+        const newFormula = newCell?.formula ?? "";
+        const oldValue = oldCell?.value ?? "";
+        const oldFormula = oldCell?.formula ?? "";
+        const display = cellText(newCell) || cellText(oldCell);
+        const titleValue = newValue || oldValue;
+        const titleFormula = newFormula || oldFormula;
+        content = esc(truncateText(display));
+        title = cellTitle("Value", titleValue, titleFormula);
+      } else {
+        cls += " cell-empty";
+      }
+
+      html += `<div class="${cls}" title="${esc(title)}">${content}</div>`;
+    }
+  }
+
+  html += `</div></div>`;
+
+  html += `<div class="grid-legend">
+    <span class="legend-item"><span class="legend-box legend-edited"></span> Modified</span>
+    <span class="legend-item"><span class="legend-box legend-added"></span> Added row/col</span>
+    <span class="legend-item"><span class="legend-box legend-removed"></span> Removed row/col</span>
+  </div>`;
+
+  return html;
+}
+
+function categorizeOps(report) {
+  const ops = Array.isArray(report.ops) ? report.ops : [];
+  
+  const sheetOps = new Map();
+  const vbaOps = [];
+  const namedRangeOps = [];
+  const chartOps = [];
+  const queryOps = [];
+  const measureOps = [];
+  
+  let addedCount = 0;
+  let removedCount = 0;
+  let modifiedCount = 0;
+  let movedCount = 0;
+  
+  for (const op of ops) {
+    const kind = op.kind;
+    
+    if (kind === "SheetAdded" || kind === "SheetRemoved") {
+      const sheetName = resolveString(report, op.sheet);
+      if (!sheetOps.has(sheetName)) sheetOps.set(sheetName, []);
+      sheetOps.get(sheetName).push(op);
+      if (kind === "SheetAdded") addedCount++;
+      else removedCount++;
+    } else if (kind.startsWith("Row") || kind.startsWith("Column") || kind.startsWith("Cell") || kind.startsWith("Block") || kind.startsWith("Rect")) {
+      const sheetName = resolveString(report, op.sheet);
+      if (!sheetOps.has(sheetName)) sheetOps.set(sheetName, []);
+      sheetOps.get(sheetName).push(op);
+      
+      if (kind.includes("Added")) addedCount++;
+      else if (kind.includes("Removed")) removedCount++;
+      else if (kind.includes("Moved")) movedCount++;
+      else if (kind.includes("Edited") || kind.includes("Changed") || kind.includes("Replaced")) modifiedCount++;
+    } else if (kind.startsWith("Vba")) {
+      vbaOps.push(op);
+      if (kind.includes("Added")) addedCount++;
+      else if (kind.includes("Removed")) removedCount++;
+      else modifiedCount++;
+    } else if (kind.startsWith("NamedRange")) {
+      namedRangeOps.push(op);
+      if (kind.includes("Added")) addedCount++;
+      else if (kind.includes("Removed")) removedCount++;
+      else modifiedCount++;
+    } else if (kind.startsWith("Chart")) {
+      chartOps.push(op);
+      if (kind.includes("Added")) addedCount++;
+      else if (kind.includes("Removed")) removedCount++;
+      else modifiedCount++;
+    } else if (kind.startsWith("Query")) {
+      queryOps.push(op);
+      if (kind.includes("Added")) addedCount++;
+      else if (kind.includes("Removed")) removedCount++;
+      else modifiedCount++;
+    } else if (kind.startsWith("Measure")) {
+      measureOps.push(op);
+      if (kind.includes("Added")) addedCount++;
+      else if (kind.includes("Removed")) removedCount++;
+      else modifiedCount++;
+    }
+  }
+  
+  return {
+    sheetOps,
+    vbaOps,
+    namedRangeOps,
+    chartOps,
+    queryOps,
+    measureOps,
+    counts: { added: addedCount, removed: removedCount, modified: modifiedCount, moved: movedCount }
+  };
+}
+
+function renderSummaryCards(counts) {
+  const total = counts.added + counts.removed + counts.modified + counts.moved;
+  if (total === 0) {
+    return `
+      <div class="no-changes">
+        <div class="no-changes-icon">✓</div>
+        <h2>No Differences Found</h2>
+        <p>The two files are identical.</p>
+      </div>
+    `;
+  }
+  
+  let html = '<div class="summary-cards">';
+  
+  if (counts.added > 0) {
+    html += `
+      <div class="summary-card added">
+        <div class="count">${counts.added}</div>
+        <div class="label">Added</div>
+      </div>
+    `;
+  }
+  
+  if (counts.removed > 0) {
+    html += `
+      <div class="summary-card removed">
+        <div class="count">${counts.removed}</div>
+        <div class="label">Removed</div>
+      </div>
+    `;
+  }
+  
+  if (counts.modified > 0) {
+    html += `
+      <div class="summary-card modified">
+        <div class="count">${counts.modified}</div>
+        <div class="label">Modified</div>
+      </div>
+    `;
+  }
+  
+  if (counts.moved > 0) {
+    html += `
+      <div class="summary-card moved">
+        <div class="count">${counts.moved}</div>
+        <div class="label">Moved</div>
+      </div>
+    `;
+  }
+  
+  html += '</div>';
+  return html;
+}
+
+function renderSheetOp(report, op) {
+  const kind = op.kind;
+  
+  if (kind === "SheetAdded") {
+    return `
+      <div class="change-item added">
+        <div class="change-icon">+</div>
+        <span>Sheet added</span>
+      </div>
+    `;
+  }
+  
+  if (kind === "SheetRemoved") {
+    return `
+      <div class="change-item removed">
+        <div class="change-icon">−</div>
+        <span>Sheet removed</span>
+      </div>
+    `;
+  }
+  
+  if (kind === "RowAdded") {
+    return `
+      <div class="change-item added">
+        <div class="change-icon">+</div>
+        <span class="change-location">Row ${op.row_idx + 1}</span>
+        <span class="change-detail">Row added</span>
+      </div>
+    `;
+  }
+  
+  if (kind === "RowRemoved") {
+    return `
+      <div class="change-item removed">
+        <div class="change-icon">−</div>
+        <span class="change-location">Row ${op.row_idx + 1}</span>
+        <span class="change-detail">Row removed</span>
+      </div>
+    `;
+  }
+  
+  if (kind === "RowReplaced") {
+    return `
+      <div class="change-item modified">
+        <div class="change-icon">~</div>
+        <span class="change-location">Row ${op.row_idx + 1}</span>
+        <span class="change-detail">Row replaced</span>
+      </div>
+    `;
+  }
+  
+  if (kind === "ColumnAdded") {
+    return `
+      <div class="change-item added">
+        <div class="change-icon">+</div>
+        <span class="change-location">Column ${colToLetter(op.col_idx)}</span>
+        <span class="change-detail">Column added</span>
+      </div>
+    `;
+  }
+  
+  if (kind === "ColumnRemoved") {
+    return `
+      <div class="change-item removed">
+        <div class="change-icon">−</div>
+        <span class="change-location">Column ${colToLetter(op.col_idx)}</span>
+        <span class="change-detail">Column removed</span>
+      </div>
+    `;
+  }
+  
+  if (kind === "CellEdited") {
+    const addr = typeof op.addr === "string" ? op.addr : formatCellAddress(op.addr.row, op.addr.col);
+    const fromVal = op.from ? formatValue(report, op.from.value) : "<empty>";
+    const toVal = op.to ? formatValue(report, op.to.value) : "<empty>";
+    const fromFormula = op.from?.formula;
+    const toFormula = op.to?.formula;
+    
+    let detail = "";
+    if (fromFormula || toFormula) {
+      const oldF = fromFormula ? esc(resolveFormula(report, fromFormula)) : "";
+      const newF = toFormula ? esc(resolveFormula(report, toFormula)) : "";
+      if (oldF && newF && oldF !== newF) {
+        detail = `
+          <span class="change-value old">${oldF}</span>
+          <span class="change-arrow">→</span>
+          <span class="change-value">${newF}</span>
+        `;
+      } else if (oldF && !newF) {
+        detail = `<span class="change-value old">${oldF}</span> <span class="change-arrow">→</span> <span class="change-value">${esc(toVal)}</span>`;
+      } else if (!oldF && newF) {
+        detail = `<span class="change-value old">${esc(fromVal)}</span> <span class="change-arrow">→</span> <span class="change-value">${newF}</span>`;
+      } else {
+        detail = `<span class="change-value">${newF || esc(toVal)}</span>`;
+      }
+    } else {
+      detail = `
+        <span class="change-value old">${esc(fromVal)}</span>
+        <span class="change-arrow">→</span>
+        <span class="change-value">${esc(toVal)}</span>
+      `;
+    }
+    
+    return `
+      <div class="change-item modified">
+        <div class="change-icon">~</div>
+        <span class="change-location">${addr}</span>
+        <div class="change-detail">${detail}</div>
+      </div>
+    `;
+  }
+  
+  if (kind === "BlockMovedRows") {
+    const count = op.row_count;
+    const from = op.src_start_row + 1;
+    const to = op.dst_start_row + 1;
+    return `
+      <div class="change-item moved">
+        <div class="change-icon">↕</div>
+        <span class="change-location">Rows ${from}–${from + count - 1}</span>
+        <div class="change-detail">
+          Moved to row ${to}
+        </div>
+      </div>
+    `;
+  }
+  
+  if (kind === "BlockMovedColumns") {
+    const count = op.col_count;
+    const from = colToLetter(op.src_start_col);
+    const to = colToLetter(op.dst_start_col);
+    const fromEnd = colToLetter(op.src_start_col + count - 1);
+    return `
+      <div class="change-item moved">
+        <div class="change-icon">↔</div>
+        <span class="change-location">Columns ${from}–${fromEnd}</span>
+        <div class="change-detail">
+          Moved to column ${to}
+        </div>
+      </div>
+    `;
+  }
+  
+  if (kind === "RectReplaced") {
+    const startAddr = formatCellAddress(op.start_row, op.start_col);
+    const endAddr = formatCellAddress(op.start_row + op.row_count - 1, op.start_col + op.col_count - 1);
+    return `
+      <div class="change-item modified">
+        <div class="change-icon">~</div>
+        <span class="change-location">${startAddr}:${endAddr}</span>
+        <div class="change-detail">Region replaced</div>
+      </div>
+    `;
+  }
+  
+  return `
+    <div class="change-item modified">
+      <div class="change-icon">?</div>
+      <span>${esc(kind)}</span>
+    </div>
+  `;
+}
+
+function renderSheetSection(report, sheetName, ops, sheetLookup) {
+  const adds = ops.filter(o => o.kind.includes("Added")).length;
+  const removes = ops.filter(o => o.kind.includes("Removed")).length;
+  const mods = ops.filter(o => o.kind.includes("Edited") || o.kind.includes("Changed") || o.kind.includes("Replaced")).length;
+  const moves = ops.filter(o => o.kind.includes("Moved")).length;
+  
+  let badge = `${ops.length} change${ops.length !== 1 ? "s" : ""}`;
+  
+  const rowOps = ops.filter(o => o.kind.startsWith("Row"));
+  const colOps = ops.filter(o => o.kind.startsWith("Column"));
+  const cellOps = ops.filter(o => o.kind === "CellEdited");
+  const moveOps = ops.filter(o => o.kind.startsWith("Block"));
+  const otherOps = ops.filter(o => !o.kind.startsWith("Row") && !o.kind.startsWith("Column") && o.kind !== "CellEdited" && !o.kind.startsWith("Block") && o.kind !== "SheetAdded" && o.kind !== "SheetRemoved");
+  
+  const oldSheet = sheetLookup ? sheetLookup.old.get(sheetName) : null;
+  const newSheet = sheetLookup ? sheetLookup.new.get(sheetName) : null;
+  const gridData = buildSheetGridData(report, ops, oldSheet, newSheet);
+  const gridHtml = renderSheetGrid(report, gridData);
+  
+  let contentHtml = "";
+  
+  if (gridHtml) {
+    contentHtml += `
+      <div class="change-group">
+        <div class="change-group-title">
+          <span>📊</span>
+          <span>Visual Diff</span>
+        </div>
+        ${gridHtml}
+      </div>
+    `;
+  }
+  
+  let detailsHtml = "";
+  
+  if (rowOps.length > 0) {
+    detailsHtml += `
+      <div class="change-group">
+        <div class="change-group-title">
+          <span>📊</span>
+          <span>Row Changes (${rowOps.length})</span>
+        </div>
+        <div class="change-list">
+          ${rowOps.map(op => renderSheetOp(report, op)).join("")}
+        </div>
+      </div>
+    `;
+  }
+  
+  if (colOps.length > 0) {
+    detailsHtml += `
+      <div class="change-group">
+        <div class="change-group-title">
+          <span>📏</span>
+          <span>Column Changes (${colOps.length})</span>
+        </div>
+        <div class="change-list">
+          ${colOps.map(op => renderSheetOp(report, op)).join("")}
+        </div>
+      </div>
+    `;
+  }
+  
+  if (cellOps.length > 0) {
+    detailsHtml += `
+      <div class="change-group">
+        <div class="change-group-title">
+          <span>📝</span>
+          <span>Cell Changes (${cellOps.length})</span>
+        </div>
+        <div class="change-list">
+          ${cellOps.map(op => renderSheetOp(report, op)).join("")}
+        </div>
+      </div>
+    `;
+  }
+  
+  if (moveOps.length > 0) {
+    detailsHtml += `
+      <div class="change-group">
+        <div class="change-group-title">
+          <span>↕️</span>
+          <span>Moved Blocks (${moveOps.length})</span>
+        </div>
+        <div class="change-list">
+          ${moveOps.map(op => renderSheetOp(report, op)).join("")}
+        </div>
+      </div>
+    `;
+  }
+  
+  if (otherOps.length > 0) {
+    detailsHtml += `
+      <div class="change-group">
+        <div class="change-group-title">
+          <span>📋</span>
+          <span>Other Changes (${otherOps.length})</span>
+        </div>
+        <div class="change-list">
+          ${otherOps.map(op => renderSheetOp(report, op)).join("")}
+        </div>
+      </div>
+    `;
+  }
+  
+  if (detailsHtml) {
+    contentHtml += `
+      <details class="details-section" open>
+        <summary class="details-toggle">Detailed Changes</summary>
+        <div class="details-content">
+          ${detailsHtml}
+        </div>
+      </details>
+    `;
+  }
+  
+  return `
+    <section class="sheet-section">
+      <div class="sheet-header" onclick="this.parentElement.classList.toggle('expanded')">
+        <div class="sheet-title">
+          <div class="sheet-icon">📋</div>
+          <span class="sheet-name">${esc(sheetName)}</span>
+          <span class="sheet-badge">${badge}</span>
+        </div>
+        <svg class="expand-icon" width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+          <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" />
+        </svg>
+      </div>
+      <div class="sheet-content">
+        ${contentHtml}
+      </div>
+    </section>
+  `;
+}
+
+function renderOtherOp(report, op) {
+  const kind = op.kind;
+  const name = op.name !== undefined ? resolveString(report, op.name) : "";
+  
+  if (kind.includes("Added")) {
+    return `
+      <div class="change-item added">
+        <div class="change-icon">+</div>
+        <span>${esc(kind.replace("Added", ""))}: ${esc(name)}</span>
+      </div>
+    `;
+  }
+  
+  if (kind.includes("Removed")) {
+    return `
+      <div class="change-item removed">
+        <div class="change-icon">−</div>
+        <span>${esc(kind.replace("Removed", ""))}: ${esc(name)}</span>
+      </div>
+    `;
+  }
+  
+  if (kind.includes("Changed") || kind.includes("Renamed")) {
+    return `
+      <div class="change-item modified">
+        <div class="change-icon">~</div>
+        <span>${esc(kind.replace("Changed", "").replace("Renamed", ""))}: ${esc(name)}</span>
+      </div>
+    `;
+  }
+  
+  return `
+    <div class="change-item modified">
+      <div class="change-icon">?</div>
+      <span>${esc(kind)}: ${esc(name)}</span>
+    </div>
+  `;
+}
+
+function renderOtherChangesSection(report, title, icon, ops) {
+  if (ops.length === 0) return "";
+  
+  return `
+    <div class="other-changes">
+      <div class="other-changes-title">
+        <span class="icon">${icon}</span>
+        <span>${esc(title)} (${ops.length})</span>
+      </div>
+      <div class="change-list">
+        ${ops.map(op => renderOtherOp(report, op)).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderWarnings(warnings) {
+  if (!warnings || warnings.length === 0) return "";
+  
+  return `
+    <div class="warnings-section">
+      <div class="warnings-title">
+        <span>⚠️</span>
+        <span>Warnings</span>
+      </div>
+      <ul class="warnings-list">
+        ${warnings.map(w => `<li>${esc(w)}</li>`).join("")}
+      </ul>
+    </div>
+  `;
+}
+
+export function renderReportHtml(report, sheetData = null) {
+  const { sheetOps, vbaOps, namedRangeOps, chartOps, queryOps, measureOps, counts } = categorizeOps(report);
+  const warnings = Array.isArray(report.warnings) ? report.warnings : [];
+  const sheetLookup = sheetData
+    ? {
+        old: buildSheetLookup(sheetData.old),
+        new: buildSheetLookup(sheetData.new)
+      }
+    : null;
+  
+  let html = "";
+  
+  html += renderWarnings(warnings);
+  html += renderSummaryCards(counts);
+  
+  const total = counts.added + counts.removed + counts.modified + counts.moved;
+  if (total === 0) {
+    return html;
+  }
+  
+  const sortedSheets = Array.from(sheetOps.keys()).sort();
+  for (const sheetName of sortedSheets) {
+    html += renderSheetSection(report, sheetName, sheetOps.get(sheetName), sheetLookup);
+  }
+  
+  html += renderOtherChangesSection(report, "VBA Modules", "📜", vbaOps);
+  html += renderOtherChangesSection(report, "Named Ranges", "🏷️", namedRangeOps);
+  html += renderOtherChangesSection(report, "Charts", "📊", chartOps);
+  html += renderOtherChangesSection(report, "Power Query", "⚡", queryOps);
+  html += renderOtherChangesSection(report, "Measures", "📐", measureOps);
+  
+  return html;
+}
+
+```
+
+---
+
+### File: `web\test_render.js`
+
+```javascript
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { renderReportHtml } from "./render.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const p = path.join(__dirname, "testdata", "sample_report.json");
+const report = JSON.parse(fs.readFileSync(p, "utf8"));
+const html = renderReportHtml(report);
+
+function mustInclude(s) {
+  if (!html.includes(s)) {
+    console.error("Missing:", s);
+    process.exit(1);
+  }
+}
+
+mustInclude("Power Query");
+mustInclude("Query: Query1");
+mustInclude("Step diffs");
+mustInclude("Measure: Measure1");
+
+console.log("ok");
 
 ```
 

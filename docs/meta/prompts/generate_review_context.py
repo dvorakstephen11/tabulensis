@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Sequence
 
-INCLUDED_EXTENSIONS = {".rs", ".py", ".toml", ".yaml", ".yml", ".gitignore"}
+INCLUDED_EXTENSIONS = {".rs", ".py", ".toml", ".yaml", ".yml", ".gitignore", ".js", ".html"}
 EXCLUDED_DIR_NAMES = {
     ".cursor",
     ".git",
@@ -343,7 +343,7 @@ class ContextBuilder:
 
 
 def lang_for_path(path: Path) -> str:
-    mapping = {".rs": "rust", ".py": "python", ".toml": "toml", ".yaml": "yaml", ".yml": "yaml", ".md": "markdown"}
+    mapping = {".rs": "rust", ".py": "python", ".toml": "toml", ".yaml": "yaml", ".yml": "yaml", ".md": "markdown", ".js": "javascript", ".html": "html"}
     return mapping.get(path.suffix, "")
 
 
