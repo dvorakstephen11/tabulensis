@@ -371,35 +371,247 @@ Grounding notes (what this Phase 1 is explicitly aligned to in the current codeb
 
 ## Phase 2 — Build a shared “Diff View Model” layer (web + desktop)
 
+### Key terms (so we stay precise)
+
+* **View Model (VM):** a UI-focused representation of the diff that is *derived* from engine output. It answers “what should the user see?” without being tied to how it’s rendered (HTML, canvas, desktop UI, etc.).
+* **View coordinates:** the unified row/column index space introduced in Phase 1 (aligned axes). Every UI feature (rendering, selection, navigation, grouping) uses these indices, not raw old/new indices.
+* **Region (a.k.a. “hunk”):** a bounding box in view coordinates that encloses a cluster of changes, plus some configurable surrounding context. Regions are how we avoid rendering or navigating 10,000 individual cell edits.
+
 ### Goal
 
-Create a single transformation pipeline that both UIs use:
+Create a single transformation pipeline that *all* UIs use:
 
-**Engine output (ops + snapshots + alignment) → View Model → Renderer**
+**Engine output (DiffReport + snapshots + Phase-1 alignment) → View Model → Renderer**
 
-### Deliverables
+This is the separation we don’t have today: `web/render.js` currently interprets ops, fetches cells, classifies changes, and emits HTML in one pass. That makes Phase 3 (canvas grid) and any desktop UI likely to re-implement semantics and diverge over time.
 
-1. **A canonical View Model per sheet**
+### Non-goals (explicit, to keep Phase 2 bounded)
 
-   * `rows[]` and `cols[]` arrays (aligned axis)
-   * A fast `cellAt(viewRow, viewCol)` that returns:
+* Do **not** replace the renderer yet (Phase 3 does that). Phase 2 keeps the current HTML output, but makes it consume a VM.
+* Do **not** change the core `DiffReport` JSON shape (still treated as engine output).
+* Do **not** build the desktop wrapper yet. Phase 2 only ensures the VM layer can be reused by a desktop shell later (same semantics, same contract).
 
-     * `oldCell?`, `newCell?`
-     * `diffKind`: unchanged/added/removed/edited/moved
-     * `editDetails?`: old/new text and formulas (for tooltip/inspector)
+### Design decisions (lock these down in Phase 2)
 
-2. **Grouping + compaction rules**
+1. **VM lives in the web UI code as a plain ES module (no build step).**
+   *Why this is codebase-realistic:* the current UI is plain `web/*.js` ESM imported by `index.html`, and the Node-based `web/test_render.js` imports `render.js` directly. A plain JS VM module fits both without introducing a bundler or TypeScript.
 
-   * Group consecutive `RowAdded` into a single “Rows 120–138 added”
-   * Group cell edits into “regions” (bounding boxes) so navigation isn’t 10,000 individual clicks
+2. **Payload normalization is part of the VM layer.**
+   Today `web/main.js` parses the WASM JSON and then does `payload.report || payload` and `payload.sheets || null`. The VM builder should accept:
+   * a raw `DiffReport` object (used by `web/test_render.js` today)
+   * a WASM payload wrapper like `{ report, sheets, alignments }` (Phase 1+)
+   It should also tolerate the current sheet snapshot nesting shape (`{ old: { sheets: [...] }, new: { sheets: [...] } }`) by normalizing to `oldSheets[]/newSheets[]` internally.
 
-3. **Deterministic sorting**
+3. **The VM is mostly data, but it may include a hot-path helper function.**
+   We want renderers to be “dumb”, but we also need performance. So we allow `sheetVm.cellAt(viewRow, viewCol)` as a function that closes over precomputed indices/maps. Everything else should be JSON-like data so it can be inspected and tested easily.
 
-   * Changes sorted by sheet, then by view row/col, then by kind
+4. **Numeric keys, not string keys, for cell lookup.**
+   The current renderer builds `Map` keys like `"${row},${col}"`. That is fine for a tiny grid, but Phase 3 will call `cellAt` many times per frame. The VM uses numeric keys:
+   * `key = row * 16384 + col` (Excel’s max columns is 16,384, so this is collision-free).
+   This one choice is the difference between “works in tests” and “feels instant” later.
+
+5. **Precedence rules for classification are defined once in the VM.**
+   The renderer never decides whether a cell is “edited vs moved vs added”. It asks the VM and just paints classes. This is how we prevent web and desktop semantics from drifting.
+
+6. **Moves are represented consistently across layers.**
+   * Axis moves (rows/cols) come from Phase 1 alignment entries (`move_src` and `move_dst` with a shared `move_id`) and become first-class in the VM’s axis arrays.
+   * Rectangular moves (`BlockMovedRect`) become region annotations (source + destination regions linked by a shared `move_id`), but they do not attempt per-cell “moved” classification (too expensive and ambiguous without a full cell mapping).
+
+7. **Compaction is region-first (Git-style hunks), not “render the whole used range”.**
+   Even before canvas virtualization, we can make the HTML UI truthful and usable by rendering a small number of region grids (each bounded + context) instead of a single huge bounding box or entire sheet.
+
+---
+
+### Deliverables (concrete, code-level)
+
+#### 1) A canonical `WorkbookVM` and `SheetVM`
+
+**New file:** `web/view_model.js`
+
+Exports a single top-level builder:
+
+* `buildWorkbookViewModel(payloadOrReport, opts?) -> WorkbookVM`
+
+Where `payloadOrReport` can be either:
+* a `DiffReport` (legacy path)
+* a WASM payload wrapper: `{ report, sheets, alignments }`
+
+**WorkbookVM fields (minimum):**
+
+* `report`: the original report (kept for deep inspection and for existing renderers that still show raw op details)
+* `warnings: string[]` (copied from report)
+* `counts: { added, removed, modified, moved }` (same meaning as today’s summary cards)
+* `sheets: SheetVM[]` (sorted by sheet name)
+* `other`: grouped non-sheet ops (VBA, named ranges, charts, Power Query, measures), already resolved to display strings where needed
+
+**SheetVM fields (minimum):**
+
+* `name: string`
+* `axis: { rows: AxisVM, cols: AxisVM }`
+* `cellAt(viewRow, viewCol) -> CellVM` (fast)
+* `changes:`
+  * `items: ChangeItemVM[]` (grouped + compact list)
+  * `regions: ChangeRegionVM[]` (bounding boxes used for navigation and “visual hunks”)
+* `renderPlan:`
+  * `regionsToRender: string[]` (ordered region IDs)
+  * `status: { kind: "ok" | "skipped" | "missing", message?: string }`
+
+#### 2) A fast `cellAt(viewRow, viewCol)`
+
+**CellVM shape (returned by `cellAt`):**
+
+* `viewRow`, `viewCol`
+* `old: { row, col, cell } | null` (null if this view position has no old mapping)
+* `new: { row, col, cell } | null` (null if this view position has no new mapping)
+* `diffKind: "empty" | "unchanged" | "added" | "removed" | "moved" | "edited"`
+* `moveId?: string` and `moveRole?: "src" | "dst"` (only when moved)
+* `edit?: { fromValue, toValue, fromFormula, toFormula }` (only when edited)
+* `display:`
+  * `text: string` (what to render in the grid cell by default)
+  * `tooltip: string` (what hover/inspector shows)
+
+**Classification precedence (must be deterministic):**
+
+1. If the cell is in `editMap` → `diffKind = "edited"` (even if its row/col is moved/insert/delete). Attach `moveId/moveRole` if relevant so renderers can style “edited inside moved block” later.
+2. Else if either axis entry is `insert` → `diffKind = "added"` (new-only).
+3. Else if either axis entry is `delete` → `diffKind = "removed"` (old-only).
+4. Else if either axis entry is `move_src`/`move_dst` → `diffKind = "moved"` with `moveRole`.
+5. Else → `diffKind = "unchanged"` if there is content on either side, otherwise `"empty"`.
+
+#### 3) Grouping + compaction rules (implemented in the VM builder)
+
+The UI already has a “Detailed Changes” list, but it is one op per line. Phase 2 introduces grouping so it stays reviewable.
+
+**Row/column ranges**
+* Build view-index sets for `RowAdded/RowRemoved/ColumnAdded/ColumnRemoved`.
+* Sort by view index (so order matches the aligned grid).
+* Group consecutive indices into a single item:
+  * Example label: `Rows 120–138 added` (1-based, new-side numbering)
+  * Example label: `Columns D–F removed` (old-side lettering)
+
+**Moves**
+* Prefer Phase-1 axis `move_id` as the canonical move identity.
+* Produce one `ChangeItem` per move with both source + destination ranges so the UI can “jump” to either end.
+
+**Cell edits -> regions**
+* Each `CellEdited` becomes a 1x1 change point in view space.
+* Cluster change points into regions using a deterministic algorithm:
+  1. group edits by `viewRow`
+  2. compress each row into contiguous column “runs”
+  3. merge runs into regions if they overlap (or nearly overlap) in columns and are on adjacent rows
+  4. stop region growth when `maxCellsPerRegion` is exceeded (start a new region to keep UI usable)
+
+**Rectangular ops**
+* `RectReplaced` becomes a region directly (view-space bounding box).
+* `BlockMovedRect` becomes two linked regions (src + dst) that share `move_id`.
+
+**Compacted rendering plan**
+* Instead of rendering a single “whole sheet” grid, render one mini-grid per region ID in `regionsToRender`.
+* Each mini-grid expands the region bounds by `contextRows/contextCols` (configurable) but is still capped by `maxVisualCells`.
+* If there are *no* regions and only non-visual ops (e.g., Power Query changes), the visual section is omitted entirely.
+
+#### 4) Deterministic sorting (one rule, reused everywhere)
+
+VM must define a stable ordering so navigation and tests don’t flake.
+
+* Workbook: sort sheets by name (case-insensitive compare if we want to mirror engine sheet ordering rules).
+* Within a sheet:
+  1. sort regions by `(topLeftViewRow, topLeftViewCol)`
+  2. then by kind order (moves, structural, rect, cell edits)
+  3. then by stable `id`
+
+---
+
+### What code is added / changed (grounded to the current file layout)
+
+#### New: `web/view_model.js` (core of Phase 2)
+
+Functions to add (names are explicit so implementation is straightforward):
+
+* `normalizePayload(payloadOrReport) -> { report, sheets, alignments }`
+  * Accepts `DiffReport` or `{report, sheets, alignments}`.
+  * Normalizes sheet snapshots to `{ oldSheets: [], newSheets: [] }` whether the input is arrays or `{sheets: [...]}` objects.
+* `buildWorkbookViewModel(payloadOrReport, opts) -> WorkbookVM`
+  * Internally reuses (or moves) the existing `categorizeOps` logic from `web/render.js` so we keep the exact same meaning for counts and section partitioning.
+* `buildSheetViewModel({ report, sheetName, ops, oldSheet, newSheet, alignment, opts }) -> SheetVM`
+  * Builds `AxisVM` (rows+cols), cell maps, edit maps, regions, and change items.
+* `makeAxisVm(entries, sideDims) -> AxisVM`
+  * Builds `entries[]` plus `oldToView/newToView` arrays for O(1) mapping.
+* `makeCellMap(sheetSnapshot) -> Map<number, SheetCell>`
+  * Numeric key version of `buildCellMap`.
+* `makeEditMap(report, sheetOps, rowsVm, colsVm) -> Map<number, CellEditVM>`
+  * Maps op addresses into view-space keys.
+* `clusterEditsToRegions(editKeys, opts) -> ChangeRegionVM[]`
+  * Deterministic clustering described above.
+* `groupConsecutive(indices) -> Array<{ start, end, count }>`
+  * Shared helper for row/col range items.
+
+#### Change: `web/render.js` becomes a pure renderer over the VM
+
+* Add `import { buildWorkbookViewModel } from "./view_model.js";`
+* Replace the top-level `renderReportHtml(report, sheetData)` path with:
+  * `const vm = buildWorkbookViewModel(payloadOrReportOrReport, { ...defaults });`
+  * `return renderWorkbookVm(vm);`
+* Keep existing HTML structure and CSS classes where possible so Phase 2 is not a style rework.
+
+#### Change: `web/main.js` passes the payload through
+
+Today it does:
+
+```js
+const payload = JSON.parse(json);
+const report = payload.report || payload;
+const sheets = payload.sheets || null;
+
+byId("results").innerHTML = renderReportHtml(report, sheets);
+```
+
+Phase 2 simplifies to:
+
+```js
+const payload = JSON.parse(json);
+byId("results").innerHTML = renderReportHtml(payload);
+```
+
+`renderReportHtml` remains backwards-compatible for the Node test that calls it with a raw report.
+
+#### New: `web/test_view_model.js` (unit tests for correctness)
+
+Add a test that asserts VM-level truthfulness independent of HTML:
+
+* **Row insertion mapping:** unchanged cells map old row i to new row i+1 via view coordinates.
+* **Move identity:** `move_src` and `move_dst` share the same `move_id` and classify as moved.
+* **Grouping:** 10 consecutive `RowAdded` ops become 1 change item.
+* **Region compaction:** 2000 `CellEdited` ops become a small number of regions (bounded by config).
+
+This complements the existing `web/test_render.js`, which should continue to pass without sheets and without alignments.
+
+---
+
+### Acceptance checks (make them hard to fake)
+
+1. **VM correctness beats HTML correctness**
+   *Given:* a fixture with a row inserted at the top and no other changes.
+   *Assert:* `cellAt(viewRow=1, viewCol=0)` returns `old.row=0` and `new.row=1` (or equivalent for your fixture), and `diffKind === "unchanged"`.
+
+2. **Moves are not displayed as add/delete**
+   *Given:* a fixture that emits `BlockMovedRows` (Phase 1 also produces row-axis move entries).
+   *Assert:* inside the moved block, `cellAt` reports `diffKind === "moved"` and includes `moveId`.
+
+3. **Compaction works on far-apart edits**
+   *Given:* two clusters of edits separated by 10,000 rows.
+   *Expected UI behavior:* two mini-grids render (two regions), not one enormous grid.
+
+4. **Graceful degradation**
+   *Given:* a report without sheets (like `web/test_render.js` today).
+   *Expected:* VM build succeeds, visual diffs are skipped with `status.kind = "missing"`, and the non-grid sections (Power Query, Measures) still render.
 
 ### Why this matters
 
-It prevents your web UI and desktop UI from diverging. The desktop app can add capabilities, but the “meaning” of the view stays identical.
+It prevents your web UI and desktop UI from diverging: once Phase 2 exists, Phase 3 can swap renderers (HTML → canvas) without re-implementing diff semantics, and a desktop shell can reuse the exact same VM builder module.
+
+---
+
 
 ---
 

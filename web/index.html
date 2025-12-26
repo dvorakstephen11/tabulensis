@@ -761,12 +761,41 @@
         color: var(--accent-red);
       }
 
+      .grid-col-header.col-move-src,
+      .grid-row-header.row-move-src,
+      .grid-col-header.col-move-dst,
+      .grid-row-header.row-move-dst {
+        background: var(--diff-move-bg);
+        color: var(--accent-purple);
+      }
+
+      .grid-col-header.col-move-src::after,
+      .grid-row-header.row-move-src::after,
+      .grid-col-header.col-move-dst::after,
+      .grid-row-header.row-move-dst::after {
+        content: " M";
+        font-size: 10px;
+        color: var(--accent-purple);
+      }
+
       .cell-added {
         background: var(--diff-add-bg);
       }
 
       .cell-removed {
         background: var(--diff-remove-bg);
+      }
+
+      .cell-move-src {
+        background: var(--diff-move-bg);
+        color: var(--accent-purple);
+        box-shadow: inset 0 0 0 1px var(--diff-move-border);
+      }
+
+      .cell-move-dst {
+        background: rgba(163, 113, 247, 0.25);
+        color: var(--accent-purple);
+        box-shadow: inset 0 0 0 1px var(--diff-move-border);
       }
 
       .cell-edited {
@@ -859,10 +888,24 @@
         border: 1px solid var(--diff-modify-border);
       }
 
+      .legend-moved {
+        background: var(--diff-move-bg);
+        border: 1px solid var(--diff-move-border);
+      }
+
       .legend-dot {
         font-size: 16px;
         color: var(--text-muted);
         line-height: 1;
+      }
+
+      .grid-skip-warning {
+        padding: 12px 16px;
+        border-radius: 10px;
+        background: rgba(210, 153, 34, 0.12);
+        border: 1px solid rgba(210, 153, 34, 0.4);
+        color: var(--text-secondary);
+        font-size: 13px;
       }
 
       .details-section {

@@ -85,14 +85,108 @@ function buildCellMap(sheet) {
 
 function buildSheetLookup(sheets) {
   const map = new Map();
-  if (!Array.isArray(sheets)) return map;
-  for (const sheet of sheets) {
+  if (!sheets) return map;
+  const list = Array.isArray(sheets) ? sheets : sheets.sheets;
+  if (!Array.isArray(list)) return map;
+  for (const sheet of list) {
     map.set(sheet.name, sheet);
   }
   return map;
 }
 
-function buildSheetGridData(report, ops, oldSheet, newSheet) {
+function buildAlignmentLookup(alignments) {
+  const map = new Map();
+  if (!Array.isArray(alignments)) return map;
+  for (const alignment of alignments) {
+    if (alignment && typeof alignment.sheet === "string") {
+      map.set(alignment.sheet, alignment);
+    }
+  }
+  return map;
+}
+
+function buildIndexMap(entries, key) {
+  const map = new Map();
+  if (!Array.isArray(entries)) return map;
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    const value = entry ? entry[key] : null;
+    if (value !== null && value !== undefined) {
+      map.set(value, i);
+    }
+  }
+  return map;
+}
+
+function formatAxisTitle(entry, axis) {
+  if (!entry) return "";
+  const hasOld = entry.old !== null && entry.old !== undefined;
+  const hasNew = entry.new !== null && entry.new !== undefined;
+  let oldLabel = "";
+  let newLabel = "";
+  if (axis === "row") {
+    if (hasOld) oldLabel = `Old row ${entry.old + 1}`;
+    if (hasNew) newLabel = `New row ${entry.new + 1}`;
+  } else {
+    if (hasOld) oldLabel = `Old col ${colToLetter(entry.old)}`;
+    if (hasNew) newLabel = `New col ${colToLetter(entry.new)}`;
+  }
+  if (oldLabel && newLabel) return `${oldLabel} | ${newLabel}`;
+  return oldLabel || newLabel || "";
+}
+
+function buildSheetGridData(report, ops, oldSheet, newSheet, alignment) {
+  if (alignment) {
+    return buildSheetGridDataAligned(report, ops, oldSheet, newSheet, alignment);
+  }
+  return buildSheetGridDataLegacy(report, ops, oldSheet, newSheet);
+}
+
+function buildSheetGridDataAligned(report, ops, oldSheet, newSheet, alignment) {
+  const skipped = Boolean(alignment && alignment.skipped);
+  if (skipped) {
+    return { hasData: false, skipped: true, alignment };
+  }
+
+  const rows = Array.isArray(alignment?.rows) ? alignment.rows : [];
+  const cols = Array.isArray(alignment?.cols) ? alignment.cols : [];
+
+  const oldCells = buildCellMap(oldSheet);
+  const newCells = buildCellMap(newSheet);
+
+  const newRowToView = buildIndexMap(rows, "new");
+  const newColToView = buildIndexMap(cols, "new");
+  const cellEdits = new Map();
+
+  for (const op of ops) {
+    if (op.kind !== "CellEdited") continue;
+    const addr = parseCellAddress(op.addr);
+    if (!addr) continue;
+    const viewRow = newRowToView.get(addr.row);
+    const viewCol = newColToView.get(addr.col);
+    if (viewRow === undefined || viewCol === undefined) continue;
+    cellEdits.set(`${viewRow},${viewCol}`, {
+      fromValue: op.from ? formatValue(report, op.from.value) : "",
+      toValue: op.to ? formatValue(report, op.to.value) : "",
+      fromFormula: resolveFormula(report, op.from?.formula),
+      toFormula: resolveFormula(report, op.to?.formula)
+    });
+  }
+
+  const hasData = rows.length > 0 && cols.length > 0;
+  return {
+    hasData,
+    skipped: false,
+    alignment,
+    rows,
+    cols,
+    cellEdits,
+    oldCells,
+    newCells
+  };
+}
+
+function buildSheetGridDataLegacy(report, ops, oldSheet, newSheet) {
   const cellEdits = new Map();
   const addedRows = new Set();
   const removedRows = new Set();
@@ -212,6 +306,171 @@ function buildSheetGridData(report, ops, oldSheet, newSheet) {
 }
 
 function renderSheetGrid(report, gridData) {
+  if (gridData.skipped) {
+    return `
+      <div class="grid-skip-warning">
+        Grid preview skipped because the aligned view is too large or inconsistent.
+      </div>
+    `;
+  }
+  if (!gridData.hasData) return "";
+  if (gridData.alignment) {
+    return renderAlignedGrid(report, gridData);
+  }
+  return renderSheetGridLegacy(report, gridData);
+}
+
+function renderAlignedGrid(report, gridData) {
+  const { rows, cols, cellEdits, oldCells, newCells } = gridData;
+  if (!rows || !cols || rows.length === 0 || cols.length === 0) return "";
+
+  const numCols = cols.length;
+
+  function cellText(cell) {
+    if (!cell) return "";
+    const value = cell.value ?? "";
+    const formula = cell.formula ?? "";
+    return value || formula || "";
+  }
+
+  function cellTitle(label, value, formula) {
+    const parts = [];
+    if (value) parts.push(value);
+    if (formula && formula != value) parts.push(formula);
+    if (!parts.length) return "";
+    return label ? `${label}: ${parts.join(" | ")}` : parts.join(" | ");
+  }
+
+  let html = `<div class="sheet-grid-container">
+    <div class="sheet-grid" style="grid-template-columns: 50px repeat(${numCols}, minmax(100px, 1fr));">`;
+
+  html += `<div class="grid-cell grid-corner"></div>`;
+  for (let c = 0; c < cols.length; c++) {
+    const colEntry = cols[c];
+    const kind = colEntry?.kind;
+    let cls = "grid-cell grid-col-header";
+    if (kind === "insert") cls += " col-added";
+    if (kind === "delete") cls += " col-removed";
+    if (kind === "move_src") cls += " col-move-src";
+    if (kind === "move_dst") cls += " col-move-dst";
+    const title = formatAxisTitle(colEntry, "col");
+    const moveAttr = colEntry?.move_id ? ` data-move-id="${esc(colEntry.move_id)}"` : "";
+    html += `<div class="${cls}"${moveAttr} title="${esc(title)}">${colToLetter(c)}</div>`;
+  }
+
+  for (let r = 0; r < rows.length; r++) {
+    const rowEntry = rows[r];
+    const rowKind = rowEntry?.kind;
+    let rowHeaderCls = "grid-cell grid-row-header";
+    if (rowKind === "insert") rowHeaderCls += " row-added";
+    if (rowKind === "delete") rowHeaderCls += " row-removed";
+    if (rowKind === "move_src") rowHeaderCls += " row-move-src";
+    if (rowKind === "move_dst") rowHeaderCls += " row-move-dst";
+    const rowTitle = formatAxisTitle(rowEntry, "row");
+    const rowMoveAttr = rowEntry?.move_id ? ` data-move-id="${esc(rowEntry.move_id)}"` : "";
+    html += `<div class="${rowHeaderCls}"${rowMoveAttr} title="${esc(rowTitle)}">${r + 1}</div>`;
+
+    for (let c = 0; c < cols.length; c++) {
+      const colEntry = cols[c];
+      const rowKind = rowEntry?.kind;
+      const colKind = colEntry?.kind;
+      const key = `${r},${c}`;
+      const edit = cellEdits.get(key);
+      const oldRow = rowEntry?.old;
+      const newRow = rowEntry?.new;
+      const oldCol = colEntry?.old;
+      const newCol = colEntry?.new;
+
+      const oldCell =
+        oldRow !== null && oldRow !== undefined && oldCol !== null && oldCol !== undefined
+          ? oldCells.get(`${oldRow},${oldCol}`)
+          : null;
+      const newCell =
+        newRow !== null && newRow !== undefined && newCol !== null && newCol !== undefined
+          ? newCells.get(`${newRow},${newCol}`)
+          : null;
+
+      const isMoveSrc = rowKind === "move_src" || colKind === "move_src";
+      const isMoveDst = rowKind === "move_dst" || colKind === "move_dst";
+      const isDelete = (rowKind === "delete" || colKind === "delete") && !isMoveSrc;
+      const isInsert = (rowKind === "insert" || colKind === "insert") && !isMoveDst;
+
+      let cls = "grid-cell";
+      let content = "";
+      let title = "";
+
+      if (
+        edit &&
+        oldRow !== null && oldRow !== undefined &&
+        newRow !== null && newRow !== undefined &&
+        oldCol !== null && oldCol !== undefined &&
+        newCol !== null && newCol !== undefined
+      ) {
+        cls += " cell-edited";
+        const fromText = edit.fromValue || edit.fromFormula || "(empty)";
+        const toText = edit.toValue || edit.toFormula || "(empty)";
+        content = `<div class="cell-change"><span class="cell-old">${esc(truncateText(fromText))}</span><span class="cell-new">${esc(truncateText(toText))}</span></div>`;
+        title = `Changed: ${fromText} -> ${toText}`;
+      } else if (isMoveSrc && (cellText(oldCell) || oldCell?.formula)) {
+        cls += " cell-move-src";
+        const oldValue = oldCell?.value ?? "";
+        const oldFormula = oldCell?.formula ?? "";
+        const display = cellText(oldCell);
+        content = esc(truncateText(display));
+        title = cellTitle("Moved (from)", oldValue, oldFormula);
+      } else if (isMoveDst && (cellText(newCell) || newCell?.formula)) {
+        cls += " cell-move-dst";
+        const newValue = newCell?.value ?? "";
+        const newFormula = newCell?.formula ?? "";
+        const display = cellText(newCell);
+        content = esc(truncateText(display));
+        title = cellTitle("Moved (to)", newValue, newFormula);
+      } else if (isDelete && (cellText(oldCell) || oldCell?.formula)) {
+        cls += " cell-removed";
+        const oldValue = oldCell?.value ?? "";
+        const oldFormula = oldCell?.formula ?? "";
+        const display = cellText(oldCell);
+        content = esc(truncateText(display));
+        title = cellTitle("Removed", oldValue, oldFormula);
+      } else if (isInsert && (cellText(newCell) || newCell?.formula)) {
+        cls += " cell-added";
+        const newValue = newCell?.value ?? "";
+        const newFormula = newCell?.formula ?? "";
+        const display = cellText(newCell);
+        content = esc(truncateText(display));
+        title = cellTitle("Added", newValue, newFormula);
+      } else if (cellText(newCell) || cellText(oldCell)) {
+        cls += " cell-unchanged";
+        const newValue = newCell?.value ?? "";
+        const newFormula = newCell?.formula ?? "";
+        const oldValue = oldCell?.value ?? "";
+        const oldFormula = oldCell?.formula ?? "";
+        const display = cellText(newCell) || cellText(oldCell);
+        const titleValue = newValue || oldValue;
+        const titleFormula = newFormula || oldFormula;
+        content = esc(truncateText(display));
+        title = cellTitle("Value", titleValue, titleFormula);
+      } else {
+        cls += " cell-empty";
+      }
+
+      html += `<div class="${cls}" title="${esc(title)}">${content}</div>`;
+    }
+  }
+
+  html += `</div></div>`;
+
+  html += `<div class="grid-legend">
+    <span class="legend-item"><span class="legend-box legend-edited"></span> Modified</span>
+    <span class="legend-item"><span class="legend-box legend-added"></span> Added row/col</span>
+    <span class="legend-item"><span class="legend-box legend-removed"></span> Removed row/col</span>
+    <span class="legend-item"><span class="legend-box legend-moved"></span> Moved row/col</span>
+  </div>`;
+
+  return html;
+}
+
+function renderSheetGridLegacy(report, gridData) {
   if (!gridData.hasData) return "";
 
   const { cellEdits, addedRows, removedRows, addedCols, removedCols, startRow, endRow, startCol, endCol, oldCells, newCells } = gridData;
@@ -606,7 +865,7 @@ function renderSheetOp(report, op) {
   `;
 }
 
-function renderSheetSection(report, sheetName, ops, sheetLookup) {
+function renderSheetSection(report, sheetName, ops, sheetLookup, alignmentLookup) {
   const adds = ops.filter(o => o.kind.includes("Added")).length;
   const removes = ops.filter(o => o.kind.includes("Removed")).length;
   const mods = ops.filter(o => o.kind.includes("Edited") || o.kind.includes("Changed") || o.kind.includes("Replaced")).length;
@@ -622,7 +881,8 @@ function renderSheetSection(report, sheetName, ops, sheetLookup) {
   
   const oldSheet = sheetLookup ? sheetLookup.old.get(sheetName) : null;
   const newSheet = sheetLookup ? sheetLookup.new.get(sheetName) : null;
-  const gridData = buildSheetGridData(report, ops, oldSheet, newSheet);
+  const alignment = alignmentLookup ? alignmentLookup.get(sheetName) : null;
+  const gridData = buildSheetGridData(report, ops, oldSheet, newSheet, alignment);
   const gridHtml = renderSheetGrid(report, gridData);
   
   let contentHtml = "";
@@ -812,7 +1072,7 @@ function renderWarnings(warnings) {
   `;
 }
 
-export function renderReportHtml(report, sheetData = null) {
+export function renderReportHtml(report, sheetData = null, alignments = null) {
   const { sheetOps, vbaOps, namedRangeOps, chartOps, queryOps, measureOps, counts } = categorizeOps(report);
   const warnings = Array.isArray(report.warnings) ? report.warnings : [];
   const sheetLookup = sheetData
@@ -821,6 +1081,7 @@ export function renderReportHtml(report, sheetData = null) {
         new: buildSheetLookup(sheetData.new)
       }
     : null;
+  const alignmentLookup = buildAlignmentLookup(alignments);
   
   let html = "";
   
@@ -834,7 +1095,7 @@ export function renderReportHtml(report, sheetData = null) {
   
   const sortedSheets = Array.from(sheetOps.keys()).sort();
   for (const sheetName of sortedSheets) {
-    html += renderSheetSection(report, sheetName, sheetOps.get(sheetName), sheetLookup);
+    html += renderSheetSection(report, sheetName, sheetOps.get(sheetName), sheetLookup, alignmentLookup);
   }
   
   html += renderOtherChangesSection(report, "VBA Modules", "📜", vbaOps);

@@ -78,8 +78,9 @@ async function runDiff() {
     const payload = JSON.parse(json);
     const report = payload.report || payload;
     const sheets = payload.sheets || null;
+    const alignments = payload.alignments || null;
 
-    byId("results").innerHTML = renderReportHtml(report, sheets);
+    byId("results").innerHTML = renderReportHtml(report, sheets, alignments);
     byId("results").classList.add("visible");
     byId("raw").textContent = JSON.stringify(report, null, 2);
 

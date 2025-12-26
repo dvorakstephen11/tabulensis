@@ -3,6 +3,8 @@ use std::io::Cursor;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
+mod alignment;
+
 #[wasm_bindgen(start)]
 pub fn init_panic_hook() {
     console_error_panic_hook::set_once();
@@ -45,6 +47,7 @@ struct SheetPairSnapshot {
 struct DiffWithSheets {
     report: excel_diff::DiffReport,
     sheets: SheetPairSnapshot,
+    alignments: Vec<alignment::SheetAlignment>,
 }
 
 fn host_kind_from_name(name: &str) -> Option<HostKind> {
@@ -222,7 +225,12 @@ pub fn diff_files_with_sheets_json(
                 new: snapshot_workbook(&pkg_new.workbook, &sheet_ids, &session.strings),
             });
 
-            let payload = DiffWithSheets { report, sheets };
+            let alignments = alignment::build_alignments(&report, &sheets);
+            let payload = DiffWithSheets {
+                report,
+                sheets,
+                alignments,
+            };
             serde_json::to_string(&payload)
                 .map_err(|e| JsValue::from_str(&format!("Failed to serialize report: {}", e)))
         }
@@ -240,6 +248,7 @@ pub fn diff_files_with_sheets_json(
                     old: empty,
                     new: WorkbookSnapshot { sheets: Vec::new() },
                 },
+                alignments: Vec::new(),
             };
             serde_json::to_string(&payload)
                 .map_err(|e| JsValue::from_str(&format!("Failed to serialize report: {}", e)))
