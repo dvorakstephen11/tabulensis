@@ -61,22 +61,51 @@ function buildCellSummary(cell, viewRow, viewCol) {
 }
 
 export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
+  const theme = readGridTheme(document.documentElement);
+  const metrics = { ...GRID_METRICS };
+  const regionLookup = new Map((sheetVm.changes?.regions || []).map(region => [region.id, region]));
+  const anchorList = Array.isArray(sheetVm.changes?.anchors) ? sheetVm.changes.anchors : [];
+  const gridAnchors = anchorList
+    .filter(anchor => anchor?.target?.kind === "grid")
+    .map(anchor => ({
+      id: anchor.id,
+      viewRow: anchor.target.viewRow,
+      viewCol: anchor.target.viewCol,
+      regionId: anchor.target.regionId,
+      moveId: anchor.target.moveId,
+      group: anchor.group
+    }));
+  const anchorIndexById = new Map(gridAnchors.map((anchor, idx) => [anchor.id, idx]));
+
+  let initialAnchorIndex = 0;
+  if (typeof opts.initialAnchor === "string") {
+    const idx = anchorIndexById.get(opts.initialAnchor);
+    if (Number.isFinite(idx)) initialAnchorIndex = idx;
+  } else if (Number.isFinite(opts.initialAnchor)) {
+    initialAnchorIndex = opts.initialAnchor;
+  }
+  if (gridAnchors.length === 0) {
+    initialAnchorIndex = -1;
+  }
+
   const state = {
     mode: opts.initialMode === "unified" ? "unified" : "side_by_side",
     selected: null,
     hover: null,
     hoverMoveId: null,
-    anchorIndex: Number.isFinite(opts.initialAnchor) ? opts.initialAnchor : 0,
-    pinned: false
+    anchorIndex: initialAnchorIndex,
+    pinned: false,
+    contentMode: opts.displayOptions?.contentMode || "values",
+    focusRows: Boolean(opts.displayOptions?.focusRows),
+    focusCols: Boolean(opts.displayOptions?.focusCols),
+    rowMap: null,
+    colMap: null,
+    rowLookup: null,
+    colLookup: null,
+    rowCount: sheetVm.axis.rows.entries.length,
+    colCount: sheetVm.axis.cols.entries.length,
+    flash: null
   };
-
-  const theme = readGridTheme(document.documentElement);
-  const metrics = { ...GRID_METRICS };
-  const anchors = (sheetVm.changes?.regions || []).map(region => ({
-    row: region.top,
-    col: region.left,
-    id: region.id
-  }));
 
   mountEl.innerHTML = "";
 
@@ -118,10 +147,131 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
   const ctx = canvas.getContext("2d");
   let rafId = null;
 
-  const contentWidth = metrics.rowHeaderWidth + sheetVm.axis.cols.entries.length * metrics.colWidth;
-  const contentHeight = metrics.colHeaderHeight + sheetVm.axis.rows.entries.length * metrics.rowHeight;
-  spacer.style.width = `${contentWidth}px`;
-  spacer.style.height = `${contentHeight}px`;
+  let contentWidth = 0;
+  let contentHeight = 0;
+
+  function buildIndexLookup(map, total) {
+    if (!Array.isArray(map)) return null;
+    const lookup = new Array(total).fill(null);
+    for (let i = 0; i < map.length; i++) {
+      const viewIndex = map[i];
+      if (Number.isFinite(viewIndex)) {
+        lookup[viewIndex] = i;
+      }
+    }
+    return lookup;
+  }
+
+  function computeFocusMap(axis, context) {
+    const entries = axis === "row" ? sheetVm.axis.rows.entries : sheetVm.axis.cols.entries;
+    const maxIndex = entries.length - 1;
+    if (maxIndex < 0) return null;
+    const changed = new Set();
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      if (entry && entry.kind && entry.kind !== "match") {
+        changed.add(i);
+      }
+    }
+    for (const item of sheetVm.changes?.items || []) {
+      if (axis === "row" && item.group === "rows" && Number.isFinite(item.viewStart) && Number.isFinite(item.viewEnd)) {
+        for (let r = item.viewStart; r <= item.viewEnd; r++) {
+          changed.add(r);
+        }
+      }
+      if (axis === "col" && item.group === "cols" && Number.isFinite(item.viewStart) && Number.isFinite(item.viewEnd)) {
+        for (let c = item.viewStart; c <= item.viewEnd; c++) {
+          changed.add(c);
+        }
+      }
+    }
+    for (const region of sheetVm.changes?.regions || []) {
+      if (axis === "row") {
+        for (let r = region.top; r <= region.bottom; r++) {
+          changed.add(r);
+        }
+      } else {
+        for (let c = region.left; c <= region.right; c++) {
+          changed.add(c);
+        }
+      }
+    }
+    if (changed.size === 0) return null;
+    const expanded = new Set();
+    const ctx = Math.max(0, context || 0);
+    for (const idx of changed) {
+      for (let offset = -ctx; offset <= ctx; offset++) {
+        const next = idx + offset;
+        if (next >= 0 && next <= maxIndex) {
+          expanded.add(next);
+        }
+      }
+    }
+    if (expanded.size === 0) return null;
+    return Array.from(expanded).sort((a, b) => a - b);
+  }
+
+  function updateContentSize() {
+    contentWidth = metrics.rowHeaderWidth + state.colCount * metrics.colWidth;
+    contentHeight = metrics.colHeaderHeight + state.rowCount * metrics.rowHeight;
+    spacer.style.width = `${contentWidth}px`;
+    spacer.style.height = `${contentHeight}px`;
+  }
+
+  function updateDisplayMaps() {
+    const rows = sheetVm.axis.rows.entries.length;
+    const cols = sheetVm.axis.cols.entries.length;
+    if (state.focusRows) {
+      const map = computeFocusMap("row", sheetVm.renderPlan?.contextRows || 0);
+      state.rowMap = map && map.length ? map : null;
+    } else {
+      state.rowMap = null;
+    }
+    if (state.focusCols) {
+      const map = computeFocusMap("col", sheetVm.renderPlan?.contextCols || 0);
+      state.colMap = map && map.length ? map : null;
+    } else {
+      state.colMap = null;
+    }
+    state.rowLookup = buildIndexLookup(state.rowMap, rows);
+    state.colLookup = buildIndexLookup(state.colMap, cols);
+    state.rowCount = state.rowMap ? state.rowMap.length : rows;
+    state.colCount = state.colMap ? state.colMap.length : cols;
+    updateContentSize();
+  }
+
+  function visibleToViewRow(visibleRow) {
+    if (state.rowMap) return state.rowMap[visibleRow];
+    return visibleRow;
+  }
+
+  function visibleToViewCol(visibleCol) {
+    if (state.colMap) return state.colMap[visibleCol];
+    return visibleCol;
+  }
+
+  function viewToVisibleRow(viewRow) {
+    if (state.rowLookup) return state.rowLookup[viewRow];
+    return viewRow;
+  }
+
+  function viewToVisibleCol(viewCol) {
+    if (state.colLookup) return state.colLookup[viewCol];
+    return viewCol;
+  }
+
+  function ensureSelectionVisible() {
+    if (!state.selected) return;
+    const row = viewToVisibleRow(state.selected.viewRow);
+    const col = viewToVisibleCol(state.selected.viewCol);
+    if (row === null || row === undefined || col === null || col === undefined) {
+      const fallbackRow = state.rowMap ? state.rowMap[0] : 0;
+      const fallbackCol = state.colMap ? state.colMap[0] : 0;
+      state.selected = { viewRow: fallbackRow, viewCol: fallbackCol };
+    }
+  }
+
+  updateDisplayMaps();
 
   function updateModeButtons() {
     const active = state.mode;
@@ -174,9 +324,29 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
 
   function paint() {
     const size = resizeCanvas();
+    const now = performance.now();
+    let flashModel = null;
+    if (state.flash) {
+      const elapsed = now - state.flash.start;
+      const duration = 900;
+      if (elapsed >= duration) {
+        state.flash = null;
+      } else {
+        flashModel = {
+          ...state.flash,
+          alpha: Math.max(0, 1 - elapsed / duration)
+        };
+      }
+    }
     paintGrid(ctx, {
       sheetVm,
       mode: state.mode,
+      contentMode: state.contentMode,
+      rowMap: state.rowMap,
+      colMap: state.colMap,
+      rowLookup: state.rowLookup,
+      colLookup: state.colLookup,
+      flash: flashModel,
       viewport: {
         width: size.width,
         height: size.height,
@@ -189,6 +359,9 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
       hover: state.hover,
       hoverMoveId: state.hoverMoveId
     });
+    if (state.flash) {
+      schedulePaint();
+    }
   }
 
   function resolvePane(x, layout) {
@@ -220,21 +393,28 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
     if (y < layout.colHeaderHeight) {
       const pane = resolvePane(x, layout);
       if (!pane) return null;
-      const viewCol = Math.floor((scroll.scrollLeft + pane.localX) / metrics.colWidth);
-      if (viewCol < 0 || viewCol >= sheetVm.axis.cols.entries.length) return null;
+      const visibleCol = Math.floor((scroll.scrollLeft + pane.localX) / metrics.colWidth);
+      if (visibleCol < 0 || visibleCol >= state.colCount) return null;
+      const viewCol = visibleToViewCol(visibleCol);
+      if (!Number.isFinite(viewCol)) return null;
       return { type: "col-header", viewCol, pane: pane.index };
     }
     if (x < layout.rowHeaderWidth) {
-      const viewRow = Math.floor((scroll.scrollTop + (y - layout.colHeaderHeight)) / metrics.rowHeight);
-      if (viewRow < 0 || viewRow >= sheetVm.axis.rows.entries.length) return null;
+      const visibleRow = Math.floor((scroll.scrollTop + (y - layout.colHeaderHeight)) / metrics.rowHeight);
+      if (visibleRow < 0 || visibleRow >= state.rowCount) return null;
+      const viewRow = visibleToViewRow(visibleRow);
+      if (!Number.isFinite(viewRow)) return null;
       return { type: "row-header", viewRow };
     }
     const pane = resolvePane(x, layout);
     if (!pane) return null;
-    const viewCol = Math.floor((scroll.scrollLeft + pane.localX) / metrics.colWidth);
-    const viewRow = Math.floor((scroll.scrollTop + (y - layout.colHeaderHeight)) / metrics.rowHeight);
-    if (viewRow < 0 || viewRow >= sheetVm.axis.rows.entries.length) return null;
-    if (viewCol < 0 || viewCol >= sheetVm.axis.cols.entries.length) return null;
+    const visibleCol = Math.floor((scroll.scrollLeft + pane.localX) / metrics.colWidth);
+    const visibleRow = Math.floor((scroll.scrollTop + (y - layout.colHeaderHeight)) / metrics.rowHeight);
+    if (visibleRow < 0 || visibleRow >= state.rowCount) return null;
+    if (visibleCol < 0 || visibleCol >= state.colCount) return null;
+    const viewRow = visibleToViewRow(visibleRow);
+    const viewCol = visibleToViewCol(visibleCol);
+    if (!Number.isFinite(viewRow) || !Number.isFinite(viewCol)) return null;
     return { type: "cell", viewRow, viewCol, pane: pane.index };
   }
 
@@ -249,20 +429,29 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
     const meta = createEl("div", "grid-tooltip-meta", `Diff: ${summary.diffKind}`);
     tooltip.append(title, meta);
 
-    if (summary.oldAddress || summary.old.value || summary.old.formula) {
+    function appendTooltipSection(label, details) {
+      if (!details.value && !details.formula) return;
       const section = createEl("div", "grid-tooltip-section");
-      section.append(createEl("div", "grid-tooltip-label", summary.oldAddress ? `Old ${summary.oldAddress}` : "Old"));
-      if (summary.old.value) section.append(createEl("div", "grid-tooltip-value", summary.old.value));
-      if (summary.old.formula) section.append(createEl("div", "grid-tooltip-formula", summary.old.formula));
+      section.append(createEl("div", "grid-tooltip-label", label));
+      if (state.contentMode === "formulas") {
+        if (details.formula) {
+          section.append(createEl("div", "grid-tooltip-formula", details.formula));
+        } else if (details.value) {
+          section.append(createEl("div", "grid-tooltip-value", details.value));
+        }
+      } else {
+        if (details.value) section.append(createEl("div", "grid-tooltip-value", details.value));
+        if (details.formula) section.append(createEl("div", "grid-tooltip-formula", details.formula));
+      }
       tooltip.append(section);
     }
 
+    if (summary.oldAddress || summary.old.value || summary.old.formula) {
+      appendTooltipSection(summary.oldAddress ? `Old ${summary.oldAddress}` : "Old", summary.old);
+    }
+
     if (summary.newAddress || summary.fresh.value || summary.fresh.formula) {
-      const section = createEl("div", "grid-tooltip-section");
-      section.append(createEl("div", "grid-tooltip-label", summary.newAddress ? `New ${summary.newAddress}` : "New"));
-      if (summary.fresh.value) section.append(createEl("div", "grid-tooltip-value", summary.fresh.value));
-      if (summary.fresh.formula) section.append(createEl("div", "grid-tooltip-formula", summary.fresh.formula));
-      tooltip.append(section);
+      appendTooltipSection(summary.newAddress ? `New ${summary.newAddress}` : "New", summary.fresh);
     }
 
     tooltip.classList.add("visible");
@@ -305,11 +494,21 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
       addRow("Move", summary.moveRole ? `${summary.moveRole} ${summary.moveId}` : summary.moveId);
     }
     addRow("Old", summary.oldAddress);
-    if (summary.old.value) addRow("Old Value", summary.old.value);
-    if (summary.old.formula) addRow("Old Formula", summary.old.formula);
+    if (state.contentMode === "formulas") {
+      if (summary.old.formula) addRow("Old Formula", summary.old.formula);
+      else if (summary.old.value) addRow("Old Value", summary.old.value);
+    } else {
+      if (summary.old.value) addRow("Old Value", summary.old.value);
+      if (summary.old.formula) addRow("Old Formula", summary.old.formula);
+    }
     addRow("New", summary.newAddress);
-    if (summary.fresh.value) addRow("New Value", summary.fresh.value);
-    if (summary.fresh.formula) addRow("New Formula", summary.fresh.formula);
+    if (state.contentMode === "formulas") {
+      if (summary.fresh.formula) addRow("New Formula", summary.fresh.formula);
+      else if (summary.fresh.value) addRow("New Value", summary.fresh.value);
+    } else {
+      if (summary.fresh.value) addRow("New Value", summary.fresh.value);
+      if (summary.fresh.formula) addRow("New Formula", summary.fresh.formula);
+    }
 
     const jumpTarget = resolveMoveTarget(cell);
     if (jumpTarget) {
@@ -352,20 +551,26 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
   }
 
   function centerOn(viewRow, viewCol) {
+    const visibleRow = viewToVisibleRow(viewRow);
+    const visibleCol = viewToVisibleCol(viewCol);
+    if (visibleRow === null || visibleRow === undefined || visibleCol === null || visibleCol === undefined) return;
     const layout = getLayout();
     const cellAreaHeight = Math.max(0, layout.height - layout.colHeaderHeight);
-    const cellX = viewCol * metrics.colWidth;
-    const cellY = viewRow * metrics.rowHeight;
+    const cellX = visibleCol * metrics.colWidth;
+    const cellY = visibleRow * metrics.rowHeight;
     const targetLeft = cellX - (layout.paneWidth - metrics.colWidth) / 2;
     const targetTop = cellY - (cellAreaHeight - metrics.rowHeight) / 2;
     setScroll(targetLeft, targetTop);
   }
 
   function scrollIntoView(viewRow, viewCol) {
+    const visibleRow = viewToVisibleRow(viewRow);
+    const visibleCol = viewToVisibleCol(viewCol);
+    if (visibleRow === null || visibleRow === undefined || visibleCol === null || visibleCol === undefined) return;
     const layout = getLayout();
     const cellAreaHeight = Math.max(0, layout.height - layout.colHeaderHeight);
-    const cellX = viewCol * metrics.colWidth;
-    const cellY = viewRow * metrics.rowHeight;
+    const cellX = visibleCol * metrics.colWidth;
+    const cellY = visibleRow * metrics.rowHeight;
     const minLeft = scroll.scrollLeft;
     const maxLeft = scroll.scrollLeft + layout.paneWidth - metrics.colWidth;
     const minTop = scroll.scrollTop;
@@ -381,21 +586,96 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
 
   function selectCell(viewRow, viewCol, { center = false } = {}) {
     state.selected = { viewRow, viewCol };
+    ensureSelectionVisible();
     updateInspector();
+    const target = state.selected;
     if (center) {
-      centerOn(viewRow, viewCol);
+      centerOn(target.viewRow, target.viewCol);
     } else {
-      scrollIntoView(viewRow, viewCol);
+      scrollIntoView(target.viewRow, target.viewCol);
     }
     schedulePaint();
   }
 
-  function jumpToRegion(index) {
-    if (!anchors.length) return;
-    const nextIndex = ((index % anchors.length) + anchors.length) % anchors.length;
-    const anchor = anchors[nextIndex];
+  function dispatchViewerEvent(name, detail) {
+    mountEl.dispatchEvent(new CustomEvent(name, { detail }));
+  }
+
+  function resolveAnchorIndex(anchorIdOrIndex) {
+    if (typeof anchorIdOrIndex === "string") {
+      const idx = anchorIndexById.get(anchorIdOrIndex);
+      return Number.isFinite(idx) ? idx : -1;
+    }
+    if (Number.isFinite(anchorIdOrIndex)) {
+      return anchorIdOrIndex;
+    }
+    return -1;
+  }
+
+  function announceAnchor(anchor) {
+    if (!anchor) return;
+    dispatchViewerEvent("gridviewer:anchor", { anchorId: anchor.id });
+  }
+
+  function jumpToAnchor(anchorIdOrIndex) {
+    if (!gridAnchors.length) return false;
+    const nextIndex = resolveAnchorIndex(anchorIdOrIndex);
+    if (nextIndex < 0 || nextIndex >= gridAnchors.length) return false;
+    const anchor = gridAnchors[nextIndex];
     state.anchorIndex = nextIndex;
-    selectCell(anchor.row, anchor.col, { center: true });
+    selectCell(anchor.viewRow, anchor.viewCol, { center: true });
+    announceAnchor(anchor);
+    return true;
+  }
+
+  function flashAnchor(anchorIdOrIndex) {
+    const idx = resolveAnchorIndex(anchorIdOrIndex);
+    if (idx < 0 || idx >= gridAnchors.length) return false;
+    const anchor = gridAnchors[idx];
+    let flash = null;
+    if (anchor.regionId) {
+      const region = regionLookup.get(anchor.regionId);
+      if (region) {
+        flash = {
+          kind: "region",
+          bounds: { top: region.top, bottom: region.bottom, left: region.left, right: region.right },
+          start: performance.now()
+        };
+      }
+    }
+    if (!flash && anchor.group === "rows") {
+      flash = { kind: "row", viewRow: anchor.viewRow, start: performance.now() };
+    }
+    if (!flash && anchor.group === "cols") {
+      flash = { kind: "col", viewCol: anchor.viewCol, start: performance.now() };
+    }
+    if (!flash && anchor.moveId) {
+      if (anchor.moveId.startsWith("r:")) {
+        flash = { kind: "row", viewRow: anchor.viewRow, start: performance.now() };
+      } else if (anchor.moveId.startsWith("c:")) {
+        flash = { kind: "col", viewCol: anchor.viewCol, start: performance.now() };
+      }
+    }
+    if (!flash) {
+      flash = { kind: "cell", viewRow: anchor.viewRow, viewCol: anchor.viewCol, start: performance.now() };
+    }
+    state.flash = flash;
+    schedulePaint();
+    return true;
+  }
+
+  function nextAnchor() {
+    if (!gridAnchors.length) return false;
+    const nextIndex = state.anchorIndex < 0 ? 0 : state.anchorIndex + 1;
+    if (nextIndex >= gridAnchors.length) return false;
+    return jumpToAnchor(nextIndex);
+  }
+
+  function prevAnchor() {
+    if (!gridAnchors.length) return false;
+    const nextIndex = state.anchorIndex < 0 ? gridAnchors.length - 1 : state.anchorIndex - 1;
+    if (nextIndex < 0) return false;
+    return jumpToAnchor(nextIndex);
   }
 
   function onScroll() {
@@ -471,26 +751,69 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
       return;
     }
     if (e.key === "n" || e.key === "N") {
-      jumpToRegion(state.anchorIndex + 1);
+      if (nextAnchor()) {
+        flashAnchor(state.anchorIndex);
+      }
       e.preventDefault();
       return;
     }
     if (e.key === "p" || e.key === "P") {
-      jumpToRegion(state.anchorIndex - 1);
+      if (prevAnchor()) {
+        flashAnchor(state.anchorIndex);
+      }
       e.preventDefault();
       return;
     }
 
-    const rowCount = sheetVm.axis.rows.entries.length;
-    const colCount = sheetVm.axis.cols.entries.length;
-    let row = state.selected ? state.selected.viewRow : 0;
-    let col = state.selected ? state.selected.viewCol : 0;
-    if (e.key === "ArrowUp") row = clamp(row - 1, 0, rowCount - 1);
-    if (e.key === "ArrowDown") row = clamp(row + 1, 0, rowCount - 1);
-    if (e.key === "ArrowLeft") col = clamp(col - 1, 0, colCount - 1);
-    if (e.key === "ArrowRight") col = clamp(col + 1, 0, colCount - 1);
-    selectCell(row, col);
+    const maxVisibleRow = Math.max(0, state.rowCount - 1);
+    const maxVisibleCol = Math.max(0, state.colCount - 1);
+    let viewRow = state.selected ? state.selected.viewRow : 0;
+    let viewCol = state.selected ? state.selected.viewCol : 0;
+    let visibleRow = viewToVisibleRow(viewRow);
+    let visibleCol = viewToVisibleCol(viewCol);
+    if (visibleRow === null || visibleRow === undefined) visibleRow = 0;
+    if (visibleCol === null || visibleCol === undefined) visibleCol = 0;
+    if (e.key === "ArrowUp") visibleRow = clamp(visibleRow - 1, 0, maxVisibleRow);
+    if (e.key === "ArrowDown") visibleRow = clamp(visibleRow + 1, 0, maxVisibleRow);
+    if (e.key === "ArrowLeft") visibleCol = clamp(visibleCol - 1, 0, maxVisibleCol);
+    if (e.key === "ArrowRight") visibleCol = clamp(visibleCol + 1, 0, maxVisibleCol);
+    viewRow = visibleToViewRow(visibleRow);
+    viewCol = visibleToViewCol(visibleCol);
+    if (Number.isFinite(viewRow) && Number.isFinite(viewCol)) {
+      selectCell(viewRow, viewCol);
+    }
     e.preventDefault();
+  }
+
+  function setDisplayOptions(next = {}) {
+    let updated = false;
+    const allowedModes = new Set(["values", "formulas", "both"]);
+    if (typeof next.contentMode === "string" && allowedModes.has(next.contentMode) && next.contentMode !== state.contentMode) {
+      state.contentMode = next.contentMode;
+      updated = true;
+      updateInspector();
+    }
+    if (typeof next.focusRows === "boolean" && next.focusRows !== state.focusRows) {
+      state.focusRows = next.focusRows;
+      updated = true;
+    }
+    if (typeof next.focusCols === "boolean" && next.focusCols !== state.focusCols) {
+      state.focusCols = next.focusCols;
+      updated = true;
+    }
+    if (updated) {
+      updateDisplayMaps();
+      ensureSelectionVisible();
+      setScroll(scroll.scrollLeft, scroll.scrollTop);
+      if (state.selected) {
+        scrollIntoView(state.selected.viewRow, state.selected.viewCol);
+      }
+      schedulePaint();
+    }
+  }
+
+  function onFocus() {
+    dispatchViewerEvent("gridviewer:focus", {});
   }
 
   function onModeClick(e) {
@@ -510,14 +833,15 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
   canvas.addEventListener("pointerleave", onPointerLeave);
   canvas.addEventListener("click", onClick);
   root.addEventListener("keydown", onKeyDown);
+  root.addEventListener("focus", onFocus);
 
   const resizeObserver = new ResizeObserver(() => schedulePaint());
   resizeObserver.observe(scroll);
 
   updateModeButtons();
   schedulePaint();
-  if (Number.isFinite(state.anchorIndex) && anchors.length > 0 && state.anchorIndex >= 0) {
-    jumpToRegion(state.anchorIndex);
+  if (Number.isFinite(state.anchorIndex) && gridAnchors.length > 0 && state.anchorIndex >= 0) {
+    jumpToAnchor(state.anchorIndex);
   }
 
   return {
@@ -530,6 +854,7 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
       canvas.removeEventListener("pointerleave", onPointerLeave);
       canvas.removeEventListener("click", onClick);
       root.removeEventListener("keydown", onKeyDown);
+      root.removeEventListener("focus", onFocus);
     },
     focus() {
       root.focus();
@@ -537,8 +862,20 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
     jumpTo(viewRow, viewCol) {
       selectCell(viewRow, viewCol, { center: true });
     },
-    jumpToRegion(index) {
-      jumpToRegion(index);
+    jumpToAnchor(anchorIdOrIndex) {
+      return jumpToAnchor(anchorIdOrIndex);
+    },
+    nextAnchor() {
+      return nextAnchor();
+    },
+    prevAnchor() {
+      return prevAnchor();
+    },
+    setDisplayOptions(options) {
+      setDisplayOptions(options);
+    },
+    flashAnchor(anchorIdOrIndex) {
+      return flashAnchor(anchorIdOrIndex);
     }
   };
 }

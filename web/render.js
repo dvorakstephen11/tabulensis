@@ -1074,22 +1074,126 @@ function renderWarnings(warnings) {
   `;
 }
 
-
-function renderChangeItemVm(item) {
-  const changeType = item.changeType || "modified";
-  const cls = `change-item ${changeType}`;
-  const icon = changeType === "added" ? "+" : changeType === "removed" ? "-" : changeType === "moved" ? ">" : "~";
-  const detail = item.detail ? `<span class="change-detail">${esc(item.detail)}</span>` : "";
+function renderPreviewLimitations(vm) {
+  const hasLimitations = vm.sheets?.some(sheet => sheet.renderPlan?.status?.kind && sheet.renderPlan.status.kind !== "ok");
+  if (!hasLimitations) return "";
   return `
-    <div class="${cls}">
-      <div class="change-icon">${icon}</div>
-      <span class="change-location">${esc(item.label || "")}</span>
-      ${detail}
+    <div class="preview-limitations">
+      <div class="preview-limitations-title">Preview limitations</div>
+      <p><strong>Skipped</strong> means the aligned view was too large or inconsistent to render. The change list is still valid.</p>
+      <p><strong>Missing</strong> means snapshots or alignment data were not available for that sheet.</p>
     </div>
   `;
 }
 
-function renderChangeGroupVm(title, icon, items) {
+function renderReviewToolbar(vm) {
+  if (!vm.sheets || vm.sheets.length === 0) return "";
+  return `
+    <div class="review-toolbar">
+      <div class="review-toolbar-left">
+        <div class="toolbar-field">
+          <label class="toolbar-label" for="sheetSearch">Sheet search</label>
+          <input type="search" id="sheetSearch" class="sheet-search" placeholder="Search sheets" />
+        </div>
+        <div class="toolbar-actions">
+          <button type="button" class="review-nav-btn" data-review-nav="prev">Prev change</button>
+          <button type="button" class="review-nav-btn" data-review-nav="next">Next change</button>
+        </div>
+      </div>
+      <div class="review-toolbar-right">
+        <label class="toolbar-toggle">
+          <input type="checkbox" data-filter="focus-rows" />
+          Show only changed rows
+        </label>
+        <label class="toolbar-toggle">
+          <input type="checkbox" data-filter="focus-cols" />
+          Show only changed columns
+        </label>
+        <label class="toolbar-toggle">
+          <input type="checkbox" data-filter="ignore-blank" checked />
+          Ignore blank-to-blank
+        </label>
+        <label class="toolbar-select">
+          <span>Display</span>
+          <select data-filter="content-mode">
+            <option value="values">Values</option>
+            <option value="formulas">Formulas</option>
+            <option value="both">Both</option>
+          </select>
+        </label>
+      </div>
+    </div>
+  `;
+}
+
+function renderSheetIndex(vm) {
+  if (!vm.sheets || vm.sheets.length === 0) return "";
+  const maxOps = Math.max(1, ...vm.sheets.map(sheet => sheet.opCount || 0));
+  const maxAnchors = Math.max(1, ...vm.sheets.map(sheet => (sheet.changes?.anchors || []).length));
+  const maxDensity = Math.max(maxOps, maxAnchors);
+
+  let html = `
+    <div class="sheet-index">
+      <div class="sheet-index-title">Sheet Index</div>
+      <div class="sheet-index-list">
+  `;
+
+  for (const sheet of vm.sheets) {
+    const anchorCount = sheet.changes?.anchors ? sheet.changes.anchors.length : 0;
+    const densityValue = Math.max(anchorCount, sheet.opCount || 0);
+    const densityPct = Math.round((densityValue / maxDensity) * 100);
+    const statusKind = sheet.renderPlan?.status?.kind || "ok";
+    const statusLabel = statusKind === "ok" ? "OK" : statusKind.toUpperCase();
+    const statusTitle = sheet.renderPlan?.status?.message ? ` title="${esc(sheet.renderPlan.status.message)}"` : "";
+
+    html += `
+      <button type="button" class="sheet-index-item" data-sheet="${esc(sheet.name)}">
+        <div class="sheet-index-main">
+          <span class="sheet-index-name">${esc(sheet.name)}</span>
+          <span class="sheet-index-badges">
+            <span class="sheet-index-badge">${sheet.opCount}</span>
+            <span class="sheet-index-badge">${anchorCount}</span>
+          </span>
+        </div>
+        <div class="sheet-index-meta">
+          <div class="density-bar"><span style="width: ${densityPct}%"></span></div>
+          <span class="status-pill ${statusKind}"${statusTitle}>${statusLabel}</span>
+        </div>
+      </button>
+    `;
+  }
+
+  html += `
+      </div>
+    </div>
+  `;
+  return html;
+}
+
+
+function renderChangeItemVm(item, sheetName) {
+  const changeType = item.changeType || "modified";
+  const cls = `change-item ${changeType}`;
+  const icon = changeType === "added" ? "+" : changeType === "removed" ? "-" : changeType === "moved" ? ">" : "~";
+  const detail = item.detail ? `<span class="change-detail">${esc(item.detail)}</span>` : "";
+  const navTargets = Array.isArray(item.navTargets) ? item.navTargets : [];
+  const actions = navTargets.length
+    ? `<div class="change-actions">${navTargets
+        .map(target => `<button type="button" class="change-jump" data-sheet="${esc(sheetName)}" data-anchor="${esc(target.anchorId)}">${esc(target.label || "Jump")}</button>`)
+        .join("")}</div>`
+    : "";
+  const itemId = `change-${sheetName}-${item.id}`;
+  return `
+    <div class="${cls}" id="${esc(itemId)}">
+      <div class="change-icon">${icon}</div>
+      <span class="change-location">${esc(item.label || "")}</span>
+      ${detail}
+      ${actions}
+    </div>
+  `;
+}
+
+function renderChangeGroupVm(title, icon, items, sheetName) {
   if (!items || items.length === 0) return "";
   return `
     <div class="change-group">
@@ -1098,7 +1202,7 @@ function renderChangeGroupVm(title, icon, items) {
         <span>${esc(title)} (${items.length})</span>
       </div>
       <div class="change-list">
-        ${items.map(item => renderChangeItemVm(item)).join("")}
+        ${items.map(item => renderChangeItemVm(item, sheetName)).join("")}
       </div>
     </div>
   `;
@@ -1202,16 +1306,32 @@ function renderSheetGridVm(sheetVm) {
   }
 
   const regionIds = sheetVm.renderPlan.regionsToRender || [];
-  if (regionIds.length === 0) return "";
+  const hasGridAnchors = Array.isArray(sheetVm.changes?.anchors)
+    ? sheetVm.changes.anchors.some(anchor => anchor.target?.kind === "grid")
+    : false;
+  if (regionIds.length === 0 && !hasGridAnchors) return "";
+
+  const initialAnchor = Array.isArray(sheetVm.changes?.anchors)
+    ? sheetVm.changes.anchors.find(anchor => anchor.target?.kind === "grid")
+    : null;
+  const initialAnchorId = initialAnchor ? initialAnchor.id : "0";
 
   return `
-    <div class="grid-viewer-mount" data-sheet="${esc(sheetVm.name)}" data-initial-mode="side_by_side" data-initial-anchor="0"></div>
+    <div class="grid-viewer-mount" data-sheet="${esc(sheetVm.name)}" data-initial-mode="side_by_side" data-initial-anchor="${esc(initialAnchorId)}"></div>
     ${renderGridLegend()}
   `;
 }
 
 function renderSheetVm(sheetVm) {
   const badge = `${sheetVm.opCount} change${sheetVm.opCount !== 1 ? "s" : ""}`;
+  const anchorCount = sheetVm.changes?.anchors ? sheetVm.changes.anchors.length : 0;
+  const anchorBadge = anchorCount > 0
+    ? `<span class="sheet-badge anchor-badge">${anchorCount} anchor${anchorCount !== 1 ? "s" : ""}</span>`
+    : "";
+  const status = sheetVm.renderPlan.status || { kind: "ok" };
+  const statusLabel = status.kind === "ok" ? "OK" : status.kind.toUpperCase();
+  const statusTitle = status.message ? ` title="${esc(status.message)}"` : "";
+  const statusPill = `<button type="button" class="status-pill ${status.kind}" data-sheet="${esc(sheetVm.name)}"${statusTitle}>${statusLabel}</button>`;
   const gridHtml = renderSheetGridVm(sheetVm);
 
   let contentHtml = "";
@@ -1234,11 +1354,11 @@ function renderSheetVm(sheetVm) {
   const otherItems = sheetVm.changes.items.filter(item => item.group === "other");
 
   let detailsHtml = "";
-  detailsHtml += renderChangeGroupVm("Row Changes", "R", rowItems);
-  detailsHtml += renderChangeGroupVm("Column Changes", "C", colItems);
-  detailsHtml += renderChangeGroupVm("Cell Changes", "*", cellItems);
-  detailsHtml += renderChangeGroupVm("Moved Blocks", ">", moveItems);
-  detailsHtml += renderChangeGroupVm("Other Changes", "?", otherItems);
+  detailsHtml += renderChangeGroupVm("Row Changes", "R", rowItems, sheetVm.name);
+  detailsHtml += renderChangeGroupVm("Column Changes", "C", colItems, sheetVm.name);
+  detailsHtml += renderChangeGroupVm("Cell Changes", "*", cellItems, sheetVm.name);
+  detailsHtml += renderChangeGroupVm("Moved Blocks", ">", moveItems, sheetVm.name);
+  detailsHtml += renderChangeGroupVm("Other Changes", "?", otherItems, sheetVm.name);
 
   if (detailsHtml) {
     contentHtml += `
@@ -1258,6 +1378,8 @@ function renderSheetVm(sheetVm) {
           <div class="sheet-icon">#</div>
           <span class="sheet-name">${esc(sheetVm.name)}</span>
           <span class="sheet-badge">${badge}</span>
+          ${anchorBadge}
+          ${statusPill}
         </div>
         <svg class="expand-icon" width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
           <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" />
@@ -1279,7 +1401,7 @@ function renderOtherChangesVm(title, icon, items) {
         <span>${esc(title)} (${items.length})</span>
       </div>
       <div class="change-list">
-        ${items.map(item => renderChangeItemVm(item)).join("")}
+        ${items.map(item => renderChangeItemVm(item, "workbook")).join("")}
       </div>
     </div>
   `;
@@ -1288,12 +1410,16 @@ function renderOtherChangesVm(title, icon, items) {
 export function renderWorkbookVm(vm) {
   let html = "";
   html += renderWarnings(vm.warnings);
+  html += renderPreviewLimitations(vm);
   html += renderSummaryCards(vm.counts);
 
   const total = vm.counts.added + vm.counts.removed + vm.counts.modified + vm.counts.moved;
   if (total === 0) {
     return html;
   }
+
+  html += renderReviewToolbar(vm);
+  html += renderSheetIndex(vm);
 
   for (const sheetVm of vm.sheets) {
     html += renderSheetVm(sheetVm);

@@ -5,7 +5,8 @@ const DEFAULT_OPTS = {
   contextCols: 1,
   maxCellsPerRegion: 200,
   maxVisualCells: 5000,
-  mergeGap: 1
+  mergeGap: 1,
+  ignoreBlankToBlank: true
 };
 
 function resolveString(report, id) {
@@ -217,8 +218,9 @@ function mapIndexToView(index, map) {
   return index;
 }
 
-function makeEditMap(report, sheetOps, rowsVm, colsVm) {
+function makeEditMap(report, sheetOps, rowsVm, colsVm, opts) {
   const editMap = new Map();
+  const ignoreBlank = opts?.ignoreBlankToBlank !== false;
   for (const op of sheetOps) {
     if (op.kind !== "CellEdited") continue;
     const addr = parseCellAddress(op.addr);
@@ -227,12 +229,14 @@ function makeEditMap(report, sheetOps, rowsVm, colsVm) {
     const viewCol = mapIndexToView(addr.col, colsVm.newToView);
     if (viewRow === null || viewCol === null) continue;
     const key = viewRow * CELL_KEY_STRIDE + viewCol;
-    editMap.set(key, {
-      fromValue: op.from ? formatValue(report, op.from.value) : "",
-      toValue: op.to ? formatValue(report, op.to.value) : "",
-      fromFormula: resolveFormula(report, op.from?.formula),
-      toFormula: resolveFormula(report, op.to?.formula)
-    });
+    const fromValue = op.from ? formatValue(report, op.from.value) : "";
+    const toValue = op.to ? formatValue(report, op.to.value) : "";
+    const fromFormula = resolveFormula(report, op.from?.formula);
+    const toFormula = resolveFormula(report, op.to?.formula);
+    if (ignoreBlank && !fromValue && !toValue && !fromFormula && !toFormula) {
+      continue;
+    }
+    editMap.set(key, { fromValue, toValue, fromFormula, toFormula });
   }
   return editMap;
 }
@@ -350,6 +354,13 @@ function mapRangeToView(start, count, map) {
   }
   if (minView === null || maxView === null) return null;
   return { start: minView, end: maxView };
+}
+
+function viewStartForRange(axisVm, start, count, side) {
+  if (!axisVm) return null;
+  const map = side === "old" ? axisVm.oldToView : axisVm.newToView;
+  const range = mapRangeToView(start, count, map);
+  return range ? range.start : null;
 }
 
 function viewIndexForSide(axisVm, viewIndex, side) {
@@ -556,20 +567,35 @@ function buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions }) {
 
   for (const op of ops) {
     if (op.kind === "RowAdded") {
-      rowAdds.push(mapIndexToView(op.row_idx, rowsVm.newToView));
+      const viewIdx = mapIndexToView(op.row_idx, rowsVm.newToView);
+      if (viewIdx !== null && viewIdx !== undefined) {
+        rowAdds.push(viewIdx);
+      }
     } else if (op.kind === "RowRemoved") {
-      rowRemoves.push(mapIndexToView(op.row_idx, rowsVm.oldToView));
+      const viewIdx = mapIndexToView(op.row_idx, rowsVm.oldToView);
+      if (viewIdx !== null && viewIdx !== undefined) {
+        rowRemoves.push(viewIdx);
+      }
     } else if (op.kind === "ColumnAdded") {
-      colAdds.push(mapIndexToView(op.col_idx, colsVm.newToView));
+      const viewIdx = mapIndexToView(op.col_idx, colsVm.newToView);
+      if (viewIdx !== null && viewIdx !== undefined) {
+        colAdds.push(viewIdx);
+      }
     } else if (op.kind === "ColumnRemoved") {
-      colRemoves.push(mapIndexToView(op.col_idx, colsVm.oldToView));
+      const viewIdx = mapIndexToView(op.col_idx, colsVm.oldToView);
+      if (viewIdx !== null && viewIdx !== undefined) {
+        colRemoves.push(viewIdx);
+      }
     } else if (op.kind === "RowReplaced") {
       const viewIdx = mapIndexToView(op.row_idx, rowsVm.newToView);
       items.push({
         id: `row-replaced-${op.row_idx}`,
         group: "rows",
         changeType: "modified",
-        label: `Row ${viewIndexForSide(rowsVm, viewIdx, "new") + 1} replaced`
+        label: `Row ${viewIndexForSide(rowsVm, viewIdx, "new") + 1} replaced`,
+        axis: "row",
+        viewStart: viewIdx,
+        viewEnd: viewIdx
       });
     }
   }
@@ -579,7 +605,10 @@ function buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions }) {
       id: `row-added-${group.start}`,
       group: "rows",
       changeType: "added",
-      label: formatRowRange(rowsVm, group.start, group.end, "new", "added")
+      label: formatRowRange(rowsVm, group.start, group.end, "new", "added"),
+      axis: "row",
+      viewStart: group.start,
+      viewEnd: group.end
     });
   }
   for (const group of groupConsecutive(rowRemoves)) {
@@ -587,7 +616,10 @@ function buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions }) {
       id: `row-removed-${group.start}`,
       group: "rows",
       changeType: "removed",
-      label: formatRowRange(rowsVm, group.start, group.end, "old", "removed")
+      label: formatRowRange(rowsVm, group.start, group.end, "old", "removed"),
+      axis: "row",
+      viewStart: group.start,
+      viewEnd: group.end
     });
   }
   for (const group of groupConsecutive(colAdds)) {
@@ -595,7 +627,10 @@ function buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions }) {
       id: `col-added-${group.start}`,
       group: "cols",
       changeType: "added",
-      label: formatColRange(colsVm, group.start, group.end, "new", "added")
+      label: formatColRange(colsVm, group.start, group.end, "new", "added"),
+      axis: "col",
+      viewStart: group.start,
+      viewEnd: group.end
     });
   }
   for (const group of groupConsecutive(colRemoves)) {
@@ -603,7 +638,10 @@ function buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions }) {
       id: `col-removed-${group.start}`,
       group: "cols",
       changeType: "removed",
-      label: formatColRange(colsVm, group.start, group.end, "old", "removed")
+      label: formatColRange(colsVm, group.start, group.end, "old", "removed"),
+      axis: "col",
+      viewStart: group.start,
+      viewEnd: group.end
     });
   }
 
@@ -619,7 +657,12 @@ function buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions }) {
           group: "moves",
           changeType: "moved",
           label,
-          detail: `to row ${move.dst_start + 1}`
+          detail: `to row ${move.dst_start + 1}`,
+          moveId: move.id,
+          axis: "row",
+          srcStart: move.src_start,
+          dstStart: move.dst_start,
+          count: move.count
         });
       } else if (move.axis === "col") {
         const start = colToLetter(move.src_start);
@@ -630,7 +673,12 @@ function buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions }) {
           group: "moves",
           changeType: "moved",
           label,
-          detail: `to column ${colToLetter(move.dst_start)}`
+          detail: `to column ${colToLetter(move.dst_start)}`,
+          moveId: move.id,
+          axis: "col",
+          srcStart: move.src_start,
+          dstStart: move.dst_start,
+          count: move.count
         });
       }
     }
@@ -640,23 +688,35 @@ function buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions }) {
         const start = op.src_start_row + 1;
         const end = op.src_start_row + op.row_count;
         const label = start === end ? `Row ${start} moved` : `Rows ${start}-${end} moved`;
+        const moveId = `r:${op.src_start_row}+${op.row_count}->${op.dst_start_row}`;
         items.push({
           id: `move-rows-${op.src_start_row}-${op.dst_start_row}`,
           group: "moves",
           changeType: "moved",
           label,
-          detail: `to row ${op.dst_start_row + 1}`
+          detail: `to row ${op.dst_start_row + 1}`,
+          moveId,
+          axis: "row",
+          srcStart: op.src_start_row,
+          dstStart: op.dst_start_row,
+          count: op.row_count
         });
       } else if (op.kind === "BlockMovedColumns") {
         const start = colToLetter(op.src_start_col);
         const end = colToLetter(op.src_start_col + op.col_count - 1);
         const label = start === end ? `Column ${start} moved` : `Columns ${start}-${end} moved`;
+        const moveId = `c:${op.src_start_col}+${op.col_count}->${op.dst_start_col}`;
         items.push({
           id: `move-cols-${op.src_start_col}-${op.dst_start_col}`,
           group: "moves",
           changeType: "moved",
           label,
-          detail: `to column ${colToLetter(op.dst_start_col)}`
+          detail: `to column ${colToLetter(op.dst_start_col)}`,
+          moveId,
+          axis: "col",
+          srcStart: op.src_start_col,
+          dstStart: op.dst_start_col,
+          count: op.col_count
         });
       }
     }
@@ -668,12 +728,15 @@ function buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions }) {
       const srcEnd = formatCellAddress(op.src_start_row + op.src_row_count - 1, op.src_start_col + op.src_col_count - 1);
       const dstStart = formatCellAddress(op.dst_start_row, op.dst_start_col);
       const dstEnd = formatCellAddress(op.dst_start_row + op.src_row_count - 1, op.dst_start_col + op.src_col_count - 1);
+      const moveId = `rect:${op.src_start_row},${op.src_start_col}+${op.src_row_count}x${op.src_col_count}->${op.dst_start_row},${op.dst_start_col}`;
       items.push({
         id: `move-rect-${srcStart}-${dstStart}`,
         group: "moves",
         changeType: "moved",
         label: `Range ${srcStart}:${srcEnd} moved`,
-        detail: `to ${dstStart}:${dstEnd}`
+        detail: `to ${dstStart}:${dstEnd}`,
+        moveId,
+        moveKind: "rect"
       });
     }
   }
@@ -687,14 +750,16 @@ function buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions }) {
         group: "cells",
         changeType: "modified",
         label: `${region.label} modified`,
-        detail
+        detail,
+        regionId: region.id
       });
     } else if (region.kind === "rect") {
       items.push({
         id: `rect-region-${region.id}`,
         group: "cells",
         changeType: "modified",
-        label: `${region.label} replaced`
+        label: `${region.label} replaced`,
+        regionId: region.id
       });
     }
   }
@@ -725,6 +790,229 @@ function buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions }) {
   }
 
   return items;
+}
+
+function anchorPriority(group, regionKind) {
+  if (group === "moves") return 0;
+  if (group === "rows" || group === "cols") return 1;
+  if (regionKind === "rect") return 2;
+  if (group === "cells") return 3;
+  return 4;
+}
+
+function buildChangeAnchors({ sheetName, status, items, regions, rowsVm, colsVm }) {
+  const entries = [];
+  const regionById = new Map();
+  const moveRegions = new Map();
+
+  for (const region of regions || []) {
+    regionById.set(region.id, region);
+    if (region.moveId) {
+      if (!moveRegions.has(region.moveId)) {
+        moveRegions.set(region.moveId, {});
+      }
+      const record = moveRegions.get(region.moveId);
+      if (region.kind === "move_src") record.src = region;
+      if (region.kind === "move_dst") record.dst = region;
+    }
+  }
+
+  const canGrid =
+    status?.kind === "ok" &&
+    Array.isArray(rowsVm?.entries) &&
+    Array.isArray(colsVm?.entries) &&
+    rowsVm.entries.length > 0 &&
+    colsVm.entries.length > 0;
+
+  function addAnchor({ id, group, changeType, label, detail, viewRow, viewCol, regionId, moveId, listElementId, regionKind }) {
+    if (!id || !listElementId) return;
+    const hasGridTarget = canGrid && Number.isFinite(viewRow) && Number.isFinite(viewCol);
+    const target = hasGridTarget
+      ? {
+          kind: "grid",
+          viewRow,
+          viewCol,
+          ...(regionId ? { regionId } : {}),
+          ...(moveId ? { moveId } : {})
+        }
+      : { kind: "list", elementId: listElementId };
+    const anchor = {
+      id,
+      group: group || "cells",
+      changeType: changeType || "modified",
+      label: label || id,
+      target
+    };
+    if (detail) anchor.detail = detail;
+    entries.push({
+      anchor,
+      sortRow: Number.isFinite(viewRow) ? viewRow : Number.MAX_SAFE_INTEGER,
+      sortCol: Number.isFinite(viewCol) ? viewCol : Number.MAX_SAFE_INTEGER,
+      priority: anchorPriority(group, regionKind)
+    });
+  }
+
+  for (const item of items || []) {
+    const listElementId = `change-${sheetName}-${item.id}`;
+
+    if (item.regionId) {
+      const region = regionById.get(item.regionId);
+      if (region) {
+        addAnchor({
+          id: `region:${region.id}`,
+          group: item.group,
+          changeType: item.changeType,
+          label: item.label,
+          detail: item.detail,
+          viewRow: region.top,
+          viewCol: region.left,
+          regionId: region.id,
+          moveId: region.moveId,
+          listElementId,
+          regionKind: region.kind
+        });
+      }
+      continue;
+    }
+
+    if (item.group === "rows") {
+      addAnchor({
+        id: `row:${item.changeType}:${item.viewStart}-${item.viewEnd}`,
+        group: "rows",
+        changeType: item.changeType,
+        label: item.label,
+        detail: item.detail,
+        viewRow: item.viewStart,
+        viewCol: 0,
+        listElementId
+      });
+      continue;
+    }
+
+    if (item.group === "cols") {
+      addAnchor({
+        id: `col:${item.changeType}:${item.viewStart}-${item.viewEnd}`,
+        group: "cols",
+        changeType: item.changeType,
+        label: item.label,
+        detail: item.detail,
+        viewRow: 0,
+        viewCol: item.viewStart,
+        listElementId
+      });
+      continue;
+    }
+
+    if (item.group === "moves" && item.moveId) {
+      if (item.axis === "row" || item.axis === "col") {
+        const axisVm = item.axis === "row" ? rowsVm : colsVm;
+        const srcStart = viewStartForRange(axisVm, item.srcStart, item.count, "old");
+        const dstStart = viewStartForRange(axisVm, item.dstStart, item.count, "new");
+        if (srcStart !== null && srcStart !== undefined) {
+          addAnchor({
+            id: `move:${item.moveId}:src`,
+            group: "moves",
+            changeType: "moved",
+            label: item.label,
+            detail: item.detail,
+            viewRow: item.axis === "row" ? srcStart : 0,
+            viewCol: item.axis === "col" ? srcStart : 0,
+            moveId: item.moveId,
+            listElementId
+          });
+        }
+        if (dstStart !== null && dstStart !== undefined) {
+          addAnchor({
+            id: `move:${item.moveId}:dst`,
+            group: "moves",
+            changeType: "moved",
+            label: item.label,
+            detail: item.detail,
+            viewRow: item.axis === "row" ? dstStart : 0,
+            viewCol: item.axis === "col" ? dstStart : 0,
+            moveId: item.moveId,
+            listElementId
+          });
+        }
+        continue;
+      }
+
+      if (item.moveKind === "rect") {
+        const moveRegion = moveRegions.get(item.moveId);
+        if (moveRegion?.src) {
+          addAnchor({
+            id: `region:${moveRegion.src.id}`,
+            group: "moves",
+            changeType: "moved",
+            label: item.label,
+            detail: "From",
+            viewRow: moveRegion.src.top,
+            viewCol: moveRegion.src.left,
+            regionId: moveRegion.src.id,
+            moveId: item.moveId,
+            listElementId,
+            regionKind: moveRegion.src.kind
+          });
+        }
+        if (moveRegion?.dst) {
+          addAnchor({
+            id: `region:${moveRegion.dst.id}`,
+            group: "moves",
+            changeType: "moved",
+            label: item.label,
+            detail: "To",
+            viewRow: moveRegion.dst.top,
+            viewCol: moveRegion.dst.left,
+            regionId: moveRegion.dst.id,
+            moveId: item.moveId,
+            listElementId,
+            regionKind: moveRegion.dst.kind
+          });
+        }
+      }
+    }
+  }
+
+  entries.sort((a, b) => {
+    if (a.sortRow !== b.sortRow) return a.sortRow - b.sortRow;
+    if (a.sortCol !== b.sortCol) return a.sortCol - b.sortCol;
+    if (a.priority !== b.priority) return a.priority - b.priority;
+    return String(a.anchor.id).localeCompare(String(b.anchor.id));
+  });
+
+  return entries.map(entry => entry.anchor);
+}
+
+function attachNavTargets(items, anchors) {
+  const anchorIds = new Set((anchors || []).map(anchor => anchor.id));
+  for (const item of items || []) {
+    const targets = [];
+    if (item.regionId) {
+      const anchorId = `region:${item.regionId}`;
+      if (anchorIds.has(anchorId)) targets.push({ anchorId });
+    } else if (item.group === "rows") {
+      const anchorId = `row:${item.changeType}:${item.viewStart}-${item.viewEnd}`;
+      if (anchorIds.has(anchorId)) targets.push({ anchorId });
+    } else if (item.group === "cols") {
+      const anchorId = `col:${item.changeType}:${item.viewStart}-${item.viewEnd}`;
+      if (anchorIds.has(anchorId)) targets.push({ anchorId });
+    } else if (item.group === "moves" && item.moveId) {
+      if (item.axis === "row" || item.axis === "col") {
+        const srcId = `move:${item.moveId}:src`;
+        const dstId = `move:${item.moveId}:dst`;
+        if (anchorIds.has(srcId)) targets.push({ anchorId: srcId, label: "From" });
+        if (anchorIds.has(dstId)) targets.push({ anchorId: dstId, label: "To" });
+      } else if (item.moveKind === "rect") {
+        const srcId = `region:move-src-${item.moveId}`;
+        const dstId = `region:move-dst-${item.moveId}`;
+        if (anchorIds.has(srcId)) targets.push({ anchorId: srcId, label: "From" });
+        if (anchorIds.has(dstId)) targets.push({ anchorId: dstId, label: "To" });
+      }
+    }
+    if (targets.length > 0) {
+      item.navTargets = targets;
+    }
+  }
 }
 
 function buildRegions({ ops, rowsVm, colsVm, editMap, opts }) {
@@ -809,7 +1097,7 @@ function buildSheetViewModel({ report, sheetName, ops, oldSheet, newSheet, align
 
   const oldCells = makeCellMap(oldSheet);
   const newCells = makeCellMap(newSheet);
-  const editMap = makeEditMap(report, ops, rowsVm, colsVm);
+  const editMap = makeEditMap(report, ops, rowsVm, colsVm, opts);
 
   const baseRegions = buildRegions({ ops, rowsVm, colsVm, editMap, opts });
   for (const region of baseRegions) {
@@ -845,13 +1133,16 @@ function buildSheetViewModel({ report, sheetName, ops, oldSheet, newSheet, align
     status = { kind: "missing", message: "Sheet snapshots are missing for this sheet." };
   }
 
+  const anchors = buildChangeAnchors({ sheetName, status, items, regions: baseRegions, rowsVm, colsVm });
+  attachNavTargets(items, anchors);
+
   const regionsToRender = status.kind === "ok" ? baseRegions.map(region => region.id) : [];
 
   return {
     name: sheetName,
     axis: { rows: rowsVm, cols: colsVm },
     cellAt: (viewRow, viewCol) => buildCellVm(viewRow, viewCol, rowsVm, colsVm, oldCells, newCells, editMap),
-    changes: { items, regions: baseRegions },
+    changes: { items, regions: baseRegions, anchors },
     renderPlan: {
       regionsToRender,
       status,

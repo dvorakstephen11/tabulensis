@@ -234,10 +234,84 @@ function testRegionMaxCells() {
   }
 }
 
+function testAnchorsForRowChanges() {
+  const report = {
+    strings: ["AnchorSheet"],
+    ops: [{ kind: "RowAdded", sheet: 0, row_idx: 0 }],
+    warnings: []
+  };
+  const oldSheet = { name: "AnchorSheet", nrows: 1, ncols: 1, cells: [] };
+  const newSheet = { name: "AnchorSheet", nrows: 2, ncols: 1, cells: [] };
+  const alignment = {
+    sheet: "AnchorSheet",
+    rows: [
+      { old: null, new: 0, kind: "insert" },
+      { old: 0, new: 1, kind: "match" }
+    ],
+    cols: [{ old: 0, new: 0, kind: "match" }],
+    moves: [],
+    skipped: false
+  };
+  const payload = {
+    report,
+    sheets: { old: { sheets: [oldSheet] }, new: { sheets: [newSheet] } },
+    alignments: [alignment]
+  };
+  const vm = buildWorkbookViewModel(payload);
+  const sheetVm = findSheet(vm, "AnchorSheet");
+  const anchor = sheetVm.changes.anchors.find(item => item.id === "row:added:0-0");
+  assert.ok(anchor, "Missing row add anchor");
+  assert.equal(anchor.target.kind, "grid");
+  assert.equal(anchor.target.viewRow, 0);
+}
+
+function testIgnoreBlankToBlank() {
+  const report = {
+    strings: ["BlankSheet"],
+    ops: [
+      {
+        kind: "CellEdited",
+        sheet: 0,
+        addr: { row: 0, col: 0 },
+        from: { value: "Blank" },
+        to: { value: "Blank" }
+      }
+    ],
+    warnings: []
+  };
+  const oldSheet = { name: "BlankSheet", nrows: 1, ncols: 1, cells: [] };
+  const newSheet = { name: "BlankSheet", nrows: 1, ncols: 1, cells: [] };
+  const alignment = {
+    sheet: "BlankSheet",
+    rows: [{ old: 0, new: 0, kind: "match" }],
+    cols: [{ old: 0, new: 0, kind: "match" }],
+    moves: [],
+    skipped: false
+  };
+  const payload = {
+    report,
+    sheets: { old: { sheets: [oldSheet] }, new: { sheets: [newSheet] } },
+    alignments: [alignment]
+  };
+
+  const vmDefault = buildWorkbookViewModel(payload);
+  const sheetDefault = findSheet(vmDefault, "BlankSheet");
+  assert.equal(sheetDefault.changes.items.length, 0);
+  assert.equal(sheetDefault.changes.regions.length, 0);
+  assert.equal(sheetDefault.changes.anchors.length, 0);
+
+  const vmInclude = buildWorkbookViewModel(payload, { ignoreBlankToBlank: false });
+  const sheetInclude = findSheet(vmInclude, "BlankSheet");
+  assert.ok(sheetInclude.changes.regions.length > 0);
+  assert.ok(sheetInclude.changes.anchors.length > 0);
+}
+
 testRowInsertionMapping();
 testMoveIdentity();
 testRowGrouping();
 testRegionCompaction();
 testRegionMaxCells();
+testAnchorsForRowChanges();
+testIgnoreBlankToBlank();
 
 console.log("ok");

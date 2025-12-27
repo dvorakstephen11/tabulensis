@@ -13,27 +13,36 @@ function safeText(value) {
   return String(value);
 }
 
-function resolveCellText(cell, side) {
-  if (!cell) return "";
+function resolveCellParts(cell, side) {
+  if (!cell) return { value: "", formula: "" };
   if (cell.edit) {
     const value = side === "old" ? cell.edit.fromValue : cell.edit.toValue;
     const formula = side === "old" ? cell.edit.fromFormula : cell.edit.toFormula;
-    if (value) return value;
-    if (formula) return formula;
+    if (value || formula) return { value: safeText(value), formula: safeText(formula) };
   }
   const payload = side === "old" ? cell.old : cell.new;
-  if (!payload || !payload.cell) return "";
-  return payload.cell.value || payload.cell.formula || "";
+  if (!payload || !payload.cell) return { value: "", formula: "" };
+  return { value: safeText(payload.cell.value || ""), formula: safeText(payload.cell.formula || "") };
 }
 
-function resolveUnifiedText(cell) {
-  if (!cell) return "";
-  if (cell.diffKind === "added") return resolveCellText(cell, "new");
-  if (cell.diffKind === "removed") return resolveCellText(cell, "old");
-  if (cell.diffKind === "moved") {
-    return cell.moveRole === "src" ? resolveCellText(cell, "old") : resolveCellText(cell, "new");
+function resolveCellText(cell, side, contentMode) {
+  const parts = resolveCellParts(cell, side);
+  if (contentMode === "formulas") {
+    return parts.formula || parts.value || "";
   }
-  return resolveCellText(cell, "new") || resolveCellText(cell, "old");
+  return parts.value || parts.formula || "";
+}
+
+function resolveUnifiedText(cell, contentMode) {
+  if (!cell) return "";
+  if (cell.diffKind === "added") return resolveCellText(cell, "new", contentMode);
+  if (cell.diffKind === "removed") return resolveCellText(cell, "old", contentMode);
+  if (cell.diffKind === "moved") {
+    return cell.moveRole === "src"
+      ? resolveCellText(cell, "old", contentMode)
+      : resolveCellText(cell, "new", contentMode);
+  }
+  return resolveCellText(cell, "new", contentMode) || resolveCellText(cell, "old", contentMode);
 }
 
 function truncateText(ctx, text, maxWidth) {
@@ -140,12 +149,27 @@ function drawCellText(ctx, x, y, width, height, text, color) {
   ctx.fillText(value, x + paddingX, y + height / 2);
 }
 
-function drawEditedUnified(ctx, x, y, width, height, cell, theme) {
+function drawCellTextLines(ctx, x, y, width, height, primary, secondary, primaryColor, secondaryColor) {
+  const paddingX = 8;
+  const maxWidth = Math.max(0, width - paddingX * 2);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.font = "11px 'JetBrains Mono', monospace";
+  ctx.fillStyle = primaryColor;
+  const primaryText = truncateText(ctx, primary, maxWidth);
+  ctx.fillText(primaryText, x + paddingX, y + 6);
+  ctx.font = "10px 'JetBrains Mono', monospace";
+  ctx.fillStyle = secondaryColor;
+  const secondaryText = truncateText(ctx, secondary, maxWidth);
+  ctx.fillText(secondaryText, x + paddingX, y + height / 2);
+}
+
+function drawEditedUnified(ctx, x, y, width, height, cell, theme, contentMode) {
   const paddingX = 8;
   const paddingY = 6;
   const maxWidth = Math.max(0, width - paddingX * 2);
-  const oldText = resolveCellText(cell, "old");
-  const newText = resolveCellText(cell, "new");
+  const oldText = resolveCellText(cell, "old", contentMode);
+  const newText = resolveCellText(cell, "new", contentMode);
 
   ctx.font = "10px 'JetBrains Mono', monospace";
   ctx.textBaseline = "top";
@@ -162,7 +186,7 @@ function drawEditedUnified(ctx, x, y, width, height, cell, theme) {
   ctx.fillText(newDisplay, x + paddingX, y + paddingY + 14);
 }
 
-function drawCell(ctx, x, y, width, height, cell, theme, mode, side) {
+function drawCell(ctx, x, y, width, height, cell, theme, mode, side, contentMode) {
   const style = cellStyle(cell, theme);
   ctx.fillStyle = style.bg;
   ctx.fillRect(x, y, width, height);
@@ -173,15 +197,34 @@ function drawCell(ctx, x, y, width, height, cell, theme, mode, side) {
   if (!cell || cell.diffKind === "empty") return;
 
   if (mode === "unified" && cell.diffKind === "edited") {
-    drawEditedUnified(ctx, x, y, width, height, cell, theme);
+    drawEditedUnified(ctx, x, y, width, height, cell, theme, contentMode);
     return;
   }
 
   let text = "";
   if (mode === "side_by_side") {
-    text = resolveCellText(cell, side);
+    if (contentMode === "both") {
+      const parts = resolveCellParts(cell, side);
+      const primary = parts.value || parts.formula;
+      const secondary = parts.value && parts.formula && parts.formula !== parts.value ? parts.formula : "";
+      if (secondary && height >= 30) {
+        const color =
+          cell.diffKind === "added"
+            ? theme.accentGreen
+            : cell.diffKind === "removed"
+              ? theme.accentRed
+              : cell.diffKind === "moved"
+                ? theme.accentPurple
+                : style.text;
+        drawCellTextLines(ctx, x, y, width, height, primary, secondary, color, theme.textMuted);
+        return;
+      }
+      text = primary;
+    } else {
+      text = resolveCellText(cell, side, contentMode);
+    }
   } else {
-    text = resolveUnifiedText(cell);
+    text = resolveUnifiedText(cell, contentMode);
   }
 
   if (cell.diffKind === "removed" && mode === "unified") {
@@ -207,16 +250,33 @@ function drawCell(ctx, x, y, width, height, cell, theme, mode, side) {
 }
 
 export function paintGrid(ctx, model) {
-  const { sheetVm, mode, viewport, metrics, theme, selection, hover, hoverMoveId } = model;
+  const {
+    sheetVm,
+    mode,
+    contentMode,
+    rowMap,
+    colMap,
+    rowLookup,
+    colLookup,
+    flash,
+    viewport,
+    metrics,
+    theme,
+    selection,
+    hover,
+    hoverMoveId
+  } = model;
   const { width, height, scrollTop, scrollLeft } = viewport;
   const rows = sheetVm.axis.rows.entries;
   const cols = sheetVm.axis.cols.entries;
+  const rowCount = rowMap ? rowMap.length : rows.length;
+  const colCount = colMap ? colMap.length : cols.length;
 
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = theme.bgPrimary;
   ctx.fillRect(0, 0, width, height);
 
-  if (!rows.length || !cols.length || width <= 0 || height <= 0) return;
+  if (!rowCount || !colCount || width <= 0 || height <= 0) return;
 
   const rowHeight = metrics.rowHeight;
   const colWidth = metrics.colWidth;
@@ -232,11 +292,11 @@ export function paintGrid(ctx, model) {
 
   const firstRow = Math.max(0, Math.floor(scrollTop / rowHeight));
   const visibleRowCount = cellAreaHeight > 0 ? Math.ceil(cellAreaHeight / rowHeight) + 1 : 0;
-  const lastRow = Math.min(rows.length - 1, firstRow + visibleRowCount - 1);
+  const lastRow = Math.min(rowCount - 1, firstRow + visibleRowCount - 1);
 
   const firstCol = Math.max(0, Math.floor(scrollLeft / colWidth));
   const visibleColCount = paneWidth > 0 ? Math.ceil(paneWidth / colWidth) + 1 : 0;
-  const lastCol = Math.min(cols.length - 1, firstCol + visibleColCount - 1);
+  const lastCol = Math.min(colCount - 1, firstCol + visibleColCount - 1);
 
   const paneOffsets = [rowHeaderWidth];
   if (paneCount === 2) {
@@ -247,9 +307,10 @@ export function paintGrid(ctx, model) {
   ctx.fillRect(0, 0, rowHeaderWidth, colHeaderHeight);
 
   for (let c = firstCol; c <= lastCol; c++) {
-    const entry = cols[c];
+    const viewCol = colMap ? colMap[c] : c;
+    const entry = cols[viewCol];
     const style = axisStyle(entry, "col", theme);
-    const label = colToLetter(c);
+    const label = colToLetter(viewCol);
     for (let p = 0; p < paneCount; p++) {
       const x = paneOffsets[p] + (c * colWidth - scrollLeft);
       drawHeaderCell(ctx, x, 0, colWidth, colHeaderHeight, label, style, theme);
@@ -257,25 +318,28 @@ export function paintGrid(ctx, model) {
   }
 
   for (let r = firstRow; r <= lastRow; r++) {
-    const entry = rows[r];
+    const viewRow = rowMap ? rowMap[r] : r;
+    const entry = rows[viewRow];
     const style = axisStyle(entry, "row", theme);
     const y = colHeaderHeight + (r * rowHeight - scrollTop);
-    drawRowHeader(ctx, 0, y, rowHeaderWidth, rowHeight, String(r + 1), style, theme);
+    drawRowHeader(ctx, 0, y, rowHeaderWidth, rowHeight, String(viewRow + 1), style, theme);
   }
 
   for (let r = firstRow; r <= lastRow; r++) {
+    const viewRow = rowMap ? rowMap[r] : r;
     const y = colHeaderHeight + (r * rowHeight - scrollTop);
     for (let c = firstCol; c <= lastCol; c++) {
-      const cell = sheetVm.cellAt(r, c);
+      const viewCol = colMap ? colMap[c] : c;
+      const cell = sheetVm.cellAt(viewRow, viewCol);
       for (let p = 0; p < paneCount; p++) {
         const x = paneOffsets[p] + (c * colWidth - scrollLeft);
         const side = p === 0 ? "old" : "new";
-        drawCell(ctx, x, y, colWidth, rowHeight, cell, theme, mode, side);
+        drawCell(ctx, x, y, colWidth, rowHeight, cell, theme, mode, side, contentMode);
       }
 
       if (hoverMoveId) {
-        const rowEntry = rows[r];
-        const colEntry = cols[c];
+        const rowEntry = rows[viewRow];
+        const colEntry = cols[viewCol];
         if ((rowEntry && rowEntry.move_id === hoverMoveId) || (colEntry && colEntry.move_id === hoverMoveId)) {
           ctx.save();
           ctx.strokeStyle = theme.diffMoveBorder || theme.accentPurple;
@@ -291,9 +355,10 @@ export function paintGrid(ctx, model) {
   }
 
   if (hover && hover.viewRow !== null && hover.viewCol !== null) {
-    const row = hover.viewRow;
-    const col = hover.viewCol;
-    if (row >= firstRow && row <= lastRow && col >= firstCol && col <= lastCol) {
+    const row = rowLookup ? rowLookup[hover.viewRow] : hover.viewRow;
+    const col = colLookup ? colLookup[hover.viewCol] : hover.viewCol;
+    if (row !== null && row !== undefined && col !== null && col !== undefined &&
+        row >= firstRow && row <= lastRow && col >= firstCol && col <= lastCol) {
       const y = colHeaderHeight + (row * rowHeight - scrollTop);
       for (let p = 0; p < paneCount; p++) {
         if (paneCount === 2 && hover.pane !== null && hover.pane !== undefined && hover.pane !== p) {
@@ -310,9 +375,10 @@ export function paintGrid(ctx, model) {
   }
 
   if (selection && selection.viewRow !== null && selection.viewCol !== null) {
-    const row = selection.viewRow;
-    const col = selection.viewCol;
-    if (row >= firstRow && row <= lastRow && col >= firstCol && col <= lastCol) {
+    const row = rowLookup ? rowLookup[selection.viewRow] : selection.viewRow;
+    const col = colLookup ? colLookup[selection.viewCol] : selection.viewCol;
+    if (row !== null && row !== undefined && col !== null && col !== undefined &&
+        row >= firstRow && row <= lastRow && col >= firstCol && col <= lastCol) {
       const y = colHeaderHeight + (row * rowHeight - scrollTop);
       for (let p = 0; p < paneCount; p++) {
         const x = paneOffsets[p] + (col * colWidth - scrollLeft);
@@ -323,5 +389,72 @@ export function paintGrid(ctx, model) {
         ctx.restore();
       }
     }
+  }
+
+  if (flash && flash.alpha > 0) {
+    const mapRange = (start, end, lookup) => {
+      let min = null;
+      let max = null;
+      for (let i = start; i <= end; i++) {
+        const vis = lookup ? lookup[i] : i;
+        if (vis === null || vis === undefined) continue;
+        if (min === null || vis < min) min = vis;
+        if (max === null || vis > max) max = vis;
+      }
+      if (min === null || max === null) return null;
+      return { start: min, end: max };
+    };
+
+    ctx.save();
+    ctx.globalAlpha = flash.alpha;
+    ctx.strokeStyle = theme.accentBlue;
+    ctx.lineWidth = 2;
+
+    if (flash.kind === "region" && flash.bounds) {
+      const rowRange = mapRange(flash.bounds.top, flash.bounds.bottom, rowLookup);
+      const colRange = mapRange(flash.bounds.left, flash.bounds.right, colLookup);
+      if (rowRange && colRange) {
+        const startRow = Math.max(firstRow, rowRange.start);
+        const endRow = Math.min(lastRow, rowRange.end);
+        const startCol = Math.max(firstCol, colRange.start);
+        const endCol = Math.min(lastCol, colRange.end);
+        if (startRow <= endRow && startCol <= endCol) {
+          const y = colHeaderHeight + (startRow * rowHeight - scrollTop);
+          const height = (endRow - startRow + 1) * rowHeight;
+          for (let p = 0; p < paneCount; p++) {
+            const x = paneOffsets[p] + (startCol * colWidth - scrollLeft);
+            const width = (endCol - startCol + 1) * colWidth;
+            ctx.strokeRect(x + 1, y + 1, width - 2, height - 2);
+          }
+        }
+      }
+    } else if (flash.kind === "row") {
+      const row = rowLookup ? rowLookup[flash.viewRow] : flash.viewRow;
+      if (row !== null && row !== undefined && row >= firstRow && row <= lastRow) {
+        const y = colHeaderHeight + (row * rowHeight - scrollTop);
+        ctx.strokeRect(0 + 1, y + 1, rowHeaderWidth - 2, rowHeight - 2);
+      }
+    } else if (flash.kind === "col") {
+      const col = colLookup ? colLookup[flash.viewCol] : flash.viewCol;
+      if (col !== null && col !== undefined && col >= firstCol && col <= lastCol) {
+        for (let p = 0; p < paneCount; p++) {
+          const x = paneOffsets[p] + (col * colWidth - scrollLeft);
+          ctx.strokeRect(x + 1, 0 + 1, colWidth - 2, colHeaderHeight - 2);
+        }
+      }
+    } else if (flash.kind === "cell") {
+      const row = rowLookup ? rowLookup[flash.viewRow] : flash.viewRow;
+      const col = colLookup ? colLookup[flash.viewCol] : flash.viewCol;
+      if (row !== null && row !== undefined && col !== null && col !== undefined &&
+          row >= firstRow && row <= lastRow && col >= firstCol && col <= lastCol) {
+        const y = colHeaderHeight + (row * rowHeight - scrollTop);
+        for (let p = 0; p < paneCount; p++) {
+          const x = paneOffsets[p] + (col * colWidth - scrollLeft);
+          ctx.strokeRect(x + 1, y + 1, colWidth - 2, rowHeight - 2);
+        }
+      }
+    }
+
+    ctx.restore();
   }
 }

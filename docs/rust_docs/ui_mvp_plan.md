@@ -981,70 +981,1068 @@ Because styles are currently in the `<style>` block, Phase 3 adds:
 
 ---
 
-## Phase 4 — Navigation, filtering, and “review workflow” polish
+## Phase 4 — Navigation, filtering, and "review workflow" polish
 
 ### Goal
 
-Make it *usable for real audits*, not just demos.
+Make the UI *reviewable as a workflow*, not just “viewable as a demo”.
 
-### Deliverables
+Phase 3 gives us a real canvas viewer with selection, hover, an inspector, and per-sheet `n/p` navigation through `sheetVm.changes.regions`. Phase 4 turns that into an experience where a reviewer can:
 
-1. **Changes panel with jump-to**
+* find the sheets that matter,
+* walk every meaningful change (including structural row/col changes, not just cell-edit regions),
+* jump to a change from the list and immediately see *where* it is in the grid,
+* filter the grid to focus on what changed,
+* understand warnings/limitations without guessing.
 
-   * Grouped by type: Structural / Cells / Moves
-   * Clicking an item scrolls and briefly pulses the region in the grid
+### Grounding notes (what exists in the current codebase)
 
-2. **Sheet list becomes actionable**
+The plan below is specifically designed to fit the existing architecture:
 
-   * Each sheet row shows counts and a small “diff density” sparkline or indicator
-   * Search sheets by name
+* The HTML is rendered as a string in `web/render.js` via `renderWorkbookVm(vm)` / `renderSheetVm(sheetVm)` and inserted with `innerHTML` (no framework). Sheets are `<section class="sheet-section" data-sheet="...">` with `.sheet-header` toggling `.expanded`.  
+* The grid viewer is mounted lazily by `hydrateGridViewers(rootEl, workbookVm)` in `web/main.js`. It finds `.grid-viewer-mount` inside expanded sheets and calls `mountSheetGridViewer({ mountEl, sheetVm, opts })`.  
+* “Detailed Changes” is already grouped (rows/cols/cells/moves/other) using `sheetVm.changes.items`, but items are currently static, non-clickable rows.  
+* `sheetVm.renderPlan.status.kind` already exists (`ok | skipped | missing`) and is used to decide whether a `.grid-viewer-mount` exists or a warning message is shown.  
+* Viewer navigation (`n/p`) is currently tied to `sheetVm.changes.regions` only, meaning “next change” may skip important *structural* changes (row/col add/remove/moves) that are not represented as regions.
 
-3. **Filters**
+Phase 4 builds directly on those facts; it does **not** introduce a framework or change the “string-rendered HTML + JS hydration” model.
 
-   * “Show only changed rows”
-   * “Show only changed columns”
-   * “Ignore blank-to-blank” (default on)
-   * “Show formulas” vs “Show values” vs “Show both”
+---
 
-4. **Warnings surfaced clearly**
+### Key model: “review anchors” + “review cursor”
 
-   * If the engine warns about ambiguous alignment or low-information regions, show it near the sheet name and explain what it means for the viewer’s confidence.
+**Review anchor**  
+A “review anchor” is a *navigable point* in a sheet that represents a meaningful change. It is the unit of:
 
-Your current renderer already has a notion of warnings and sections, so you’re evolving what exists, not inventing the concept. 
+* next/prev navigation,
+* jump-to from the changes list,
+* “pulse highlight” feedback when arriving somewhere.
+
+In Phase 4, anchors must include:
+* cell/rect change regions (already in `changes.regions`)
+* row/col additions/removals/replacements (structural)
+* row/col moves (Phase 1 move identities)
+* block moved rectangles (source and destination endpoints)
+
+**Review cursor**  
+The “review cursor” is the current anchor within the workbook. It is a workbook-level concept (not just per sheet) so we can implement “Next/Prev change across sheets” in a deterministic order.
+
+---
+
+### Deliverables (concrete, code-level)
+
+#### 1) Add `SheetVM.changes.anchors` as the canonical navigation sequence
+
+**Design decision:** anchors are VM-owned, not renderer-owned.  
+We do *not* derive navigation by parsing human-readable strings (labels) or DOM position. The VM already has the aligned view indices and knows what each change means; it should also own the “where do I jump?” decision so the semantics stay consistent across web + desktop.
+
+**Add to `SheetVM.changes`:**
+
+* `anchors: ChangeAnchorVM[]`
+
+Where:
+
+```ts
+type ChangeAnchorVM = {
+  id: string                    // stable ID used for syncing + jump-to
+  group: "rows" | "cols" | "cells" | "moves" | "other"
+  changeType: "added" | "removed" | "modified" | "moved"
+  label: string                 // short human string ("Rows 10–12 added", "Cells B2:C4 modified", ...)
+  // Primary target for navigation
+  target:
+    | { kind: "grid", viewRow: number, viewCol: number, regionId?: string, moveId?: string }
+    | { kind: "list", elementId: string } // fallback for skipped/missing sheets
+  // Optional: additional context shown in UI ("to row 50", "to column D", ...)
+  detail?: string
+}
+```
+
+**Anchor ID scheme (stable, deterministic):**
+
+* Cell/rect/move regions: `region:${region.id}`
+* Row structural: `row:${changeType}:${startViewRow}-${endViewRow}`
+* Col structural: `col:${changeType}:${startViewCol}-${endViewCol}`
+* Row/col moves (Phase-1 move id):
+
+  * `move:${moveId}:src` and `move:${moveId}:dst`
+* “Other” (non-grid ops on a sheet): `other:${op.kind}:${idx}` (only if we decide to anchor them; acceptable to omit for MVP)
+
+**Ordering (within a sheet):**
+
+1. Sort by target location in view space: `(viewRow, viewCol)`
+2. Tie-break by group priority (moves first, then structural, then rect, then cell), then `id`
+   This preserves today’s region sort behavior and makes “next change” feel spatially consistent.
+
+**How anchors get created (grounded in current VM):**
+
+* For each `changes.regions` entry:
+
+  * create a grid anchor at `(region.top, region.left)` with `regionId: region.id` and optional `moveId`
+* For row/col add/remove/replace items:
+
+  * create a grid anchor at `(startViewRow, 0)` or `(0, startViewCol)` (if axis length is zero, fall back to list anchor)
+* For row/col moves:
+
+  * create two anchors (src + dst) at the start location in the moved axis
+* For sheets where `renderPlan.status.kind !== "ok"`:
+
+  * create list anchors pointing at the corresponding change item DOM IDs (see Deliverable 2)
+
+This closes an important gap: Phase 3 viewer `n/p` currently only walks `regions`. After Phase 4, `n/p` walks *all* meaningful anchors.
+
+---
+
+#### 2) Make “Detailed Changes” a true changes panel with jump-to + pulse highlight
+
+Phase 4 upgrades the existing per-sheet “Detailed Changes” list into an interactive changes panel.
+
+**Design decision:** keep the UI structure, add interactivity.
+We do not replace the “Detailed Changes” HTML with a new panel component; we make existing `change-item`s actionable and add minimal extra markup.
+
+**`ChangeItemVM` additions (VM-level, so renderer doesn’t have to guess):**
+
+* Add `navTargets?: Array<{ anchorId: string, label?: string }>`
+
+  * Most items: one target (e.g., row range item → jump)
+  * Move items: two targets (`From`, `To`) so a user can hop between endpoints without relying on inspector-only controls
+
+**Renderer changes (`web/render.js`):**
+
+* Render each change item as a `<button type="button">` (or keep as `<div>` but add a nested button) with:
+
+  * a stable element id for list-target anchors:
+
+    * `id="change-${sheetName}-${item.id}"`
+  * one or more jump buttons:
+
+    * `<button class="change-jump" data-sheet="..." data-anchor="...">Jump</button>`
+    * for move items, render two: `From` and `To`
+
+**Main JS behavior (`web/main.js`):**
+
+* Use event delegation on the results root:
+
+  * On click `.change-jump`, call `navigateToAnchor(sheetName, anchorId)`
+* `navigateToAnchor` must:
+
+  1. Expand the sheet section (if collapsed)
+  2. Ensure the grid viewer is mounted (if the sheet has a `.grid-viewer-mount`)
+  3. If anchor target is `grid`, call `viewer.jumpToAnchor(anchorId)` and `viewer.flashAnchor(anchorId)`
+  4. If anchor target is `list`, scroll the change item element into view and briefly flash its background (CSS class with timeout)
+  5. Update global review cursor (for next/prev)
+
+**Pulse highlight (viewer-level):**
+
+* When arriving at an anchor via jump/next/prev:
+
+  * flash the region bounds (if `regionId`), else flash the row header / col header, else flash the selected cell
+* This must be implemented inside the canvas painter so feedback is immediate and doesn’t rely on DOM overlays.
+
+---
+
+#### 3) Sheet list becomes actionable (index + search + “diff density” cues)
+
+**Design decision:** add a “Sheet Index” at the top, not a left sidebar.
+This keeps the page layout stable and fits the current HTML structure (single-column results with sections). If we later want a sidebar, this index can be re-skinned without changing the underlying wiring.
+
+**Renderer changes (`web/render.js`):**
+Add a new block right after summary cards:
+
+* `renderReviewToolbar(vm)` — a sticky-ish bar containing:
+
+  * sheet search input (filters by name)
+  * global next/prev change buttons
+  * filter toggles (see Deliverable 5)
+
+* `renderSheetIndex(vm)` — list of sheets with:
+
+  * sheet name
+  * change count badge (`sheetVm.opCount`)
+  * anchor count badge (`sheetVm.changes.anchors.length`)
+  * a “density” bar (relative to max `opCount` or max anchor count across sheets)
+  * status pill: `OK`, `SKIPPED`, `MISSING` based on `sheetVm.renderPlan.status.kind`
+
+Each sheet index item is a `<button>` with `data-sheet="..."`.
+
+**Main JS behavior (`web/main.js`):**
+
+* Clicking a sheet index item:
+
+  * scrolls to that `.sheet-section`
+  * expands it
+  * if it has anchors, optionally jumps to the first anchor (configurable: do this only if user clicks the “start review” icon)
+* Search input:
+
+  * filters both index items and sheet sections by name (no re-render; toggle `hidden` or a CSS class)
+  * does not destroy mounted viewers; it only hides sections
+
+---
+
+#### 4) Next/Prev change across sheets (workbook-level cursor)
+
+**Design decision:** workbook-level next/prev must be deterministic and sync with per-viewer navigation.
+
+We want:
+
+* Viewer-local `n/p` (keyboard) to update the global cursor, so toolbar “Next” continues from where the reviewer is.
+* Toolbar “Next/Prev” to work even if the reviewer is mid-scroll.
+
+**Implementation approach:**
+
+* Build a flattened `reviewOrder` in `web/main.js` after rendering:
+
+  * array of `{ sheetName, anchorId }`, in sheet order (`vm.sheets` is already sorted), then anchor order (`sheetVm.changes.anchors` sorted)
+* Maintain `reviewState = { activeSheetName, activeAnchorId }`
+
+**Sync mechanism (no framework, but still robust):**
+
+* Add custom events in `grid_viewer.js` dispatched from the mount element:
+
+  * `gridviewer:focus` when the viewer gets focus (sets active sheet)
+  * `gridviewer:anchor` when anchor changes (sets active anchor)
+* `web/main.js` listens for those events on the results root and updates `reviewState`.
+
+**Behavior of global buttons:**
+
+* `Next change`:
+
+  * if there is an active anchor, advance to the next entry in `reviewOrder`
+  * else, jump to the first entry
+* `Prev change`:
+
+  * analogous, backwards
+* When moving to a different sheet:
+
+  * expand the sheet
+  * scroll it into view
+  * mount viewer if needed
+  * jump to anchor and flash
+
+**Edge case (skipped/missing sheets):**
+
+* If a sheet has `anchors` but they are list-target anchors (no grid), global next/prev still works:
+
+  * expand sheet
+  * scroll to change item element
+  * flash the change row
+
+This prevents “silent skipping” of the hardest sheets (the ones that often have the most need for review).
+
+---
+
+#### 5) Filters that match how spreadsheet reviews actually happen
+
+Phase 4 adds *review-time filters* that affect rendering and navigation without changing the underlying diff semantics.
+
+##### 5.1 Show only changed rows / changed columns (“focus mode”)
+
+**Design decision:** “focus mode” is a viewer-level projection, not a VM rebuild.
+We already have `axis` + `cellAt()`; the fastest path is to compute a list of visible row indices / col indices and map the viewer’s scroll/paint/hit-test through that mapping.
+
+**Viewer state additions (`web/grid_viewer.js`):**
+
+* `focus: { rows: boolean, cols: boolean }`
+* `rowMap: number[] | null` and `colMap: number[] | null`
+
+  * mapping from visible index → underlying `viewRow/viewCol`
+
+**How to compute maps (deterministic):**
+
+* Start from a “changed index set”:
+
+  * any row/col where axis entry `kind !== "match"`
+  * plus rows/cols covered by any `changes.regions` bounds
+  * plus rows/cols covered by move endpoints (row/col moves)
+* Expand by context:
+
+  * reuse `sheetVm.renderPlan.contextRows/contextCols` as the default context in focus mode
+* Convert to sorted unique arrays → `rowMap/colMap`
+
+**Painter + hit-testing changes:**
+
+* All operations that currently assume `(visibleIndex === viewIndex)` need to map:
+
+  * visible row i → viewRow = rowMap[i]
+  * visible col j → viewCol = colMap[j]
+* Row/col headers must show the underlying view index (so gaps are obvious) rather than renumbering.
+
+**MVP choice (explicit):** we do *not* render “gap rows” (`...`) in Phase 4.
+We accept that row/col labels jump (e.g., 12, 13, 98, 99). This keeps implementation simple and truthful. “Pretty hunk separators” can be Phase 6 polish if needed.
+
+##### 5.2 Ignore blank-to-blank edits (default ON)
+
+**Design decision:** blank-to-blank is a VM-level filter that triggers a cheap re-VM + re-render.
+It is the only Phase 4 filter that changes what constitutes a “change”, because it affects:
+
+* whether a cell is `diffKind: edited`,
+* whether that edit participates in region clustering,
+* whether it appears in the changes list.
+
+Trying to apply it purely at paint-time would make the change list and anchor list disagree with the grid.
+
+**Implementation:**
+
+* Add `opts.ignoreBlankToBlank: boolean` to `buildWorkbookViewModel(payloadOrReport, opts)` (default true).
+* In `makeEditMap(...)`, skip inserting an edit when:
+
+  * `fromValue`, `toValue`, `fromFormula`, `toFormula` are all empty strings after formatting/resolution.
+* Wire the toolbar checkbox:
+
+  * when toggled, rebuild VM from the already-parsed payload
+  * re-render the results HTML
+  * re-run hydration
+  * preserve:
+
+    * sheet expansion states (which `.sheet-section` were expanded)
+    * current active sheet name
+    * filter settings
+    * (optional) current anchor position if the anchor still exists
+
+This is a deliberate trade: “toggle is rare; correctness is mandatory”.
+
+##### 5.3 Show formulas vs values vs both
+
+**Design decision:** this is a viewer-only display preference.
+The underlying cell mapping doesn’t change; only the text we paint and what we prioritize in inspector.
+
+**Add to viewer options:**
+
+* `contentMode: "values" | "formulas" | "both"`
+
+**Rendering behavior:**
+
+* `values` (default): display values first, formula secondary in inspector/tooltip (current behavior)
+* `formulas`: display formula if present, else value
+* `both`:
+
+  * Side-by-side mode: paint two lines when space permits (value on top, formula below), but only when formula exists and differs from value
+  * Unified mode: keep the current “old → new” two-line layout to avoid turning each edited cell into a 4-line block; show both value+formula in inspector/tooltip instead
+
+This keeps the grid readable while still giving formula reviewers what they need.
+
+---
+
+#### 6) Warnings surfaced clearly (and where they matter)
+
+Phase 4 makes warnings actionable and local.
+
+**Current reality:** we already show report-level warnings at the top, and per-sheet grid availability is encoded as `sheetVm.renderPlan.status.kind` with a message.
+
+**Enhancements:**
+
+1. **Sheet header status pill**
+
+   * Add a small pill next to the change badge:
+
+     * `OK` (grid available)
+     * `SKIPPED` (aligned view too large/inconsistent)
+     * `MISSING` (alignment or snapshots missing)
+   * Clicking the pill (or a “?” icon) scrolls to the sheet’s grid warning message and expands the “what this means” explanation.
+
+2. **Sheet index status**
+
+   * Mirror the pill in the sheet index list so reviewers can prioritize:
+
+     * “OK + many anchors” first for rapid review
+     * “SKIPPED/MISSING” as “needs manual Excel check” buckets
+
+3. **One plain-language explanation block**
+
+   * Add a short static “Preview limitations” explanation near the warnings section:
+
+     * “Skipped” means the aligned view was too large or inconsistent to render; detailed change list is still valid but visual diff is unavailable.
+     * “Missing” means snapshots/alignment weren’t present for that sheet in the payload.
+
+This avoids the current ambiguity where a reviewer must infer why a grid is absent.
+
+---
+
+### What code is added / changed (grounded to current file layout)
+
+#### `web/view_model.js` (VM additions for navigation + filter correctness)
+
+**Changes:**
+
+* Add `DEFAULT_OPTS.ignoreBlankToBlank = true`
+* Update `makeEditMap(...)` to optionally skip blank-to-blank edits
+* Extend `buildChangeItems(...)` to attach navigation metadata (so we don’t parse labels later):
+
+  * row/col range items should carry `viewStart/viewEnd` for their axis
+  * move items should carry `moveId`, `axis`, `srcStart`, `dstStart`, `count`
+  * region-derived items should carry `regionId` (already implicit in the id string; make it explicit)
+
+**New helper:**
+
+* `buildChangeAnchors({ sheetName, status, items, regions, rowsVm, colsVm }) -> ChangeAnchorVM[]`
+
+  * Produces `changes.anchors` with correct grid/list targets depending on `status.kind`
+  * Ensures deterministic sorting
+
+**Sheet VM shape update:**
+
+* `changes: { items, regions, anchors }`
+
+#### `web/render.js` (interactive markup + sheet index + toolbar)
+
+**Changes:**
+
+* Add `renderReviewToolbar(vm)` (search + global next/prev + filter controls)
+* Add `renderSheetIndex(vm)` (actionable list with counts + status)
+* Update `renderWorkbookVm(vm)` to insert those blocks after summary cards/warnings and before sheets
+* Update `renderChangeItemVm(item, sheetName)` (signature change is fine; this is internal):
+
+  * give each item a stable DOM id: `change-${sheetName}-${item.id}`
+  * render jump buttons from `item.navTargets`:
+
+    * `.change-jump` buttons with `data-sheet` and `data-anchor`
+* Update `renderSheetVm(sheetVm)`:
+
+  * add header status pill based on `sheetVm.renderPlan.status.kind`
+  * optionally show anchor count badge
+
+**CSS expectations:**
+
+* Add styles to make change items look like current rows even if implemented as `<button>`
+* Add `.change-jump` styles (small, unobtrusive)
+* Add `.sheet-index` and `.review-toolbar` styles
+
+#### `web/main.js` (review state + navigation wiring)
+
+**Changes:**
+
+* Extend existing hydration flow with a new setup step:
+
+  * `setupReviewWorkflow(rootEl, workbookVm, payloadCache)`
+* Add helpers:
+
+  * `getSheetSection(sheetName)`
+  * `expandSheet(sheetName)`
+  * `ensureViewer(sheetName) -> viewer | null`
+  * `navigateToAnchor(sheetName, anchorId)`
+  * `buildReviewOrder(workbookVm) -> Array<{sheetName, anchorId}>`
+* Add event delegation handlers:
+
+  * click on `.sheet-index-item` → expand + scroll
+  * click on `.change-jump` → navigateToAnchor
+  * input on sheet search → filter sections + index
+  * toolbar next/prev → traverse reviewOrder
+  * filter changes (contentMode, focusRows, focusCols) → apply to all mounted viewers and remember for future mounts
+  * ignoreBlankToBlank toggle → rebuild VM from cached payload and re-render, preserving expansion state
+
+**Sync with viewer events:**
+
+* Listen for `gridviewer:focus` and `gridviewer:anchor` custom events to keep `reviewState` correct even when the reviewer uses keyboard inside the viewer.
+
+#### `web/grid_viewer.js` (anchor-based navigation + options + flash)
+
+**Changes:**
+
+* Switch anchor source from `sheetVm.changes.regions` to `sheetVm.changes.anchors` filtered to `target.kind === "grid"`
+* Add methods to returned viewer API:
+
+  * `jumpToAnchor(anchorIdOrIndex)`
+  * `nextAnchor()` / `prevAnchor()` (return boolean for “moved”)
+  * `setDisplayOptions({ contentMode, focusRows, focusCols })`
+  * `flashAnchor(anchorId)` (or integrated into jump)
+* Emit custom events from `mountEl`:
+
+  * `gridviewer:focus` on focus
+  * `gridviewer:anchor` whenever the active anchor changes
+
+#### `web/grid_painter.js` (display mode + flash overlay + focus mapping)
+
+**Changes:**
+
+* Accept a `paintModel` that includes:
+
+  * `contentMode`
+  * optional `rowMap/colMap` mapping (for focus mode)
+  * optional `flash` object with bounds + alpha
+* Implement “both” display mode as described (two-line only when it makes sense)
+* Render flash overlay:
+
+  * region bounds (if known)
+  * row/col header flash for structural anchors
+  * cell flash fallback
+* Maintain performance:
+
+  * no per-cell allocations in hot loops (reuse small arrays or compute primitives)
+  * no DOM operations during paint
+
+#### `web/index.html` (CSS only)
+
+**Add styles:**
+
+* review toolbar container, sticky behavior (optional but recommended)
+* sheet index list and density bars
+* status pills (`ok/skipped/missing`)
+* interactive change items (button reset styles)
+* “active sheet” highlight in sheet index (set by JS via a class)
+
+---
+
+### Acceptance checks (make them hard to fake)
+
+1. **Row/col changes are navigable**
+   *Given:* a fixture with only `RowAdded` / `ColumnRemoved` ops (no `CellEdited`).
+   *Expected:* `sheetVm.changes.anchors` is non-empty, and viewer `n/p` visits those anchors (not “no changes”).
+
+2. **Jump-to from list works even when the sheet is collapsed**
+   *Given:* page rendered with all sheets collapsed.
+   *Action:* click a “Jump” button in a change item.
+   *Expected:* the sheet expands, viewer mounts (if available), scrolls to the anchor, and a flash highlight is visible.
+
+3. **Move items support both endpoints**
+   *Given:* a fixture with a row move or rect move.
+   *Expected:* the move list item has `From` and `To` jump actions, and each lands in the correct location.
+
+4. **Global next/prev crosses sheets deterministically**
+   *Given:* two sheets with anchors each.
+   *Action:* click global “Next change” repeatedly.
+   *Expected:* it walks anchors in sheet order, then location order; it never gets stuck on a sheet, and it never skips unpreviewable sheets if they have list anchors.
+
+5. **Focus mode doesn’t lie**
+   *Given:* a sheet with changes far apart (e.g., edits at row 10 and row 10,000).
+   *Action:* enable “Show only changed rows”.
+   *Expected:* the viewer shows a compact set of rows, and row header labels clearly jump (e.g., 11 then 10001), proving we didn’t renumber.
+
+6. **Ignore blank-to-blank toggling is consistent**
+   *Given:* a fixture containing at least one `CellEdited` op that resolves to empty → empty.
+   *Expected:* with ignore ON (default), it does not appear in `changes.items`, `regions`, or `anchors`.
+   *When toggled OFF:* it appears everywhere consistently, and navigation can reach it.
+
+7. **Warnings are local and explicit**
+   *Given:* a sheet with `renderPlan.status.kind === "skipped"` or `"missing"`.
+   *Expected:* status pill is shown in sheet header and sheet index; global next/prev can still bring you to the first relevant change item (list anchor) with a visible highlight.
+
 
 ---
 
 ## Phase 5 — Web app hardening: performance, privacy UX, and workerization
 
+### Grounding notes (what exists today in this repo, and what this phase hardens)
+
+This phase is explicitly grounded in the current web + WASM structure:
+
+* The browser entrypoint is `web/index.html` + `web/main.js` (plain ES modules; no bundler).
+* `web/main.js` currently does the heavy work on the main thread:
+  * reads files via `readFileBytes(file) -> Uint8Array`
+  * calls WASM synchronously: `diff_files_with_sheets_json(oldBytes, newBytes, oldName, newName)`
+  * then `JSON.parse(...)`, `buildWorkbookViewModel(payload)`, `renderWorkbookVm(...)`, and hydrates grid viewers.
+  This can freeze the UI during diff and during large JSON parse / VM build.
+* The WASM entrypoint `wasm/src/lib.rs::diff_files_with_sheets_json(...)` currently:
+  * clones the full file buffers (`Cursor::new(old_bytes.to_vec())`), doubling peak memory at the worst moment,
+  * snapshots *all* non-empty cells for every “touched” sheet (`snapshot_sheet` iterates `sheet.grid.iter_cells()` with no cap),
+  * serializes to a giant JSON string.
+* `wasm/src/alignment.rs` still contains the old DOM-era guardrail `MAX_VIEW_CELLS` (“keep the HTML grid from exploding”), but the current UI uses a canvas viewer that is already virtualized and does not need a `rows * cols` cap to stay performant.
+* The UI already has the right architectural seams to harden:
+  * Rendering is pure string generation (`web/render.js`), so it remains testable via Node (`web/test_render.js`).
+  * Canvas/DOM code is isolated in `web/grid_viewer.js` and is imported only by `web/main.js`.
+  * Viewer hydration is lazy (mounted on expand) in `hydrateGridViewers(...)`, which makes it practical to delay per-sheet heavy indexing.
+
+This phase makes the web demo feel “instant, safe, and respectful”: no jank, no surprise network requests, and predictable memory behavior.
+
+---
+
+### Key terms (so the design choices are precise)
+
+**Web Worker (module worker)**  
+A background JS thread that runs computation without blocking the UI thread. “Module” workers can use `import` and share the same ES module style as the rest of `web/`.
+
+**Transferables**  
+A way to pass `ArrayBuffer`s to a worker *without copying* (`postMessage(msg, [buffer])`). The sender’s buffer becomes “detached” (released) after transfer.
+
+**Structured clone**  
+The browser’s built-in mechanism to copy JS objects between threads. It can clone plain objects/arrays efficiently, but it can still be expensive for extremely large payloads.
+
+**Partial preview (payload truncation)**  
+A deliberate, explicitly-labeled behavior where we keep diff truthfulness (ops + alignment) but limit how much sheet cell content we ship to the UI to prevent huge JSON/memory spikes.
+
+---
+
 ### Goal
 
-A web UI that feels instant and safe.
+A web UI that:
 
-### Deliverables
+1. stays responsive during diff computation (no main-thread freezes),
+2. communicates “what’s happening” with progress stages and cancellation,
+3. avoids accidental data leakage / surprise network requests,
+4. degrades gracefully for large workbooks (never crashes the tab),
+5. produces shareable artifacts (report JSON and a self-contained HTML report).
 
-1. **Run diff in a Web Worker**
+---
 
-   * Key term: a “Web Worker” is a background thread in the browser so the UI doesn’t freeze.
-   * This is crucial if users drop large files.
+### Non-goals (explicit, to keep Phase 5 bounded)
 
-2. **Streaming-ish UX even if results are batch**
+* Not implementing a fully streaming diff pipeline (ops trickling in over time). The core diff is currently a batch operation.
+* Not implementing on-demand “tile fetching” from WASM for arbitrary viewports (that would require a stateful workbook cache in WASM and a query API).
+* Not implementing perfect Excel rendering fidelity (formats, widths, merged cells, etc.).
 
-   * Show stages: “Parsing”, “Aligning”, “Diffing”, “Rendering”
-   * Display file sizes + “runs locally in your browser” messaging
+---
 
-3. **Payload size control**
+### Design decisions (the complicated calls made explicitly)
 
-   * For web, avoid shipping entire-sheet snapshots when a sheet is huge:
+#### 1) WASM runs in a Worker, not on the UI thread
 
-     * Prefer: “changed region tiles” + “on-demand fetch tiles” (via additional WASM calls), or
-     * Fallback: cap snapshot to bounding boxes + context.
+**Decision:** The main thread will never call `diff_files_with_sheets_json` directly. A dedicated module worker owns:
+* WASM initialization (`init()`),
+* version retrieval (`get_version()`),
+* and the diff call itself.
 
-Your WASM layer currently snapshots all cells for selected sheets. That’s fine for small-to-medium, but you’ll want control knobs for large. 
+**Why (in this codebase):**
+* `diff_files_with_sheets_json(...)` is synchronous and can take seconds; moving it to a worker immediately removes UI freezes.
+* Keeping WASM out of the main thread avoids double-loading WASM (and double memory usage).
+* This fits the existing “no build step” structure: a `web/diff_worker.js` module can import `./wasm/excel_diff_wasm.js` directly.
 
-4. **Export**
+#### 2) Cancellation is “terminate the worker”, not cooperative interruption
 
-   * Download report JSON (already basically possible)
-   * Download HTML report (self-contained)
+**Decision:** “Cancel” stops the diff by terminating the worker (`worker.terminate()`), then re-creating a fresh worker.
+
+**Why:**
+* The diff call is currently a single WASM function call with no checkpoints; there is no safe mid-flight cancellation without changing the core engine.
+* Worker termination is a hard stop that reliably returns control to the UI and releases the worker’s JS/WASM heap.
+
+**User-visible contract:**
+* Cancel is immediate.
+* Cancelling discards the in-progress result (there is no partial report).
+* After cancel, the UI returns to the ready state.
+
+#### 3) Progress UX is stage-based (not percent-based)
+
+**Decision:** We show progress as discrete stages, not “42%”.
+Stages are chosen to reflect actual pipeline boundaries we control:
+
+Main thread stages:
+1. Validating inputs
+2. Reading files into `ArrayBuffer`
+3. Transferring buffers to worker
+4. Building view model + rendering DOM
+5. Hydrating the grid viewer (optional / lazy)
+
+Worker stages:
+1. Initializing WASM (first run only)
+2. Diffing + snapshotting + alignment (single batch call)
+3. Returning payload
+
+**Why:**
+* Percent bars are misleading without true internal progress signals.
+* Stage messaging is truthful, stable, and doesn’t require changing the diff engine.
+
+#### 4) Payload-size control must happen in WASM, and must preserve “edited-cell truth”
+
+**Decision:** Add a WASM-side snapshot limiter so we don’t serialize massive `sheets[].cells` arrays into JSON.
+
+**Important truthfulness constraint:**  
+Even if sheet cell snapshots are truncated, **edited cell values remain exact**, because `CellEdited` ops already include `from` and `to` (the VM uses those to render edited cells). So truncation reduces *context*, not correctness for edits.
+
+**Implementation stance (MVP-hardening tradeoff):**
+* We do **not** attempt to ship the entire used-range for large sheets.
+* We do ship:
+  * sheet dimensions (`nrows`, `ncols`),
+  * alignment (bounded by row/col caps),
+  * all ops (subject to a conservative op cap),
+  * and a *bounded* subset of non-empty cells for context.
+
+**UI contract:**
+* When truncation happens, the UI displays a clear “Preview limited” message, but still shows:
+  * structural markers,
+  * accurate edited-cell old/new values,
+  * and jump-to navigation between change regions.
+
+#### 5) VM should stop eagerly indexing all sheet cells up-front
+
+**Decision:** Update `web/view_model.js` so `makeCellMap(oldSheet/newSheet)` is lazy per sheet (built only when the viewer needs it).
+
+**Why (in the current code):**
+* `hydrateGridViewers(...)` already mounts the heavy canvas viewer lazily on expand.
+* But `buildWorkbookViewModel(...)` currently builds `oldCells/newCells` maps for *every* sheet VM immediately, even for collapsed sheets.
+* For large snapshots, that indexing is an avoidable main-thread spike, even after workerization.
+
+This “lazy cell indexing” pairs naturally with payload truncation: small snapshots index quickly; big sheets don’t punish initial render.
+
+#### 6) Export artifacts are small + safe by default
+
+**Decision:** Provide two exports:
+
+1) **Report JSON export**: export the `DiffReport` (plus minimal metadata), not the full `{report, sheets, alignments}` payload.  
+2) **Self-contained HTML export**: a static HTML file with:
+   * the rendered summary + change lists,
+   * the report JSON embedded in a `<pre>` section,
+   * and (optional) PNG snapshots of grid viewer canvases for sheets the user expanded.
+
+**Why:**
+* Exporting full sheet snapshots can create huge files and encourages sharing raw spreadsheet content.
+* Report JSON is typically enough for audit trails and is stable across UI evolution.
+* A static HTML export is portable and avoids the complexity of bundling ESM modules into a single offline interactive app.
+
+#### 7) Privacy hardening means “no third-party requests”, not just “we don’t upload your files”
+
+**Decision:** Make the demo *network-quiet* after initial load and eliminate third-party asset loads:
+
+* Remove Google Fonts `<link>`s from `web/index.html`.
+* Use system font stacks only.
+* Add a tight CSP (via `<meta http-equiv="Content-Security-Policy">`) appropriate for:
+  * module scripts,
+  * WASM compilation,
+  * workers,
+  * and `data:` images (for export previews).
+
+**Why:**
+* Today `web/index.html` includes `fonts.googleapis.com` / `fonts.gstatic.com`. That’s a third-party request and undermines “privacy posture”.
+* The best privacy UX is: “Open DevTools → Network: no third-party requests, and nothing gets posted.”
+
+---
+
+### Implementation plan (concrete, tied to current file layout)
+
+#### Step 1: Add a module worker that owns WASM + diff
+
+**New file:** `web/diff_worker.js`
+
+Responsibilities:
+* Import and initialize WASM:
+  * `import init, { diff_files_with_sheets_json, get_version } from "./wasm/excel_diff_wasm.js";`
+* Handle messages:
+  * `{ type: "init", requestId }`
+  * `{ type: "diff", requestId, oldName, newName, oldBuffer, newBuffer, options }`
+* Emit messages:
+  * `{ type: "ready", version }`
+  * `{ type: "progress", requestId, stage, detail? }`
+  * `{ type: "result", requestId, payload }`
+  * `{ type: "error", requestId, message }`
+
+Implementation details (important and codebase-realistic):
+* Use `Uint8Array` views on received `ArrayBuffer`s:
+  * `const oldBytes = new Uint8Array(msg.oldBuffer);`
+  * `const json = diff_files_with_sheets_json(oldBytes, newBytes, oldName, newName);`
+* Worker parses JSON before posting back (keeps main thread out of `JSON.parse`):
+  * `const payload = JSON.parse(json);`
+  * `postMessage({ type: "result", requestId, payload });`
+* Release large references ASAP in worker:
+  * set `oldBytes/newBytes/json/payload` to `null` after post (so GC can reclaim).
+
+#### Step 2: Add a small worker client wrapper for request/response + cancellation
+
+**New file:** `web/diff_worker_client.js`
+
+Exports:
+* `createDiffWorkerClient({ onStatus }) -> { ready(), diff(files, options), cancel(), dispose() }`
+
+Design:
+* The client owns:
+  * worker lifecycle (create / terminate / recreate),
+  * requestId generation,
+  * response routing (only resolve the current request),
+  * error normalization (worker errors → `Error` objects),
+  * and a simple “busy” state.
+
+This keeps `web/main.js` readable and reduces the risk of UI bugs.
+
+#### Step 3: Update `web/main.js` to run diff through the worker + stage UX
+
+**Change file:** `web/main.js`
+
+Changes:
+* Remove direct WASM imports:
+  * remove `import init, { diff_files_with_sheets_json, get_version } ...`
+* Replace with:
+  * `import { createDiffWorkerClient } from "./diff_worker_client.js";`
+* Replace `main()` init logic:
+  * create client
+  * `await client.ready()` → set `#version` from worker’s `ready` message
+* Replace `runDiff()`:
+  1. Validate old/new file presence.
+  2. Disable “Compare” button; enable “Cancel”.
+  3. Update status to “Reading files…”.
+  4. Read as `ArrayBuffer` (not `Uint8Array`) so we can transfer ownership:
+     * `const oldBuffer = await oldFile.arrayBuffer();`
+     * `const newBuffer = await newFile.arrayBuffer();`
+  5. Transfer buffers to worker via client:
+     * `const payload = await client.diff({ oldName, newName, oldBuffer, newBuffer }, options)`
+  6. Yield a frame, then build VM + render:
+     * `await nextFrame()` to ensure status paints before heavy DOM updates.
+  7. `workbookVm = buildWorkbookViewModel(payload)`
+  8. `resultsEl.innerHTML = renderWorkbookVm(workbookVm)`
+  9. Hydrate viewers as today (`hydrateGridViewers(...)`), and keep a handle for export.
+
+**New UI controls (wired here):**
+* `#cancel` button: calls `client.cancel()`, resets UI state, and clears in-progress status.
+* Export buttons (see Step 6): call into an `export.js` helper.
+
+#### Step 4: Make WASM memory behavior less risky (remove extra file-buffer clones)
+
+**Change file:** `wasm/src/lib.rs`
+
+**Critical low-risk improvement:** remove the redundant `.to_vec()` clones:
+
+Current:
+* `let old_cursor = Cursor::new(old_bytes.to_vec());`
+* `let new_cursor = Cursor::new(new_bytes.to_vec());`
+
+Replace with:
+* `let old_cursor = Cursor::new(old_bytes);`
+* `let new_cursor = Cursor::new(new_bytes);`
+
+Rationale:
+* JS → WASM already requires a copy into linear memory.
+* The `.to_vec()` adds a second full copy in WASM heap; this is exactly what causes peak-memory spikes on large files.
+
+#### Step 5: Implement snapshot truncation metadata + caps in WASM
+
+**Change file:** `wasm/src/lib.rs`
+
+Add fields to `SheetSnapshot`:
+
+* `truncated: bool`
+* `included_cells: u32` (or `usize` serialized as number)
+* `total_non_empty_cells: u32`
+* (optional) `note: Option<String>` with a short human-readable reason
+
+Add constants (explicit so behavior is stable):
+* `MAX_SNAPSHOT_CELLS_PER_SHEET: usize = 50_000` (tunable)
+* `MAX_SNAPSHOT_CELLS_TOTAL: usize = 200_000` (across all sheets)
+* `STRUCTURAL_PREVIEW_MAX_ROWS: u32 = 200`
+* `STRUCTURAL_PREVIEW_MAX_COLS: u32 = 80`
+* `SNAPSHOT_CONTEXT_ROWS: u32 = 1` (match `web/view_model.js` default)
+* `SNAPSHOT_CONTEXT_COLS: u32 = 1`
+
+Add a new snapshot function:
+* `snapshot_sheet_limited(sheet, pool, sheet_ops, caps) -> SheetSnapshot`
+
+Algorithm (explicit and implementable with existing core APIs):
+1. Compute `total_non_empty_cells = sheet.grid.cell_count()`.
+2. If `total_non_empty_cells == 0`: return empty cells, `truncated=false`.
+3. Derive a small list of “interest rectangles” from ops for that sheet:
+   * For `CellEdited`: add a 1x1 rect at `(row,col)` (old/new values are still in ops; this is for context only).
+   * For `RectReplaced` and `BlockMovedRect`: add the rect for src/dst/top_left/size.
+   * For row/col structural ops:
+     * Use “strips” but clamp the opposite axis:
+       * rows: `[row .. row+count)` × `[0 .. min(ncols, STRUCTURAL_PREVIEW_MAX_COLS))`
+       * cols: `[0 .. min(nrows, STRUCTURAL_PREVIEW_MAX_ROWS))` × `[col .. col+count)`
+4. Expand each rect by context rows/cols and clamp within `[0..nrows)` / `[0..ncols)`.
+5. Estimate the total area of interest rects. Choose a sampling strategy:
+   * If total area is small: iterate rect coordinates and call `sheet.grid.get(row,col)` (avoids scanning the whole sheet).
+   * If total area is huge but non-empty cell count is smaller: iterate `sheet.grid.iter_cells()` and include those that fall in any rect.
+6. Stop when either:
+   * per-sheet cap reached, or
+   * global cap reached (tracked by the parent `snapshot_workbook` call).
+   Set `truncated=true` and include a short note.
+
+Modify `snapshot_workbook(...)` to:
+* group ops by sheet name (you already do this in `alignment.rs`; reuse the same approach in `lib.rs` locally),
+* pass per-sheet op slices into `snapshot_sheet_limited`,
+* and track global snapshot cell budget.
+
+**Key UX implication:**  
+Even with truncated snapshots, the UI remains truthful for edited cells because `CellEdited.from/to` is authoritative.
+
+#### Step 6: Revisit alignment skip logic to match the canvas viewer reality
+
+**Change file:** `wasm/src/alignment.rs`
+
+* Remove `MAX_VIEW_CELLS` gating (or raise it dramatically), because canvas rendering is viewport-bound.
+* Keep the axis caps:
+  * `MAX_VIEW_ROWS` and `MAX_VIEW_COLS` still protect:
+    * JSON size (axis arrays),
+    * and the browser scroll model (huge scroll extents).
+* Update the `skipped` reason message to be explicit:
+  * e.g., `"Preview disabled: sheet has 250,000 columns (cap is 200)."`
+
+This aligns the backend guardrails with the current renderer (canvas virtualization).
+
+#### Step 7: Make `web/view_model.js` lazily build old/new cell maps per sheet
+
+**Change file:** `web/view_model.js`
+
+Modify `buildSheetViewModel(...)` so it does not eagerly call:
+* `const oldCells = makeCellMap(oldSheet);`
+* `const newCells = makeCellMap(newSheet);`
+
+Instead:
+* store `oldSheet` and `newSheet` on the sheet VM
+* create `oldCells/newCells` as `null` initially
+* implement a small internal `ensureCellMaps()` that:
+  * builds maps on first use,
+  * then caches them for subsequent `cellAt` calls.
+
+Expose (optional but clean):
+* `sheetVm.ensureCellIndex()` which can be called by the viewer on mount (so first render isn’t surprised).
+
+Also propagate truncation metadata into the VM:
+* `sheetVm.preview = { truncatedOld, truncatedNew, note? }`
+* `sheetVm.renderPlan.status.kind` becomes:
+  * `"ok"`: full preview
+  * `"partial"`: preview available but truncated
+  * `"skipped"` / `"missing"` as today
+
+#### Step 8: Teach the renderer to display “partial preview” warnings
+
+**Change file:** `web/render.js`
+
+Update `renderSheetGridVm(sheetVm)` behavior:
+
+* If `status.kind === "partial"`:
+  * render the viewer mount as usual,
+  * plus render a small non-blocking warning element above the viewer:
+    * “Preview limited for performance; edited cells remain exact.”
+* If `status.kind === "skipped" | "missing"`: keep existing skip warning behavior.
+
+This keeps the UX honest while still enabling the viewer.
+
+#### Step 9: Add export helpers (report JSON + self-contained HTML)
+
+**New file:** `web/export.js`
+
+Exports:
+* `downloadReportJson({ report, meta })`
+  * `meta` includes `{ version, oldName, newName, createdAtIso }`
+  * output filename: `excel-diff-report__old__new__YYYY-MM-DD.json`
+* `downloadHtmlReport({ title, meta, renderedResultsHtml, cssText, reportJsonText, gridPreviews })`
+  * `gridPreviews` is optional map `{ sheetName -> dataUrlPng }`
+
+Implementation notes grounded in the current UI:
+* CSS source of truth is the `<style>` block in `web/index.html`. At runtime we can do:
+  * `const cssText = document.querySelector("style")?.textContent || ""`
+* `renderedResultsHtml` can be taken from `#results.innerHTML` after diff.
+* If we choose to include preview images:
+  * extend `mountSheetGridViewer(...)` to expose `capturePng()` that returns `canvas.toDataURL("image/png")`
+  * only capture images for mounted viewers (first expanded sheet), or optionally mount-capture-destroy for each sheet (slower but complete).
+
+This export is intentionally static (no scripts) so it opens safely anywhere.
+
+#### Step 10: Privacy / security polish in `web/index.html`
+
+**Change file:** `web/index.html`
+
+1) Remove Google Fonts `<link>` tags.
+2) Ensure font stack uses system fonts only.
+3) Add a small privacy note in the UI near uploads:
+   * “Runs locally in your browser. Files are not uploaded.”
+4) Add a CSP `<meta http-equiv="Content-Security-Policy" ...>` compatible with:
+   * module scripts
+   * workers
+   * WASM
+   * inline styles (since the page uses a `<style>` block)
+
+Example CSP shape (final string should be tested in-browser):
+* `default-src 'self';`
+* `script-src 'self' 'wasm-unsafe-eval';`
+* `style-src 'self' 'unsafe-inline';`
+* `img-src 'self' data:;`
+* `connect-src 'self';`
+* `worker-src 'self';`
+* `object-src 'none'; base-uri 'none'; frame-ancestors 'none';`
+
+---
+
+### What code is added / changed (explicit inventory)
+
+#### New files
+
+1) `web/diff_worker.js`
+* Owns WASM init + diff
+* Implements the worker message protocol
+* Emits stage progress messages
+
+2) `web/diff_worker_client.js`
+* Creates/owns the worker instance
+* `ready()`, `diff()`, `cancel()`, `dispose()`
+* Ensures only one in-flight request is active and cancels safely
+
+3) `web/export.js`
+* `downloadReportJson(...)`
+* `downloadHtmlReport(...)`
+* Shared helper `downloadBlob(filename, mime, textOrBytes)`
+
+#### Changed files
+
+1) `web/main.js`
+* Replace direct WASM import with worker client
+* Add stage-based status updates
+* Add cancel button wiring
+* Wire export buttons after successful diff
+* Keep `hydrateGridViewers(...)` behavior, but retain viewer references for export previews
+
+2) `web/index.html`
+* Remove Google Fonts
+* Add cancel + export controls
+* Add privacy note
+* Add CSP meta tag
+* Add minimal CSS for:
+  * progress stages / spinner
+  * export bar
+  * partial-preview warning
+
+3) `wasm/src/lib.rs`
+* Remove `.to_vec()` buffer clones (use `Cursor::new(&[u8])`)
+* Implement capped/truncated snapshots:
+  * add snapshot metadata to `SheetSnapshot`
+  * snapshot selection by interest rects derived from ops
+  * global + per-sheet caps
+
+4) `wasm/src/alignment.rs`
+* Remove/relax `MAX_VIEW_CELLS` cap
+* Keep row/col caps
+* Improve `skipped` messaging
+
+5) `web/view_model.js`
+* Lazy old/new cell map building per sheet
+* Propagate truncation metadata into VM status (`partial`)
+* Optional `sheetVm.ensureCellIndex()` for viewer mount
+
+6) `web/render.js`
+* Render `partial` status warnings without disabling preview
+
+7) `web/grid_viewer.js` (optional but recommended if we include image previews in HTML export)
+* Add `capturePng()` on the returned viewer object
+
+8) `.github/workflows/web_ui_tests.yml` (recommended hardening)
+* Run both:
+  * `node web/test_render.js`
+  * `node web/test_view_model.js`
+  so VM performance/behavior changes stay covered.
+
+---
+
+### Acceptance checks (manual + deterministic)
+
+#### Responsiveness (hard to fake)
+* Start a diff of two moderately large `.xlsx` files (tens of MB).
+* Expected:
+  * UI remains responsive (you can scroll the page, expand/collapse sections).
+  * Status updates appear immediately (“Reading…”, “Diffing…”, “Rendering…”).
+  * Cancel works: the worker is terminated and UI returns to ready state.
+
+#### Memory behavior (specific to this codebase)
+* In DevTools Performance/Memory:
+  * Peak memory should be noticeably lower after removing WASM-side `.to_vec()` clones.
+  * Large files should not cause an immediate tab crash.
+
+#### Payload truncation truthfulness
+* Use a case with many edits in a large sheet.
+* Expected:
+  * UI shows a clear “Preview limited” warning if caps trigger.
+  * Edited cells still show correct old/new values (from ops), even if surrounding context is sparse/blank.
+
+#### Privacy posture
+* Open DevTools → Network, hard refresh.
+* Expected:
+  * No requests to `fonts.googleapis.com` / `fonts.gstatic.com` (they’re removed).
+  * No other third-party requests.
+* Optional: verify CSP blocks accidental external loads.
+
+#### Export
+* “Download report JSON”:
+  * downloads a small JSON file
+  * includes `report.ops` and metadata (version/filenames/timestamp)
+* “Download HTML report”:
+  * opens offline (airplane mode) with readable summary + change lists
+  * if preview PNGs are enabled: at least the expanded sheet includes a visual snapshot
+
+#### Regression checks
+* `node web/test_render.js` still passes (renderer remains pure; no Worker/Canvas imports).
+* `node web/test_view_model.js` passes (VM changes preserve semantics).
+* WASM size budget remains under the existing workflow limit (10MB).
 
 ---
 

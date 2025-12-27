@@ -292,13 +292,19 @@
       alignment.rs
       lib.rs
   web/
+    grid_metrics.js
+    grid_painter.js
+    grid_theme.js
+    grid_viewer.js
     index.html
     main.js
     package.json
     render.js
     test_render.js
+    test_view_model.js
     testdata/
       sample_report.json
+    view_model.js
 ```
 
 ## File Contents
@@ -1181,7 +1187,6 @@ use excel_diff::{
     Workbook, WorkbookPackage, index_to_address, suggest_key_columns, with_default_session,
 };
 use std::collections::HashMap;
-use std::fs::File;
 use std::io::{self, BufWriter, IsTerminal, Write};
 use std::path::Path;
 use std::process::ExitCode;
@@ -51626,6 +51631,945 @@ pub fn diff_summary(old_bytes: &[u8], new_bytes: &[u8]) -> Result<DiffSummary, J
 
 ---
 
+### File: `web\grid_metrics.js`
+
+```javascript
+export const GRID_METRICS = {
+  rowHeight: 36,
+  colWidth: 100,
+  rowHeaderWidth: 50,
+  colHeaderHeight: 36,
+  paneGap: 16
+};
+
+```
+
+---
+
+### File: `web\grid_painter.js`
+
+```javascript
+function colToLetter(col) {
+  let result = "";
+  let c = col;
+  while (c >= 0) {
+    result = String.fromCharCode((c % 26) + 65) + result;
+    c = Math.floor(c / 26) - 1;
+  }
+  return result;
+}
+
+function safeText(value) {
+  if (value === null || value === undefined) return "";
+  return String(value);
+}
+
+function resolveCellText(cell, side) {
+  if (!cell) return "";
+  if (cell.edit) {
+    const value = side === "old" ? cell.edit.fromValue : cell.edit.toValue;
+    const formula = side === "old" ? cell.edit.fromFormula : cell.edit.toFormula;
+    if (value) return value;
+    if (formula) return formula;
+  }
+  const payload = side === "old" ? cell.old : cell.new;
+  if (!payload || !payload.cell) return "";
+  return payload.cell.value || payload.cell.formula || "";
+}
+
+function resolveUnifiedText(cell) {
+  if (!cell) return "";
+  if (cell.diffKind === "added") return resolveCellText(cell, "new");
+  if (cell.diffKind === "removed") return resolveCellText(cell, "old");
+  if (cell.diffKind === "moved") {
+    return cell.moveRole === "src" ? resolveCellText(cell, "old") : resolveCellText(cell, "new");
+  }
+  return resolveCellText(cell, "new") || resolveCellText(cell, "old");
+}
+
+function truncateText(ctx, text, maxWidth) {
+  const value = safeText(text);
+  if (!value) return "";
+  if (ctx.measureText(value).width <= maxWidth) return value;
+  let end = value.length;
+  while (end > 0) {
+    const candidate = value.slice(0, end) + "...";
+    if (ctx.measureText(candidate).width <= maxWidth) return candidate;
+    end -= 1;
+  }
+  return "";
+}
+
+function drawStrike(ctx, x, y, width, color) {
+  if (!width) return;
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x + width, y);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function axisStyle(entry, axis, theme) {
+  if (!entry) {
+    return { bg: theme.bgTertiary, text: theme.textSecondary, marker: "" };
+  }
+  if (entry.kind === "insert") {
+    return { bg: theme.diffAddBg, text: theme.accentGreen, marker: "+" };
+  }
+  if (entry.kind === "delete") {
+    return { bg: theme.diffRemoveBg, text: theme.accentRed, marker: "-" };
+  }
+  if (entry.kind === "move_src") {
+    return { bg: theme.diffMoveBg, text: theme.accentPurple, marker: "M" };
+  }
+  if (entry.kind === "move_dst") {
+    return { bg: theme.diffMoveDstBg || theme.diffMoveBg, text: theme.accentPurple, marker: "M" };
+  }
+  return { bg: theme.bgTertiary, text: theme.textSecondary, marker: "" };
+}
+
+function cellStyle(cell, theme) {
+  if (!cell) return { bg: theme.bgPrimary, text: theme.textPrimary };
+  if (cell.diffKind === "edited") {
+    return { bg: theme.diffModifyBg, text: theme.textPrimary };
+  }
+  if (cell.diffKind === "added") {
+    return { bg: theme.diffAddBg, text: theme.textPrimary };
+  }
+  if (cell.diffKind === "removed") {
+    return { bg: theme.diffRemoveBg, text: theme.textPrimary };
+  }
+  if (cell.diffKind === "moved") {
+    const bg = cell.moveRole === "dst" ? theme.diffMoveDstBg : theme.diffMoveBg;
+    return { bg, text: theme.textPrimary };
+  }
+  if (cell.diffKind === "unchanged") {
+    return { bg: theme.bgPrimary, text: theme.textPrimary };
+  }
+  return { bg: theme.bgPrimary, text: theme.textMuted };
+}
+
+function drawHeaderCell(ctx, x, y, width, height, label, style, theme) {
+  ctx.fillStyle = style.bg;
+  ctx.fillRect(x, y, width, height);
+  ctx.strokeStyle = theme.borderSecondary;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x, y, width, height);
+  ctx.fillStyle = style.text;
+  ctx.font = "11px 'JetBrains Mono', monospace";
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "center";
+  const text = style.marker ? `${label} ${style.marker}` : label;
+  ctx.fillText(text, x + width / 2, y + height / 2);
+}
+
+function drawRowHeader(ctx, x, y, width, height, label, style, theme) {
+  ctx.fillStyle = style.bg;
+  ctx.fillRect(x, y, width, height);
+  ctx.strokeStyle = theme.borderSecondary;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x, y, width, height);
+  ctx.fillStyle = style.text;
+  ctx.font = "11px 'JetBrains Mono', monospace";
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "right";
+  const text = style.marker ? `${label} ${style.marker}` : label;
+  ctx.fillText(text, x + width - 6, y + height / 2);
+}
+
+function drawCellText(ctx, x, y, width, height, text, color) {
+  const paddingX = 8;
+  const maxWidth = Math.max(0, width - paddingX * 2);
+  ctx.fillStyle = color;
+  ctx.font = "12px 'JetBrains Mono', monospace";
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "left";
+  const value = truncateText(ctx, text, maxWidth);
+  ctx.fillText(value, x + paddingX, y + height / 2);
+}
+
+function drawEditedUnified(ctx, x, y, width, height, cell, theme) {
+  const paddingX = 8;
+  const paddingY = 6;
+  const maxWidth = Math.max(0, width - paddingX * 2);
+  const oldText = resolveCellText(cell, "old");
+  const newText = resolveCellText(cell, "new");
+
+  ctx.font = "10px 'JetBrains Mono', monospace";
+  ctx.textBaseline = "top";
+  ctx.textAlign = "left";
+  ctx.fillStyle = theme.accentRed;
+  const oldDisplay = truncateText(ctx, oldText, maxWidth);
+  ctx.fillText(oldDisplay, x + paddingX, y + paddingY);
+  const oldWidth = ctx.measureText(oldDisplay).width;
+  drawStrike(ctx, x + paddingX, y + paddingY + 6, oldWidth, theme.accentRed);
+
+  ctx.font = "12px 'JetBrains Mono', monospace";
+  ctx.fillStyle = theme.accentGreen;
+  const newDisplay = truncateText(ctx, newText, maxWidth);
+  ctx.fillText(newDisplay, x + paddingX, y + paddingY + 14);
+}
+
+function drawCell(ctx, x, y, width, height, cell, theme, mode, side) {
+  const style = cellStyle(cell, theme);
+  ctx.fillStyle = style.bg;
+  ctx.fillRect(x, y, width, height);
+  ctx.strokeStyle = theme.borderSecondary;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x, y, width, height);
+
+  if (!cell || cell.diffKind === "empty") return;
+
+  if (mode === "unified" && cell.diffKind === "edited") {
+    drawEditedUnified(ctx, x, y, width, height, cell, theme);
+    return;
+  }
+
+  let text = "";
+  if (mode === "side_by_side") {
+    text = resolveCellText(cell, side);
+  } else {
+    text = resolveUnifiedText(cell);
+  }
+
+  if (cell.diffKind === "removed" && mode === "unified") {
+    ctx.save();
+    ctx.fillStyle = theme.accentRed;
+    drawCellText(ctx, x, y, width, height, text, theme.accentRed);
+    const textWidth = ctx.measureText(truncateText(ctx, text, Math.max(0, width - 16))).width;
+    drawStrike(ctx, x + 8, y + height / 2, textWidth, theme.accentRed);
+    ctx.restore();
+    return;
+  }
+
+  const color =
+    cell.diffKind === "added"
+      ? theme.accentGreen
+      : cell.diffKind === "removed"
+        ? theme.accentRed
+        : cell.diffKind === "moved"
+          ? theme.accentPurple
+          : style.text;
+
+  drawCellText(ctx, x, y, width, height, text, color);
+}
+
+export function paintGrid(ctx, model) {
+  const { sheetVm, mode, viewport, metrics, theme, selection, hover, hoverMoveId } = model;
+  const { width, height, scrollTop, scrollLeft } = viewport;
+  const rows = sheetVm.axis.rows.entries;
+  const cols = sheetVm.axis.cols.entries;
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = theme.bgPrimary;
+  ctx.fillRect(0, 0, width, height);
+
+  if (!rows.length || !cols.length || width <= 0 || height <= 0) return;
+
+  const rowHeight = metrics.rowHeight;
+  const colWidth = metrics.colWidth;
+  const rowHeaderWidth = metrics.rowHeaderWidth;
+  const colHeaderHeight = metrics.colHeaderHeight;
+  const paneGap = metrics.paneGap;
+  const paneCount = mode === "side_by_side" ? 2 : 1;
+  const paneWidth =
+    paneCount === 2
+      ? Math.max(0, Math.floor((width - rowHeaderWidth - paneGap) / 2))
+      : Math.max(0, width - rowHeaderWidth);
+  const cellAreaHeight = Math.max(0, height - colHeaderHeight);
+
+  const firstRow = Math.max(0, Math.floor(scrollTop / rowHeight));
+  const visibleRowCount = cellAreaHeight > 0 ? Math.ceil(cellAreaHeight / rowHeight) + 1 : 0;
+  const lastRow = Math.min(rows.length - 1, firstRow + visibleRowCount - 1);
+
+  const firstCol = Math.max(0, Math.floor(scrollLeft / colWidth));
+  const visibleColCount = paneWidth > 0 ? Math.ceil(paneWidth / colWidth) + 1 : 0;
+  const lastCol = Math.min(cols.length - 1, firstCol + visibleColCount - 1);
+
+  const paneOffsets = [rowHeaderWidth];
+  if (paneCount === 2) {
+    paneOffsets.push(rowHeaderWidth + paneWidth + paneGap);
+  }
+
+  ctx.fillStyle = theme.bgTertiary;
+  ctx.fillRect(0, 0, rowHeaderWidth, colHeaderHeight);
+
+  for (let c = firstCol; c <= lastCol; c++) {
+    const entry = cols[c];
+    const style = axisStyle(entry, "col", theme);
+    const label = colToLetter(c);
+    for (let p = 0; p < paneCount; p++) {
+      const x = paneOffsets[p] + (c * colWidth - scrollLeft);
+      drawHeaderCell(ctx, x, 0, colWidth, colHeaderHeight, label, style, theme);
+    }
+  }
+
+  for (let r = firstRow; r <= lastRow; r++) {
+    const entry = rows[r];
+    const style = axisStyle(entry, "row", theme);
+    const y = colHeaderHeight + (r * rowHeight - scrollTop);
+    drawRowHeader(ctx, 0, y, rowHeaderWidth, rowHeight, String(r + 1), style, theme);
+  }
+
+  for (let r = firstRow; r <= lastRow; r++) {
+    const y = colHeaderHeight + (r * rowHeight - scrollTop);
+    for (let c = firstCol; c <= lastCol; c++) {
+      const cell = sheetVm.cellAt(r, c);
+      for (let p = 0; p < paneCount; p++) {
+        const x = paneOffsets[p] + (c * colWidth - scrollLeft);
+        const side = p === 0 ? "old" : "new";
+        drawCell(ctx, x, y, colWidth, rowHeight, cell, theme, mode, side);
+      }
+
+      if (hoverMoveId) {
+        const rowEntry = rows[r];
+        const colEntry = cols[c];
+        if ((rowEntry && rowEntry.move_id === hoverMoveId) || (colEntry && colEntry.move_id === hoverMoveId)) {
+          ctx.save();
+          ctx.strokeStyle = theme.diffMoveBorder || theme.accentPurple;
+          ctx.lineWidth = 2;
+          for (let p = 0; p < paneCount; p++) {
+            const x = paneOffsets[p] + (c * colWidth - scrollLeft);
+            ctx.strokeRect(x + 1, y + 1, colWidth - 2, rowHeight - 2);
+          }
+          ctx.restore();
+        }
+      }
+    }
+  }
+
+  if (hover && hover.viewRow !== null && hover.viewCol !== null) {
+    const row = hover.viewRow;
+    const col = hover.viewCol;
+    if (row >= firstRow && row <= lastRow && col >= firstCol && col <= lastCol) {
+      const y = colHeaderHeight + (row * rowHeight - scrollTop);
+      for (let p = 0; p < paneCount; p++) {
+        if (paneCount === 2 && hover.pane !== null && hover.pane !== undefined && hover.pane !== p) {
+          continue;
+        }
+        const x = paneOffsets[p] + (col * colWidth - scrollLeft);
+        ctx.save();
+        ctx.strokeStyle = theme.accentBlue;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x + 1, y + 1, colWidth - 2, rowHeight - 2);
+        ctx.restore();
+      }
+    }
+  }
+
+  if (selection && selection.viewRow !== null && selection.viewCol !== null) {
+    const row = selection.viewRow;
+    const col = selection.viewCol;
+    if (row >= firstRow && row <= lastRow && col >= firstCol && col <= lastCol) {
+      const y = colHeaderHeight + (row * rowHeight - scrollTop);
+      for (let p = 0; p < paneCount; p++) {
+        const x = paneOffsets[p] + (col * colWidth - scrollLeft);
+        ctx.save();
+        ctx.strokeStyle = theme.accentBlue;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x + 1, y + 1, colWidth - 2, rowHeight - 2);
+        ctx.restore();
+      }
+    }
+  }
+}
+
+```
+
+---
+
+### File: `web\grid_theme.js`
+
+```javascript
+function resolveCssVar(style, name, fallback) {
+  const value = style.getPropertyValue(name);
+  return value && value.trim() ? value.trim() : fallback;
+}
+
+export function readGridTheme(rootEl = document.documentElement) {
+  const style = getComputedStyle(rootEl);
+  return {
+    bgPrimary: resolveCssVar(style, "--bg-primary", "#0d1117"),
+    bgSecondary: resolveCssVar(style, "--bg-secondary", "#161b22"),
+    bgTertiary: resolveCssVar(style, "--bg-tertiary", "#21262d"),
+    borderPrimary: resolveCssVar(style, "--border-primary", "#30363d"),
+    borderSecondary: resolveCssVar(style, "--border-secondary", "#21262d"),
+    textPrimary: resolveCssVar(style, "--text-primary", "#e6edf3"),
+    textSecondary: resolveCssVar(style, "--text-secondary", "#8b949e"),
+    textMuted: resolveCssVar(style, "--text-muted", "#6e7681"),
+    accentBlue: resolveCssVar(style, "--accent-blue", "#58a6ff"),
+    accentGreen: resolveCssVar(style, "--accent-green", "#3fb950"),
+    accentRed: resolveCssVar(style, "--accent-red", "#f85149"),
+    accentYellow: resolveCssVar(style, "--accent-yellow", "#d29922"),
+    accentPurple: resolveCssVar(style, "--accent-purple", "#a371f7"),
+    diffAddBg: resolveCssVar(style, "--diff-add-bg", "rgba(46, 160, 67, 0.15)"),
+    diffRemoveBg: resolveCssVar(style, "--diff-remove-bg", "rgba(248, 81, 73, 0.15)"),
+    diffModifyBg: resolveCssVar(style, "--diff-modify-bg", "rgba(210, 153, 34, 0.15)"),
+    diffMoveBg: resolveCssVar(style, "--diff-move-bg", "rgba(163, 113, 247, 0.15)"),
+    diffMoveBorder: resolveCssVar(style, "--diff-move-border", "rgba(163, 113, 247, 0.4)"),
+    diffMoveDstBg: resolveCssVar(style, "--diff-move-dst-bg", "rgba(163, 113, 247, 0.25)")
+  };
+}
+
+```
+
+---
+
+### File: `web\grid_viewer.js`
+
+```javascript
+import { GRID_METRICS } from "./grid_metrics.js";
+import { paintGrid } from "./grid_painter.js";
+import { readGridTheme } from "./grid_theme.js";
+
+function colToLetter(col) {
+  let result = "";
+  let c = col;
+  while (c >= 0) {
+    result = String.fromCharCode((c % 26) + 65) + result;
+    c = Math.floor(c / 26) - 1;
+  }
+  return result;
+}
+
+function formatCellAddress(row, col) {
+  return `${colToLetter(col)}${row + 1}`;
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function createEl(tag, className, text) {
+  const el = document.createElement(tag);
+  if (className) el.className = className;
+  if (text !== undefined) el.textContent = text;
+  return el;
+}
+
+function extractSideDetails(cell, side) {
+  if (!cell) return { value: "", formula: "" };
+  const edit = cell.edit;
+  let value = side === "old" ? edit?.fromValue : edit?.toValue;
+  let formula = side === "old" ? edit?.fromFormula : edit?.toFormula;
+  if (!value && !formula) {
+    const payload = side === "old" ? cell.old : cell.new;
+    value = payload?.cell?.value ?? "";
+    formula = payload?.cell?.formula ?? "";
+  }
+  return { value: String(value || ""), formula: String(formula || "") };
+}
+
+function buildCellSummary(cell, viewRow, viewCol) {
+  const summary = {
+    viewAddress: formatCellAddress(viewRow, viewCol),
+    diffKind: cell?.diffKind || "empty",
+    moveId: cell?.moveId || "",
+    moveRole: cell?.moveRole || "",
+    oldAddress: "",
+    newAddress: "",
+    old: extractSideDetails(cell, "old"),
+    fresh: extractSideDetails(cell, "new")
+  };
+  if (cell?.old) {
+    summary.oldAddress = formatCellAddress(cell.old.row, cell.old.col);
+  }
+  if (cell?.new) {
+    summary.newAddress = formatCellAddress(cell.new.row, cell.new.col);
+  }
+  return summary;
+}
+
+export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
+  const state = {
+    mode: opts.initialMode === "unified" ? "unified" : "side_by_side",
+    selected: null,
+    hover: null,
+    hoverMoveId: null,
+    anchorIndex: Number.isFinite(opts.initialAnchor) ? opts.initialAnchor : 0,
+    pinned: false
+  };
+
+  const theme = readGridTheme(document.documentElement);
+  const metrics = { ...GRID_METRICS };
+  const anchors = (sheetVm.changes?.regions || []).map(region => ({
+    row: region.top,
+    col: region.left,
+    id: region.id
+  }));
+
+  mountEl.innerHTML = "";
+
+  const root = createEl("div", "grid-viewer");
+  root.tabIndex = 0;
+
+  const toolbar = createEl("div", "grid-toolbar");
+  const toolbarGroup = createEl("div", "grid-toolbar-group");
+  const sideBtn = createEl("button", "grid-mode-btn", "Side-by-side");
+  sideBtn.type = "button";
+  sideBtn.dataset.mode = "side_by_side";
+  const unifiedBtn = createEl("button", "grid-mode-btn", "Unified");
+  unifiedBtn.type = "button";
+  unifiedBtn.dataset.mode = "unified";
+  toolbarGroup.append(sideBtn, unifiedBtn);
+  const toolbarHint = createEl("div", "grid-toolbar-hint", "Arrow keys: move, N/P: next/prev change");
+  toolbar.append(toolbarGroup, toolbarHint);
+
+  const body = createEl("div", "grid-viewer-body");
+  const canvasWrap = createEl("div", "grid-canvas-wrap");
+  const scroll = createEl("div", "grid-scroll");
+  const spacer = createEl("div", "grid-scroll-spacer");
+  const canvas = createEl("canvas", "grid-canvas");
+  canvas.setAttribute("role", "presentation");
+  scroll.append(spacer, canvas);
+  const tooltip = createEl("div", "grid-tooltip");
+  canvasWrap.append(scroll, tooltip);
+
+  const inspector = createEl("div", "grid-inspector");
+  const inspectorTitle = createEl("div", "grid-inspector-title", "Inspector");
+  const inspectorEmpty = createEl("div", "grid-inspector-empty", "Select a cell to inspect.");
+  const inspectorContent = createEl("div", "grid-inspector-content");
+  inspector.append(inspectorTitle, inspectorEmpty, inspectorContent);
+
+  body.append(canvasWrap, inspector);
+  root.append(toolbar, body);
+  mountEl.append(root);
+
+  const ctx = canvas.getContext("2d");
+  let rafId = null;
+
+  const contentWidth = metrics.rowHeaderWidth + sheetVm.axis.cols.entries.length * metrics.colWidth;
+  const contentHeight = metrics.colHeaderHeight + sheetVm.axis.rows.entries.length * metrics.rowHeight;
+  spacer.style.width = `${contentWidth}px`;
+  spacer.style.height = `${contentHeight}px`;
+
+  function updateModeButtons() {
+    const active = state.mode;
+    for (const btn of [sideBtn, unifiedBtn]) {
+      btn.classList.toggle("active", btn.dataset.mode === active);
+    }
+  }
+
+  function getLayout() {
+    const width = scroll.clientWidth;
+    const height = scroll.clientHeight;
+    const paneCount = state.mode === "side_by_side" ? 2 : 1;
+    const paneWidth =
+      paneCount === 2
+        ? Math.max(0, Math.floor((width - metrics.rowHeaderWidth - metrics.paneGap) / 2))
+        : Math.max(0, width - metrics.rowHeaderWidth);
+    return {
+      width,
+      height,
+      paneCount,
+      paneWidth,
+      rowHeaderWidth: metrics.rowHeaderWidth,
+      colHeaderHeight: metrics.colHeaderHeight,
+      paneGap: metrics.paneGap
+    };
+  }
+
+  function resizeCanvas() {
+    const { width, height } = getLayout();
+    const dpr = window.devicePixelRatio || 1;
+    const targetWidth = Math.max(1, Math.floor(width));
+    const targetHeight = Math.max(1, Math.floor(height));
+    if (canvas.width !== targetWidth * dpr || canvas.height !== targetHeight * dpr) {
+      canvas.width = targetWidth * dpr;
+      canvas.height = targetHeight * dpr;
+      canvas.style.width = `${targetWidth}px`;
+      canvas.style.height = `${targetHeight}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    return { width: targetWidth, height: targetHeight };
+  }
+
+  function schedulePaint() {
+    if (rafId !== null) return;
+    rafId = requestAnimationFrame(() => {
+      rafId = null;
+      paint();
+    });
+  }
+
+  function paint() {
+    const size = resizeCanvas();
+    paintGrid(ctx, {
+      sheetVm,
+      mode: state.mode,
+      viewport: {
+        width: size.width,
+        height: size.height,
+        scrollTop: scroll.scrollTop,
+        scrollLeft: scroll.scrollLeft
+      },
+      metrics,
+      theme,
+      selection: state.selected,
+      hover: state.hover,
+      hoverMoveId: state.hoverMoveId
+    });
+  }
+
+  function resolvePane(x, layout) {
+    if (layout.paneWidth <= 0) return null;
+    const leftStart = layout.rowHeaderWidth;
+    if (layout.paneCount === 1) {
+      if (x < leftStart) return null;
+      return { index: 0, localX: x - leftStart };
+    }
+    const rightStart = layout.rowHeaderWidth + layout.paneWidth + layout.paneGap;
+    if (x >= leftStart && x < leftStart + layout.paneWidth) {
+      return { index: 0, localX: x - leftStart };
+    }
+    if (x >= rightStart && x < rightStart + layout.paneWidth) {
+      return { index: 1, localX: x - rightStart };
+    }
+    return null;
+  }
+
+  function hitTest(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    const layout = getLayout();
+    if (x < 0 || y < 0 || x > rect.width || y > rect.height) return null;
+    if (x < layout.rowHeaderWidth && y < layout.colHeaderHeight) {
+      return { type: "corner" };
+    }
+    if (y < layout.colHeaderHeight) {
+      const pane = resolvePane(x, layout);
+      if (!pane) return null;
+      const viewCol = Math.floor((scroll.scrollLeft + pane.localX) / metrics.colWidth);
+      if (viewCol < 0 || viewCol >= sheetVm.axis.cols.entries.length) return null;
+      return { type: "col-header", viewCol, pane: pane.index };
+    }
+    if (x < layout.rowHeaderWidth) {
+      const viewRow = Math.floor((scroll.scrollTop + (y - layout.colHeaderHeight)) / metrics.rowHeight);
+      if (viewRow < 0 || viewRow >= sheetVm.axis.rows.entries.length) return null;
+      return { type: "row-header", viewRow };
+    }
+    const pane = resolvePane(x, layout);
+    if (!pane) return null;
+    const viewCol = Math.floor((scroll.scrollLeft + pane.localX) / metrics.colWidth);
+    const viewRow = Math.floor((scroll.scrollTop + (y - layout.colHeaderHeight)) / metrics.rowHeight);
+    if (viewRow < 0 || viewRow >= sheetVm.axis.rows.entries.length) return null;
+    if (viewCol < 0 || viewCol >= sheetVm.axis.cols.entries.length) return null;
+    return { type: "cell", viewRow, viewCol, pane: pane.index };
+  }
+
+  function updateTooltip(cell, viewRow, viewCol, clientX, clientY) {
+    if (!cell) {
+      tooltip.classList.remove("visible");
+      return;
+    }
+    tooltip.innerHTML = "";
+    const summary = buildCellSummary(cell, viewRow, viewCol);
+    const title = createEl("div", "grid-tooltip-title", `View ${summary.viewAddress}`);
+    const meta = createEl("div", "grid-tooltip-meta", `Diff: ${summary.diffKind}`);
+    tooltip.append(title, meta);
+
+    if (summary.oldAddress || summary.old.value || summary.old.formula) {
+      const section = createEl("div", "grid-tooltip-section");
+      section.append(createEl("div", "grid-tooltip-label", summary.oldAddress ? `Old ${summary.oldAddress}` : "Old"));
+      if (summary.old.value) section.append(createEl("div", "grid-tooltip-value", summary.old.value));
+      if (summary.old.formula) section.append(createEl("div", "grid-tooltip-formula", summary.old.formula));
+      tooltip.append(section);
+    }
+
+    if (summary.newAddress || summary.fresh.value || summary.fresh.formula) {
+      const section = createEl("div", "grid-tooltip-section");
+      section.append(createEl("div", "grid-tooltip-label", summary.newAddress ? `New ${summary.newAddress}` : "New"));
+      if (summary.fresh.value) section.append(createEl("div", "grid-tooltip-value", summary.fresh.value));
+      if (summary.fresh.formula) section.append(createEl("div", "grid-tooltip-formula", summary.fresh.formula));
+      tooltip.append(section);
+    }
+
+    tooltip.classList.add("visible");
+
+    const wrapRect = canvasWrap.getBoundingClientRect();
+    const tooltipRect = tooltip.getBoundingClientRect();
+    let left = clientX - wrapRect.left + 12;
+    let top = clientY - wrapRect.top + 12;
+    if (left + tooltipRect.width > wrapRect.width) {
+      left = Math.max(8, wrapRect.width - tooltipRect.width - 8);
+    }
+    if (top + tooltipRect.height > wrapRect.height) {
+      top = Math.max(8, wrapRect.height - tooltipRect.height - 8);
+    }
+    tooltip.style.transform = `translate(${left}px, ${top}px)`;
+  }
+
+  function updateInspector() {
+    inspectorContent.innerHTML = "";
+    if (!state.selected) {
+      inspectorEmpty.style.display = "block";
+      return;
+    }
+    inspectorEmpty.style.display = "none";
+
+    const cell = sheetVm.cellAt(state.selected.viewRow, state.selected.viewCol);
+    const summary = buildCellSummary(cell, state.selected.viewRow, state.selected.viewCol);
+
+    const addRow = (label, value) => {
+      if (!value) return;
+      const row = createEl("div", "grid-inspector-row");
+      row.append(createEl("div", "grid-inspector-label", label));
+      row.append(createEl("div", "grid-inspector-value", value));
+      inspectorContent.append(row);
+    };
+
+    addRow("View", summary.viewAddress);
+    addRow("Diff", summary.diffKind);
+    if (summary.moveId) {
+      addRow("Move", summary.moveRole ? `${summary.moveRole} ${summary.moveId}` : summary.moveId);
+    }
+    addRow("Old", summary.oldAddress);
+    if (summary.old.value) addRow("Old Value", summary.old.value);
+    if (summary.old.formula) addRow("Old Formula", summary.old.formula);
+    addRow("New", summary.newAddress);
+    if (summary.fresh.value) addRow("New Value", summary.fresh.value);
+    if (summary.fresh.formula) addRow("New Formula", summary.fresh.formula);
+
+    const jumpTarget = resolveMoveTarget(cell);
+    if (jumpTarget) {
+      const jumpBtn = createEl("button", "grid-inspector-jump", "Jump to other end");
+      jumpBtn.type = "button";
+      jumpBtn.addEventListener("click", () => {
+        selectCell(jumpTarget.viewRow, jumpTarget.viewCol, { center: true });
+      });
+      inspectorContent.append(jumpBtn);
+    }
+  }
+
+  function resolveMoveTarget(cell) {
+    if (!cell || !cell.moveId) return null;
+    const rowEntry = sheetVm.axis.rows.entries[cell.viewRow];
+    if (rowEntry && rowEntry.move_id === cell.moveId) {
+      const targetKind = rowEntry.kind === "move_src" ? "move_dst" : "move_src";
+      const targetRow = sheetVm.axis.rows.entries.findIndex(entry => entry?.move_id === cell.moveId && entry?.kind === targetKind);
+      if (targetRow >= 0) {
+        return { viewRow: targetRow, viewCol: cell.viewCol };
+      }
+    }
+    const colEntry = sheetVm.axis.cols.entries[cell.viewCol];
+    if (colEntry && colEntry.move_id === cell.moveId) {
+      const targetKind = colEntry.kind === "move_src" ? "move_dst" : "move_src";
+      const targetCol = sheetVm.axis.cols.entries.findIndex(entry => entry?.move_id === cell.moveId && entry?.kind === targetKind);
+      if (targetCol >= 0) {
+        return { viewRow: cell.viewRow, viewCol: targetCol };
+      }
+    }
+    return null;
+  }
+
+  function setScroll(left, top) {
+    const layout = getLayout();
+    const maxLeft = Math.max(0, contentWidth - layout.width);
+    const maxTop = Math.max(0, contentHeight - layout.height);
+    scroll.scrollLeft = clamp(left, 0, maxLeft);
+    scroll.scrollTop = clamp(top, 0, maxTop);
+  }
+
+  function centerOn(viewRow, viewCol) {
+    const layout = getLayout();
+    const cellAreaHeight = Math.max(0, layout.height - layout.colHeaderHeight);
+    const cellX = viewCol * metrics.colWidth;
+    const cellY = viewRow * metrics.rowHeight;
+    const targetLeft = cellX - (layout.paneWidth - metrics.colWidth) / 2;
+    const targetTop = cellY - (cellAreaHeight - metrics.rowHeight) / 2;
+    setScroll(targetLeft, targetTop);
+  }
+
+  function scrollIntoView(viewRow, viewCol) {
+    const layout = getLayout();
+    const cellAreaHeight = Math.max(0, layout.height - layout.colHeaderHeight);
+    const cellX = viewCol * metrics.colWidth;
+    const cellY = viewRow * metrics.rowHeight;
+    const minLeft = scroll.scrollLeft;
+    const maxLeft = scroll.scrollLeft + layout.paneWidth - metrics.colWidth;
+    const minTop = scroll.scrollTop;
+    const maxTop = scroll.scrollTop + cellAreaHeight - metrics.rowHeight;
+    let nextLeft = scroll.scrollLeft;
+    let nextTop = scroll.scrollTop;
+    if (cellX < minLeft) nextLeft = cellX;
+    else if (cellX > maxLeft) nextLeft = cellX - (layout.paneWidth - metrics.colWidth);
+    if (cellY < minTop) nextTop = cellY;
+    else if (cellY > maxTop) nextTop = cellY - (cellAreaHeight - metrics.rowHeight);
+    setScroll(nextLeft, nextTop);
+  }
+
+  function selectCell(viewRow, viewCol, { center = false } = {}) {
+    state.selected = { viewRow, viewCol };
+    updateInspector();
+    if (center) {
+      centerOn(viewRow, viewCol);
+    } else {
+      scrollIntoView(viewRow, viewCol);
+    }
+    schedulePaint();
+  }
+
+  function jumpToRegion(index) {
+    if (!anchors.length) return;
+    const nextIndex = ((index % anchors.length) + anchors.length) % anchors.length;
+    const anchor = anchors[nextIndex];
+    state.anchorIndex = nextIndex;
+    selectCell(anchor.row, anchor.col, { center: true });
+  }
+
+  function onScroll() {
+    state.hover = null;
+    state.hoverMoveId = null;
+    tooltip.classList.remove("visible");
+    schedulePaint();
+  }
+
+  function onPointerMove(e) {
+    const hit = hitTest(e.clientX, e.clientY);
+    if (!hit) {
+      state.hover = null;
+      state.hoverMoveId = null;
+      tooltip.classList.remove("visible");
+      schedulePaint();
+      return;
+    }
+    if (hit.type === "cell") {
+      state.hover = { viewRow: hit.viewRow, viewCol: hit.viewCol, pane: hit.pane };
+      const cell = sheetVm.cellAt(hit.viewRow, hit.viewCol);
+      state.hoverMoveId = cell?.moveId || null;
+      updateTooltip(cell, hit.viewRow, hit.viewCol, e.clientX, e.clientY);
+      schedulePaint();
+      return;
+    }
+    if (hit.type === "row-header") {
+      const entry = sheetVm.axis.rows.entries[hit.viewRow];
+      state.hover = { viewRow: hit.viewRow, viewCol: null, pane: null };
+      state.hoverMoveId = entry?.move_id || null;
+    } else if (hit.type === "col-header") {
+      const entry = sheetVm.axis.cols.entries[hit.viewCol];
+      state.hover = { viewRow: null, viewCol: hit.viewCol, pane: null };
+      state.hoverMoveId = entry?.move_id || null;
+    } else {
+      state.hover = null;
+      state.hoverMoveId = null;
+    }
+    tooltip.classList.remove("visible");
+    schedulePaint();
+  }
+
+  function onPointerLeave() {
+    state.hover = null;
+    state.hoverMoveId = null;
+    tooltip.classList.remove("visible");
+    schedulePaint();
+  }
+
+  function onClick(e) {
+    const hit = hitTest(e.clientX, e.clientY);
+    if (!hit) return;
+    if (hit.type === "cell") {
+      selectCell(hit.viewRow, hit.viewCol);
+    } else if (hit.type === "row-header") {
+      const targetCol = state.selected ? state.selected.viewCol : 0;
+      selectCell(hit.viewRow, clamp(targetCol, 0, sheetVm.axis.cols.entries.length - 1));
+    } else if (hit.type === "col-header") {
+      const targetRow = state.selected ? state.selected.viewRow : 0;
+      selectCell(clamp(targetRow, 0, sheetVm.axis.rows.entries.length - 1), hit.viewCol);
+    }
+    root.focus();
+  }
+
+  function onKeyDown(e) {
+    if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Enter", "n", "p", "N", "P"].includes(e.key)) {
+      return;
+    }
+    if (e.key === "Enter") {
+      state.pinned = !state.pinned;
+      inspector.classList.toggle("pinned", state.pinned);
+      e.preventDefault();
+      return;
+    }
+    if (e.key === "n" || e.key === "N") {
+      jumpToRegion(state.anchorIndex + 1);
+      e.preventDefault();
+      return;
+    }
+    if (e.key === "p" || e.key === "P") {
+      jumpToRegion(state.anchorIndex - 1);
+      e.preventDefault();
+      return;
+    }
+
+    const rowCount = sheetVm.axis.rows.entries.length;
+    const colCount = sheetVm.axis.cols.entries.length;
+    let row = state.selected ? state.selected.viewRow : 0;
+    let col = state.selected ? state.selected.viewCol : 0;
+    if (e.key === "ArrowUp") row = clamp(row - 1, 0, rowCount - 1);
+    if (e.key === "ArrowDown") row = clamp(row + 1, 0, rowCount - 1);
+    if (e.key === "ArrowLeft") col = clamp(col - 1, 0, colCount - 1);
+    if (e.key === "ArrowRight") col = clamp(col + 1, 0, colCount - 1);
+    selectCell(row, col);
+    e.preventDefault();
+  }
+
+  function onModeClick(e) {
+    const btn = e.target.closest(".grid-mode-btn");
+    if (!btn) return;
+    const nextMode = btn.dataset.mode === "unified" ? "unified" : "side_by_side";
+    if (state.mode !== nextMode) {
+      state.mode = nextMode;
+      updateModeButtons();
+      schedulePaint();
+    }
+  }
+
+  toolbar.addEventListener("click", onModeClick);
+  scroll.addEventListener("scroll", onScroll);
+  canvas.addEventListener("pointermove", onPointerMove);
+  canvas.addEventListener("pointerleave", onPointerLeave);
+  canvas.addEventListener("click", onClick);
+  root.addEventListener("keydown", onKeyDown);
+
+  const resizeObserver = new ResizeObserver(() => schedulePaint());
+  resizeObserver.observe(scroll);
+
+  updateModeButtons();
+  schedulePaint();
+  if (Number.isFinite(state.anchorIndex) && anchors.length > 0 && state.anchorIndex >= 0) {
+    jumpToRegion(state.anchorIndex);
+  }
+
+  return {
+    destroy() {
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      resizeObserver.disconnect();
+      toolbar.removeEventListener("click", onModeClick);
+      scroll.removeEventListener("scroll", onScroll);
+      canvas.removeEventListener("pointermove", onPointerMove);
+      canvas.removeEventListener("pointerleave", onPointerLeave);
+      canvas.removeEventListener("click", onClick);
+      root.removeEventListener("keydown", onKeyDown);
+    },
+    focus() {
+      root.focus();
+    },
+    jumpTo(viewRow, viewCol) {
+      selectCell(viewRow, viewCol, { center: true });
+    },
+    jumpToRegion(index) {
+      jumpToRegion(index);
+    }
+  };
+}
+
+```
+
+---
+
 ### File: `web\index.html`
 
 ```html
@@ -51662,6 +52606,7 @@ pub fn diff_summary(old_bytes: &[u8], new_bytes: &[u8]) -> Result<DiffSummary, J
         --diff-modify-border: rgba(210, 153, 34, 0.4);
         --diff-move-bg: rgba(163, 113, 247, 0.15);
         --diff-move-border: rgba(163, 113, 247, 0.4);
+        --diff-move-dst-bg: rgba(163, 113, 247, 0.25);
       }
 
       * {
@@ -52539,6 +53484,213 @@ pub fn diff_summary(old_bytes: &[u8], new_bytes: &[u8]) -> Result<DiffSummary, J
         font-size: 13px;
       }
 
+      .grid-viewer {
+        display: grid;
+        gap: 12px;
+      }
+
+      .grid-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .grid-toolbar-group {
+        display: flex;
+        gap: 8px;
+      }
+
+      .grid-toolbar-hint {
+        font-size: 12px;
+        color: var(--text-muted);
+      }
+
+      .grid-mode-btn {
+        background: var(--bg-primary);
+        border: 1px solid var(--border-primary);
+        color: var(--text-secondary);
+        padding: 6px 10px;
+        border-radius: 8px;
+        font-size: 12px;
+        cursor: pointer;
+        transition: border-color 0.2s ease, color 0.2s ease;
+      }
+
+      .grid-mode-btn:hover {
+        border-color: var(--accent-blue);
+        color: var(--text-primary);
+      }
+
+      .grid-mode-btn.active {
+        background: var(--accent-blue);
+        color: var(--bg-primary);
+        border-color: var(--accent-blue);
+      }
+
+      .grid-viewer-body {
+        display: grid;
+        grid-template-columns: 1fr 320px;
+        gap: 16px;
+        align-items: start;
+      }
+
+      @media (max-width: 1100px) {
+        .grid-viewer-body {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      .grid-canvas-wrap {
+        position: relative;
+        border: 1px solid var(--border-primary);
+        border-radius: 12px;
+        overflow: hidden;
+        background: var(--bg-primary);
+      }
+
+      .grid-scroll {
+        position: relative;
+        overflow: auto;
+        height: 520px;
+      }
+
+      .grid-scroll-spacer {
+        width: 0;
+        height: 0;
+      }
+
+      .grid-canvas {
+        position: sticky;
+        top: 0;
+        left: 0;
+        display: block;
+      }
+
+      .grid-tooltip {
+        position: absolute;
+        left: 0;
+        top: 0;
+        pointer-events: none;
+        opacity: 0;
+        transform: translate(-9999px, -9999px);
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-primary);
+        border-radius: 10px;
+        padding: 10px 12px;
+        font-size: 12px;
+        color: var(--text-primary);
+        max-width: 320px;
+        box-shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
+        transition: opacity 0.1s ease;
+        z-index: 5;
+      }
+
+      .grid-tooltip.visible {
+        opacity: 1;
+      }
+
+      .grid-tooltip-title {
+        font-weight: 600;
+        margin-bottom: 4px;
+      }
+
+      .grid-tooltip-meta {
+        color: var(--text-secondary);
+        font-size: 11px;
+        margin-bottom: 6px;
+      }
+
+      .grid-tooltip-section {
+        margin-bottom: 6px;
+      }
+
+      .grid-tooltip-section:last-child {
+        margin-bottom: 0;
+      }
+
+      .grid-tooltip-label {
+        font-size: 11px;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        margin-bottom: 2px;
+      }
+
+      .grid-tooltip-value {
+        font-family: 'JetBrains Mono', monospace;
+      }
+
+      .grid-tooltip-formula {
+        font-family: 'JetBrains Mono', monospace;
+        color: var(--text-muted);
+      }
+
+      .grid-inspector {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-primary);
+        border-radius: 12px;
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        min-height: 120px;
+      }
+
+      .grid-inspector-title {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        color: var(--text-secondary);
+      }
+
+      .grid-inspector-empty {
+        font-size: 12px;
+        color: var(--text-muted);
+      }
+
+      .grid-inspector-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 12px;
+      }
+
+      .grid-inspector-label {
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+      }
+
+      .grid-inspector-value {
+        font-family: 'JetBrains Mono', monospace;
+        color: var(--text-primary);
+        text-align: right;
+        word-break: break-word;
+      }
+
+      .grid-inspector-jump {
+        margin-top: 6px;
+        align-self: flex-start;
+        background: var(--bg-primary);
+        border: 1px solid var(--border-primary);
+        color: var(--text-secondary);
+        padding: 6px 10px;
+        border-radius: 8px;
+        font-size: 12px;
+        cursor: pointer;
+        transition: border-color 0.2s ease, color 0.2s ease;
+      }
+
+      .grid-inspector-jump:hover {
+        border-color: var(--accent-blue);
+        color: var(--text-primary);
+      }
+
+      .grid-inspector.pinned {
+        border-color: var(--accent-blue);
+      }
+
       .details-section {
         margin-top: 20px;
         border: 1px solid var(--border-primary);
@@ -52649,7 +53801,9 @@ pub fn diff_summary(old_bytes: &[u8], new_bytes: &[u8]) -> Result<DiffSummary, J
 
 ```javascript
 import init, { diff_files_with_sheets_json, get_version } from "./wasm/excel_diff_wasm.js";
-import { renderReportHtml } from "./render.js";
+import { renderWorkbookVm } from "./render.js";
+import { buildWorkbookViewModel } from "./view_model.js";
+import { mountSheetGridViewer } from "./grid_viewer.js";
 
 function byId(id) {
   const el = document.getElementById(id);
@@ -52714,6 +53868,7 @@ async function runDiff() {
     return;
   }
 
+  cleanupViewers();
   setStatus("Comparing files...", "loading");
   byId("results").innerHTML = "";
   byId("results").classList.remove("visible");
@@ -52727,11 +53882,11 @@ async function runDiff() {
     const json = diff_files_with_sheets_json(oldBytes, newBytes, oldFile.name, newFile.name);
     const payload = JSON.parse(json);
     const report = payload.report || payload;
-    const sheets = payload.sheets || null;
-    const alignments = payload.alignments || null;
+    const workbookVm = buildWorkbookViewModel(payload);
 
-    byId("results").innerHTML = renderReportHtml(report, sheets, alignments);
-    byId("results").classList.add("visible");
+    const resultsEl = byId("results");
+    resultsEl.innerHTML = renderWorkbookVm(workbookVm);
+    resultsEl.classList.add("visible");
     byId("raw").textContent = JSON.stringify(report, null, 2);
 
     const opCount = report.ops ? report.ops.length : 0;
@@ -52741,10 +53896,11 @@ async function runDiff() {
       setStatus(`Found ${opCount} difference${opCount !== 1 ? "s" : ""}`, "");
     }
     
-    const firstSheet = document.querySelector(".sheet-section");
+    const firstSheet = resultsEl.querySelector(".sheet-section");
     if (firstSheet) {
       firstSheet.classList.add("expanded");
     }
+    cleanupHandler = hydrateGridViewers(resultsEl, workbookVm);
   } catch (e) {
     setStatus("Error: " + (e.message || String(e)), "error");
     byId("results").innerHTML = `
@@ -52758,6 +53914,64 @@ async function runDiff() {
     `;
     byId("results").classList.add("visible");
   }
+}
+
+let cleanupHandler = null;
+
+function cleanupViewers() {
+  if (cleanupHandler) {
+    cleanupHandler();
+    cleanupHandler = null;
+  }
+}
+
+function hydrateGridViewers(rootEl, workbookVm) {
+  const sheetMap = new Map(workbookVm.sheets.map(sheet => [sheet.name, sheet]));
+  const viewers = new Map();
+
+  function mountForSection(section) {
+    if (!section) return;
+    const mount = section.querySelector(".grid-viewer-mount");
+    if (!mount || mount.dataset.mounted) return;
+    const sheetName = section.dataset.sheet || mount.dataset.sheet;
+    const sheetVm = sheetMap.get(sheetName);
+    if (!sheetVm) return;
+    const initialMode = mount.dataset.initialMode || "side_by_side";
+    const initialAnchor = mount.dataset.initialAnchor ? Number(mount.dataset.initialAnchor) : 0;
+    const viewer = mountSheetGridViewer({
+      mountEl: mount,
+      sheetVm,
+      opts: { initialMode, initialAnchor }
+    });
+    mount.dataset.mounted = "true";
+    viewers.set(mount, viewer);
+  }
+
+  function onHeaderClick(event) {
+    const header = event.target.closest(".sheet-header");
+    if (!header || !rootEl.contains(header)) return;
+    const section = header.closest(".sheet-section");
+    if (!section) return;
+    section.classList.toggle("expanded");
+    if (section.classList.contains("expanded")) {
+      mountForSection(section);
+    }
+  }
+
+  rootEl.addEventListener("click", onHeaderClick);
+
+  const expanded = rootEl.querySelectorAll(".sheet-section.expanded");
+  for (const section of expanded) {
+    mountForSection(section);
+  }
+
+  return () => {
+    rootEl.removeEventListener("click", onHeaderClick);
+    for (const viewer of viewers.values()) {
+      viewer.destroy();
+    }
+    viewers.clear();
+  };
 }
 
 async function main() {
@@ -52790,6 +54004,8 @@ main();
 ### File: `web\render.js`
 
 ```javascript
+import { buildWorkbookViewModel } from "./view_model.js";
+
 function esc(s) {
   return String(s)
     .replace(/&/g, "&amp;")
@@ -53775,8 +54991,8 @@ function renderSheetSection(report, sheetName, ops, sheetLookup, alignmentLookup
   }
   
   return `
-    <section class="sheet-section">
-      <div class="sheet-header" onclick="this.parentElement.classList.toggle('expanded')">
+    <section class="sheet-section" data-sheet="${esc(sheetName)}">
+      <div class="sheet-header">
         <div class="sheet-title">
           <div class="sheet-icon">📋</div>
           <span class="sheet-name">${esc(sheetName)}</span>
@@ -53864,39 +55080,243 @@ function renderWarnings(warnings) {
   `;
 }
 
-export function renderReportHtml(report, sheetData = null, alignments = null) {
-  const { sheetOps, vbaOps, namedRangeOps, chartOps, queryOps, measureOps, counts } = categorizeOps(report);
-  const warnings = Array.isArray(report.warnings) ? report.warnings : [];
-  const sheetLookup = sheetData
-    ? {
-        old: buildSheetLookup(sheetData.old),
-        new: buildSheetLookup(sheetData.new)
+
+function renderChangeItemVm(item) {
+  const changeType = item.changeType || "modified";
+  const cls = `change-item ${changeType}`;
+  const icon = changeType === "added" ? "+" : changeType === "removed" ? "-" : changeType === "moved" ? ">" : "~";
+  const detail = item.detail ? `<span class="change-detail">${esc(item.detail)}</span>` : "";
+  return `
+    <div class="${cls}">
+      <div class="change-icon">${icon}</div>
+      <span class="change-location">${esc(item.label || "")}</span>
+      ${detail}
+    </div>
+  `;
+}
+
+function renderChangeGroupVm(title, icon, items) {
+  if (!items || items.length === 0) return "";
+  return `
+    <div class="change-group">
+      <div class="change-group-title">
+        <span>${icon}</span>
+        <span>${esc(title)} (${items.length})</span>
+      </div>
+      <div class="change-list">
+        ${items.map(item => renderChangeItemVm(item)).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderGridLegend() {
+  return `
+    <div class="grid-legend">
+      <span class="legend-item"><span class="legend-box legend-edited"></span> Modified</span>
+      <span class="legend-item"><span class="legend-box legend-added"></span> Added row/col</span>
+      <span class="legend-item"><span class="legend-box legend-removed"></span> Removed row/col</span>
+      <span class="legend-item"><span class="legend-box legend-moved"></span> Moved row/col</span>
+    </div>
+  `;
+}
+
+function renderRegionGrid(sheetVm, region) {
+  const rows = sheetVm.axis.rows.entries;
+  const cols = sheetVm.axis.cols.entries;
+  const bounds = region.renderBounds || region;
+  if (!bounds || rows.length === 0 || cols.length === 0) return "";
+
+  const numCols = bounds.right - bounds.left + 1;
+
+  let html = `<div class="sheet-grid-container">
+    <div class="sheet-grid" style="grid-template-columns: 50px repeat(${numCols}, minmax(100px, 1fr));">`;
+
+  html += `<div class="grid-cell grid-corner"></div>`;
+  for (let c = bounds.left; c <= bounds.right; c++) {
+    const colEntry = cols[c];
+    const kind = colEntry?.kind;
+    let cls = "grid-cell grid-col-header";
+    if (kind === "insert") cls += " col-added";
+    if (kind === "delete") cls += " col-removed";
+    if (kind === "move_src") cls += " col-move-src";
+    if (kind === "move_dst") cls += " col-move-dst";
+    const title = formatAxisTitle(colEntry, "col");
+    const moveAttr = colEntry?.move_id ? ` data-move-id="${esc(colEntry.move_id)}"` : "";
+    html += `<div class="${cls}"${moveAttr} title="${esc(title)}">${colToLetter(c)}</div>`;
+  }
+
+  for (let r = bounds.top; r <= bounds.bottom; r++) {
+    const rowEntry = rows[r];
+    const rowKind = rowEntry?.kind;
+    let rowHeaderCls = "grid-cell grid-row-header";
+    if (rowKind === "insert") rowHeaderCls += " row-added";
+    if (rowKind === "delete") rowHeaderCls += " row-removed";
+    if (rowKind === "move_src") rowHeaderCls += " row-move-src";
+    if (rowKind === "move_dst") rowHeaderCls += " row-move-dst";
+    const rowTitle = formatAxisTitle(rowEntry, "row");
+    const rowMoveAttr = rowEntry?.move_id ? ` data-move-id="${esc(rowEntry.move_id)}"` : "";
+    html += `<div class="${rowHeaderCls}"${rowMoveAttr} title="${esc(rowTitle)}">${r + 1}</div>`;
+
+    for (let c = bounds.left; c <= bounds.right; c++) {
+      const cell = sheetVm.cellAt(r, c);
+      let cls = "grid-cell";
+      let content = "";
+      let title = cell.display.tooltip || "";
+
+      if (cell.diffKind === "edited") {
+        cls += " cell-edited";
+        const fromText = cell.edit?.fromValue || cell.edit?.fromFormula || "(empty)";
+        const toText = cell.edit?.toValue || cell.edit?.toFormula || "(empty)";
+        content = `<div class="cell-change"><span class="cell-old">${esc(truncateText(fromText))}</span><span class="cell-new">${esc(truncateText(toText))}</span></div>`;
+        title = `Changed: ${fromText} -> ${toText}`;
+      } else if (cell.diffKind === "added") {
+        cls += " cell-added";
+        content = esc(truncateText(cell.display.text || ""));
+      } else if (cell.diffKind === "removed") {
+        cls += " cell-removed";
+        content = esc(truncateText(cell.display.text || ""));
+      } else if (cell.diffKind === "moved") {
+        cls += cell.moveRole === "src" ? " cell-move-src" : " cell-move-dst";
+        content = esc(truncateText(cell.display.text || ""));
+      } else if (cell.diffKind === "unchanged") {
+        cls += " cell-unchanged";
+        content = esc(truncateText(cell.display.text || ""));
+      } else {
+        cls += " cell-empty";
       }
-    : null;
-  const alignmentLookup = buildAlignmentLookup(alignments);
-  
+
+      html += `<div class="${cls}" title="${esc(title)}">${content}</div>`;
+    }
+  }
+
+  html += `</div></div>`;
+  return html;
+}
+
+function renderSheetGridVm(sheetVm) {
+  const status = sheetVm.renderPlan.status;
+  if (status.kind === "missing" && sheetVm.changes.regions.length === 0) {
+    return "";
+  }
+  if (status.kind === "skipped" || status.kind === "missing") {
+    return `
+      <div class="grid-skip-warning">
+        ${esc(status.message || "Grid preview unavailable.")}
+      </div>
+    `;
+  }
+
+  const regionIds = sheetVm.renderPlan.regionsToRender || [];
+  if (regionIds.length === 0) return "";
+
+  return `
+    <div class="grid-viewer-mount" data-sheet="${esc(sheetVm.name)}" data-initial-mode="side_by_side" data-initial-anchor="0"></div>
+    ${renderGridLegend()}
+  `;
+}
+
+function renderSheetVm(sheetVm) {
+  const badge = `${sheetVm.opCount} change${sheetVm.opCount !== 1 ? "s" : ""}`;
+  const gridHtml = renderSheetGridVm(sheetVm);
+
+  let contentHtml = "";
+  if (gridHtml) {
+    contentHtml += `
+      <div class="change-group">
+        <div class="change-group-title">
+          <span>*</span>
+          <span>Visual Diff</span>
+        </div>
+        ${gridHtml}
+      </div>
+    `;
+  }
+
+  const rowItems = sheetVm.changes.items.filter(item => item.group === "rows");
+  const colItems = sheetVm.changes.items.filter(item => item.group === "cols");
+  const cellItems = sheetVm.changes.items.filter(item => item.group === "cells");
+  const moveItems = sheetVm.changes.items.filter(item => item.group === "moves");
+  const otherItems = sheetVm.changes.items.filter(item => item.group === "other");
+
+  let detailsHtml = "";
+  detailsHtml += renderChangeGroupVm("Row Changes", "R", rowItems);
+  detailsHtml += renderChangeGroupVm("Column Changes", "C", colItems);
+  detailsHtml += renderChangeGroupVm("Cell Changes", "*", cellItems);
+  detailsHtml += renderChangeGroupVm("Moved Blocks", ">", moveItems);
+  detailsHtml += renderChangeGroupVm("Other Changes", "?", otherItems);
+
+  if (detailsHtml) {
+    contentHtml += `
+      <details class="details-section" open>
+        <summary class="details-toggle">Detailed Changes</summary>
+        <div class="details-content">
+          ${detailsHtml}
+        </div>
+      </details>
+    `;
+  }
+
+  return `
+    <section class="sheet-section" data-sheet="${esc(sheetVm.name)}">
+      <div class="sheet-header">
+        <div class="sheet-title">
+          <div class="sheet-icon">#</div>
+          <span class="sheet-name">${esc(sheetVm.name)}</span>
+          <span class="sheet-badge">${badge}</span>
+        </div>
+        <svg class="expand-icon" width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+          <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" />
+        </svg>
+      </div>
+      <div class="sheet-content">
+        ${contentHtml}
+      </div>
+    </section>
+  `;
+}
+
+function renderOtherChangesVm(title, icon, items) {
+  if (!items || items.length === 0) return "";
+  return `
+    <div class="other-changes">
+      <div class="other-changes-title">
+        <span class="icon">${icon}</span>
+        <span>${esc(title)} (${items.length})</span>
+      </div>
+      <div class="change-list">
+        ${items.map(item => renderChangeItemVm(item)).join("")}
+      </div>
+    </div>
+  `;
+}
+
+export function renderWorkbookVm(vm) {
   let html = "";
-  
-  html += renderWarnings(warnings);
-  html += renderSummaryCards(counts);
-  
-  const total = counts.added + counts.removed + counts.modified + counts.moved;
+  html += renderWarnings(vm.warnings);
+  html += renderSummaryCards(vm.counts);
+
+  const total = vm.counts.added + vm.counts.removed + vm.counts.modified + vm.counts.moved;
   if (total === 0) {
     return html;
   }
-  
-  const sortedSheets = Array.from(sheetOps.keys()).sort();
-  for (const sheetName of sortedSheets) {
-    html += renderSheetSection(report, sheetName, sheetOps.get(sheetName), sheetLookup, alignmentLookup);
+
+  for (const sheetVm of vm.sheets) {
+    html += renderSheetVm(sheetVm);
   }
-  
-  html += renderOtherChangesSection(report, "VBA Modules", "📜", vbaOps);
-  html += renderOtherChangesSection(report, "Named Ranges", "🏷️", namedRangeOps);
-  html += renderOtherChangesSection(report, "Charts", "📊", chartOps);
-  html += renderOtherChangesSection(report, "Power Query", "⚡", queryOps);
-  html += renderOtherChangesSection(report, "Measures", "📐", measureOps);
-  
+
+  html += renderOtherChangesVm("VBA Modules", "V", vm.other.vba);
+  html += renderOtherChangesVm("Named Ranges", "N", vm.other.namedRanges);
+  html += renderOtherChangesVm("Charts", "C", vm.other.charts);
+  html += renderOtherChangesVm("Power Query", "Q", vm.other.queries);
+  html += renderOtherChangesVm("Measures", "M", vm.other.measures);
+
   return html;
+}
+
+export function renderReportHtml(payloadOrReport) {
+  const vm = buildWorkbookViewModel(payloadOrReport);
+  return renderWorkbookVm(vm);
 }
 
 ```
@@ -53931,6 +55351,1203 @@ mustInclude("Step diffs");
 mustInclude("Measure: Measure1");
 
 console.log("ok");
+
+```
+
+---
+
+### File: `web\test_view_model.js`
+
+```javascript
+import assert from "node:assert/strict";
+import { buildWorkbookViewModel } from "./view_model.js";
+
+function findSheet(vm, name) {
+  const sheet = vm.sheets.find(item => item.name === name);
+  assert.ok(sheet, `Missing sheet ${name}`);
+  return sheet;
+}
+
+function makeCellEdited(sheetId, row, col) {
+  return {
+    kind: "CellEdited",
+    sheet: sheetId,
+    addr: { row, col },
+    from: { value: { Number: row } },
+    to: { value: { Number: row + 1 } }
+  };
+}
+
+function testRowInsertionMapping() {
+  const report = {
+    strings: ["Sheet1"],
+    ops: [{ kind: "RowAdded", sheet: 0, row_idx: 0 }],
+    warnings: []
+  };
+  const oldSheet = {
+    name: "Sheet1",
+    nrows: 2,
+    ncols: 1,
+    cells: [
+      { row: 0, col: 0, value: "A", formula: null },
+      { row: 1, col: 0, value: "B", formula: null }
+    ]
+  };
+  const newSheet = {
+    name: "Sheet1",
+    nrows: 3,
+    ncols: 1,
+    cells: [
+      { row: 0, col: 0, value: "X", formula: null },
+      { row: 1, col: 0, value: "A", formula: null },
+      { row: 2, col: 0, value: "B", formula: null }
+    ]
+  };
+  const alignment = {
+    sheet: "Sheet1",
+    rows: [
+      { old: null, new: 0, kind: "insert" },
+      { old: 0, new: 1, kind: "match" },
+      { old: 1, new: 2, kind: "match" }
+    ],
+    cols: [{ old: 0, new: 0, kind: "match" }],
+    moves: [],
+    skipped: false
+  };
+  const payload = {
+    report,
+    sheets: { old: { sheets: [oldSheet] }, new: { sheets: [newSheet] } },
+    alignments: [alignment]
+  };
+  const vm = buildWorkbookViewModel(payload);
+  const sheetVm = findSheet(vm, "Sheet1");
+  const cell = sheetVm.cellAt(1, 0);
+  assert.equal(cell.diffKind, "unchanged");
+  assert.equal(cell.old.row, 0);
+  assert.equal(cell.new.row, 1);
+}
+
+function testMoveIdentity() {
+  const report = {
+    strings: ["MoveSheet"],
+    ops: [
+      { kind: "BlockMovedRows", sheet: 0, src_start_row: 0, dst_start_row: 1, row_count: 1 }
+    ],
+    warnings: []
+  };
+  const oldSheet = {
+    name: "MoveSheet",
+    nrows: 2,
+    ncols: 1,
+    cells: [
+      { row: 0, col: 0, value: "A", formula: null },
+      { row: 1, col: 0, value: "B", formula: null }
+    ]
+  };
+  const newSheet = {
+    name: "MoveSheet",
+    nrows: 2,
+    ncols: 1,
+    cells: [
+      { row: 0, col: 0, value: "B", formula: null },
+      { row: 1, col: 0, value: "A", formula: null }
+    ]
+  };
+  const alignment = {
+    sheet: "MoveSheet",
+    rows: [
+      { old: 0, new: null, kind: "move_src", move_id: "r:0+1->1" },
+      { old: 1, new: 0, kind: "match" },
+      { old: null, new: 1, kind: "move_dst", move_id: "r:0+1->1" }
+    ],
+    cols: [{ old: 0, new: 0, kind: "match" }],
+    moves: [{ id: "r:0+1->1", axis: "row", src_start: 0, dst_start: 1, count: 1 }],
+    skipped: false
+  };
+  const payload = {
+    report,
+    sheets: { old: { sheets: [oldSheet] }, new: { sheets: [newSheet] } },
+    alignments: [alignment]
+  };
+  const vm = buildWorkbookViewModel(payload);
+  const sheetVm = findSheet(vm, "MoveSheet");
+
+  const srcCell = sheetVm.cellAt(0, 0);
+  assert.equal(srcCell.diffKind, "moved");
+  assert.equal(srcCell.moveRole, "src");
+  assert.equal(srcCell.moveId, "r:0+1->1");
+
+  const dstCell = sheetVm.cellAt(2, 0);
+  assert.equal(dstCell.diffKind, "moved");
+  assert.equal(dstCell.moveRole, "dst");
+  assert.equal(dstCell.moveId, "r:0+1->1");
+}
+
+function testRowGrouping() {
+  const report = { strings: ["GroupSheet"], ops: [], warnings: [] };
+  const ops = [];
+  for (let i = 0; i < 10; i++) {
+    ops.push({ kind: "RowAdded", sheet: 0, row_idx: i });
+  }
+  report.ops = ops;
+
+  const oldSheet = { name: "GroupSheet", nrows: 0, ncols: 1, cells: [] };
+  const newSheet = { name: "GroupSheet", nrows: 10, ncols: 1, cells: [] };
+  const rows = [];
+  for (let i = 0; i < 10; i++) {
+    rows.push({ old: null, new: i, kind: "insert" });
+  }
+  const alignment = {
+    sheet: "GroupSheet",
+    rows,
+    cols: [{ old: 0, new: 0, kind: "match" }],
+    moves: [],
+    skipped: false
+  };
+  const payload = {
+    report,
+    sheets: { old: { sheets: [oldSheet] }, new: { sheets: [newSheet] } },
+    alignments: [alignment]
+  };
+
+  const vm = buildWorkbookViewModel(payload);
+  const sheetVm = findSheet(vm, "GroupSheet");
+  const rowAdds = sheetVm.changes.items.filter(item => item.group === "rows" && item.changeType === "added");
+  assert.equal(rowAdds.length, 1);
+  assert.ok(/Rows 1-10 added/.test(rowAdds[0].label));
+}
+
+function testRegionCompaction() {
+  const report = { strings: ["RegionSheet"], ops: [], warnings: [] };
+  const ops = [
+    makeCellEdited(0, 0, 0),
+    makeCellEdited(0, 0, 1),
+    makeCellEdited(0, 1, 0),
+    makeCellEdited(0, 1, 1),
+    makeCellEdited(0, 100, 0),
+    makeCellEdited(0, 100, 1),
+    makeCellEdited(0, 101, 0),
+    makeCellEdited(0, 101, 1)
+  ];
+  report.ops = ops;
+
+  const oldSheet = { name: "RegionSheet", nrows: 120, ncols: 2, cells: [] };
+  const newSheet = { name: "RegionSheet", nrows: 120, ncols: 2, cells: [] };
+  const rows = [];
+  for (let i = 0; i < 120; i++) {
+    rows.push({ old: i, new: i, kind: "match" });
+  }
+  const cols = [
+    { old: 0, new: 0, kind: "match" },
+    { old: 1, new: 1, kind: "match" }
+  ];
+  const alignment = {
+    sheet: "RegionSheet",
+    rows,
+    cols,
+    moves: [],
+    skipped: false
+  };
+  const payload = {
+    report,
+    sheets: { old: { sheets: [oldSheet] }, new: { sheets: [newSheet] } },
+    alignments: [alignment]
+  };
+  const vm = buildWorkbookViewModel(payload, { maxCellsPerRegion: 100 });
+  const sheetVm = findSheet(vm, "RegionSheet");
+  const regions = sheetVm.changes.regions.filter(region => region.kind === "cell");
+  assert.equal(regions.length, 2);
+}
+
+function testRegionMaxCells() {
+  const report = { strings: ["CapSheet"], ops: [], warnings: [] };
+  const ops = [];
+  for (let col = 0; col < 120; col++) {
+    ops.push(makeCellEdited(0, 0, col));
+  }
+  report.ops = ops;
+
+  const oldSheet = { name: "CapSheet", nrows: 1, ncols: 120, cells: [] };
+  const newSheet = { name: "CapSheet", nrows: 1, ncols: 120, cells: [] };
+  const rows = [{ old: 0, new: 0, kind: "match" }];
+  const cols = [];
+  for (let col = 0; col < 120; col++) {
+    cols.push({ old: col, new: col, kind: "match" });
+  }
+  const alignment = {
+    sheet: "CapSheet",
+    rows,
+    cols,
+    moves: [],
+    skipped: false
+  };
+  const payload = {
+    report,
+    sheets: { old: { sheets: [oldSheet] }, new: { sheets: [newSheet] } },
+    alignments: [alignment]
+  };
+  const vm = buildWorkbookViewModel(payload, { maxCellsPerRegion: 50 });
+  const sheetVm = findSheet(vm, "CapSheet");
+  const regions = sheetVm.changes.regions.filter(region => region.kind === "cell");
+  assert.ok(regions.length >= 3);
+  for (const region of regions) {
+    assert.ok(region.cellCount <= 50);
+  }
+}
+
+testRowInsertionMapping();
+testMoveIdentity();
+testRowGrouping();
+testRegionCompaction();
+testRegionMaxCells();
+
+console.log("ok");
+
+```
+
+---
+
+### File: `web\view_model.js`
+
+```javascript
+const CELL_KEY_STRIDE = 16384;
+
+const DEFAULT_OPTS = {
+  contextRows: 1,
+  contextCols: 1,
+  maxCellsPerRegion: 200,
+  maxVisualCells: 5000,
+  mergeGap: 1
+};
+
+function resolveString(report, id) {
+  if (typeof id !== "number") return String(id);
+  if (!report || !Array.isArray(report.strings)) return "<unknown>";
+  return report.strings[id] != null ? report.strings[id] : "<unknown>";
+}
+
+function colToLetter(col) {
+  let result = "";
+  let c = col;
+  while (c >= 0) {
+    result = String.fromCharCode((c % 26) + 65) + result;
+    c = Math.floor(c / 26) - 1;
+  }
+  return result;
+}
+
+function formatCellAddress(row, col) {
+  return colToLetter(col) + (row + 1);
+}
+
+function parseCellAddress(addr) {
+  if (!addr) return null;
+  if (typeof addr === "object" && Number.isInteger(addr.row) && Number.isInteger(addr.col)) {
+    return { row: addr.row, col: addr.col };
+  }
+  const match = /^([A-Z]+)(\d+)$/i.exec(String(addr).trim());
+  if (!match) return null;
+  const letters = match[1].toUpperCase();
+  let col = 0;
+  for (let i = 0; i < letters.length; i++) {
+    col = col * 26 + (letters.charCodeAt(i) - 64);
+  }
+  const row = parseInt(match[2], 10) - 1;
+  return { row, col: col - 1 };
+}
+
+function formatValue(report, val) {
+  if (val === null || val === undefined) return "";
+  if (val === "Blank") return "";
+  if (typeof val === "object") {
+    if (val.Number !== undefined) return String(val.Number);
+    if (val.Text !== undefined) return resolveString(report, val.Text);
+    if (val.Bool !== undefined) return val.Bool ? "TRUE" : "FALSE";
+    if (val.Error !== undefined) return resolveString(report, val.Error);
+    if (val.Formula !== undefined) return String(val.Formula);
+    return JSON.stringify(val);
+  }
+  return String(val);
+}
+
+function resolveFormula(report, id) {
+  if (id === null || id === undefined) return "";
+  const text = resolveString(report, id);
+  if (!text) return "";
+  return text.startsWith("=") ? text : `=${text}`;
+}
+
+function normalizeSheetList(list) {
+  if (!list) return [];
+  if (Array.isArray(list)) return list;
+  if (Array.isArray(list.sheets)) return list.sheets;
+  return [];
+}
+
+function normalizePayload(payloadOrReport) {
+  const payload = payloadOrReport && payloadOrReport.report ? payloadOrReport : { report: payloadOrReport };
+  const report = payload.report || payloadOrReport || {};
+  const rawSheets = payload.sheets || null;
+  const alignments = Array.isArray(payload.alignments) ? payload.alignments : [];
+  const sheets = {
+    oldSheets: normalizeSheetList(rawSheets?.old),
+    newSheets: normalizeSheetList(rawSheets?.new)
+  };
+  return { report, sheets, alignments };
+}
+
+function buildSheetLookup(sheets) {
+  const map = new Map();
+  for (const sheet of sheets || []) {
+    if (sheet && typeof sheet.name === "string") {
+      map.set(sheet.name, sheet);
+    }
+  }
+  return map;
+}
+
+function buildAlignmentLookup(alignments) {
+  const map = new Map();
+  if (!Array.isArray(alignments)) return map;
+  for (const alignment of alignments) {
+    if (alignment && typeof alignment.sheet === "string") {
+      map.set(alignment.sheet, alignment);
+    }
+  }
+  return map;
+}
+
+function categorizeOps(report) {
+  const ops = Array.isArray(report?.ops) ? report.ops : [];
+  const sheetOps = new Map();
+  const vbaOps = [];
+  const namedRangeOps = [];
+  const chartOps = [];
+  const queryOps = [];
+  const measureOps = [];
+
+  let addedCount = 0;
+  let removedCount = 0;
+  let modifiedCount = 0;
+  let movedCount = 0;
+
+  for (const op of ops) {
+    const kind = op.kind;
+    if (kind === "SheetAdded" || kind === "SheetRemoved") {
+      const sheetName = resolveString(report, op.sheet);
+      if (!sheetOps.has(sheetName)) sheetOps.set(sheetName, []);
+      sheetOps.get(sheetName).push(op);
+      if (kind === "SheetAdded") addedCount++;
+      else removedCount++;
+    } else if (kind.startsWith("Row") || kind.startsWith("Column") || kind.startsWith("Cell") || kind.startsWith("Block") || kind.startsWith("Rect")) {
+      const sheetName = resolveString(report, op.sheet);
+      if (!sheetOps.has(sheetName)) sheetOps.set(sheetName, []);
+      sheetOps.get(sheetName).push(op);
+      if (kind.includes("Added")) addedCount++;
+      else if (kind.includes("Removed")) removedCount++;
+      else if (kind.includes("Moved")) movedCount++;
+      else if (kind.includes("Edited") || kind.includes("Changed") || kind.includes("Replaced")) modifiedCount++;
+    } else if (kind.startsWith("Vba")) {
+      vbaOps.push(op);
+      if (kind.includes("Added")) addedCount++;
+      else if (kind.includes("Removed")) removedCount++;
+      else modifiedCount++;
+    } else if (kind.startsWith("NamedRange")) {
+      namedRangeOps.push(op);
+      if (kind.includes("Added")) addedCount++;
+      else if (kind.includes("Removed")) removedCount++;
+      else modifiedCount++;
+    } else if (kind.startsWith("Chart")) {
+      chartOps.push(op);
+      if (kind.includes("Added")) addedCount++;
+      else if (kind.includes("Removed")) removedCount++;
+      else modifiedCount++;
+    } else if (kind.startsWith("Query")) {
+      queryOps.push(op);
+      if (kind.includes("Added")) addedCount++;
+      else if (kind.includes("Removed")) removedCount++;
+      else modifiedCount++;
+    } else if (kind.startsWith("Measure")) {
+      measureOps.push(op);
+      if (kind.includes("Added")) addedCount++;
+      else if (kind.includes("Removed")) removedCount++;
+      else modifiedCount++;
+    }
+  }
+
+  return {
+    sheetOps,
+    vbaOps,
+    namedRangeOps,
+    chartOps,
+    queryOps,
+    measureOps,
+    counts: { added: addedCount, removed: removedCount, modified: modifiedCount, moved: movedCount }
+  };
+}
+
+function makeAxisVm(entries, oldLen, newLen) {
+  const list = Array.isArray(entries) ? entries : [];
+  const oldToView = new Array(oldLen || 0).fill(null);
+  const newToView = new Array(newLen || 0).fill(null);
+  for (let i = 0; i < list.length; i++) {
+    const entry = list[i];
+    if (!entry) continue;
+    if (entry.old !== null && entry.old !== undefined && oldToView.length) {
+      oldToView[entry.old] = i;
+    }
+    if (entry.new !== null && entry.new !== undefined && newToView.length) {
+      newToView[entry.new] = i;
+    }
+  }
+  return {
+    entries: list,
+    oldToView,
+    newToView,
+    oldLen: oldLen || 0,
+    newLen: newLen || 0,
+    count: list.length
+  };
+}
+
+function makeCellMap(sheet) {
+  const map = new Map();
+  if (!sheet || !Array.isArray(sheet.cells)) return map;
+  for (const cell of sheet.cells) {
+    const key = cell.row * CELL_KEY_STRIDE + cell.col;
+    map.set(key, cell);
+  }
+  return map;
+}
+
+function mapIndexToView(index, map) {
+  if (index === null || index === undefined) return null;
+  if (Array.isArray(map) && map.length > 0) {
+    const mapped = map[index];
+    if (mapped !== null && mapped !== undefined) return mapped;
+  }
+  return index;
+}
+
+function makeEditMap(report, sheetOps, rowsVm, colsVm) {
+  const editMap = new Map();
+  for (const op of sheetOps) {
+    if (op.kind !== "CellEdited") continue;
+    const addr = parseCellAddress(op.addr);
+    if (!addr) continue;
+    const viewRow = mapIndexToView(addr.row, rowsVm.newToView);
+    const viewCol = mapIndexToView(addr.col, colsVm.newToView);
+    if (viewRow === null || viewCol === null) continue;
+    const key = viewRow * CELL_KEY_STRIDE + viewCol;
+    editMap.set(key, {
+      fromValue: op.from ? formatValue(report, op.from.value) : "",
+      toValue: op.to ? formatValue(report, op.to.value) : "",
+      fromFormula: resolveFormula(report, op.from?.formula),
+      toFormula: resolveFormula(report, op.to?.formula)
+    });
+  }
+  return editMap;
+}
+
+function cellDisplayText(cell) {
+  if (!cell) return "";
+  return cell.value || cell.formula || "";
+}
+
+function cellTooltip(label, cell) {
+  if (!cell) return "";
+  const value = cell.value ?? "";
+  const formula = cell.formula ?? "";
+  if (!value && !formula) return "";
+  if (value && formula && value !== formula) {
+    return label ? `${label}: ${value} | ${formula}` : `${value} | ${formula}`;
+  }
+  const text = value || formula;
+  return label ? `${label}: ${text}` : text;
+}
+
+function buildCellVm(viewRow, viewCol, rowsVm, colsVm, oldCells, newCells, editMap) {
+  const rowEntry = rowsVm.entries[viewRow];
+  const colEntry = colsVm.entries[viewCol];
+  if (!rowEntry || !colEntry) {
+    return {
+      viewRow,
+      viewCol,
+      old: null,
+      new: null,
+      diffKind: "empty",
+      display: { text: "", tooltip: "" }
+    };
+  }
+
+  const oldRow = rowEntry.old;
+  const oldCol = colEntry.old;
+  const newRow = rowEntry.new;
+  const newCol = colEntry.new;
+
+  const oldCell =
+    oldRow !== null && oldRow !== undefined && oldCol !== null && oldCol !== undefined
+      ? oldCells.get(oldRow * CELL_KEY_STRIDE + oldCol) || null
+      : null;
+  const newCell =
+    newRow !== null && newRow !== undefined && newCol !== null && newCol !== undefined
+      ? newCells.get(newRow * CELL_KEY_STRIDE + newCol) || null
+      : null;
+
+  const viewKey = viewRow * CELL_KEY_STRIDE + viewCol;
+  const edit = editMap.get(viewKey);
+
+  const rowKind = rowEntry.kind;
+  const colKind = colEntry.kind;
+  const isInsert = rowKind === "insert" || colKind === "insert";
+  const isDelete = rowKind === "delete" || colKind === "delete";
+  const isMoveSrc = rowKind === "move_src" || colKind === "move_src";
+  const isMoveDst = rowKind === "move_dst" || colKind === "move_dst";
+  const moveRole = isMoveSrc ? "src" : isMoveDst ? "dst" : undefined;
+  const moveId = rowEntry.move_id || colEntry.move_id || undefined;
+
+  let diffKind = "empty";
+  if (edit) diffKind = "edited";
+  else if (isInsert) diffKind = "added";
+  else if (isDelete) diffKind = "removed";
+  else if (isMoveSrc || isMoveDst) diffKind = "moved";
+  else if (oldCell || newCell) diffKind = "unchanged";
+
+  let displayText = "";
+  let tooltip = "";
+  if (diffKind === "edited") {
+    const fromText = edit.fromValue || edit.fromFormula || "";
+    const toText = edit.toValue || edit.toFormula || "";
+    displayText = toText || fromText;
+    tooltip = fromText || toText ? `Changed: ${fromText || "(empty)"} -> ${toText || "(empty)"}` : "";
+  } else if (diffKind === "added") {
+    displayText = cellDisplayText(newCell);
+    tooltip = cellTooltip("Added", newCell);
+  } else if (diffKind === "removed") {
+    displayText = cellDisplayText(oldCell);
+    tooltip = cellTooltip("Removed", oldCell);
+  } else if (diffKind === "moved") {
+    const cell = moveRole === "src" ? oldCell : newCell;
+    displayText = cellDisplayText(cell);
+    tooltip = cellTooltip("Moved", cell);
+  } else if (diffKind === "unchanged") {
+    displayText = cellDisplayText(newCell || oldCell);
+    tooltip = cellTooltip("Value", newCell || oldCell);
+  }
+
+  return {
+    viewRow,
+    viewCol,
+    old: oldRow !== null && oldRow !== undefined && oldCol !== null && oldCol !== undefined ? { row: oldRow, col: oldCol, cell: oldCell } : null,
+    new: newRow !== null && newRow !== undefined && newCol !== null && newCol !== undefined ? { row: newRow, col: newCol, cell: newCell } : null,
+    diffKind,
+    moveId,
+    moveRole,
+    edit: edit || undefined,
+    display: { text: displayText, tooltip }
+  };
+}
+
+function mapRangeToView(start, count, map) {
+  if (start === null || start === undefined || count === null || count === undefined) return null;
+  if (count <= 0) return null;
+  let minView = null;
+  let maxView = null;
+  const end = start + count - 1;
+  for (let idx = start; idx <= end; idx++) {
+    const view = mapIndexToView(idx, map);
+    if (view === null || view === undefined) continue;
+    if (minView === null || view < minView) minView = view;
+    if (maxView === null || view > maxView) maxView = view;
+  }
+  if (minView === null || maxView === null) return null;
+  return { start: minView, end: maxView };
+}
+
+function viewIndexForSide(axisVm, viewIndex, side) {
+  if (axisVm?.entries?.length) {
+    const entry = axisVm.entries[viewIndex];
+    const value = entry ? entry[side] : null;
+    if (value !== null && value !== undefined) return value;
+  }
+  return viewIndex;
+}
+
+function formatRowRange(axisVm, startView, endView, side, action) {
+  const start = viewIndexForSide(axisVm, startView, side);
+  const end = viewIndexForSide(axisVm, endView, side);
+  if (start === end) return `Row ${start + 1} ${action}`;
+  return `Rows ${start + 1}-${end + 1} ${action}`;
+}
+
+function formatColRange(axisVm, startView, endView, side, action) {
+  const start = viewIndexForSide(axisVm, startView, side);
+  const end = viewIndexForSide(axisVm, endView, side);
+  if (start === end) return `Column ${colToLetter(start)} ${action}`;
+  return `Columns ${colToLetter(start)}-${colToLetter(end)} ${action}`;
+}
+
+function groupConsecutive(indices) {
+  const sorted = [...indices].sort((a, b) => a - b);
+  const groups = [];
+  let start = null;
+  let prev = null;
+  for (const idx of sorted) {
+    if (start === null) {
+      start = idx;
+      prev = idx;
+      continue;
+    }
+    if (idx === prev + 1) {
+      prev = idx;
+      continue;
+    }
+    groups.push({ start, end: prev, count: prev - start + 1 });
+    start = idx;
+    prev = idx;
+  }
+  if (start !== null) {
+    groups.push({ start, end: prev, count: prev - start + 1 });
+  }
+  return groups;
+}
+
+function clusterEditsToRegions(editKeys, opts) {
+  if (!editKeys || editKeys.length === 0) return [];
+  const byRow = new Map();
+  for (const key of editKeys) {
+    const row = Math.floor(key / CELL_KEY_STRIDE);
+    const col = key % CELL_KEY_STRIDE;
+    if (!byRow.has(row)) byRow.set(row, []);
+    byRow.get(row).push(col);
+  }
+  const rows = Array.from(byRow.keys()).sort((a, b) => a - b);
+  const regions = [];
+  const mergeGap = opts.mergeGap ?? 0;
+  const maxCells = opts.maxCellsPerRegion ?? 200;
+  let active = [];
+
+  for (const row of rows) {
+    const cols = byRow.get(row).sort((a, b) => a - b);
+    const runs = [];
+    let runStart = null;
+    let runEnd = null;
+    for (const col of cols) {
+      if (runStart === null) {
+        runStart = col;
+        runEnd = col;
+        continue;
+      }
+      if (col === runEnd + 1) {
+        runEnd = col;
+        continue;
+      }
+      runs.push({ start: runStart, end: runEnd, count: runEnd - runStart + 1 });
+      runStart = col;
+      runEnd = col;
+    }
+    if (runStart !== null) {
+      runs.push({ start: runStart, end: runEnd, count: runEnd - runStart + 1 });
+    }
+
+    const expandedRuns = [];
+    if (maxCells > 0) {
+      for (const run of runs) {
+        if (run.count <= maxCells) {
+          expandedRuns.push(run);
+          continue;
+        }
+        let segStart = run.start;
+        while (segStart <= run.end) {
+          const segEnd = Math.min(run.end, segStart + maxCells - 1);
+          expandedRuns.push({ start: segStart, end: segEnd, count: segEnd - segStart + 1 });
+          segStart = segEnd + 1;
+        }
+      }
+    } else {
+      expandedRuns.push(...runs);
+    }
+
+    const nextActive = [];
+    const used = new Set();
+
+    for (const run of expandedRuns) {
+      let matched = null;
+      let matchedIndex = -1;
+      for (let i = 0; i < active.length; i++) {
+        const region = active[i];
+        if (region.rowEnd !== row - 1) continue;
+        const overlaps =
+          run.start <= region.colEnd + mergeGap &&
+          run.end >= region.colStart - mergeGap;
+        if (overlaps) {
+          matched = region;
+          matchedIndex = i;
+          break;
+        }
+      }
+
+      if (matched) {
+        const nextCount = matched.cellCount + run.count;
+        if (nextCount > maxCells) {
+          regions.push(matched);
+        } else {
+          matched.rowEnd = row;
+          matched.colStart = Math.min(matched.colStart, run.start);
+          matched.colEnd = Math.max(matched.colEnd, run.end);
+          matched.cellCount = nextCount;
+          nextActive.push(matched);
+          used.add(matchedIndex);
+          continue;
+        }
+      }
+
+      nextActive.push({
+        rowStart: row,
+        rowEnd: row,
+        colStart: run.start,
+        colEnd: run.end,
+        cellCount: run.count
+      });
+    }
+
+    for (let i = 0; i < active.length; i++) {
+      if (!used.has(i)) {
+        regions.push(active[i]);
+      }
+    }
+    active = nextActive;
+  }
+
+  regions.push(...active);
+
+  return regions.map((region, idx) => ({
+    id: `cells-${idx + 1}`,
+    kind: "cell",
+    top: region.rowStart,
+    bottom: region.rowEnd,
+    left: region.colStart,
+    right: region.colEnd,
+    cellCount: region.cellCount
+  }));
+}
+
+function capBounds(bounds, maxVisualCells) {
+  if (!maxVisualCells || maxVisualCells <= 0) return bounds;
+  let rows = bounds.bottom - bounds.top + 1;
+  let cols = bounds.right - bounds.left + 1;
+  if (rows * cols <= maxVisualCells) return bounds;
+  const maxRows = Math.max(1, Math.floor(maxVisualCells / cols));
+  if (maxRows < rows) {
+    return { ...bounds, bottom: bounds.top + maxRows - 1 };
+  }
+  const maxCols = Math.max(1, Math.floor(maxVisualCells / rows));
+  if (maxCols < cols) {
+    return { ...bounds, right: bounds.left + maxCols - 1 };
+  }
+  return bounds;
+}
+
+function expandBounds(region, rowsCount, colsCount, opts) {
+  const contextRows = opts.contextRows ?? 0;
+  const contextCols = opts.contextCols ?? 0;
+  const top = Math.max(0, region.top - contextRows);
+  const left = Math.max(0, region.left - contextCols);
+  const bottom = Math.min(rowsCount - 1, region.bottom + contextRows);
+  const right = Math.min(colsCount - 1, region.right + contextCols);
+  return capBounds({ top, left, bottom, right }, opts.maxVisualCells);
+}
+
+function buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions }) {
+  const items = [];
+
+  const rowAdds = [];
+  const rowRemoves = [];
+  const colAdds = [];
+  const colRemoves = [];
+
+  for (const op of ops) {
+    if (op.kind === "RowAdded") {
+      rowAdds.push(mapIndexToView(op.row_idx, rowsVm.newToView));
+    } else if (op.kind === "RowRemoved") {
+      rowRemoves.push(mapIndexToView(op.row_idx, rowsVm.oldToView));
+    } else if (op.kind === "ColumnAdded") {
+      colAdds.push(mapIndexToView(op.col_idx, colsVm.newToView));
+    } else if (op.kind === "ColumnRemoved") {
+      colRemoves.push(mapIndexToView(op.col_idx, colsVm.oldToView));
+    } else if (op.kind === "RowReplaced") {
+      const viewIdx = mapIndexToView(op.row_idx, rowsVm.newToView);
+      items.push({
+        id: `row-replaced-${op.row_idx}`,
+        group: "rows",
+        changeType: "modified",
+        label: `Row ${viewIndexForSide(rowsVm, viewIdx, "new") + 1} replaced`
+      });
+    }
+  }
+
+  for (const group of groupConsecutive(rowAdds)) {
+    items.push({
+      id: `row-added-${group.start}`,
+      group: "rows",
+      changeType: "added",
+      label: formatRowRange(rowsVm, group.start, group.end, "new", "added")
+    });
+  }
+  for (const group of groupConsecutive(rowRemoves)) {
+    items.push({
+      id: `row-removed-${group.start}`,
+      group: "rows",
+      changeType: "removed",
+      label: formatRowRange(rowsVm, group.start, group.end, "old", "removed")
+    });
+  }
+  for (const group of groupConsecutive(colAdds)) {
+    items.push({
+      id: `col-added-${group.start}`,
+      group: "cols",
+      changeType: "added",
+      label: formatColRange(colsVm, group.start, group.end, "new", "added")
+    });
+  }
+  for (const group of groupConsecutive(colRemoves)) {
+    items.push({
+      id: `col-removed-${group.start}`,
+      group: "cols",
+      changeType: "removed",
+      label: formatColRange(colsVm, group.start, group.end, "old", "removed")
+    });
+  }
+
+  const alignmentMoves = Array.isArray(alignment?.moves) ? alignment.moves : [];
+  if (alignmentMoves.length > 0) {
+    for (const move of alignmentMoves) {
+      if (move.axis === "row") {
+        const start = move.src_start + 1;
+        const end = move.src_start + move.count;
+        const label = start === end ? `Row ${start} moved` : `Rows ${start}-${end} moved`;
+        items.push({
+          id: `move-${move.id}`,
+          group: "moves",
+          changeType: "moved",
+          label,
+          detail: `to row ${move.dst_start + 1}`
+        });
+      } else if (move.axis === "col") {
+        const start = colToLetter(move.src_start);
+        const end = colToLetter(move.src_start + move.count - 1);
+        const label = start === end ? `Column ${start} moved` : `Columns ${start}-${end} moved`;
+        items.push({
+          id: `move-${move.id}`,
+          group: "moves",
+          changeType: "moved",
+          label,
+          detail: `to column ${colToLetter(move.dst_start)}`
+        });
+      }
+    }
+  } else {
+    for (const op of ops) {
+      if (op.kind === "BlockMovedRows") {
+        const start = op.src_start_row + 1;
+        const end = op.src_start_row + op.row_count;
+        const label = start === end ? `Row ${start} moved` : `Rows ${start}-${end} moved`;
+        items.push({
+          id: `move-rows-${op.src_start_row}-${op.dst_start_row}`,
+          group: "moves",
+          changeType: "moved",
+          label,
+          detail: `to row ${op.dst_start_row + 1}`
+        });
+      } else if (op.kind === "BlockMovedColumns") {
+        const start = colToLetter(op.src_start_col);
+        const end = colToLetter(op.src_start_col + op.col_count - 1);
+        const label = start === end ? `Column ${start} moved` : `Columns ${start}-${end} moved`;
+        items.push({
+          id: `move-cols-${op.src_start_col}-${op.dst_start_col}`,
+          group: "moves",
+          changeType: "moved",
+          label,
+          detail: `to column ${colToLetter(op.dst_start_col)}`
+        });
+      }
+    }
+  }
+
+  for (const op of ops) {
+    if (op.kind === "BlockMovedRect") {
+      const srcStart = formatCellAddress(op.src_start_row, op.src_start_col);
+      const srcEnd = formatCellAddress(op.src_start_row + op.src_row_count - 1, op.src_start_col + op.src_col_count - 1);
+      const dstStart = formatCellAddress(op.dst_start_row, op.dst_start_col);
+      const dstEnd = formatCellAddress(op.dst_start_row + op.src_row_count - 1, op.dst_start_col + op.src_col_count - 1);
+      items.push({
+        id: `move-rect-${srcStart}-${dstStart}`,
+        group: "moves",
+        changeType: "moved",
+        label: `Range ${srcStart}:${srcEnd} moved`,
+        detail: `to ${dstStart}:${dstEnd}`
+      });
+    }
+  }
+
+  for (const region of regions) {
+    if (region.kind === "cell") {
+      const cellCount = region.cellCount || ((region.bottom - region.top + 1) * (region.right - region.left + 1));
+      const detail = cellCount > 1 ? `${cellCount} cells` : "";
+      items.push({
+        id: `cell-region-${region.id}`,
+        group: "cells",
+        changeType: "modified",
+        label: `${region.label} modified`,
+        detail
+      });
+    } else if (region.kind === "rect") {
+      items.push({
+        id: `rect-region-${region.id}`,
+        group: "cells",
+        changeType: "modified",
+        label: `${region.label} replaced`
+      });
+    }
+  }
+
+  const handledKinds = new Set([
+    "RowAdded",
+    "RowRemoved",
+    "RowReplaced",
+    "ColumnAdded",
+    "ColumnRemoved",
+    "CellEdited",
+    "RectReplaced",
+    "BlockMovedRows",
+    "BlockMovedColumns",
+    "BlockMovedRect",
+    "SheetAdded",
+    "SheetRemoved"
+  ]);
+
+  for (const op of ops) {
+    if (handledKinds.has(op.kind)) continue;
+    items.push({
+      id: `other-${op.kind}`,
+      group: "other",
+      changeType: "modified",
+      label: op.kind
+    });
+  }
+
+  return items;
+}
+
+function buildRegions({ ops, rowsVm, colsVm, editMap, opts }) {
+  const regions = [];
+  const editKeys = Array.from(editMap.keys());
+  regions.push(...clusterEditsToRegions(editKeys, opts));
+
+  for (const op of ops) {
+    if (op.kind === "RectReplaced") {
+      const rowRange = mapRangeToView(op.start_row, op.row_count, rowsVm.newToView);
+      const colRange = mapRangeToView(op.start_col, op.col_count, colsVm.newToView);
+      if (!rowRange || !colRange) continue;
+      regions.push({
+        id: `rect-${op.start_row}-${op.start_col}`,
+        kind: "rect",
+        top: rowRange.start,
+        bottom: rowRange.end,
+        left: colRange.start,
+        right: colRange.end,
+        cellCount: (rowRange.end - rowRange.start + 1) * (colRange.end - colRange.start + 1)
+      });
+    } else if (op.kind === "BlockMovedRect") {
+      const moveId = `rect:${op.src_start_row},${op.src_start_col}+${op.src_row_count}x${op.src_col_count}->${op.dst_start_row},${op.dst_start_col}`;
+      const srcRows = mapRangeToView(op.src_start_row, op.src_row_count, rowsVm.oldToView);
+      const srcCols = mapRangeToView(op.src_start_col, op.src_col_count, colsVm.oldToView);
+      const dstRows = mapRangeToView(op.dst_start_row, op.src_row_count, rowsVm.newToView);
+      const dstCols = mapRangeToView(op.dst_start_col, op.src_col_count, colsVm.newToView);
+      if (srcRows && srcCols) {
+        regions.push({
+          id: `move-src-${moveId}`,
+          kind: "move_src",
+          moveId,
+          top: srcRows.start,
+          bottom: srcRows.end,
+          left: srcCols.start,
+          right: srcCols.end,
+          cellCount: (srcRows.end - srcRows.start + 1) * (srcCols.end - srcCols.start + 1)
+        });
+      }
+      if (dstRows && dstCols) {
+        regions.push({
+          id: `move-dst-${moveId}`,
+          kind: "move_dst",
+          moveId,
+          top: dstRows.start,
+          bottom: dstRows.end,
+          left: dstCols.start,
+          right: dstCols.end,
+          cellCount: (dstRows.end - dstRows.start + 1) * (dstCols.end - dstCols.start + 1)
+        });
+      }
+    }
+  }
+
+  return regions;
+}
+
+function labelRegion(region, rowsVm, colsVm) {
+  const startRow = viewIndexForSide(rowsVm, region.top, "new");
+  const endRow = viewIndexForSide(rowsVm, region.bottom, "new");
+  const startCol = viewIndexForSide(colsVm, region.left, "new");
+  const endCol = viewIndexForSide(colsVm, region.right, "new");
+  const startAddr = formatCellAddress(startRow, startCol);
+  const endAddr = formatCellAddress(endRow, endCol);
+  if (region.kind === "rect") {
+    return `Region ${startAddr}:${endAddr}`;
+  }
+  if (startAddr === endAddr) return `Cell ${startAddr}`;
+  return `Cells ${startAddr}:${endAddr}`;
+}
+
+function buildSheetViewModel({ report, sheetName, ops, oldSheet, newSheet, alignment, opts }) {
+  const oldRows = oldSheet?.nrows || 0;
+  const oldCols = oldSheet?.ncols || 0;
+  const newRows = newSheet?.nrows || 0;
+  const newCols = newSheet?.ncols || 0;
+
+  const rowEntries = Array.isArray(alignment?.rows) ? alignment.rows : [];
+  const colEntries = Array.isArray(alignment?.cols) ? alignment.cols : [];
+  const rowsVm = makeAxisVm(rowEntries, oldRows, newRows);
+  const colsVm = makeAxisVm(colEntries, oldCols, newCols);
+
+  const oldCells = makeCellMap(oldSheet);
+  const newCells = makeCellMap(newSheet);
+  const editMap = makeEditMap(report, ops, rowsVm, colsVm);
+
+  const baseRegions = buildRegions({ ops, rowsVm, colsVm, editMap, opts });
+  for (const region of baseRegions) {
+    region.label = labelRegion(region, rowsVm, colsVm);
+  }
+
+  const items = buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions: baseRegions });
+
+  const kindOrder = { move_src: 0, move_dst: 0, rect: 1, cell: 2 };
+  baseRegions.sort((a, b) => {
+    if (a.top !== b.top) return a.top - b.top;
+    if (a.left !== b.left) return a.left - b.left;
+    const ak = kindOrder[a.kind] ?? 99;
+    const bk = kindOrder[b.kind] ?? 99;
+    if (ak !== bk) return ak - bk;
+    return String(a.id).localeCompare(String(b.id));
+  });
+
+  const rowsCount = rowsVm.entries.length;
+  const colsCount = colsVm.entries.length;
+  for (const region of baseRegions) {
+    if (rowsCount > 0 && colsCount > 0) {
+      region.renderBounds = expandBounds(region, rowsCount, colsCount, opts);
+    }
+  }
+
+  let status = { kind: "ok" };
+  if (!alignment || alignment.skipped) {
+    status = alignment?.skipped
+      ? { kind: "skipped", message: "Grid preview skipped because the aligned view is too large or inconsistent." }
+      : { kind: "missing", message: "Alignment data is missing for this sheet." };
+  } else if (rowsCount === 0 || colsCount === 0) {
+    status = { kind: "missing", message: "Sheet snapshots are missing for this sheet." };
+  }
+
+  const regionsToRender = status.kind === "ok" ? baseRegions.map(region => region.id) : [];
+
+  return {
+    name: sheetName,
+    axis: { rows: rowsVm, cols: colsVm },
+    cellAt: (viewRow, viewCol) => buildCellVm(viewRow, viewCol, rowsVm, colsVm, oldCells, newCells, editMap),
+    changes: { items, regions: baseRegions },
+    renderPlan: {
+      regionsToRender,
+      status,
+      contextRows: opts.contextRows,
+      contextCols: opts.contextCols,
+      maxVisualCells: opts.maxVisualCells
+    },
+    opCount: ops.length
+  };
+}
+
+function buildOtherItems(report, ops, prefix) {
+  const items = [];
+  for (const op of ops) {
+    const kind = op.kind || prefix;
+    const name = op.name !== undefined ? resolveString(report, op.name) : "";
+    let label = "";
+    let detail = "";
+    if (kind.startsWith("Query")) {
+      label = `Query: ${name}`;
+      if (op.semantic_detail?.step_diffs?.length) {
+        detail = "Step diffs";
+      }
+    } else if (kind.startsWith("Measure")) {
+      label = `Measure: ${name}`;
+    } else if (kind.startsWith("NamedRange")) {
+      label = `Named Range: ${name}`;
+    } else if (kind.startsWith("Chart")) {
+      label = `Chart: ${name}`;
+    } else if (kind.startsWith("Vba")) {
+      label = `VBA Module: ${name}`;
+    } else {
+      label = name ? `${kind}: ${name}` : String(kind);
+    }
+    const changeType = kind.includes("Added") ? "added" : kind.includes("Removed") ? "removed" : "modified";
+    items.push({
+      id: `${kind}-${name}`,
+      changeType,
+      label,
+      detail
+    });
+  }
+  return items;
+}
+
+export function buildWorkbookViewModel(payloadOrReport, opts = {}) {
+  const { report, sheets, alignments } = normalizePayload(payloadOrReport);
+  const options = { ...DEFAULT_OPTS, ...opts };
+  const { sheetOps, vbaOps, namedRangeOps, chartOps, queryOps, measureOps, counts } = categorizeOps(report);
+
+  const oldLookup = buildSheetLookup(sheets.oldSheets);
+  const newLookup = buildSheetLookup(sheets.newSheets);
+  const alignmentLookup = buildAlignmentLookup(alignments);
+
+  const sheetVms = [];
+  for (const [sheetName, ops] of sheetOps.entries()) {
+    const sheetVm = buildSheetViewModel({
+      report,
+      sheetName,
+      ops,
+      oldSheet: oldLookup.get(sheetName) || null,
+      newSheet: newLookup.get(sheetName) || null,
+      alignment: alignmentLookup.get(sheetName) || null,
+      opts: options
+    });
+    sheetVms.push(sheetVm);
+  }
+
+  sheetVms.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+
+  return {
+    report,
+    warnings: Array.isArray(report?.warnings) ? report.warnings : [],
+    counts,
+    sheets: sheetVms,
+    other: {
+      vba: buildOtherItems(report, vbaOps, "Vba"),
+      namedRanges: buildOtherItems(report, namedRangeOps, "NamedRange"),
+      charts: buildOtherItems(report, chartOps, "Chart"),
+      queries: buildOtherItems(report, queryOps, "Query"),
+      measures: buildOtherItems(report, measureOps, "Measure")
+    }
+  };
+}
 
 ```
 
