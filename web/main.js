@@ -77,10 +77,8 @@ async function runDiff() {
     const json = diff_files_with_sheets_json(oldBytes, newBytes, oldFile.name, newFile.name);
     const payload = JSON.parse(json);
     const report = payload.report || payload;
-    const sheets = payload.sheets || null;
-    const alignments = payload.alignments || null;
 
-    byId("results").innerHTML = renderReportHtml(report, sheets, alignments);
+    byId("results").innerHTML = renderReportHtml(payload);
     byId("results").classList.add("visible");
     byId("raw").textContent = JSON.stringify(report, null, 2);
 

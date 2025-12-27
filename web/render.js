@@ -1,3 +1,5 @@
+import { buildWorkbookViewModel } from "./view_model.js";
+
 function esc(s) {
   return String(s)
     .replace(/&/g, "&amp;")
@@ -1072,37 +1074,246 @@ function renderWarnings(warnings) {
   `;
 }
 
-export function renderReportHtml(report, sheetData = null, alignments = null) {
-  const { sheetOps, vbaOps, namedRangeOps, chartOps, queryOps, measureOps, counts } = categorizeOps(report);
-  const warnings = Array.isArray(report.warnings) ? report.warnings : [];
-  const sheetLookup = sheetData
-    ? {
-        old: buildSheetLookup(sheetData.old),
-        new: buildSheetLookup(sheetData.new)
+
+function renderChangeItemVm(item) {
+  const changeType = item.changeType || "modified";
+  const cls = `change-item ${changeType}`;
+  const icon = changeType === "added" ? "+" : changeType === "removed" ? "-" : changeType === "moved" ? ">" : "~";
+  const detail = item.detail ? `<span class="change-detail">${esc(item.detail)}</span>` : "";
+  return `
+    <div class="${cls}">
+      <div class="change-icon">${icon}</div>
+      <span class="change-location">${esc(item.label || "")}</span>
+      ${detail}
+    </div>
+  `;
+}
+
+function renderChangeGroupVm(title, icon, items) {
+  if (!items || items.length === 0) return "";
+  return `
+    <div class="change-group">
+      <div class="change-group-title">
+        <span>${icon}</span>
+        <span>${esc(title)} (${items.length})</span>
+      </div>
+      <div class="change-list">
+        ${items.map(item => renderChangeItemVm(item)).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderGridLegend() {
+  return `
+    <div class="grid-legend">
+      <span class="legend-item"><span class="legend-box legend-edited"></span> Modified</span>
+      <span class="legend-item"><span class="legend-box legend-added"></span> Added row/col</span>
+      <span class="legend-item"><span class="legend-box legend-removed"></span> Removed row/col</span>
+      <span class="legend-item"><span class="legend-box legend-moved"></span> Moved row/col</span>
+    </div>
+  `;
+}
+
+function renderRegionGrid(sheetVm, region) {
+  const rows = sheetVm.axis.rows.entries;
+  const cols = sheetVm.axis.cols.entries;
+  const bounds = region.renderBounds || region;
+  if (!bounds || rows.length === 0 || cols.length === 0) return "";
+
+  const numCols = bounds.right - bounds.left + 1;
+
+  let html = `<div class="sheet-grid-container">
+    <div class="sheet-grid" style="grid-template-columns: 50px repeat(${numCols}, minmax(100px, 1fr));">`;
+
+  html += `<div class="grid-cell grid-corner"></div>`;
+  for (let c = bounds.left; c <= bounds.right; c++) {
+    const colEntry = cols[c];
+    const kind = colEntry?.kind;
+    let cls = "grid-cell grid-col-header";
+    if (kind === "insert") cls += " col-added";
+    if (kind === "delete") cls += " col-removed";
+    if (kind === "move_src") cls += " col-move-src";
+    if (kind === "move_dst") cls += " col-move-dst";
+    const title = formatAxisTitle(colEntry, "col");
+    const moveAttr = colEntry?.move_id ? ` data-move-id="${esc(colEntry.move_id)}"` : "";
+    html += `<div class="${cls}"${moveAttr} title="${esc(title)}">${colToLetter(c)}</div>`;
+  }
+
+  for (let r = bounds.top; r <= bounds.bottom; r++) {
+    const rowEntry = rows[r];
+    const rowKind = rowEntry?.kind;
+    let rowHeaderCls = "grid-cell grid-row-header";
+    if (rowKind === "insert") rowHeaderCls += " row-added";
+    if (rowKind === "delete") rowHeaderCls += " row-removed";
+    if (rowKind === "move_src") rowHeaderCls += " row-move-src";
+    if (rowKind === "move_dst") rowHeaderCls += " row-move-dst";
+    const rowTitle = formatAxisTitle(rowEntry, "row");
+    const rowMoveAttr = rowEntry?.move_id ? ` data-move-id="${esc(rowEntry.move_id)}"` : "";
+    html += `<div class="${rowHeaderCls}"${rowMoveAttr} title="${esc(rowTitle)}">${r + 1}</div>`;
+
+    for (let c = bounds.left; c <= bounds.right; c++) {
+      const cell = sheetVm.cellAt(r, c);
+      let cls = "grid-cell";
+      let content = "";
+      let title = cell.display.tooltip || "";
+
+      if (cell.diffKind === "edited") {
+        cls += " cell-edited";
+        const fromText = cell.edit?.fromValue || cell.edit?.fromFormula || "(empty)";
+        const toText = cell.edit?.toValue || cell.edit?.toFormula || "(empty)";
+        content = `<div class="cell-change"><span class="cell-old">${esc(truncateText(fromText))}</span><span class="cell-new">${esc(truncateText(toText))}</span></div>`;
+        title = `Changed: ${fromText} -> ${toText}`;
+      } else if (cell.diffKind === "added") {
+        cls += " cell-added";
+        content = esc(truncateText(cell.display.text || ""));
+      } else if (cell.diffKind === "removed") {
+        cls += " cell-removed";
+        content = esc(truncateText(cell.display.text || ""));
+      } else if (cell.diffKind === "moved") {
+        cls += cell.moveRole === "src" ? " cell-move-src" : " cell-move-dst";
+        content = esc(truncateText(cell.display.text || ""));
+      } else if (cell.diffKind === "unchanged") {
+        cls += " cell-unchanged";
+        content = esc(truncateText(cell.display.text || ""));
+      } else {
+        cls += " cell-empty";
       }
-    : null;
-  const alignmentLookup = buildAlignmentLookup(alignments);
-  
+
+      html += `<div class="${cls}" title="${esc(title)}">${content}</div>`;
+    }
+  }
+
+  html += `</div></div>`;
+  return html;
+}
+
+function renderSheetGridVm(sheetVm) {
+  const status = sheetVm.renderPlan.status;
+  if (status.kind === "missing" && sheetVm.changes.regions.length === 0) {
+    return "";
+  }
+  if (status.kind === "skipped" || status.kind === "missing") {
+    return `
+      <div class="grid-skip-warning">
+        ${esc(status.message || "Grid preview unavailable.")}
+      </div>
+    `;
+  }
+
+  const regionIds = sheetVm.renderPlan.regionsToRender || [];
+  if (regionIds.length === 0) return "";
+
+  const regionMap = new Map(sheetVm.changes.regions.map(region => [region.id, region]));
   let html = "";
-  
-  html += renderWarnings(warnings);
-  html += renderSummaryCards(counts);
-  
-  const total = counts.added + counts.removed + counts.modified + counts.moved;
+  for (const id of regionIds) {
+    const region = regionMap.get(id);
+    if (!region) continue;
+    html += renderRegionGrid(sheetVm, region);
+  }
+  html += renderGridLegend();
+  return html;
+}
+
+function renderSheetVm(sheetVm) {
+  const badge = `${sheetVm.opCount} change${sheetVm.opCount !== 1 ? "s" : ""}`;
+  const gridHtml = renderSheetGridVm(sheetVm);
+
+  let contentHtml = "";
+  if (gridHtml) {
+    contentHtml += `
+      <div class="change-group">
+        <div class="change-group-title">
+          <span>*</span>
+          <span>Visual Diff</span>
+        </div>
+        ${gridHtml}
+      </div>
+    `;
+  }
+
+  const rowItems = sheetVm.changes.items.filter(item => item.group === "rows");
+  const colItems = sheetVm.changes.items.filter(item => item.group === "cols");
+  const cellItems = sheetVm.changes.items.filter(item => item.group === "cells");
+  const moveItems = sheetVm.changes.items.filter(item => item.group === "moves");
+  const otherItems = sheetVm.changes.items.filter(item => item.group === "other");
+
+  let detailsHtml = "";
+  detailsHtml += renderChangeGroupVm("Row Changes", "R", rowItems);
+  detailsHtml += renderChangeGroupVm("Column Changes", "C", colItems);
+  detailsHtml += renderChangeGroupVm("Cell Changes", "*", cellItems);
+  detailsHtml += renderChangeGroupVm("Moved Blocks", ">", moveItems);
+  detailsHtml += renderChangeGroupVm("Other Changes", "?", otherItems);
+
+  if (detailsHtml) {
+    contentHtml += `
+      <details class="details-section" open>
+        <summary class="details-toggle">Detailed Changes</summary>
+        <div class="details-content">
+          ${detailsHtml}
+        </div>
+      </details>
+    `;
+  }
+
+  return `
+    <section class="sheet-section">
+      <div class="sheet-header" onclick="this.parentElement.classList.toggle('expanded')">
+        <div class="sheet-title">
+          <div class="sheet-icon">#</div>
+          <span class="sheet-name">${esc(sheetVm.name)}</span>
+          <span class="sheet-badge">${badge}</span>
+        </div>
+        <svg class="expand-icon" width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+          <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" />
+        </svg>
+      </div>
+      <div class="sheet-content">
+        ${contentHtml}
+      </div>
+    </section>
+  `;
+}
+
+function renderOtherChangesVm(title, icon, items) {
+  if (!items || items.length === 0) return "";
+  return `
+    <div class="other-changes">
+      <div class="other-changes-title">
+        <span class="icon">${icon}</span>
+        <span>${esc(title)} (${items.length})</span>
+      </div>
+      <div class="change-list">
+        ${items.map(item => renderChangeItemVm(item)).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderWorkbookVm(vm) {
+  let html = "";
+  html += renderWarnings(vm.warnings);
+  html += renderSummaryCards(vm.counts);
+
+  const total = vm.counts.added + vm.counts.removed + vm.counts.modified + vm.counts.moved;
   if (total === 0) {
     return html;
   }
-  
-  const sortedSheets = Array.from(sheetOps.keys()).sort();
-  for (const sheetName of sortedSheets) {
-    html += renderSheetSection(report, sheetName, sheetOps.get(sheetName), sheetLookup, alignmentLookup);
+
+  for (const sheetVm of vm.sheets) {
+    html += renderSheetVm(sheetVm);
   }
-  
-  html += renderOtherChangesSection(report, "VBA Modules", "📜", vbaOps);
-  html += renderOtherChangesSection(report, "Named Ranges", "🏷️", namedRangeOps);
-  html += renderOtherChangesSection(report, "Charts", "📊", chartOps);
-  html += renderOtherChangesSection(report, "Power Query", "⚡", queryOps);
-  html += renderOtherChangesSection(report, "Measures", "📐", measureOps);
-  
+
+  html += renderOtherChangesVm("VBA Modules", "V", vm.other.vba);
+  html += renderOtherChangesVm("Named Ranges", "N", vm.other.namedRanges);
+  html += renderOtherChangesVm("Charts", "C", vm.other.charts);
+  html += renderOtherChangesVm("Power Query", "Q", vm.other.queries);
+  html += renderOtherChangesVm("Measures", "M", vm.other.measures);
+
   return html;
+}
+
+export function renderReportHtml(payloadOrReport) {
+  const vm = buildWorkbookViewModel(payloadOrReport);
+  return renderWorkbookVm(vm);
 }

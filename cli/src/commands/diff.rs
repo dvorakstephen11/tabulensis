@@ -7,7 +7,6 @@ use excel_diff::{
     Workbook, WorkbookPackage, index_to_address, suggest_key_columns, with_default_session,
 };
 use std::collections::HashMap;
-use std::fs::File;
 use std::io::{self, BufWriter, IsTerminal, Write};
 use std::path::Path;
 use std::process::ExitCode;

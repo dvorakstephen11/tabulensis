@@ -289,6 +289,7 @@
   wasm/
     Cargo.toml
     src/
+      alignment.rs
       lib.rs
   web/
     index.html
@@ -50891,6 +50892,438 @@ console_error_panic_hook = "0.1"
 
 ---
 
+### File: `wasm\src\alignment.rs`
+
+```rust
+use std::collections::{HashMap, HashSet};
+
+use serde::Serialize;
+
+use crate::{SheetPairSnapshot, SheetSnapshot};
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum AxisKind {
+    Match,
+    Insert,
+    Delete,
+    MoveSrc,
+    MoveDst,
+}
+
+#[derive(Serialize)]
+struct AxisEntry {
+    old: Option<u32>,
+    new: Option<u32>,
+    kind: AxisKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    move_id: Option<String>,
+}
+
+#[derive(Serialize)]
+struct MoveGroup {
+    id: String,
+    axis: String,
+    src_start: u32,
+    dst_start: u32,
+    count: u32,
+}
+
+#[derive(Serialize)]
+pub(crate) struct SheetAlignment {
+    sheet: String,
+    rows: Vec<AxisEntry>,
+    cols: Vec<AxisEntry>,
+    moves: Vec<MoveGroup>,
+    skipped: bool,
+}
+
+// Guardrail: keep the HTML grid from exploding on large sheets.
+const MAX_VIEW_ROWS: u32 = 10_000;
+const MAX_VIEW_COLS: u32 = 200;
+const MAX_VIEW_CELLS: u64 = 200_000;
+
+pub(crate) fn build_alignments(
+    report: &excel_diff::DiffReport,
+    sheets: &SheetPairSnapshot,
+) -> Vec<SheetAlignment> {
+    let ops_by_sheet = group_ops_by_sheet(report);
+    let old_lookup = build_sheet_lookup(&sheets.old.sheets);
+    let new_lookup = build_sheet_lookup(&sheets.new.sheets);
+
+    let mut names = HashSet::new();
+    names.extend(ops_by_sheet.keys().cloned());
+    names.extend(old_lookup.keys().cloned());
+    names.extend(new_lookup.keys().cloned());
+
+    let mut names: Vec<String> = names.into_iter().collect();
+    names.sort();
+
+    let empty_ops: Vec<&excel_diff::DiffOp> = Vec::new();
+    let mut alignments = Vec::with_capacity(names.len());
+
+    for sheet in names {
+        let ops = ops_by_sheet
+            .get(&sheet)
+            .map(Vec::as_slice)
+            .unwrap_or(empty_ops.as_slice());
+        let old_sheet = old_lookup.get(&sheet).copied();
+        let new_sheet = new_lookup.get(&sheet).copied();
+        alignments.push(build_sheet_alignment(&sheet, old_sheet, new_sheet, ops));
+    }
+
+    alignments
+}
+
+fn build_sheet_lookup<'a>(sheets: &'a [SheetSnapshot]) -> HashMap<String, &'a SheetSnapshot> {
+    let mut map = HashMap::new();
+    for sheet in sheets {
+        map.insert(sheet.name.clone(), sheet);
+    }
+    map
+}
+
+fn group_ops_by_sheet<'a>(
+    report: &'a excel_diff::DiffReport,
+) -> HashMap<String, Vec<&'a excel_diff::DiffOp>> {
+    let mut map = HashMap::new();
+    for op in &report.ops {
+        let sheet = match op {
+            excel_diff::DiffOp::SheetAdded { sheet }
+            | excel_diff::DiffOp::SheetRemoved { sheet }
+            | excel_diff::DiffOp::RowAdded { sheet, .. }
+            | excel_diff::DiffOp::RowRemoved { sheet, .. }
+            | excel_diff::DiffOp::RowReplaced { sheet, .. }
+            | excel_diff::DiffOp::ColumnAdded { sheet, .. }
+            | excel_diff::DiffOp::ColumnRemoved { sheet, .. }
+            | excel_diff::DiffOp::BlockMovedRows { sheet, .. }
+            | excel_diff::DiffOp::BlockMovedColumns { sheet, .. }
+            | excel_diff::DiffOp::BlockMovedRect { sheet, .. }
+            | excel_diff::DiffOp::RectReplaced { sheet, .. }
+            | excel_diff::DiffOp::CellEdited { sheet, .. } => Some(*sheet),
+            _ => None,
+        };
+
+        let Some(sheet_id) = sheet else {
+            continue;
+        };
+
+        let sheet_name = report.resolve(sheet_id).unwrap_or("<unknown>");
+        map.entry(sheet_name.to_string())
+            .or_insert_with(Vec::new)
+            .push(op);
+    }
+    map
+}
+
+fn build_sheet_alignment(
+    sheet: &str,
+    old_sheet: Option<&SheetSnapshot>,
+    new_sheet: Option<&SheetSnapshot>,
+    ops: &[&excel_diff::DiffOp],
+) -> SheetAlignment {
+    let old_nrows = old_sheet.map(|s| s.nrows).unwrap_or(0);
+    let new_nrows = new_sheet.map(|s| s.nrows).unwrap_or(0);
+    let old_ncols = old_sheet.map(|s| s.ncols).unwrap_or(0);
+    let new_ncols = new_sheet.map(|s| s.ncols).unwrap_or(0);
+
+    let mut added_rows = HashSet::new();
+    let mut removed_rows = HashSet::new();
+    let mut added_cols = HashSet::new();
+    let mut removed_cols = HashSet::new();
+    let mut move_src_rows = HashMap::new();
+    let mut move_dst_rows = HashMap::new();
+    let mut move_src_cols = HashMap::new();
+    let mut move_dst_cols = HashMap::new();
+    let mut moves = Vec::new();
+
+    for op in ops {
+        match op {
+            excel_diff::DiffOp::RowAdded { row_idx, .. } => {
+                added_rows.insert(*row_idx);
+            }
+            excel_diff::DiffOp::RowRemoved { row_idx, .. } => {
+                removed_rows.insert(*row_idx);
+            }
+            excel_diff::DiffOp::ColumnAdded { col_idx, .. } => {
+                added_cols.insert(*col_idx);
+            }
+            excel_diff::DiffOp::ColumnRemoved { col_idx, .. } => {
+                removed_cols.insert(*col_idx);
+            }
+            excel_diff::DiffOp::BlockMovedRows {
+                src_start_row,
+                row_count,
+                dst_start_row,
+                ..
+            } => {
+                if *row_count == 0 {
+                    continue;
+                }
+                let move_id = format!("r:{}+{}->{}", src_start_row, row_count, dst_start_row);
+                moves.push(MoveGroup {
+                    id: move_id.clone(),
+                    axis: "row".to_string(),
+                    src_start: *src_start_row,
+                    dst_start: *dst_start_row,
+                    count: *row_count,
+                });
+                let src_end = src_start_row.saturating_add(*row_count);
+                for row in *src_start_row..src_end {
+                    move_src_rows.insert(row, move_id.clone());
+                }
+                let dst_end = dst_start_row.saturating_add(*row_count);
+                for row in *dst_start_row..dst_end {
+                    move_dst_rows.insert(row, move_id.clone());
+                }
+            }
+            excel_diff::DiffOp::BlockMovedColumns {
+                src_start_col,
+                col_count,
+                dst_start_col,
+                ..
+            } => {
+                if *col_count == 0 {
+                    continue;
+                }
+                let move_id = format!("c:{}+{}->{}", src_start_col, col_count, dst_start_col);
+                moves.push(MoveGroup {
+                    id: move_id.clone(),
+                    axis: "col".to_string(),
+                    src_start: *src_start_col,
+                    dst_start: *dst_start_col,
+                    count: *col_count,
+                });
+                let src_end = src_start_col.saturating_add(*col_count);
+                for col in *src_start_col..src_end {
+                    move_src_cols.insert(col, move_id.clone());
+                }
+                let dst_end = dst_start_col.saturating_add(*col_count);
+                for col in *dst_start_col..dst_end {
+                    move_dst_cols.insert(col, move_id.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let row_summary = axis_summary(
+        old_nrows,
+        new_nrows,
+        &added_rows,
+        &removed_rows,
+        &move_src_rows,
+        &move_dst_rows,
+    );
+    let col_summary = axis_summary(
+        old_ncols,
+        new_ncols,
+        &added_cols,
+        &removed_cols,
+        &move_src_cols,
+        &move_dst_cols,
+    );
+
+    let mut skipped = !row_summary.consistent || !col_summary.consistent;
+    if exceeds_limit(row_summary.view_len, col_summary.view_len) {
+        skipped = true;
+    }
+
+    if skipped {
+        return SheetAlignment {
+            sheet: sheet.to_string(),
+            rows: Vec::new(),
+            cols: Vec::new(),
+            moves,
+            skipped: true,
+        };
+    }
+
+    let (mut rows, rows_consistent) = build_axis_entries(
+        old_nrows,
+        new_nrows,
+        &added_rows,
+        &removed_rows,
+        &move_src_rows,
+        &move_dst_rows,
+    );
+    let (mut cols, cols_consistent) = build_axis_entries(
+        old_ncols,
+        new_ncols,
+        &added_cols,
+        &removed_cols,
+        &move_src_cols,
+        &move_dst_cols,
+    );
+
+    let mut skipped = !(rows_consistent && cols_consistent);
+    if exceeds_limit(rows.len() as u32, cols.len() as u32) {
+        skipped = true;
+    }
+
+    if skipped {
+        rows.clear();
+        cols.clear();
+    }
+
+    SheetAlignment {
+        sheet: sheet.to_string(),
+        rows,
+        cols,
+        moves,
+        skipped,
+    }
+}
+
+struct AxisSummary {
+    view_len: u32,
+    consistent: bool,
+}
+
+fn axis_summary(
+    old_len: u32,
+    new_len: u32,
+    added: &HashSet<u32>,
+    removed: &HashSet<u32>,
+    move_src: &HashMap<u32, String>,
+    move_dst: &HashMap<u32, String>,
+) -> AxisSummary {
+    let added_total = union_count(added, move_dst.keys());
+    let removed_total = union_count(removed, move_src.keys());
+
+    let view_from_old = old_len.saturating_add(added_total);
+    let view_from_new = new_len.saturating_add(removed_total);
+    let view_len = view_from_old.max(view_from_new);
+
+    let consistent = old_len >= removed_total
+        && new_len >= added_total
+        && (old_len - removed_total) == (new_len - added_total);
+
+    AxisSummary { view_len, consistent }
+}
+
+fn union_count<'a>(
+    base: &HashSet<u32>,
+    extra: impl Iterator<Item = &'a u32>,
+) -> u32 {
+    let mut count = u32::try_from(base.len()).unwrap_or(u32::MAX);
+    for value in extra {
+        if !base.contains(value) {
+            count = count.saturating_add(1);
+        }
+    }
+    count
+}
+
+fn build_axis_entries(
+    old_len: u32,
+    new_len: u32,
+    added: &HashSet<u32>,
+    removed: &HashSet<u32>,
+    move_src: &HashMap<u32, String>,
+    move_dst: &HashMap<u32, String>,
+) -> (Vec<AxisEntry>, bool) {
+    let mut entries = Vec::new();
+    let mut i = 0;
+    let mut j = 0;
+
+    while i < old_len || j < new_len {
+        if j < new_len {
+            if let Some(move_id) = move_dst.get(&j) {
+                entries.push(AxisEntry {
+                    old: None,
+                    new: Some(j),
+                    kind: AxisKind::MoveDst,
+                    move_id: Some(move_id.clone()),
+                });
+                j += 1;
+                continue;
+            }
+            if added.contains(&j) {
+                entries.push(AxisEntry {
+                    old: None,
+                    new: Some(j),
+                    kind: AxisKind::Insert,
+                    move_id: None,
+                });
+                j += 1;
+                continue;
+            }
+        }
+
+        if i < old_len {
+            if let Some(move_id) = move_src.get(&i) {
+                entries.push(AxisEntry {
+                    old: Some(i),
+                    new: None,
+                    kind: AxisKind::MoveSrc,
+                    move_id: Some(move_id.clone()),
+                });
+                i += 1;
+                continue;
+            }
+            if removed.contains(&i) {
+                entries.push(AxisEntry {
+                    old: Some(i),
+                    new: None,
+                    kind: AxisKind::Delete,
+                    move_id: None,
+                });
+                i += 1;
+                continue;
+            }
+        }
+
+        if i < old_len && j < new_len {
+            entries.push(AxisEntry {
+                old: Some(i),
+                new: Some(j),
+                kind: AxisKind::Match,
+                move_id: None,
+            });
+            i += 1;
+            j += 1;
+            continue;
+        }
+
+        if i < old_len {
+            entries.push(AxisEntry {
+                old: Some(i),
+                new: None,
+                kind: AxisKind::Delete,
+                move_id: None,
+            });
+            i += 1;
+        } else if j < new_len {
+            entries.push(AxisEntry {
+                old: None,
+                new: Some(j),
+                kind: AxisKind::Insert,
+                move_id: None,
+            });
+            j += 1;
+        }
+    }
+
+    let summary = axis_summary(old_len, new_len, added, removed, move_src, move_dst);
+    (entries, summary.consistent)
+}
+
+fn exceeds_limit(rows: u32, cols: u32) -> bool {
+    if rows == 0 || cols == 0 {
+        return false;
+    }
+    if rows > MAX_VIEW_ROWS || cols > MAX_VIEW_COLS {
+        return true;
+    }
+    let cells = (rows as u64).saturating_mul(cols as u64);
+    cells > MAX_VIEW_CELLS
+}
+
+```
+
+---
+
 ### File: `wasm\src\lib.rs`
 
 ```rust
@@ -50898,6 +51331,8 @@ use std::collections::HashSet;
 use std::io::Cursor;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
+
+mod alignment;
 
 #[wasm_bindgen(start)]
 pub fn init_panic_hook() {
@@ -50941,6 +51376,7 @@ struct SheetPairSnapshot {
 struct DiffWithSheets {
     report: excel_diff::DiffReport,
     sheets: SheetPairSnapshot,
+    alignments: Vec<alignment::SheetAlignment>,
 }
 
 fn host_kind_from_name(name: &str) -> Option<HostKind> {
@@ -51118,7 +51554,12 @@ pub fn diff_files_with_sheets_json(
                 new: snapshot_workbook(&pkg_new.workbook, &sheet_ids, &session.strings),
             });
 
-            let payload = DiffWithSheets { report, sheets };
+            let alignments = alignment::build_alignments(&report, &sheets);
+            let payload = DiffWithSheets {
+                report,
+                sheets,
+                alignments,
+            };
             serde_json::to_string(&payload)
                 .map_err(|e| JsValue::from_str(&format!("Failed to serialize report: {}", e)))
         }
@@ -51136,6 +51577,7 @@ pub fn diff_files_with_sheets_json(
                     old: empty,
                     new: WorkbookSnapshot { sheets: Vec::new() },
                 },
+                alignments: Vec::new(),
             };
             serde_json::to_string(&payload)
                 .map_err(|e| JsValue::from_str(&format!("Failed to serialize report: {}", e)))
@@ -51950,12 +52392,41 @@ pub fn diff_summary(old_bytes: &[u8], new_bytes: &[u8]) -> Result<DiffSummary, J
         color: var(--accent-red);
       }
 
+      .grid-col-header.col-move-src,
+      .grid-row-header.row-move-src,
+      .grid-col-header.col-move-dst,
+      .grid-row-header.row-move-dst {
+        background: var(--diff-move-bg);
+        color: var(--accent-purple);
+      }
+
+      .grid-col-header.col-move-src::after,
+      .grid-row-header.row-move-src::after,
+      .grid-col-header.col-move-dst::after,
+      .grid-row-header.row-move-dst::after {
+        content: " M";
+        font-size: 10px;
+        color: var(--accent-purple);
+      }
+
       .cell-added {
         background: var(--diff-add-bg);
       }
 
       .cell-removed {
         background: var(--diff-remove-bg);
+      }
+
+      .cell-move-src {
+        background: var(--diff-move-bg);
+        color: var(--accent-purple);
+        box-shadow: inset 0 0 0 1px var(--diff-move-border);
+      }
+
+      .cell-move-dst {
+        background: rgba(163, 113, 247, 0.25);
+        color: var(--accent-purple);
+        box-shadow: inset 0 0 0 1px var(--diff-move-border);
       }
 
       .cell-edited {
@@ -52048,10 +52519,24 @@ pub fn diff_summary(old_bytes: &[u8], new_bytes: &[u8]) -> Result<DiffSummary, J
         border: 1px solid var(--diff-modify-border);
       }
 
+      .legend-moved {
+        background: var(--diff-move-bg);
+        border: 1px solid var(--diff-move-border);
+      }
+
       .legend-dot {
         font-size: 16px;
         color: var(--text-muted);
         line-height: 1;
+      }
+
+      .grid-skip-warning {
+        padding: 12px 16px;
+        border-radius: 10px;
+        background: rgba(210, 153, 34, 0.12);
+        border: 1px solid rgba(210, 153, 34, 0.4);
+        color: var(--text-secondary);
+        font-size: 13px;
       }
 
       .details-section {
@@ -52243,8 +52728,9 @@ async function runDiff() {
     const payload = JSON.parse(json);
     const report = payload.report || payload;
     const sheets = payload.sheets || null;
+    const alignments = payload.alignments || null;
 
-    byId("results").innerHTML = renderReportHtml(report, sheets);
+    byId("results").innerHTML = renderReportHtml(report, sheets, alignments);
     byId("results").classList.add("visible");
     byId("raw").textContent = JSON.stringify(report, null, 2);
 
@@ -52391,14 +52877,108 @@ function buildCellMap(sheet) {
 
 function buildSheetLookup(sheets) {
   const map = new Map();
-  if (!Array.isArray(sheets)) return map;
-  for (const sheet of sheets) {
+  if (!sheets) return map;
+  const list = Array.isArray(sheets) ? sheets : sheets.sheets;
+  if (!Array.isArray(list)) return map;
+  for (const sheet of list) {
     map.set(sheet.name, sheet);
   }
   return map;
 }
 
-function buildSheetGridData(report, ops, oldSheet, newSheet) {
+function buildAlignmentLookup(alignments) {
+  const map = new Map();
+  if (!Array.isArray(alignments)) return map;
+  for (const alignment of alignments) {
+    if (alignment && typeof alignment.sheet === "string") {
+      map.set(alignment.sheet, alignment);
+    }
+  }
+  return map;
+}
+
+function buildIndexMap(entries, key) {
+  const map = new Map();
+  if (!Array.isArray(entries)) return map;
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    const value = entry ? entry[key] : null;
+    if (value !== null && value !== undefined) {
+      map.set(value, i);
+    }
+  }
+  return map;
+}
+
+function formatAxisTitle(entry, axis) {
+  if (!entry) return "";
+  const hasOld = entry.old !== null && entry.old !== undefined;
+  const hasNew = entry.new !== null && entry.new !== undefined;
+  let oldLabel = "";
+  let newLabel = "";
+  if (axis === "row") {
+    if (hasOld) oldLabel = `Old row ${entry.old + 1}`;
+    if (hasNew) newLabel = `New row ${entry.new + 1}`;
+  } else {
+    if (hasOld) oldLabel = `Old col ${colToLetter(entry.old)}`;
+    if (hasNew) newLabel = `New col ${colToLetter(entry.new)}`;
+  }
+  if (oldLabel && newLabel) return `${oldLabel} | ${newLabel}`;
+  return oldLabel || newLabel || "";
+}
+
+function buildSheetGridData(report, ops, oldSheet, newSheet, alignment) {
+  if (alignment) {
+    return buildSheetGridDataAligned(report, ops, oldSheet, newSheet, alignment);
+  }
+  return buildSheetGridDataLegacy(report, ops, oldSheet, newSheet);
+}
+
+function buildSheetGridDataAligned(report, ops, oldSheet, newSheet, alignment) {
+  const skipped = Boolean(alignment && alignment.skipped);
+  if (skipped) {
+    return { hasData: false, skipped: true, alignment };
+  }
+
+  const rows = Array.isArray(alignment?.rows) ? alignment.rows : [];
+  const cols = Array.isArray(alignment?.cols) ? alignment.cols : [];
+
+  const oldCells = buildCellMap(oldSheet);
+  const newCells = buildCellMap(newSheet);
+
+  const newRowToView = buildIndexMap(rows, "new");
+  const newColToView = buildIndexMap(cols, "new");
+  const cellEdits = new Map();
+
+  for (const op of ops) {
+    if (op.kind !== "CellEdited") continue;
+    const addr = parseCellAddress(op.addr);
+    if (!addr) continue;
+    const viewRow = newRowToView.get(addr.row);
+    const viewCol = newColToView.get(addr.col);
+    if (viewRow === undefined || viewCol === undefined) continue;
+    cellEdits.set(`${viewRow},${viewCol}`, {
+      fromValue: op.from ? formatValue(report, op.from.value) : "",
+      toValue: op.to ? formatValue(report, op.to.value) : "",
+      fromFormula: resolveFormula(report, op.from?.formula),
+      toFormula: resolveFormula(report, op.to?.formula)
+    });
+  }
+
+  const hasData = rows.length > 0 && cols.length > 0;
+  return {
+    hasData,
+    skipped: false,
+    alignment,
+    rows,
+    cols,
+    cellEdits,
+    oldCells,
+    newCells
+  };
+}
+
+function buildSheetGridDataLegacy(report, ops, oldSheet, newSheet) {
   const cellEdits = new Map();
   const addedRows = new Set();
   const removedRows = new Set();
@@ -52518,6 +53098,171 @@ function buildSheetGridData(report, ops, oldSheet, newSheet) {
 }
 
 function renderSheetGrid(report, gridData) {
+  if (gridData.skipped) {
+    return `
+      <div class="grid-skip-warning">
+        Grid preview skipped because the aligned view is too large or inconsistent.
+      </div>
+    `;
+  }
+  if (!gridData.hasData) return "";
+  if (gridData.alignment) {
+    return renderAlignedGrid(report, gridData);
+  }
+  return renderSheetGridLegacy(report, gridData);
+}
+
+function renderAlignedGrid(report, gridData) {
+  const { rows, cols, cellEdits, oldCells, newCells } = gridData;
+  if (!rows || !cols || rows.length === 0 || cols.length === 0) return "";
+
+  const numCols = cols.length;
+
+  function cellText(cell) {
+    if (!cell) return "";
+    const value = cell.value ?? "";
+    const formula = cell.formula ?? "";
+    return value || formula || "";
+  }
+
+  function cellTitle(label, value, formula) {
+    const parts = [];
+    if (value) parts.push(value);
+    if (formula && formula != value) parts.push(formula);
+    if (!parts.length) return "";
+    return label ? `${label}: ${parts.join(" | ")}` : parts.join(" | ");
+  }
+
+  let html = `<div class="sheet-grid-container">
+    <div class="sheet-grid" style="grid-template-columns: 50px repeat(${numCols}, minmax(100px, 1fr));">`;
+
+  html += `<div class="grid-cell grid-corner"></div>`;
+  for (let c = 0; c < cols.length; c++) {
+    const colEntry = cols[c];
+    const kind = colEntry?.kind;
+    let cls = "grid-cell grid-col-header";
+    if (kind === "insert") cls += " col-added";
+    if (kind === "delete") cls += " col-removed";
+    if (kind === "move_src") cls += " col-move-src";
+    if (kind === "move_dst") cls += " col-move-dst";
+    const title = formatAxisTitle(colEntry, "col");
+    const moveAttr = colEntry?.move_id ? ` data-move-id="${esc(colEntry.move_id)}"` : "";
+    html += `<div class="${cls}"${moveAttr} title="${esc(title)}">${colToLetter(c)}</div>`;
+  }
+
+  for (let r = 0; r < rows.length; r++) {
+    const rowEntry = rows[r];
+    const rowKind = rowEntry?.kind;
+    let rowHeaderCls = "grid-cell grid-row-header";
+    if (rowKind === "insert") rowHeaderCls += " row-added";
+    if (rowKind === "delete") rowHeaderCls += " row-removed";
+    if (rowKind === "move_src") rowHeaderCls += " row-move-src";
+    if (rowKind === "move_dst") rowHeaderCls += " row-move-dst";
+    const rowTitle = formatAxisTitle(rowEntry, "row");
+    const rowMoveAttr = rowEntry?.move_id ? ` data-move-id="${esc(rowEntry.move_id)}"` : "";
+    html += `<div class="${rowHeaderCls}"${rowMoveAttr} title="${esc(rowTitle)}">${r + 1}</div>`;
+
+    for (let c = 0; c < cols.length; c++) {
+      const colEntry = cols[c];
+      const rowKind = rowEntry?.kind;
+      const colKind = colEntry?.kind;
+      const key = `${r},${c}`;
+      const edit = cellEdits.get(key);
+      const oldRow = rowEntry?.old;
+      const newRow = rowEntry?.new;
+      const oldCol = colEntry?.old;
+      const newCol = colEntry?.new;
+
+      const oldCell =
+        oldRow !== null && oldRow !== undefined && oldCol !== null && oldCol !== undefined
+          ? oldCells.get(`${oldRow},${oldCol}`)
+          : null;
+      const newCell =
+        newRow !== null && newRow !== undefined && newCol !== null && newCol !== undefined
+          ? newCells.get(`${newRow},${newCol}`)
+          : null;
+
+      const isMoveSrc = rowKind === "move_src" || colKind === "move_src";
+      const isMoveDst = rowKind === "move_dst" || colKind === "move_dst";
+      const isDelete = (rowKind === "delete" || colKind === "delete") && !isMoveSrc;
+      const isInsert = (rowKind === "insert" || colKind === "insert") && !isMoveDst;
+
+      let cls = "grid-cell";
+      let content = "";
+      let title = "";
+
+      if (
+        edit &&
+        oldRow !== null && oldRow !== undefined &&
+        newRow !== null && newRow !== undefined &&
+        oldCol !== null && oldCol !== undefined &&
+        newCol !== null && newCol !== undefined
+      ) {
+        cls += " cell-edited";
+        const fromText = edit.fromValue || edit.fromFormula || "(empty)";
+        const toText = edit.toValue || edit.toFormula || "(empty)";
+        content = `<div class="cell-change"><span class="cell-old">${esc(truncateText(fromText))}</span><span class="cell-new">${esc(truncateText(toText))}</span></div>`;
+        title = `Changed: ${fromText} -> ${toText}`;
+      } else if (isMoveSrc && (cellText(oldCell) || oldCell?.formula)) {
+        cls += " cell-move-src";
+        const oldValue = oldCell?.value ?? "";
+        const oldFormula = oldCell?.formula ?? "";
+        const display = cellText(oldCell);
+        content = esc(truncateText(display));
+        title = cellTitle("Moved (from)", oldValue, oldFormula);
+      } else if (isMoveDst && (cellText(newCell) || newCell?.formula)) {
+        cls += " cell-move-dst";
+        const newValue = newCell?.value ?? "";
+        const newFormula = newCell?.formula ?? "";
+        const display = cellText(newCell);
+        content = esc(truncateText(display));
+        title = cellTitle("Moved (to)", newValue, newFormula);
+      } else if (isDelete && (cellText(oldCell) || oldCell?.formula)) {
+        cls += " cell-removed";
+        const oldValue = oldCell?.value ?? "";
+        const oldFormula = oldCell?.formula ?? "";
+        const display = cellText(oldCell);
+        content = esc(truncateText(display));
+        title = cellTitle("Removed", oldValue, oldFormula);
+      } else if (isInsert && (cellText(newCell) || newCell?.formula)) {
+        cls += " cell-added";
+        const newValue = newCell?.value ?? "";
+        const newFormula = newCell?.formula ?? "";
+        const display = cellText(newCell);
+        content = esc(truncateText(display));
+        title = cellTitle("Added", newValue, newFormula);
+      } else if (cellText(newCell) || cellText(oldCell)) {
+        cls += " cell-unchanged";
+        const newValue = newCell?.value ?? "";
+        const newFormula = newCell?.formula ?? "";
+        const oldValue = oldCell?.value ?? "";
+        const oldFormula = oldCell?.formula ?? "";
+        const display = cellText(newCell) || cellText(oldCell);
+        const titleValue = newValue || oldValue;
+        const titleFormula = newFormula || oldFormula;
+        content = esc(truncateText(display));
+        title = cellTitle("Value", titleValue, titleFormula);
+      } else {
+        cls += " cell-empty";
+      }
+
+      html += `<div class="${cls}" title="${esc(title)}">${content}</div>`;
+    }
+  }
+
+  html += `</div></div>`;
+
+  html += `<div class="grid-legend">
+    <span class="legend-item"><span class="legend-box legend-edited"></span> Modified</span>
+    <span class="legend-item"><span class="legend-box legend-added"></span> Added row/col</span>
+    <span class="legend-item"><span class="legend-box legend-removed"></span> Removed row/col</span>
+    <span class="legend-item"><span class="legend-box legend-moved"></span> Moved row/col</span>
+  </div>`;
+
+  return html;
+}
+
+function renderSheetGridLegacy(report, gridData) {
   if (!gridData.hasData) return "";
 
   const { cellEdits, addedRows, removedRows, addedCols, removedCols, startRow, endRow, startCol, endCol, oldCells, newCells } = gridData;
@@ -52912,7 +53657,7 @@ function renderSheetOp(report, op) {
   `;
 }
 
-function renderSheetSection(report, sheetName, ops, sheetLookup) {
+function renderSheetSection(report, sheetName, ops, sheetLookup, alignmentLookup) {
   const adds = ops.filter(o => o.kind.includes("Added")).length;
   const removes = ops.filter(o => o.kind.includes("Removed")).length;
   const mods = ops.filter(o => o.kind.includes("Edited") || o.kind.includes("Changed") || o.kind.includes("Replaced")).length;
@@ -52928,7 +53673,8 @@ function renderSheetSection(report, sheetName, ops, sheetLookup) {
   
   const oldSheet = sheetLookup ? sheetLookup.old.get(sheetName) : null;
   const newSheet = sheetLookup ? sheetLookup.new.get(sheetName) : null;
-  const gridData = buildSheetGridData(report, ops, oldSheet, newSheet);
+  const alignment = alignmentLookup ? alignmentLookup.get(sheetName) : null;
+  const gridData = buildSheetGridData(report, ops, oldSheet, newSheet, alignment);
   const gridHtml = renderSheetGrid(report, gridData);
   
   let contentHtml = "";
@@ -53118,7 +53864,7 @@ function renderWarnings(warnings) {
   `;
 }
 
-export function renderReportHtml(report, sheetData = null) {
+export function renderReportHtml(report, sheetData = null, alignments = null) {
   const { sheetOps, vbaOps, namedRangeOps, chartOps, queryOps, measureOps, counts } = categorizeOps(report);
   const warnings = Array.isArray(report.warnings) ? report.warnings : [];
   const sheetLookup = sheetData
@@ -53127,6 +53873,7 @@ export function renderReportHtml(report, sheetData = null) {
         new: buildSheetLookup(sheetData.new)
       }
     : null;
+  const alignmentLookup = buildAlignmentLookup(alignments);
   
   let html = "";
   
@@ -53140,7 +53887,7 @@ export function renderReportHtml(report, sheetData = null) {
   
   const sortedSheets = Array.from(sheetOps.keys()).sort();
   for (const sheetName of sortedSheets) {
-    html += renderSheetSection(report, sheetName, sheetOps.get(sheetName), sheetLookup);
+    html += renderSheetSection(report, sheetName, sheetOps.get(sheetName), sheetLookup, alignmentLookup);
   }
   
   html += renderOtherChangesSection(report, "VBA Modules", "📜", vbaOps);
