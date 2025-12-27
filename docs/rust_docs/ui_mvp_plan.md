@@ -615,6 +615,9 @@ It prevents your web UI and desktop UI from diverging: once Phase 2 exists, Phas
 
 ---
 
+Below is the current Phase 3 block in `ui_mvp_plan.md` (this is the exact section to replace). 
+
+```md
 ## Phase 3 — Replace the current HTML grid with a real interactive grid viewer (virtualized)
 
 ### Key term: “virtualization”
@@ -658,6 +661,323 @@ A fast grid viewer that feels spreadsheet-native.
 
 * Smooth scroll at large sizes (no jank)
 * Selecting a cell always shows correct old/new values after row inserts/moves (proof alignment works)
+
+---
+
+## Phase 3 — Replace the current HTML grid with a real interactive grid viewer (virtualized)
+
+### Grounding notes (what this phase is replacing in the current codebase)
+
+Today the “Visual Diff” for a sheet is rendered as a literal DOM grid:
+
+* `web/render.js` builds a `<div class="sheet-grid"> ... </div>` with one `.grid-cell` element per visible cell via `renderSheetGrid()` → `renderAlignedGrid()` (or legacy fallback). The grid relies on CSS `position: sticky` headers and the browser DOM to stay responsive. This is the main source of jank and “skipped” previews as sheets get larger.
+* Sheet expand/collapse is currently done via an inline `onclick` on `.sheet-header`, and `web/main.js` simply `innerHTML = renderReportHtml(...)` after parsing the WASM payload.
+
+Phase 3 moves the grid rendering responsibility into a purpose-built viewer that:
+1) consumes the Phase 2 `SheetVM` (`axis + cellAt() + changes/regions`), and
+2) renders only the visible rows/cols on each frame (virtualization), instead of materializing a DOM node per cell.
+
+This phase is intentionally designed to fit the existing “no build step / plain ES modules / string-rendered HTML” structure.
+
+### Key terms
+
+**View space (aligned coordinates)**  
+The grid viewer never “guesses” correspondence. Every rendered cell is addressed in *view* coordinates (`viewRow`, `viewCol`), and the VM maps those to `old(row,col)` and/or `new(row,col)` via the aligned axis.
+
+**Virtualization**  
+Render only what is visible in the viewport, and redraw as the scroll offsets change. The cost becomes proportional to viewport size, not sheet size.
+
+**Two display modes**
+* **Side-by-side:** the same view-space window is drawn twice (Old pane and New pane), scroll-locked.
+* **Unified:** a single pane shows the canonical PR-diff representation.
+
+### Goal
+
+A fast, spreadsheet-native grid viewer that:
+
+* stays truthful to alignment (the selected cell always resolves to the correct old/new mapping),
+* supports large aligned views without DOM blowups,
+* becomes the foundation for Phase 4’s “review workflow” (jump-to, filtering, next/prev change).
+
+### Non-goals (explicit, so we don’t overbuild)
+
+* Not implementing “real Excel rendering” (merged cells, conditional formats, fonts per cell, column widths from the workbook, etc.).
+* Not implementing formula evaluation or recalculation.
+* Not implementing edit-in-place.
+* Not implementing perfect parity with Excel scroll/selection semantics (we only need reviewer-grade navigation).
+
+### Design decisions (the “complicated calls” made explicitly)
+
+#### 1) Canvas 2D (not DOM, not WebGL)
+
+**Decision:** Use Canvas 2D rendering for the cell area and headers.
+
+**Why this is the right MVP tradeoff in this codebase:**
+* The current renderer is DOM-heavy by construction; Canvas removes the “N DOM nodes per cell” scaling problem.
+* Canvas works in the current web demo (plain `index.html` + module imports), and it is the same primitive a desktop WebView will use.
+* WebGL is unnecessary complexity for a MVP grid (text, borders, background fills, simple highlight overlays).
+
+#### 2) Fixed cell metrics (row height / column width)
+
+**Decision:** Use fixed metrics that match the existing CSS grid’s feel:
+* `rowHeightPx = 36` (matches `.grid-cell { min-height: 36px; }`)
+* `colWidthPx = 100` (matches the existing `minmax(100px, 1fr)` intent)
+* `rowHeaderWidthPx = 50` (matches the current `grid-template-columns: 50px ...`)
+
+**Why:** Variable sizing looks nicer but makes virtualization, hit-testing, and scroll math much harder. Fixed metrics keep the viewer deterministic and fast.
+
+A later phase can introduce:
+* “auto-fit column” (per visible region only),
+* optional “compact density mode” (smaller rowHeight/colWidth).
+
+#### 3) One scroll model for both panes (side-by-side)
+
+**Decision:** Side-by-side uses one shared scroll model (`scrollTop`, `scrollLeft`), and draws Old and New panes from the same scroll offsets.
+
+**Why:** This guarantees that “Old row X / New row Y” alignment stays visually locked. It also avoids “two scrollbars drifting apart”.
+
+#### 4) Truth-first classification and styling comes from the VM
+
+**Decision:** The grid viewer does not re-derive diff semantics from ops. It asks the VM for:
+* `AxisEntryVM` for headers (insert/delete/move markers)
+* `CellVM` for each visible view cell (`diffKind`, `moveId`, display text, tooltip text, old/new cell payload)
+
+**Why:** The current codebase already has one place where classification is complicated (`renderAlignedGrid` decides moved-vs-deleted-vs-inserted-vs-edited). That logic must live in a single “source of truth” (Phase 2 VM), so Phase 3 can focus on rendering + interaction.
+
+#### 5) Move highlighting behavior
+
+**Decision:** Moves are treated as “paired endpoints” linked by `moveId`, with hover and selection behavior:
+
+* Hover a moved header or moved cell:
+  * highlight *that endpoint* (src or dst) with a stronger tint
+  * also “ghost highlight” the corresponding paired endpoint so the relationship is obvious
+* Click a moved header:
+  * selects that moved region and exposes “Jump to other end” in the inspector (Phase 3 can implement the jump, even if Phase 4 adds the richer workflow)
+
+**Why:** Without this, moved blocks are visually confusing; the current HTML grid already carries `move_id` data in headers/cells, but it isn’t leveraged yet.
+
+### Viewer UX: what the user can do in Phase 3
+
+#### Modes
+1. **Side-by-side (default)**
+   * Left pane: Old values/formulas
+   * Right pane: New values/formulas
+   * Shared row header gutter and column headers
+   * Same structural markers (+/-/M) as the current grid header styling
+
+2. **Unified (toggle)**
+   * Inserted rows/cols show new content only
+   * Deleted rows/cols show old content only (old text drawn with strike-through)
+   * Edited cells show a two-line rendering:
+     * old (smaller, strike-through, red)
+     * new (slightly larger, green)
+
+#### Interaction
+* **Hover tooltip:** a positioned DOM tooltip (not `title=`) showing full value + formula for old/new, with the exact old/new addresses and view address.
+* **Click selection:** click selects a cell; selection is visually outlined; the inspector updates.
+* **Keyboard (when viewer has focus):**
+  * Arrow keys move selection by 1 cell in view space
+  * `Shift+Arrow` expands selection rectangle (optional, if easy)
+  * `Enter` toggles “pin inspector” (keeps the inspector visible even when mouse moves)
+  * `n` / `p` jumps to next/previous *change anchor* (see below)
+
+**Change anchor definition (deterministic):**
+* Use Phase 2 `sheetVm.changes.regions[]` sorted by `(minViewRow, minViewCol)`.
+* The anchor point for a region is `(minViewRow, minViewCol)`.
+* “Next/prev” moves between anchors and scroll-centers the viewport on the anchor.
+
+### Implementation plan (concrete, tied to current file layout)
+
+#### Step 1: Replace the HTML grid markup with a viewer mount point
+
+In the renderer (Phase 2 `web/render.js`), the “Visual Diff” section should output:
+
+* a stable mount `<div>` that the browser JS can find and hydrate
+* enough `data-*` to connect it to the correct `SheetVM` and initial state
+
+Example shape (exact attribute names are part of the plan so it’s implementable):
+
+* `div.grid-viewer-mount`
+  * `data-sheet="SheetName"`
+  * `data-initial-mode="side_by_side"`
+  * `data-initial-anchor="0"` (optional; index into region anchors)
+
+The renderer remains a pure string builder (so `web/test_render.js` remains viable). No DOM work happens in `render.js`.
+
+#### Step 2: Add a dedicated grid viewer module (browser-only hydration)
+
+**New file:** `web/grid_viewer.js`
+
+Exports:
+* `mountSheetGridViewer({ mountEl, sheetVm, opts }) -> { destroy(), focus(), jumpTo(viewRow, viewCol), jumpToRegion(idx) }`
+
+Responsibilities:
+* Build the internal DOM structure inside `mountEl`:
+  * toolbar (mode toggle, optional “show formulas” toggle placeholder)
+  * viewer layout (headers + scroll container + canvas)
+  * inspector panel (right side)
+  * tooltip overlay
+* Own all event listeners and redraw scheduling.
+
+Important constraint for this repo:
+* `grid_viewer.js` is imported by `web/main.js` only (so Node-based renderer tests are not coupled to Canvas/DOM APIs).
+
+#### Step 3: Add a pure painter module for Canvas rendering
+
+**New file:** `web/grid_painter.js`
+
+Exports:
+* `paintGrid(ctx, paintModel)` where `paintModel` contains:
+  * `sheetVm`
+  * `mode` ("side_by_side" | "unified")
+  * viewport info (`scrollTop`, `scrollLeft`, `viewportWidth`, `viewportHeight`)
+  * metrics (rowHeight, colWidth, header sizes)
+  * selection/hover state (`selectedCell`, `hoveredCell`, `hoverMoveId`)
+  * theme colors (see below)
+
+Painter responsibilities:
+* Compute visible view-row/view-col ranges:
+  * `firstRow = floor(scrollTop / rowHeight)`
+  * `rowCount = ceil(viewportHeight / rowHeight) + 1`
+  * same for cols
+* For each visible cell:
+  * call `sheetVm.cellAt(viewRow, viewCol)` and render based on `diffKind`
+  * draw background fill, border, and cell text
+  * in unified mode, render “edited” as two-line old/new text
+
+Painter must be deterministic:
+* same inputs -> same pixels (no random jitter, no reliance on map iteration order)
+
+#### Step 4: Theme integration (reuse the existing CSS variables)
+
+**New file:** `web/grid_theme.js`
+
+Exports:
+* `readGridTheme(rootEl) -> GridTheme`
+
+Implementation:
+* read CSS variables from `getComputedStyle(document.documentElement)`:
+  * `--bg-primary`, `--bg-secondary`, `--bg-tertiary`
+  * `--border-primary`, `--border-secondary`
+  * `--diff-add-bg`, `--diff-remove-bg`, `--diff-modify-bg`, `--diff-move-bg`, `--diff-move-border`
+  * `--accent-green`, `--accent-red`, `--accent-yellow`, `--accent-purple`
+
+Add (small) CSS variable for move-destination tint so we don’t hardcode RGBA in JS:
+* `--diff-move-dst-bg` (matches current `.cell-move-dst` background intent)
+
+#### Step 5: Hook hydration into the existing `web/main.js` lifecycle
+
+Modify `web/main.js` (after Phase 2 VM introduction) so `runDiff()` does:
+
+1. `payload = JSON.parse(diff_files_with_sheets_json(...))`
+2. `workbookVm = buildWorkbookViewModel(payload, opts)`
+3. `resultsEl.innerHTML = renderWorkbookVm(workbookVm)` (Phase 2 renderer)
+4. `hydrateGridViewers(resultsEl, workbookVm)` (Phase 3)
+
+Hydration function responsibilities:
+* locate all `.grid-viewer-mount` elements
+* mount viewers lazily:
+  * eagerly mount only for the initially expanded sheet
+  * mount on expand for subsequent sheets (event delegation rather than inline onclick)
+
+This phase should also remove the inline `onclick` in `renderSheetSection` and attach a real click listener in `main.js` so:
+* expand/collapse logic lives in one place
+* viewer mounting can be reliably triggered when a sheet becomes expanded
+
+#### Step 6: Minimal CSS additions in `web/index.html`
+
+Because styles are currently in the `<style>` block, Phase 3 adds:
+
+* layout container for viewer + inspector:
+  * `.grid-viewer { display: grid; grid-template-columns: 1fr 320px; gap: 16px; }` (values tuned in implementation)
+* canvas wrapper styling:
+  * `.grid-canvas-wrap { position: relative; border: 1px solid var(--border-primary); border-radius: 12px; overflow: hidden; background: var(--bg-primary); }`
+  * `.grid-scroll { overflow: auto; height: 520px; }` (MVP fixed height; later can become responsive)
+* tooltip styling:
+  * `.grid-tooltip { position: absolute; pointer-events: none; ... }`
+* inspector styling:
+  * `.grid-inspector { background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 12px; padding: 12px; }`
+
+### What code is added / changed (explicit inventory)
+
+#### New files
+
+1. `web/grid_viewer.js`
+   * `mountSheetGridViewer(...)`
+   * internal state model:
+     * `mode`
+     * `scrollTop/scrollLeft`
+     * `selected { viewRow, viewCol }`
+     * `hover { viewRow, viewCol, moveId? }`
+     * `anchorIndex` for n/p navigation
+   * event wiring:
+     * scroll -> schedule redraw via `requestAnimationFrame`
+     * pointermove -> hover hit-test + tooltip
+     * click -> selection + inspector update + focus
+     * keydown -> selection move + n/p anchor jumps
+   * lifecycle:
+     * `destroy()` removes listeners and observers
+
+2. `web/grid_painter.js`
+   * `paintGrid(ctx, model)`
+   * helpers for:
+     * cell background selection (from `diffKind` + move role)
+     * text truncation to cell width (canvas `measureText` with small cache)
+     * drawing strike-through for old text in unified mode
+     * drawing selection outline and hover outline
+
+3. `web/grid_theme.js`
+   * `readGridTheme(...)`
+   * `resolveCssVar(name, fallback)` helper
+
+(Optional but recommended for cleanliness)
+4. `web/grid_metrics.js`
+   * constants + “max scroll size clamp” logic (so we have one place to adjust metrics)
+
+#### Changed files
+
+1. `web/render.js`
+   * remove DOM-heavy HTML grid generation in the Visual Diff section
+   * instead emit `.grid-viewer-mount` placeholders
+   * remove inline onclick on `.sheet-header` (so expand/collapse can be owned by `main.js`)
+   * ensure Node render test remains stable (no Canvas imports; renderer stays string-only)
+
+2. `web/main.js`
+   * build VM (Phase 2) and render VM (Phase 2)
+   * hydrate viewers after `innerHTML` insertion (Phase 3)
+   * implement expand/collapse listeners and lazy viewer mounting
+   * ensure first sheet auto-expands and hydrates (keeps current behavior)
+
+3. `web/index.html` (style block only)
+   * add viewer/inspector/tooltip styles
+   * add any new CSS vars used by the canvas theme (e.g., `--diff-move-dst-bg`)
+
+(If we want to unlock “huge sheet support” beyond the Phase 1 HTML guardrails)
+4. `wasm/src/alignment.rs` (optional but strongly recommended once the HTML grid is removed)
+   * revisit the `MAX_VIEW_CELLS`-based skip logic:
+     * that limit existed to prevent rendering a massive DOM grid
+     * with virtualization, the viewer cost scales with viewport size, so `rows * cols` is no longer the right skip metric
+   * keep row/col axis length sanity caps (they bound JSON size), but relax/remove the “cells” cap
+
+### Acceptance checks (manual + deterministic)
+
+#### Performance / feel
+* Smooth scroll (60fps-ish) in a sheet that would previously skip or lag (large view axis; sparse content).
+* No “DOM explosion” as you scroll; memory remains stable (no growing node count).
+
+#### Correctness / truthfulness
+* Pick a workbook with:
+  * a row insertion above an edited cell
+  * a moved row block with at least one edited cell inside it
+* Clicking the visually edited cell shows:
+  * correct old address/value/formula
+  * correct new address/value/formula
+  * correct diffKind classification (edited beats moved/insert/delete)
+
+#### Navigation
+* `n` cycles through region anchors in stable order; `p` goes backward.
+* Jump centers the viewport on the anchor, and selection updates accordingly.
+
 
 ---
 

@@ -1,5 +1,7 @@
 import init, { diff_files_with_sheets_json, get_version } from "./wasm/excel_diff_wasm.js";
-import { renderReportHtml } from "./render.js";
+import { renderWorkbookVm } from "./render.js";
+import { buildWorkbookViewModel } from "./view_model.js";
+import { mountSheetGridViewer } from "./grid_viewer.js";
 
 function byId(id) {
   const el = document.getElementById(id);
@@ -64,6 +66,7 @@ async function runDiff() {
     return;
   }
 
+  cleanupViewers();
   setStatus("Comparing files...", "loading");
   byId("results").innerHTML = "";
   byId("results").classList.remove("visible");
@@ -77,9 +80,11 @@ async function runDiff() {
     const json = diff_files_with_sheets_json(oldBytes, newBytes, oldFile.name, newFile.name);
     const payload = JSON.parse(json);
     const report = payload.report || payload;
+    const workbookVm = buildWorkbookViewModel(payload);
 
-    byId("results").innerHTML = renderReportHtml(payload);
-    byId("results").classList.add("visible");
+    const resultsEl = byId("results");
+    resultsEl.innerHTML = renderWorkbookVm(workbookVm);
+    resultsEl.classList.add("visible");
     byId("raw").textContent = JSON.stringify(report, null, 2);
 
     const opCount = report.ops ? report.ops.length : 0;
@@ -89,10 +94,11 @@ async function runDiff() {
       setStatus(`Found ${opCount} difference${opCount !== 1 ? "s" : ""}`, "");
     }
     
-    const firstSheet = document.querySelector(".sheet-section");
+    const firstSheet = resultsEl.querySelector(".sheet-section");
     if (firstSheet) {
       firstSheet.classList.add("expanded");
     }
+    cleanupHandler = hydrateGridViewers(resultsEl, workbookVm);
   } catch (e) {
     setStatus("Error: " + (e.message || String(e)), "error");
     byId("results").innerHTML = `
@@ -106,6 +112,64 @@ async function runDiff() {
     `;
     byId("results").classList.add("visible");
   }
+}
+
+let cleanupHandler = null;
+
+function cleanupViewers() {
+  if (cleanupHandler) {
+    cleanupHandler();
+    cleanupHandler = null;
+  }
+}
+
+function hydrateGridViewers(rootEl, workbookVm) {
+  const sheetMap = new Map(workbookVm.sheets.map(sheet => [sheet.name, sheet]));
+  const viewers = new Map();
+
+  function mountForSection(section) {
+    if (!section) return;
+    const mount = section.querySelector(".grid-viewer-mount");
+    if (!mount || mount.dataset.mounted) return;
+    const sheetName = section.dataset.sheet || mount.dataset.sheet;
+    const sheetVm = sheetMap.get(sheetName);
+    if (!sheetVm) return;
+    const initialMode = mount.dataset.initialMode || "side_by_side";
+    const initialAnchor = mount.dataset.initialAnchor ? Number(mount.dataset.initialAnchor) : 0;
+    const viewer = mountSheetGridViewer({
+      mountEl: mount,
+      sheetVm,
+      opts: { initialMode, initialAnchor }
+    });
+    mount.dataset.mounted = "true";
+    viewers.set(mount, viewer);
+  }
+
+  function onHeaderClick(event) {
+    const header = event.target.closest(".sheet-header");
+    if (!header || !rootEl.contains(header)) return;
+    const section = header.closest(".sheet-section");
+    if (!section) return;
+    section.classList.toggle("expanded");
+    if (section.classList.contains("expanded")) {
+      mountForSection(section);
+    }
+  }
+
+  rootEl.addEventListener("click", onHeaderClick);
+
+  const expanded = rootEl.querySelectorAll(".sheet-section.expanded");
+  for (const section of expanded) {
+    mountForSection(section);
+  }
+
+  return () => {
+    rootEl.removeEventListener("click", onHeaderClick);
+    for (const viewer of viewers.values()) {
+      viewer.destroy();
+    }
+    viewers.clear();
+  };
 }
 
 async function main() {

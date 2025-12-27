@@ -985,8 +985,8 @@ function renderSheetSection(report, sheetName, ops, sheetLookup, alignmentLookup
   }
   
   return `
-    <section class="sheet-section">
-      <div class="sheet-header" onclick="this.parentElement.classList.toggle('expanded')">
+    <section class="sheet-section" data-sheet="${esc(sheetName)}">
+      <div class="sheet-header">
         <div class="sheet-title">
           <div class="sheet-icon">📋</div>
           <span class="sheet-name">${esc(sheetName)}</span>
@@ -1204,15 +1204,10 @@ function renderSheetGridVm(sheetVm) {
   const regionIds = sheetVm.renderPlan.regionsToRender || [];
   if (regionIds.length === 0) return "";
 
-  const regionMap = new Map(sheetVm.changes.regions.map(region => [region.id, region]));
-  let html = "";
-  for (const id of regionIds) {
-    const region = regionMap.get(id);
-    if (!region) continue;
-    html += renderRegionGrid(sheetVm, region);
-  }
-  html += renderGridLegend();
-  return html;
+  return `
+    <div class="grid-viewer-mount" data-sheet="${esc(sheetVm.name)}" data-initial-mode="side_by_side" data-initial-anchor="0"></div>
+    ${renderGridLegend()}
+  `;
 }
 
 function renderSheetVm(sheetVm) {
@@ -1257,8 +1252,8 @@ function renderSheetVm(sheetVm) {
   }
 
   return `
-    <section class="sheet-section">
-      <div class="sheet-header" onclick="this.parentElement.classList.toggle('expanded')">
+    <section class="sheet-section" data-sheet="${esc(sheetVm.name)}">
+      <div class="sheet-header">
         <div class="sheet-title">
           <div class="sheet-icon">#</div>
           <span class="sheet-name">${esc(sheetVm.name)}</span>
@@ -1290,7 +1285,7 @@ function renderOtherChangesVm(title, icon, items) {
   `;
 }
 
-function renderWorkbookVm(vm) {
+export function renderWorkbookVm(vm) {
   let html = "";
   html += renderWarnings(vm.warnings);
   html += renderSummaryCards(vm.counts);
