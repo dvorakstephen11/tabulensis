@@ -2050,24 +2050,345 @@ Example CSP shape (final string should be tested in-browser):
 
 ### Goal
 
-Desktop app = same shape, higher ceilings.
+Desktop app = same shape, higher ceilings. :contentReference[oaicite:0]{index=0}
 
-### Deliverables
+Concretely: keep the current `web/` UI (same VM + renderer + canvas viewer), but replace “WASM in a worker reading `File` bytes” with “native Rust diff reading from disk”, and add desktop-only ergonomics (open dialog, drag/drop, recents, rerun). 
 
-1. **Choose a shell that preserves UI parity**
+---
 
-   * A WebView-based shell (Electron or Tauri) lets you reuse the web UI nearly 1:1.
-   * Desktop then calls the native Rust diff engine directly (no WASM constraints).
+### Grounding notes: what already exists and should be preserved
 
-2. **Native file handling**
+1. **The UI already has a clean “diff engine” seam.**  
+   `web/main.js` constructs a `diffClient` and uses a small API surface: `ready()`, `diff(...)`, `cancel()`, `dispose()`, plus stage/status updates via `onStatus`. This is exactly the seam we should preserve and swap behind. 
 
-   * Open dialogs, drag/drop from Finder/Explorer
-   * Recent comparisons list
-   * “Re-run diff” quickly after file changes
+2. **The UI already has a stage-based progress vocabulary.**  
+   `web/main.js` maps `{ stage, detail }` to user-facing status strings (e.g., `diff`, `parse`, `render`) and uses `detail` when present, so a desktop backend can stream “truthful stage text” without needing percent-perfect progress. :contentReference[oaicite:3]{index=3}
 
-3. **Progress + cancellation**
+3. **There is an existing, stable payload contract to keep parity.**  
+   The WASM entrypoint `diff_files_with_sheets_json(...)` returns a JSON wrapper `{ report, sheets, alignments }` (not just a `DiffReport`). Desktop should emit the same shape so `web/view_model.js` / `web/render.js` remain reusable and semantics do not fork. 
 
-   * Desktop can run diff on a background thread and allow cancel mid-run (much harder in pure web).
+4. **Workbook vs PBIX/PBIT handling already exists in Rust code.**  
+   The CLI has `host_kind_from_path(...)` and `open_host(...)` that decide how to open `.xlsx/.xlsm/.xltx/.xltm` vs `.pbix/.pbit`. Desktop should reuse the same extension rules so behavior matches the CLI and web demo. :contentReference[oaicite:5]{index=5}
+
+5. **Repo structure reality:**  
+   The Cargo workspace currently has `core`, `cli`, `wasm` only. Desktop will be a new member (or a Tauri `src-tauri` project that still depends on `core`). :contentReference[oaicite:6]{index=6}
+
+---
+
+### Success criteria for Phase 6 (what “foundation” means)
+
+**Parity (must):**
+- Desktop renders the same summary cards, sheet list, detailed changes, and grid viewer behavior as the web UI, because it uses the same `web/` modules and the same `{ report, sheets, alignments }` payload contract. 
+
+**Ceiling-lift (must):**
+- Desktop can diff substantially larger files than the browser demo because it:
+  - reads from disk directly (no `File.arrayBuffer()` duplication in JS),
+  - runs native Rust (no WASM constraints),
+  - can allocate more memory without tab-crash dynamics.
+
+**Desktop ergonomics (must):**
+- “Open…” dialogs for old/new.
+- Drag/drop from Finder/Explorer into “Old” / “New” zones.
+- Recent comparisons list persisted across app restarts.
+- One-click “Re-run” for a recent entry.
+
+**Progress + cancellation (must):**
+- Status updates are visible during diff.
+- Cancel reliably stops the in-flight diff and returns to “ready” state (no hung UI).
+
+---
+
+### Design decisions (lock these down to prevent web/desktop drift)
+
+#### 1) Shell choice: default to Tauri (WebView + Rust backend), keep Electron as contingency
+
+**Default recommendation: Tauri**  
+Why it fits *this* repo:
+- The project is already Rust-first (core engine is Rust), so a Rust backend is a natural fit.
+- The UI is already a self-contained set of ESM files under `web/` (no bundler). A WebView shell can load those assets as-is.
+- We get native dialogs + file IO without introducing a Node runtime into production.
+
+**Contingency: Electron**  
+Keep as a fallback *only if* WebView constraints block one of the key requirements (module workers / canvas / CSP / file-drop behavior). The goal is UI parity, not “which framework”. The plan below is written so the UI changes are minimal and mostly shell-agnostic.
+
+#### 2) Payload contract is sacred: desktop backend must emit the same wrapper shape
+
+Desktop should return the same JSON-serializable struct shape the web demo already consumes:  
+`{ report: DiffReport, sheets: SheetPairSnapshot, alignments: SheetAlignment[] }`. :contentReference[oaicite:8]{index=8}
+
+This keeps:
+- `web/view_model.js` and `web/render.js` unchanged (or nearly unchanged),
+- the canvas viewer semantics unchanged,
+- the “truthfulness” guarantees from Phases 1–5 intact.
+
+#### 3) Keep the `diffClient` interface identical across web and desktop
+
+The worker client already defines the right minimal contract (`ready/diff/cancel/dispose`) and the right status callback shape. Desktop should implement the same so `web/main.js` only needs a small “platform selection” shim. 
+
+#### 4) Cancellation semantics: prefer cooperative cancellation in the native engine, but allow “hard cancel” as a fallback
+
+In web we cancel by terminating the worker, because the WASM call is synchronous.   
+On desktop we can do better:
+
+- **Preferred:** cooperative cancel checkpoints (fast, safe) in the native diff pipeline so “Cancel” stops the job without killing the whole app process.
+- **Fallback:** run the diff in an isolated worker thread/process and hard-stop it (thread cancellation via process boundary if needed). This is a pragmatic “never hang” guarantee.
+
+---
+
+### Implementation plan (concrete, codebase-realistic)
+
+#### Step 1: Add a desktop project without introducing a front-end build step
+
+**Repo layout proposal (low-friction):**
+- Add a new directory, e.g. `desktop/` (or `app/`), containing the desktop shell project.
+- Configure the shell to load frontend assets from the existing `web/` directory (the same `index.html` + ESM modules the browser demo uses). :contentReference[oaicite:11]{index=11}
+
+**Workspace wiring:**
+- Add the desktop crate/project to the workspace alongside `core`, `cli`, `wasm`, so the desktop backend can depend on the same `excel_diff` crate the CLI uses. 
+
+**Key acceptance gate for Step 1:**
+- Desktop launches and renders `web/index.html` with all scripts/styles loaded locally.
+- The UI is visible and interactive (even before diff is wired).
+
+#### Step 2: Introduce a “platform adapter” in `web/` that selects the diff backend
+
+Add a small module (new file) that answers:
+- “Am I running in desktop shell?” (Tauri detection, etc.)
+- “Which diff client should I create?”
+
+**New file (example):** `web/platform.js`
+- `isDesktop() -> boolean`
+- `createAppDiffClient({ onStatus }) -> diffClient`
+
+Implementation approach:
+- If desktop: return `createNativeDiffClient({ onStatus })`
+- Else: return existing `createDiffWorkerClient({ onStatus })` :contentReference[oaicite:13]{index=13}
+
+**Change file:** `web/main.js`
+- Replace direct construction of `createDiffWorkerClient(...)` with the platform factory.
+- Keep the rest of the flow unchanged as much as possible (same stage UI, same error handling, same exports wiring). 
+
+**Acceptance gate for Step 2:**
+- Browser demo still uses the worker client and works unchanged.
+- Desktop still loads, but now constructs the native client (even if it’s stubbed initially).
+
+#### Step 3: Implement the native diff client (front-end side) with the same contract
+
+**New file (example):** `web/native_diff_client.js`  
+Export: `createNativeDiffClient({ onStatus }) -> { ready, diff, cancel, dispose }`
+
+Requirements to match the existing worker client behavior:
+- Only one in-flight diff at a time (match the worker client’s “busy” semantics). :contentReference[oaicite:15]{index=15}
+- `ready()` resolves to a version string for `#version` display (mirrors worker’s `ready` message that includes version). 
+- `diff(...)` resolves to the payload object (`{ report, sheets, alignments }`), not a JSON string.
+- `cancel()` is always safe to call; it reliably returns UI to ready state (even if cancel is best-effort). The UI already assumes cancel resets state immediately. 
+
+**Status updates contract:**
+- Call `onStatus({ stage, detail, source: "native" })` during:
+  - validate
+  - read/open
+  - diff
+  - (optional) snapshot/alignment
+- This plugs directly into the existing `handleWorkerStatus(...)` stage mechanism, because it only needs `{ stage, detail }`. :contentReference[oaicite:18]{index=18}
+
+#### Step 4: Move payload-building logic into a shared Rust module so WASM and desktop cannot drift
+
+Right now, the web payload wrapper logic lives in the WASM crate: snapshot selection + caps + alignment building, producing `DiffWithSheets { report, sheets, alignments }`. :contentReference[oaicite:19]{index=19}  
+Desktop needs the same logic.
+
+**Best practice (to prevent divergence):** extract a new Rust crate in the workspace, e.g. `ui_payload/`:
+- Pure Rust (no wasm-bindgen, no Tauri dependency).
+- Depends on `excel_diff` (core) and `serde`.
+- Contains:
+  - the payload structs (the same serializable field names and nesting),
+  - snapshot generation (including truncation metadata),
+  - alignment building (currently in `wasm/src/alignment.rs`),
+  - host-kind detection helpers (can be copied from CLI’s `host_kind_from_path` rules). 
+
+**Then:**
+- WASM crate becomes a thin wrapper:
+  - open packages from bytes,
+  - call `ui_payload::build_payload_from_packages(...)`,
+  - serialize to JSON string.
+- Desktop backend calls the same shared builder but opens packages from file paths.
+
+**Acceptance gate for Step 4 (high-value):**
+- A small golden fixture diff run via WASM and via desktop returns payloads that are structurally equivalent (same keys, same kinds, same alignment lengths for the same caps).
+
+#### Step 5: Desktop backend command that runs diff from disk paths and returns the payload
+
+Desktop backend responsibilities:
+- Accept two file paths (old/new).
+- Determine host kind (Workbook vs PBIX/PBIT) using the same extension logic already proven in CLI. :contentReference[oaicite:21]{index=21}
+- Open packages from `File::open(path)` and run the diff using `excel_diff` core.
+- Build the `{ report, sheets, alignments }` wrapper using the shared `ui_payload` builder (Step 4). :contentReference[oaicite:22]{index=22}
+
+**Important parity detail:** PBIX/PBIT currently yields a payload with empty sheets and empty alignments (the WASM path explicitly does this). Desktop should do the same so the UI behavior remains consistent. :contentReference[oaicite:23]{index=23}
+
+**Version command:**
+- Implement a simple backend `get_version` that returns the desktop app version and/or engine version; the web UI already expects a version string to display. 
+
+#### Step 6: Native file handling in the UI (open dialogs + drag/drop + paths)
+
+Today `web/main.js` reads from `<input type=file>` and passes `ArrayBuffer`s to the worker.   
+Desktop should switch to **path-based selection** (to avoid JS memory blowups and enable rerun).
+
+**UI behavior changes (desktop only):**
+- Clicking the “Old file” or “New file” dropzone opens a native “Open File…” dialog and stores:
+  - `oldPath/newPath` (full path)
+  - `oldName/newName` (basename for display)
+- Drag/drop:
+  - Dropping a file onto the Old zone sets `oldPath`.
+  - Dropping onto New zone sets `newPath`.
+  - Dropping two files onto the page can fill both in order (optional).
+
+**Minimal code strategy to avoid HTML churn:**
+- Keep the existing dropzone HTML structure so CSS/layout remain stable.
+- In desktop mode:
+  - ignore (or hide/disable) the `<input type=file>` element,
+  - update the same `nameOld/nameNew` DOM nodes with basename strings so the UI looks identical.
+
+**Recents persistence:**
+- Maintain a recent list of comparisons (`[{ oldPath, newPath, lastRunIso, oldName, newName }]`), stored in app-local data as JSON.
+- Render a “Recent” section in the UI:
+  - each item: “Old → New”, timestamp
+  - actions: “Load”, “Re-run”, “Swap” (optional)
+- Keep list small (e.g., last 20) to reduce UI clutter.
+
+**Acceptance gate for Step 6:**
+- Selecting files via dialog populates the UI without reading bytes into JS.
+- Rerun works after app restart (recents persisted).
+
+#### Step 7: Progress + cancellation implemented end-to-end
+
+**Backend execution model:**
+- Run the diff on a background task/thread so the UI thread is never blocked (the webview stays responsive).
+- Stream progress as discrete stages via events:
+  - `read` (opening/parsing packages)
+  - `diff` (core diff execution)
+  - `snapshot` (building sheet snapshots)
+  - `align` (building alignment arrays)
+  - `done` (ready to render)
+
+**Frontend behavior:**
+- The native diff client listens to progress events and calls `onStatus({ stage, detail })`.
+- `web/main.js` already displays those stages via `showStage(...)`. :contentReference[oaicite:26]{index=26}
+
+**Cancellation semantics:**
+- Frontend “Cancel” immediately resets UI state (already implemented pattern). 
+- Backend cancels the in-flight job:
+  - Preferred: cooperative cancel token checked in the diff pipeline.
+  - Fallback: if a cooperative cancel is not feasible everywhere yet, ensure cancel never hangs by isolating the job (thread/process boundary) and hard-stopping it if needed.
+
+**Acceptance gate for Step 7:**
+- Start a long diff, see status change at least through `read → diff`.
+- Press Cancel:
+  - UI returns to ready immediately,
+  - backend stops work promptly (no CPU pegged for minutes),
+  - a subsequent diff run works (no “stuck busy” state).
+
+#### Step 8: Desktop packaging + smoke checks (minimum viable “distributable”)
+
+**Build outputs (foundation-level):**
+- A dev build that runs locally via one command.
+- A release build that produces a single installable artifact per OS (details can be refined in Phase 7).
+
+**Smoke checks for packaging:**
+- App launches offline.
+- No unexpected network requests (keep the “local-only” posture from the web UI). 
+- Diff works on a small sample.
+
+---
+
+### What code is added / changed (explicit inventory)
+
+#### New (web)
+
+- `web/platform.js`  
+  Platform detection + diff client selection.
+
+- `web/native_diff_client.js`  
+  Desktop implementation of the `diffClient` contract matching the worker client’s API surface (`ready/diff/cancel/dispose`). :contentReference[oaicite:29]{index=29}
+
+- (Optional but recommended) `web/recents.js`  
+  Pure helpers for rendering and normalizing recent entries (keep `main.js` readable).
+
+#### Changed (web)
+
+- `web/main.js`  
+  - Construct diff client via `platform.createAppDiffClient(...)` instead of `createDiffWorkerClient(...)`.
+  - Allow “selected inputs” to be either:
+    - web `File` objects (browser path), or
+    - desktop `{ path, name }` records (desktop path).
+  - Skip “transfer to worker” stage in desktop mode; keep the same stage UI plumbing. 
+
+- `web/index.html` (+ inline CSS in the `<style>` block)  
+  - Add a small “Recent” section (desktop-only rendering is fine; the DOM can exist in web but be hidden).
+  - Add minimal affordances for “Open…” on click (can be purely JS-driven without HTML changes if desired). :contentReference[oaicite:31]{index=31}
+
+#### New (Rust)
+
+- `ui_payload/` (new crate, recommended)  
+  Shared “build `{ report, sheets, alignments }`” logic extracted from WASM so desktop and web cannot drift. :contentReference[oaicite:32]{index=32}
+
+#### Changed (Rust)
+
+- `wasm/`  
+  Refactor to call into `ui_payload` for payload creation (wrapper remains `wasm_bindgen`-exposed). :contentReference[oaicite:33]{index=33}
+
+- `Cargo.toml` (workspace)  
+  Add desktop and `ui_payload` crates as workspace members. :contentReference[oaicite:34]{index=34}
+
+- `desktop/` (new desktop shell project)  
+  Rust backend:
+  - command: `get_version`
+  - command: `diff_paths_with_sheets(...)` (plus progress events + cancel command)
+  - recents storage helpers
+
+---
+
+### Acceptance checks (manual + deterministic)
+
+#### Parity (web vs desktop)
+1. **Same payload shape**
+   - Run the same small fixture in web (WASM) and desktop (native).
+   - Expected: both return `{ report, sheets, alignments }` and the UI renders without any desktop-only renderer code. 
+
+2. **Same sheet-level truthfulness**
+   - Use a case with row insertion/move.
+   - Expected: the desktop UI behaves identically to web (because it’s the same VM + viewer). 
+
+#### Native file handling
+3. **Open dialog populates old/new without loading bytes into JS**
+   - Expected: dropzone labels update to basenames; diff runs via paths.
+
+4. **Drag/drop behavior**
+   - Drop onto Old sets old; drop onto New sets new; diff runs.
+
+5. **Recents persist**
+   - Run a diff, quit app, relaunch.
+   - Expected: the comparison is present in “Recent” and can be re-run.
+
+#### Progress + cancellation
+6. **Progress is visible**
+   - Start a medium/large diff.
+   - Expected: status transitions through at least `read` and `diff`, with meaningful `detail` text (stage-based). :contentReference[oaicite:37]{index=37}
+
+7. **Cancel is reliable**
+   - Start a diff, click Cancel.
+   - Expected: UI returns to ready state immediately; a new diff can be started right away. 
+
+#### “Higher ceilings” sanity checks
+8. **Large file behavior**
+   - Compare files that are painful in the browser (large `.xlsx`).
+   - Expected: desktop completes more reliably (no tab crash dynamics), with the UI staying responsive during the run.
+
+#### Regression safety (don’t break the existing repo discipline)
+9. **Web UI tests still pass**
+   - `node web/test_render.js`
+   - `node web/test_view_model.js`  
+   Expected: unchanged, because renderer/VM remain pure and desktop integration stays behind `web/main.js` + platform adapter. 
+
 
 ---
 

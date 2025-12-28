@@ -1,8 +1,8 @@
 import { renderWorkbookVm } from "./render.js";
 import { buildWorkbookViewModel } from "./view_model.js";
 import { mountSheetGridViewer } from "./grid_viewer.js";
-import { createDiffWorkerClient } from "./diff_worker_client.js";
 import { downloadReportJson, downloadHtmlReport } from "./export.js";
+import { createAppDiffClient, isDesktop, openFileDialog, loadRecents, saveRecent } from "./platform.js";
 
 function byId(id) {
   const el = document.getElementById(id);
@@ -20,6 +20,27 @@ function nextFrame() {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
+function baseName(path) {
+  if (!path) return "";
+  const parts = String(path).split(/[\\/]/);
+  return parts[parts.length - 1] || "";
+}
+
+function fileDisplayName(file) {
+  if (!file) return "";
+  if (file.name) return file.name;
+  if (file.path) return baseName(file.path);
+  return "";
+}
+
+function buildDesktopSelection(path, name) {
+  if (!path) return null;
+  return {
+    path,
+    name: name || baseName(path)
+  };
+}
+
 let diffClient = null;
 let reviewController = null;
 let activeViewerManager = null;
@@ -28,6 +49,18 @@ let isBusy = false;
 let activeRunId = 0;
 let lastReport = null;
 let lastMeta = null;
+let isDesktopApp = false;
+let selectedOld = null;
+let selectedNew = null;
+let recentComparisons = [];
+let recentsSection = null;
+let recentsList = null;
+let recentsEmpty = null;
+
+const FILE_SIDES = {
+  old: { dropId: "dropOld", inputId: "fileOld", nameId: "nameOld" },
+  new: { dropId: "dropNew", inputId: "fileNew", nameId: "nameNew" }
+};
 
 function setBusy(state) {
   isBusy = state;
@@ -52,24 +85,63 @@ function clearResults() {
   lastMeta = null;
 }
 
-function setupFileDrop(dropId, inputId, nameId) {
-  const drop = byId(dropId);
-  const input = byId(inputId);
-  const nameEl = byId(nameId);
+function updateDropDisplay(side, file) {
+  const config = FILE_SIDES[side];
+  const drop = byId(config.dropId);
+  const nameEl = byId(config.nameId);
+  const label = fileDisplayName(file);
+  if (label) {
+    nameEl.textContent = label;
+    drop.classList.add("has-file");
+  } else {
+    nameEl.textContent = "";
+    drop.classList.remove("has-file");
+  }
+}
+
+function setSelectedFile(side, file) {
+  if (side === "old") {
+    selectedOld = file;
+  } else {
+    selectedNew = file;
+  }
+  updateDropDisplay(side, file);
+}
+
+function toDesktopSelection(file) {
+  if (!file) return null;
+  const path = file.path || "";
+  if (!path) return null;
+  return buildDesktopSelection(path, file.name);
+}
+
+function setupFileDrop(side) {
+  const config = FILE_SIDES[side];
+  const drop = byId(config.dropId);
+  const input = byId(config.inputId);
 
   function updateDisplay(file) {
-    if (file) {
-      nameEl.textContent = file.name;
-      drop.classList.add("has-file");
-    } else {
-      nameEl.textContent = "";
-      drop.classList.remove("has-file");
-    }
+    setSelectedFile(side, file);
   }
 
-  input.addEventListener("change", () => {
-    updateDisplay(input.files[0]);
-  });
+  if (isDesktopApp) {
+    input.disabled = true;
+    input.tabIndex = -1;
+    input.style.display = "none";
+    drop.addEventListener("click", async () => {
+      try {
+        const path = await openFileDialog();
+        if (!path) return;
+        updateDisplay(buildDesktopSelection(path));
+      } catch (err) {
+        setStatus(`Error: ${err.message || err}`, "error");
+      }
+    });
+  } else {
+    input.addEventListener("change", () => {
+      updateDisplay(input.files[0]);
+    });
+  }
 
   drop.addEventListener("dragover", (e) => {
     e.preventDefault();
@@ -83,10 +155,26 @@ function setupFileDrop(dropId, inputId, nameId) {
   drop.addEventListener("drop", (e) => {
     e.preventDefault();
     drop.classList.remove("dragover");
-    if (e.dataTransfer.files.length > 0) {
-      input.files = e.dataTransfer.files;
-      updateDisplay(e.dataTransfer.files[0]);
+    const files = e.dataTransfer?.files || [];
+    if (!files.length) return;
+
+    if (isDesktopApp) {
+      const selections = Array.from(files)
+        .map(toDesktopSelection)
+        .filter(Boolean);
+      if (selections.length >= 2) {
+        setSelectedFile("old", selections[0]);
+        setSelectedFile("new", selections[1]);
+        return;
+      }
+      if (selections[0]) {
+        updateDisplay(selections[0]);
+      }
+      return;
     }
+
+    input.files = files;
+    updateDisplay(files[0]);
   });
 }
 
@@ -96,6 +184,8 @@ const STAGE_LABELS = {
   read: "Reading files...",
   transfer: "Transferring files to worker...",
   diff: "Diffing workbooks...",
+  snapshot: "Building previews...",
+  align: "Aligning sheets...",
   parse: "Parsing results...",
   render: "Rendering results...",
   hydrate: "Hydrating viewers..."
@@ -118,8 +208,8 @@ function handleWorkerStatus(status) {
 function buildMeta(oldFile, newFile) {
   return {
     version: engineVersion,
-    oldName: oldFile?.name || "",
-    newName: newFile?.name || "",
+    oldName: fileDisplayName(oldFile) || "",
+    newName: fileDisplayName(newFile) || "",
     createdAtIso: new Date().toISOString()
   };
 }
@@ -152,6 +242,159 @@ function handleError(err) {
   byId("results").classList.add("visible");
 }
 
+function formatRecentTimestamp(iso) {
+  if (!iso) return "";
+  const dt = new Date(iso);
+  if (Number.isNaN(dt.getTime())) return iso;
+  return dt.toLocaleString();
+}
+
+function applyRecentSelection(entry) {
+  if (!entry) return;
+  setSelectedFile("old", buildDesktopSelection(entry.oldPath, entry.oldName));
+  setSelectedFile("new", buildDesktopSelection(entry.newPath, entry.newName));
+}
+
+function renderRecents() {
+  if (!recentsSection || !recentsList || !recentsEmpty) return;
+  if (!isDesktopApp) {
+    recentsSection.classList.remove("visible");
+    return;
+  }
+  recentsSection.classList.add("visible");
+  recentsList.innerHTML = "";
+  if (!recentComparisons.length) {
+    recentsEmpty.hidden = false;
+    return;
+  }
+  recentsEmpty.hidden = true;
+
+  recentComparisons.forEach((entry, index) => {
+    const item = document.createElement("div");
+    item.className = "recent-item";
+
+    const main = document.createElement("div");
+    main.className = "recent-main";
+
+    const names = document.createElement("div");
+    names.className = "recent-names";
+
+    const oldSpan = document.createElement("span");
+    oldSpan.className = "recent-name";
+    oldSpan.textContent = entry.oldName || baseName(entry.oldPath);
+
+    const arrow = document.createElement("span");
+    arrow.className = "recent-arrow";
+    arrow.textContent = "->";
+
+    const newSpan = document.createElement("span");
+    newSpan.className = "recent-name";
+    newSpan.textContent = entry.newName || baseName(entry.newPath);
+
+    names.appendChild(oldSpan);
+    names.appendChild(arrow);
+    names.appendChild(newSpan);
+
+    const meta = document.createElement("div");
+    meta.className = "recent-meta";
+    meta.textContent = formatRecentTimestamp(entry.lastRunIso);
+
+    main.appendChild(names);
+    main.appendChild(meta);
+
+    const actions = document.createElement("div");
+    actions.className = "recent-actions";
+
+    const loadBtn = document.createElement("button");
+    loadBtn.type = "button";
+    loadBtn.className = "secondary-btn recent-action";
+    loadBtn.dataset.recentAction = "load";
+    loadBtn.dataset.recentIndex = String(index);
+    loadBtn.textContent = "Load";
+
+    const rerunBtn = document.createElement("button");
+    rerunBtn.type = "button";
+    rerunBtn.className = "secondary-btn recent-action";
+    rerunBtn.dataset.recentAction = "rerun";
+    rerunBtn.dataset.recentIndex = String(index);
+    rerunBtn.textContent = "Re-run";
+
+    const swapBtn = document.createElement("button");
+    swapBtn.type = "button";
+    swapBtn.className = "secondary-btn recent-action";
+    swapBtn.dataset.recentAction = "swap";
+    swapBtn.dataset.recentIndex = String(index);
+    swapBtn.textContent = "Swap";
+
+    actions.appendChild(loadBtn);
+    actions.appendChild(rerunBtn);
+    actions.appendChild(swapBtn);
+
+    item.appendChild(main);
+    item.appendChild(actions);
+    recentsList.appendChild(item);
+  });
+}
+
+function handleRecentsClick(event) {
+  const button = event.target.closest(".recent-action");
+  if (!button) return;
+  const index = Number(button.dataset.recentIndex);
+  const action = button.dataset.recentAction;
+  const entry = recentComparisons[index];
+  if (!entry) return;
+
+  if (action === "swap") {
+    const swapped = {
+      oldPath: entry.newPath,
+      newPath: entry.oldPath,
+      oldName: entry.newName,
+      newName: entry.oldName,
+      lastRunIso: entry.lastRunIso
+    };
+    applyRecentSelection(swapped);
+    return;
+  }
+
+  applyRecentSelection(entry);
+  if (action === "rerun") {
+    runDiff();
+  }
+}
+
+async function persistRecentComparison(oldFile, newFile, lastRunIso) {
+  if (!isDesktopApp || !oldFile?.path || !newFile?.path) return;
+  const entry = {
+    oldPath: oldFile.path,
+    newPath: newFile.path,
+    oldName: fileDisplayName(oldFile),
+    newName: fileDisplayName(newFile),
+    lastRunIso: lastRunIso || new Date().toISOString()
+  };
+  try {
+    const updated = await saveRecent(entry);
+    if (Array.isArray(updated)) {
+      recentComparisons = updated;
+      renderRecents();
+    }
+  } catch (err) {
+    console.warn("Failed to save recent comparison:", err);
+  }
+}
+
+async function loadRecentComparisons() {
+  if (!isDesktopApp) return;
+  try {
+    const items = await loadRecents();
+    if (Array.isArray(items)) {
+      recentComparisons = items;
+    }
+  } catch (err) {
+    console.warn("Failed to load recents:", err);
+  }
+  renderRecents();
+}
+
 function cancelDiff() {
   if (!isBusy) return;
   activeRunId += 1;
@@ -163,11 +406,15 @@ function cancelDiff() {
 }
 
 async function runDiff() {
-  const oldFile = byId("fileOld").files[0];
-  const newFile = byId("fileNew").files[0];
+  const oldFile = selectedOld;
+  const newFile = selectedNew;
 
   if (!oldFile || !newFile) {
     setStatus("Please select both files to compare.", "error");
+    return;
+  }
+  if (isDesktopApp && (!oldFile.path || !newFile.path)) {
+    setStatus("Please select valid files to compare.", "error");
     return;
   }
 
@@ -182,22 +429,36 @@ async function runDiff() {
   showStage("read");
 
   try {
-    const oldBuffer = await oldFile.arrayBuffer();
-    const newBuffer = await newFile.arrayBuffer();
-    if (runId !== activeRunId) return;
-
-    showStage("transfer");
-
     const options = { ignoreBlankToBlank: true };
-    const payload = await diffClient.diff(
-      {
-        oldName: oldFile.name,
-        newName: newFile.name,
-        oldBuffer,
-        newBuffer
-      },
-      options
-    );
+    let payload;
+
+    if (isDesktopApp) {
+      payload = await diffClient.diff(
+        {
+          oldName: fileDisplayName(oldFile),
+          newName: fileDisplayName(newFile),
+          oldPath: oldFile.path,
+          newPath: newFile.path
+        },
+        options
+      );
+    } else {
+      const oldBuffer = await oldFile.arrayBuffer();
+      const newBuffer = await newFile.arrayBuffer();
+      if (runId !== activeRunId) return;
+
+      showStage("transfer");
+
+      payload = await diffClient.diff(
+        {
+          oldName: oldFile.name,
+          newName: newFile.name,
+          oldBuffer,
+          newBuffer
+        },
+        options
+      );
+    }
     if (runId !== activeRunId) return;
 
     showStage("render");
@@ -217,6 +478,7 @@ async function runDiff() {
     lastReport = report;
     lastMeta = buildMeta(oldFile, newFile);
     setExportsEnabled(true);
+    await persistRecentComparison(oldFile, newFile, lastMeta.createdAtIso);
   } catch (e) {
     if (!isBusy && String(e).toLowerCase().includes("canceled")) {
       return;
@@ -648,14 +910,23 @@ async function main() {
   setStatus("Loading...", "loading");
 
   try {
-    diffClient = createDiffWorkerClient({ onStatus: handleWorkerStatus });
+    isDesktopApp = isDesktop();
+    diffClient = createAppDiffClient({ onStatus: handleWorkerStatus });
     showStage("init");
     engineVersion = await diffClient.ready();
     byId("version").textContent = engineVersion;
     setStatus("");
 
-    setupFileDrop("dropOld", "fileOld", "nameOld");
-    setupFileDrop("dropNew", "fileNew", "nameNew");
+    setupFileDrop("old");
+    setupFileDrop("new");
+
+    recentsSection = byId("recentsSection");
+    recentsList = byId("recentsList");
+    recentsEmpty = byId("recentsEmpty");
+    if (recentsList) {
+      recentsList.addEventListener("click", handleRecentsClick);
+    }
+    await loadRecentComparisons();
 
     byId("run").addEventListener("click", runDiff);
     const cancelBtn = byId("cancel");

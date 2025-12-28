@@ -292,6 +292,9 @@
       alignment.rs
       lib.rs
   web/
+    diff_worker.js
+    diff_worker_client.js
+    export.js
     grid_metrics.js
     grid_painter.js
     grid_theme.js
@@ -1087,6 +1090,8 @@ jobs:
           node-version: "20"
       - name: Render test
         run: node web/test_render.js
+      - name: View model test
+        run: node web/test_view_model.js
 
 ```
 
@@ -50941,12 +50946,13 @@ pub(crate) struct SheetAlignment {
     cols: Vec<AxisEntry>,
     moves: Vec<MoveGroup>,
     skipped: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skip_reason: Option<String>,
 }
 
 // Guardrail: keep the HTML grid from exploding on large sheets.
 const MAX_VIEW_ROWS: u32 = 10_000;
 const MAX_VIEW_COLS: u32 = 200;
-const MAX_VIEW_CELLS: u64 = 200_000;
 
 pub(crate) fn build_alignments(
     report: &excel_diff::DiffReport,
@@ -51129,18 +51135,22 @@ fn build_sheet_alignment(
         &move_dst_cols,
     );
 
-    let mut skipped = !row_summary.consistent || !col_summary.consistent;
-    if exceeds_limit(row_summary.view_len, col_summary.view_len) {
-        skipped = true;
+    let mut skip_reason = None;
+    if !row_summary.consistent || !col_summary.consistent {
+        skip_reason = Some("Preview disabled: alignment inconsistent.".to_string());
+    }
+    if let Some(reason) = limit_reason(row_summary.view_len, col_summary.view_len) {
+        skip_reason = Some(reason);
     }
 
-    if skipped {
+    if skip_reason.is_some() {
         return SheetAlignment {
             sheet: sheet.to_string(),
             rows: Vec::new(),
             cols: Vec::new(),
             moves,
             skipped: true,
+            skip_reason,
         };
     }
 
@@ -51161,11 +51171,15 @@ fn build_sheet_alignment(
         &move_dst_cols,
     );
 
-    let mut skipped = !(rows_consistent && cols_consistent);
-    if exceeds_limit(rows.len() as u32, cols.len() as u32) {
-        skipped = true;
+    let mut skip_reason = None;
+    if !(rows_consistent && cols_consistent) {
+        skip_reason = Some("Preview disabled: alignment inconsistent.".to_string());
+    }
+    if let Some(reason) = limit_reason(rows.len() as u32, cols.len() as u32) {
+        skip_reason = Some(reason);
     }
 
+    let skipped = skip_reason.is_some();
     if skipped {
         rows.clear();
         cols.clear();
@@ -51177,6 +51191,7 @@ fn build_sheet_alignment(
         cols,
         moves,
         skipped,
+        skip_reason,
     }
 }
 
@@ -51314,15 +51329,20 @@ fn build_axis_entries(
     (entries, summary.consistent)
 }
 
-fn exceeds_limit(rows: u32, cols: u32) -> bool {
-    if rows == 0 || cols == 0 {
-        return false;
+fn limit_reason(rows: u32, cols: u32) -> Option<String> {
+    if rows > MAX_VIEW_ROWS {
+        return Some(format!(
+            "Preview disabled: sheet has {} rows (cap is {}).",
+            rows, MAX_VIEW_ROWS
+        ));
     }
-    if rows > MAX_VIEW_ROWS || cols > MAX_VIEW_COLS {
-        return true;
+    if cols > MAX_VIEW_COLS {
+        return Some(format!(
+            "Preview disabled: sheet has {} columns (cap is {}).",
+            cols, MAX_VIEW_COLS
+        ));
     }
-    let cells = (rows as u64).saturating_mul(cols as u64);
-    cells > MAX_VIEW_CELLS
+    None
 }
 
 ```
@@ -51332,7 +51352,7 @@ fn exceeds_limit(rows: u32, cols: u32) -> bool {
 ### File: `wasm\src\lib.rs`
 
 ```rust
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
@@ -51364,6 +51384,11 @@ struct SheetSnapshot {
     nrows: u32,
     ncols: u32,
     cells: Vec<SheetCell>,
+    truncated: bool,
+    included_cells: u32,
+    total_non_empty_cells: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -51382,6 +51407,29 @@ struct DiffWithSheets {
     report: excel_diff::DiffReport,
     sheets: SheetPairSnapshot,
     alignments: Vec<alignment::SheetAlignment>,
+}
+
+const MAX_SNAPSHOT_CELLS_PER_SHEET: usize = 50_000;
+const MAX_SNAPSHOT_CELLS_TOTAL: usize = 200_000;
+const STRUCTURAL_PREVIEW_MAX_ROWS: u32 = 200;
+const STRUCTURAL_PREVIEW_MAX_COLS: u32 = 80;
+const SNAPSHOT_CONTEXT_ROWS: u32 = 1;
+const SNAPSHOT_CONTEXT_COLS: u32 = 1;
+
+struct SnapshotCaps {
+    per_sheet: usize,
+    max_rows: u32,
+    max_cols: u32,
+    context_rows: u32,
+    context_cols: u32,
+}
+
+#[derive(Clone, Copy)]
+struct Rect {
+    row_start: u32,
+    row_end: u32,
+    col_start: u32,
+    col_end: u32,
 }
 
 fn host_kind_from_name(name: &str) -> Option<HostKind> {
@@ -51419,6 +51467,37 @@ fn collect_sheet_ids(ops: &[excel_diff::DiffOp]) -> HashSet<excel_diff::StringId
     sheets
 }
 
+fn group_ops_by_sheet(
+    report: &excel_diff::DiffReport,
+) -> HashMap<String, Vec<&excel_diff::DiffOp>> {
+    let mut map: HashMap<String, Vec<&excel_diff::DiffOp>> = HashMap::new();
+    for op in &report.ops {
+        let sheet = match op {
+            excel_diff::DiffOp::SheetAdded { sheet }
+            | excel_diff::DiffOp::SheetRemoved { sheet }
+            | excel_diff::DiffOp::RowAdded { sheet, .. }
+            | excel_diff::DiffOp::RowRemoved { sheet, .. }
+            | excel_diff::DiffOp::RowReplaced { sheet, .. }
+            | excel_diff::DiffOp::ColumnAdded { sheet, .. }
+            | excel_diff::DiffOp::ColumnRemoved { sheet, .. }
+            | excel_diff::DiffOp::BlockMovedRows { sheet, .. }
+            | excel_diff::DiffOp::BlockMovedColumns { sheet, .. }
+            | excel_diff::DiffOp::BlockMovedRect { sheet, .. }
+            | excel_diff::DiffOp::RectReplaced { sheet, .. }
+            | excel_diff::DiffOp::CellEdited { sheet, .. } => Some(*sheet),
+            _ => None,
+        };
+        let Some(sheet_id) = sheet else {
+            continue;
+        };
+        let sheet_name = report.resolve(sheet_id).unwrap_or("<unknown>");
+        map.entry(sheet_name.to_string())
+            .or_insert_with(Vec::new)
+            .push(op);
+    }
+    map
+}
+
 fn render_cell_value(
     pool: &excel_diff::StringPool,
     value: &Option<excel_diff::CellValue>,
@@ -51435,30 +51514,334 @@ fn render_cell_value(
     }
 }
 
-fn snapshot_sheet(
+impl Rect {
+    fn area(&self) -> u64 {
+        let rows = self.row_end.saturating_sub(self.row_start).saturating_add(1) as u64;
+        let cols = self.col_end.saturating_sub(self.col_start).saturating_add(1) as u64;
+        rows.saturating_mul(cols)
+    }
+
+    fn contains(&self, row: u32, col: u32) -> bool {
+        row >= self.row_start
+            && row <= self.row_end
+            && col >= self.col_start
+            && col <= self.col_end
+    }
+}
+
+fn clamp_range(start: u32, count: u32, max: u32) -> Option<(u32, u32)> {
+    if count == 0 || max == 0 {
+        return None;
+    }
+    if start >= max {
+        return None;
+    }
+    let end = start.saturating_add(count).saturating_sub(1);
+    let end = end.min(max.saturating_sub(1));
+    Some((start, end))
+}
+
+fn rect_from_range(
+    row_start: u32,
+    row_count: u32,
+    col_start: u32,
+    col_count: u32,
+    nrows: u32,
+    ncols: u32,
+) -> Option<Rect> {
+    let (row_start, row_end) = clamp_range(row_start, row_count, nrows)?;
+    let (col_start, col_end) = clamp_range(col_start, col_count, ncols)?;
+    Some(Rect {
+        row_start,
+        row_end,
+        col_start,
+        col_end,
+    })
+}
+
+fn expand_rect(rect: Rect, context_rows: u32, context_cols: u32, nrows: u32, ncols: u32) -> Rect {
+    if nrows == 0 || ncols == 0 {
+        return rect;
+    }
+    let row_start = rect.row_start.saturating_sub(context_rows);
+    let col_start = rect.col_start.saturating_sub(context_cols);
+    let row_end = rect
+        .row_end
+        .saturating_add(context_rows)
+        .min(nrows.saturating_sub(1));
+    let col_end = rect
+        .col_end
+        .saturating_add(context_cols)
+        .min(ncols.saturating_sub(1));
+    Rect {
+        row_start,
+        row_end,
+        col_start,
+        col_end,
+    }
+}
+
+fn collect_interest_rects(
+    nrows: u32,
+    ncols: u32,
+    ops: &[&excel_diff::DiffOp],
+    caps: &SnapshotCaps,
+) -> Vec<Rect> {
+    let mut rects = Vec::new();
+    if nrows == 0 || ncols == 0 {
+        return rects;
+    }
+
+    let preview_cols = caps.max_cols.min(ncols);
+    let preview_rows = caps.max_rows.min(nrows);
+
+    for op in ops {
+        match op {
+            excel_diff::DiffOp::CellEdited { addr, .. } => {
+                if addr.row < nrows && addr.col < ncols {
+                    if let Some(rect) = rect_from_range(addr.row, 1, addr.col, 1, nrows, ncols) {
+                        rects.push(rect);
+                    }
+                }
+            }
+            excel_diff::DiffOp::RectReplaced {
+                start_row,
+                row_count,
+                start_col,
+                col_count,
+                ..
+            } => {
+                if let Some(rect) = rect_from_range(*start_row, *row_count, *start_col, *col_count, nrows, ncols) {
+                    rects.push(rect);
+                }
+            }
+            excel_diff::DiffOp::BlockMovedRect {
+                src_start_row,
+                src_row_count,
+                src_start_col,
+                src_col_count,
+                dst_start_row,
+                dst_start_col,
+                ..
+            } => {
+                if let Some(rect) = rect_from_range(
+                    *src_start_row,
+                    *src_row_count,
+                    *src_start_col,
+                    *src_col_count,
+                    nrows,
+                    ncols,
+                ) {
+                    rects.push(rect);
+                }
+                if let Some(rect) = rect_from_range(
+                    *dst_start_row,
+                    *src_row_count,
+                    *dst_start_col,
+                    *src_col_count,
+                    nrows,
+                    ncols,
+                ) {
+                    rects.push(rect);
+                }
+            }
+            excel_diff::DiffOp::RowAdded { row_idx, .. }
+            | excel_diff::DiffOp::RowRemoved { row_idx, .. }
+            | excel_diff::DiffOp::RowReplaced { row_idx, .. } => {
+                if preview_cols == 0 {
+                    continue;
+                }
+                if let Some(rect) = rect_from_range(*row_idx, 1, 0, preview_cols, nrows, ncols) {
+                    rects.push(rect);
+                }
+            }
+            excel_diff::DiffOp::BlockMovedRows {
+                src_start_row,
+                row_count,
+                dst_start_row,
+                ..
+            } => {
+                if preview_cols == 0 {
+                    continue;
+                }
+                if let Some(rect) = rect_from_range(*src_start_row, *row_count, 0, preview_cols, nrows, ncols) {
+                    rects.push(rect);
+                }
+                if let Some(rect) = rect_from_range(*dst_start_row, *row_count, 0, preview_cols, nrows, ncols) {
+                    rects.push(rect);
+                }
+            }
+            excel_diff::DiffOp::ColumnAdded { col_idx, .. }
+            | excel_diff::DiffOp::ColumnRemoved { col_idx, .. } => {
+                if preview_rows == 0 {
+                    continue;
+                }
+                if let Some(rect) = rect_from_range(0, preview_rows, *col_idx, 1, nrows, ncols) {
+                    rects.push(rect);
+                }
+            }
+            excel_diff::DiffOp::BlockMovedColumns {
+                src_start_col,
+                col_count,
+                dst_start_col,
+                ..
+            } => {
+                if preview_rows == 0 {
+                    continue;
+                }
+                if let Some(rect) = rect_from_range(0, preview_rows, *src_start_col, *col_count, nrows, ncols) {
+                    rects.push(rect);
+                }
+                if let Some(rect) = rect_from_range(0, preview_rows, *dst_start_col, *col_count, nrows, ncols) {
+                    rects.push(rect);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    rects
+        .into_iter()
+        .map(|rect| expand_rect(rect, caps.context_rows, caps.context_cols, nrows, ncols))
+        .collect()
+}
+
+fn push_cell(
+    cells: &mut Vec<SheetCell>,
+    pool: &excel_diff::StringPool,
+    row: u32,
+    col: u32,
+    cell: &excel_diff::Cell,
+) {
+    let value = render_cell_value(pool, &cell.value);
+    let formula = cell.formula.map(|id| format!("={}", pool.resolve(id)));
+    cells.push(SheetCell {
+        row,
+        col,
+        value,
+        formula,
+    });
+}
+
+fn snapshot_sheet_limited(
     sheet: &excel_diff::Sheet,
     pool: &excel_diff::StringPool,
+    ops: &[&excel_diff::DiffOp],
+    caps: &SnapshotCaps,
+    budget: &mut usize,
 ) -> SheetSnapshot {
     let name = pool.resolve(sheet.name).to_string();
-    let mut cells = Vec::with_capacity(sheet.grid.cell_count());
-    for ((row, col), cell) in sheet.grid.iter_cells() {
-        let value = render_cell_value(pool, &cell.value);
-        let formula = cell
-            .formula
-            .map(|id| format!("={}", pool.resolve(id)));
-        cells.push(SheetCell {
-            row,
-            col,
-            value,
-            formula,
-        });
+    let nrows = sheet.grid.nrows;
+    let ncols = sheet.grid.ncols;
+    let total_non_empty = sheet.grid.cell_count();
+    let total_non_empty_cells = u32::try_from(total_non_empty).unwrap_or(u32::MAX);
+
+    if total_non_empty == 0 {
+        return SheetSnapshot {
+            name,
+            nrows,
+            ncols,
+            cells: Vec::new(),
+            truncated: false,
+            included_cells: 0,
+            total_non_empty_cells: 0,
+            note: None,
+        };
     }
+
+    let per_sheet_limit = caps.per_sheet.min(*budget);
+    let mut cells = Vec::new();
+
+    if total_non_empty <= per_sheet_limit {
+        cells.reserve(total_non_empty);
+        for ((row, col), cell) in sheet.grid.iter_cells() {
+            push_cell(&mut cells, pool, row, col, cell);
+        }
+        *budget = budget.saturating_sub(total_non_empty);
+        return SheetSnapshot {
+            name,
+            nrows,
+            ncols,
+            cells,
+            truncated: false,
+            included_cells: total_non_empty_cells,
+            total_non_empty_cells,
+            note: None,
+        };
+    }
+
+    if per_sheet_limit == 0 {
+        return SheetSnapshot {
+            name,
+            nrows,
+            ncols,
+            cells: Vec::new(),
+            truncated: true,
+            included_cells: 0,
+            total_non_empty_cells,
+            note: Some("Preview limited: snapshot budget reached.".to_string()),
+        };
+    }
+
+    let rects = collect_interest_rects(nrows, ncols, ops, caps);
+    let total_rect_area: u64 = rects.iter().map(Rect::area).sum();
+    let mut seen = HashSet::new();
+    let mut remaining = per_sheet_limit;
+
+    if rects.is_empty() || total_rect_area > total_non_empty as u64 {
+        for ((row, col), cell) in sheet.grid.iter_cells() {
+            if remaining == 0 || *budget == 0 {
+                break;
+            }
+            if !rects.is_empty() && !rects.iter().any(|rect| rect.contains(row, col)) {
+                continue;
+            }
+            if seen.insert((row, col)) {
+                push_cell(&mut cells, pool, row, col, cell);
+                remaining = remaining.saturating_sub(1);
+                *budget = budget.saturating_sub(1);
+            }
+        }
+    } else {
+        'rects: for rect in &rects {
+            for row in rect.row_start..=rect.row_end {
+                for col in rect.col_start..=rect.col_end {
+                    if remaining == 0 || *budget == 0 {
+                        break 'rects;
+                    }
+                    if !seen.insert((row, col)) {
+                        continue;
+                    }
+                    if let Some(cell) = sheet.grid.get(row, col) {
+                        push_cell(&mut cells, pool, row, col, cell);
+                        remaining = remaining.saturating_sub(1);
+                        *budget = budget.saturating_sub(1);
+                    }
+                }
+            }
+        }
+    }
+
+    let included_cells = u32::try_from(cells.len()).unwrap_or(u32::MAX);
+    let truncated = included_cells < total_non_empty_cells;
+    let note = if truncated {
+        Some(format!(
+            "Preview limited: showing {} of {} non-empty cells.",
+            included_cells, total_non_empty_cells
+        ))
+    } else {
+        None
+    };
 
     SheetSnapshot {
         name,
-        nrows: sheet.grid.nrows,
-        ncols: sheet.grid.ncols,
+        nrows,
+        ncols,
         cells,
+        truncated,
+        included_cells,
+        total_non_empty_cells,
+        note,
     }
 }
 
@@ -51466,6 +51849,9 @@ fn snapshot_workbook(
     workbook: &excel_diff::Workbook,
     sheet_ids: &HashSet<excel_diff::StringId>,
     pool: &excel_diff::StringPool,
+    ops_by_sheet: &HashMap<String, Vec<&excel_diff::DiffOp>>,
+    caps: &SnapshotCaps,
+    budget: &mut usize,
 ) -> WorkbookSnapshot {
     if sheet_ids.is_empty() {
         return WorkbookSnapshot { sheets: Vec::new() };
@@ -51476,7 +51862,12 @@ fn snapshot_workbook(
         if !sheet_ids.contains(&sheet.name) {
             continue;
         }
-        sheets.push(snapshot_sheet(sheet, pool));
+        let sheet_name = pool.resolve(sheet.name).to_string();
+        let ops = ops_by_sheet
+            .get(&sheet_name)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        sheets.push(snapshot_sheet_limited(sheet, pool, ops, caps, budget));
     }
 
     WorkbookSnapshot { sheets }
@@ -51484,8 +51875,8 @@ fn snapshot_workbook(
 
 #[wasm_bindgen]
 pub fn diff_files_json(
-    old_bytes: &[u8],
-    new_bytes: &[u8],
+    old_bytes: Vec<u8>,
+    new_bytes: Vec<u8>,
     old_name: &str,
     new_name: &str,
 ) -> Result<String, JsValue> {
@@ -51498,8 +51889,8 @@ pub fn diff_files_json(
         return Err(JsValue::from_str("Old/new files must be the same type"));
     }
 
-    let old_cursor = Cursor::new(old_bytes.to_vec());
-    let new_cursor = Cursor::new(new_bytes.to_vec());
+    let old_cursor = Cursor::new(old_bytes);
+    let new_cursor = Cursor::new(new_bytes);
 
     let cfg = excel_diff::DiffConfig::default();
 
@@ -51526,8 +51917,8 @@ pub fn diff_files_json(
 
 #[wasm_bindgen]
 pub fn diff_files_with_sheets_json(
-    old_bytes: &[u8],
-    new_bytes: &[u8],
+    old_bytes: Vec<u8>,
+    new_bytes: Vec<u8>,
     old_name: &str,
     new_name: &str,
 ) -> Result<String, JsValue> {
@@ -51540,8 +51931,8 @@ pub fn diff_files_with_sheets_json(
         return Err(JsValue::from_str("Old/new files must be the same type"));
     }
 
-    let old_cursor = Cursor::new(old_bytes.to_vec());
-    let new_cursor = Cursor::new(new_bytes.to_vec());
+    let old_cursor = Cursor::new(old_bytes);
+    let new_cursor = Cursor::new(new_bytes);
     let cfg = excel_diff::DiffConfig::default();
 
     match kind_old {
@@ -51553,10 +51944,35 @@ pub fn diff_files_with_sheets_json(
 
             let report = pkg_old.diff(&pkg_new, &cfg);
             let sheet_ids = collect_sheet_ids(&report.ops);
+            let ops_by_sheet = group_ops_by_sheet(&report);
+            let caps = SnapshotCaps {
+                per_sheet: MAX_SNAPSHOT_CELLS_PER_SHEET,
+                max_rows: STRUCTURAL_PREVIEW_MAX_ROWS,
+                max_cols: STRUCTURAL_PREVIEW_MAX_COLS,
+                context_rows: SNAPSHOT_CONTEXT_ROWS,
+                context_cols: SNAPSHOT_CONTEXT_COLS,
+            };
 
-            let sheets = excel_diff::with_default_session(|session| SheetPairSnapshot {
-                old: snapshot_workbook(&pkg_old.workbook, &sheet_ids, &session.strings),
-                new: snapshot_workbook(&pkg_new.workbook, &sheet_ids, &session.strings),
+            let sheets = excel_diff::with_default_session(|session| {
+                let mut remaining = MAX_SNAPSHOT_CELLS_TOTAL;
+                SheetPairSnapshot {
+                    old: snapshot_workbook(
+                        &pkg_old.workbook,
+                        &sheet_ids,
+                        &session.strings,
+                        &ops_by_sheet,
+                        &caps,
+                        &mut remaining,
+                    ),
+                    new: snapshot_workbook(
+                        &pkg_new.workbook,
+                        &sheet_ids,
+                        &session.strings,
+                        &ops_by_sheet,
+                        &caps,
+                        &mut remaining,
+                    ),
+                }
             });
 
             let alignments = alignment::build_alignments(&report, &sheets);
@@ -51591,7 +52007,7 @@ pub fn diff_files_with_sheets_json(
 }
 
 #[wasm_bindgen]
-pub fn diff_workbooks_json(old_bytes: &[u8], new_bytes: &[u8]) -> Result<String, JsValue> {
+pub fn diff_workbooks_json(old_bytes: Vec<u8>, new_bytes: Vec<u8>) -> Result<String, JsValue> {
     diff_files_json(old_bytes, new_bytes, "old.xlsx", "new.xlsx")
 }
 
@@ -51608,9 +52024,9 @@ pub struct DiffSummary {
 }
 
 #[wasm_bindgen]
-pub fn diff_summary(old_bytes: &[u8], new_bytes: &[u8]) -> Result<DiffSummary, JsValue> {
-    let old_cursor = Cursor::new(old_bytes.to_vec());
-    let new_cursor = Cursor::new(new_bytes.to_vec());
+pub fn diff_summary(old_bytes: Vec<u8>, new_bytes: Vec<u8>) -> Result<DiffSummary, JsValue> {
+    let old_cursor = Cursor::new(old_bytes);
+    let new_cursor = Cursor::new(new_bytes);
 
     let pkg_old = excel_diff::WorkbookPackage::open(old_cursor)
         .map_err(|e| JsValue::from_str(&format!("Failed to open old file: {}", e)))?;
@@ -51626,6 +52042,339 @@ pub fn diff_summary(old_bytes: &[u8], new_bytes: &[u8]) -> Result<DiffSummary, J
     })
 }
 
+
+```
+
+---
+
+### File: `web\diff_worker.js`
+
+```javascript
+import init, { diff_files_with_sheets_json, get_version } from "./wasm/excel_diff_wasm.js";
+
+let initPromise = null;
+let cachedVersion = null;
+
+async function ensureInitialized() {
+  if (!initPromise) {
+    initPromise = (async () => {
+      await init();
+      cachedVersion = get_version();
+      return cachedVersion;
+    })();
+  }
+  return initPromise;
+}
+
+function postProgress(requestId, stage, detail) {
+  self.postMessage({ type: "progress", requestId, stage, detail });
+}
+
+self.addEventListener("message", async (event) => {
+  const msg = event.data || {};
+  const requestId = msg.requestId;
+  if (!msg.type) return;
+
+  try {
+    if (msg.type === "init") {
+      postProgress(requestId, "init", "Initializing engine");
+      const version = await ensureInitialized();
+      self.postMessage({ type: "ready", requestId, version });
+      return;
+    }
+
+    if (msg.type === "diff") {
+      await ensureInitialized();
+      postProgress(requestId, "diff", "Diffing workbooks");
+      let oldBytes = new Uint8Array(msg.oldBuffer);
+      let newBytes = new Uint8Array(msg.newBuffer);
+      let json = diff_files_with_sheets_json(
+        oldBytes,
+        newBytes,
+        msg.oldName || "old",
+        msg.newName || "new"
+      );
+      postProgress(requestId, "parse", "Parsing results");
+      let payload = JSON.parse(json);
+      self.postMessage({ type: "result", requestId, payload });
+      oldBytes = null;
+      newBytes = null;
+      json = null;
+      payload = null;
+      return;
+    }
+  } catch (err) {
+    const message = err && err.message ? err.message : String(err);
+    self.postMessage({ type: "error", requestId, message });
+  }
+});
+
+```
+
+---
+
+### File: `web\diff_worker_client.js`
+
+```javascript
+export function createDiffWorkerClient({ onStatus } = {}) {
+  let worker = null;
+  let current = null;
+  let requestCounter = 0;
+  let readyPromise = null;
+  let cachedVersion = null;
+  let disposed = false;
+
+  function nextRequestId() {
+    requestCounter += 1;
+    return requestCounter;
+  }
+
+  function notify(status) {
+    if (typeof onStatus === "function") {
+      onStatus(status);
+    }
+  }
+
+  function resetWorker() {
+    if (worker) {
+      worker.terminate();
+      worker = null;
+    }
+    current = null;
+    readyPromise = null;
+    cachedVersion = null;
+  }
+
+  function handleWorkerError(error) {
+    const message = error && error.message ? error.message : String(error);
+    if (current && current.reject) {
+      current.reject(new Error(message));
+      current = null;
+    }
+    resetWorker();
+  }
+
+  function handleMessage(event) {
+    const msg = event.data || {};
+    if (!current || msg.requestId !== current.id) return;
+
+    if (msg.type === "progress") {
+      notify({ stage: msg.stage, detail: msg.detail, source: "worker" });
+      return;
+    }
+
+    if (msg.type === "ready") {
+      cachedVersion = msg.version || "";
+      const resolve = current.resolve;
+      current = null;
+      resolve(cachedVersion);
+      return;
+    }
+
+    if (msg.type === "result") {
+      const resolve = current.resolve;
+      current = null;
+      resolve(msg.payload);
+      return;
+    }
+
+    if (msg.type === "error") {
+      const reject = current.reject;
+      current = null;
+      reject(new Error(msg.message || "Worker error"));
+    }
+  }
+
+  function ensureWorker() {
+    if (disposed) {
+      throw new Error("Diff worker client disposed.");
+    }
+    if (!worker) {
+      worker = new Worker(new URL("./diff_worker.js", import.meta.url), { type: "module" });
+      worker.addEventListener("message", handleMessage);
+      worker.addEventListener("error", handleWorkerError);
+      worker.addEventListener("messageerror", handleWorkerError);
+    }
+    return worker;
+  }
+
+  async function ready() {
+    if (cachedVersion) return cachedVersion;
+    if (readyPromise) return readyPromise;
+    const w = ensureWorker();
+    const id = nextRequestId();
+    readyPromise = new Promise((resolve, reject) => {
+      current = { id, resolve, reject, kind: "init" };
+      w.postMessage({ type: "init", requestId: id });
+    });
+    return readyPromise;
+  }
+
+  async function diff(files, options = {}) {
+    if (current) {
+      throw new Error("Diff already in progress.");
+    }
+    await ready();
+    const w = ensureWorker();
+    const id = nextRequestId();
+    return new Promise((resolve, reject) => {
+      current = { id, resolve, reject, kind: "diff" };
+      w.postMessage(
+        {
+          type: "diff",
+          requestId: id,
+          oldName: files.oldName,
+          newName: files.newName,
+          oldBuffer: files.oldBuffer,
+          newBuffer: files.newBuffer,
+          options
+        },
+        [files.oldBuffer, files.newBuffer]
+      );
+    });
+  }
+
+  function cancel() {
+    if (!worker) return false;
+    if (current && current.reject) {
+      current.reject(new Error("Diff canceled."));
+      current = null;
+    }
+    resetWorker();
+    return true;
+  }
+
+  function dispose() {
+    disposed = true;
+    resetWorker();
+  }
+
+  return {
+    ready,
+    diff,
+    cancel,
+    dispose
+  };
+}
+
+```
+
+---
+
+### File: `web\export.js`
+
+```javascript
+function escapeHtml(text) {
+  return String(text ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function safeName(value, fallback) {
+  const text = String(value || fallback || "file").trim();
+  const cleaned = text.replace(/[^a-z0-9._-]+/gi, "_").replace(/^_+|_+$/g, "");
+  return cleaned || fallback || "file";
+}
+
+function downloadBlob(filename, mime, textOrBytes) {
+  const blob = textOrBytes instanceof Blob ? textOrBytes : new Blob([textOrBytes], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export function downloadReportJson({ report, meta }) {
+  const payload = { meta: meta || {}, report: report || {} };
+  const json = JSON.stringify(payload, null, 2);
+  const oldName = safeName(meta?.oldName, "old");
+  const newName = safeName(meta?.newName, "new");
+  const date = (meta?.createdAtIso || new Date().toISOString()).slice(0, 10);
+  const filename = `excel-diff-report__${oldName}__${newName}__${date}.json`;
+  downloadBlob(filename, "application/json", json);
+}
+
+export function downloadHtmlReport({
+  title,
+  meta,
+  renderedResultsHtml,
+  cssText,
+  reportJsonText,
+  gridPreviews
+}) {
+  const safeTitle = escapeHtml(title || "Excel Diff Report");
+  const createdAt = escapeHtml(meta?.createdAtIso || new Date().toISOString());
+  const oldName = escapeHtml(meta?.oldName || "Old file");
+  const newName = escapeHtml(meta?.newName || "New file");
+  const reportPre = escapeHtml(reportJsonText || "");
+  const previews = gridPreviews || {};
+  const previewHtml = Object.keys(previews).length
+    ? `
+      <section class="export-previews">
+        <h2>Grid previews</h2>
+        ${Object.entries(previews)
+          .map(
+            ([sheet, dataUrl]) => `
+          <div class="export-preview">
+            <h3>${escapeHtml(sheet)}</h3>
+            <img src="${dataUrl}" alt="Grid preview for ${escapeHtml(sheet)}" />
+          </div>`
+          )
+          .join("")}
+      </section>
+    `
+    : "";
+
+  const html = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${safeTitle}</title>
+    <style>
+${cssText || ""}
+      .export-wrap { max-width: 1100px; margin: 32px auto; padding: 0 20px 40px; }
+      .export-meta { color: var(--text-secondary); margin-bottom: 24px; }
+      .export-previews img { max-width: 100%; border: 1px solid var(--border-primary); border-radius: 8px; background: var(--bg-primary); }
+      .export-preview { margin-bottom: 24px; }
+      pre { white-space: pre-wrap; word-break: break-word; background: var(--bg-primary); border: 1px solid var(--border-primary); color: var(--text-secondary); padding: 16px; border-radius: 8px; }
+    </style>
+  </head>
+  <body>
+    <div class="export-wrap">
+      <header>
+        <h1>${safeTitle}</h1>
+        <div class="export-meta">
+          <div><strong>Old:</strong> ${oldName}</div>
+          <div><strong>New:</strong> ${newName}</div>
+          <div><strong>Generated:</strong> ${createdAt}</div>
+        </div>
+      </header>
+      <main>
+        ${renderedResultsHtml || ""}
+        ${previewHtml}
+        <section class="export-report-json">
+          <h2>Report JSON</h2>
+          <pre>${reportPre}</pre>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>`;
+
+  const oldSafe = safeName(meta?.oldName, "old");
+  const newSafe = safeName(meta?.newName, "new");
+  const date = (meta?.createdAtIso || new Date().toISOString()).slice(0, 10);
+  const filename = `excel-diff-report__${oldSafe}__${newSafe}__${date}.html`;
+  downloadBlob(filename, "text/html", html);
+}
 
 ```
 
@@ -53032,6 +53781,14 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
     },
     flashAnchor(anchorIdOrIndex) {
       return flashAnchor(anchorIdOrIndex);
+    },
+    capturePng() {
+      paint();
+      try {
+        return canvas.toDataURL("image/png");
+      } catch (err) {
+        return "";
+      }
     }
   };
 }
@@ -53049,11 +53806,11 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Excel Diff</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none';" />
     <style>
       :root {
+        --font-sans: system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+        --font-mono: ui-monospace, "SFMono-Regular", "Menlo", "Consolas", "Liberation Mono", monospace;
         --bg-primary: #0d1117;
         --bg-secondary: #161b22;
         --bg-tertiary: #21262d;
@@ -53086,7 +53843,7 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
       }
 
       body {
-        font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+        font-family: var(--font-sans);
         background: var(--bg-primary);
         color: var(--text-primary);
         min-height: 100vh;
@@ -53136,7 +53893,7 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
       }
 
       .version {
-        font-family: 'JetBrains Mono', monospace;
+        font-family: var(--font-mono);
         font-size: 12px;
         color: var(--text-muted);
         background: var(--bg-tertiary);
@@ -53170,6 +53927,63 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
         .diff-btn {
           width: 100%;
           justify-content: center;
+        }
+      }
+
+      .action-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+        margin-top: 20px;
+      }
+
+      .action-left {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      .export-group {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .secondary-btn {
+        background: var(--bg-primary);
+        border: 1px solid var(--border-primary);
+        color: var(--text-secondary);
+        padding: 10px 14px;
+        border-radius: 10px;
+        font-size: 12px;
+        cursor: pointer;
+        transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
+        font-family: inherit;
+      }
+
+      .secondary-btn:hover {
+        border-color: var(--accent-blue);
+        color: var(--text-primary);
+      }
+
+      .secondary-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .privacy-note {
+        font-size: 12px;
+        color: var(--text-muted);
+      }
+
+      @media (max-width: 800px) {
+        .action-bar {
+          flex-direction: column;
+          align-items: flex-start;
         }
       }
 
@@ -53232,7 +54046,7 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
       }
 
       .file-name {
-        font-family: 'JetBrains Mono', monospace;
+        font-family: var(--font-mono);
         font-size: 13px;
         color: var(--accent-green);
         margin-top: 8px;
@@ -53268,6 +54082,10 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
       }
 
       #status {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
         text-align: center;
         padding: 16px;
         color: var(--text-secondary);
@@ -53278,8 +54096,22 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
         color: var(--accent-blue);
       }
 
+      #status.loading::before {
+        content: "";
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        border: 2px solid rgba(88, 166, 255, 0.3);
+        border-top-color: var(--accent-blue);
+        animation: statusSpin 1s linear infinite;
+      }
+
       #status.error {
         color: var(--accent-red);
+      }
+
+      @keyframes statusSpin {
+        to { transform: rotate(360deg); }
       }
 
       .results {
@@ -53328,7 +54160,7 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
       .summary-card .count {
         font-size: 36px;
         font-weight: 700;
-        font-family: 'JetBrains Mono', monospace;
+        font-family: var(--font-mono);
       }
 
       .summary-card.added .count { color: var(--accent-green); }
@@ -53524,7 +54356,7 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
       }
 
       .sheet-index-badge {
-        font-family: 'JetBrains Mono', monospace;
+        font-family: var(--font-mono);
         font-size: 11px;
         padding: 2px 8px;
         border-radius: 10px;
@@ -53574,6 +54406,11 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
       .status-pill.skipped {
         border-color: var(--accent-yellow);
         color: var(--accent-yellow);
+      }
+
+      .status-pill.partial {
+        border-color: var(--accent-blue);
+        color: var(--accent-blue);
       }
 
       .status-pill.missing {
@@ -53664,7 +54501,7 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
       }
 
       .sheet-badge {
-        font-family: 'JetBrains Mono', monospace;
+        font-family: var(--font-mono);
         font-size: 12px;
         padding: 4px 10px;
         border-radius: 20px;
@@ -53722,7 +54559,7 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
         gap: 12px;
         padding: 12px 16px;
         border-radius: 8px;
-        font-family: 'JetBrains Mono', monospace;
+        font-family: var(--font-mono);
         font-size: 13px;
         position: relative;
       }
@@ -53846,7 +54683,7 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
         border: 1px solid var(--border-primary);
         border-radius: 8px;
         overflow: hidden;
-        font-family: 'JetBrains Mono', monospace;
+        font-family: var(--font-mono);
         font-size: 12px;
       }
 
@@ -53929,7 +54766,7 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
       }
 
       .raw-json-content pre {
-        font-family: 'JetBrains Mono', monospace;
+        font-family: var(--font-mono);
         font-size: 12px;
         line-height: 1.6;
         color: var(--text-secondary);
@@ -54004,7 +54841,7 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
         gap: 8px;
         padding: 12px 16px;
         border-radius: 8px;
-        font-family: 'JetBrains Mono', monospace;
+        font-family: var(--font-mono);
         font-size: 13px;
         font-weight: 500;
       }
@@ -54044,7 +54881,7 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
         padding: 8px 12px;
         border-right: 1px solid var(--border-secondary);
         border-bottom: 1px solid var(--border-secondary);
-        font-family: 'JetBrains Mono', monospace;
+        font-family: var(--font-mono);
         font-size: 12px;
         min-height: 36px;
         display: flex;
@@ -54245,6 +55082,16 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
         box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.6);
       }
 
+      .grid-partial-warning {
+        padding: 12px 16px;
+        border-radius: 10px;
+        background: rgba(88, 166, 255, 0.12);
+        border: 1px solid rgba(88, 166, 255, 0.4);
+        color: var(--text-secondary);
+        font-size: 13px;
+        margin-bottom: 12px;
+      }
+
       .grid-viewer {
         display: grid;
         gap: 12px;
@@ -54379,11 +55226,11 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
       }
 
       .grid-tooltip-value {
-        font-family: 'JetBrains Mono', monospace;
+        font-family: var(--font-mono);
       }
 
       .grid-tooltip-formula {
-        font-family: 'JetBrains Mono', monospace;
+        font-family: var(--font-mono);
         color: var(--text-muted);
       }
 
@@ -54424,7 +55271,7 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
       }
 
       .grid-inspector-value {
-        font-family: 'JetBrains Mono', monospace;
+        font-family: var(--font-mono);
         color: var(--text-primary);
         text-align: right;
         word-break: break-word;
@@ -54533,6 +55380,16 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
             <span>→</span>
           </button>
         </div>
+        <div class="action-bar">
+          <div class="action-left">
+            <button class="secondary-btn" id="cancel" disabled>Cancel</button>
+            <div class="export-group">
+              <button class="secondary-btn" id="exportJson" disabled>Download report JSON</button>
+              <button class="secondary-btn" id="exportHtml" disabled>Download HTML report</button>
+            </div>
+          </div>
+          <div class="privacy-note">Runs locally in your browser. Files are not uploaded.</div>
+        </div>
       </section>
 
       <div id="status"></div>
@@ -54561,10 +55418,11 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
 ### File: `web\main.js`
 
 ```javascript
-import init, { diff_files_with_sheets_json, get_version } from "./wasm/excel_diff_wasm.js";
 import { renderWorkbookVm } from "./render.js";
 import { buildWorkbookViewModel } from "./view_model.js";
 import { mountSheetGridViewer } from "./grid_viewer.js";
+import { createDiffWorkerClient } from "./diff_worker_client.js";
+import { downloadReportJson, downloadHtmlReport } from "./export.js";
 
 function byId(id) {
   const el = document.getElementById(id);
@@ -54578,8 +55436,40 @@ function setStatus(msg, type = "") {
   status.className = type;
 }
 
-async function readFileBytes(file) {
-  return new Uint8Array(await file.arrayBuffer());
+function nextFrame() {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+let diffClient = null;
+let reviewController = null;
+let activeViewerManager = null;
+let engineVersion = "";
+let isBusy = false;
+let activeRunId = 0;
+let lastReport = null;
+let lastMeta = null;
+
+function setBusy(state) {
+  isBusy = state;
+  byId("run").disabled = state;
+  const cancelBtn = byId("cancel");
+  if (cancelBtn) cancelBtn.disabled = !state;
+}
+
+function setExportsEnabled(enabled) {
+  const jsonBtn = byId("exportJson");
+  const htmlBtn = byId("exportHtml");
+  if (jsonBtn) jsonBtn.disabled = !enabled;
+  if (htmlBtn) htmlBtn.disabled = !enabled;
+}
+
+function clearResults() {
+  byId("results").innerHTML = "";
+  byId("results").classList.remove("visible");
+  byId("raw").textContent = "";
+  byId("rawJsonContent").classList.remove("visible");
+  lastReport = null;
+  lastMeta = null;
 }
 
 function setupFileDrop(dropId, inputId, nameId) {
@@ -54620,6 +55510,78 @@ function setupFileDrop(dropId, inputId, nameId) {
   });
 }
 
+const STAGE_LABELS = {
+  init: "Initializing engine...",
+  validate: "Validating inputs...",
+  read: "Reading files...",
+  transfer: "Transferring files to worker...",
+  diff: "Diffing workbooks...",
+  parse: "Parsing results...",
+  render: "Rendering results...",
+  hydrate: "Hydrating viewers..."
+};
+
+function showStage(stage, detail) {
+  const text = detail || STAGE_LABELS[stage] || "";
+  if (text) {
+    setStatus(text, "loading");
+  }
+}
+
+function handleWorkerStatus(status) {
+  if (!isBusy) return;
+  if (status && status.stage) {
+    showStage(status.stage, status.detail);
+  }
+}
+
+function buildMeta(oldFile, newFile) {
+  return {
+    version: engineVersion,
+    oldName: oldFile?.name || "",
+    newName: newFile?.name || "",
+    createdAtIso: new Date().toISOString()
+  };
+}
+
+function collectGridPreviews() {
+  const previews = {};
+  if (!activeViewerManager || typeof activeViewerManager.getMountedViewers !== "function") {
+    return previews;
+  }
+  for (const [sheetName, viewer] of activeViewerManager.getMountedViewers()) {
+    if (!viewer || typeof viewer.capturePng !== "function") continue;
+    const dataUrl = viewer.capturePng();
+    if (dataUrl) previews[sheetName] = dataUrl;
+  }
+  return previews;
+}
+
+function handleError(err) {
+  const message = err && err.message ? err.message : String(err);
+  setStatus(`Error: ${message}`, "error");
+  byId("results").innerHTML = `
+    <div class="warnings-section">
+      <div class="warnings-title">
+        <span>!</span>
+        <span>Error</span>
+      </div>
+      <p style="color: var(--text-secondary); margin-top: 8px;">${String(message)}</p>
+    </div>
+  `;
+  byId("results").classList.add("visible");
+}
+
+function cancelDiff() {
+  if (!isBusy) return;
+  activeRunId += 1;
+  diffClient.cancel();
+  clearResults();
+  setExportsEnabled(false);
+  setBusy(false);
+  setStatus("Canceled.", "");
+}
+
 async function runDiff() {
   const oldFile = byId("fileOld").files[0];
   const newFile = byId("fileNew").files[0];
@@ -54630,53 +55592,69 @@ async function runDiff() {
   }
 
   cleanupViewers();
-  setStatus("Comparing files...", "loading");
-  byId("results").innerHTML = "";
-  byId("results").classList.remove("visible");
-  byId("raw").textContent = "";
-  byId("rawJsonContent").classList.remove("visible");
+  clearResults();
+  setExportsEnabled(false);
+
+  activeRunId += 1;
+  const runId = activeRunId;
+  setBusy(true);
+  showStage("validate");
+  showStage("read");
 
   try {
-    const oldBytes = await readFileBytes(oldFile);
-    const newBytes = await readFileBytes(newFile);
+    const oldBuffer = await oldFile.arrayBuffer();
+    const newBuffer = await newFile.arrayBuffer();
+    if (runId !== activeRunId) return;
 
-    const json = diff_files_with_sheets_json(oldBytes, newBytes, oldFile.name, newFile.name);
-    const payload = JSON.parse(json);
-    const report = payload.report || payload;
+    showStage("transfer");
+
     const options = { ignoreBlankToBlank: true };
-    renderResults(payload, options);
+    const payload = await diffClient.diff(
+      {
+        oldName: oldFile.name,
+        newName: newFile.name,
+        oldBuffer,
+        newBuffer
+      },
+      options
+    );
+    if (runId !== activeRunId) return;
 
+    showStage("render");
+    await nextFrame();
+
+    const report = payload.report || payload;
+    renderResults(payload, options);
     byId("raw").textContent = JSON.stringify(report, null, 2);
 
     const opCount = report.ops ? report.ops.length : 0;
     if (opCount === 0) {
-      setStatus("✓ Files are identical", "");
+      setStatus("Files are identical.", "");
     } else {
-      setStatus(`Found ${opCount} difference${opCount !== 1 ? "s" : ""}`, "");
+      setStatus(`Found ${opCount} difference${opCount !== 1 ? "s" : ""}.`, "");
     }
-    
+
+    lastReport = report;
+    lastMeta = buildMeta(oldFile, newFile);
+    setExportsEnabled(true);
   } catch (e) {
-    setStatus("Error: " + (e.message || String(e)), "error");
-    byId("results").innerHTML = `
-      <div class="warnings-section">
-        <div class="warnings-title">
-          <span>❌</span>
-          <span>Error</span>
-        </div>
-        <p style="color: var(--text-secondary); margin-top: 8px;">${String(e.message || e)}</p>
-      </div>
-    `;
-    byId("results").classList.add("visible");
+    if (!isBusy && String(e).toLowerCase().includes("canceled")) {
+      return;
+    }
+    handleError(e);
+  } finally {
+    if (runId === activeRunId) {
+      setBusy(false);
+    }
   }
 }
-
-let reviewController = null;
 
 function cleanupViewers() {
   if (reviewController) {
     reviewController.cleanup();
     reviewController = null;
   }
+  activeViewerManager = null;
 }
 
 function renderResults(payload, options = {}, state = {}) {
@@ -54686,6 +55664,7 @@ function renderResults(payload, options = {}, state = {}) {
   resultsEl.innerHTML = renderWorkbookVm(workbookVm);
   resultsEl.classList.add("visible");
   reviewController = setupReviewWorkflow(resultsEl, workbookVm, payload, options, state);
+  activeViewerManager = reviewController.viewerManager || null;
   return workbookVm;
 }
 
@@ -54968,6 +55947,7 @@ function setupReviewWorkflow(rootEl, workbookVm, payloadCache, options = {}, sta
   }
 
   return {
+    viewerManager,
     cleanup() {
       rootEl.removeEventListener("click", onRootClick);
       rootEl.removeEventListener("input", onRootInput);
@@ -54999,6 +55979,9 @@ function hydrateGridViewers(rootEl, workbookVm, displayOptions = {}, expandedShe
     const sheetName = section.dataset.sheet || mount.dataset.sheet;
     const sheetVm = sheetMap.get(sheetName);
     if (!sheetVm) return;
+    if (typeof sheetVm.ensureCellIndex === "function") {
+      sheetVm.ensureCellIndex();
+    }
     const initialMode = mount.dataset.initialMode || "side_by_side";
     const initialAnchor = mount.dataset.initialAnchor || "0";
     const viewer = mountSheetGridViewer({
@@ -55018,6 +56001,14 @@ function hydrateGridViewers(rootEl, workbookVm, displayOptions = {}, expandedShe
     section.classList.add("expanded");
     mountForSection(section);
     return viewers.get(sheetName) || null;
+  }
+
+  function getViewer(sheetName) {
+    return viewers.get(sheetName) || null;
+  }
+
+  function getMountedViewers() {
+    return new Map(viewers);
   }
 
   function setDisplayOptions(nextOptions) {
@@ -55060,6 +56051,8 @@ function hydrateGridViewers(rootEl, workbookVm, displayOptions = {}, expandedShe
 
   return {
     ensureViewer,
+    getViewer,
+    getMountedViewers,
     setDisplayOptions,
     cleanup() {
       rootEl.removeEventListener("click", onHeaderClick);
@@ -55073,20 +56066,54 @@ function hydrateGridViewers(rootEl, workbookVm, displayOptions = {}, expandedShe
 
 async function main() {
   setStatus("Loading...", "loading");
-  
+
   try {
-    await init();
-    byId("version").textContent = get_version();
+    diffClient = createDiffWorkerClient({ onStatus: handleWorkerStatus });
+    showStage("init");
+    engineVersion = await diffClient.ready();
+    byId("version").textContent = engineVersion;
     setStatus("");
-    
+
     setupFileDrop("dropOld", "fileOld", "nameOld");
     setupFileDrop("dropNew", "fileNew", "nameNew");
-    
+
     byId("run").addEventListener("click", runDiff);
-    
+    const cancelBtn = byId("cancel");
+    if (cancelBtn) cancelBtn.addEventListener("click", cancelDiff);
+
+    const exportJsonBtn = byId("exportJson");
+    if (exportJsonBtn) {
+      exportJsonBtn.addEventListener("click", () => {
+        if (!lastReport || !lastMeta) return;
+        downloadReportJson({ report: lastReport, meta: lastMeta });
+      });
+    }
+
+    const exportHtmlBtn = byId("exportHtml");
+    if (exportHtmlBtn) {
+      exportHtmlBtn.addEventListener("click", () => {
+        if (!lastReport || !lastMeta) return;
+        const resultsHtml = byId("results").innerHTML;
+        const cssText = document.querySelector("style")?.textContent || "";
+        const reportJsonText = JSON.stringify(lastReport, null, 2);
+        const gridPreviews = collectGridPreviews();
+        downloadHtmlReport({
+          title: "Excel Diff Report",
+          meta: lastMeta,
+          renderedResultsHtml: resultsHtml,
+          cssText,
+          reportJsonText,
+          gridPreviews
+        });
+      });
+    }
+
     byId("toggleJson").addEventListener("click", () => {
       byId("rawJsonContent").classList.toggle("visible");
     });
+
+    setBusy(false);
+    setExportsEnabled(false);
   } catch (e) {
     setStatus("Failed to load: " + String(e), "error");
   }
@@ -56183,6 +57210,7 @@ function renderPreviewLimitations(vm) {
   return `
     <div class="preview-limitations">
       <div class="preview-limitations-title">Preview limitations</div>
+      <p><strong>Partial</strong> means the preview is limited for performance; edited cells remain exact.</p>
       <p><strong>Skipped</strong> means the aligned view was too large or inconsistent to render. The change list is still valid.</p>
       <p><strong>Missing</strong> means snapshots or alignment data were not available for that sheet.</p>
     </div>
@@ -56408,6 +57436,15 @@ function renderSheetGridVm(sheetVm) {
     `;
   }
 
+  const warningHtml =
+    status.kind === "partial"
+      ? `
+        <div class="grid-partial-warning">
+          ${esc(status.message || "Preview limited for performance; edited cells remain exact.")}
+        </div>
+      `
+      : "";
+
   const regionIds = sheetVm.renderPlan.regionsToRender || [];
   const hasGridAnchors = Array.isArray(sheetVm.changes?.anchors)
     ? sheetVm.changes.anchors.some(anchor => anchor.target?.kind === "grid")
@@ -56420,6 +57457,7 @@ function renderSheetGridVm(sheetVm) {
   const initialAnchorId = initialAnchor ? initialAnchor.id : "0";
 
   return `
+    ${warningHtml}
     <div class="grid-viewer-mount" data-sheet="${esc(sheetVm.name)}" data-initial-mode="side_by_side" data-initial-anchor="${esc(initialAnchorId)}"></div>
     ${renderGridLegend()}
   `;
@@ -57727,7 +58765,7 @@ function buildChangeAnchors({ sheetName, status, items, regions, rowsVm, colsVm 
   }
 
   const canGrid =
-    status?.kind === "ok" &&
+    (status?.kind === "ok" || status?.kind === "partial") &&
     Array.isArray(rowsVm?.entries) &&
     Array.isArray(colsVm?.entries) &&
     rowsVm.entries.length > 0 &&
@@ -58004,8 +59042,13 @@ function buildSheetViewModel({ report, sheetName, ops, oldSheet, newSheet, align
   const rowsVm = makeAxisVm(rowEntries, oldRows, newRows);
   const colsVm = makeAxisVm(colEntries, oldCols, newCols);
 
-  const oldCells = makeCellMap(oldSheet);
-  const newCells = makeCellMap(newSheet);
+  let oldCells = null;
+  let newCells = null;
+
+  function ensureCellMaps() {
+    if (!oldCells) oldCells = makeCellMap(oldSheet);
+    if (!newCells) newCells = makeCellMap(newSheet);
+  }
   const editMap = makeEditMap(report, ops, rowsVm, colsVm, opts);
 
   const baseRegions = buildRegions({ ops, rowsVm, colsVm, editMap, opts });
@@ -58033,24 +59076,48 @@ function buildSheetViewModel({ report, sheetName, ops, oldSheet, newSheet, align
     }
   }
 
+  const preview = {
+    truncatedOld: Boolean(oldSheet?.truncated),
+    truncatedNew: Boolean(newSheet?.truncated)
+  };
+  if (oldSheet?.note || newSheet?.note) {
+    preview.note = oldSheet?.note || newSheet?.note;
+  }
+
   let status = { kind: "ok" };
   if (!alignment || alignment.skipped) {
+    const message = alignment?.skip_reason
+      ? alignment.skip_reason
+      : "Grid preview skipped because the aligned view is too large or inconsistent.";
     status = alignment?.skipped
-      ? { kind: "skipped", message: "Grid preview skipped because the aligned view is too large or inconsistent." }
+      ? { kind: "skipped", message }
       : { kind: "missing", message: "Alignment data is missing for this sheet." };
   } else if (rowsCount === 0 || colsCount === 0) {
     status = { kind: "missing", message: "Sheet snapshots are missing for this sheet." };
+  } else if (preview.truncatedOld || preview.truncatedNew) {
+    status = {
+      kind: "partial",
+      message: preview.note || "Preview limited for performance; edited cells remain exact."
+    };
   }
 
   const anchors = buildChangeAnchors({ sheetName, status, items, regions: baseRegions, rowsVm, colsVm });
   attachNavTargets(items, anchors);
 
-  const regionsToRender = status.kind === "ok" ? baseRegions.map(region => region.id) : [];
+  const regionsToRender =
+    status.kind === "ok" || status.kind === "partial"
+      ? baseRegions.map(region => region.id)
+      : [];
 
   return {
     name: sheetName,
     axis: { rows: rowsVm, cols: colsVm },
-    cellAt: (viewRow, viewCol) => buildCellVm(viewRow, viewCol, rowsVm, colsVm, oldCells, newCells, editMap),
+    preview,
+    ensureCellIndex: () => ensureCellMaps(),
+    cellAt: (viewRow, viewCol) => {
+      ensureCellMaps();
+      return buildCellVm(viewRow, viewCol, rowsVm, colsVm, oldCells, newCells, editMap);
+    },
     changes: { items, regions: baseRegions, anchors },
     renderPlan: {
       regionsToRender,

@@ -1,0 +1,18 @@
+[package]
+name = "excel_diff_desktop"
+version = "0.1.0"
+edition = "2021"
+description = "Desktop shell for Excel Diff"
+license = "MIT"
+build = "build.rs"
+
+[dependencies]
+tauri = { version = "2.5.3" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+excel_diff = { path = "../../core", default-features = false, features = ["excel-open-xml", "model-diff"] }
+ui_payload = { path = "../../ui_payload" }
+rfd = "0.14"
+
+[build-dependencies]
+tauri-build = { version = "2.5.3" }

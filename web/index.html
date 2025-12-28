@@ -178,6 +178,91 @@
         color: var(--text-muted);
       }
 
+      .recents-section {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-primary);
+        border-radius: 16px;
+        padding: 20px 24px;
+        margin-bottom: 32px;
+        display: none;
+      }
+
+      .recents-section.visible {
+        display: block;
+      }
+
+      .recents-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+
+      .recents-title {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      .recents-empty {
+        font-size: 13px;
+        color: var(--text-muted);
+      }
+
+      .recents-list {
+        display: grid;
+        gap: 12px;
+      }
+
+      .recent-item {
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border-primary);
+        border-radius: 12px;
+        padding: 12px 16px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+
+      .recent-main {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 200px;
+      }
+
+      .recent-names {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+      }
+
+      .recent-name {
+        font-family: var(--font-mono);
+        color: var(--text-primary);
+      }
+
+      .recent-arrow {
+        color: var(--text-muted);
+      }
+
+      .recent-meta {
+        font-size: 12px;
+        color: var(--text-muted);
+      }
+
+      .recent-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
       @media (max-width: 800px) {
         .action-bar {
           flex-direction: column;
@@ -1588,6 +1673,14 @@
           </div>
           <div class="privacy-note">Runs locally in your browser. Files are not uploaded.</div>
         </div>
+      </section>
+
+      <section class="recents-section" id="recentsSection">
+        <div class="recents-header">
+          <div class="recents-title">Recent comparisons</div>
+        </div>
+        <div class="recents-empty" id="recentsEmpty">No recent comparisons yet.</div>
+        <div class="recents-list" id="recentsList"></div>
       </section>
 
       <div id="status"></div>

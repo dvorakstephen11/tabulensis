@@ -1,19 +1,12 @@
 [package]
-name = "excel_diff_wasm"
+name = "ui_payload"
 version = "0.1.0"
 edition = "2024"
-description = "WebAssembly bindings for excel_diff"
+description = "UI payload builder for excel_diff (snapshots + alignment)"
 license = "MIT"
 repository = "https://github.com/dvora/excel_diff"
 homepage = "https://github.com/dvora/excel_diff"
 
-[lib]
-crate-type = ["cdylib", "rlib"]
-
 [dependencies]
 excel_diff = { path = "../core", default-features = false, features = ["excel-open-xml", "model-diff"] }
-wasm-bindgen = "0.2"
-serde_json = "1.0"
-console_error_panic_hook = "0.1"
-ui_payload = { path = "../ui_payload" }
-
+serde = { version = "1.0", features = ["derive"] }

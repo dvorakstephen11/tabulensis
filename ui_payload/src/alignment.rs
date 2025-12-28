@@ -6,7 +6,7 @@ use crate::{SheetPairSnapshot, SheetSnapshot};
 
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
-enum AxisKind {
+pub enum AxisKind {
     Match,
     Insert,
     Delete,
@@ -15,7 +15,7 @@ enum AxisKind {
 }
 
 #[derive(Serialize)]
-struct AxisEntry {
+pub struct AxisEntry {
     old: Option<u32>,
     new: Option<u32>,
     kind: AxisKind,
@@ -24,7 +24,7 @@ struct AxisEntry {
 }
 
 #[derive(Serialize)]
-struct MoveGroup {
+pub struct MoveGroup {
     id: String,
     axis: String,
     src_start: u32,
@@ -33,7 +33,7 @@ struct MoveGroup {
 }
 
 #[derive(Serialize)]
-pub(crate) struct SheetAlignment {
+pub struct SheetAlignment {
     sheet: String,
     rows: Vec<AxisEntry>,
     cols: Vec<AxisEntry>,
@@ -47,7 +47,7 @@ pub(crate) struct SheetAlignment {
 const MAX_VIEW_ROWS: u32 = 10_000;
 const MAX_VIEW_COLS: u32 = 200;
 
-pub(crate) fn build_alignments(
+pub fn build_alignments(
     report: &excel_diff::DiffReport,
     sheets: &SheetPairSnapshot,
 ) -> Vec<SheetAlignment> {
