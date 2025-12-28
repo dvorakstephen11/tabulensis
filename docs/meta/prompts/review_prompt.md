@@ -51664,27 +51664,36 @@ function safeText(value) {
   return String(value);
 }
 
-function resolveCellText(cell, side) {
-  if (!cell) return "";
+function resolveCellParts(cell, side) {
+  if (!cell) return { value: "", formula: "" };
   if (cell.edit) {
     const value = side === "old" ? cell.edit.fromValue : cell.edit.toValue;
     const formula = side === "old" ? cell.edit.fromFormula : cell.edit.toFormula;
-    if (value) return value;
-    if (formula) return formula;
+    if (value || formula) return { value: safeText(value), formula: safeText(formula) };
   }
   const payload = side === "old" ? cell.old : cell.new;
-  if (!payload || !payload.cell) return "";
-  return payload.cell.value || payload.cell.formula || "";
+  if (!payload || !payload.cell) return { value: "", formula: "" };
+  return { value: safeText(payload.cell.value || ""), formula: safeText(payload.cell.formula || "") };
 }
 
-function resolveUnifiedText(cell) {
-  if (!cell) return "";
-  if (cell.diffKind === "added") return resolveCellText(cell, "new");
-  if (cell.diffKind === "removed") return resolveCellText(cell, "old");
-  if (cell.diffKind === "moved") {
-    return cell.moveRole === "src" ? resolveCellText(cell, "old") : resolveCellText(cell, "new");
+function resolveCellText(cell, side, contentMode) {
+  const parts = resolveCellParts(cell, side);
+  if (contentMode === "formulas") {
+    return parts.formula || parts.value || "";
   }
-  return resolveCellText(cell, "new") || resolveCellText(cell, "old");
+  return parts.value || parts.formula || "";
+}
+
+function resolveUnifiedText(cell, contentMode) {
+  if (!cell) return "";
+  if (cell.diffKind === "added") return resolveCellText(cell, "new", contentMode);
+  if (cell.diffKind === "removed") return resolveCellText(cell, "old", contentMode);
+  if (cell.diffKind === "moved") {
+    return cell.moveRole === "src"
+      ? resolveCellText(cell, "old", contentMode)
+      : resolveCellText(cell, "new", contentMode);
+  }
+  return resolveCellText(cell, "new", contentMode) || resolveCellText(cell, "old", contentMode);
 }
 
 function truncateText(ctx, text, maxWidth) {
@@ -51791,12 +51800,27 @@ function drawCellText(ctx, x, y, width, height, text, color) {
   ctx.fillText(value, x + paddingX, y + height / 2);
 }
 
-function drawEditedUnified(ctx, x, y, width, height, cell, theme) {
+function drawCellTextLines(ctx, x, y, width, height, primary, secondary, primaryColor, secondaryColor) {
+  const paddingX = 8;
+  const maxWidth = Math.max(0, width - paddingX * 2);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.font = "11px 'JetBrains Mono', monospace";
+  ctx.fillStyle = primaryColor;
+  const primaryText = truncateText(ctx, primary, maxWidth);
+  ctx.fillText(primaryText, x + paddingX, y + 6);
+  ctx.font = "10px 'JetBrains Mono', monospace";
+  ctx.fillStyle = secondaryColor;
+  const secondaryText = truncateText(ctx, secondary, maxWidth);
+  ctx.fillText(secondaryText, x + paddingX, y + height / 2);
+}
+
+function drawEditedUnified(ctx, x, y, width, height, cell, theme, contentMode) {
   const paddingX = 8;
   const paddingY = 6;
   const maxWidth = Math.max(0, width - paddingX * 2);
-  const oldText = resolveCellText(cell, "old");
-  const newText = resolveCellText(cell, "new");
+  const oldText = resolveCellText(cell, "old", contentMode);
+  const newText = resolveCellText(cell, "new", contentMode);
 
   ctx.font = "10px 'JetBrains Mono', monospace";
   ctx.textBaseline = "top";
@@ -51813,7 +51837,7 @@ function drawEditedUnified(ctx, x, y, width, height, cell, theme) {
   ctx.fillText(newDisplay, x + paddingX, y + paddingY + 14);
 }
 
-function drawCell(ctx, x, y, width, height, cell, theme, mode, side) {
+function drawCell(ctx, x, y, width, height, cell, theme, mode, side, contentMode) {
   const style = cellStyle(cell, theme);
   ctx.fillStyle = style.bg;
   ctx.fillRect(x, y, width, height);
@@ -51824,15 +51848,34 @@ function drawCell(ctx, x, y, width, height, cell, theme, mode, side) {
   if (!cell || cell.diffKind === "empty") return;
 
   if (mode === "unified" && cell.diffKind === "edited") {
-    drawEditedUnified(ctx, x, y, width, height, cell, theme);
+    drawEditedUnified(ctx, x, y, width, height, cell, theme, contentMode);
     return;
   }
 
   let text = "";
   if (mode === "side_by_side") {
-    text = resolveCellText(cell, side);
+    if (contentMode === "both") {
+      const parts = resolveCellParts(cell, side);
+      const primary = parts.value || parts.formula;
+      const secondary = parts.value && parts.formula && parts.formula !== parts.value ? parts.formula : "";
+      if (secondary && height >= 30) {
+        const color =
+          cell.diffKind === "added"
+            ? theme.accentGreen
+            : cell.diffKind === "removed"
+              ? theme.accentRed
+              : cell.diffKind === "moved"
+                ? theme.accentPurple
+                : style.text;
+        drawCellTextLines(ctx, x, y, width, height, primary, secondary, color, theme.textMuted);
+        return;
+      }
+      text = primary;
+    } else {
+      text = resolveCellText(cell, side, contentMode);
+    }
   } else {
-    text = resolveUnifiedText(cell);
+    text = resolveUnifiedText(cell, contentMode);
   }
 
   if (cell.diffKind === "removed" && mode === "unified") {
@@ -51858,16 +51901,33 @@ function drawCell(ctx, x, y, width, height, cell, theme, mode, side) {
 }
 
 export function paintGrid(ctx, model) {
-  const { sheetVm, mode, viewport, metrics, theme, selection, hover, hoverMoveId } = model;
+  const {
+    sheetVm,
+    mode,
+    contentMode,
+    rowMap,
+    colMap,
+    rowLookup,
+    colLookup,
+    flash,
+    viewport,
+    metrics,
+    theme,
+    selection,
+    hover,
+    hoverMoveId
+  } = model;
   const { width, height, scrollTop, scrollLeft } = viewport;
   const rows = sheetVm.axis.rows.entries;
   const cols = sheetVm.axis.cols.entries;
+  const rowCount = rowMap ? rowMap.length : rows.length;
+  const colCount = colMap ? colMap.length : cols.length;
 
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = theme.bgPrimary;
   ctx.fillRect(0, 0, width, height);
 
-  if (!rows.length || !cols.length || width <= 0 || height <= 0) return;
+  if (!rowCount || !colCount || width <= 0 || height <= 0) return;
 
   const rowHeight = metrics.rowHeight;
   const colWidth = metrics.colWidth;
@@ -51883,11 +51943,11 @@ export function paintGrid(ctx, model) {
 
   const firstRow = Math.max(0, Math.floor(scrollTop / rowHeight));
   const visibleRowCount = cellAreaHeight > 0 ? Math.ceil(cellAreaHeight / rowHeight) + 1 : 0;
-  const lastRow = Math.min(rows.length - 1, firstRow + visibleRowCount - 1);
+  const lastRow = Math.min(rowCount - 1, firstRow + visibleRowCount - 1);
 
   const firstCol = Math.max(0, Math.floor(scrollLeft / colWidth));
   const visibleColCount = paneWidth > 0 ? Math.ceil(paneWidth / colWidth) + 1 : 0;
-  const lastCol = Math.min(cols.length - 1, firstCol + visibleColCount - 1);
+  const lastCol = Math.min(colCount - 1, firstCol + visibleColCount - 1);
 
   const paneOffsets = [rowHeaderWidth];
   if (paneCount === 2) {
@@ -51898,9 +51958,10 @@ export function paintGrid(ctx, model) {
   ctx.fillRect(0, 0, rowHeaderWidth, colHeaderHeight);
 
   for (let c = firstCol; c <= lastCol; c++) {
-    const entry = cols[c];
+    const viewCol = colMap ? colMap[c] : c;
+    const entry = cols[viewCol];
     const style = axisStyle(entry, "col", theme);
-    const label = colToLetter(c);
+    const label = colToLetter(viewCol);
     for (let p = 0; p < paneCount; p++) {
       const x = paneOffsets[p] + (c * colWidth - scrollLeft);
       drawHeaderCell(ctx, x, 0, colWidth, colHeaderHeight, label, style, theme);
@@ -51908,25 +51969,28 @@ export function paintGrid(ctx, model) {
   }
 
   for (let r = firstRow; r <= lastRow; r++) {
-    const entry = rows[r];
+    const viewRow = rowMap ? rowMap[r] : r;
+    const entry = rows[viewRow];
     const style = axisStyle(entry, "row", theme);
     const y = colHeaderHeight + (r * rowHeight - scrollTop);
-    drawRowHeader(ctx, 0, y, rowHeaderWidth, rowHeight, String(r + 1), style, theme);
+    drawRowHeader(ctx, 0, y, rowHeaderWidth, rowHeight, String(viewRow + 1), style, theme);
   }
 
   for (let r = firstRow; r <= lastRow; r++) {
+    const viewRow = rowMap ? rowMap[r] : r;
     const y = colHeaderHeight + (r * rowHeight - scrollTop);
     for (let c = firstCol; c <= lastCol; c++) {
-      const cell = sheetVm.cellAt(r, c);
+      const viewCol = colMap ? colMap[c] : c;
+      const cell = sheetVm.cellAt(viewRow, viewCol);
       for (let p = 0; p < paneCount; p++) {
         const x = paneOffsets[p] + (c * colWidth - scrollLeft);
         const side = p === 0 ? "old" : "new";
-        drawCell(ctx, x, y, colWidth, rowHeight, cell, theme, mode, side);
+        drawCell(ctx, x, y, colWidth, rowHeight, cell, theme, mode, side, contentMode);
       }
 
       if (hoverMoveId) {
-        const rowEntry = rows[r];
-        const colEntry = cols[c];
+        const rowEntry = rows[viewRow];
+        const colEntry = cols[viewCol];
         if ((rowEntry && rowEntry.move_id === hoverMoveId) || (colEntry && colEntry.move_id === hoverMoveId)) {
           ctx.save();
           ctx.strokeStyle = theme.diffMoveBorder || theme.accentPurple;
@@ -51942,9 +52006,10 @@ export function paintGrid(ctx, model) {
   }
 
   if (hover && hover.viewRow !== null && hover.viewCol !== null) {
-    const row = hover.viewRow;
-    const col = hover.viewCol;
-    if (row >= firstRow && row <= lastRow && col >= firstCol && col <= lastCol) {
+    const row = rowLookup ? rowLookup[hover.viewRow] : hover.viewRow;
+    const col = colLookup ? colLookup[hover.viewCol] : hover.viewCol;
+    if (row !== null && row !== undefined && col !== null && col !== undefined &&
+        row >= firstRow && row <= lastRow && col >= firstCol && col <= lastCol) {
       const y = colHeaderHeight + (row * rowHeight - scrollTop);
       for (let p = 0; p < paneCount; p++) {
         if (paneCount === 2 && hover.pane !== null && hover.pane !== undefined && hover.pane !== p) {
@@ -51961,9 +52026,10 @@ export function paintGrid(ctx, model) {
   }
 
   if (selection && selection.viewRow !== null && selection.viewCol !== null) {
-    const row = selection.viewRow;
-    const col = selection.viewCol;
-    if (row >= firstRow && row <= lastRow && col >= firstCol && col <= lastCol) {
+    const row = rowLookup ? rowLookup[selection.viewRow] : selection.viewRow;
+    const col = colLookup ? colLookup[selection.viewCol] : selection.viewCol;
+    if (row !== null && row !== undefined && col !== null && col !== undefined &&
+        row >= firstRow && row <= lastRow && col >= firstCol && col <= lastCol) {
       const y = colHeaderHeight + (row * rowHeight - scrollTop);
       for (let p = 0; p < paneCount; p++) {
         const x = paneOffsets[p] + (col * colWidth - scrollLeft);
@@ -51974,6 +52040,73 @@ export function paintGrid(ctx, model) {
         ctx.restore();
       }
     }
+  }
+
+  if (flash && flash.alpha > 0) {
+    const mapRange = (start, end, lookup) => {
+      let min = null;
+      let max = null;
+      for (let i = start; i <= end; i++) {
+        const vis = lookup ? lookup[i] : i;
+        if (vis === null || vis === undefined) continue;
+        if (min === null || vis < min) min = vis;
+        if (max === null || vis > max) max = vis;
+      }
+      if (min === null || max === null) return null;
+      return { start: min, end: max };
+    };
+
+    ctx.save();
+    ctx.globalAlpha = flash.alpha;
+    ctx.strokeStyle = theme.accentBlue;
+    ctx.lineWidth = 2;
+
+    if (flash.kind === "region" && flash.bounds) {
+      const rowRange = mapRange(flash.bounds.top, flash.bounds.bottom, rowLookup);
+      const colRange = mapRange(flash.bounds.left, flash.bounds.right, colLookup);
+      if (rowRange && colRange) {
+        const startRow = Math.max(firstRow, rowRange.start);
+        const endRow = Math.min(lastRow, rowRange.end);
+        const startCol = Math.max(firstCol, colRange.start);
+        const endCol = Math.min(lastCol, colRange.end);
+        if (startRow <= endRow && startCol <= endCol) {
+          const y = colHeaderHeight + (startRow * rowHeight - scrollTop);
+          const height = (endRow - startRow + 1) * rowHeight;
+          for (let p = 0; p < paneCount; p++) {
+            const x = paneOffsets[p] + (startCol * colWidth - scrollLeft);
+            const width = (endCol - startCol + 1) * colWidth;
+            ctx.strokeRect(x + 1, y + 1, width - 2, height - 2);
+          }
+        }
+      }
+    } else if (flash.kind === "row") {
+      const row = rowLookup ? rowLookup[flash.viewRow] : flash.viewRow;
+      if (row !== null && row !== undefined && row >= firstRow && row <= lastRow) {
+        const y = colHeaderHeight + (row * rowHeight - scrollTop);
+        ctx.strokeRect(0 + 1, y + 1, rowHeaderWidth - 2, rowHeight - 2);
+      }
+    } else if (flash.kind === "col") {
+      const col = colLookup ? colLookup[flash.viewCol] : flash.viewCol;
+      if (col !== null && col !== undefined && col >= firstCol && col <= lastCol) {
+        for (let p = 0; p < paneCount; p++) {
+          const x = paneOffsets[p] + (col * colWidth - scrollLeft);
+          ctx.strokeRect(x + 1, 0 + 1, colWidth - 2, colHeaderHeight - 2);
+        }
+      }
+    } else if (flash.kind === "cell") {
+      const row = rowLookup ? rowLookup[flash.viewRow] : flash.viewRow;
+      const col = colLookup ? colLookup[flash.viewCol] : flash.viewCol;
+      if (row !== null && row !== undefined && col !== null && col !== undefined &&
+          row >= firstRow && row <= lastRow && col >= firstCol && col <= lastCol) {
+        const y = colHeaderHeight + (row * rowHeight - scrollTop);
+        for (let p = 0; p < paneCount; p++) {
+          const x = paneOffsets[p] + (col * colWidth - scrollLeft);
+          ctx.strokeRect(x + 1, y + 1, colWidth - 2, rowHeight - 2);
+        }
+      }
+    }
+
+    ctx.restore();
   }
 }
 
@@ -52084,22 +52217,51 @@ function buildCellSummary(cell, viewRow, viewCol) {
 }
 
 export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
+  const theme = readGridTheme(document.documentElement);
+  const metrics = { ...GRID_METRICS };
+  const regionLookup = new Map((sheetVm.changes?.regions || []).map(region => [region.id, region]));
+  const anchorList = Array.isArray(sheetVm.changes?.anchors) ? sheetVm.changes.anchors : [];
+  const gridAnchors = anchorList
+    .filter(anchor => anchor?.target?.kind === "grid")
+    .map(anchor => ({
+      id: anchor.id,
+      viewRow: anchor.target.viewRow,
+      viewCol: anchor.target.viewCol,
+      regionId: anchor.target.regionId,
+      moveId: anchor.target.moveId,
+      group: anchor.group
+    }));
+  const anchorIndexById = new Map(gridAnchors.map((anchor, idx) => [anchor.id, idx]));
+
+  let initialAnchorIndex = 0;
+  if (typeof opts.initialAnchor === "string") {
+    const idx = anchorIndexById.get(opts.initialAnchor);
+    if (Number.isFinite(idx)) initialAnchorIndex = idx;
+  } else if (Number.isFinite(opts.initialAnchor)) {
+    initialAnchorIndex = opts.initialAnchor;
+  }
+  if (gridAnchors.length === 0) {
+    initialAnchorIndex = -1;
+  }
+
   const state = {
     mode: opts.initialMode === "unified" ? "unified" : "side_by_side",
     selected: null,
     hover: null,
     hoverMoveId: null,
-    anchorIndex: Number.isFinite(opts.initialAnchor) ? opts.initialAnchor : 0,
-    pinned: false
+    anchorIndex: initialAnchorIndex,
+    pinned: false,
+    contentMode: opts.displayOptions?.contentMode || "values",
+    focusRows: Boolean(opts.displayOptions?.focusRows),
+    focusCols: Boolean(opts.displayOptions?.focusCols),
+    rowMap: null,
+    colMap: null,
+    rowLookup: null,
+    colLookup: null,
+    rowCount: sheetVm.axis.rows.entries.length,
+    colCount: sheetVm.axis.cols.entries.length,
+    flash: null
   };
-
-  const theme = readGridTheme(document.documentElement);
-  const metrics = { ...GRID_METRICS };
-  const anchors = (sheetVm.changes?.regions || []).map(region => ({
-    row: region.top,
-    col: region.left,
-    id: region.id
-  }));
 
   mountEl.innerHTML = "";
 
@@ -52141,10 +52303,131 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
   const ctx = canvas.getContext("2d");
   let rafId = null;
 
-  const contentWidth = metrics.rowHeaderWidth + sheetVm.axis.cols.entries.length * metrics.colWidth;
-  const contentHeight = metrics.colHeaderHeight + sheetVm.axis.rows.entries.length * metrics.rowHeight;
-  spacer.style.width = `${contentWidth}px`;
-  spacer.style.height = `${contentHeight}px`;
+  let contentWidth = 0;
+  let contentHeight = 0;
+
+  function buildIndexLookup(map, total) {
+    if (!Array.isArray(map)) return null;
+    const lookup = new Array(total).fill(null);
+    for (let i = 0; i < map.length; i++) {
+      const viewIndex = map[i];
+      if (Number.isFinite(viewIndex)) {
+        lookup[viewIndex] = i;
+      }
+    }
+    return lookup;
+  }
+
+  function computeFocusMap(axis, context) {
+    const entries = axis === "row" ? sheetVm.axis.rows.entries : sheetVm.axis.cols.entries;
+    const maxIndex = entries.length - 1;
+    if (maxIndex < 0) return null;
+    const changed = new Set();
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      if (entry && entry.kind && entry.kind !== "match") {
+        changed.add(i);
+      }
+    }
+    for (const item of sheetVm.changes?.items || []) {
+      if (axis === "row" && item.group === "rows" && Number.isFinite(item.viewStart) && Number.isFinite(item.viewEnd)) {
+        for (let r = item.viewStart; r <= item.viewEnd; r++) {
+          changed.add(r);
+        }
+      }
+      if (axis === "col" && item.group === "cols" && Number.isFinite(item.viewStart) && Number.isFinite(item.viewEnd)) {
+        for (let c = item.viewStart; c <= item.viewEnd; c++) {
+          changed.add(c);
+        }
+      }
+    }
+    for (const region of sheetVm.changes?.regions || []) {
+      if (axis === "row") {
+        for (let r = region.top; r <= region.bottom; r++) {
+          changed.add(r);
+        }
+      } else {
+        for (let c = region.left; c <= region.right; c++) {
+          changed.add(c);
+        }
+      }
+    }
+    if (changed.size === 0) return null;
+    const expanded = new Set();
+    const ctx = Math.max(0, context || 0);
+    for (const idx of changed) {
+      for (let offset = -ctx; offset <= ctx; offset++) {
+        const next = idx + offset;
+        if (next >= 0 && next <= maxIndex) {
+          expanded.add(next);
+        }
+      }
+    }
+    if (expanded.size === 0) return null;
+    return Array.from(expanded).sort((a, b) => a - b);
+  }
+
+  function updateContentSize() {
+    contentWidth = metrics.rowHeaderWidth + state.colCount * metrics.colWidth;
+    contentHeight = metrics.colHeaderHeight + state.rowCount * metrics.rowHeight;
+    spacer.style.width = `${contentWidth}px`;
+    spacer.style.height = `${contentHeight}px`;
+  }
+
+  function updateDisplayMaps() {
+    const rows = sheetVm.axis.rows.entries.length;
+    const cols = sheetVm.axis.cols.entries.length;
+    if (state.focusRows) {
+      const map = computeFocusMap("row", sheetVm.renderPlan?.contextRows || 0);
+      state.rowMap = map && map.length ? map : null;
+    } else {
+      state.rowMap = null;
+    }
+    if (state.focusCols) {
+      const map = computeFocusMap("col", sheetVm.renderPlan?.contextCols || 0);
+      state.colMap = map && map.length ? map : null;
+    } else {
+      state.colMap = null;
+    }
+    state.rowLookup = buildIndexLookup(state.rowMap, rows);
+    state.colLookup = buildIndexLookup(state.colMap, cols);
+    state.rowCount = state.rowMap ? state.rowMap.length : rows;
+    state.colCount = state.colMap ? state.colMap.length : cols;
+    updateContentSize();
+  }
+
+  function visibleToViewRow(visibleRow) {
+    if (state.rowMap) return state.rowMap[visibleRow];
+    return visibleRow;
+  }
+
+  function visibleToViewCol(visibleCol) {
+    if (state.colMap) return state.colMap[visibleCol];
+    return visibleCol;
+  }
+
+  function viewToVisibleRow(viewRow) {
+    if (state.rowLookup) return state.rowLookup[viewRow];
+    return viewRow;
+  }
+
+  function viewToVisibleCol(viewCol) {
+    if (state.colLookup) return state.colLookup[viewCol];
+    return viewCol;
+  }
+
+  function ensureSelectionVisible() {
+    if (!state.selected) return;
+    const row = viewToVisibleRow(state.selected.viewRow);
+    const col = viewToVisibleCol(state.selected.viewCol);
+    if (row === null || row === undefined || col === null || col === undefined) {
+      const fallbackRow = state.rowMap ? state.rowMap[0] : 0;
+      const fallbackCol = state.colMap ? state.colMap[0] : 0;
+      state.selected = { viewRow: fallbackRow, viewCol: fallbackCol };
+    }
+  }
+
+  updateDisplayMaps();
 
   function updateModeButtons() {
     const active = state.mode;
@@ -52197,9 +52480,29 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
 
   function paint() {
     const size = resizeCanvas();
+    const now = performance.now();
+    let flashModel = null;
+    if (state.flash) {
+      const elapsed = now - state.flash.start;
+      const duration = 900;
+      if (elapsed >= duration) {
+        state.flash = null;
+      } else {
+        flashModel = {
+          ...state.flash,
+          alpha: Math.max(0, 1 - elapsed / duration)
+        };
+      }
+    }
     paintGrid(ctx, {
       sheetVm,
       mode: state.mode,
+      contentMode: state.contentMode,
+      rowMap: state.rowMap,
+      colMap: state.colMap,
+      rowLookup: state.rowLookup,
+      colLookup: state.colLookup,
+      flash: flashModel,
       viewport: {
         width: size.width,
         height: size.height,
@@ -52212,6 +52515,9 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
       hover: state.hover,
       hoverMoveId: state.hoverMoveId
     });
+    if (state.flash) {
+      schedulePaint();
+    }
   }
 
   function resolvePane(x, layout) {
@@ -52243,21 +52549,28 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
     if (y < layout.colHeaderHeight) {
       const pane = resolvePane(x, layout);
       if (!pane) return null;
-      const viewCol = Math.floor((scroll.scrollLeft + pane.localX) / metrics.colWidth);
-      if (viewCol < 0 || viewCol >= sheetVm.axis.cols.entries.length) return null;
+      const visibleCol = Math.floor((scroll.scrollLeft + pane.localX) / metrics.colWidth);
+      if (visibleCol < 0 || visibleCol >= state.colCount) return null;
+      const viewCol = visibleToViewCol(visibleCol);
+      if (!Number.isFinite(viewCol)) return null;
       return { type: "col-header", viewCol, pane: pane.index };
     }
     if (x < layout.rowHeaderWidth) {
-      const viewRow = Math.floor((scroll.scrollTop + (y - layout.colHeaderHeight)) / metrics.rowHeight);
-      if (viewRow < 0 || viewRow >= sheetVm.axis.rows.entries.length) return null;
+      const visibleRow = Math.floor((scroll.scrollTop + (y - layout.colHeaderHeight)) / metrics.rowHeight);
+      if (visibleRow < 0 || visibleRow >= state.rowCount) return null;
+      const viewRow = visibleToViewRow(visibleRow);
+      if (!Number.isFinite(viewRow)) return null;
       return { type: "row-header", viewRow };
     }
     const pane = resolvePane(x, layout);
     if (!pane) return null;
-    const viewCol = Math.floor((scroll.scrollLeft + pane.localX) / metrics.colWidth);
-    const viewRow = Math.floor((scroll.scrollTop + (y - layout.colHeaderHeight)) / metrics.rowHeight);
-    if (viewRow < 0 || viewRow >= sheetVm.axis.rows.entries.length) return null;
-    if (viewCol < 0 || viewCol >= sheetVm.axis.cols.entries.length) return null;
+    const visibleCol = Math.floor((scroll.scrollLeft + pane.localX) / metrics.colWidth);
+    const visibleRow = Math.floor((scroll.scrollTop + (y - layout.colHeaderHeight)) / metrics.rowHeight);
+    if (visibleRow < 0 || visibleRow >= state.rowCount) return null;
+    if (visibleCol < 0 || visibleCol >= state.colCount) return null;
+    const viewRow = visibleToViewRow(visibleRow);
+    const viewCol = visibleToViewCol(visibleCol);
+    if (!Number.isFinite(viewRow) || !Number.isFinite(viewCol)) return null;
     return { type: "cell", viewRow, viewCol, pane: pane.index };
   }
 
@@ -52272,20 +52585,29 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
     const meta = createEl("div", "grid-tooltip-meta", `Diff: ${summary.diffKind}`);
     tooltip.append(title, meta);
 
-    if (summary.oldAddress || summary.old.value || summary.old.formula) {
+    function appendTooltipSection(label, details) {
+      if (!details.value && !details.formula) return;
       const section = createEl("div", "grid-tooltip-section");
-      section.append(createEl("div", "grid-tooltip-label", summary.oldAddress ? `Old ${summary.oldAddress}` : "Old"));
-      if (summary.old.value) section.append(createEl("div", "grid-tooltip-value", summary.old.value));
-      if (summary.old.formula) section.append(createEl("div", "grid-tooltip-formula", summary.old.formula));
+      section.append(createEl("div", "grid-tooltip-label", label));
+      if (state.contentMode === "formulas") {
+        if (details.formula) {
+          section.append(createEl("div", "grid-tooltip-formula", details.formula));
+        } else if (details.value) {
+          section.append(createEl("div", "grid-tooltip-value", details.value));
+        }
+      } else {
+        if (details.value) section.append(createEl("div", "grid-tooltip-value", details.value));
+        if (details.formula) section.append(createEl("div", "grid-tooltip-formula", details.formula));
+      }
       tooltip.append(section);
     }
 
+    if (summary.oldAddress || summary.old.value || summary.old.formula) {
+      appendTooltipSection(summary.oldAddress ? `Old ${summary.oldAddress}` : "Old", summary.old);
+    }
+
     if (summary.newAddress || summary.fresh.value || summary.fresh.formula) {
-      const section = createEl("div", "grid-tooltip-section");
-      section.append(createEl("div", "grid-tooltip-label", summary.newAddress ? `New ${summary.newAddress}` : "New"));
-      if (summary.fresh.value) section.append(createEl("div", "grid-tooltip-value", summary.fresh.value));
-      if (summary.fresh.formula) section.append(createEl("div", "grid-tooltip-formula", summary.fresh.formula));
-      tooltip.append(section);
+      appendTooltipSection(summary.newAddress ? `New ${summary.newAddress}` : "New", summary.fresh);
     }
 
     tooltip.classList.add("visible");
@@ -52328,11 +52650,21 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
       addRow("Move", summary.moveRole ? `${summary.moveRole} ${summary.moveId}` : summary.moveId);
     }
     addRow("Old", summary.oldAddress);
-    if (summary.old.value) addRow("Old Value", summary.old.value);
-    if (summary.old.formula) addRow("Old Formula", summary.old.formula);
+    if (state.contentMode === "formulas") {
+      if (summary.old.formula) addRow("Old Formula", summary.old.formula);
+      else if (summary.old.value) addRow("Old Value", summary.old.value);
+    } else {
+      if (summary.old.value) addRow("Old Value", summary.old.value);
+      if (summary.old.formula) addRow("Old Formula", summary.old.formula);
+    }
     addRow("New", summary.newAddress);
-    if (summary.fresh.value) addRow("New Value", summary.fresh.value);
-    if (summary.fresh.formula) addRow("New Formula", summary.fresh.formula);
+    if (state.contentMode === "formulas") {
+      if (summary.fresh.formula) addRow("New Formula", summary.fresh.formula);
+      else if (summary.fresh.value) addRow("New Value", summary.fresh.value);
+    } else {
+      if (summary.fresh.value) addRow("New Value", summary.fresh.value);
+      if (summary.fresh.formula) addRow("New Formula", summary.fresh.formula);
+    }
 
     const jumpTarget = resolveMoveTarget(cell);
     if (jumpTarget) {
@@ -52375,20 +52707,26 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
   }
 
   function centerOn(viewRow, viewCol) {
+    const visibleRow = viewToVisibleRow(viewRow);
+    const visibleCol = viewToVisibleCol(viewCol);
+    if (visibleRow === null || visibleRow === undefined || visibleCol === null || visibleCol === undefined) return;
     const layout = getLayout();
     const cellAreaHeight = Math.max(0, layout.height - layout.colHeaderHeight);
-    const cellX = viewCol * metrics.colWidth;
-    const cellY = viewRow * metrics.rowHeight;
+    const cellX = visibleCol * metrics.colWidth;
+    const cellY = visibleRow * metrics.rowHeight;
     const targetLeft = cellX - (layout.paneWidth - metrics.colWidth) / 2;
     const targetTop = cellY - (cellAreaHeight - metrics.rowHeight) / 2;
     setScroll(targetLeft, targetTop);
   }
 
   function scrollIntoView(viewRow, viewCol) {
+    const visibleRow = viewToVisibleRow(viewRow);
+    const visibleCol = viewToVisibleCol(viewCol);
+    if (visibleRow === null || visibleRow === undefined || visibleCol === null || visibleCol === undefined) return;
     const layout = getLayout();
     const cellAreaHeight = Math.max(0, layout.height - layout.colHeaderHeight);
-    const cellX = viewCol * metrics.colWidth;
-    const cellY = viewRow * metrics.rowHeight;
+    const cellX = visibleCol * metrics.colWidth;
+    const cellY = visibleRow * metrics.rowHeight;
     const minLeft = scroll.scrollLeft;
     const maxLeft = scroll.scrollLeft + layout.paneWidth - metrics.colWidth;
     const minTop = scroll.scrollTop;
@@ -52404,21 +52742,96 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
 
   function selectCell(viewRow, viewCol, { center = false } = {}) {
     state.selected = { viewRow, viewCol };
+    ensureSelectionVisible();
     updateInspector();
+    const target = state.selected;
     if (center) {
-      centerOn(viewRow, viewCol);
+      centerOn(target.viewRow, target.viewCol);
     } else {
-      scrollIntoView(viewRow, viewCol);
+      scrollIntoView(target.viewRow, target.viewCol);
     }
     schedulePaint();
   }
 
-  function jumpToRegion(index) {
-    if (!anchors.length) return;
-    const nextIndex = ((index % anchors.length) + anchors.length) % anchors.length;
-    const anchor = anchors[nextIndex];
+  function dispatchViewerEvent(name, detail) {
+    mountEl.dispatchEvent(new CustomEvent(name, { detail }));
+  }
+
+  function resolveAnchorIndex(anchorIdOrIndex) {
+    if (typeof anchorIdOrIndex === "string") {
+      const idx = anchorIndexById.get(anchorIdOrIndex);
+      return Number.isFinite(idx) ? idx : -1;
+    }
+    if (Number.isFinite(anchorIdOrIndex)) {
+      return anchorIdOrIndex;
+    }
+    return -1;
+  }
+
+  function announceAnchor(anchor) {
+    if (!anchor) return;
+    dispatchViewerEvent("gridviewer:anchor", { anchorId: anchor.id });
+  }
+
+  function jumpToAnchor(anchorIdOrIndex) {
+    if (!gridAnchors.length) return false;
+    const nextIndex = resolveAnchorIndex(anchorIdOrIndex);
+    if (nextIndex < 0 || nextIndex >= gridAnchors.length) return false;
+    const anchor = gridAnchors[nextIndex];
     state.anchorIndex = nextIndex;
-    selectCell(anchor.row, anchor.col, { center: true });
+    selectCell(anchor.viewRow, anchor.viewCol, { center: true });
+    announceAnchor(anchor);
+    return true;
+  }
+
+  function flashAnchor(anchorIdOrIndex) {
+    const idx = resolveAnchorIndex(anchorIdOrIndex);
+    if (idx < 0 || idx >= gridAnchors.length) return false;
+    const anchor = gridAnchors[idx];
+    let flash = null;
+    if (anchor.regionId) {
+      const region = regionLookup.get(anchor.regionId);
+      if (region) {
+        flash = {
+          kind: "region",
+          bounds: { top: region.top, bottom: region.bottom, left: region.left, right: region.right },
+          start: performance.now()
+        };
+      }
+    }
+    if (!flash && anchor.group === "rows") {
+      flash = { kind: "row", viewRow: anchor.viewRow, start: performance.now() };
+    }
+    if (!flash && anchor.group === "cols") {
+      flash = { kind: "col", viewCol: anchor.viewCol, start: performance.now() };
+    }
+    if (!flash && anchor.moveId) {
+      if (anchor.moveId.startsWith("r:")) {
+        flash = { kind: "row", viewRow: anchor.viewRow, start: performance.now() };
+      } else if (anchor.moveId.startsWith("c:")) {
+        flash = { kind: "col", viewCol: anchor.viewCol, start: performance.now() };
+      }
+    }
+    if (!flash) {
+      flash = { kind: "cell", viewRow: anchor.viewRow, viewCol: anchor.viewCol, start: performance.now() };
+    }
+    state.flash = flash;
+    schedulePaint();
+    return true;
+  }
+
+  function nextAnchor() {
+    if (!gridAnchors.length) return false;
+    const nextIndex = state.anchorIndex < 0 ? 0 : state.anchorIndex + 1;
+    if (nextIndex >= gridAnchors.length) return false;
+    return jumpToAnchor(nextIndex);
+  }
+
+  function prevAnchor() {
+    if (!gridAnchors.length) return false;
+    const nextIndex = state.anchorIndex < 0 ? gridAnchors.length - 1 : state.anchorIndex - 1;
+    if (nextIndex < 0) return false;
+    return jumpToAnchor(nextIndex);
   }
 
   function onScroll() {
@@ -52494,26 +52907,69 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
       return;
     }
     if (e.key === "n" || e.key === "N") {
-      jumpToRegion(state.anchorIndex + 1);
+      if (nextAnchor()) {
+        flashAnchor(state.anchorIndex);
+      }
       e.preventDefault();
       return;
     }
     if (e.key === "p" || e.key === "P") {
-      jumpToRegion(state.anchorIndex - 1);
+      if (prevAnchor()) {
+        flashAnchor(state.anchorIndex);
+      }
       e.preventDefault();
       return;
     }
 
-    const rowCount = sheetVm.axis.rows.entries.length;
-    const colCount = sheetVm.axis.cols.entries.length;
-    let row = state.selected ? state.selected.viewRow : 0;
-    let col = state.selected ? state.selected.viewCol : 0;
-    if (e.key === "ArrowUp") row = clamp(row - 1, 0, rowCount - 1);
-    if (e.key === "ArrowDown") row = clamp(row + 1, 0, rowCount - 1);
-    if (e.key === "ArrowLeft") col = clamp(col - 1, 0, colCount - 1);
-    if (e.key === "ArrowRight") col = clamp(col + 1, 0, colCount - 1);
-    selectCell(row, col);
+    const maxVisibleRow = Math.max(0, state.rowCount - 1);
+    const maxVisibleCol = Math.max(0, state.colCount - 1);
+    let viewRow = state.selected ? state.selected.viewRow : 0;
+    let viewCol = state.selected ? state.selected.viewCol : 0;
+    let visibleRow = viewToVisibleRow(viewRow);
+    let visibleCol = viewToVisibleCol(viewCol);
+    if (visibleRow === null || visibleRow === undefined) visibleRow = 0;
+    if (visibleCol === null || visibleCol === undefined) visibleCol = 0;
+    if (e.key === "ArrowUp") visibleRow = clamp(visibleRow - 1, 0, maxVisibleRow);
+    if (e.key === "ArrowDown") visibleRow = clamp(visibleRow + 1, 0, maxVisibleRow);
+    if (e.key === "ArrowLeft") visibleCol = clamp(visibleCol - 1, 0, maxVisibleCol);
+    if (e.key === "ArrowRight") visibleCol = clamp(visibleCol + 1, 0, maxVisibleCol);
+    viewRow = visibleToViewRow(visibleRow);
+    viewCol = visibleToViewCol(visibleCol);
+    if (Number.isFinite(viewRow) && Number.isFinite(viewCol)) {
+      selectCell(viewRow, viewCol);
+    }
     e.preventDefault();
+  }
+
+  function setDisplayOptions(next = {}) {
+    let updated = false;
+    const allowedModes = new Set(["values", "formulas", "both"]);
+    if (typeof next.contentMode === "string" && allowedModes.has(next.contentMode) && next.contentMode !== state.contentMode) {
+      state.contentMode = next.contentMode;
+      updated = true;
+      updateInspector();
+    }
+    if (typeof next.focusRows === "boolean" && next.focusRows !== state.focusRows) {
+      state.focusRows = next.focusRows;
+      updated = true;
+    }
+    if (typeof next.focusCols === "boolean" && next.focusCols !== state.focusCols) {
+      state.focusCols = next.focusCols;
+      updated = true;
+    }
+    if (updated) {
+      updateDisplayMaps();
+      ensureSelectionVisible();
+      setScroll(scroll.scrollLeft, scroll.scrollTop);
+      if (state.selected) {
+        scrollIntoView(state.selected.viewRow, state.selected.viewCol);
+      }
+      schedulePaint();
+    }
+  }
+
+  function onFocus() {
+    dispatchViewerEvent("gridviewer:focus", {});
   }
 
   function onModeClick(e) {
@@ -52533,14 +52989,15 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
   canvas.addEventListener("pointerleave", onPointerLeave);
   canvas.addEventListener("click", onClick);
   root.addEventListener("keydown", onKeyDown);
+  root.addEventListener("focus", onFocus);
 
   const resizeObserver = new ResizeObserver(() => schedulePaint());
   resizeObserver.observe(scroll);
 
   updateModeButtons();
   schedulePaint();
-  if (Number.isFinite(state.anchorIndex) && anchors.length > 0 && state.anchorIndex >= 0) {
-    jumpToRegion(state.anchorIndex);
+  if (Number.isFinite(state.anchorIndex) && gridAnchors.length > 0 && state.anchorIndex >= 0) {
+    jumpToAnchor(state.anchorIndex);
   }
 
   return {
@@ -52553,6 +53010,7 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
       canvas.removeEventListener("pointerleave", onPointerLeave);
       canvas.removeEventListener("click", onClick);
       root.removeEventListener("keydown", onKeyDown);
+      root.removeEventListener("focus", onFocus);
     },
     focus() {
       root.focus();
@@ -52560,8 +53018,20 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
     jumpTo(viewRow, viewCol) {
       selectCell(viewRow, viewCol, { center: true });
     },
-    jumpToRegion(index) {
-      jumpToRegion(index);
+    jumpToAnchor(anchorIdOrIndex) {
+      return jumpToAnchor(anchorIdOrIndex);
+    },
+    nextAnchor() {
+      return nextAnchor();
+    },
+    prevAnchor() {
+      return prevAnchor();
+    },
+    setDisplayOptions(options) {
+      setDisplayOptions(options);
+    },
+    flashAnchor(anchorIdOrIndex) {
+      return flashAnchor(anchorIdOrIndex);
     }
   };
 }
@@ -52897,6 +53367,258 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
         color: var(--text-secondary);
       }
 
+      .review-toolbar {
+        position: sticky;
+        top: 16px;
+        z-index: 5;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px 20px;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-primary);
+        border-radius: 14px;
+        margin-bottom: 20px;
+      }
+
+      .review-toolbar-left,
+      .review-toolbar-right {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+
+      .toolbar-field {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 220px;
+      }
+
+      .toolbar-label {
+        font-size: 12px;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      .sheet-search {
+        background: var(--bg-primary);
+        border: 1px solid var(--border-primary);
+        border-radius: 8px;
+        padding: 8px 12px;
+        color: var(--text-primary);
+        font-size: 13px;
+      }
+
+      .sheet-search:focus {
+        outline: none;
+        border-color: var(--accent-blue);
+        box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.2);
+      }
+
+      .toolbar-actions {
+        display: flex;
+        gap: 8px;
+      }
+
+      .review-nav-btn {
+        background: var(--bg-primary);
+        border: 1px solid var(--border-primary);
+        color: var(--text-primary);
+        padding: 8px 12px;
+        border-radius: 8px;
+        font-size: 12px;
+        cursor: pointer;
+        transition: border-color 0.2s ease, color 0.2s ease;
+      }
+
+      .review-nav-btn:hover {
+        border-color: var(--accent-blue);
+      }
+
+      .toolbar-toggle {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        color: var(--text-secondary);
+      }
+
+      .toolbar-select {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        color: var(--text-secondary);
+      }
+
+      .toolbar-select select {
+        background: var(--bg-primary);
+        border: 1px solid var(--border-primary);
+        border-radius: 6px;
+        padding: 6px 8px;
+        color: var(--text-primary);
+        font-size: 12px;
+      }
+
+      .sheet-index {
+        margin-bottom: 24px;
+      }
+
+      .sheet-index-title {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 10px;
+      }
+
+      .sheet-index-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .sheet-index-item {
+        border: 1px solid var(--border-primary);
+        border-radius: 12px;
+        padding: 12px 16px;
+        background: var(--bg-secondary);
+        color: inherit;
+        cursor: pointer;
+        text-align: left;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        transition: border-color 0.2s ease, transform 0.2s ease;
+      }
+
+      .sheet-index-item:hover {
+        border-color: var(--accent-blue);
+        transform: translateY(-1px);
+      }
+
+      .sheet-index-item.active {
+        border-color: var(--accent-blue);
+        box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.2);
+      }
+
+      .sheet-index-main {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .sheet-index-name {
+        font-weight: 600;
+      }
+
+      .sheet-index-badges {
+        display: flex;
+        gap: 6px;
+      }
+
+      .sheet-index-badge {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 11px;
+        padding: 2px 8px;
+        border-radius: 10px;
+        background: var(--bg-primary);
+        color: var(--text-secondary);
+      }
+
+      .sheet-index-meta {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .density-bar {
+        flex: 1;
+        height: 6px;
+        background: var(--bg-primary);
+        border-radius: 999px;
+        overflow: hidden;
+      }
+
+      .density-bar span {
+        display: block;
+        height: 100%;
+        background: var(--accent-blue);
+        opacity: 0.7;
+      }
+
+      .status-pill {
+        border: 1px solid var(--border-primary);
+        border-radius: 999px;
+        padding: 4px 8px;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.4px;
+        text-transform: uppercase;
+        background: var(--bg-primary);
+        color: var(--text-secondary);
+        cursor: pointer;
+      }
+
+      .status-pill.ok {
+        border-color: var(--accent-green);
+        color: var(--accent-green);
+      }
+
+      .status-pill.skipped {
+        border-color: var(--accent-yellow);
+        color: var(--accent-yellow);
+      }
+
+      .status-pill.missing {
+        border-color: var(--accent-red);
+        color: var(--accent-red);
+      }
+
+      .status-pill:focus {
+        outline: none;
+        box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.2);
+      }
+
+      .sheet-index .status-pill {
+        cursor: default;
+      }
+
+      .anchor-badge {
+        background: rgba(88, 166, 255, 0.12);
+        border: 1px solid rgba(88, 166, 255, 0.4);
+        color: var(--accent-blue);
+      }
+
+      .preview-limitations {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-primary);
+        border-radius: 12px;
+        padding: 16px 20px;
+        margin-bottom: 24px;
+        color: var(--text-secondary);
+        font-size: 13px;
+      }
+
+      .preview-limitations-title {
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 8px;
+        color: var(--text-secondary);
+      }
+
+      .preview-limitations p + p {
+        margin-top: 6px;
+      }
+
       .sheet-section {
         background: var(--bg-secondary);
         border: 1px solid var(--border-primary);
@@ -53002,6 +53724,7 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
         border-radius: 8px;
         font-family: 'JetBrains Mono', monospace;
         font-size: 13px;
+        position: relative;
       }
 
       .change-item.added {
@@ -53066,6 +53789,39 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
         align-items: center;
         gap: 8px;
         flex-wrap: wrap;
+        min-width: 0;
+      }
+
+      .change-actions {
+        display: flex;
+        gap: 6px;
+        margin-left: auto;
+      }
+
+      .change-jump {
+        background: var(--bg-primary);
+        border: 1px solid var(--border-primary);
+        color: var(--text-secondary);
+        padding: 4px 8px;
+        border-radius: 6px;
+        font-size: 11px;
+        cursor: pointer;
+        transition: border-color 0.2s ease, color 0.2s ease;
+      }
+
+      .change-jump:hover {
+        border-color: var(--accent-blue);
+        color: var(--text-primary);
+      }
+
+      .change-item.flash {
+        animation: changeFlash 1.2s ease-out;
+        box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.6);
+      }
+
+      @keyframes changeFlash {
+        0% { box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.6); }
+        100% { box-shadow: 0 0 0 0 rgba(88, 166, 255, 0); }
       }
 
       .change-value {
@@ -53484,6 +54240,11 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
         font-size: 13px;
       }
 
+      .grid-skip-warning.flash {
+        animation: changeFlash 1.2s ease-out;
+        box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.6);
+      }
+
       .grid-viewer {
         display: grid;
         gap: 12px;
@@ -53882,11 +54643,9 @@ async function runDiff() {
     const json = diff_files_with_sheets_json(oldBytes, newBytes, oldFile.name, newFile.name);
     const payload = JSON.parse(json);
     const report = payload.report || payload;
-    const workbookVm = buildWorkbookViewModel(payload);
+    const options = { ignoreBlankToBlank: true };
+    renderResults(payload, options);
 
-    const resultsEl = byId("results");
-    resultsEl.innerHTML = renderWorkbookVm(workbookVm);
-    resultsEl.classList.add("visible");
     byId("raw").textContent = JSON.stringify(report, null, 2);
 
     const opCount = report.ops ? report.ops.length : 0;
@@ -53896,11 +54655,6 @@ async function runDiff() {
       setStatus(`Found ${opCount} difference${opCount !== 1 ? "s" : ""}`, "");
     }
     
-    const firstSheet = resultsEl.querySelector(".sheet-section");
-    if (firstSheet) {
-      firstSheet.classList.add("expanded");
-    }
-    cleanupHandler = hydrateGridViewers(resultsEl, workbookVm);
   } catch (e) {
     setStatus("Error: " + (e.message || String(e)), "error");
     byId("results").innerHTML = `
@@ -53916,18 +54670,327 @@ async function runDiff() {
   }
 }
 
-let cleanupHandler = null;
+let reviewController = null;
 
 function cleanupViewers() {
-  if (cleanupHandler) {
-    cleanupHandler();
-    cleanupHandler = null;
+  if (reviewController) {
+    reviewController.cleanup();
+    reviewController = null;
   }
 }
 
-function hydrateGridViewers(rootEl, workbookVm) {
+function renderResults(payload, options = {}, state = {}) {
+  cleanupViewers();
+  const workbookVm = buildWorkbookViewModel(payload, options);
+  const resultsEl = byId("results");
+  resultsEl.innerHTML = renderWorkbookVm(workbookVm);
+  resultsEl.classList.add("visible");
+  reviewController = setupReviewWorkflow(resultsEl, workbookVm, payload, options, state);
+  return workbookVm;
+}
+
+function buildReviewOrder(workbookVm) {
+  const order = [];
+  for (const sheet of workbookVm.sheets) {
+    const anchors = sheet.changes?.anchors || [];
+    for (const anchor of anchors) {
+      order.push({ sheetName: sheet.name, anchorId: anchor.id });
+    }
+  }
+  return order;
+}
+
+function setupReviewWorkflow(rootEl, workbookVm, payloadCache, options = {}, state = {}) {
+  const anchorMap = new Map(
+    workbookVm.sheets.map(sheet => [sheet.name, new Map((sheet.changes?.anchors || []).map(anchor => [anchor.id, anchor]))])
+  );
+  const displayOptions = {
+    contentMode: state.contentMode || "values",
+    focusRows: Boolean(state.focusRows),
+    focusCols: Boolean(state.focusCols)
+  };
+  const viewerManager = hydrateGridViewers(rootEl, workbookVm, displayOptions, state.expandedSheets || null);
+  const reviewOrder = buildReviewOrder(workbookVm);
+  const reviewState = {
+    activeSheetName: state.activeSheetName || null,
+    activeAnchorId: state.activeAnchorId || null
+  };
+
+  const searchInput = rootEl.querySelector(".sheet-search");
+  const focusRowsInput = rootEl.querySelector('input[data-filter="focus-rows"]');
+  const focusColsInput = rootEl.querySelector('input[data-filter="focus-cols"]');
+  const ignoreBlankInput = rootEl.querySelector('input[data-filter="ignore-blank"]');
+  const contentModeSelect = rootEl.querySelector('select[data-filter="content-mode"]');
+
+  if (focusRowsInput) focusRowsInput.checked = displayOptions.focusRows;
+  if (focusColsInput) focusColsInput.checked = displayOptions.focusCols;
+  if (ignoreBlankInput) ignoreBlankInput.checked = options.ignoreBlankToBlank !== false;
+  if (contentModeSelect) contentModeSelect.value = displayOptions.contentMode;
+
+  function setActiveSheet(sheetName) {
+    const items = rootEl.querySelectorAll(".sheet-index-item");
+    for (const item of items) {
+      item.classList.toggle("active", item.dataset.sheet === sheetName);
+    }
+  }
+
+  function applySheetFilter(value) {
+    const term = String(value || "").trim().toLowerCase();
+    const sections = rootEl.querySelectorAll(".sheet-section");
+    const indexItems = rootEl.querySelectorAll(".sheet-index-item");
+    for (const section of sections) {
+      const name = (section.dataset.sheet || "").toLowerCase();
+      section.hidden = term ? !name.includes(term) : false;
+    }
+    for (const item of indexItems) {
+      const name = (item.dataset.sheet || "").toLowerCase();
+      item.hidden = term ? !name.includes(term) : false;
+    }
+  }
+
+  if (searchInput) {
+    searchInput.value = state.sheetFilter || "";
+    if (state.sheetFilter) applySheetFilter(state.sheetFilter);
+  }
+
+  function getSheetSection(sheetName) {
+    const sections = rootEl.querySelectorAll(".sheet-section");
+    for (const section of sections) {
+      if (section.dataset.sheet === sheetName) return section;
+    }
+    return null;
+  }
+
+  function expandSheet(sheetName) {
+    const section = getSheetSection(sheetName);
+    if (!section) return null;
+    section.classList.add("expanded");
+    return section;
+  }
+
+  function ensureViewer(sheetName) {
+    return viewerManager.ensureViewer(sheetName);
+  }
+
+  function flashElement(el) {
+    if (!el) return;
+    el.classList.add("flash");
+    window.setTimeout(() => {
+      el.classList.remove("flash");
+    }, 1200);
+  }
+
+  function navigateToAnchor(sheetName, anchorId) {
+    const sheetAnchors = anchorMap.get(sheetName);
+    const anchor = sheetAnchors ? sheetAnchors.get(anchorId) : null;
+    if (!anchor) return false;
+    const section = expandSheet(sheetName);
+    if (anchor.target.kind === "grid") {
+      const viewer = ensureViewer(sheetName);
+      if (viewer) {
+        viewer.jumpToAnchor(anchorId);
+        viewer.flashAnchor(anchorId);
+        viewer.focus();
+      }
+    } else if (anchor.target.kind === "list") {
+      const target = document.getElementById(anchor.target.elementId);
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+        flashElement(target);
+      }
+    }
+    if (section && anchor.target.kind === "grid") {
+      section.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+    reviewState.activeSheetName = sheetName;
+    reviewState.activeAnchorId = anchorId;
+    setActiveSheet(sheetName);
+    return true;
+  }
+
+  function findReviewIndex() {
+    if (!reviewState.activeSheetName || !reviewState.activeAnchorId) return -1;
+    return reviewOrder.findIndex(
+      entry => entry.sheetName === reviewState.activeSheetName && entry.anchorId === reviewState.activeAnchorId
+    );
+  }
+
+  function moveReview(delta) {
+    if (!reviewOrder.length) return;
+    let idx = findReviewIndex();
+    if (idx === -1) {
+      idx = delta > 0 ? 0 : reviewOrder.length - 1;
+    } else {
+      idx += delta;
+    }
+    if (idx < 0 || idx >= reviewOrder.length) return;
+    const next = reviewOrder[idx];
+    navigateToAnchor(next.sheetName, next.anchorId);
+  }
+
+  function captureState() {
+    const expandedSheets = new Set();
+    const sections = rootEl.querySelectorAll(".sheet-section.expanded");
+    for (const section of sections) {
+      if (section.dataset.sheet) expandedSheets.add(section.dataset.sheet);
+    }
+    return {
+      expandedSheets,
+      activeSheetName: reviewState.activeSheetName,
+      activeAnchorId: reviewState.activeAnchorId,
+      contentMode: displayOptions.contentMode,
+      focusRows: displayOptions.focusRows,
+      focusCols: displayOptions.focusCols,
+      sheetFilter: searchInput ? searchInput.value : ""
+    };
+  }
+
+  function rebuildResults(ignoreBlankToBlank) {
+    const nextState = captureState();
+    const nextOptions = { ...options, ignoreBlankToBlank };
+    renderResults(payloadCache, nextOptions, nextState);
+  }
+
+  function onRootClick(event) {
+    const navBtn = event.target.closest(".review-nav-btn");
+    if (navBtn) {
+      event.preventDefault();
+      const direction = navBtn.dataset.reviewNav;
+      moveReview(direction === "prev" ? -1 : 1);
+      return;
+    }
+
+    const jumpBtn = event.target.closest(".change-jump");
+    if (jumpBtn) {
+      event.preventDefault();
+      event.stopPropagation();
+      const sheetName = jumpBtn.dataset.sheet;
+      const anchorId = jumpBtn.dataset.anchor;
+      if (sheetName && anchorId) {
+        navigateToAnchor(sheetName, anchorId);
+      }
+      return;
+    }
+
+    const statusBtn = event.target.closest(".status-pill");
+    if (statusBtn && statusBtn.tagName === "BUTTON") {
+      event.preventDefault();
+      event.stopPropagation();
+      const sheetName = statusBtn.dataset.sheet;
+      if (sheetName) {
+        const section = expandSheet(sheetName);
+        if (section) {
+          const warning = section.querySelector(".grid-skip-warning");
+          if (warning) {
+            warning.scrollIntoView({ behavior: "smooth", block: "center" });
+            flashElement(warning);
+          } else {
+            section.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+        }
+      }
+      return;
+    }
+
+    const indexBtn = event.target.closest(".sheet-index-item");
+    if (indexBtn) {
+      event.preventDefault();
+      const sheetName = indexBtn.dataset.sheet;
+      if (sheetName) {
+        const section = expandSheet(sheetName);
+        if (section) {
+          ensureViewer(sheetName);
+          section.scrollIntoView({ behavior: "smooth", block: "start" });
+          reviewState.activeSheetName = sheetName;
+          reviewState.activeAnchorId = null;
+          setActiveSheet(sheetName);
+        }
+      }
+    }
+  }
+
+  function onRootInput(event) {
+    if (event.target.classList.contains("sheet-search")) {
+      applySheetFilter(event.target.value);
+    }
+  }
+
+  function onRootChange(event) {
+    if (event.target === focusRowsInput) {
+      displayOptions.focusRows = focusRowsInput.checked;
+      viewerManager.setDisplayOptions(displayOptions);
+    } else if (event.target === focusColsInput) {
+      displayOptions.focusCols = focusColsInput.checked;
+      viewerManager.setDisplayOptions(displayOptions);
+    } else if (event.target === ignoreBlankInput) {
+      rebuildResults(ignoreBlankInput.checked);
+    } else if (event.target === contentModeSelect) {
+      displayOptions.contentMode = contentModeSelect.value;
+      viewerManager.setDisplayOptions(displayOptions);
+    }
+  }
+
+  function onViewerFocus(event) {
+    const mount = event.target.closest(".grid-viewer-mount");
+    if (!mount) return;
+    const sheetName = mount.dataset.sheet;
+    if (!sheetName) return;
+    reviewState.activeSheetName = sheetName;
+    setActiveSheet(sheetName);
+  }
+
+  function onViewerAnchor(event) {
+    const mount = event.target.closest(".grid-viewer-mount");
+    if (!mount) return;
+    const sheetName = mount.dataset.sheet;
+    if (!sheetName) return;
+    const anchorId = event.detail?.anchorId;
+    if (!anchorId) return;
+    reviewState.activeSheetName = sheetName;
+    reviewState.activeAnchorId = anchorId;
+    setActiveSheet(sheetName);
+  }
+
+  rootEl.addEventListener("click", onRootClick);
+  rootEl.addEventListener("input", onRootInput);
+  rootEl.addEventListener("change", onRootChange);
+  rootEl.addEventListener("gridviewer:focus", onViewerFocus);
+  rootEl.addEventListener("gridviewer:anchor", onViewerAnchor);
+
+  viewerManager.setDisplayOptions(displayOptions);
+
+  if (reviewState.activeSheetName && reviewState.activeAnchorId) {
+    const moved = navigateToAnchor(reviewState.activeSheetName, reviewState.activeAnchorId);
+    if (!moved) {
+      expandSheet(reviewState.activeSheetName);
+      setActiveSheet(reviewState.activeSheetName);
+    }
+  }
+
+  return {
+    cleanup() {
+      rootEl.removeEventListener("click", onRootClick);
+      rootEl.removeEventListener("input", onRootInput);
+      rootEl.removeEventListener("change", onRootChange);
+      rootEl.removeEventListener("gridviewer:focus", onViewerFocus);
+      rootEl.removeEventListener("gridviewer:anchor", onViewerAnchor);
+      viewerManager.cleanup();
+    }
+  };
+}
+
+function hydrateGridViewers(rootEl, workbookVm, displayOptions = {}, expandedSheets = null) {
   const sheetMap = new Map(workbookVm.sheets.map(sheet => [sheet.name, sheet]));
   const viewers = new Map();
+  let currentOptions = { ...displayOptions };
+
+  function getSectionByName(sheetName) {
+    const sections = rootEl.querySelectorAll(".sheet-section");
+    for (const section of sections) {
+      if (section.dataset.sheet === sheetName) return section;
+    }
+    return null;
+  }
 
   function mountForSection(section) {
     if (!section) return;
@@ -53937,19 +55000,37 @@ function hydrateGridViewers(rootEl, workbookVm) {
     const sheetVm = sheetMap.get(sheetName);
     if (!sheetVm) return;
     const initialMode = mount.dataset.initialMode || "side_by_side";
-    const initialAnchor = mount.dataset.initialAnchor ? Number(mount.dataset.initialAnchor) : 0;
+    const initialAnchor = mount.dataset.initialAnchor || "0";
     const viewer = mountSheetGridViewer({
       mountEl: mount,
       sheetVm,
-      opts: { initialMode, initialAnchor }
+      opts: { initialMode, initialAnchor, displayOptions: currentOptions }
     });
     mount.dataset.mounted = "true";
-    viewers.set(mount, viewer);
+    viewers.set(sheetName, viewer);
+  }
+
+  function ensureViewer(sheetName) {
+    const existing = viewers.get(sheetName);
+    if (existing) return existing;
+    const section = getSectionByName(sheetName);
+    if (!section) return null;
+    section.classList.add("expanded");
+    mountForSection(section);
+    return viewers.get(sheetName) || null;
+  }
+
+  function setDisplayOptions(nextOptions) {
+    currentOptions = { ...currentOptions, ...nextOptions };
+    for (const viewer of viewers.values()) {
+      viewer.setDisplayOptions(currentOptions);
+    }
   }
 
   function onHeaderClick(event) {
     const header = event.target.closest(".sheet-header");
     if (!header || !rootEl.contains(header)) return;
+    if (event.target.closest("button")) return;
     const section = header.closest(".sheet-section");
     if (!section) return;
     section.classList.toggle("expanded");
@@ -53960,17 +55041,33 @@ function hydrateGridViewers(rootEl, workbookVm) {
 
   rootEl.addEventListener("click", onHeaderClick);
 
+  const sections = rootEl.querySelectorAll(".sheet-section");
+  if (expandedSheets && expandedSheets.size > 0) {
+    for (const section of sections) {
+      section.classList.toggle("expanded", expandedSheets.has(section.dataset.sheet));
+    }
+  } else {
+    const anyExpanded = rootEl.querySelector(".sheet-section.expanded");
+    if (!anyExpanded && sections.length > 0) {
+      sections[0].classList.add("expanded");
+    }
+  }
+
   const expanded = rootEl.querySelectorAll(".sheet-section.expanded");
   for (const section of expanded) {
     mountForSection(section);
   }
 
-  return () => {
-    rootEl.removeEventListener("click", onHeaderClick);
-    for (const viewer of viewers.values()) {
-      viewer.destroy();
+  return {
+    ensureViewer,
+    setDisplayOptions,
+    cleanup() {
+      rootEl.removeEventListener("click", onHeaderClick);
+      for (const viewer of viewers.values()) {
+        viewer.destroy();
+      }
+      viewers.clear();
     }
-    viewers.clear();
   };
 }
 
@@ -55080,22 +56177,126 @@ function renderWarnings(warnings) {
   `;
 }
 
-
-function renderChangeItemVm(item) {
-  const changeType = item.changeType || "modified";
-  const cls = `change-item ${changeType}`;
-  const icon = changeType === "added" ? "+" : changeType === "removed" ? "-" : changeType === "moved" ? ">" : "~";
-  const detail = item.detail ? `<span class="change-detail">${esc(item.detail)}</span>` : "";
+function renderPreviewLimitations(vm) {
+  const hasLimitations = vm.sheets?.some(sheet => sheet.renderPlan?.status?.kind && sheet.renderPlan.status.kind !== "ok");
+  if (!hasLimitations) return "";
   return `
-    <div class="${cls}">
-      <div class="change-icon">${icon}</div>
-      <span class="change-location">${esc(item.label || "")}</span>
-      ${detail}
+    <div class="preview-limitations">
+      <div class="preview-limitations-title">Preview limitations</div>
+      <p><strong>Skipped</strong> means the aligned view was too large or inconsistent to render. The change list is still valid.</p>
+      <p><strong>Missing</strong> means snapshots or alignment data were not available for that sheet.</p>
     </div>
   `;
 }
 
-function renderChangeGroupVm(title, icon, items) {
+function renderReviewToolbar(vm) {
+  if (!vm.sheets || vm.sheets.length === 0) return "";
+  return `
+    <div class="review-toolbar">
+      <div class="review-toolbar-left">
+        <div class="toolbar-field">
+          <label class="toolbar-label" for="sheetSearch">Sheet search</label>
+          <input type="search" id="sheetSearch" class="sheet-search" placeholder="Search sheets" />
+        </div>
+        <div class="toolbar-actions">
+          <button type="button" class="review-nav-btn" data-review-nav="prev">Prev change</button>
+          <button type="button" class="review-nav-btn" data-review-nav="next">Next change</button>
+        </div>
+      </div>
+      <div class="review-toolbar-right">
+        <label class="toolbar-toggle">
+          <input type="checkbox" data-filter="focus-rows" />
+          Show only changed rows
+        </label>
+        <label class="toolbar-toggle">
+          <input type="checkbox" data-filter="focus-cols" />
+          Show only changed columns
+        </label>
+        <label class="toolbar-toggle">
+          <input type="checkbox" data-filter="ignore-blank" checked />
+          Ignore blank-to-blank
+        </label>
+        <label class="toolbar-select">
+          <span>Display</span>
+          <select data-filter="content-mode">
+            <option value="values">Values</option>
+            <option value="formulas">Formulas</option>
+            <option value="both">Both</option>
+          </select>
+        </label>
+      </div>
+    </div>
+  `;
+}
+
+function renderSheetIndex(vm) {
+  if (!vm.sheets || vm.sheets.length === 0) return "";
+  const maxOps = Math.max(1, ...vm.sheets.map(sheet => sheet.opCount || 0));
+  const maxAnchors = Math.max(1, ...vm.sheets.map(sheet => (sheet.changes?.anchors || []).length));
+  const maxDensity = Math.max(maxOps, maxAnchors);
+
+  let html = `
+    <div class="sheet-index">
+      <div class="sheet-index-title">Sheet Index</div>
+      <div class="sheet-index-list">
+  `;
+
+  for (const sheet of vm.sheets) {
+    const anchorCount = sheet.changes?.anchors ? sheet.changes.anchors.length : 0;
+    const densityValue = Math.max(anchorCount, sheet.opCount || 0);
+    const densityPct = Math.round((densityValue / maxDensity) * 100);
+    const statusKind = sheet.renderPlan?.status?.kind || "ok";
+    const statusLabel = statusKind === "ok" ? "OK" : statusKind.toUpperCase();
+    const statusTitle = sheet.renderPlan?.status?.message ? ` title="${esc(sheet.renderPlan.status.message)}"` : "";
+
+    html += `
+      <button type="button" class="sheet-index-item" data-sheet="${esc(sheet.name)}">
+        <div class="sheet-index-main">
+          <span class="sheet-index-name">${esc(sheet.name)}</span>
+          <span class="sheet-index-badges">
+            <span class="sheet-index-badge">${sheet.opCount}</span>
+            <span class="sheet-index-badge">${anchorCount}</span>
+          </span>
+        </div>
+        <div class="sheet-index-meta">
+          <div class="density-bar"><span style="width: ${densityPct}%"></span></div>
+          <span class="status-pill ${statusKind}"${statusTitle}>${statusLabel}</span>
+        </div>
+      </button>
+    `;
+  }
+
+  html += `
+      </div>
+    </div>
+  `;
+  return html;
+}
+
+
+function renderChangeItemVm(item, sheetName) {
+  const changeType = item.changeType || "modified";
+  const cls = `change-item ${changeType}`;
+  const icon = changeType === "added" ? "+" : changeType === "removed" ? "-" : changeType === "moved" ? ">" : "~";
+  const detail = item.detail ? `<span class="change-detail">${esc(item.detail)}</span>` : "";
+  const navTargets = Array.isArray(item.navTargets) ? item.navTargets : [];
+  const actions = navTargets.length
+    ? `<div class="change-actions">${navTargets
+        .map(target => `<button type="button" class="change-jump" data-sheet="${esc(sheetName)}" data-anchor="${esc(target.anchorId)}">${esc(target.label || "Jump")}</button>`)
+        .join("")}</div>`
+    : "";
+  const itemId = `change-${sheetName}-${item.id}`;
+  return `
+    <div class="${cls}" id="${esc(itemId)}">
+      <div class="change-icon">${icon}</div>
+      <span class="change-location">${esc(item.label || "")}</span>
+      ${detail}
+      ${actions}
+    </div>
+  `;
+}
+
+function renderChangeGroupVm(title, icon, items, sheetName) {
   if (!items || items.length === 0) return "";
   return `
     <div class="change-group">
@@ -55104,7 +56305,7 @@ function renderChangeGroupVm(title, icon, items) {
         <span>${esc(title)} (${items.length})</span>
       </div>
       <div class="change-list">
-        ${items.map(item => renderChangeItemVm(item)).join("")}
+        ${items.map(item => renderChangeItemVm(item, sheetName)).join("")}
       </div>
     </div>
   `;
@@ -55208,16 +56409,32 @@ function renderSheetGridVm(sheetVm) {
   }
 
   const regionIds = sheetVm.renderPlan.regionsToRender || [];
-  if (regionIds.length === 0) return "";
+  const hasGridAnchors = Array.isArray(sheetVm.changes?.anchors)
+    ? sheetVm.changes.anchors.some(anchor => anchor.target?.kind === "grid")
+    : false;
+  if (regionIds.length === 0 && !hasGridAnchors) return "";
+
+  const initialAnchor = Array.isArray(sheetVm.changes?.anchors)
+    ? sheetVm.changes.anchors.find(anchor => anchor.target?.kind === "grid")
+    : null;
+  const initialAnchorId = initialAnchor ? initialAnchor.id : "0";
 
   return `
-    <div class="grid-viewer-mount" data-sheet="${esc(sheetVm.name)}" data-initial-mode="side_by_side" data-initial-anchor="0"></div>
+    <div class="grid-viewer-mount" data-sheet="${esc(sheetVm.name)}" data-initial-mode="side_by_side" data-initial-anchor="${esc(initialAnchorId)}"></div>
     ${renderGridLegend()}
   `;
 }
 
 function renderSheetVm(sheetVm) {
   const badge = `${sheetVm.opCount} change${sheetVm.opCount !== 1 ? "s" : ""}`;
+  const anchorCount = sheetVm.changes?.anchors ? sheetVm.changes.anchors.length : 0;
+  const anchorBadge = anchorCount > 0
+    ? `<span class="sheet-badge anchor-badge">${anchorCount} anchor${anchorCount !== 1 ? "s" : ""}</span>`
+    : "";
+  const status = sheetVm.renderPlan.status || { kind: "ok" };
+  const statusLabel = status.kind === "ok" ? "OK" : status.kind.toUpperCase();
+  const statusTitle = status.message ? ` title="${esc(status.message)}"` : "";
+  const statusPill = `<button type="button" class="status-pill ${status.kind}" data-sheet="${esc(sheetVm.name)}"${statusTitle}>${statusLabel}</button>`;
   const gridHtml = renderSheetGridVm(sheetVm);
 
   let contentHtml = "";
@@ -55240,11 +56457,11 @@ function renderSheetVm(sheetVm) {
   const otherItems = sheetVm.changes.items.filter(item => item.group === "other");
 
   let detailsHtml = "";
-  detailsHtml += renderChangeGroupVm("Row Changes", "R", rowItems);
-  detailsHtml += renderChangeGroupVm("Column Changes", "C", colItems);
-  detailsHtml += renderChangeGroupVm("Cell Changes", "*", cellItems);
-  detailsHtml += renderChangeGroupVm("Moved Blocks", ">", moveItems);
-  detailsHtml += renderChangeGroupVm("Other Changes", "?", otherItems);
+  detailsHtml += renderChangeGroupVm("Row Changes", "R", rowItems, sheetVm.name);
+  detailsHtml += renderChangeGroupVm("Column Changes", "C", colItems, sheetVm.name);
+  detailsHtml += renderChangeGroupVm("Cell Changes", "*", cellItems, sheetVm.name);
+  detailsHtml += renderChangeGroupVm("Moved Blocks", ">", moveItems, sheetVm.name);
+  detailsHtml += renderChangeGroupVm("Other Changes", "?", otherItems, sheetVm.name);
 
   if (detailsHtml) {
     contentHtml += `
@@ -55264,6 +56481,8 @@ function renderSheetVm(sheetVm) {
           <div class="sheet-icon">#</div>
           <span class="sheet-name">${esc(sheetVm.name)}</span>
           <span class="sheet-badge">${badge}</span>
+          ${anchorBadge}
+          ${statusPill}
         </div>
         <svg class="expand-icon" width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
           <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" />
@@ -55285,7 +56504,7 @@ function renderOtherChangesVm(title, icon, items) {
         <span>${esc(title)} (${items.length})</span>
       </div>
       <div class="change-list">
-        ${items.map(item => renderChangeItemVm(item)).join("")}
+        ${items.map(item => renderChangeItemVm(item, "workbook")).join("")}
       </div>
     </div>
   `;
@@ -55294,12 +56513,16 @@ function renderOtherChangesVm(title, icon, items) {
 export function renderWorkbookVm(vm) {
   let html = "";
   html += renderWarnings(vm.warnings);
+  html += renderPreviewLimitations(vm);
   html += renderSummaryCards(vm.counts);
 
   const total = vm.counts.added + vm.counts.removed + vm.counts.modified + vm.counts.moved;
   if (total === 0) {
     return html;
   }
+
+  html += renderReviewToolbar(vm);
+  html += renderSheetIndex(vm);
 
   for (const sheetVm of vm.sheets) {
     html += renderSheetVm(sheetVm);
@@ -55595,11 +56818,85 @@ function testRegionMaxCells() {
   }
 }
 
+function testAnchorsForRowChanges() {
+  const report = {
+    strings: ["AnchorSheet"],
+    ops: [{ kind: "RowAdded", sheet: 0, row_idx: 0 }],
+    warnings: []
+  };
+  const oldSheet = { name: "AnchorSheet", nrows: 1, ncols: 1, cells: [] };
+  const newSheet = { name: "AnchorSheet", nrows: 2, ncols: 1, cells: [] };
+  const alignment = {
+    sheet: "AnchorSheet",
+    rows: [
+      { old: null, new: 0, kind: "insert" },
+      { old: 0, new: 1, kind: "match" }
+    ],
+    cols: [{ old: 0, new: 0, kind: "match" }],
+    moves: [],
+    skipped: false
+  };
+  const payload = {
+    report,
+    sheets: { old: { sheets: [oldSheet] }, new: { sheets: [newSheet] } },
+    alignments: [alignment]
+  };
+  const vm = buildWorkbookViewModel(payload);
+  const sheetVm = findSheet(vm, "AnchorSheet");
+  const anchor = sheetVm.changes.anchors.find(item => item.id === "row:added:0-0");
+  assert.ok(anchor, "Missing row add anchor");
+  assert.equal(anchor.target.kind, "grid");
+  assert.equal(anchor.target.viewRow, 0);
+}
+
+function testIgnoreBlankToBlank() {
+  const report = {
+    strings: ["BlankSheet"],
+    ops: [
+      {
+        kind: "CellEdited",
+        sheet: 0,
+        addr: { row: 0, col: 0 },
+        from: { value: "Blank" },
+        to: { value: "Blank" }
+      }
+    ],
+    warnings: []
+  };
+  const oldSheet = { name: "BlankSheet", nrows: 1, ncols: 1, cells: [] };
+  const newSheet = { name: "BlankSheet", nrows: 1, ncols: 1, cells: [] };
+  const alignment = {
+    sheet: "BlankSheet",
+    rows: [{ old: 0, new: 0, kind: "match" }],
+    cols: [{ old: 0, new: 0, kind: "match" }],
+    moves: [],
+    skipped: false
+  };
+  const payload = {
+    report,
+    sheets: { old: { sheets: [oldSheet] }, new: { sheets: [newSheet] } },
+    alignments: [alignment]
+  };
+
+  const vmDefault = buildWorkbookViewModel(payload);
+  const sheetDefault = findSheet(vmDefault, "BlankSheet");
+  assert.equal(sheetDefault.changes.items.length, 0);
+  assert.equal(sheetDefault.changes.regions.length, 0);
+  assert.equal(sheetDefault.changes.anchors.length, 0);
+
+  const vmInclude = buildWorkbookViewModel(payload, { ignoreBlankToBlank: false });
+  const sheetInclude = findSheet(vmInclude, "BlankSheet");
+  assert.ok(sheetInclude.changes.regions.length > 0);
+  assert.ok(sheetInclude.changes.anchors.length > 0);
+}
+
 testRowInsertionMapping();
 testMoveIdentity();
 testRowGrouping();
 testRegionCompaction();
 testRegionMaxCells();
+testAnchorsForRowChanges();
+testIgnoreBlankToBlank();
 
 console.log("ok");
 
@@ -55617,7 +56914,8 @@ const DEFAULT_OPTS = {
   contextCols: 1,
   maxCellsPerRegion: 200,
   maxVisualCells: 5000,
-  mergeGap: 1
+  mergeGap: 1,
+  ignoreBlankToBlank: true
 };
 
 function resolveString(report, id) {
@@ -55829,8 +57127,9 @@ function mapIndexToView(index, map) {
   return index;
 }
 
-function makeEditMap(report, sheetOps, rowsVm, colsVm) {
+function makeEditMap(report, sheetOps, rowsVm, colsVm, opts) {
   const editMap = new Map();
+  const ignoreBlank = opts?.ignoreBlankToBlank !== false;
   for (const op of sheetOps) {
     if (op.kind !== "CellEdited") continue;
     const addr = parseCellAddress(op.addr);
@@ -55839,12 +57138,14 @@ function makeEditMap(report, sheetOps, rowsVm, colsVm) {
     const viewCol = mapIndexToView(addr.col, colsVm.newToView);
     if (viewRow === null || viewCol === null) continue;
     const key = viewRow * CELL_KEY_STRIDE + viewCol;
-    editMap.set(key, {
-      fromValue: op.from ? formatValue(report, op.from.value) : "",
-      toValue: op.to ? formatValue(report, op.to.value) : "",
-      fromFormula: resolveFormula(report, op.from?.formula),
-      toFormula: resolveFormula(report, op.to?.formula)
-    });
+    const fromValue = op.from ? formatValue(report, op.from.value) : "";
+    const toValue = op.to ? formatValue(report, op.to.value) : "";
+    const fromFormula = resolveFormula(report, op.from?.formula);
+    const toFormula = resolveFormula(report, op.to?.formula);
+    if (ignoreBlank && !fromValue && !toValue && !fromFormula && !toFormula) {
+      continue;
+    }
+    editMap.set(key, { fromValue, toValue, fromFormula, toFormula });
   }
   return editMap;
 }
@@ -55962,6 +57263,13 @@ function mapRangeToView(start, count, map) {
   }
   if (minView === null || maxView === null) return null;
   return { start: minView, end: maxView };
+}
+
+function viewStartForRange(axisVm, start, count, side) {
+  if (!axisVm) return null;
+  const map = side === "old" ? axisVm.oldToView : axisVm.newToView;
+  const range = mapRangeToView(start, count, map);
+  return range ? range.start : null;
 }
 
 function viewIndexForSide(axisVm, viewIndex, side) {
@@ -56168,20 +57476,35 @@ function buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions }) {
 
   for (const op of ops) {
     if (op.kind === "RowAdded") {
-      rowAdds.push(mapIndexToView(op.row_idx, rowsVm.newToView));
+      const viewIdx = mapIndexToView(op.row_idx, rowsVm.newToView);
+      if (viewIdx !== null && viewIdx !== undefined) {
+        rowAdds.push(viewIdx);
+      }
     } else if (op.kind === "RowRemoved") {
-      rowRemoves.push(mapIndexToView(op.row_idx, rowsVm.oldToView));
+      const viewIdx = mapIndexToView(op.row_idx, rowsVm.oldToView);
+      if (viewIdx !== null && viewIdx !== undefined) {
+        rowRemoves.push(viewIdx);
+      }
     } else if (op.kind === "ColumnAdded") {
-      colAdds.push(mapIndexToView(op.col_idx, colsVm.newToView));
+      const viewIdx = mapIndexToView(op.col_idx, colsVm.newToView);
+      if (viewIdx !== null && viewIdx !== undefined) {
+        colAdds.push(viewIdx);
+      }
     } else if (op.kind === "ColumnRemoved") {
-      colRemoves.push(mapIndexToView(op.col_idx, colsVm.oldToView));
+      const viewIdx = mapIndexToView(op.col_idx, colsVm.oldToView);
+      if (viewIdx !== null && viewIdx !== undefined) {
+        colRemoves.push(viewIdx);
+      }
     } else if (op.kind === "RowReplaced") {
       const viewIdx = mapIndexToView(op.row_idx, rowsVm.newToView);
       items.push({
         id: `row-replaced-${op.row_idx}`,
         group: "rows",
         changeType: "modified",
-        label: `Row ${viewIndexForSide(rowsVm, viewIdx, "new") + 1} replaced`
+        label: `Row ${viewIndexForSide(rowsVm, viewIdx, "new") + 1} replaced`,
+        axis: "row",
+        viewStart: viewIdx,
+        viewEnd: viewIdx
       });
     }
   }
@@ -56191,7 +57514,10 @@ function buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions }) {
       id: `row-added-${group.start}`,
       group: "rows",
       changeType: "added",
-      label: formatRowRange(rowsVm, group.start, group.end, "new", "added")
+      label: formatRowRange(rowsVm, group.start, group.end, "new", "added"),
+      axis: "row",
+      viewStart: group.start,
+      viewEnd: group.end
     });
   }
   for (const group of groupConsecutive(rowRemoves)) {
@@ -56199,7 +57525,10 @@ function buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions }) {
       id: `row-removed-${group.start}`,
       group: "rows",
       changeType: "removed",
-      label: formatRowRange(rowsVm, group.start, group.end, "old", "removed")
+      label: formatRowRange(rowsVm, group.start, group.end, "old", "removed"),
+      axis: "row",
+      viewStart: group.start,
+      viewEnd: group.end
     });
   }
   for (const group of groupConsecutive(colAdds)) {
@@ -56207,7 +57536,10 @@ function buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions }) {
       id: `col-added-${group.start}`,
       group: "cols",
       changeType: "added",
-      label: formatColRange(colsVm, group.start, group.end, "new", "added")
+      label: formatColRange(colsVm, group.start, group.end, "new", "added"),
+      axis: "col",
+      viewStart: group.start,
+      viewEnd: group.end
     });
   }
   for (const group of groupConsecutive(colRemoves)) {
@@ -56215,7 +57547,10 @@ function buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions }) {
       id: `col-removed-${group.start}`,
       group: "cols",
       changeType: "removed",
-      label: formatColRange(colsVm, group.start, group.end, "old", "removed")
+      label: formatColRange(colsVm, group.start, group.end, "old", "removed"),
+      axis: "col",
+      viewStart: group.start,
+      viewEnd: group.end
     });
   }
 
@@ -56231,7 +57566,12 @@ function buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions }) {
           group: "moves",
           changeType: "moved",
           label,
-          detail: `to row ${move.dst_start + 1}`
+          detail: `to row ${move.dst_start + 1}`,
+          moveId: move.id,
+          axis: "row",
+          srcStart: move.src_start,
+          dstStart: move.dst_start,
+          count: move.count
         });
       } else if (move.axis === "col") {
         const start = colToLetter(move.src_start);
@@ -56242,7 +57582,12 @@ function buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions }) {
           group: "moves",
           changeType: "moved",
           label,
-          detail: `to column ${colToLetter(move.dst_start)}`
+          detail: `to column ${colToLetter(move.dst_start)}`,
+          moveId: move.id,
+          axis: "col",
+          srcStart: move.src_start,
+          dstStart: move.dst_start,
+          count: move.count
         });
       }
     }
@@ -56252,23 +57597,35 @@ function buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions }) {
         const start = op.src_start_row + 1;
         const end = op.src_start_row + op.row_count;
         const label = start === end ? `Row ${start} moved` : `Rows ${start}-${end} moved`;
+        const moveId = `r:${op.src_start_row}+${op.row_count}->${op.dst_start_row}`;
         items.push({
           id: `move-rows-${op.src_start_row}-${op.dst_start_row}`,
           group: "moves",
           changeType: "moved",
           label,
-          detail: `to row ${op.dst_start_row + 1}`
+          detail: `to row ${op.dst_start_row + 1}`,
+          moveId,
+          axis: "row",
+          srcStart: op.src_start_row,
+          dstStart: op.dst_start_row,
+          count: op.row_count
         });
       } else if (op.kind === "BlockMovedColumns") {
         const start = colToLetter(op.src_start_col);
         const end = colToLetter(op.src_start_col + op.col_count - 1);
         const label = start === end ? `Column ${start} moved` : `Columns ${start}-${end} moved`;
+        const moveId = `c:${op.src_start_col}+${op.col_count}->${op.dst_start_col}`;
         items.push({
           id: `move-cols-${op.src_start_col}-${op.dst_start_col}`,
           group: "moves",
           changeType: "moved",
           label,
-          detail: `to column ${colToLetter(op.dst_start_col)}`
+          detail: `to column ${colToLetter(op.dst_start_col)}`,
+          moveId,
+          axis: "col",
+          srcStart: op.src_start_col,
+          dstStart: op.dst_start_col,
+          count: op.col_count
         });
       }
     }
@@ -56280,12 +57637,15 @@ function buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions }) {
       const srcEnd = formatCellAddress(op.src_start_row + op.src_row_count - 1, op.src_start_col + op.src_col_count - 1);
       const dstStart = formatCellAddress(op.dst_start_row, op.dst_start_col);
       const dstEnd = formatCellAddress(op.dst_start_row + op.src_row_count - 1, op.dst_start_col + op.src_col_count - 1);
+      const moveId = `rect:${op.src_start_row},${op.src_start_col}+${op.src_row_count}x${op.src_col_count}->${op.dst_start_row},${op.dst_start_col}`;
       items.push({
         id: `move-rect-${srcStart}-${dstStart}`,
         group: "moves",
         changeType: "moved",
         label: `Range ${srcStart}:${srcEnd} moved`,
-        detail: `to ${dstStart}:${dstEnd}`
+        detail: `to ${dstStart}:${dstEnd}`,
+        moveId,
+        moveKind: "rect"
       });
     }
   }
@@ -56299,14 +57659,16 @@ function buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions }) {
         group: "cells",
         changeType: "modified",
         label: `${region.label} modified`,
-        detail
+        detail,
+        regionId: region.id
       });
     } else if (region.kind === "rect") {
       items.push({
         id: `rect-region-${region.id}`,
         group: "cells",
         changeType: "modified",
-        label: `${region.label} replaced`
+        label: `${region.label} replaced`,
+        regionId: region.id
       });
     }
   }
@@ -56337,6 +57699,229 @@ function buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions }) {
   }
 
   return items;
+}
+
+function anchorPriority(group, regionKind) {
+  if (group === "moves") return 0;
+  if (group === "rows" || group === "cols") return 1;
+  if (regionKind === "rect") return 2;
+  if (group === "cells") return 3;
+  return 4;
+}
+
+function buildChangeAnchors({ sheetName, status, items, regions, rowsVm, colsVm }) {
+  const entries = [];
+  const regionById = new Map();
+  const moveRegions = new Map();
+
+  for (const region of regions || []) {
+    regionById.set(region.id, region);
+    if (region.moveId) {
+      if (!moveRegions.has(region.moveId)) {
+        moveRegions.set(region.moveId, {});
+      }
+      const record = moveRegions.get(region.moveId);
+      if (region.kind === "move_src") record.src = region;
+      if (region.kind === "move_dst") record.dst = region;
+    }
+  }
+
+  const canGrid =
+    status?.kind === "ok" &&
+    Array.isArray(rowsVm?.entries) &&
+    Array.isArray(colsVm?.entries) &&
+    rowsVm.entries.length > 0 &&
+    colsVm.entries.length > 0;
+
+  function addAnchor({ id, group, changeType, label, detail, viewRow, viewCol, regionId, moveId, listElementId, regionKind }) {
+    if (!id || !listElementId) return;
+    const hasGridTarget = canGrid && Number.isFinite(viewRow) && Number.isFinite(viewCol);
+    const target = hasGridTarget
+      ? {
+          kind: "grid",
+          viewRow,
+          viewCol,
+          ...(regionId ? { regionId } : {}),
+          ...(moveId ? { moveId } : {})
+        }
+      : { kind: "list", elementId: listElementId };
+    const anchor = {
+      id,
+      group: group || "cells",
+      changeType: changeType || "modified",
+      label: label || id,
+      target
+    };
+    if (detail) anchor.detail = detail;
+    entries.push({
+      anchor,
+      sortRow: Number.isFinite(viewRow) ? viewRow : Number.MAX_SAFE_INTEGER,
+      sortCol: Number.isFinite(viewCol) ? viewCol : Number.MAX_SAFE_INTEGER,
+      priority: anchorPriority(group, regionKind)
+    });
+  }
+
+  for (const item of items || []) {
+    const listElementId = `change-${sheetName}-${item.id}`;
+
+    if (item.regionId) {
+      const region = regionById.get(item.regionId);
+      if (region) {
+        addAnchor({
+          id: `region:${region.id}`,
+          group: item.group,
+          changeType: item.changeType,
+          label: item.label,
+          detail: item.detail,
+          viewRow: region.top,
+          viewCol: region.left,
+          regionId: region.id,
+          moveId: region.moveId,
+          listElementId,
+          regionKind: region.kind
+        });
+      }
+      continue;
+    }
+
+    if (item.group === "rows") {
+      addAnchor({
+        id: `row:${item.changeType}:${item.viewStart}-${item.viewEnd}`,
+        group: "rows",
+        changeType: item.changeType,
+        label: item.label,
+        detail: item.detail,
+        viewRow: item.viewStart,
+        viewCol: 0,
+        listElementId
+      });
+      continue;
+    }
+
+    if (item.group === "cols") {
+      addAnchor({
+        id: `col:${item.changeType}:${item.viewStart}-${item.viewEnd}`,
+        group: "cols",
+        changeType: item.changeType,
+        label: item.label,
+        detail: item.detail,
+        viewRow: 0,
+        viewCol: item.viewStart,
+        listElementId
+      });
+      continue;
+    }
+
+    if (item.group === "moves" && item.moveId) {
+      if (item.axis === "row" || item.axis === "col") {
+        const axisVm = item.axis === "row" ? rowsVm : colsVm;
+        const srcStart = viewStartForRange(axisVm, item.srcStart, item.count, "old");
+        const dstStart = viewStartForRange(axisVm, item.dstStart, item.count, "new");
+        if (srcStart !== null && srcStart !== undefined) {
+          addAnchor({
+            id: `move:${item.moveId}:src`,
+            group: "moves",
+            changeType: "moved",
+            label: item.label,
+            detail: item.detail,
+            viewRow: item.axis === "row" ? srcStart : 0,
+            viewCol: item.axis === "col" ? srcStart : 0,
+            moveId: item.moveId,
+            listElementId
+          });
+        }
+        if (dstStart !== null && dstStart !== undefined) {
+          addAnchor({
+            id: `move:${item.moveId}:dst`,
+            group: "moves",
+            changeType: "moved",
+            label: item.label,
+            detail: item.detail,
+            viewRow: item.axis === "row" ? dstStart : 0,
+            viewCol: item.axis === "col" ? dstStart : 0,
+            moveId: item.moveId,
+            listElementId
+          });
+        }
+        continue;
+      }
+
+      if (item.moveKind === "rect") {
+        const moveRegion = moveRegions.get(item.moveId);
+        if (moveRegion?.src) {
+          addAnchor({
+            id: `region:${moveRegion.src.id}`,
+            group: "moves",
+            changeType: "moved",
+            label: item.label,
+            detail: "From",
+            viewRow: moveRegion.src.top,
+            viewCol: moveRegion.src.left,
+            regionId: moveRegion.src.id,
+            moveId: item.moveId,
+            listElementId,
+            regionKind: moveRegion.src.kind
+          });
+        }
+        if (moveRegion?.dst) {
+          addAnchor({
+            id: `region:${moveRegion.dst.id}`,
+            group: "moves",
+            changeType: "moved",
+            label: item.label,
+            detail: "To",
+            viewRow: moveRegion.dst.top,
+            viewCol: moveRegion.dst.left,
+            regionId: moveRegion.dst.id,
+            moveId: item.moveId,
+            listElementId,
+            regionKind: moveRegion.dst.kind
+          });
+        }
+      }
+    }
+  }
+
+  entries.sort((a, b) => {
+    if (a.sortRow !== b.sortRow) return a.sortRow - b.sortRow;
+    if (a.sortCol !== b.sortCol) return a.sortCol - b.sortCol;
+    if (a.priority !== b.priority) return a.priority - b.priority;
+    return String(a.anchor.id).localeCompare(String(b.anchor.id));
+  });
+
+  return entries.map(entry => entry.anchor);
+}
+
+function attachNavTargets(items, anchors) {
+  const anchorIds = new Set((anchors || []).map(anchor => anchor.id));
+  for (const item of items || []) {
+    const targets = [];
+    if (item.regionId) {
+      const anchorId = `region:${item.regionId}`;
+      if (anchorIds.has(anchorId)) targets.push({ anchorId });
+    } else if (item.group === "rows") {
+      const anchorId = `row:${item.changeType}:${item.viewStart}-${item.viewEnd}`;
+      if (anchorIds.has(anchorId)) targets.push({ anchorId });
+    } else if (item.group === "cols") {
+      const anchorId = `col:${item.changeType}:${item.viewStart}-${item.viewEnd}`;
+      if (anchorIds.has(anchorId)) targets.push({ anchorId });
+    } else if (item.group === "moves" && item.moveId) {
+      if (item.axis === "row" || item.axis === "col") {
+        const srcId = `move:${item.moveId}:src`;
+        const dstId = `move:${item.moveId}:dst`;
+        if (anchorIds.has(srcId)) targets.push({ anchorId: srcId, label: "From" });
+        if (anchorIds.has(dstId)) targets.push({ anchorId: dstId, label: "To" });
+      } else if (item.moveKind === "rect") {
+        const srcId = `region:move-src-${item.moveId}`;
+        const dstId = `region:move-dst-${item.moveId}`;
+        if (anchorIds.has(srcId)) targets.push({ anchorId: srcId, label: "From" });
+        if (anchorIds.has(dstId)) targets.push({ anchorId: dstId, label: "To" });
+      }
+    }
+    if (targets.length > 0) {
+      item.navTargets = targets;
+    }
+  }
 }
 
 function buildRegions({ ops, rowsVm, colsVm, editMap, opts }) {
@@ -56421,7 +58006,7 @@ function buildSheetViewModel({ report, sheetName, ops, oldSheet, newSheet, align
 
   const oldCells = makeCellMap(oldSheet);
   const newCells = makeCellMap(newSheet);
-  const editMap = makeEditMap(report, ops, rowsVm, colsVm);
+  const editMap = makeEditMap(report, ops, rowsVm, colsVm, opts);
 
   const baseRegions = buildRegions({ ops, rowsVm, colsVm, editMap, opts });
   for (const region of baseRegions) {
@@ -56457,13 +58042,16 @@ function buildSheetViewModel({ report, sheetName, ops, oldSheet, newSheet, align
     status = { kind: "missing", message: "Sheet snapshots are missing for this sheet." };
   }
 
+  const anchors = buildChangeAnchors({ sheetName, status, items, regions: baseRegions, rowsVm, colsVm });
+  attachNavTargets(items, anchors);
+
   const regionsToRender = status.kind === "ok" ? baseRegions.map(region => region.id) : [];
 
   return {
     name: sheetName,
     axis: { rows: rowsVm, cols: colsVm },
     cellAt: (viewRow, viewCol) => buildCellVm(viewRow, viewCol, rowsVm, colsVm, oldCells, newCells, editMap),
-    changes: { items, regions: baseRegions },
+    changes: { items, regions: baseRegions, anchors },
     renderPlan: {
       regionsToRender,
       status,

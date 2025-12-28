@@ -39,12 +39,13 @@ pub(crate) struct SheetAlignment {
     cols: Vec<AxisEntry>,
     moves: Vec<MoveGroup>,
     skipped: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skip_reason: Option<String>,
 }
 
 // Guardrail: keep the HTML grid from exploding on large sheets.
 const MAX_VIEW_ROWS: u32 = 10_000;
 const MAX_VIEW_COLS: u32 = 200;
-const MAX_VIEW_CELLS: u64 = 200_000;
 
 pub(crate) fn build_alignments(
     report: &excel_diff::DiffReport,
@@ -227,18 +228,22 @@ fn build_sheet_alignment(
         &move_dst_cols,
     );
 
-    let mut skipped = !row_summary.consistent || !col_summary.consistent;
-    if exceeds_limit(row_summary.view_len, col_summary.view_len) {
-        skipped = true;
+    let mut skip_reason = None;
+    if !row_summary.consistent || !col_summary.consistent {
+        skip_reason = Some("Preview disabled: alignment inconsistent.".to_string());
+    }
+    if let Some(reason) = limit_reason(row_summary.view_len, col_summary.view_len) {
+        skip_reason = Some(reason);
     }
 
-    if skipped {
+    if skip_reason.is_some() {
         return SheetAlignment {
             sheet: sheet.to_string(),
             rows: Vec::new(),
             cols: Vec::new(),
             moves,
             skipped: true,
+            skip_reason,
         };
     }
 
@@ -259,11 +264,15 @@ fn build_sheet_alignment(
         &move_dst_cols,
     );
 
-    let mut skipped = !(rows_consistent && cols_consistent);
-    if exceeds_limit(rows.len() as u32, cols.len() as u32) {
-        skipped = true;
+    let mut skip_reason = None;
+    if !(rows_consistent && cols_consistent) {
+        skip_reason = Some("Preview disabled: alignment inconsistent.".to_string());
+    }
+    if let Some(reason) = limit_reason(rows.len() as u32, cols.len() as u32) {
+        skip_reason = Some(reason);
     }
 
+    let skipped = skip_reason.is_some();
     if skipped {
         rows.clear();
         cols.clear();
@@ -275,6 +284,7 @@ fn build_sheet_alignment(
         cols,
         moves,
         skipped,
+        skip_reason,
     }
 }
 
@@ -412,13 +422,18 @@ fn build_axis_entries(
     (entries, summary.consistent)
 }
 
-fn exceeds_limit(rows: u32, cols: u32) -> bool {
-    if rows == 0 || cols == 0 {
-        return false;
+fn limit_reason(rows: u32, cols: u32) -> Option<String> {
+    if rows > MAX_VIEW_ROWS {
+        return Some(format!(
+            "Preview disabled: sheet has {} rows (cap is {}).",
+            rows, MAX_VIEW_ROWS
+        ));
     }
-    if rows > MAX_VIEW_ROWS || cols > MAX_VIEW_COLS {
-        return true;
+    if cols > MAX_VIEW_COLS {
+        return Some(format!(
+            "Preview disabled: sheet has {} columns (cap is {}).",
+            cols, MAX_VIEW_COLS
+        ));
     }
-    let cells = (rows as u64).saturating_mul(cols as u64);
-    cells > MAX_VIEW_CELLS
+    None
 }

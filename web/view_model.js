@@ -818,7 +818,7 @@ function buildChangeAnchors({ sheetName, status, items, regions, rowsVm, colsVm 
   }
 
   const canGrid =
-    status?.kind === "ok" &&
+    (status?.kind === "ok" || status?.kind === "partial") &&
     Array.isArray(rowsVm?.entries) &&
     Array.isArray(colsVm?.entries) &&
     rowsVm.entries.length > 0 &&
@@ -1095,8 +1095,13 @@ function buildSheetViewModel({ report, sheetName, ops, oldSheet, newSheet, align
   const rowsVm = makeAxisVm(rowEntries, oldRows, newRows);
   const colsVm = makeAxisVm(colEntries, oldCols, newCols);
 
-  const oldCells = makeCellMap(oldSheet);
-  const newCells = makeCellMap(newSheet);
+  let oldCells = null;
+  let newCells = null;
+
+  function ensureCellMaps() {
+    if (!oldCells) oldCells = makeCellMap(oldSheet);
+    if (!newCells) newCells = makeCellMap(newSheet);
+  }
   const editMap = makeEditMap(report, ops, rowsVm, colsVm, opts);
 
   const baseRegions = buildRegions({ ops, rowsVm, colsVm, editMap, opts });
@@ -1124,24 +1129,48 @@ function buildSheetViewModel({ report, sheetName, ops, oldSheet, newSheet, align
     }
   }
 
+  const preview = {
+    truncatedOld: Boolean(oldSheet?.truncated),
+    truncatedNew: Boolean(newSheet?.truncated)
+  };
+  if (oldSheet?.note || newSheet?.note) {
+    preview.note = oldSheet?.note || newSheet?.note;
+  }
+
   let status = { kind: "ok" };
   if (!alignment || alignment.skipped) {
+    const message = alignment?.skip_reason
+      ? alignment.skip_reason
+      : "Grid preview skipped because the aligned view is too large or inconsistent.";
     status = alignment?.skipped
-      ? { kind: "skipped", message: "Grid preview skipped because the aligned view is too large or inconsistent." }
+      ? { kind: "skipped", message }
       : { kind: "missing", message: "Alignment data is missing for this sheet." };
   } else if (rowsCount === 0 || colsCount === 0) {
     status = { kind: "missing", message: "Sheet snapshots are missing for this sheet." };
+  } else if (preview.truncatedOld || preview.truncatedNew) {
+    status = {
+      kind: "partial",
+      message: preview.note || "Preview limited for performance; edited cells remain exact."
+    };
   }
 
   const anchors = buildChangeAnchors({ sheetName, status, items, regions: baseRegions, rowsVm, colsVm });
   attachNavTargets(items, anchors);
 
-  const regionsToRender = status.kind === "ok" ? baseRegions.map(region => region.id) : [];
+  const regionsToRender =
+    status.kind === "ok" || status.kind === "partial"
+      ? baseRegions.map(region => region.id)
+      : [];
 
   return {
     name: sheetName,
     axis: { rows: rowsVm, cols: colsVm },
-    cellAt: (viewRow, viewCol) => buildCellVm(viewRow, viewCol, rowsVm, colsVm, oldCells, newCells, editMap),
+    preview,
+    ensureCellIndex: () => ensureCellMaps(),
+    cellAt: (viewRow, viewCol) => {
+      ensureCellMaps();
+      return buildCellVm(viewRow, viewCol, rowsVm, colsVm, oldCells, newCells, editMap);
+    },
     changes: { items, regions: baseRegions, anchors },
     renderPlan: {
       regionsToRender,

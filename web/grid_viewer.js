@@ -876,6 +876,14 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
     },
     flashAnchor(anchorIdOrIndex) {
       return flashAnchor(anchorIdOrIndex);
+    },
+    capturePng() {
+      paint();
+      try {
+        return canvas.toDataURL("image/png");
+      } catch (err) {
+        return "";
+      }
     }
   };
 }

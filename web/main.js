@@ -1,7 +1,8 @@
-import init, { diff_files_with_sheets_json, get_version } from "./wasm/excel_diff_wasm.js";
 import { renderWorkbookVm } from "./render.js";
 import { buildWorkbookViewModel } from "./view_model.js";
 import { mountSheetGridViewer } from "./grid_viewer.js";
+import { createDiffWorkerClient } from "./diff_worker_client.js";
+import { downloadReportJson, downloadHtmlReport } from "./export.js";
 
 function byId(id) {
   const el = document.getElementById(id);
@@ -15,8 +16,40 @@ function setStatus(msg, type = "") {
   status.className = type;
 }
 
-async function readFileBytes(file) {
-  return new Uint8Array(await file.arrayBuffer());
+function nextFrame() {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+let diffClient = null;
+let reviewController = null;
+let activeViewerManager = null;
+let engineVersion = "";
+let isBusy = false;
+let activeRunId = 0;
+let lastReport = null;
+let lastMeta = null;
+
+function setBusy(state) {
+  isBusy = state;
+  byId("run").disabled = state;
+  const cancelBtn = byId("cancel");
+  if (cancelBtn) cancelBtn.disabled = !state;
+}
+
+function setExportsEnabled(enabled) {
+  const jsonBtn = byId("exportJson");
+  const htmlBtn = byId("exportHtml");
+  if (jsonBtn) jsonBtn.disabled = !enabled;
+  if (htmlBtn) htmlBtn.disabled = !enabled;
+}
+
+function clearResults() {
+  byId("results").innerHTML = "";
+  byId("results").classList.remove("visible");
+  byId("raw").textContent = "";
+  byId("rawJsonContent").classList.remove("visible");
+  lastReport = null;
+  lastMeta = null;
 }
 
 function setupFileDrop(dropId, inputId, nameId) {
@@ -57,6 +90,78 @@ function setupFileDrop(dropId, inputId, nameId) {
   });
 }
 
+const STAGE_LABELS = {
+  init: "Initializing engine...",
+  validate: "Validating inputs...",
+  read: "Reading files...",
+  transfer: "Transferring files to worker...",
+  diff: "Diffing workbooks...",
+  parse: "Parsing results...",
+  render: "Rendering results...",
+  hydrate: "Hydrating viewers..."
+};
+
+function showStage(stage, detail) {
+  const text = detail || STAGE_LABELS[stage] || "";
+  if (text) {
+    setStatus(text, "loading");
+  }
+}
+
+function handleWorkerStatus(status) {
+  if (!isBusy) return;
+  if (status && status.stage) {
+    showStage(status.stage, status.detail);
+  }
+}
+
+function buildMeta(oldFile, newFile) {
+  return {
+    version: engineVersion,
+    oldName: oldFile?.name || "",
+    newName: newFile?.name || "",
+    createdAtIso: new Date().toISOString()
+  };
+}
+
+function collectGridPreviews() {
+  const previews = {};
+  if (!activeViewerManager || typeof activeViewerManager.getMountedViewers !== "function") {
+    return previews;
+  }
+  for (const [sheetName, viewer] of activeViewerManager.getMountedViewers()) {
+    if (!viewer || typeof viewer.capturePng !== "function") continue;
+    const dataUrl = viewer.capturePng();
+    if (dataUrl) previews[sheetName] = dataUrl;
+  }
+  return previews;
+}
+
+function handleError(err) {
+  const message = err && err.message ? err.message : String(err);
+  setStatus(`Error: ${message}`, "error");
+  byId("results").innerHTML = `
+    <div class="warnings-section">
+      <div class="warnings-title">
+        <span>!</span>
+        <span>Error</span>
+      </div>
+      <p style="color: var(--text-secondary); margin-top: 8px;">${String(message)}</p>
+    </div>
+  `;
+  byId("results").classList.add("visible");
+}
+
+function cancelDiff() {
+  if (!isBusy) return;
+  activeRunId += 1;
+  diffClient.cancel();
+  clearResults();
+  setExportsEnabled(false);
+  setBusy(false);
+  setStatus("Canceled.", "");
+}
+
 async function runDiff() {
   const oldFile = byId("fileOld").files[0];
   const newFile = byId("fileNew").files[0];
@@ -67,53 +172,69 @@ async function runDiff() {
   }
 
   cleanupViewers();
-  setStatus("Comparing files...", "loading");
-  byId("results").innerHTML = "";
-  byId("results").classList.remove("visible");
-  byId("raw").textContent = "";
-  byId("rawJsonContent").classList.remove("visible");
+  clearResults();
+  setExportsEnabled(false);
+
+  activeRunId += 1;
+  const runId = activeRunId;
+  setBusy(true);
+  showStage("validate");
+  showStage("read");
 
   try {
-    const oldBytes = await readFileBytes(oldFile);
-    const newBytes = await readFileBytes(newFile);
+    const oldBuffer = await oldFile.arrayBuffer();
+    const newBuffer = await newFile.arrayBuffer();
+    if (runId !== activeRunId) return;
 
-    const json = diff_files_with_sheets_json(oldBytes, newBytes, oldFile.name, newFile.name);
-    const payload = JSON.parse(json);
-    const report = payload.report || payload;
+    showStage("transfer");
+
     const options = { ignoreBlankToBlank: true };
-    renderResults(payload, options);
+    const payload = await diffClient.diff(
+      {
+        oldName: oldFile.name,
+        newName: newFile.name,
+        oldBuffer,
+        newBuffer
+      },
+      options
+    );
+    if (runId !== activeRunId) return;
 
+    showStage("render");
+    await nextFrame();
+
+    const report = payload.report || payload;
+    renderResults(payload, options);
     byId("raw").textContent = JSON.stringify(report, null, 2);
 
     const opCount = report.ops ? report.ops.length : 0;
     if (opCount === 0) {
-      setStatus("✓ Files are identical", "");
+      setStatus("Files are identical.", "");
     } else {
-      setStatus(`Found ${opCount} difference${opCount !== 1 ? "s" : ""}`, "");
+      setStatus(`Found ${opCount} difference${opCount !== 1 ? "s" : ""}.`, "");
     }
-    
+
+    lastReport = report;
+    lastMeta = buildMeta(oldFile, newFile);
+    setExportsEnabled(true);
   } catch (e) {
-    setStatus("Error: " + (e.message || String(e)), "error");
-    byId("results").innerHTML = `
-      <div class="warnings-section">
-        <div class="warnings-title">
-          <span>❌</span>
-          <span>Error</span>
-        </div>
-        <p style="color: var(--text-secondary); margin-top: 8px;">${String(e.message || e)}</p>
-      </div>
-    `;
-    byId("results").classList.add("visible");
+    if (!isBusy && String(e).toLowerCase().includes("canceled")) {
+      return;
+    }
+    handleError(e);
+  } finally {
+    if (runId === activeRunId) {
+      setBusy(false);
+    }
   }
 }
-
-let reviewController = null;
 
 function cleanupViewers() {
   if (reviewController) {
     reviewController.cleanup();
     reviewController = null;
   }
+  activeViewerManager = null;
 }
 
 function renderResults(payload, options = {}, state = {}) {
@@ -123,6 +244,7 @@ function renderResults(payload, options = {}, state = {}) {
   resultsEl.innerHTML = renderWorkbookVm(workbookVm);
   resultsEl.classList.add("visible");
   reviewController = setupReviewWorkflow(resultsEl, workbookVm, payload, options, state);
+  activeViewerManager = reviewController.viewerManager || null;
   return workbookVm;
 }
 
@@ -405,6 +527,7 @@ function setupReviewWorkflow(rootEl, workbookVm, payloadCache, options = {}, sta
   }
 
   return {
+    viewerManager,
     cleanup() {
       rootEl.removeEventListener("click", onRootClick);
       rootEl.removeEventListener("input", onRootInput);
@@ -436,6 +559,9 @@ function hydrateGridViewers(rootEl, workbookVm, displayOptions = {}, expandedShe
     const sheetName = section.dataset.sheet || mount.dataset.sheet;
     const sheetVm = sheetMap.get(sheetName);
     if (!sheetVm) return;
+    if (typeof sheetVm.ensureCellIndex === "function") {
+      sheetVm.ensureCellIndex();
+    }
     const initialMode = mount.dataset.initialMode || "side_by_side";
     const initialAnchor = mount.dataset.initialAnchor || "0";
     const viewer = mountSheetGridViewer({
@@ -455,6 +581,14 @@ function hydrateGridViewers(rootEl, workbookVm, displayOptions = {}, expandedShe
     section.classList.add("expanded");
     mountForSection(section);
     return viewers.get(sheetName) || null;
+  }
+
+  function getViewer(sheetName) {
+    return viewers.get(sheetName) || null;
+  }
+
+  function getMountedViewers() {
+    return new Map(viewers);
   }
 
   function setDisplayOptions(nextOptions) {
@@ -497,6 +631,8 @@ function hydrateGridViewers(rootEl, workbookVm, displayOptions = {}, expandedShe
 
   return {
     ensureViewer,
+    getViewer,
+    getMountedViewers,
     setDisplayOptions,
     cleanup() {
       rootEl.removeEventListener("click", onHeaderClick);
@@ -510,20 +646,54 @@ function hydrateGridViewers(rootEl, workbookVm, displayOptions = {}, expandedShe
 
 async function main() {
   setStatus("Loading...", "loading");
-  
+
   try {
-    await init();
-    byId("version").textContent = get_version();
+    diffClient = createDiffWorkerClient({ onStatus: handleWorkerStatus });
+    showStage("init");
+    engineVersion = await diffClient.ready();
+    byId("version").textContent = engineVersion;
     setStatus("");
-    
+
     setupFileDrop("dropOld", "fileOld", "nameOld");
     setupFileDrop("dropNew", "fileNew", "nameNew");
-    
+
     byId("run").addEventListener("click", runDiff);
-    
+    const cancelBtn = byId("cancel");
+    if (cancelBtn) cancelBtn.addEventListener("click", cancelDiff);
+
+    const exportJsonBtn = byId("exportJson");
+    if (exportJsonBtn) {
+      exportJsonBtn.addEventListener("click", () => {
+        if (!lastReport || !lastMeta) return;
+        downloadReportJson({ report: lastReport, meta: lastMeta });
+      });
+    }
+
+    const exportHtmlBtn = byId("exportHtml");
+    if (exportHtmlBtn) {
+      exportHtmlBtn.addEventListener("click", () => {
+        if (!lastReport || !lastMeta) return;
+        const resultsHtml = byId("results").innerHTML;
+        const cssText = document.querySelector("style")?.textContent || "";
+        const reportJsonText = JSON.stringify(lastReport, null, 2);
+        const gridPreviews = collectGridPreviews();
+        downloadHtmlReport({
+          title: "Excel Diff Report",
+          meta: lastMeta,
+          renderedResultsHtml: resultsHtml,
+          cssText,
+          reportJsonText,
+          gridPreviews
+        });
+      });
+    }
+
     byId("toggleJson").addEventListener("click", () => {
       byId("rawJsonContent").classList.toggle("visible");
     });
+
+    setBusy(false);
+    setExportsEnabled(false);
   } catch (e) {
     setStatus("Failed to load: " + String(e), "error");
   }

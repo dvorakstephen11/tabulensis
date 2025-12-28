@@ -1080,6 +1080,7 @@ function renderPreviewLimitations(vm) {
   return `
     <div class="preview-limitations">
       <div class="preview-limitations-title">Preview limitations</div>
+      <p><strong>Partial</strong> means the preview is limited for performance; edited cells remain exact.</p>
       <p><strong>Skipped</strong> means the aligned view was too large or inconsistent to render. The change list is still valid.</p>
       <p><strong>Missing</strong> means snapshots or alignment data were not available for that sheet.</p>
     </div>
@@ -1305,6 +1306,15 @@ function renderSheetGridVm(sheetVm) {
     `;
   }
 
+  const warningHtml =
+    status.kind === "partial"
+      ? `
+        <div class="grid-partial-warning">
+          ${esc(status.message || "Preview limited for performance; edited cells remain exact.")}
+        </div>
+      `
+      : "";
+
   const regionIds = sheetVm.renderPlan.regionsToRender || [];
   const hasGridAnchors = Array.isArray(sheetVm.changes?.anchors)
     ? sheetVm.changes.anchors.some(anchor => anchor.target?.kind === "grid")
@@ -1317,6 +1327,7 @@ function renderSheetGridVm(sheetVm) {
   const initialAnchorId = initialAnchor ? initialAnchor.id : "0";
 
   return `
+    ${warningHtml}
     <div class="grid-viewer-mount" data-sheet="${esc(sheetVm.name)}" data-initial-mode="side_by_side" data-initial-anchor="${esc(initialAnchorId)}"></div>
     ${renderGridLegend()}
   `;
