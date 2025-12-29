@@ -41,6 +41,16 @@ export async function openNativeFileDialog() {
   return result;
 }
 
+export async function openNativeFolderDialog() {
+  const bridge = getNativeBridge();
+  if (!bridge) {
+    throw new Error("Native dialog unavailable.");
+  }
+  const result = await bridge.invoke("pick_folder");
+  if (!result) return null;
+  return result;
+}
+
 export async function loadNativeRecents() {
   const bridge = getNativeBridge();
   if (!bridge) return [];
@@ -51,6 +61,54 @@ export async function saveNativeRecent(entry) {
   const bridge = getNativeBridge();
   if (!bridge) return [];
   return bridge.invoke("save_recent", { entry });
+}
+
+export async function loadNativeDiffSummary(diffId) {
+  const bridge = getNativeBridge();
+  if (!bridge) throw new Error("Native bridge unavailable.");
+  return bridge.invoke("load_diff_summary", { diff_id: diffId });
+}
+
+export async function loadNativeSheetPayload(diffId, sheetName) {
+  const bridge = getNativeBridge();
+  if (!bridge) throw new Error("Native bridge unavailable.");
+  return bridge.invoke("load_sheet_payload", { diff_id: diffId, sheet_name: sheetName });
+}
+
+export async function exportNativeAuditXlsx(diffId) {
+  const bridge = getNativeBridge();
+  if (!bridge) throw new Error("Native bridge unavailable.");
+  return bridge.invoke("export_audit_xlsx", { diff_id: diffId });
+}
+
+export async function runNativeBatchCompare(request) {
+  const bridge = getNativeBridge();
+  if (!bridge) throw new Error("Native bridge unavailable.");
+  return bridge.invoke("run_batch_compare", { request });
+}
+
+export async function loadNativeBatchSummary(batchId) {
+  const bridge = getNativeBridge();
+  if (!bridge) throw new Error("Native bridge unavailable.");
+  return bridge.invoke("load_batch_summary", { batch_id: batchId });
+}
+
+export async function searchNativeDiffOps(diffId, query, limit) {
+  const bridge = getNativeBridge();
+  if (!bridge) throw new Error("Native bridge unavailable.");
+  return bridge.invoke("search_diff_ops", { diff_id: diffId, query, limit });
+}
+
+export async function buildNativeSearchIndex(path, side) {
+  const bridge = getNativeBridge();
+  if (!bridge) throw new Error("Native bridge unavailable.");
+  return bridge.invoke("build_search_index", { path, side });
+}
+
+export async function searchNativeWorkbookIndex(indexId, query, limit) {
+  const bridge = getNativeBridge();
+  if (!bridge) throw new Error("Native bridge unavailable.");
+  return bridge.invoke("search_workbook_index", { index_id: indexId, query, limit });
 }
 
 export function createNativeDiffClient({ onStatus } = {}) {
@@ -149,6 +207,14 @@ export function createNativeDiffClient({ onStatus } = {}) {
     ready,
     diff,
     cancel,
-    dispose
+    dispose,
+    loadSummary: loadNativeDiffSummary,
+    loadSheetPayload: loadNativeSheetPayload,
+    exportAuditXlsx: exportNativeAuditXlsx,
+    runBatchCompare: runNativeBatchCompare,
+    loadBatchSummary: loadNativeBatchSummary,
+    searchDiffOps: searchNativeDiffOps,
+    buildSearchIndex: buildNativeSearchIndex,
+    searchWorkbookIndex: searchNativeWorkbookIndex
   };
 }

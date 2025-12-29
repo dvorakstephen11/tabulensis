@@ -2394,27 +2394,357 @@ Desktop should switch to **path-based selection** (to avoid JS memory blowups an
 
 ## Phase 7 — Desktop-only “spectacular” enhancements that actually matter
 
-These are the “greater resources” wins that users feel immediately:
+### Goal
 
-1. **Very large file support**
+Phase 6 gives us a desktop shell and native diff execution. Phase 7 is where the desktop app becomes the “real tool”: it handles enormous workbooks without hanging, produces durable audit artifacts, supports folder-scale workflows, and makes it easy to find and jump to the thing you care about. :contentReference[oaicite:0]{index=0}
 
-   * More memory headroom
-   * Better caching (store parsed workbook structures for quick re-diffs)
+### Grounding notes (reality of this codebase)
 
-2. **Export formats**
+- The Rust workspace currently contains `core/` (library), `cli/` (binary), and `wasm/` (web bindings). Desktop capabilities should be implemented as an additional crate/module that calls the same `excel_diff` library rather than re-implementing diff logic. :contentReference[oaicite:1]{index=1}
+- The core library already supports both:
+  - **in-memory** diffs (`WorkbookPackage::diff... -> DiffReport`) and
+  - **streaming** diffs via `DiffSink` (`WorkbookPackage::diff_streaming... -> DiffSummary`), with a reference sink implementation (`JsonLinesSink`). :contentReference[oaicite:2]{index=2} :contentReference[oaicite:3]{index=3} :contentReference[oaicite:4]{index=4}
+- The core’s default “easy” API uses a **thread-local** `DiffSession` / `StringPool` (`with_default_session`) which directly affects any caching or multi-job concurrency design. :contentReference[oaicite:5]{index=5}
+- The CLI already has battle-tested semantics for “large diffs” (auto-switch to a streaming-friendly format with a concrete threshold, and host routing for workbook vs PBIX). Desktop should reuse these semantics rather than inventing new heuristics. :contentReference[oaicite:6]{index=6}
+- The web payload pipeline already has explicit “view caps” for alignments (e.g., `MAX_VIEW_ROWS = 10_000`) and a “skip with reason” pattern; desktop can lift caps, but should keep the same *truthful degradation* behavior when a preview would be unsafe. :contentReference[oaicite:7]{index=7}
 
-   * “Audit workbook” export: a generated XLSX that lists changes with hyperlinks (high perceived value)
-   * Rich HTML export with embedded screenshots/regions (optional)
+---
 
-3. **Batch / folder compare**
+### Desktop data plane: two modes, one UI
 
-   * Compare many files (versioned monthly reports, etc.)
-   * Output a summary table + drill-down
+To make desktop “spectacular” without forking UI semantics, Phase 7 introduces two internal modes that feed the *same* VM/rendering pipeline:
 
-4. **Deep search**
+1. **Small/Medium mode (payload mode)**  
+   - Compute in-memory `DiffReport`.
+   - Produce the familiar `{ report, sheets, alignments }` payload and build VM in JS like the web app does today. :contentReference[oaicite:8]{index=8}
 
-   * Search for a value/formula across old/new and show hits as navigable results
-   * This is painful in web for big sheets; desktop can do it comfortably.
+2. **Large mode (artifact mode)**  
+   - Stream ops into an on-disk store, and expose *on-demand* access to sheet ops + limited previews.
+   - UI starts from a summary and lazily materializes per-sheet data only when the user opens/expands it.
+
+This is the core desktop advantage: UI cost becomes proportional to what the user views, not proportional to workbook size.
+
+---
+
+## 7.1 Very large file support
+
+### What users get
+
+- Diffs that can be **orders of magnitude larger** than what is practical in a web/JSON payload.
+- No “tab hangs” while diffing; progress + cancel always work.
+- Reopen recent diffs instantly (no recompute).
+- Repeat diffs are faster via caching (when re-diffing the same files repeatedly). :contentReference[oaicite:9]{index=9}
+
+### Backend design
+
+#### 7.1.1 Mode selection (small/medium vs large)
+- Implement a single `DiffRunner` that:
+  - estimates sheet volume / likely op volume using the CLI’s established heuristic and threshold (so behavior matches what already works). :contentReference[oaicite:10]{index=10}
+  - routes to:
+    - `InMemory(DiffReport)` for typical cases
+    - `StreamingToStore(DiffSummary + OpStore)` for huge cases
+
+#### 7.1.2 OpStore: on-disk diff artifact store
+Create a desktop-only store layer (SQLite is a pragmatic default) to persist:
+- run metadata
+- warnings
+- ops (streamed)
+- precomputed per-sheet counts/statistics
+
+**Minimum schema (v1)**
+- `diff_runs`:
+  - `diff_id` (UUID), `old_path`, `new_path`, `started_at`, `finished_at`
+  - `config_json` (the exact DiffConfig-ish options used)
+  - `engine_version`, `app_version`, `schema_version`
+  - `complete` (bool), `op_count`, `warnings_count`
+- `diff_warnings`:
+  - `diff_id`, `idx`, `text`
+- `diff_ops`:
+  - `diff_id`, `op_idx`
+  - `sheet_name` (resolved string)
+  - `kind` (string tag)
+  - kind-specific index fields (nullable):
+    - `row`, `col`, `row_end`, `col_end` (for cell/rect-ish ops)
+    - `move_id` (for move ops)
+  - `payload` (JSON or compact binary blob)
+
+**Indexing**
+- `(diff_id, sheet_name, op_idx)` for paging
+- `(diff_id, sheet_name, kind)` for filtering
+- optional `(diff_id, sheet_name, row, col)` for fast “jump to cell” queries
+
+#### 7.1.3 Streaming sink implementation
+Implement `OpStoreSink: DiffSink` and write to the store as ops stream:
+- follow the same lifecycle contract as the existing `JsonLinesSink` (begin/emit/finish semantics, “finish even on error” discipline). :contentReference[oaicite:11]{index=11}
+- handle the fact that `DiffOp` is `#[non_exhaustive]` by storing unknown kinds generically instead of failing. :contentReference[oaicite:12]{index=12}
+
+#### 7.1.4 Caching that respects `with_default_session`
+Because the default high-level APIs depend on a thread-local session/pool, caching must not create invalid `StringId` resolution or accidental cross-thread reuse. :contentReference[oaicite:13]{index=13}
+
+Choose one (document the choice in Phase 7):
+- **Option A (recommended first): a single long-lived “engine thread”**
+  - All parse + diff happens on one dedicated thread.
+  - Maintain an LRU cache on that thread keyed by `(abs_path, mtime, size)`:
+    - value: `WorkbookPackage` / `PbixPackage` objects that are safe to reuse in that thread’s session.
+  - Batch compare runs sequentially but benefits heavily from cached parsing.
+
+- **Option B (later): worker pool + per-worker caches**
+  - N worker threads, each with its own session (thread-local) and LRU cache.
+  - Scheduler assigns jobs; repeated paths hit cache only when a worker sees them again.
+
+#### 7.1.5 Progress + cancel, always
+- Wire `ProgressCallback` through to desktop IPC; core already emits phase names and percent in `[0,1]` and tests verify it’s throttled. :contentReference[oaicite:14]{index=14}
+- Cancel should:
+  - stop diff work promptly
+  - mark store entry as canceled/failed
+  - not leave a “looks complete but missing ops” artifact.
+
+#### 7.1.6 “Trusted file” overrides for package limits
+The ZIP/OPC container layer has explicit safety limits (`ContainerLimits`) with messaging suggesting increasing limits only for trusted files. Desktop should:
+- surface a clear error (“file exceeds safety limits”)
+- offer a “trusted local file” override for this run (and optionally a settings toggle) that increases:
+  - `max_total_uncompressed_bytes`
+  - `max_part_uncompressed_bytes`
+  - `max_entries` (with care) :contentReference[oaicite:15]{index=15}
+
+### UI design (large mode)
+
+#### 7.1.7 On-demand sheet materialization (avoid huge JSON)
+Large mode UI flow:
+1. show overall summary immediately (sheet list + counts + warnings)
+2. expanding a sheet triggers IPC calls to fetch:
+   - a **paged change list** for that sheet
+   - **region anchors** (for quick navigation)
+   - optional **limited previews** around anchors
+
+#### 7.1.8 Better previews without scanning the whole sheet
+For huge sheets, the web snapshot approach iterates cells until caps are hit. Desktop can do better by sampling *only what is needed*:
+- For each “region” you want to preview:
+  - compute a bounding rectangle + context rows/cols
+  - fetch cell values by direct lookup using `Grid::get(row, col)` rather than scanning all cells. :contentReference[oaicite:16]{index=16}
+- Guarantee correctness for edited cells by using the `from/to` snapshots carried in the diff ops for those cells (even if the surrounding context is partial).
+
+This keeps previews accurate around changes while remaining bounded.
+
+#### 7.1.9 Truthful degradation (keep “skipped with reason” semantics)
+If a sheet is too large to reasonably build full alignment axes or previews, keep the web’s “skipped with reason” pattern and fall back to:
+- change list + region navigation
+- per-op inspection
+- optional small “window preview” around a selected anchor :contentReference[oaicite:17]{index=17}
+
+### Acceptance checks
+
+- Diff producing > 1,000,000 ops:
+  - no UI hang, change list is paged, sheet expand loads incrementally.
+- Cancel mid-run:
+  - run becomes “canceled”, no corrupted store artifacts.
+- Reopen:
+  - stored runs load instantly (no recompute).
+- Exceeding package limits:
+  - actionable error + trusted override retry path. :contentReference[oaicite:18]{index=18}
+
+---
+
+## 7.2 Export formats
+
+### What users get
+
+- **Audit workbook export (`.xlsx`)**: an Excel file listing changes with hyperlinks. :contentReference[oaicite:19]{index=19}
+- **Rich HTML export**: an offline report that can include screenshots/regions. :contentReference[oaicite:20]{index=20}
+
+### 7.2.1 Audit workbook export (XLSX)
+
+#### Export spec (v1)
+- `Summary`
+  - old/new paths, timestamp, app+engine versions
+  - schema version, `complete` flag, warning count
+  - per-sheet counts (cells/rows/cols/moves/queries/model/etc.)
+- `Cells`
+  - one row per cell edit-like op
+  - columns: Sheet, Address (A1), Old value, New value, Old formula, New formula, Classification
+  - hyperlinks:
+    - intra-workbook navigation (e.g., from Summary sheet row to first row for that sheet)
+    - optional deep link back into the app (custom URI scheme)
+- `Structure`
+  - row/column add/remove/move ops grouped
+- `PowerQuery` / `Model`
+  - query/measure/model ops if present
+- `Warnings`
+  - one warning per row
+- `OtherOps` (robustness)
+  - any unrecognized/non-exhaustive op kinds stored as JSON rows (do not drop) :contentReference[oaicite:21]{index=21}
+
+#### Implementation details (rooted in current engine data)
+- Must support both:
+  - **small/medium mode**: iterate `DiffReport.ops`
+  - **large mode**: stream from OpStore (do not load all ops into memory)
+- Address rendering:
+  - use `CellAddress::to_a1()` for A1 output (exists in core tests). :contentReference[oaicite:22]{index=22}
+- Value/formula string rendering:
+  - reuse the same “cell display” logic already used in UI snapshotting and/or CLI formatting to keep exports consistent. :contentReference[oaicite:23]{index=23} :contentReference[oaicite:24]{index=24}
+- Dependency strategy:
+  - XLSX writer dependency should live in the desktop crate only (keep core lightweight).
+
+### 7.2.2 Rich HTML export (offline + optional screenshots)
+
+#### Export spec (v1)
+- Export folder (or zip):
+  - `report.html` (static, readable offline)
+  - `summary.json` (always)
+  - optionally `previews/` PNGs for key regions
+  - optionally include the minimal data required for change lists
+
+#### Screenshot/region embedding
+- The grid viewer already exposes `capturePng()` (web side). Desktop should reuse this to capture:
+  - the currently selected region
+  - the top N change regions per sheet (bounded)
+  - any region explicitly starred/pinned by the user :contentReference[oaicite:25]{index=25}
+
+### Acceptance checks
+- Audit workbook opens and is navigable (filters/sorts/hyperlinks).
+- Export works in large mode without memory spikes (streamed read).
+- HTML export opens offline and images load when present.
+
+---
+
+## 7.3 Batch / folder compare
+
+### What users get
+
+- Compare folder A vs folder B and get a summary table with drill-down into any diff. :contentReference[oaicite:26]{index=26}
+
+### Backend plan
+
+1. **Pairing plan (deterministic)**
+- Input:
+  - old root, new root
+  - pairing strategy:
+    - by relative path (default)
+    - by filename (flat)
+    - optional regex-based pairing (later)
+  - include/exclude globs
+- Supported types should match what the CLI claims: `.xlsx, .xlsm, .xltx, .xltm, .pbix, .pbit`. :contentReference[oaicite:27]{index=27}
+
+2. **Batch runner**
+- Use the same `DiffRunner` as 7.1.
+- MVP: sequential (maximizes cache reuse and reduces resource spikes).
+- Persist:
+  - `batch_runs` (batch_id, roots, strategy, timestamps)
+  - `batch_items` (batch_id, old_path, new_path, status, diff_id, error)
+
+3. **Batch summary computation**
+- For each diff:
+  - store op_count, per-sheet counts, complete/warnings, duration
+- Provide a normalized “change score” for sorting:
+  - e.g., weighted sum of ops by kind (cells < structure < model) (documented, stable).
+
+### UI plan
+
+- Batch compare page:
+  - table: filename, status, change score, op_count, warnings, duration
+  - filters: changed only, failures only, search by name
+  - click -> open diff viewer (loads from store, no recompute)
+
+### Batch exports
+- CSV summary
+- HTML summary
+- optional “batch audit workbook” (one workbook summarizing all items)
+
+### Acceptance checks
+- 50–100 pairs run with stable progress.
+- missing/unsupported files are shown explicitly.
+- drill-down opens from stored artifacts.
+
+---
+
+## 7.4 Deep search
+
+### What users get
+
+- Search for value/formula across old/new and jump to hits. :contentReference[oaicite:28]{index=28}
+
+### Two-tier design (fast by default, powerful when requested)
+
+1. **Search within diff artifacts (instant)**
+- Always available in both modes:
+  - query OpStore (or `DiffReport` in small mode)
+  - search across:
+    - cell ops (values/formulas)
+    - query/model/VBA ops
+    - warnings
+- Results include navigable targets:
+  - sheet + address/anchor
+  - query/measure name
+  - op reference (for exact drill-down)
+
+2. **Search within full workbook content (desktop-only index)**
+- Explicit action: “Build search index for Old/New”.
+- Implementation:
+  - open workbook via `WorkbookPackage::open(File::open(...))` (core supports `Read + Seek`). :contentReference[oaicite:29]{index=29}
+  - iterate only non-empty cells via `Grid::iter_cells()` and index:
+    - displayed value text
+    - formula text
+    - sheet name + address
+  - include Power Query text + VBA module code when present (already parsed into `WorkbookPackage`). :contentReference[oaicite:30]{index=30} :contentReference[oaicite:31]{index=31}
+
+### Index storage (SQLite FTS)
+- Tables:
+  - `workbook_indexes` (index_id, path, mtime, size, created_at, side)
+  - `cell_docs` as FTS5: (sheet, addr, kind=value|formula|other, text)
+- Cache indexes by `(path, mtime, size)`.
+
+### UI + navigation
+- Global search bar with scope toggles:
+  - Changes (default)
+  - Old workbook
+  - New workbook
+  - Both
+- Clicking a result:
+  - if diff open: jump to the aligned sheet view and highlight
+  - else: open a minimal single-workbook sheet viewer (optional) or show a cell inspector
+
+### Acceptance checks
+- Changes search is instant on huge diffs (OpStore query, not JS scanning).
+- Full-index search finds values that did not change.
+- Clicking a result navigates + highlights reliably.
+
+---
+
+## Concrete code changes (so this is actionable)
+
+Backend (desktop crate introduced in Phase 6):
+- `desktop/src/diff_runner.rs`
+  - mode selection (small/medium vs large)
+  - progress + cancel wiring
+  - caching policy (Option A engine thread vs Option B worker pool)
+- `desktop/src/store/`
+  - `schema.sql` + migrations
+  - `op_store.rs` (SQLite wrapper + indexes)
+  - `op_sink.rs` (DiffSink implementation)
+  - `batch_store.rs` (batch tables + queries)
+  - `search_index.rs` (FTS build/query)
+- `desktop/src/export/`
+  - `audit_xlsx.rs`
+  - `html_export.rs`
+
+UI (minimal divergence, keep VM semantics):
+- Add “large mode” data source abstraction:
+  - full payload path (small mode)
+  - on-demand sheet/ops path (large mode)
+- Add views/routes:
+  - Batch compare
+  - Deep search
+
+Tests/fixtures:
+- Add integration tests that:
+  - run a streaming diff into a temp OpStore
+  - export audit workbook from OpStore
+  - validate row counts + schema version + “complete/warnings” propagation
+- Add fixture scenarios for:
+  - huge op counts
+  - batch pairing edge cases
+  - search index correctness
+
 
 ---
 

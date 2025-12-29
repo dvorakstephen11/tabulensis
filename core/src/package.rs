@@ -114,6 +114,38 @@ impl WorkbookPackage {
         })
     }
 
+    #[cfg(feature = "excel-open-xml")]
+    /// Parse a workbook with custom container limits (trusted overrides).
+    pub fn open_with_limits<R: std::io::Read + std::io::Seek + 'static>(
+        reader: R,
+        limits: crate::ContainerLimits,
+    ) -> Result<Self, crate::excel_open_xml::PackageError> {
+        crate::with_default_session(|session| {
+            #[cfg(feature = "perf-metrics")]
+            let start = std::time::Instant::now();
+            let mut container =
+                crate::container::OpcContainer::open_from_reader_with_limits(reader, limits)?;
+            let workbook = crate::excel_open_xml::open_workbook_from_container(
+                &mut container,
+                &mut session.strings,
+            )?;
+            let raw = crate::excel_open_xml::open_data_mashup_from_container(&mut container)?;
+            let data_mashup = match raw {
+                Some(raw) => Some(crate::datamashup::build_data_mashup(&raw)?),
+                None => None,
+            };
+            let vba_modules =
+                crate::excel_open_xml::open_vba_modules_from_container(&mut container, &mut session.strings)?;
+            Ok(Self {
+                workbook,
+                data_mashup,
+                vba_modules,
+                #[cfg(feature = "perf-metrics")]
+                parse_time_ms: start.elapsed().as_millis() as u64,
+            })
+        })
+    }
+
     /// Diff this package against `other`, returning an in-memory [`DiffReport`].
     ///
     /// This collects all ops into memory and returns a report containing both the ops and the
@@ -625,6 +657,54 @@ impl PbixPackage {
         reader: R,
     ) -> Result<Self, crate::excel_open_xml::PackageError> {
         let mut container = ZipContainer::open_from_reader(reader)?;
+
+        let data_mashup_opt = container.read_file_optional_checked("DataMashup")?;
+
+        let data_mashup = if let Some(bytes) = data_mashup_opt {
+            let raw = crate::datamashup_framing::parse_data_mashup(&bytes)?;
+            Some(crate::datamashup::build_data_mashup(&raw)?)
+        } else {
+            None
+        };
+
+        #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+        let mut model_schema = None;
+
+        if data_mashup.is_none() {
+            if looks_like_pbix(&container) {
+                #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+                {
+                    if let Some(bytes) = container.read_file_optional_checked("DataModelSchema")? {
+                        model_schema =
+                            Some(crate::tabular_schema::parse_data_model_schema(&bytes)?);
+                        return Ok(Self {
+                            data_mashup,
+                            model_schema,
+                        });
+                    }
+                }
+
+                return Err(crate::excel_open_xml::PackageError::NoDataMashupUseTabularModel);
+            }
+
+            return Err(crate::excel_open_xml::PackageError::UnsupportedFormat {
+                message: "missing DataMashup at ZIP root".to_string(),
+            });
+        }
+
+        Ok(Self {
+            data_mashup,
+            #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+            model_schema,
+        })
+    }
+
+    #[cfg(feature = "excel-open-xml")]
+    pub fn open_with_limits<R: std::io::Read + std::io::Seek + 'static>(
+        reader: R,
+        limits: crate::ContainerLimits,
+    ) -> Result<Self, crate::excel_open_xml::PackageError> {
+        let mut container = ZipContainer::open_from_reader_with_limits(reader, limits)?;
 
         let data_mashup_opt = container.read_file_optional_checked("DataMashup")?;
 

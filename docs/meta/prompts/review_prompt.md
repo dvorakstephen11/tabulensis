@@ -248,6 +248,21 @@
       sparse_grid_tests.rs
       streaming_sink_tests.rs
       string_pool_tests.rs
+  desktop/
+    src-tauri/
+      build.rs
+      Cargo.toml
+      gen/
+        schemas/
+          acl-manifests.json
+          capabilities.json
+          desktop-schema.json
+          windows-schema.json
+      icons/
+        icon.ico
+      src/
+        main.rs
+      tauri.conf.json
   fixtures/
     manifest.yaml
     manifest_cli_tests.yaml
@@ -286,10 +301,14 @@
     export_perf_metrics.py
     verify_release_versions.py
     visualize_benchmarks.py
-  wasm/
+  ui_payload/
     Cargo.toml
     src/
       alignment.rs
+      lib.rs
+  wasm/
+    Cargo.toml
+    src/
       lib.rs
   web/
     diff_worker.js
@@ -301,7 +320,9 @@
     grid_viewer.js
     index.html
     main.js
+    native_diff_client.js
     package.json
+    platform.js
     render.js
     test_render.js
     test_view_model.js
@@ -1137,7 +1158,7 @@ web/wasm/
 
 ```toml
 [workspace]
-members = ["core", "cli", "wasm"]
+members = ["core", "cli", "wasm", "ui_payload", "desktop/src-tauri"]
 resolver = "2"
 
 ```
@@ -45225,6 +45246,359 @@ fn into_strings_returns_all_interned() {
 
 ---
 
+### File: `desktop\src-tauri\build.rs`
+
+```rust
+fn main() {
+    tauri_build::build();
+}
+
+```
+
+---
+
+### File: `desktop\src-tauri\Cargo.toml`
+
+```toml
+[package]
+name = "excel_diff_desktop"
+version = "0.1.0"
+edition = "2021"
+description = "Desktop shell for Excel Diff"
+license = "MIT"
+build = "build.rs"
+
+[dependencies]
+tauri = { version = "2.5.3" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+excel_diff = { path = "../../core", default-features = false, features = ["excel-open-xml", "model-diff"] }
+ui_payload = { path = "../../ui_payload" }
+rfd = "0.14"
+
+[build-dependencies]
+tauri-build = { version = "2.5.3" }
+
+```
+
+---
+
+### File: `desktop\src-tauri\src\main.rs`
+
+```rust
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, Manager, State};
+
+struct ActiveDiff {
+    run_id: u64,
+    cancel: Arc<AtomicBool>,
+}
+
+#[derive(Default)]
+struct DiffState {
+    current: Mutex<Option<ActiveDiff>>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ProgressEvent {
+    run_id: u64,
+    stage: String,
+    detail: String,
+}
+
+fn emit_progress(app: &AppHandle, run_id: u64, stage: &str, detail: &str) {
+    let _ = app.emit(
+        "diff-progress",
+        ProgressEvent {
+            run_id,
+            stage: stage.to_string(),
+            detail: detail.to_string(),
+        },
+    );
+}
+
+struct EngineProgress {
+    app: AppHandle,
+    run_id: u64,
+    cancel: Arc<AtomicBool>,
+    last_phase: Mutex<Option<String>>,
+}
+
+impl EngineProgress {
+    fn new(app: AppHandle, run_id: u64, cancel: Arc<AtomicBool>) -> Self {
+        Self {
+            app,
+            run_id,
+            cancel,
+            last_phase: Mutex::new(None),
+        }
+    }
+
+    fn map_detail(phase: &str) -> &'static str {
+        match phase {
+            "parse" => "Parsing workbooks...",
+            "alignment" => "Aligning rows and columns...",
+            "cell_diff" => "Diffing cells...",
+            "move_detection" => "Detecting moved blocks...",
+            "m_diff" => "Diffing Power Query...",
+            _ => "Diffing workbooks...",
+        }
+    }
+
+    fn should_emit(&self, phase: &str) -> bool {
+        let mut last = self.last_phase.lock().unwrap_or_else(|e| e.into_inner());
+        if last.as_deref() == Some(phase) {
+            return false;
+        }
+        *last = Some(phase.to_string());
+        true
+    }
+}
+
+impl excel_diff::ProgressCallback for EngineProgress {
+    fn on_progress(&self, phase: &str, _percent: f32) {
+        if self.cancel.load(Ordering::Relaxed) {
+            panic!("diff canceled");
+        }
+        if self.should_emit(phase) {
+            emit_progress(&self.app, self.run_id, "diff", Self::map_detail(phase));
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DiffOptions {
+    ignore_blank_to_blank: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct RecentComparison {
+    old_path: String,
+    new_path: String,
+    old_name: String,
+    new_name: String,
+    last_run_iso: String,
+}
+
+fn recents_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("Unable to resolve app data directory: {e}"))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create app data directory: {e}"))?;
+    Ok(dir.join("recents.json"))
+}
+
+fn load_recents_from_disk(path: &Path) -> Vec<RecentComparison> {
+    let data = std::fs::read_to_string(path).unwrap_or_default();
+    if data.trim().is_empty() {
+        return Vec::new();
+    }
+    serde_json::from_str(&data).unwrap_or_default()
+}
+
+fn save_recents_to_disk(path: &Path, entries: &[RecentComparison]) -> Result<(), String> {
+    let data = serde_json::to_string_pretty(entries)
+        .map_err(|e| format!("Failed to serialize recents: {e}"))?;
+    std::fs::write(path, data).map_err(|e| format!("Failed to write recents: {e}"))
+}
+
+fn update_recents(mut entries: Vec<RecentComparison>, entry: RecentComparison) -> Vec<RecentComparison> {
+    entries.retain(|item| !(item.old_path == entry.old_path && item.new_path == entry.new_path));
+    entries.insert(0, entry);
+    entries.truncate(20);
+    entries
+}
+
+#[tauri::command]
+fn get_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[tauri::command]
+fn load_recents(app: AppHandle) -> Result<Vec<RecentComparison>, String> {
+    let path = recents_path(&app)?;
+    Ok(load_recents_from_disk(&path))
+}
+
+#[tauri::command]
+fn save_recent(app: AppHandle, entry: RecentComparison) -> Result<Vec<RecentComparison>, String> {
+  let path = recents_path(&app)?;
+  let current = load_recents_from_disk(&path);
+  let updated = update_recents(current, entry);
+  save_recents_to_disk(&path, &updated)?;
+  Ok(updated)
+}
+
+#[tauri::command]
+fn pick_file() -> Option<String> {
+  let path = rfd::FileDialog::new()
+    .add_filter("Excel / PBIX", &["xlsx", "xlsm", "xltx", "xltm", "pbix", "pbit"])
+    .pick_file()?;
+  Some(path.display().to_string())
+}
+
+#[tauri::command]
+fn cancel_diff(state: State<'_, DiffState>, run_id: u64) -> bool {
+    let current = match state.current.lock() {
+        Ok(lock) => lock,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some(active) = current.as_ref() {
+        if active.run_id == run_id {
+            active.cancel.store(true, Ordering::Relaxed);
+            return true;
+        }
+    }
+    false
+}
+
+#[tauri::command]
+async fn diff_paths_with_sheets(
+    app: AppHandle,
+    state: State<'_, DiffState>,
+    old_path: String,
+    new_path: String,
+    run_id: u64,
+    options: Option<DiffOptions>,
+) -> Result<ui_payload::DiffWithSheets, String> {
+    if let Some(opts) = options {
+        let _ = opts.ignore_blank_to_blank;
+    }
+    let cancel_flag = {
+        let mut current = match state.current.lock() {
+            Ok(lock) => lock,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if current.is_some() {
+            return Err("Diff already in progress.".to_string());
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        *current = Some(ActiveDiff {
+            run_id,
+            cancel: cancel.clone(),
+        });
+        cancel
+    };
+
+    let app_handle = app.clone();
+    let task = tauri::async_runtime::spawn_blocking(move || {
+        emit_progress(&app_handle, run_id, "read", "Reading files...");
+
+        let old_kind = ui_payload::host_kind_from_path(Path::new(&old_path))
+            .ok_or_else(|| "Unsupported old file extension".to_string())?;
+        let new_kind = ui_payload::host_kind_from_path(Path::new(&new_path))
+            .ok_or_else(|| "Unsupported new file extension".to_string())?;
+
+        if old_kind != new_kind {
+            return Err("Old/new files must be the same type".to_string());
+        }
+
+        if cancel_flag.load(Ordering::Relaxed) {
+            return Err("Diff canceled.".to_string());
+        }
+
+        let cfg = excel_diff::DiffConfig::default();
+
+        match old_kind {
+            ui_payload::HostKind::Workbook => {
+                let old_file = std::fs::File::open(&old_path)
+                    .map_err(|e| format!("Failed to open old file: {e}"))?;
+                let new_file = std::fs::File::open(&new_path)
+                    .map_err(|e| format!("Failed to open new file: {e}"))?;
+
+                let old_pkg = excel_diff::WorkbookPackage::open(old_file)
+                    .map_err(|e| format!("Failed to parse old workbook: {e}"))?;
+                let new_pkg = excel_diff::WorkbookPackage::open(new_file)
+                    .map_err(|e| format!("Failed to parse new workbook: {e}"))?;
+
+                emit_progress(&app_handle, run_id, "diff", "Diffing workbooks...");
+                let progress = EngineProgress::new(app_handle.clone(), run_id, cancel_flag.clone());
+                let report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    old_pkg.diff_with_progress(&new_pkg, &cfg, &progress)
+                })) {
+                    Ok(report) => report,
+                    Err(_) => {
+                        if cancel_flag.load(Ordering::Relaxed) {
+                            return Err("Diff canceled.".to_string());
+                        }
+                        return Err("Diff failed unexpectedly.".to_string());
+                    }
+                };
+
+                if cancel_flag.load(Ordering::Relaxed) {
+                    return Err("Diff canceled.".to_string());
+                }
+
+                emit_progress(&app_handle, run_id, "snapshot", "Building previews...");
+                Ok(ui_payload::build_payload_from_workbook_report(
+                    report, &old_pkg, &new_pkg,
+                ))
+            }
+            ui_payload::HostKind::Pbix => {
+                let old_file = std::fs::File::open(&old_path)
+                    .map_err(|e| format!("Failed to open old file: {e}"))?;
+                let new_file = std::fs::File::open(&new_path)
+                    .map_err(|e| format!("Failed to open new file: {e}"))?;
+
+                let old_pkg = excel_diff::PbixPackage::open(old_file)
+                    .map_err(|e| format!("Failed to parse old PBIX/PBIT: {e}"))?;
+                let new_pkg = excel_diff::PbixPackage::open(new_file)
+                    .map_err(|e| format!("Failed to parse new PBIX/PBIT: {e}"))?;
+
+                emit_progress(&app_handle, run_id, "diff", "Diffing PBIX metadata...");
+                Ok(ui_payload::build_payload_from_pbix(&old_pkg, &new_pkg, &cfg))
+            }
+        }
+    });
+
+    let result = match task.await {
+        Ok(result) => result,
+        Err(e) => Err(format!("Diff task failed: {e}")),
+    };
+
+    let mut current = match state.current.lock() {
+        Ok(lock) => lock,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some(active) = current.as_ref() {
+        if active.run_id == run_id {
+            *current = None;
+        }
+    }
+
+    result
+}
+
+fn main() {
+    tauri::Builder::default()
+        .manage(DiffState::default())
+        .invoke_handler(tauri::generate_handler![
+            get_version,
+            load_recents,
+            save_recent,
+            pick_file,
+            cancel_diff,
+            diff_paths_with_sheets
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+
+```
+
+---
+
 ### File: `fixtures\manifest.yaml`
 
 ```yaml
@@ -50875,34 +51249,27 @@ if __name__ == "__main__":
 
 ---
 
-### File: `wasm\Cargo.toml`
+### File: `ui_payload\Cargo.toml`
 
 ```toml
 [package]
-name = "excel_diff_wasm"
+name = "ui_payload"
 version = "0.1.0"
 edition = "2024"
-description = "WebAssembly bindings for excel_diff"
+description = "UI payload builder for excel_diff (snapshots + alignment)"
 license = "MIT"
 repository = "https://github.com/dvora/excel_diff"
 homepage = "https://github.com/dvora/excel_diff"
 
-[lib]
-crate-type = ["cdylib", "rlib"]
-
 [dependencies]
 excel_diff = { path = "../core", default-features = false, features = ["excel-open-xml", "model-diff"] }
-wasm-bindgen = "0.2"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-console_error_panic_hook = "0.1"
-
 
 ```
 
 ---
 
-### File: `wasm\src\alignment.rs`
+### File: `ui_payload\src\alignment.rs`
 
 ```rust
 use std::collections::{HashMap, HashSet};
@@ -50913,7 +51280,7 @@ use crate::{SheetPairSnapshot, SheetSnapshot};
 
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
-enum AxisKind {
+pub enum AxisKind {
     Match,
     Insert,
     Delete,
@@ -50922,7 +51289,7 @@ enum AxisKind {
 }
 
 #[derive(Serialize)]
-struct AxisEntry {
+pub struct AxisEntry {
     old: Option<u32>,
     new: Option<u32>,
     kind: AxisKind,
@@ -50931,7 +51298,7 @@ struct AxisEntry {
 }
 
 #[derive(Serialize)]
-struct MoveGroup {
+pub struct MoveGroup {
     id: String,
     axis: String,
     src_start: u32,
@@ -50940,7 +51307,7 @@ struct MoveGroup {
 }
 
 #[derive(Serialize)]
-pub(crate) struct SheetAlignment {
+pub struct SheetAlignment {
     sheet: String,
     rows: Vec<AxisEntry>,
     cols: Vec<AxisEntry>,
@@ -50954,7 +51321,7 @@ pub(crate) struct SheetAlignment {
 const MAX_VIEW_ROWS: u32 = 10_000;
 const MAX_VIEW_COLS: u32 = 200;
 
-pub(crate) fn build_alignments(
+pub fn build_alignments(
     report: &excel_diff::DiffReport,
     sheets: &SheetPairSnapshot,
 ) -> Vec<SheetAlignment> {
@@ -51349,29 +51716,26 @@ fn limit_reason(rows: u32, cols: u32) -> Option<String> {
 
 ---
 
-### File: `wasm\src\lib.rs`
+### File: `ui_payload\src\lib.rs`
 
 ```rust
 use std::collections::{HashMap, HashSet};
-use std::io::Cursor;
+use std::path::Path;
+
 use serde::Serialize;
-use wasm_bindgen::prelude::*;
 
 mod alignment;
 
-#[wasm_bindgen(start)]
-pub fn init_panic_hook() {
-    console_error_panic_hook::set_once();
-}
+pub use alignment::SheetAlignment;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum HostKind {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostKind {
     Workbook,
     Pbix,
 }
 
 #[derive(Serialize)]
-struct SheetCell {
+pub struct SheetCell {
     row: u32,
     col: u32,
     value: Option<String>,
@@ -51379,34 +51743,34 @@ struct SheetCell {
 }
 
 #[derive(Serialize)]
-struct SheetSnapshot {
-    name: String,
-    nrows: u32,
-    ncols: u32,
-    cells: Vec<SheetCell>,
-    truncated: bool,
-    included_cells: u32,
-    total_non_empty_cells: u32,
+pub struct SheetSnapshot {
+    pub name: String,
+    pub nrows: u32,
+    pub ncols: u32,
+    pub cells: Vec<SheetCell>,
+    pub truncated: bool,
+    pub included_cells: u32,
+    pub total_non_empty_cells: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    note: Option<String>,
+    pub note: Option<String>,
 }
 
 #[derive(Serialize)]
-struct WorkbookSnapshot {
-    sheets: Vec<SheetSnapshot>,
+pub struct WorkbookSnapshot {
+    pub sheets: Vec<SheetSnapshot>,
 }
 
 #[derive(Serialize)]
-struct SheetPairSnapshot {
-    old: WorkbookSnapshot,
-    new: WorkbookSnapshot,
+pub struct SheetPairSnapshot {
+    pub old: WorkbookSnapshot,
+    pub new: WorkbookSnapshot,
 }
 
 #[derive(Serialize)]
-struct DiffWithSheets {
-    report: excel_diff::DiffReport,
-    sheets: SheetPairSnapshot,
-    alignments: Vec<alignment::SheetAlignment>,
+pub struct DiffWithSheets {
+    pub report: excel_diff::DiffReport,
+    pub sheets: SheetPairSnapshot,
+    pub alignments: Vec<SheetAlignment>,
 }
 
 const MAX_SNAPSHOT_CELLS_PER_SHEET: usize = 50_000;
@@ -51432,13 +51796,103 @@ struct Rect {
     col_end: u32,
 }
 
-fn host_kind_from_name(name: &str) -> Option<HostKind> {
+pub fn host_kind_from_name(name: &str) -> Option<HostKind> {
     let lower = name.to_ascii_lowercase();
     let ext = lower.rsplit('.').next().unwrap_or("");
     match ext {
         "xlsx" | "xlsm" | "xltx" | "xltm" => Some(HostKind::Workbook),
         "pbix" | "pbit" => Some(HostKind::Pbix),
         _ => None,
+    }
+}
+
+pub fn host_kind_from_path(path: &Path) -> Option<HostKind> {
+    let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
+    match ext.as_str() {
+        "xlsx" | "xlsm" | "xltx" | "xltm" => Some(HostKind::Workbook),
+        "pbix" | "pbit" => Some(HostKind::Pbix),
+        _ => None,
+    }
+}
+
+pub fn build_payload_from_workbooks(
+    old_pkg: &excel_diff::WorkbookPackage,
+    new_pkg: &excel_diff::WorkbookPackage,
+    cfg: &excel_diff::DiffConfig,
+) -> DiffWithSheets {
+    let report = old_pkg.diff(new_pkg, cfg);
+    build_payload_from_workbook_report(report, old_pkg, new_pkg)
+}
+
+pub fn build_payload_from_workbooks_with_progress(
+    old_pkg: &excel_diff::WorkbookPackage,
+    new_pkg: &excel_diff::WorkbookPackage,
+    cfg: &excel_diff::DiffConfig,
+    progress: &dyn excel_diff::ProgressCallback,
+) -> DiffWithSheets {
+    let report = old_pkg.diff_with_progress(new_pkg, cfg, progress);
+    build_payload_from_workbook_report(report, old_pkg, new_pkg)
+}
+
+pub fn build_payload_from_pbix(
+    old_pkg: &excel_diff::PbixPackage,
+    new_pkg: &excel_diff::PbixPackage,
+    cfg: &excel_diff::DiffConfig,
+) -> DiffWithSheets {
+    let report = old_pkg.diff(new_pkg, cfg);
+    let empty = WorkbookSnapshot { sheets: Vec::new() };
+    DiffWithSheets {
+        report,
+        sheets: SheetPairSnapshot {
+            old: empty,
+            new: WorkbookSnapshot { sheets: Vec::new() },
+        },
+        alignments: Vec::new(),
+    }
+}
+
+pub fn build_payload_from_workbook_report(
+    report: excel_diff::DiffReport,
+    old_pkg: &excel_diff::WorkbookPackage,
+    new_pkg: &excel_diff::WorkbookPackage,
+) -> DiffWithSheets {
+    let sheet_ids = collect_sheet_ids(&report.ops);
+    let ops_by_sheet = group_ops_by_sheet(&report);
+    let caps = SnapshotCaps {
+        per_sheet: MAX_SNAPSHOT_CELLS_PER_SHEET,
+        max_rows: STRUCTURAL_PREVIEW_MAX_ROWS,
+        max_cols: STRUCTURAL_PREVIEW_MAX_COLS,
+        context_rows: SNAPSHOT_CONTEXT_ROWS,
+        context_cols: SNAPSHOT_CONTEXT_COLS,
+    };
+
+    let sheets = excel_diff::with_default_session(|session| {
+        let mut remaining = MAX_SNAPSHOT_CELLS_TOTAL;
+        SheetPairSnapshot {
+            old: snapshot_workbook(
+                &old_pkg.workbook,
+                &sheet_ids,
+                &session.strings,
+                &ops_by_sheet,
+                &caps,
+                &mut remaining,
+            ),
+            new: snapshot_workbook(
+                &new_pkg.workbook,
+                &sheet_ids,
+                &session.strings,
+                &ops_by_sheet,
+                &caps,
+                &mut remaining,
+            ),
+        }
+    });
+
+    let alignments = alignment::build_alignments(&report, &sheets);
+    DiffWithSheets {
+        report,
+        sheets,
+        alignments,
     }
 }
 
@@ -51873,6 +52327,49 @@ fn snapshot_workbook(
     WorkbookSnapshot { sheets }
 }
 
+```
+
+---
+
+### File: `wasm\Cargo.toml`
+
+```toml
+[package]
+name = "excel_diff_wasm"
+version = "0.1.0"
+edition = "2024"
+description = "WebAssembly bindings for excel_diff"
+license = "MIT"
+repository = "https://github.com/dvora/excel_diff"
+homepage = "https://github.com/dvora/excel_diff"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+excel_diff = { path = "../core", default-features = false, features = ["excel-open-xml", "model-diff"] }
+wasm-bindgen = "0.2"
+serde_json = "1.0"
+console_error_panic_hook = "0.1"
+ui_payload = { path = "../ui_payload" }
+
+
+```
+
+---
+
+### File: `wasm\src\lib.rs`
+
+```rust
+use std::io::Cursor;
+
+use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen(start)]
+pub fn init_panic_hook() {
+    console_error_panic_hook::set_once();
+}
+
 #[wasm_bindgen]
 pub fn diff_files_json(
     old_bytes: Vec<u8>,
@@ -51880,9 +52377,9 @@ pub fn diff_files_json(
     old_name: &str,
     new_name: &str,
 ) -> Result<String, JsValue> {
-    let kind_old = host_kind_from_name(old_name)
+    let kind_old = ui_payload::host_kind_from_name(old_name)
         .ok_or_else(|| JsValue::from_str("Unsupported old file extension"))?;
-    let kind_new = host_kind_from_name(new_name)
+    let kind_new = ui_payload::host_kind_from_name(new_name)
         .ok_or_else(|| JsValue::from_str("Unsupported new file extension"))?;
 
     if kind_old != kind_new {
@@ -51895,14 +52392,14 @@ pub fn diff_files_json(
     let cfg = excel_diff::DiffConfig::default();
 
     let report = match kind_old {
-        HostKind::Workbook => {
+        ui_payload::HostKind::Workbook => {
             let pkg_old = excel_diff::WorkbookPackage::open(old_cursor)
                 .map_err(|e| JsValue::from_str(&format!("Failed to open old workbook: {}", e)))?;
             let pkg_new = excel_diff::WorkbookPackage::open(new_cursor)
                 .map_err(|e| JsValue::from_str(&format!("Failed to open new workbook: {}", e)))?;
             pkg_old.diff(&pkg_new, &cfg)
         }
-        HostKind::Pbix => {
+        ui_payload::HostKind::Pbix => {
             let pkg_old = excel_diff::PbixPackage::open(old_cursor)
                 .map_err(|e| JsValue::from_str(&format!("Failed to open old PBIX/PBIT: {}", e)))?;
             let pkg_new = excel_diff::PbixPackage::open(new_cursor)
@@ -51922,9 +52419,9 @@ pub fn diff_files_with_sheets_json(
     old_name: &str,
     new_name: &str,
 ) -> Result<String, JsValue> {
-    let kind_old = host_kind_from_name(old_name)
+    let kind_old = ui_payload::host_kind_from_name(old_name)
         .ok_or_else(|| JsValue::from_str("Unsupported old file extension"))?;
-    let kind_new = host_kind_from_name(new_name)
+    let kind_new = ui_payload::host_kind_from_name(new_name)
         .ok_or_else(|| JsValue::from_str("Unsupported new file extension"))?;
 
     if kind_old != kind_new {
@@ -51935,75 +52432,25 @@ pub fn diff_files_with_sheets_json(
     let new_cursor = Cursor::new(new_bytes);
     let cfg = excel_diff::DiffConfig::default();
 
-    match kind_old {
-        HostKind::Workbook => {
+    let payload = match kind_old {
+        ui_payload::HostKind::Workbook => {
             let pkg_old = excel_diff::WorkbookPackage::open(old_cursor)
                 .map_err(|e| JsValue::from_str(&format!("Failed to open old workbook: {}", e)))?;
             let pkg_new = excel_diff::WorkbookPackage::open(new_cursor)
                 .map_err(|e| JsValue::from_str(&format!("Failed to open new workbook: {}", e)))?;
-
-            let report = pkg_old.diff(&pkg_new, &cfg);
-            let sheet_ids = collect_sheet_ids(&report.ops);
-            let ops_by_sheet = group_ops_by_sheet(&report);
-            let caps = SnapshotCaps {
-                per_sheet: MAX_SNAPSHOT_CELLS_PER_SHEET,
-                max_rows: STRUCTURAL_PREVIEW_MAX_ROWS,
-                max_cols: STRUCTURAL_PREVIEW_MAX_COLS,
-                context_rows: SNAPSHOT_CONTEXT_ROWS,
-                context_cols: SNAPSHOT_CONTEXT_COLS,
-            };
-
-            let sheets = excel_diff::with_default_session(|session| {
-                let mut remaining = MAX_SNAPSHOT_CELLS_TOTAL;
-                SheetPairSnapshot {
-                    old: snapshot_workbook(
-                        &pkg_old.workbook,
-                        &sheet_ids,
-                        &session.strings,
-                        &ops_by_sheet,
-                        &caps,
-                        &mut remaining,
-                    ),
-                    new: snapshot_workbook(
-                        &pkg_new.workbook,
-                        &sheet_ids,
-                        &session.strings,
-                        &ops_by_sheet,
-                        &caps,
-                        &mut remaining,
-                    ),
-                }
-            });
-
-            let alignments = alignment::build_alignments(&report, &sheets);
-            let payload = DiffWithSheets {
-                report,
-                sheets,
-                alignments,
-            };
-            serde_json::to_string(&payload)
-                .map_err(|e| JsValue::from_str(&format!("Failed to serialize report: {}", e)))
+            ui_payload::build_payload_from_workbooks(&pkg_old, &pkg_new, &cfg)
         }
-        HostKind::Pbix => {
+        ui_payload::HostKind::Pbix => {
             let pkg_old = excel_diff::PbixPackage::open(old_cursor)
                 .map_err(|e| JsValue::from_str(&format!("Failed to open old PBIX/PBIT: {}", e)))?;
             let pkg_new = excel_diff::PbixPackage::open(new_cursor)
                 .map_err(|e| JsValue::from_str(&format!("Failed to open new PBIX/PBIT: {}", e)))?;
-
-            let report = pkg_old.diff(&pkg_new, &cfg);
-            let empty = WorkbookSnapshot { sheets: Vec::new() };
-            let payload = DiffWithSheets {
-                report,
-                sheets: SheetPairSnapshot {
-                    old: empty,
-                    new: WorkbookSnapshot { sheets: Vec::new() },
-                },
-                alignments: Vec::new(),
-            };
-            serde_json::to_string(&payload)
-                .map_err(|e| JsValue::from_str(&format!("Failed to serialize report: {}", e)))
+            ui_payload::build_payload_from_pbix(&pkg_old, &pkg_new, &cfg)
         }
-    }
+    };
+
+    serde_json::to_string(&payload)
+        .map_err(|e| JsValue::from_str(&format!("Failed to serialize report: {}", e)))
 }
 
 #[wasm_bindgen]
@@ -52041,7 +52488,6 @@ pub fn diff_summary(old_bytes: Vec<u8>, new_bytes: Vec<u8>) -> Result<DiffSummar
         sheets_new: pkg_new.workbook.sheets.len(),
     })
 }
-
 
 ```
 
@@ -53980,6 +54426,91 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
         color: var(--text-muted);
       }
 
+      .recents-section {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-primary);
+        border-radius: 16px;
+        padding: 20px 24px;
+        margin-bottom: 32px;
+        display: none;
+      }
+
+      .recents-section.visible {
+        display: block;
+      }
+
+      .recents-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+
+      .recents-title {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      .recents-empty {
+        font-size: 13px;
+        color: var(--text-muted);
+      }
+
+      .recents-list {
+        display: grid;
+        gap: 12px;
+      }
+
+      .recent-item {
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border-primary);
+        border-radius: 12px;
+        padding: 12px 16px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+
+      .recent-main {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 200px;
+      }
+
+      .recent-names {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+      }
+
+      .recent-name {
+        font-family: var(--font-mono);
+        color: var(--text-primary);
+      }
+
+      .recent-arrow {
+        color: var(--text-muted);
+      }
+
+      .recent-meta {
+        font-size: 12px;
+        color: var(--text-muted);
+      }
+
+      .recent-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
       @media (max-width: 800px) {
         .action-bar {
           flex-direction: column;
@@ -55392,6 +55923,14 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
         </div>
       </section>
 
+      <section class="recents-section" id="recentsSection">
+        <div class="recents-header">
+          <div class="recents-title">Recent comparisons</div>
+        </div>
+        <div class="recents-empty" id="recentsEmpty">No recent comparisons yet.</div>
+        <div class="recents-list" id="recentsList"></div>
+      </section>
+
       <div id="status"></div>
 
       <div id="results" class="results"></div>
@@ -55421,8 +55960,8 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
 import { renderWorkbookVm } from "./render.js";
 import { buildWorkbookViewModel } from "./view_model.js";
 import { mountSheetGridViewer } from "./grid_viewer.js";
-import { createDiffWorkerClient } from "./diff_worker_client.js";
 import { downloadReportJson, downloadHtmlReport } from "./export.js";
+import { createAppDiffClient, isDesktop, openFileDialog, loadRecents, saveRecent } from "./platform.js";
 
 function byId(id) {
   const el = document.getElementById(id);
@@ -55440,6 +55979,27 @@ function nextFrame() {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
+function baseName(path) {
+  if (!path) return "";
+  const parts = String(path).split(/[\\/]/);
+  return parts[parts.length - 1] || "";
+}
+
+function fileDisplayName(file) {
+  if (!file) return "";
+  if (file.name) return file.name;
+  if (file.path) return baseName(file.path);
+  return "";
+}
+
+function buildDesktopSelection(path, name) {
+  if (!path) return null;
+  return {
+    path,
+    name: name || baseName(path)
+  };
+}
+
 let diffClient = null;
 let reviewController = null;
 let activeViewerManager = null;
@@ -55448,6 +56008,18 @@ let isBusy = false;
 let activeRunId = 0;
 let lastReport = null;
 let lastMeta = null;
+let isDesktopApp = false;
+let selectedOld = null;
+let selectedNew = null;
+let recentComparisons = [];
+let recentsSection = null;
+let recentsList = null;
+let recentsEmpty = null;
+
+const FILE_SIDES = {
+  old: { dropId: "dropOld", inputId: "fileOld", nameId: "nameOld" },
+  new: { dropId: "dropNew", inputId: "fileNew", nameId: "nameNew" }
+};
 
 function setBusy(state) {
   isBusy = state;
@@ -55472,24 +56044,63 @@ function clearResults() {
   lastMeta = null;
 }
 
-function setupFileDrop(dropId, inputId, nameId) {
-  const drop = byId(dropId);
-  const input = byId(inputId);
-  const nameEl = byId(nameId);
+function updateDropDisplay(side, file) {
+  const config = FILE_SIDES[side];
+  const drop = byId(config.dropId);
+  const nameEl = byId(config.nameId);
+  const label = fileDisplayName(file);
+  if (label) {
+    nameEl.textContent = label;
+    drop.classList.add("has-file");
+  } else {
+    nameEl.textContent = "";
+    drop.classList.remove("has-file");
+  }
+}
+
+function setSelectedFile(side, file) {
+  if (side === "old") {
+    selectedOld = file;
+  } else {
+    selectedNew = file;
+  }
+  updateDropDisplay(side, file);
+}
+
+function toDesktopSelection(file) {
+  if (!file) return null;
+  const path = file.path || "";
+  if (!path) return null;
+  return buildDesktopSelection(path, file.name);
+}
+
+function setupFileDrop(side) {
+  const config = FILE_SIDES[side];
+  const drop = byId(config.dropId);
+  const input = byId(config.inputId);
 
   function updateDisplay(file) {
-    if (file) {
-      nameEl.textContent = file.name;
-      drop.classList.add("has-file");
-    } else {
-      nameEl.textContent = "";
-      drop.classList.remove("has-file");
-    }
+    setSelectedFile(side, file);
   }
 
-  input.addEventListener("change", () => {
-    updateDisplay(input.files[0]);
-  });
+  if (isDesktopApp) {
+    input.disabled = true;
+    input.tabIndex = -1;
+    input.style.display = "none";
+    drop.addEventListener("click", async () => {
+      try {
+        const path = await openFileDialog();
+        if (!path) return;
+        updateDisplay(buildDesktopSelection(path));
+      } catch (err) {
+        setStatus(`Error: ${err.message || err}`, "error");
+      }
+    });
+  } else {
+    input.addEventListener("change", () => {
+      updateDisplay(input.files[0]);
+    });
+  }
 
   drop.addEventListener("dragover", (e) => {
     e.preventDefault();
@@ -55503,10 +56114,26 @@ function setupFileDrop(dropId, inputId, nameId) {
   drop.addEventListener("drop", (e) => {
     e.preventDefault();
     drop.classList.remove("dragover");
-    if (e.dataTransfer.files.length > 0) {
-      input.files = e.dataTransfer.files;
-      updateDisplay(e.dataTransfer.files[0]);
+    const files = e.dataTransfer?.files || [];
+    if (!files.length) return;
+
+    if (isDesktopApp) {
+      const selections = Array.from(files)
+        .map(toDesktopSelection)
+        .filter(Boolean);
+      if (selections.length >= 2) {
+        setSelectedFile("old", selections[0]);
+        setSelectedFile("new", selections[1]);
+        return;
+      }
+      if (selections[0]) {
+        updateDisplay(selections[0]);
+      }
+      return;
     }
+
+    input.files = files;
+    updateDisplay(files[0]);
   });
 }
 
@@ -55516,6 +56143,8 @@ const STAGE_LABELS = {
   read: "Reading files...",
   transfer: "Transferring files to worker...",
   diff: "Diffing workbooks...",
+  snapshot: "Building previews...",
+  align: "Aligning sheets...",
   parse: "Parsing results...",
   render: "Rendering results...",
   hydrate: "Hydrating viewers..."
@@ -55538,8 +56167,8 @@ function handleWorkerStatus(status) {
 function buildMeta(oldFile, newFile) {
   return {
     version: engineVersion,
-    oldName: oldFile?.name || "",
-    newName: newFile?.name || "",
+    oldName: fileDisplayName(oldFile) || "",
+    newName: fileDisplayName(newFile) || "",
     createdAtIso: new Date().toISOString()
   };
 }
@@ -55572,6 +56201,159 @@ function handleError(err) {
   byId("results").classList.add("visible");
 }
 
+function formatRecentTimestamp(iso) {
+  if (!iso) return "";
+  const dt = new Date(iso);
+  if (Number.isNaN(dt.getTime())) return iso;
+  return dt.toLocaleString();
+}
+
+function applyRecentSelection(entry) {
+  if (!entry) return;
+  setSelectedFile("old", buildDesktopSelection(entry.oldPath, entry.oldName));
+  setSelectedFile("new", buildDesktopSelection(entry.newPath, entry.newName));
+}
+
+function renderRecents() {
+  if (!recentsSection || !recentsList || !recentsEmpty) return;
+  if (!isDesktopApp) {
+    recentsSection.classList.remove("visible");
+    return;
+  }
+  recentsSection.classList.add("visible");
+  recentsList.innerHTML = "";
+  if (!recentComparisons.length) {
+    recentsEmpty.hidden = false;
+    return;
+  }
+  recentsEmpty.hidden = true;
+
+  recentComparisons.forEach((entry, index) => {
+    const item = document.createElement("div");
+    item.className = "recent-item";
+
+    const main = document.createElement("div");
+    main.className = "recent-main";
+
+    const names = document.createElement("div");
+    names.className = "recent-names";
+
+    const oldSpan = document.createElement("span");
+    oldSpan.className = "recent-name";
+    oldSpan.textContent = entry.oldName || baseName(entry.oldPath);
+
+    const arrow = document.createElement("span");
+    arrow.className = "recent-arrow";
+    arrow.textContent = "->";
+
+    const newSpan = document.createElement("span");
+    newSpan.className = "recent-name";
+    newSpan.textContent = entry.newName || baseName(entry.newPath);
+
+    names.appendChild(oldSpan);
+    names.appendChild(arrow);
+    names.appendChild(newSpan);
+
+    const meta = document.createElement("div");
+    meta.className = "recent-meta";
+    meta.textContent = formatRecentTimestamp(entry.lastRunIso);
+
+    main.appendChild(names);
+    main.appendChild(meta);
+
+    const actions = document.createElement("div");
+    actions.className = "recent-actions";
+
+    const loadBtn = document.createElement("button");
+    loadBtn.type = "button";
+    loadBtn.className = "secondary-btn recent-action";
+    loadBtn.dataset.recentAction = "load";
+    loadBtn.dataset.recentIndex = String(index);
+    loadBtn.textContent = "Load";
+
+    const rerunBtn = document.createElement("button");
+    rerunBtn.type = "button";
+    rerunBtn.className = "secondary-btn recent-action";
+    rerunBtn.dataset.recentAction = "rerun";
+    rerunBtn.dataset.recentIndex = String(index);
+    rerunBtn.textContent = "Re-run";
+
+    const swapBtn = document.createElement("button");
+    swapBtn.type = "button";
+    swapBtn.className = "secondary-btn recent-action";
+    swapBtn.dataset.recentAction = "swap";
+    swapBtn.dataset.recentIndex = String(index);
+    swapBtn.textContent = "Swap";
+
+    actions.appendChild(loadBtn);
+    actions.appendChild(rerunBtn);
+    actions.appendChild(swapBtn);
+
+    item.appendChild(main);
+    item.appendChild(actions);
+    recentsList.appendChild(item);
+  });
+}
+
+function handleRecentsClick(event) {
+  const button = event.target.closest(".recent-action");
+  if (!button) return;
+  const index = Number(button.dataset.recentIndex);
+  const action = button.dataset.recentAction;
+  const entry = recentComparisons[index];
+  if (!entry) return;
+
+  if (action === "swap") {
+    const swapped = {
+      oldPath: entry.newPath,
+      newPath: entry.oldPath,
+      oldName: entry.newName,
+      newName: entry.oldName,
+      lastRunIso: entry.lastRunIso
+    };
+    applyRecentSelection(swapped);
+    return;
+  }
+
+  applyRecentSelection(entry);
+  if (action === "rerun") {
+    runDiff();
+  }
+}
+
+async function persistRecentComparison(oldFile, newFile, lastRunIso) {
+  if (!isDesktopApp || !oldFile?.path || !newFile?.path) return;
+  const entry = {
+    oldPath: oldFile.path,
+    newPath: newFile.path,
+    oldName: fileDisplayName(oldFile),
+    newName: fileDisplayName(newFile),
+    lastRunIso: lastRunIso || new Date().toISOString()
+  };
+  try {
+    const updated = await saveRecent(entry);
+    if (Array.isArray(updated)) {
+      recentComparisons = updated;
+      renderRecents();
+    }
+  } catch (err) {
+    console.warn("Failed to save recent comparison:", err);
+  }
+}
+
+async function loadRecentComparisons() {
+  if (!isDesktopApp) return;
+  try {
+    const items = await loadRecents();
+    if (Array.isArray(items)) {
+      recentComparisons = items;
+    }
+  } catch (err) {
+    console.warn("Failed to load recents:", err);
+  }
+  renderRecents();
+}
+
 function cancelDiff() {
   if (!isBusy) return;
   activeRunId += 1;
@@ -55583,11 +56365,15 @@ function cancelDiff() {
 }
 
 async function runDiff() {
-  const oldFile = byId("fileOld").files[0];
-  const newFile = byId("fileNew").files[0];
+  const oldFile = selectedOld;
+  const newFile = selectedNew;
 
   if (!oldFile || !newFile) {
     setStatus("Please select both files to compare.", "error");
+    return;
+  }
+  if (isDesktopApp && (!oldFile.path || !newFile.path)) {
+    setStatus("Please select valid files to compare.", "error");
     return;
   }
 
@@ -55602,22 +56388,36 @@ async function runDiff() {
   showStage("read");
 
   try {
-    const oldBuffer = await oldFile.arrayBuffer();
-    const newBuffer = await newFile.arrayBuffer();
-    if (runId !== activeRunId) return;
-
-    showStage("transfer");
-
     const options = { ignoreBlankToBlank: true };
-    const payload = await diffClient.diff(
-      {
-        oldName: oldFile.name,
-        newName: newFile.name,
-        oldBuffer,
-        newBuffer
-      },
-      options
-    );
+    let payload;
+
+    if (isDesktopApp) {
+      payload = await diffClient.diff(
+        {
+          oldName: fileDisplayName(oldFile),
+          newName: fileDisplayName(newFile),
+          oldPath: oldFile.path,
+          newPath: newFile.path
+        },
+        options
+      );
+    } else {
+      const oldBuffer = await oldFile.arrayBuffer();
+      const newBuffer = await newFile.arrayBuffer();
+      if (runId !== activeRunId) return;
+
+      showStage("transfer");
+
+      payload = await diffClient.diff(
+        {
+          oldName: oldFile.name,
+          newName: newFile.name,
+          oldBuffer,
+          newBuffer
+        },
+        options
+      );
+    }
     if (runId !== activeRunId) return;
 
     showStage("render");
@@ -55637,6 +56437,7 @@ async function runDiff() {
     lastReport = report;
     lastMeta = buildMeta(oldFile, newFile);
     setExportsEnabled(true);
+    await persistRecentComparison(oldFile, newFile, lastMeta.createdAtIso);
   } catch (e) {
     if (!isBusy && String(e).toLowerCase().includes("canceled")) {
       return;
@@ -56068,14 +56869,23 @@ async function main() {
   setStatus("Loading...", "loading");
 
   try {
-    diffClient = createDiffWorkerClient({ onStatus: handleWorkerStatus });
+    isDesktopApp = isDesktop();
+    diffClient = createAppDiffClient({ onStatus: handleWorkerStatus });
     showStage("init");
     engineVersion = await diffClient.ready();
     byId("version").textContent = engineVersion;
     setStatus("");
 
-    setupFileDrop("dropOld", "fileOld", "nameOld");
-    setupFileDrop("dropNew", "fileNew", "nameNew");
+    setupFileDrop("old");
+    setupFileDrop("new");
+
+    recentsSection = byId("recentsSection");
+    recentsList = byId("recentsList");
+    recentsEmpty = byId("recentsEmpty");
+    if (recentsList) {
+      recentsList.addEventListener("click", handleRecentsClick);
+    }
+    await loadRecentComparisons();
 
     byId("run").addEventListener("click", runDiff);
     const cancelBtn = byId("cancel");
@@ -56120,6 +56930,210 @@ async function main() {
 }
 
 main();
+
+```
+
+---
+
+### File: `web\native_diff_client.js`
+
+```javascript
+function resolveTauri() {
+  if (typeof window === "undefined") return null;
+  return window.__TAURI__ || null;
+}
+
+function resolveInvoke(tauri) {
+  if (tauri?.core?.invoke) return tauri.core.invoke;
+  if (tauri?.invoke) return tauri.invoke;
+  return null;
+}
+
+function resolveListen(tauri) {
+  if (tauri?.event?.listen) return tauri.event.listen;
+  return null;
+}
+
+export function getNativeBridge() {
+  const tauri = resolveTauri();
+  if (!tauri) return null;
+  const invoke = resolveInvoke(tauri);
+  if (typeof invoke !== "function") return null;
+  return {
+    invoke,
+    listen: resolveListen(tauri)
+  };
+}
+
+function notify(onStatus, payload) {
+  if (typeof onStatus === "function") {
+    onStatus(payload);
+  }
+}
+
+export async function openNativeFileDialog() {
+  const bridge = getNativeBridge();
+  if (!bridge) {
+    throw new Error("Native dialog unavailable.");
+  }
+  const result = await bridge.invoke("pick_file");
+  if (!result) return null;
+  return result;
+}
+
+export async function loadNativeRecents() {
+  const bridge = getNativeBridge();
+  if (!bridge) return [];
+  return bridge.invoke("load_recents");
+}
+
+export async function saveNativeRecent(entry) {
+  const bridge = getNativeBridge();
+  if (!bridge) return [];
+  return bridge.invoke("save_recent", { entry });
+}
+
+export function createNativeDiffClient({ onStatus } = {}) {
+  const bridge = getNativeBridge();
+  if (!bridge) {
+    throw new Error("Native bridge unavailable.");
+  }
+
+  let current = null;
+  let requestCounter = 0;
+  let cachedVersion = null;
+  let readyPromise = null;
+  let disposed = false;
+  let unlisten = null;
+
+  function nextRequestId() {
+    requestCounter += 1;
+    return requestCounter;
+  }
+
+  async function ensureListener() {
+    if (unlisten || typeof bridge.listen !== "function") return;
+    unlisten = await bridge.listen("diff-progress", event => {
+      if (!current || !event || !event.payload) return;
+      const payload = event.payload;
+      if (payload.runId !== current.id) return;
+      notify(onStatus, {
+        stage: payload.stage,
+        detail: payload.detail,
+        source: "native"
+      });
+    });
+  }
+
+  async function ready() {
+    if (cachedVersion) return cachedVersion;
+    if (readyPromise) return readyPromise;
+    readyPromise = bridge.invoke("get_version").then(version => {
+      cachedVersion = version || "";
+      return cachedVersion;
+    });
+    return readyPromise;
+  }
+
+  async function diff(files, options = {}) {
+    if (disposed) {
+      throw new Error("Native diff client disposed.");
+    }
+    if (current) {
+      throw new Error("Diff already in progress.");
+    }
+    await ready();
+    await ensureListener();
+    const id = nextRequestId();
+    return new Promise((resolve, reject) => {
+      current = { id, resolve, reject };
+      bridge
+        .invoke("diff_paths_with_sheets", {
+          old_path: files.oldPath,
+          new_path: files.newPath,
+          run_id: id,
+          options
+        })
+        .then(payload => {
+          if (!current || current.id !== id) return;
+          current = null;
+          resolve(payload);
+        })
+        .catch(err => {
+          if (!current || current.id !== id) return;
+          current = null;
+          reject(err instanceof Error ? err : new Error(String(err)));
+        });
+    });
+  }
+
+  function cancel() {
+    if (!current) return false;
+    const id = current.id;
+    bridge.invoke("cancel_diff", { run_id: id }).catch(() => {});
+    current.reject(new Error("Diff canceled."));
+    current = null;
+    return true;
+  }
+
+  function dispose() {
+    disposed = true;
+    if (unlisten) {
+      unlisten();
+      unlisten = null;
+    }
+    current = null;
+  }
+
+  return {
+    ready,
+    diff,
+    cancel,
+    dispose
+  };
+}
+
+```
+
+---
+
+### File: `web\platform.js`
+
+```javascript
+import { createDiffWorkerClient } from "./diff_worker_client.js";
+import {
+  createNativeDiffClient,
+  getNativeBridge,
+  loadNativeRecents,
+  openNativeFileDialog,
+  saveNativeRecent
+} from "./native_diff_client.js";
+
+export function isDesktop() {
+  return Boolean(getNativeBridge());
+}
+
+export function createAppDiffClient({ onStatus } = {}) {
+  if (isDesktop()) {
+    return createNativeDiffClient({ onStatus });
+  }
+  return createDiffWorkerClient({ onStatus });
+}
+
+export async function openFileDialog() {
+  if (!isDesktop()) return null;
+  return openNativeFileDialog();
+}
+
+export async function loadRecents() {
+  if (!isDesktop()) return [];
+  return loadNativeRecents();
+}
+
+export async function saveRecent(entry) {
+  if (!isDesktop()) return [];
+  return saveNativeRecent(entry);
+}
 
 ```
 

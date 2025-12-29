@@ -13,6 +13,14 @@ serde_json = "1.0"
 excel_diff = { path = "../../core", default-features = false, features = ["excel-open-xml", "model-diff"] }
 ui_payload = { path = "../../ui_payload" }
 rfd = "0.14"
+rusqlite = { version = "0.31", features = ["bundled"] }
+uuid = { version = "1.7", features = ["v4", "serde"] }
+time = { version = "0.3", features = ["formatting"] }
+thiserror = "1.0"
+rust_xlsxwriter = "0.71"
+lru = "0.12"
+walkdir = "2.5"
+globset = "0.4"
 
 [build-dependencies]
 tauri-build = { version = "2.5.3" }

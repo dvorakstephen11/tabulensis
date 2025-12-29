@@ -2,7 +2,22 @@ import { renderWorkbookVm } from "./render.js";
 import { buildWorkbookViewModel } from "./view_model.js";
 import { mountSheetGridViewer } from "./grid_viewer.js";
 import { downloadReportJson, downloadHtmlReport } from "./export.js";
-import { createAppDiffClient, isDesktop, openFileDialog, loadRecents, saveRecent } from "./platform.js";
+import {
+  createAppDiffClient,
+  isDesktop,
+  openFileDialog,
+  openFolderDialog,
+  loadRecents,
+  saveRecent,
+  loadDiffSummary,
+  loadSheetPayload,
+  exportAuditXlsx,
+  runBatchCompare,
+  loadBatchSummary,
+  searchDiffOps,
+  buildSearchIndex,
+  searchWorkbookIndex
+} from "./platform.js";
 
 function byId(id) {
   const el = document.getElementById(id);
@@ -49,6 +64,9 @@ let isBusy = false;
 let activeRunId = 0;
 let lastReport = null;
 let lastMeta = null;
+let lastDiffId = null;
+let lastSummary = null;
+let lastMode = "payload";
 let isDesktopApp = false;
 let selectedOld = null;
 let selectedNew = null;
@@ -56,6 +74,21 @@ let recentComparisons = [];
 let recentsSection = null;
 let recentsList = null;
 let recentsEmpty = null;
+let largeModeNav = null;
+let selectedOldFolder = null;
+let selectedNewFolder = null;
+let batchSection = null;
+let batchResults = null;
+let batchOldLabel = null;
+let batchNewLabel = null;
+let batchRunBtn = null;
+let searchSection = null;
+let searchResults = null;
+let searchIndexCache = {
+  old: { id: null, path: null },
+  new: { id: null, path: null }
+};
+let largeSummaryCleanup = null;
 
 const FILE_SIDES = {
   old: { dropId: "dropOld", inputId: "fileOld", nameId: "nameOld" },
@@ -69,11 +102,13 @@ function setBusy(state) {
   if (cancelBtn) cancelBtn.disabled = !state;
 }
 
-function setExportsEnabled(enabled) {
+function setExportsEnabled({ json = false, html = false, audit = false } = {}) {
   const jsonBtn = byId("exportJson");
   const htmlBtn = byId("exportHtml");
-  if (jsonBtn) jsonBtn.disabled = !enabled;
-  if (htmlBtn) htmlBtn.disabled = !enabled;
+  const auditBtn = document.getElementById("exportAudit");
+  if (jsonBtn) jsonBtn.disabled = !json;
+  if (htmlBtn) htmlBtn.disabled = !html;
+  if (auditBtn) auditBtn.disabled = !audit;
 }
 
 function clearResults() {
@@ -83,6 +118,17 @@ function clearResults() {
   byId("rawJsonContent").classList.remove("visible");
   lastReport = null;
   lastMeta = null;
+  lastDiffId = null;
+  lastSummary = null;
+  lastMode = "payload";
+  if (largeModeNav) {
+    largeModeNav.innerHTML = "";
+    largeModeNav.classList.remove("visible");
+  }
+  if (largeSummaryCleanup) {
+    largeSummaryCleanup();
+    largeSummaryCleanup = null;
+  }
 }
 
 function updateDropDisplay(side, file) {
@@ -205,12 +251,260 @@ function handleWorkerStatus(status) {
   }
 }
 
+function setBatchFolder(side, path) {
+  if (side === "old") {
+    selectedOldFolder = path;
+  } else {
+    selectedNewFolder = path;
+  }
+  if (batchOldLabel) {
+    batchOldLabel.textContent = selectedOldFolder || "";
+  }
+  if (batchNewLabel) {
+    batchNewLabel.textContent = selectedNewFolder || "";
+  }
+  if (batchRunBtn) {
+    batchRunBtn.disabled = !selectedOldFolder || !selectedNewFolder;
+  }
+}
+
+function renderBatchResults(outcome) {
+  if (!batchResults) return;
+  const items = Array.isArray(outcome?.items) ? outcome.items : [];
+  const rows = items
+    .map(item => {
+      const status = item.status || "";
+      const diffId = item.diffId || "";
+      const opCount = item.opCount != null ? item.opCount : "";
+      const warnings = item.warningsCount != null ? item.warningsCount : "";
+      const action = diffId
+        ? `<button class="secondary-btn batch-open" data-diff-id="${diffId}">Open</button>`
+        : "";
+      return `
+        <tr>
+          <td>${status}</td>
+          <td>${item.oldPath || ""}</td>
+          <td>${item.newPath || ""}</td>
+          <td>${opCount}</td>
+          <td>${warnings}</td>
+          <td>${action}</td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  batchResults.innerHTML = `
+    <div class="batch-summary">
+      <div><strong>${outcome.itemCount || items.length}</strong> items</div>
+      <div><strong>${outcome.completedCount || 0}</strong> completed</div>
+      <div>Status: ${outcome.status || ""}</div>
+    </div>
+    <div class="batch-table-wrap">
+      <table class="batch-table">
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>Old path</th>
+            <th>New path</th>
+            <th>Ops</th>
+            <th>Warnings</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows || "<tr><td colspan=\"6\">No items.</td></tr>"}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function setupBatchSection() {
+  batchSection = document.getElementById("batchSection");
+  batchResults = document.getElementById("batchResults");
+  batchOldLabel = document.getElementById("batchOldLabel");
+  batchNewLabel = document.getElementById("batchNewLabel");
+  batchRunBtn = document.getElementById("batchRun");
+  if (!batchSection) return;
+  batchSection.classList.toggle("visible", isDesktopApp);
+
+  const pickOld = document.getElementById("batchPickOld");
+  const pickNew = document.getElementById("batchPickNew");
+
+  if (pickOld) {
+    pickOld.addEventListener("click", async () => {
+      const path = await openFolderDialog();
+      if (path) setBatchFolder("old", path);
+    });
+  }
+  if (pickNew) {
+    pickNew.addEventListener("click", async () => {
+      const path = await openFolderDialog();
+      if (path) setBatchFolder("new", path);
+    });
+  }
+
+  if (batchRunBtn) {
+    batchRunBtn.addEventListener("click", async () => {
+      if (!selectedOldFolder || !selectedNewFolder) return;
+      setStatus("Running batch compare...", "loading");
+      try {
+        const outcome = await runBatchCompare({
+          oldRoot: selectedOldFolder,
+          newRoot: selectedNewFolder,
+          strategy: "relative",
+          trusted: false
+        });
+        renderBatchResults(outcome);
+        setStatus("Batch complete.", "");
+      } catch (err) {
+        handleError(err);
+      }
+    });
+  }
+
+  if (batchResults) {
+    batchResults.addEventListener("click", event => {
+      const btn = event.target.closest(".batch-open");
+      if (!btn) return;
+      const diffId = btn.dataset.diffId;
+      if (diffId) {
+        openStoredDiff({ diffId });
+      }
+    });
+  }
+}
+
+function renderSearchResults(items, title) {
+  if (!searchResults) return;
+  const rows = items
+    .map(item => {
+      const sheet = item.sheet ? `<div class="search-meta">${item.sheet}</div>` : "";
+      const addr = item.address ? `<div class="search-meta">${item.address}</div>` : "";
+      const detail = item.detail ? `<div class="search-detail">${item.detail}</div>` : "";
+      return `
+        <div class="search-item">
+          <div class="search-title">${item.label || item.text || ""}</div>
+          ${sheet}
+          ${addr}
+          ${detail}
+        </div>
+      `;
+    })
+    .join("");
+
+  searchResults.innerHTML = `
+    <div class="search-summary">${title}</div>
+    ${rows || "<div class=\"empty-state\">No results.</div>"}
+  `;
+}
+
+function getSearchPath(side) {
+  if (lastSummary) {
+    return side === "old" ? lastSummary.oldPath : lastSummary.newPath;
+  }
+  if (side === "old" && selectedOld?.path) return selectedOld.path;
+  if (side === "new" && selectedNew?.path) return selectedNew.path;
+  return null;
+}
+
+async function ensureSearchIndex(side) {
+  const path = getSearchPath(side);
+  if (!path) throw new Error("Select files before building an index.");
+  const cached = searchIndexCache[side];
+  if (cached?.id && cached.path === path) return cached.id;
+  const summary = await buildSearchIndex(path, side);
+  searchIndexCache[side] = { id: summary.indexId, path: summary.path || path };
+  return summary.indexId;
+}
+
+function setupSearchSection() {
+  searchSection = document.getElementById("searchSection");
+  searchResults = document.getElementById("searchResults");
+  if (!searchSection) return;
+  searchSection.classList.toggle("visible", isDesktopApp);
+
+  const searchInput = document.getElementById("searchInput");
+  const searchScope = document.getElementById("searchScope");
+  const searchBtn = document.getElementById("searchRun");
+  const indexBtn = document.getElementById("searchIndex");
+
+  if (searchBtn) {
+    searchBtn.addEventListener("click", async () => {
+      const query = searchInput?.value || "";
+      const scope = searchScope?.value || "changes";
+      if (!query.trim()) return;
+
+      try {
+        if (scope === "changes") {
+          if (!lastDiffId) throw new Error("Run a diff before searching.");
+          const results = await searchDiffOps(lastDiffId, query, 100);
+          renderSearchResults(results, `Matches for \"${query}\" in changes`);
+        } else if (scope === "old" || scope === "new") {
+          const indexId = await ensureSearchIndex(scope);
+          const results = await searchWorkbookIndex(indexId, query, 100);
+          const mapped = results.map(item => ({
+            label: item.text,
+            sheet: item.sheet,
+            address: item.address,
+            detail: item.kind
+          }));
+          renderSearchResults(mapped, `Matches for \"${query}\" in ${scope} workbook`);
+        }
+      } catch (err) {
+        handleError(err);
+      }
+    });
+  }
+
+  if (indexBtn) {
+    indexBtn.addEventListener("click", async () => {
+      const scope = searchScope?.value || "changes";
+      if (scope !== "old" && scope !== "new") return;
+      try {
+        await ensureSearchIndex(scope);
+        setStatus(`Index ready for ${scope} workbook.`, "");
+      } catch (err) {
+        handleError(err);
+      }
+    });
+  }
+}
+
+function normalizeDiffOutcome(result) {
+  if (result && result.mode) {
+    return {
+      mode: result.mode || "payload",
+      diffId: result.diffId || null,
+      payload: result.payload || null,
+      summary: result.summary || null
+    };
+  }
+  return {
+    mode: "payload",
+    diffId: null,
+    payload: result,
+    summary: null
+  };
+}
+
 function buildMeta(oldFile, newFile) {
   return {
     version: engineVersion,
     oldName: fileDisplayName(oldFile) || "",
     newName: fileDisplayName(newFile) || "",
     createdAtIso: new Date().toISOString()
+  };
+}
+
+function buildMetaFromSummary(summary) {
+  const oldPath = summary?.oldPath || "";
+  const newPath = summary?.newPath || "";
+  return {
+    version: engineVersion,
+    oldName: baseName(oldPath),
+    newName: baseName(newPath),
+    createdAtIso: summary?.finishedAt || summary?.startedAt || new Date().toISOString()
   };
 }
 
@@ -312,6 +606,16 @@ function renderRecents() {
     loadBtn.dataset.recentIndex = String(index);
     loadBtn.textContent = "Load";
 
+    const openBtn = document.createElement("button");
+    openBtn.type = "button";
+    openBtn.className = "secondary-btn recent-action";
+    openBtn.dataset.recentAction = "open";
+    openBtn.dataset.recentIndex = String(index);
+    openBtn.textContent = "Open";
+    if (!entry.diffId) {
+      openBtn.disabled = true;
+    }
+
     const rerunBtn = document.createElement("button");
     rerunBtn.type = "button";
     rerunBtn.className = "secondary-btn recent-action";
@@ -327,6 +631,7 @@ function renderRecents() {
     swapBtn.textContent = "Swap";
 
     actions.appendChild(loadBtn);
+    actions.appendChild(openBtn);
     actions.appendChild(rerunBtn);
     actions.appendChild(swapBtn);
 
@@ -356,6 +661,11 @@ function handleRecentsClick(event) {
     return;
   }
 
+  if (action === "open") {
+    openStoredDiff(entry);
+    return;
+  }
+
   applyRecentSelection(entry);
   if (action === "rerun") {
     runDiff();
@@ -369,7 +679,9 @@ async function persistRecentComparison(oldFile, newFile, lastRunIso) {
     newPath: newFile.path,
     oldName: fileDisplayName(oldFile),
     newName: fileDisplayName(newFile),
-    lastRunIso: lastRunIso || new Date().toISOString()
+    lastRunIso: lastRunIso || new Date().toISOString(),
+    diffId: lastDiffId || undefined,
+    mode: lastMode || undefined
   };
   try {
     const updated = await saveRecent(entry);
@@ -395,12 +707,34 @@ async function loadRecentComparisons() {
   renderRecents();
 }
 
+async function openStoredDiff(entry) {
+  if (!isDesktopApp || !entry?.diffId) return;
+  cleanupViewers();
+  clearResults();
+  setExportsEnabled({ json: false, html: false, audit: false });
+  setStatus("Loading stored diff...", "loading");
+  try {
+    const summary = await loadDiffSummary(entry.diffId);
+    lastDiffId = entry.diffId;
+    lastSummary = summary;
+    lastMode = summary?.mode || "payload";
+    lastReport = null;
+    lastMeta = buildMetaFromSummary(summary);
+    renderLargeSummary(summary);
+    setExportsEnabled({ json: false, html: true, audit: isDesktopApp });
+    const opCount = summary?.opCount || 0;
+    setStatus(`Loaded ${opCount} change${opCount !== 1 ? "s" : ""}.`, "");
+  } catch (err) {
+    handleError(err);
+  }
+}
+
 function cancelDiff() {
   if (!isBusy) return;
   activeRunId += 1;
   diffClient.cancel();
   clearResults();
-  setExportsEnabled(false);
+  setExportsEnabled({ json: false, html: false, audit: false });
   setBusy(false);
   setStatus("Canceled.", "");
 }
@@ -420,7 +754,7 @@ async function runDiff() {
 
   cleanupViewers();
   clearResults();
-  setExportsEnabled(false);
+  setExportsEnabled({ json: false, html: false, audit: false });
 
   activeRunId += 1;
   const runId = activeRunId;
@@ -464,21 +798,45 @@ async function runDiff() {
     showStage("render");
     await nextFrame();
 
-    const report = payload.report || payload;
-    renderResults(payload, options);
-    byId("raw").textContent = JSON.stringify(report, null, 2);
+    const outcome = normalizeDiffOutcome(payload);
+    lastDiffId = outcome.diffId || null;
+    lastSummary = outcome.summary || null;
+    lastMode = outcome.mode || "payload";
 
-    const opCount = report.ops ? report.ops.length : 0;
-    if (opCount === 0) {
-      setStatus("Files are identical.", "");
+    if (outcome.mode === "payload" && outcome.payload) {
+      const report = outcome.payload.report || outcome.payload;
+      renderResults(outcome.payload, options);
+      byId("raw").textContent = JSON.stringify(report, null, 2);
+
+      const opCount = report.ops ? report.ops.length : 0;
+      if (opCount === 0) {
+        setStatus("Files are identical.", "");
+      } else {
+        setStatus(`Found ${opCount} difference${opCount !== 1 ? "s" : ""}.`, "");
+      }
+
+      lastReport = report;
+      lastMeta = buildMeta(oldFile, newFile);
+      setExportsEnabled({ json: true, html: true, audit: isDesktopApp });
+    } else if (outcome.summary) {
+      renderLargeSummary(outcome.summary);
+      byId("raw").textContent = JSON.stringify(outcome.summary, null, 2);
+      lastReport = null;
+      lastMeta = buildMetaFromSummary(outcome.summary);
+
+      const opCount = outcome.summary.opCount || 0;
+      if (opCount === 0) {
+        setStatus("Files are identical.", "");
+      } else {
+        setStatus(`Found ${opCount} difference${opCount !== 1 ? "s" : ""} (large mode).`, "");
+      }
+
+      setExportsEnabled({ json: false, html: true, audit: isDesktopApp });
     } else {
-      setStatus(`Found ${opCount} difference${opCount !== 1 ? "s" : ""}.`, "");
+      throw new Error("Unexpected diff response.");
     }
 
-    lastReport = report;
-    lastMeta = buildMeta(oldFile, newFile);
-    setExportsEnabled(true);
-    await persistRecentComparison(oldFile, newFile, lastMeta.createdAtIso);
+    await persistRecentComparison(oldFile, newFile, lastMeta?.createdAtIso || "");
   } catch (e) {
     if (!isBusy && String(e).toLowerCase().includes("canceled")) {
       return;
@@ -501,6 +859,7 @@ function cleanupViewers() {
 
 function renderResults(payload, options = {}, state = {}) {
   cleanupViewers();
+  hideLargeModeNav();
   const workbookVm = buildWorkbookViewModel(payload, options);
   const resultsEl = byId("results");
   resultsEl.innerHTML = renderWorkbookVm(workbookVm);
@@ -508,6 +867,156 @@ function renderResults(payload, options = {}, state = {}) {
   reviewController = setupReviewWorkflow(resultsEl, workbookVm, payload, options, state);
   activeViewerManager = reviewController.viewerManager || null;
   return workbookVm;
+}
+
+function renderSummaryCards(counts = {}) {
+  const added = counts.added || 0;
+  const removed = counts.removed || 0;
+  const modified = counts.modified || 0;
+  const moved = counts.moved || 0;
+  return `
+    <div class="summary-cards">
+      <div class="summary-card added">
+        <div class="count">${added}</div>
+        <div class="label">Added</div>
+      </div>
+      <div class="summary-card removed">
+        <div class="count">${removed}</div>
+        <div class="label">Removed</div>
+      </div>
+      <div class="summary-card modified">
+        <div class="count">${modified}</div>
+        <div class="label">Modified</div>
+      </div>
+      <div class="summary-card moved">
+        <div class="count">${moved}</div>
+        <div class="label">Moved</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderLargeSummary(summary) {
+  cleanupViewers();
+  hideLargeModeNav();
+  if (largeSummaryCleanup) {
+    largeSummaryCleanup();
+    largeSummaryCleanup = null;
+  }
+
+  const resultsEl = byId("results");
+  const warnings = Array.isArray(summary?.warnings) ? summary.warnings : [];
+  const warningsHtml = warnings.length
+    ? `
+      <div class="warnings-section">
+        <div class="warnings-title">
+          <span>!</span>
+          <span>Warnings</span>
+        </div>
+        <ul class="warnings-list">
+          ${warnings.map(w => `<li>${String(w)}</li>`).join("")}
+        </ul>
+      </div>
+    `
+    : "";
+
+  const sheets = Array.isArray(summary?.sheets) ? summary.sheets : [];
+  const sheetHtml = sheets
+    .map(sheet => {
+      const counts = sheet.counts || {};
+      return `
+        <div class="large-sheet-item" data-sheet="${sheet.sheetName}">
+          <div class="large-sheet-main">
+            <div class="large-sheet-name">${sheet.sheetName}</div>
+            <div class="large-sheet-meta">${sheet.opCount || 0} changes</div>
+          </div>
+          <div class="large-sheet-counts">
+            <span class="pill added">+${counts.added || 0}</span>
+            <span class="pill removed">-${counts.removed || 0}</span>
+            <span class="pill modified">~${counts.modified || 0}</span>
+            <span class="pill moved">&gt;${counts.moved || 0}</span>
+          </div>
+          <button class="secondary-btn large-sheet-load" data-sheet="${sheet.sheetName}">Load details</button>
+        </div>
+      `;
+    })
+    .join("");
+
+  resultsEl.innerHTML = `
+    <div class="large-summary">
+      <div class="large-summary-header">
+        <div>
+          <h2>Large Mode Summary</h2>
+          <p>Sheet details load on demand to keep huge diffs responsive.</p>
+        </div>
+        <div class="large-summary-meta">
+          <span>${summary?.opCount || 0} ops</span>
+          <span>${summary?.sheets?.length || 0} sheets</span>
+        </div>
+      </div>
+      ${warningsHtml}
+      ${renderSummaryCards(summary?.counts || {})}
+      <div class="large-sheet-list">
+        ${sheetHtml || "<div class=\"empty-state\">No sheet-level changes recorded.</div>"}
+      </div>
+    </div>
+  `;
+  resultsEl.classList.add("visible");
+
+  const onClick = event => {
+    const button = event.target.closest(".large-sheet-load");
+    if (!button) return;
+    const sheetName = button.dataset.sheet;
+    if (sheetName) {
+      loadLargeSheet(sheetName);
+    }
+  };
+
+  resultsEl.addEventListener("click", onClick);
+  largeSummaryCleanup = () => resultsEl.removeEventListener("click", onClick);
+}
+
+function showLargeModeNav(sheetName) {
+  if (!largeModeNav) return;
+  largeModeNav.innerHTML = `
+    <button class="secondary-btn" id="largeBack">Back to summary</button>
+    <span class="large-mode-title">${sheetName}</span>
+  `;
+  largeModeNav.classList.add("visible");
+  const backBtn = largeModeNav.querySelector("#largeBack");
+  if (backBtn) {
+    backBtn.addEventListener("click", () => {
+      if (lastSummary) {
+        renderLargeSummary(lastSummary);
+        setExportsEnabled({ json: false, html: true, audit: isDesktopApp });
+      }
+    });
+  }
+}
+
+function hideLargeModeNav() {
+  if (!largeModeNav) return;
+  largeModeNav.classList.remove("visible");
+  largeModeNav.innerHTML = "";
+}
+
+async function loadLargeSheet(sheetName) {
+  if (!isDesktopApp || !lastDiffId) return;
+  try {
+    showStage("render", `Loading ${sheetName}...`);
+    const payload = await loadSheetPayload(lastDiffId, sheetName);
+    if (!payload) {
+      throw new Error("No payload returned for sheet.");
+    }
+    renderResults(payload, { ignoreBlankToBlank: true });
+    lastReport = payload.report || payload;
+    lastMeta = buildMetaFromSummary(lastSummary || {});
+    showLargeModeNav(sheetName);
+    setExportsEnabled({ json: false, html: true, audit: isDesktopApp });
+    setStatus(`Loaded ${sheetName}.`, "");
+  } catch (err) {
+    handleError(err);
+  }
 }
 
 function buildReviewOrder(workbookVm) {
@@ -919,6 +1428,9 @@ async function main() {
 
     setupFileDrop("old");
     setupFileDrop("new");
+    largeModeNav = byId("largeModeNav");
+    setupBatchSection();
+    setupSearchSection();
 
     recentsSection = byId("recentsSection");
     recentsList = byId("recentsList");
@@ -943,10 +1455,10 @@ async function main() {
     const exportHtmlBtn = byId("exportHtml");
     if (exportHtmlBtn) {
       exportHtmlBtn.addEventListener("click", () => {
-        if (!lastReport || !lastMeta) return;
+        if (!lastMeta) return;
         const resultsHtml = byId("results").innerHTML;
         const cssText = document.querySelector("style")?.textContent || "";
-        const reportJsonText = JSON.stringify(lastReport, null, 2);
+        const reportJsonText = JSON.stringify(lastReport || lastSummary || {}, null, 2);
         const gridPreviews = collectGridPreviews();
         downloadHtmlReport({
           title: "Excel Diff Report",
@@ -959,12 +1471,24 @@ async function main() {
       });
     }
 
+    const exportAuditBtn = document.getElementById("exportAudit");
+    if (exportAuditBtn) {
+      exportAuditBtn.addEventListener("click", async () => {
+        if (!lastDiffId) return;
+        try {
+          await exportAuditXlsx(lastDiffId);
+        } catch (err) {
+          handleError(err);
+        }
+      });
+    }
+
     byId("toggleJson").addEventListener("click", () => {
       byId("rawJsonContent").classList.toggle("visible");
     });
 
     setBusy(false);
-    setExportsEnabled(false);
+    setExportsEnabled({ json: false, html: false, audit: false });
   } catch (e) {
     setStatus("Failed to load: " + String(e), "error");
   }
