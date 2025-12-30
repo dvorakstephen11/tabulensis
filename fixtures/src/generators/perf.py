@@ -19,6 +19,13 @@ class LargeGridGenerator(BaseGenerator):
         seed = self.args.get('seed', 0)
         pattern_length = self.args.get('pattern_length', 100)
         fill_percent = self.args.get('fill_percent', 100)
+        edit_row = self.args.get('edit_row')
+        edit_col = self.args.get('edit_col')
+        edit_value = self.args.get('edit_value')
+        if edit_row is not None:
+            edit_row = int(edit_row)
+        if edit_col is not None:
+            edit_col = int(edit_col)
 
         rng = random.Random(seed)
 
@@ -49,7 +56,11 @@ class LargeGridGenerator(BaseGenerator):
                             row_data.append(f"R{r}C{c}")
                         else:
                             row_data.append(None)
-                
+                if edit_row is not None and edit_col is not None and r == edit_row:
+                    idx = edit_col - 1
+                    if 0 <= idx < cols:
+                        row_data[idx] = edit_value
+
                 ws.append(row_data)
 
             wb.save(output_dir / name)

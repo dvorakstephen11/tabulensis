@@ -1,0 +1,100 @@
+scenarios:
+  - id: "e2e_p1_dense_a"
+    generator: "perf_large"
+    args:
+      rows: 50000
+      cols: 20
+      mode: "dense"
+    output: "e2e_p1_dense_a.xlsx"
+
+  - id: "e2e_p1_dense_b"
+    generator: "perf_large"
+    args:
+      rows: 50000
+      cols: 20
+      mode: "dense"
+      edit_row: 25000
+      edit_col: 10
+      edit_value: "E2E_EDIT"
+    output: "e2e_p1_dense_b.xlsx"
+
+  - id: "e2e_p2_noise_a"
+    generator: "perf_large"
+    args:
+      rows: 50000
+      cols: 20
+      mode: "noise"
+      seed: 12345
+    output: "e2e_p2_noise_a.xlsx"
+
+  - id: "e2e_p2_noise_b"
+    generator: "perf_large"
+    args:
+      rows: 50000
+      cols: 20
+      mode: "noise"
+      seed: 12345
+      edit_row: 25000
+      edit_col: 10
+      edit_value: 2.0
+    output: "e2e_p2_noise_b.xlsx"
+
+  - id: "e2e_p3_repetitive_a"
+    generator: "perf_large"
+    args:
+      rows: 50000
+      cols: 50
+      mode: "repetitive"
+      pattern_length: 100
+    output: "e2e_p3_repetitive_a.xlsx"
+
+  - id: "e2e_p3_repetitive_b"
+    generator: "perf_large"
+    args:
+      rows: 50000
+      cols: 50
+      mode: "repetitive"
+      pattern_length: 100
+      edit_row: 25000
+      edit_col: 25
+      edit_value: "E2E_EDIT"
+    output: "e2e_p3_repetitive_b.xlsx"
+
+  - id: "e2e_p4_sparse_a"
+    generator: "perf_large"
+    args:
+      rows: 50000
+      cols: 100
+      mode: "sparse"
+      fill_percent: 1
+      seed: 77777
+    output: "e2e_p4_sparse_a.xlsx"
+
+  - id: "e2e_p4_sparse_b"
+    generator: "perf_large"
+    args:
+      rows: 50000
+      cols: 100
+      mode: "sparse"
+      fill_percent: 1
+      seed: 77777
+      edit_row: 25000
+      edit_col: 50
+      edit_value: "E2E_EDIT"
+    output: "e2e_p4_sparse_b.xlsx"
+
+  - id: "e2e_p5_identical_a"
+    generator: "perf_large"
+    args:
+      rows: 50000
+      cols: 100
+      mode: "dense"
+    output: "e2e_p5_identical_a.xlsx"
+
+  - id: "e2e_p5_identical_b"
+    generator: "perf_large"
+    args:
+      rows: 50000
+      cols: 100
+      mode: "dense"
+    output: "e2e_p5_identical_b.xlsx"

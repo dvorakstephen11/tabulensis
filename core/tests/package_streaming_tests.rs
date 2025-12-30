@@ -1,7 +1,7 @@
 use excel_diff::{
-    CellValue, DataMashup, DiffConfig, DiffError, DiffOp, DiffSink, Grid, JsonLinesSink, Metadata,
-    PackageParts, PackageXml, Permissions, SectionDocument, Sheet, SheetKind, StringId, Workbook,
-    WorkbookPackage,
+    CallbackSink, CellValue, DataMashup, DiffConfig, DiffError, DiffOp, DiffSink, Grid,
+    JsonLinesSink, Metadata, PackageParts, PackageXml, Permissions, SectionDocument, Sheet,
+    SheetKind, StringId, Workbook, WorkbookPackage,
 };
 use serde::Deserialize;
 
@@ -248,6 +248,71 @@ fn package_diff_streaming_finishes_on_m_emit_error() {
         "sink.finish() should be called on M emit error"
     );
     assert_eq!(sink.finish_calls, 1, "finish should be called exactly once");
+}
+
+#[cfg(feature = "perf-metrics")]
+#[test]
+fn package_diff_streaming_includes_package_parse_time_in_total() {
+    let mut grid_a = Grid::new(1, 1);
+    let mut grid_b = Grid::new(1, 1);
+    grid_a.insert_cell(0, 0, Some(CellValue::Number(1.0)), None);
+    grid_b.insert_cell(0, 0, Some(CellValue::Number(2.0)), None);
+
+    let sheet_id = excel_diff::with_default_session(|session| session.strings.intern("Sheet1"));
+
+    let wb_a = Workbook {
+        sheets: vec![Sheet {
+            name: sheet_id,
+            kind: SheetKind::Worksheet,
+            grid: grid_a,
+        }],
+        ..Default::default()
+    };
+    let wb_b = Workbook {
+        sheets: vec![Sheet {
+            name: sheet_id,
+            kind: SheetKind::Worksheet,
+            grid: grid_b,
+        }],
+        ..Default::default()
+    };
+
+    let pkg_a = WorkbookPackage {
+        workbook: wb_a,
+        data_mashup: None,
+        vba_modules: None,
+        parse_time_ms: 15,
+    };
+    let pkg_b = WorkbookPackage {
+        workbook: wb_b,
+        data_mashup: None,
+        vba_modules: None,
+        parse_time_ms: 25,
+    };
+
+    let mut sink = CallbackSink::new(|_op| {});
+    let summary = pkg_a
+        .diff_streaming(&pkg_b, &DiffConfig::default(), &mut sink)
+        .expect("diff_streaming should succeed");
+    let metrics = summary.metrics.expect("expected perf metrics");
+
+    let added = 15u64.saturating_add(25u64);
+    assert!(
+        metrics.parse_time_ms >= added,
+        "parse_time_ms should include package parse time (>= {}), got {}",
+        added,
+        metrics.parse_time_ms
+    );
+    assert!(
+        metrics.total_time_ms >= metrics.parse_time_ms,
+        "total_time_ms should include parse_time_ms (total={}, parse={})",
+        metrics.total_time_ms,
+        metrics.parse_time_ms
+    );
+    assert_eq!(
+        metrics.diff_time_ms,
+        metrics.total_time_ms.saturating_sub(metrics.parse_time_ms)
+    );
 }
 
 #[test]

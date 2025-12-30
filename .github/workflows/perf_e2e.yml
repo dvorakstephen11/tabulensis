@@ -1,0 +1,41 @@
+name: Performance E2E
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch: {}
+
+jobs:
+  perf-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install fixture generator deps
+        run: python -m pip install -r fixtures/requirements.txt
+
+      - name: Install fixture generator
+        run: python -m pip install -e fixtures --no-deps
+
+      - name: Generate e2e fixtures
+        run: generate-fixtures --manifest fixtures/manifest_perf_e2e.yaml --force
+
+      - name: Export e2e metrics
+        run: python scripts/export_e2e_metrics.py --skip-fixtures --export-csv benchmarks/latest_e2e.csv
+
+      - name: Upload perf artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-e2e
+          path: |
+            benchmarks/latest_e2e.json
+            benchmarks/latest_e2e.csv
+            benchmarks/results_e2e/*.json

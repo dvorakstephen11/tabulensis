@@ -882,6 +882,7 @@ fn apply_parse_metrics(
         .parse_time_ms
         .saturating_add(new_pkg.parse_time_ms);
     m.parse_time_ms = m.parse_time_ms.saturating_add(added);
+    m.total_time_ms = m.total_time_ms.saturating_add(added);
     m.diff_time_ms = m.total_time_ms.saturating_sub(m.parse_time_ms);
 }
 
