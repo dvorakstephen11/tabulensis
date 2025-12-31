@@ -54,3 +54,9 @@ jobs:
             echo "Web demo WASM size $SIZE exceeds 10MB limit"
             exit 1
           fi
+
+      - name: Build WASM package (nodejs)
+        run: wasm-pack build wasm --release --target nodejs --out-dir pkg-node
+
+      - name: Enforce WASM memory budgets
+        run: node scripts/wasm_memory_harness.cjs --pkg wasm/pkg-node --budgets benchmarks/wasm_memory_budgets.json

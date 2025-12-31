@@ -90,6 +90,7 @@ mod formula_diff;
 mod grid_metadata;
 mod grid_parser;
 mod grid_view;
+mod memory_estimate;
 pub(crate) mod hashing;
 mod matching;
 mod m_ast;

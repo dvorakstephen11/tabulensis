@@ -7,13 +7,13 @@ use crate::perf::{DiffMetrics, Phase};
 use crate::sink::{DiffSink, VecSink};
 use crate::string_pool::StringPool;
 use crate::workbook::{Grid, RowSignature};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::SheetId;
 use super::context::{DiffContext, EmitCtx, emit_op};
 use super::grid_primitives::{
-    cells_content_equal, compute_formula_diff, run_positional_diff_from_views_with_metrics,
-    run_positional_diff_with_metrics, snapshot_with_addr, positional_diff_from_views_for_rows,
+    cells_content_equal, compute_formula_diff, positional_diff_for_rows,
+    run_positional_diff_with_metrics, snapshot_with_addr,
 };
 use super::move_mask::SheetGridDiffer;
 
@@ -143,7 +143,7 @@ fn diff_grids_core<'p, S: DiffSink>(
     let sheet_name = pool.resolve(sheet_id);
     let context = format!("sheet '{sheet_name}'");
     if hardening.memory_guard_or_warn(
-        super::hardening::estimate_advanced_sheet_diff_peak(old, new),
+        crate::memory_estimate::estimate_advanced_sheet_diff_peak(old, new),
         &mut ctx.warnings,
         &context,
     ) {
@@ -167,29 +167,16 @@ fn diff_grids_core<'p, S: DiffSink>(
     if let Some(m) = metrics.as_mut() {
         m.start_phase(Phase::SignatureBuild);
     }
-    let old_view = GridView::from_grid_with_config(old, config);
-    let new_view = GridView::from_grid_with_config(new, config);
-    #[cfg(feature = "perf-metrics")]
-    if let Some(m) = metrics.as_mut() {
-        let lookups = old.cell_count() as u64 + new.cell_count() as u64;
-        let allocations = old.nrows as u64
-            + old.ncols as u64
-            + new.nrows as u64
-            + new.ncols as u64;
-        m.add_hash_lookups_est(lookups);
-        m.add_allocations_est(allocations);
-    }
-
-    let preflight = should_short_circuit_to_positional(&old_view, &new_view, config);
-    #[cfg(feature = "perf-metrics")]
-    if let Some(m) = metrics.as_mut() {
-        m.end_phase(Phase::SignatureBuild);
-    }
+    let preflight = preflight_decision_from_grids(old, new, config);
 
     if matches!(
-        preflight,
+        preflight.decision,
         PreflightDecision::ShortCircuitNearIdentical | PreflightDecision::ShortCircuitDissimilar
     ) {
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.end_phase(Phase::SignatureBuild);
+        }
         let mut emit_ctx = EmitCtx::new(
             sheet_id,
             pool,
@@ -203,12 +190,12 @@ fn diff_grids_core<'p, S: DiffSink>(
             metrics.as_deref_mut(),
         );
 
-        if preflight == PreflightDecision::ShortCircuitNearIdentical
+        if preflight.decision == PreflightDecision::ShortCircuitNearIdentical
             && old.nrows == new.nrows
             && old.ncols == new.ncols
         {
             let rows = rows_with_context(
-                &mismatched_rows(&old_view, &new_view),
+                &preflight.mismatched_rows,
                 config.max_context_rows,
                 old.nrows,
             );
@@ -216,14 +203,7 @@ fn diff_grids_core<'p, S: DiffSink>(
             if let Some(m) = emit_ctx.metrics.as_deref_mut() {
                 m.start_phase(Phase::CellDiff);
             }
-            let compared = positional_diff_from_views_for_rows(
-                &mut emit_ctx,
-                old,
-                new,
-                &old_view,
-                &new_view,
-                &rows,
-            )?;
+            let compared = positional_diff_for_rows(&mut emit_ctx, old, new, &rows)?;
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = emit_ctx.metrics.as_deref_mut() {
                 m.add_cells_compared(compared);
@@ -232,16 +212,24 @@ fn diff_grids_core<'p, S: DiffSink>(
             #[cfg(not(feature = "perf-metrics"))]
             let _ = compared;
         } else {
-            run_positional_diff_from_views_with_metrics(
-                &mut emit_ctx,
-                old,
-                new,
-                &old_view,
-                &new_view,
-            )?;
+            run_positional_diff_with_metrics(&mut emit_ctx, old, new)?;
         }
 
         return Ok(());
+    }
+
+    let old_view = GridView::from_grid_with_config(old, config);
+    let new_view = GridView::from_grid_with_config(new, config);
+    #[cfg(feature = "perf-metrics")]
+    if let Some(m) = metrics.as_mut() {
+        let lookups = old.cell_count() as u64 + new.cell_count() as u64;
+        let allocations = old.nrows as u64
+            + old.ncols as u64
+            + new.nrows as u64
+            + new.ncols as u64;
+        m.add_hash_lookups_est(lookups);
+        m.add_allocations_est(allocations);
+        m.end_phase(Phase::SignatureBuild);
     }
 
     let emit_ctx = EmitCtx::new(
@@ -548,27 +536,42 @@ pub(super) enum PreflightDecision {
     ShortCircuitDissimilar,
 }
 
-pub(super) fn should_short_circuit_to_positional(
-    old_view: &GridView<'_>,
-    new_view: &GridView<'_>,
+#[derive(Debug)]
+struct PreflightLite {
+    decision: PreflightDecision,
+    mismatched_rows: Vec<u32>,
+}
+
+fn preflight_decision_from_grids(
+    old: &Grid,
+    new: &Grid,
     config: &DiffConfig,
-) -> PreflightDecision {
-    let nrows_old = old_view.row_meta.len();
-    let nrows_new = new_view.row_meta.len();
-    let ncols_old = old_view.col_meta.len();
-    let ncols_new = new_view.col_meta.len();
+) -> PreflightLite {
+    let nrows_old = old.nrows as usize;
+    let nrows_new = new.nrows as usize;
+    let ncols_old = old.ncols as usize;
+    let ncols_new = new.ncols as usize;
 
     if nrows_old != nrows_new || ncols_old != ncols_new {
-        return PreflightDecision::RunFullPipeline;
+        return PreflightLite {
+            decision: PreflightDecision::RunFullPipeline,
+            mismatched_rows: Vec::new(),
+        };
     }
 
     let nrows = nrows_old;
     if nrows < config.preflight_min_rows as usize {
-        return PreflightDecision::RunFullPipeline;
+        return PreflightLite {
+            decision: PreflightDecision::RunFullPipeline,
+            mismatched_rows: Vec::new(),
+        };
     }
 
+    let old_signatures = row_signatures_for_grid(old);
+    let new_signatures = row_signatures_for_grid(new);
+
     let (in_order_matches, old_sig_set, new_sig_set) =
-        compute_row_signature_stats(old_view, new_view);
+        compute_row_signature_stats(&old_signatures, &new_signatures);
 
     let in_order_mismatches = nrows.saturating_sub(in_order_matches);
     let in_order_match_ratio = if nrows > 0 {
@@ -585,8 +588,15 @@ pub(super) fn should_short_circuit_to_positional(
         1.0
     };
 
+    if jaccard < config.bailout_similarity_threshold {
+        return PreflightLite {
+            decision: PreflightDecision::ShortCircuitDissimilar,
+            mismatched_rows: Vec::new(),
+        };
+    }
+
     let (multiset_equal, multiset_edit_distance_rows) =
-        multiset_equal_and_edit_distance(old_view, new_view);
+        multiset_equal_and_edit_distance(&old_signatures, &new_signatures);
 
     let reorder_suspected = (in_order_mismatches as u64) > multiset_edit_distance_rows;
 
@@ -596,44 +606,47 @@ pub(super) fn should_short_circuit_to_positional(
         && !reorder_suspected;
 
     if near_identical {
-        return PreflightDecision::ShortCircuitNearIdentical;
+        return PreflightLite {
+            decision: PreflightDecision::ShortCircuitNearIdentical,
+            mismatched_rows: mismatched_rows_from_signatures(&old_signatures, &new_signatures),
+        };
     }
 
-    if jaccard < config.bailout_similarity_threshold {
-        return PreflightDecision::ShortCircuitDissimilar;
+    PreflightLite {
+        decision: PreflightDecision::RunFullPipeline,
+        mismatched_rows: Vec::new(),
     }
-
-    PreflightDecision::RunFullPipeline
 }
 
 fn compute_row_signature_stats(
-    old_view: &GridView<'_>,
-    new_view: &GridView<'_>,
+    old_signatures: &[RowSignature],
+    new_signatures: &[RowSignature],
 ) -> (usize, HashSet<RowSignature>, HashSet<RowSignature>) {
     let mut in_order_matches = 0usize;
-    let mut old_sig_set = HashSet::with_capacity(old_view.row_meta.len());
-    let mut new_sig_set = HashSet::with_capacity(new_view.row_meta.len());
+    let mut old_sig_set = HashSet::with_capacity(old_signatures.len());
+    let mut new_sig_set = HashSet::with_capacity(new_signatures.len());
 
-    for (old_meta, new_meta) in old_view.row_meta.iter().zip(new_view.row_meta.iter()) {
-        if old_meta.signature == new_meta.signature {
+    for (old_sig, new_sig) in old_signatures.iter().zip(new_signatures.iter()) {
+        if old_sig == new_sig {
             in_order_matches += 1;
         }
-        old_sig_set.insert(old_meta.signature);
-        new_sig_set.insert(new_meta.signature);
+        old_sig_set.insert(*old_sig);
+        new_sig_set.insert(*new_sig);
     }
 
     (in_order_matches, old_sig_set, new_sig_set)
 }
 
-fn multiset_equal_and_edit_distance(old_view: &GridView<'_>, new_view: &GridView<'_>) -> (bool, u64) {
-    use std::collections::HashMap;
-
+fn multiset_equal_and_edit_distance(
+    old_signatures: &[RowSignature],
+    new_signatures: &[RowSignature],
+) -> (bool, u64) {
     let mut delta: HashMap<RowSignature, i32> = HashMap::new();
-    for meta in &old_view.row_meta {
-        *delta.entry(meta.signature).or_insert(0) += 1;
+    for sig in old_signatures {
+        *delta.entry(*sig).or_insert(0) += 1;
     }
-    for meta in &new_view.row_meta {
-        *delta.entry(meta.signature).or_insert(0) -= 1;
+    for sig in new_signatures {
+        *delta.entry(*sig).or_insert(0) -= 1;
     }
 
     let mut equal = true;
@@ -648,17 +661,31 @@ fn multiset_equal_and_edit_distance(old_view: &GridView<'_>, new_view: &GridView
     (equal, sum_abs / 2)
 }
 
-fn mismatched_rows(old_view: &GridView<'_>, new_view: &GridView<'_>) -> Vec<u32> {
+fn mismatched_rows_from_signatures(
+    old_signatures: &[RowSignature],
+    new_signatures: &[RowSignature],
+) -> Vec<u32> {
     let mut rows = Vec::new();
-    let count = old_view.row_meta.len().min(new_view.row_meta.len());
+    let count = old_signatures.len().min(new_signatures.len());
     for idx in 0..count {
-        let a = old_view.row_meta[idx].signature;
-        let b = new_view.row_meta[idx].signature;
+        let a = old_signatures[idx];
+        let b = new_signatures[idx];
         if a != b {
             rows.push(idx as u32);
         }
     }
     rows
+}
+
+fn row_signatures_for_grid(grid: &Grid) -> Vec<RowSignature> {
+    if let Some(sigs) = &grid.row_signatures {
+        return sigs.clone();
+    }
+    let mut out = Vec::with_capacity(grid.nrows as usize);
+    for row in 0..grid.nrows {
+        out.push(grid.compute_row_signature(row));
+    }
+    out
 }
 
 fn rows_with_context(rows: &[u32], context: u32, max_rows: u32) -> Vec<u32> {
@@ -837,15 +864,82 @@ mod tests {
         grid_b.insert_cell(2999, 5, Some(CellValue::Number(999999.0)), None);
 
         let config = DiffConfig::default();
-        let old_view = GridView::from_grid_with_config(&grid_a, &config);
-        let new_view = GridView::from_grid_with_config(&grid_b, &config);
-
-        let decision = should_short_circuit_to_positional(&old_view, &new_view, &config);
+        let decision = preflight_decision_from_grids(&grid_a, &grid_b, &config);
 
         assert_eq!(
-            decision,
+            decision.decision,
             PreflightDecision::RunFullPipeline,
             "small row swap + edit should NOT short-circuit to near-identical"
+        );
+    }
+
+    #[test]
+    fn preflight_short_circuit_dissimilar_skips_gridview_build() {
+        use crate::grid_view::{gridview_build_count, reset_gridview_build_count};
+
+        let mut grid_a = Grid::new(200, 10);
+        let mut grid_b = Grid::new(200, 10);
+
+        for row in 0..200u32 {
+            for col in 0..10u32 {
+                let value = (row * 1000 + col) as f64;
+                grid_a.insert_cell(row, col, Some(CellValue::Number(value)), None);
+                grid_b.insert_cell(row, col, Some(CellValue::Number(value + 1.0)), None);
+            }
+        }
+
+        let config = DiffConfig::builder()
+            .preflight_min_rows(0)
+            .bailout_similarity_threshold(0.05)
+            .build()
+            .expect("valid config");
+
+        let mut pool = StringPool::new();
+        let sheet_id: SheetId = pool.intern("PreflightTest");
+        let mut sink = VecSink::new();
+        let mut op_count = 0usize;
+        let mut ctx = DiffContext::default();
+        let mut hardening = super::super::hardening::HardeningController::new(&config, None);
+
+        reset_gridview_build_count();
+
+        #[cfg(feature = "perf-metrics")]
+        {
+            diff_grids_core(
+                sheet_id,
+                &grid_a,
+                &grid_b,
+                &config,
+                &pool,
+                &mut sink,
+                &mut op_count,
+                &mut ctx,
+                &mut hardening,
+                None,
+            )
+            .expect("diff should succeed");
+        }
+
+        #[cfg(not(feature = "perf-metrics"))]
+        {
+            diff_grids_core(
+                sheet_id,
+                &grid_a,
+                &grid_b,
+                &config,
+                &pool,
+                &mut sink,
+                &mut op_count,
+                &mut ctx,
+                &mut hardening,
+            )
+            .expect("diff should succeed");
+        }
+
+        assert_eq!(
+            gridview_build_count(),
+            0,
+            "low-similarity preflight should avoid GridView construction"
         );
     }
 
@@ -866,11 +960,11 @@ mod tests {
             }
         }
 
-        let config = DiffConfig::default();
-        let old_view = GridView::from_grid_with_config(&grid_a, &config);
-        let new_view = GridView::from_grid_with_config(&grid_b, &config);
+        let old_signatures = row_signatures_for_grid(&grid_a);
+        let new_signatures = row_signatures_for_grid(&grid_b);
 
-        let (equal, edit_distance) = multiset_equal_and_edit_distance(&old_view, &new_view);
+        let (equal, edit_distance) =
+            multiset_equal_and_edit_distance(&old_signatures, &new_signatures);
         assert!(equal);
         assert_eq!(edit_distance, 0);
 
@@ -878,8 +972,9 @@ mod tests {
             grid_b.insert_cell(0, col, Some(CellValue::Number(99999.0 + col as f64)), None);
         }
 
-        let new_view_edited = GridView::from_grid_with_config(&grid_b, &config);
-        let (equal2, edit_distance2) = multiset_equal_and_edit_distance(&old_view, &new_view_edited);
+        let new_signatures_edited = row_signatures_for_grid(&grid_b);
+        let (equal2, edit_distance2) =
+            multiset_equal_and_edit_distance(&old_signatures, &new_signatures_edited);
         assert!(!equal2);
         assert_eq!(edit_distance2, 1);
     }

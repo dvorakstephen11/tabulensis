@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import re
 import subprocess
@@ -29,26 +30,31 @@ E2E_THRESHOLDS = {
         "max_total_time_s": 25,
         "max_parse_time_s": 20,
         "max_diff_time_s": 10,
+        "max_peak_memory_bytes": 199_327_436,
     },
     "e2e_p2_noise": {
         "max_total_time_s": 20,
         "max_parse_time_s": 15,
         "max_diff_time_s": 10,
+        "max_peak_memory_bytes": 66_108_831,
     },
     "e2e_p3_repetitive": {
         "max_total_time_s": 30,
         "max_parse_time_s": 25,
         "max_diff_time_s": 10,
+        "max_peak_memory_bytes": 149_252_565,
     },
     "e2e_p4_sparse": {
         "max_total_time_s": 5,
         "max_parse_time_s": 3,
         "max_diff_time_s": 2,
+        "max_peak_memory_bytes": 19_226_538,
     },
     "e2e_p5_identical": {
         "max_total_time_s": 80,
         "max_parse_time_s": 75,
         "max_diff_time_s": 10,
+        "max_peak_memory_bytes": 966_180_894,
     },
 }
 
@@ -290,7 +296,10 @@ def get_effective_thresholds(thresholds: dict) -> dict:
     for test_name, caps in thresholds.items():
         scaled = {}
         for key, value in caps.items():
-            scaled[key] = value * slack_factor
+            if key == "max_peak_memory_bytes":
+                scaled[key] = int(math.ceil(value * slack_factor))
+            else:
+                scaled[key] = value * slack_factor
         effective[test_name] = scaled
 
     if slack_factor != 1.0:
@@ -307,10 +316,12 @@ def enforce_thresholds(metrics: dict, thresholds: dict) -> list[str]:
         total_time_s = data.get("total_time_ms", 0) / 1000.0
         parse_time_s = data.get("parse_time_ms", 0) / 1000.0
         diff_time_s = data.get("diff_time_ms", 0) / 1000.0
+        peak_bytes = data.get("peak_memory_bytes", 0)
 
         max_total = caps.get("max_total_time_s")
         max_parse = caps.get("max_parse_time_s")
         max_diff = caps.get("max_diff_time_s")
+        max_peak = caps.get("max_peak_memory_bytes")
 
         if max_total is not None and total_time_s > max_total:
             failures.append(
@@ -324,11 +335,16 @@ def enforce_thresholds(metrics: dict, thresholds: dict) -> list[str]:
             failures.append(
                 f"{test_name}: diff_time {diff_time_s:.3f}s > {max_diff:.1f}s"
             )
+        if max_peak is not None and peak_bytes > max_peak:
+            failures.append(
+                f"{test_name}: peak_memory_bytes {peak_bytes} > {max_peak}"
+            )
 
         print(
             f"  {test_name}: total={total_time_s:.3f}s (cap {max_total:.1f}s), "
             f"parse={parse_time_s:.3f}s (cap {max_parse:.1f}s), "
-            f"diff={diff_time_s:.3f}s (cap {max_diff:.1f}s)"
+            f"diff={diff_time_s:.3f}s (cap {max_diff:.1f}s), "
+            f"peak={peak_bytes} bytes (cap {max_peak})"
         )
     print()
     return failures
@@ -459,7 +475,8 @@ def main() -> int:
     for test_name, caps in effective_thresholds.items():
         print(
             f"  {test_name}: total<={caps['max_total_time_s']}s "
-            f"parse<={caps['max_parse_time_s']}s diff<={caps['max_diff_time_s']}s"
+            f"parse<={caps['max_parse_time_s']}s diff<={caps['max_diff_time_s']}s "
+            f"peak<={caps['max_peak_memory_bytes']} bytes"
         )
     print()
 

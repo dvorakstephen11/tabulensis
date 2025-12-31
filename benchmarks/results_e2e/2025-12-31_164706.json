@@ -1,13 +1,13 @@
 {
-  "timestamp": "2025-12-31T17:00:22.678161+00:00",
+  "timestamp": "2025-12-31T16:47:06.045877+00:00",
   "git_commit": "e70ee8ef678c",
   "git_branch": "2025-12-31-13-phase-plan-phase-3",
   "tests": {
     "e2e_p1_dense": {
-      "total_time_ms": 7277,
-      "parse_time_ms": 7215,
-      "diff_time_ms": 62,
-      "signature_build_time_ms": 58,
+      "total_time_ms": 7720,
+      "parse_time_ms": 7644,
+      "diff_time_ms": 76,
+      "signature_build_time_ms": 73,
       "move_detection_time_ms": 0,
       "alignment_time_ms": 0,
       "cell_diff_time_ms": 0,
@@ -29,10 +29,10 @@
       "total_input_bytes": 6561972
     },
     "e2e_p2_noise": {
-      "total_time_ms": 3437,
-      "parse_time_ms": 3244,
-      "diff_time_ms": 193,
-      "signature_build_time_ms": 146,
+      "total_time_ms": 3939,
+      "parse_time_ms": 3667,
+      "diff_time_ms": 272,
+      "signature_build_time_ms": 210,
       "move_detection_time_ms": 0,
       "alignment_time_ms": 0,
       "cell_diff_time_ms": 0,
@@ -54,10 +54,10 @@
       "total_input_bytes": 25368109
     },
     "e2e_p3_repetitive": {
-      "total_time_ms": 9305,
-      "parse_time_ms": 9183,
-      "diff_time_ms": 122,
-      "signature_build_time_ms": 112,
+      "total_time_ms": 10810,
+      "parse_time_ms": 10616,
+      "diff_time_ms": 194,
+      "signature_build_time_ms": 182,
       "move_detection_time_ms": 0,
       "alignment_time_ms": 0,
       "cell_diff_time_ms": 0,
@@ -79,10 +79,10 @@
       "total_input_bytes": 16131440
     },
     "e2e_p4_sparse": {
-      "total_time_ms": 322,
-      "parse_time_ms": 193,
-      "diff_time_ms": 129,
-      "signature_build_time_ms": 129,
+      "total_time_ms": 436,
+      "parse_time_ms": 298,
+      "diff_time_ms": 138,
+      "signature_build_time_ms": 138,
       "move_detection_time_ms": 0,
       "alignment_time_ms": 0,
       "cell_diff_time_ms": 0,
@@ -104,9 +104,9 @@
       "total_input_bytes": 1066168
     },
     "e2e_p5_identical": {
-      "total_time_ms": 41998,
-      "parse_time_ms": 41957,
-      "diff_time_ms": 41,
+      "total_time_ms": 52682,
+      "parse_time_ms": 52645,
+      "diff_time_ms": 37,
       "signature_build_time_ms": 0,
       "move_detection_time_ms": 0,
       "alignment_time_ms": 0,
@@ -125,13 +125,13 @@
       "hash_lookups_est": 0,
       "allocations_est": 0,
       "old_bytes": 16406392,
-      "new_bytes": 16406392,
-      "total_input_bytes": 32812784
+      "new_bytes": 16406394,
+      "total_input_bytes": 32812786
     }
   },
   "summary": {
     "total_tests": 5,
-    "total_time_ms": 62339,
+    "total_time_ms": 75587,
     "total_rows_processed": 500002,
     "total_cells_compared": 5001430
   }

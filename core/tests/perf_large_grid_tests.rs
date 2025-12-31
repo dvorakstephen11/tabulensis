@@ -524,7 +524,7 @@ fn preflight_skips_move_and_alignment_for_single_cell_edit_same_shape() {
 }
 
 #[test]
-fn preflight_skips_move_and_alignment_for_low_similarity_same_shape() {
+fn perf_preflight_low_similarity() {
     let grid_a = create_large_grid(6000, 50, 0);
     let grid_b = create_large_grid(6000, 50, 100_000_000);
 
@@ -574,7 +574,7 @@ fn preflight_skips_move_and_alignment_for_low_similarity_same_shape() {
     );
 
     log_perf_metric(
-        "preflight_low_similarity",
+        "perf_preflight_low_similarity",
         &metrics,
         " (dissimilar bailout)",
     );

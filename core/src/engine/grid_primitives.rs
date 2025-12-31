@@ -907,12 +907,10 @@ pub(super) fn positional_diff_from_views<S: DiffSink>(
     Ok(compared)
 }
 
-pub(super) fn positional_diff_from_views_for_rows<S: DiffSink>(
+pub(super) fn positional_diff_for_rows<S: DiffSink>(
     ctx: &mut EmitCtx<'_, '_, S>,
     old: &Grid,
     new: &Grid,
-    old_view: &GridView,
-    new_view: &GridView,
     rows: &[u32],
 ) -> Result<u64, DiffError> {
     let overlap_rows = old.nrows.min(new.nrows);
@@ -942,25 +940,7 @@ pub(super) fn positional_diff_from_views_for_rows<S: DiffSink>(
             continue;
         }
 
-        let old_cells = old_view
-            .rows
-            .get(row as usize)
-            .map(|r| r.cells.as_slice())
-            .unwrap_or(&[]);
-        let new_cells = new_view
-            .rows
-            .get(row as usize)
-            .map(|r| r.cells.as_slice())
-            .unwrap_or(&[]);
-
-        let result = diff_row_pair_sparse(
-            ctx,
-            row,
-            row,
-            overlap_cols,
-            old_cells,
-            new_cells,
-        )?;
+        let result = diff_row_pair(ctx, old, new, row, row, overlap_cols)?;
         compared = compared.saturating_add(result.compared);
         if result.replaced {
             if let Some(existing) = pending_rect.as_mut() {

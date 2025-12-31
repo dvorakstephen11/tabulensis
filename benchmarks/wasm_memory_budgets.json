@@ -1,0 +1,11 @@
+{
+  "wasm_default_max_memory_mb": 256,
+  "cases": {
+    "low_similarity": {
+      "max_memory_bytes": 33266074
+    },
+    "near_identical": {
+      "max_memory_bytes": 22806528
+    }
+  }
+}

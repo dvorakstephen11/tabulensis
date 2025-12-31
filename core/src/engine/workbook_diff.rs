@@ -382,7 +382,7 @@ fn estimate_alignment_buffer_bytes(
     let mut max_estimate = 0u64;
     for (key, old_sheet) in &old_sheets {
         if let Some(new_sheet) = new_sheets.get(key) {
-            let estimate = super::hardening::estimate_advanced_sheet_diff_peak(
+            let estimate = crate::memory_estimate::estimate_advanced_sheet_diff_peak(
                 &old_sheet.grid,
                 &new_sheet.grid,
             );

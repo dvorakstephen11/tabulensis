@@ -13,12 +13,26 @@
       fuzz.yml
       pages.yml
       perf.yml
+      perf_e2e.yml
       perf_fullscale.yml
       release.yml
       wasm.yml
       web_ui_tests.yml
   .gitignore
   benchmarks/
+    baselines/
+      e2e.json
+      full-scale.json
+      gate.json
+      quick.json
+    latest_e2e.csv
+    latest_e2e.json
+    latest_fullscale.csv
+    latest_fullscale.json
+    latest_gate.csv
+    latest_gate.json
+    latest_quick.csv
+    latest_quick.json
     README.md
     results/
       .gitkeep
@@ -66,6 +80,12 @@
         speedup_heatmap.png
         time_trends.png
         trend_summary.md
+    results_e2e/
+      .gitkeep
+      2025-12-31_150320.json
+      2025-12-31_150514.json
+      2025-12-31_150704.json
+      2025-12-31_150906.json
   Cargo.lock
   Cargo.toml
   cli/
@@ -197,6 +217,7 @@
       d2_d4_database_mode_workbook_tests.rs
       data_mashup_tests.rs
       database_mode_wrapper_tests.rs
+      e2e_perf_workbook_open.rs
       engine_tests.rs
       excel_open_xml_tests.rs
       f7_formula_canonicalization_tests.rs
@@ -261,11 +282,24 @@
       icons/
         icon.ico
       src/
+        batch.rs
+        diff_runner.rs
+        export/
+          audit_xlsx.rs
+          mod.rs
         main.rs
+        search.rs
+        store/
+          mod.rs
+          op_sink.rs
+          op_store.rs
+          schema.sql
+          types.rs
       tauri.conf.json
   fixtures/
     manifest.yaml
     manifest_cli_tests.yaml
+    manifest_perf_e2e.yaml
     pyproject.toml
     README.md
     requirements.txt
@@ -298,6 +332,7 @@
     check_perf_thresholds.py
     combine_results_to_csv.py
     compare_perf_results.py
+    export_e2e_metrics.py
     export_perf_metrics.py
     verify_release_versions.py
     visualize_benchmarks.py
@@ -522,7 +557,12 @@ jobs:
           python-version: '3.11'
           
       - name: Check perf thresholds (quick suite)
-        run: python scripts/check_perf_thresholds.py --export-csv benchmarks/latest_quick.csv --export-json benchmarks/latest_quick.json
+        run: python scripts/check_perf_thresholds.py --suite quick --baseline benchmarks/baselines/quick.json --export-csv benchmarks/latest_quick.csv --export-json benchmarks/latest_quick.json
+
+      - name: Check perf thresholds (gate suite)
+        env:
+          EXCEL_DIFF_PERF_SLACK_FACTOR: "1.3"
+        run: python scripts/check_perf_thresholds.py --suite gate --baseline benchmarks/baselines/gate.json --test-target perf_large_grid_tests --export-csv benchmarks/latest_gate.csv --export-json benchmarks/latest_gate.json
 
       - name: Upload perf artifacts
         uses: actions/upload-artifact@v4
@@ -532,6 +572,63 @@ jobs:
             benchmarks/latest_quick.csv
             benchmarks/latest_quick.json
 
+      - name: Upload gate perf artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-gate
+          path: |
+            benchmarks/latest_gate.csv
+            benchmarks/latest_gate.json
+
+
+```
+
+---
+
+### File: `.github\workflows\perf_e2e.yml`
+
+```yaml
+name: Performance E2E
+
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  perf-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install fixture generator deps
+        run: python -m pip install -r fixtures/requirements.txt
+
+      - name: Install fixture generator
+        run: python -m pip install -e fixtures --no-deps
+
+      - name: Generate e2e fixtures
+        run: generate-fixtures --manifest fixtures/manifest_perf_e2e.yaml --force
+
+      - name: Export + enforce e2e metrics
+        run: python scripts/export_e2e_metrics.py --skip-fixtures --baseline benchmarks/baselines/e2e.json --export-csv benchmarks/latest_e2e.csv
+
+      - name: Upload perf artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-e2e
+          path: |
+            benchmarks/latest_e2e.json
+            benchmarks/latest_e2e.csv
+            benchmarks/results_e2e/*.json
 
 ```
 
@@ -544,7 +641,7 @@ name: Performance Full Scale
 
 on:
   schedule:
-    - cron: "0 3 * * 1"
+    - cron: "0 3 * * *"
   workflow_dispatch: {}
 
 jobs:
@@ -562,7 +659,7 @@ jobs:
           python-version: '3.11'
 
       - name: Run full-scale perf suite + gates
-        run: python scripts/check_perf_thresholds.py --full-scale --export-csv benchmarks/latest_fullscale.csv --export-json benchmarks/latest_fullscale.json
+        run: python scripts/check_perf_thresholds.py --suite full-scale --baseline benchmarks/baselines/full-scale.json --export-csv benchmarks/latest_fullscale.csv --export-json benchmarks/latest_fullscale.json
 
       - name: Upload perf artifacts
         uses: actions/upload-artifact@v4
@@ -26524,6 +26621,38 @@ impl WorkbookPackage {
         })
     }
 
+    #[cfg(feature = "excel-open-xml")]
+    /// Parse a workbook with custom container limits (trusted overrides).
+    pub fn open_with_limits<R: std::io::Read + std::io::Seek + 'static>(
+        reader: R,
+        limits: crate::ContainerLimits,
+    ) -> Result<Self, crate::excel_open_xml::PackageError> {
+        crate::with_default_session(|session| {
+            #[cfg(feature = "perf-metrics")]
+            let start = std::time::Instant::now();
+            let mut container =
+                crate::container::OpcContainer::open_from_reader_with_limits(reader, limits)?;
+            let workbook = crate::excel_open_xml::open_workbook_from_container(
+                &mut container,
+                &mut session.strings,
+            )?;
+            let raw = crate::excel_open_xml::open_data_mashup_from_container(&mut container)?;
+            let data_mashup = match raw {
+                Some(raw) => Some(crate::datamashup::build_data_mashup(&raw)?),
+                None => None,
+            };
+            let vba_modules =
+                crate::excel_open_xml::open_vba_modules_from_container(&mut container, &mut session.strings)?;
+            Ok(Self {
+                workbook,
+                data_mashup,
+                vba_modules,
+                #[cfg(feature = "perf-metrics")]
+                parse_time_ms: start.elapsed().as_millis() as u64,
+            })
+        })
+    }
+
     /// Diff this package against `other`, returning an in-memory [`DiffReport`].
     ///
     /// This collects all ops into memory and returns a report containing both the ops and the
@@ -27077,6 +27206,54 @@ impl PbixPackage {
         })
     }
 
+    #[cfg(feature = "excel-open-xml")]
+    pub fn open_with_limits<R: std::io::Read + std::io::Seek + 'static>(
+        reader: R,
+        limits: crate::ContainerLimits,
+    ) -> Result<Self, crate::excel_open_xml::PackageError> {
+        let mut container = ZipContainer::open_from_reader_with_limits(reader, limits)?;
+
+        let data_mashup_opt = container.read_file_optional_checked("DataMashup")?;
+
+        let data_mashup = if let Some(bytes) = data_mashup_opt {
+            let raw = crate::datamashup_framing::parse_data_mashup(&bytes)?;
+            Some(crate::datamashup::build_data_mashup(&raw)?)
+        } else {
+            None
+        };
+
+        #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+        let mut model_schema = None;
+
+        if data_mashup.is_none() {
+            if looks_like_pbix(&container) {
+                #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+                {
+                    if let Some(bytes) = container.read_file_optional_checked("DataModelSchema")? {
+                        model_schema =
+                            Some(crate::tabular_schema::parse_data_model_schema(&bytes)?);
+                        return Ok(Self {
+                            data_mashup,
+                            model_schema,
+                        });
+                    }
+                }
+
+                return Err(crate::excel_open_xml::PackageError::NoDataMashupUseTabularModel);
+            }
+
+            return Err(crate::excel_open_xml::PackageError::UnsupportedFormat {
+                message: "missing DataMashup at ZIP root".to_string(),
+            });
+        }
+
+        Ok(Self {
+            data_mashup,
+            #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+            model_schema,
+        })
+    }
+
     pub fn data_mashup(&self) -> Option<&DataMashup> {
         self.data_mashup.as_ref()
     }
@@ -27212,6 +27389,7 @@ fn apply_parse_metrics(
         .parse_time_ms
         .saturating_add(new_pkg.parse_time_ms);
     m.parse_time_ms = m.parse_time_ms.saturating_add(added);
+    m.total_time_ms = m.total_time_ms.saturating_add(added);
     m.diff_time_ms = m.total_time_ms.saturating_sub(m.parse_time_ms);
 }
 
@@ -32783,6 +32961,167 @@ fn database_mode_wrapper_limits_exceeded_returns_incomplete_report() {
     );
 }
 
+
+```
+
+---
+
+### File: `core\tests\e2e_perf_workbook_open.rs`
+
+```rust
+#![cfg(feature = "perf-metrics")]
+
+mod common;
+
+use common::fixture_path;
+use excel_diff::perf::DiffMetrics;
+use excel_diff::{CallbackSink, ContainerLimits, DiffConfig, WorkbookPackage};
+use std::fs::File;
+
+fn open_fixture_with_size(name: &str) -> (WorkbookPackage, u64) {
+    let path = fixture_path(name);
+    let bytes = std::fs::metadata(&path)
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    let file = File::open(&path).unwrap_or_else(|e| {
+        panic!("failed to open fixture {}: {e}", path.display());
+    });
+    let limits = ContainerLimits {
+        max_entries: 10_000,
+        max_part_uncompressed_bytes: 512 * 1024 * 1024,
+        max_total_uncompressed_bytes: 1024 * 1024 * 1024,
+    };
+    let pkg = WorkbookPackage::open_with_limits(file, limits).unwrap_or_else(|e| {
+        panic!("failed to parse fixture {}: {e}", path.display());
+    });
+    (pkg, bytes)
+}
+
+fn log_perf_metric(name: &str, metrics: &DiffMetrics, old_bytes: u64, new_bytes: u64) {
+    let total_input_bytes = old_bytes.saturating_add(new_bytes);
+    println!(
+        "PERF_METRIC {name} total_time_ms={} parse_time_ms={} diff_time_ms={} signature_build_time_ms={} move_detection_time_ms={} alignment_time_ms={} cell_diff_time_ms={} op_emit_time_ms={} report_serialize_time_ms={} peak_memory_bytes={} grid_storage_bytes={} string_pool_bytes={} op_buffer_bytes={} alignment_buffer_bytes={} rows_processed={} cells_compared={} anchors_found={} moves_detected={} hash_lookups_est={} allocations_est={} old_bytes={} new_bytes={} total_input_bytes={}",
+        metrics.total_time_ms,
+        metrics.parse_time_ms,
+        metrics.diff_time_ms,
+        metrics.signature_build_time_ms,
+        metrics.move_detection_time_ms,
+        metrics.alignment_time_ms,
+        metrics.cell_diff_time_ms,
+        metrics.op_emit_time_ms,
+        metrics.report_serialize_time_ms,
+        metrics.peak_memory_bytes,
+        metrics.grid_storage_bytes,
+        metrics.string_pool_bytes,
+        metrics.op_buffer_bytes,
+        metrics.alignment_buffer_bytes,
+        metrics.rows_processed,
+        metrics.cells_compared,
+        metrics.anchors_found,
+        metrics.moves_detected,
+        metrics.hash_lookups_est,
+        metrics.allocations_est,
+        old_bytes,
+        new_bytes,
+        total_input_bytes
+    );
+}
+
+fn run_e2e_case(name: &str, old_name: &str, new_name: &str, expect_ops: bool) {
+    let (old_pkg, old_bytes) = open_fixture_with_size(old_name);
+    let (new_pkg, new_bytes) = open_fixture_with_size(new_name);
+
+    let mut op_count = 0usize;
+    let summary = {
+        let mut sink = CallbackSink::new(|_op| op_count += 1);
+        old_pkg
+            .diff_streaming(&new_pkg, &DiffConfig::default(), &mut sink)
+            .expect("diff_streaming should succeed")
+    };
+
+    assert!(summary.complete, "expected streaming diff to complete");
+    assert_eq!(
+        summary.op_count, op_count,
+        "summary op_count should match sink-emitted ops"
+    );
+
+    if expect_ops {
+        assert!(summary.op_count > 0, "expected at least one op");
+    } else {
+        assert_eq!(summary.op_count, 0, "expected no ops");
+    }
+
+    let metrics = summary.metrics.expect("expected perf metrics");
+    assert!(
+        metrics.parse_time_ms > 0,
+        "parse_time_ms should be non-zero for e2e fixtures"
+    );
+    assert!(
+        metrics.total_time_ms >= metrics.parse_time_ms,
+        "total_time_ms should include parse_time_ms"
+    );
+    assert_eq!(
+        metrics.diff_time_ms,
+        metrics.total_time_ms.saturating_sub(metrics.parse_time_ms)
+    );
+
+    log_perf_metric(name, &metrics, old_bytes, new_bytes);
+}
+
+#[test]
+#[ignore = "Long-running test: run with `cargo test --features perf-metrics -- --ignored` to execute"]
+fn e2e_p1_dense_single_edit() {
+    run_e2e_case(
+        "e2e_p1_dense",
+        "e2e_p1_dense_a.xlsx",
+        "e2e_p1_dense_b.xlsx",
+        true,
+    );
+}
+
+#[test]
+#[ignore = "Long-running test: run with `cargo test --features perf-metrics -- --ignored` to execute"]
+fn e2e_p2_noise_single_edit() {
+    run_e2e_case(
+        "e2e_p2_noise",
+        "e2e_p2_noise_a.xlsx",
+        "e2e_p2_noise_b.xlsx",
+        true,
+    );
+}
+
+#[test]
+#[ignore = "Long-running test: run with `cargo test --features perf-metrics -- --ignored` to execute"]
+fn e2e_p3_repetitive_single_edit() {
+    run_e2e_case(
+        "e2e_p3_repetitive",
+        "e2e_p3_repetitive_a.xlsx",
+        "e2e_p3_repetitive_b.xlsx",
+        true,
+    );
+}
+
+#[test]
+#[ignore = "Long-running test: run with `cargo test --features perf-metrics -- --ignored` to execute"]
+fn e2e_p4_sparse_single_edit() {
+    run_e2e_case(
+        "e2e_p4_sparse",
+        "e2e_p4_sparse_a.xlsx",
+        "e2e_p4_sparse_b.xlsx",
+        true,
+    );
+}
+
+#[test]
+#[ignore = "Long-running test: run with `cargo test --features perf-metrics -- --ignored` to execute"]
+fn e2e_p5_identical() {
+    run_e2e_case(
+        "e2e_p5_identical",
+        "e2e_p5_identical_a.xlsx",
+        "e2e_p5_identical_b.xlsx",
+        false,
+    );
+}
 
 ```
 
@@ -40943,9 +41282,9 @@ fn serialize_diff_report_with_metrics_includes_metrics_object() {
 
 ```rust
 use excel_diff::{
-    CellValue, DataMashup, DiffConfig, DiffError, DiffOp, DiffSink, Grid, JsonLinesSink, Metadata,
-    PackageParts, PackageXml, Permissions, SectionDocument, Sheet, SheetKind, StringId, Workbook,
-    WorkbookPackage,
+    CallbackSink, CellValue, DataMashup, DiffConfig, DiffError, DiffOp, DiffSink, Grid,
+    JsonLinesSink, Metadata, PackageParts, PackageXml, Permissions, SectionDocument, Sheet,
+    SheetKind, StringId, Workbook, WorkbookPackage,
 };
 use serde::Deserialize;
 
@@ -41192,6 +41531,71 @@ fn package_diff_streaming_finishes_on_m_emit_error() {
         "sink.finish() should be called on M emit error"
     );
     assert_eq!(sink.finish_calls, 1, "finish should be called exactly once");
+}
+
+#[cfg(feature = "perf-metrics")]
+#[test]
+fn package_diff_streaming_includes_package_parse_time_in_total() {
+    let mut grid_a = Grid::new(1, 1);
+    let mut grid_b = Grid::new(1, 1);
+    grid_a.insert_cell(0, 0, Some(CellValue::Number(1.0)), None);
+    grid_b.insert_cell(0, 0, Some(CellValue::Number(2.0)), None);
+
+    let sheet_id = excel_diff::with_default_session(|session| session.strings.intern("Sheet1"));
+
+    let wb_a = Workbook {
+        sheets: vec![Sheet {
+            name: sheet_id,
+            kind: SheetKind::Worksheet,
+            grid: grid_a,
+        }],
+        ..Default::default()
+    };
+    let wb_b = Workbook {
+        sheets: vec![Sheet {
+            name: sheet_id,
+            kind: SheetKind::Worksheet,
+            grid: grid_b,
+        }],
+        ..Default::default()
+    };
+
+    let pkg_a = WorkbookPackage {
+        workbook: wb_a,
+        data_mashup: None,
+        vba_modules: None,
+        parse_time_ms: 15,
+    };
+    let pkg_b = WorkbookPackage {
+        workbook: wb_b,
+        data_mashup: None,
+        vba_modules: None,
+        parse_time_ms: 25,
+    };
+
+    let mut sink = CallbackSink::new(|_op| {});
+    let summary = pkg_a
+        .diff_streaming(&pkg_b, &DiffConfig::default(), &mut sink)
+        .expect("diff_streaming should succeed");
+    let metrics = summary.metrics.expect("expected perf metrics");
+
+    let added = 15u64.saturating_add(25u64);
+    assert!(
+        metrics.parse_time_ms >= added,
+        "parse_time_ms should include package parse time (>= {}), got {}",
+        added,
+        metrics.parse_time_ms
+    );
+    assert!(
+        metrics.total_time_ms >= metrics.parse_time_ms,
+        "total_time_ms should include parse_time_ms (total={}, parse={})",
+        metrics.total_time_ms,
+        metrics.parse_time_ms
+    );
+    assert_eq!(
+        metrics.diff_time_ms,
+        metrics.total_time_ms.saturating_sub(metrics.parse_time_ms)
+    );
 }
 
 #[test]
@@ -45275,6 +45679,14 @@ serde_json = "1.0"
 excel_diff = { path = "../../core", default-features = false, features = ["excel-open-xml", "model-diff"] }
 ui_payload = { path = "../../ui_payload" }
 rfd = "0.14"
+rusqlite = { version = "0.31", features = ["bundled"] }
+uuid = { version = "1.7", features = ["v4", "serde"] }
+time = { version = "0.3", features = ["formatting"] }
+thiserror = "1.0"
+rust_xlsxwriter = "0.71"
+lru = "0.12"
+walkdir = "2.5"
+globset = "0.4"
 
 [build-dependencies]
 tauri-build = { version = "2.5.3" }
@@ -45283,52 +45695,941 @@ tauri-build = { version = "2.5.3" }
 
 ---
 
-### File: `desktop\src-tauri\src\main.rs`
+### File: `desktop\src-tauri\src\batch.rs`
 
 ```rust
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
+use globset::{Glob, GlobSet, GlobSetBuilder};
+use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
+use tauri::AppHandle;
+use uuid::Uuid;
+use walkdir::WalkDir;
+
+use crate::diff_runner::{DiffErrorPayload, DiffRequest, DiffRunner};
+use crate::store::{OpStore, StoreError};
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchOutcome {
+    pub batch_id: String,
+    pub status: String,
+    pub item_count: usize,
+    pub completed_count: usize,
+    pub items: Vec<BatchItemResult>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchItemResult {
+    pub item_id: usize,
+    pub old_path: Option<String>,
+    pub new_path: Option<String>,
+    pub status: String,
+    pub diff_id: Option<String>,
+    pub op_count: Option<u64>,
+    pub warnings_count: Option<usize>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchRequest {
+    pub old_root: String,
+    pub new_root: String,
+    pub strategy: String,
+    pub include_globs: Option<Vec<String>>,
+    pub exclude_globs: Option<Vec<String>>,
+    pub trusted: bool,
+}
+
+pub fn run_batch_compare(
+    app: AppHandle,
+    runner: DiffRunner,
+    store_path: &Path,
+    request: BatchRequest,
+) -> Result<BatchOutcome, DiffErrorPayload> {
+    let old_root = PathBuf::from(&request.old_root);
+    let new_root = PathBuf::from(&request.new_root);
+
+    let include = build_globset(&request.include_globs)?;
+    let exclude = build_globset(&request.exclude_globs)?;
+    let include_all = request
+        .include_globs
+        .as_ref()
+        .map(|list| list.is_empty())
+        .unwrap_or(true);
+
+    let old_files = collect_files(&old_root, &include, &exclude, include_all)?;
+    let new_files = collect_files(&new_root, &include, &exclude, include_all)?;
+
+    let strategy = request.strategy.to_lowercase();
+    let batch_id = Uuid::new_v4().to_string();
+
+    let mut pairs = pair_files(&old_root, &new_root, &old_files, &new_files, &strategy);
+    pairs.sort_by(|a, b| a.key.cmp(&b.key));
+
+    let store = OpStore::open(store_path).map_err(store_error)?;
+    let conn = store.connection();
+    insert_batch_run(conn, &batch_id, &request, pairs.len())?;
+
+    let mut items = Vec::new();
+    let mut completed = 0;
+
+    for (idx, pair) in pairs.iter().enumerate() {
+        let item_id = idx;
+        let mut result = BatchItemResult {
+            item_id,
+            old_path: pair.old.as_ref().map(|p| p.display().to_string()),
+            new_path: pair.new.as_ref().map(|p| p.display().to_string()),
+            status: pair.status.clone(),
+            diff_id: None,
+            op_count: None,
+            warnings_count: None,
+            error: pair.error.clone(),
+        };
+
+        insert_batch_item(conn, &batch_id, &result)?;
+
+        if pair.status != "pending" {
+            items.push(result);
+            continue;
+        }
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let diff_request = DiffRequest {
+            old_path: pair.old.as_ref().unwrap().display().to_string(),
+            new_path: pair.new.as_ref().unwrap().display().to_string(),
+            run_id: 0,
+            trusted: request.trusted,
+            cancel,
+            app: app.clone(),
+        };
+
+        match runner.diff(diff_request) {
+            Ok(outcome) => {
+                result.status = "complete".to_string();
+                result.diff_id = Some(outcome.diff_id.clone());
+                if let Some(summary) = outcome.summary {
+                    result.op_count = Some(summary.op_count);
+                    result.warnings_count = Some(summary.warnings.len());
+                }
+                update_batch_item(conn, &batch_id, &result)?;
+            }
+            Err(err) => {
+                result.status = "failed".to_string();
+                result.error = Some(err.message);
+                update_batch_item(conn, &batch_id, &result)?;
+            }
+        }
+
+        completed += 1;
+        update_batch_progress(conn, &batch_id, completed)?;
+        items.push(result);
+    }
+
+    let status = "complete".to_string();
+    finish_batch_run(conn, &batch_id, &status, completed)?;
+
+    Ok(BatchOutcome {
+        batch_id,
+        status,
+        item_count: pairs.len(),
+        completed_count: completed,
+        items,
+    })
+}
+
+pub fn load_batch_summary(store_path: &Path, batch_id: &str) -> Result<BatchOutcome, DiffErrorPayload> {
+    let store = OpStore::open(store_path).map_err(store_error)?;
+    let conn = store.connection();
+
+    let (status, item_count, completed_count) = conn
+        .query_row(
+            "SELECT status, item_count, completed_count FROM batch_runs WHERE batch_id = ?1",
+            params![batch_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
+        )
+        .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT item_id, old_path, new_path, status, diff_id, op_count, warnings_count, error FROM batch_items WHERE batch_id = ?1 ORDER BY item_id",
+        )
+        .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
+    let rows = stmt
+        .query_map(params![batch_id], |row| {
+            Ok(BatchItemResult {
+                item_id: row.get::<_, i64>(0)? as usize,
+                old_path: row.get::<_, Option<String>>(1)?,
+                new_path: row.get::<_, Option<String>>(2)?,
+                status: row.get::<_, String>(3)?,
+                diff_id: row.get::<_, Option<String>>(4)?,
+                op_count: row.get::<_, Option<i64>>(5)?.map(|v| v as u64),
+                warnings_count: row.get::<_, Option<i64>>(6)?.map(|v| v as usize),
+                error: row.get::<_, Option<String>>(7)?,
+            })
+        })
+        .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
+
+    let mut items = Vec::new();
+    for row in rows {
+        items.push(row.map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?);
+    }
+
+    Ok(BatchOutcome {
+        batch_id: batch_id.to_string(),
+        status,
+        item_count: item_count as usize,
+        completed_count: completed_count as usize,
+        items,
+    })
+}
+
+struct PairCandidate {
+    key: String,
+    old: Option<PathBuf>,
+    new: Option<PathBuf>,
+    status: String,
+    error: Option<String>,
+}
+
+fn collect_files(
+    root: &Path,
+    include: &GlobSet,
+    exclude: &GlobSet,
+    include_all: bool,
+) -> Result<Vec<PathBuf>, DiffErrorPayload> {
+    let mut files = Vec::new();
+    for entry in WalkDir::new(root).into_iter().filter_map(Result::ok) {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.path();
+        if !is_supported(path) {
+            continue;
+        }
+        if include_all || include.is_match(path) {
+            if !exclude.is_match(path) {
+                files.push(path.to_path_buf());
+            }
+        }
+    }
+    Ok(files)
+}
+
+fn build_globset(globs: &Option<Vec<String>>) -> Result<GlobSet, DiffErrorPayload> {
+    let mut builder = GlobSetBuilder::new();
+    if let Some(globs) = globs {
+        for glob in globs {
+            let parsed = Glob::new(glob).map_err(|e| DiffErrorPayload::new("glob", e.to_string(), false))?;
+            builder.add(parsed);
+        }
+    }
+    builder.build().map_err(|e| DiffErrorPayload::new("glob", e.to_string(), false))
+}
+
+fn pair_files(
+    old_root: &Path,
+    new_root: &Path,
+    old_files: &[PathBuf],
+    new_files: &[PathBuf],
+    strategy: &str,
+) -> Vec<PairCandidate> {
+    let mut old_map = group_files(old_root, old_files, strategy);
+    let mut new_map = group_files(new_root, new_files, strategy);
+    let mut keys = BTreeMap::new();
+
+    for key in old_map.keys() {
+        keys.insert(key.clone(), ());
+    }
+    for key in new_map.keys() {
+        keys.insert(key.clone(), ());
+    }
+
+    let mut pairs = Vec::new();
+    for key in keys.keys() {
+        let old_list = old_map.remove(key).unwrap_or_default();
+        let new_list = new_map.remove(key).unwrap_or_default();
+
+        match (old_list.len(), new_list.len()) {
+            (1, 1) => pairs.push(PairCandidate {
+                key: key.clone(),
+                old: Some(old_list[0].clone()),
+                new: Some(new_list[0].clone()),
+                status: "pending".to_string(),
+                error: None,
+            }),
+            (0, 1) => pairs.push(PairCandidate {
+                key: key.clone(),
+                old: None,
+                new: Some(new_list[0].clone()),
+                status: "missing_old".to_string(),
+                error: Some("Missing old file".to_string()),
+            }),
+            (1, 0) => pairs.push(PairCandidate {
+                key: key.clone(),
+                old: Some(old_list[0].clone()),
+                new: None,
+                status: "missing_new".to_string(),
+                error: Some("Missing new file".to_string()),
+            }),
+            _ => pairs.push(PairCandidate {
+                key: key.clone(),
+                old: old_list.get(0).cloned(),
+                new: new_list.get(0).cloned(),
+                status: "duplicate".to_string(),
+                error: Some("Duplicate match".to_string()),
+            }),
+        }
+    }
+
+    pairs
+}
+
+fn group_files(root: &Path, files: &[PathBuf], strategy: &str) -> HashMap<String, Vec<PathBuf>> {
+    let mut map: HashMap<String, Vec<PathBuf>> = HashMap::new();
+    for path in files {
+        let key = match strategy {
+            "filename" => path.file_name().and_then(|s| s.to_str()).unwrap_or_default().to_lowercase(),
+            _ => path
+                .strip_prefix(root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .replace('\\', "/")
+                .to_lowercase(),
+        };
+        map.entry(key).or_default().push(path.clone());
+    }
+    map
+}
+
+fn is_supported(path: &Path) -> bool {
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+    matches!(ext.as_str(), "xlsx" | "xlsm" | "xltx" | "xltm" | "pbix" | "pbit")
+}
+
+fn insert_batch_run(conn: &Connection, batch_id: &str, req: &BatchRequest, item_count: usize) -> Result<(), DiffErrorPayload> {
+    conn.execute(
+        "INSERT INTO batch_runs (batch_id, old_root, new_root, strategy, started_at, status, item_count, completed_count)\
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            batch_id,
+            req.old_root,
+            req.new_root,
+            req.strategy,
+            now_iso(),
+            "running",
+            item_count as i64,
+            0i64,
+        ],
+    )
+    .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
+    Ok(())
+}
+
+fn insert_batch_item(conn: &Connection, batch_id: &str, item: &BatchItemResult) -> Result<(), DiffErrorPayload> {
+    conn.execute(
+        "INSERT INTO batch_items (batch_id, item_id, old_path, new_path, status, diff_id, op_count, warnings_count, error)\
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            batch_id,
+            item.item_id as i64,
+            item.old_path,
+            item.new_path,
+            item.status,
+            item.diff_id,
+            item.op_count.map(|v| v as i64),
+            item.warnings_count.map(|v| v as i64),
+            item.error,
+        ],
+    )
+    .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
+    Ok(())
+}
+
+fn update_batch_item(conn: &Connection, batch_id: &str, item: &BatchItemResult) -> Result<(), DiffErrorPayload> {
+    conn.execute(
+        "UPDATE batch_items SET status = ?1, diff_id = ?2, op_count = ?3, warnings_count = ?4, error = ?5 WHERE batch_id = ?6 AND item_id = ?7",
+        params![
+            item.status,
+            item.diff_id,
+            item.op_count.map(|v| v as i64),
+            item.warnings_count.map(|v| v as i64),
+            item.error,
+            batch_id,
+            item.item_id as i64,
+        ],
+    )
+    .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
+    Ok(())
+}
+
+fn update_batch_progress(conn: &Connection, batch_id: &str, completed: usize) -> Result<(), DiffErrorPayload> {
+    conn.execute(
+        "UPDATE batch_runs SET completed_count = ?1 WHERE batch_id = ?2",
+        params![completed as i64, batch_id],
+    )
+    .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
+    Ok(())
+}
+
+fn finish_batch_run(conn: &Connection, batch_id: &str, status: &str, completed: usize) -> Result<(), DiffErrorPayload> {
+    conn.execute(
+        "UPDATE batch_runs SET status = ?1, completed_count = ?2, finished_at = ?3 WHERE batch_id = ?4",
+        params![status, completed as i64, now_iso(), batch_id],
+    )
+    .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
+    Ok(())
+}
+
+fn now_iso() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| "".to_string())
+}
+
+fn store_error(err: StoreError) -> DiffErrorPayload {
+    DiffErrorPayload::new("store", err.to_string(), false)
+}
+
+```
+
+---
+
+### File: `desktop\src-tauri\src\diff_runner.rs`
+
+```rust
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
+use std::fs::File;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{self, Sender};
+use std::sync::Arc;
+use std::thread;
 
-use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, State};
+use excel_diff::{ContainerError, ContainerLimits, DiffConfig, DiffError, DiffReport, DiffSink, DiffSummary, PbixPackage, ProgressCallback, WorkbookPackage};
+use lru::LruCache;
+use serde::Serialize;
+use tauri::{AppHandle, Emitter};
 
-struct ActiveDiff {
-    run_id: u64,
-    cancel: Arc<AtomicBool>,
+use crate::export::export_audit_xlsx_from_store;
+use crate::store::{
+    DiffMode, DiffRunSummary, OpStore, OpStoreSink, RunStatus, SheetStats, StoreError, resolve_sheet_stats,
+};
+
+const AUTO_STREAM_CELL_THRESHOLD: u64 = 1_000_000;
+const WORKBOOK_CACHE_CAPACITY: usize = 4;
+const PBIX_CACHE_CAPACITY: usize = 2;
+
+#[derive(Debug, Clone)]
+pub struct DiffRequest {
+    pub old_path: String,
+    pub new_path: String,
+    pub run_id: u64,
+    pub trusted: bool,
+    pub cancel: Arc<AtomicBool>,
+    pub app: AppHandle,
 }
 
-#[derive(Default)]
-struct DiffState {
-    current: Mutex<Option<ActiveDiff>>,
+#[derive(Debug, Clone)]
+pub struct SheetPayloadRequest {
+    pub diff_id: String,
+    pub sheet_name: String,
+    pub cancel: Arc<AtomicBool>,
+    pub app: AppHandle,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ProgressEvent {
-    run_id: u64,
-    stage: String,
-    detail: String,
+pub struct DiffOutcome {
+    pub diff_id: String,
+    pub mode: DiffMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload: Option<ui_payload::DiffWithSheets>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<DiffRunSummary>,
 }
 
-fn emit_progress(app: &AppHandle, run_id: u64, stage: &str, detail: &str) {
-    let _ = app.emit(
-        "diff-progress",
-        ProgressEvent {
-            run_id,
-            stage: stage.to_string(),
-            detail: detail.to_string(),
-        },
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffErrorPayload {
+    pub code: String,
+    pub message: String,
+    #[serde(default)]
+    pub trusted_retry: bool,
+}
+
+impl DiffErrorPayload {
+    pub(crate) fn new(code: impl Into<String>, message: impl Into<String>, trusted_retry: bool) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            trusted_retry,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CacheKey {
+    path: String,
+    mtime: u64,
+    size: u64,
+    trusted: bool,
+}
+
+impl PartialEq for CacheKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path
+            && self.mtime == other.mtime
+            && self.size == other.size
+            && self.trusted == other.trusted
+    }
+}
+
+impl Eq for CacheKey {}
+
+impl std::hash::Hash for CacheKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.path.hash(state);
+        self.mtime.hash(state);
+        self.size.hash(state);
+        self.trusted.hash(state);
+    }
+}
+
+#[derive(Clone)]
+pub struct DiffRunner {
+    tx: Sender<EngineCommand>,
+}
+
+impl DiffRunner {
+    pub fn new(store_path: PathBuf, app_version: String, engine_version: String) -> Self {
+        let (tx, rx) = mpsc::channel();
+        let engine = EngineState::new(store_path, app_version, engine_version, rx);
+        thread::spawn(move || engine.run());
+        Self { tx }
+    }
+
+    pub fn diff(&self, request: DiffRequest) -> Result<DiffOutcome, DiffErrorPayload> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        self.tx
+            .send(EngineCommand::Diff {
+                request,
+                respond_to: reply_tx,
+            })
+            .map_err(|e| {
+                DiffErrorPayload::new("engine_down", e.to_string(), false)
+            })?;
+        reply_rx.recv().map_err(|e| {
+            DiffErrorPayload::new("engine_down", e.to_string(), false)
+        })?
+    }
+
+    pub fn load_sheet_payload(
+        &self,
+        request: SheetPayloadRequest,
+    ) -> Result<ui_payload::DiffWithSheets, DiffErrorPayload> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        self.tx
+            .send(EngineCommand::LoadSheet {
+                request,
+                respond_to: reply_tx,
+            })
+            .map_err(|e| DiffErrorPayload::new("engine_down", e.to_string(), false))?;
+        reply_rx.recv().map_err(|e| {
+            DiffErrorPayload::new("engine_down", e.to_string(), false)
+        })?
+    }
+}
+
+enum EngineCommand {
+    Diff {
+        request: DiffRequest,
+        respond_to: Sender<Result<DiffOutcome, DiffErrorPayload>>,
+    },
+    LoadSheet {
+        request: SheetPayloadRequest,
+        respond_to: Sender<Result<ui_payload::DiffWithSheets, DiffErrorPayload>>,
+    },
+}
+
+struct EngineState {
+    store_path: PathBuf,
+    app_version: String,
+    engine_version: String,
+    workbook_cache: LruCache<CacheKey, WorkbookPackage>,
+    pbix_cache: LruCache<CacheKey, PbixPackage>,
+    rx: mpsc::Receiver<EngineCommand>,
+}
+
+impl EngineState {
+    fn new(
+        store_path: PathBuf,
+        app_version: String,
+        engine_version: String,
+        rx: mpsc::Receiver<EngineCommand>,
+    ) -> Self {
+        Self {
+            store_path,
+            app_version,
+            engine_version,
+            workbook_cache: LruCache::new(NonZeroUsize::new(WORKBOOK_CACHE_CAPACITY).unwrap()),
+            pbix_cache: LruCache::new(NonZeroUsize::new(PBIX_CACHE_CAPACITY).unwrap()),
+            rx,
+        }
+    }
+
+    fn run(mut self) {
+        while let Ok(cmd) = self.rx.recv() {
+            match cmd {
+                EngineCommand::Diff { request, respond_to } => {
+                    let result = self.handle_diff(request);
+                    let _ = respond_to.send(result);
+                }
+                EngineCommand::LoadSheet { request, respond_to } => {
+                    let result = self.handle_load_sheet(request);
+                    let _ = respond_to.send(result);
+                }
+            }
+        }
+    }
+
+    fn handle_diff(&mut self, request: DiffRequest) -> Result<DiffOutcome, DiffErrorPayload> {
+        emit_progress(&request.app, request.run_id, "read", "Reading files...");
+
+        let old_path = PathBuf::from(&request.old_path);
+        let new_path = PathBuf::from(&request.new_path);
+
+        let old_kind = ui_payload::host_kind_from_path(&old_path)
+            .ok_or_else(|| DiffErrorPayload::new("unsupported", "Unsupported old file extension", false))?;
+        let new_kind = ui_payload::host_kind_from_path(&new_path)
+            .ok_or_else(|| DiffErrorPayload::new("unsupported", "Unsupported new file extension", false))?;
+
+        if old_kind != new_kind {
+            return Err(DiffErrorPayload::new(
+                "mismatch",
+                "Old/new files must be the same type",
+                false,
+            ));
+        }
+
+        if request.cancel.load(Ordering::Relaxed) {
+            return Err(DiffErrorPayload::new("canceled", "Diff canceled.", false));
+        }
+
+        let mut store = OpStore::open(&self.store_path).map_err(map_store_error)?;
+        let config = DiffConfig::default();
+        let config_json = serde_json::to_string(&config).unwrap_or_else(|_| "{}".to_string());
+
+        match old_kind {
+            ui_payload::HostKind::Workbook => {
+                let old_pkg = self.open_workbook_cached(&old_path, request.trusted)?;
+                let new_pkg = self.open_workbook_cached(&new_path, request.trusted)?;
+
+                let estimated_cells = estimate_diff_cell_volume(&old_pkg.workbook, &new_pkg.workbook);
+                let mode = if estimated_cells >= AUTO_STREAM_CELL_THRESHOLD {
+                    DiffMode::Large
+                } else {
+                    DiffMode::Payload
+                };
+
+                let diff_id = store
+                    .start_run(
+                        &request.old_path,
+                        &request.new_path,
+                        &config_json,
+                        &self.engine_version,
+                        &self.app_version,
+                        mode,
+                        request.trusted,
+                    )
+                    .map_err(map_store_error)?;
+
+                match mode {
+                    DiffMode::Payload => {
+                        emit_progress(&request.app, request.run_id, "diff", "Diffing workbooks...");
+                        let progress = EngineProgress::new(request.app.clone(), request.run_id, request.cancel.clone());
+                        let report = match run_diff_with_progress(
+                            || old_pkg.diff_with_progress(&new_pkg, &config, &progress),
+                            &request.cancel,
+                        ) {
+                            Ok(report) => report,
+                            Err(err) => {
+                                let _ = store.fail_run(&diff_id, status_for_error(&err), &err.message);
+                                return Err(err);
+                            }
+                        };
+
+                        emit_progress(&request.app, request.run_id, "snapshot", "Building previews...");
+                        let (counts, sheet_stats) = store
+                            .insert_ops_from_report(&diff_id, &report)
+                            .map_err(map_store_error)?;
+                        let resolved = resolve_sheet_stats(&report.strings, &sheet_stats).map_err(map_store_error)?;
+                        let summary = report_to_summary(&report);
+                        store
+                            .finish_run(&diff_id, &summary, &report.strings, &counts, &resolved, RunStatus::Complete)
+                            .map_err(map_store_error)?;
+
+                        let payload = ui_payload::build_payload_from_workbook_report(report, &old_pkg, &new_pkg);
+                        let summary_record = store.load_summary(&diff_id).map_err(map_store_error)?;
+                        Ok(DiffOutcome {
+                            diff_id,
+                            mode,
+                            payload: Some(payload),
+                            summary: Some(summary_record),
+                        })
+                    }
+                    DiffMode::Large => {
+                        emit_progress(&request.app, request.run_id, "diff", "Streaming diff to disk...");
+                        let progress = EngineProgress::new(request.app.clone(), request.run_id, request.cancel.clone());
+                        let sink_store = OpStore::open(&self.store_path).map_err(map_store_error)?;
+                        let conn = sink_store.into_connection();
+                        let mut sink = OpStoreSink::new(conn, diff_id.clone())
+                            .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
+
+                        let summary = match run_diff_with_progress(
+                            || old_pkg.diff_streaming_with_progress(&new_pkg, &config, &mut sink, &progress),
+                            &request.cancel,
+                        ) {
+                            Ok(result) => result.map_err(diff_error_from_diff),
+                            Err(err) => Err(err),
+                        };
+
+                        let summary = match summary {
+                            Ok(summary) => summary,
+                            Err(err) => {
+                                let _ = sink.finish();
+                                let _ = store.fail_run(&diff_id, status_for_error(&err), &err.message);
+                                return Err(err);
+                            }
+                        };
+
+                        sink.finish().map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
+                        let (_, counts, stats, _) = sink.into_parts();
+                        let strings = current_strings();
+                        let mut stats: Vec<SheetStats> = stats.into_values().collect();
+                        stats.sort_by_key(|entry| entry.sheet_id);
+                        let resolved = resolve_sheet_stats(&strings, &stats).map_err(map_store_error)?;
+                        store
+                            .finish_run(&diff_id, &summary, &strings, &counts, &resolved, RunStatus::Complete)
+                            .map_err(map_store_error)?;
+
+                        let summary_record = store.load_summary(&diff_id).map_err(map_store_error)?;
+                        Ok(DiffOutcome {
+                            diff_id,
+                            mode,
+                            payload: None,
+                            summary: Some(summary_record),
+                        })
+                    }
+                }
+            }
+            ui_payload::HostKind::Pbix => {
+                let old_pkg = self.open_pbix_cached(&old_path, request.trusted)?;
+                let new_pkg = self.open_pbix_cached(&new_path, request.trusted)?;
+
+                let diff_id = store
+                    .start_run(
+                        &request.old_path,
+                        &request.new_path,
+                        &config_json,
+                        &self.engine_version,
+                        &self.app_version,
+                        DiffMode::Payload,
+                        request.trusted,
+                    )
+                    .map_err(map_store_error)?;
+
+                emit_progress(&request.app, request.run_id, "diff", "Diffing PBIX metadata...");
+                let report = old_pkg.diff(&new_pkg, &config);
+                let (counts, sheet_stats) = store
+                    .insert_ops_from_report(&diff_id, &report)
+                    .map_err(map_store_error)?;
+                let resolved = resolve_sheet_stats(&report.strings, &sheet_stats).map_err(map_store_error)?;
+                let summary = report_to_summary(&report);
+                store
+                    .finish_run(&diff_id, &summary, &report.strings, &counts, &resolved, RunStatus::Complete)
+                    .map_err(map_store_error)?;
+
+                let payload = ui_payload::build_payload_from_pbix(&old_pkg, &new_pkg, &config);
+                let summary_record = store.load_summary(&diff_id).map_err(map_store_error)?;
+                Ok(DiffOutcome {
+                    diff_id,
+                    mode: DiffMode::Payload,
+                    payload: Some(payload),
+                    summary: Some(summary_record),
+                })
+            }
+        }
+    }
+
+    fn handle_load_sheet(
+        &mut self,
+        request: SheetPayloadRequest,
+    ) -> Result<ui_payload::DiffWithSheets, DiffErrorPayload> {
+        let store = OpStore::open(&self.store_path).map_err(map_store_error)?;
+        let summary = store.load_summary(&request.diff_id).map_err(map_store_error)?;
+
+        if request.cancel.load(Ordering::Relaxed) {
+            return Err(DiffErrorPayload::new("canceled", "Diff canceled.", false));
+        }
+
+        let old_path = PathBuf::from(&summary.old_path);
+        let new_path = PathBuf::from(&summary.new_path);
+        let old_pkg = self.open_workbook_cached(&old_path, summary.trusted)?;
+        let new_pkg = self.open_workbook_cached(&new_path, summary.trusted)?;
+
+        let ops = store.load_sheet_ops(&request.diff_id, &request.sheet_name).map_err(map_store_error)?;
+        let strings = store.load_strings(&request.diff_id).map_err(map_store_error)?;
+
+        let mut report = DiffReport::new(ops);
+        report.strings = strings;
+        report.complete = summary.complete;
+        report.warnings = summary.warnings.clone();
+
+        emit_progress(&request.app, 0, "snapshot", "Building previews...");
+        Ok(ui_payload::build_payload_from_workbook_report(report, &old_pkg, &new_pkg))
+    }
+
+    fn open_workbook_cached(&mut self, path: &Path, trusted: bool) -> Result<WorkbookPackage, DiffErrorPayload> {
+        let key = cache_key(path, trusted)?;
+        if let Some(pkg) = self.workbook_cache.get(&key) {
+            return Ok(pkg.clone());
+        }
+        let file = File::open(path).map_err(|e| DiffErrorPayload::new("io", e.to_string(), false))?;
+        let pkg = if trusted {
+            WorkbookPackage::open_with_limits(file, trusted_limits())
+                .map_err(map_package_error)?
+        } else {
+            WorkbookPackage::open(file)
+                .map_err(map_package_error)?
+        };
+        self.workbook_cache.put(key, pkg.clone());
+        Ok(pkg)
+    }
+
+    fn open_pbix_cached(&mut self, path: &Path, trusted: bool) -> Result<PbixPackage, DiffErrorPayload> {
+        let key = cache_key(path, trusted)?;
+        if let Some(pkg) = self.pbix_cache.get(&key) {
+            return Ok(pkg.clone());
+        }
+        let file = File::open(path).map_err(|e| DiffErrorPayload::new("io", e.to_string(), false))?;
+        let pkg = if trusted {
+            PbixPackage::open_with_limits(file, trusted_limits())
+                .map_err(map_package_error)?
+        } else {
+            PbixPackage::open(file)
+                .map_err(map_package_error)?
+        };
+        self.pbix_cache.put(key, pkg.clone());
+        Ok(pkg)
+    }
+}
+
+fn report_to_summary(report: &DiffReport) -> DiffSummary {
+    DiffSummary {
+        complete: report.complete,
+        warnings: report.warnings.clone(),
+        op_count: report.ops.len(),
+        #[cfg(feature = "perf-metrics")]
+        metrics: report.metrics.clone(),
+    }
+}
+
+fn cache_key(path: &Path, trusted: bool) -> Result<CacheKey, DiffErrorPayload> {
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let normalized = canonical.to_string_lossy().to_lowercase();
+    let meta = std::fs::metadata(&canonical).map_err(|e| DiffErrorPayload::new("io", e.to_string(), false))?;
+    let size = meta.len();
+    let mtime = meta.modified().ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|dur| dur.as_secs())
+        .unwrap_or(0);
+    Ok(CacheKey {
+        path: normalized,
+        mtime,
+        size,
+        trusted,
+    })
+}
+
+fn trusted_limits() -> ContainerLimits {
+    let base = ContainerLimits::default();
+    ContainerLimits {
+        max_entries: base.max_entries.saturating_mul(4),
+        max_part_uncompressed_bytes: base.max_part_uncompressed_bytes.saturating_mul(4),
+        max_total_uncompressed_bytes: base.max_total_uncompressed_bytes.saturating_mul(4),
+    }
+}
+
+fn estimate_diff_cell_volume(old: &excel_diff::Workbook, new: &excel_diff::Workbook) -> u64 {
+    excel_diff::with_default_session(|session| {
+        let mut max_counts: HashMap<(String, excel_diff::SheetKind), u64> = HashMap::new();
+        for sheet in old.sheets.iter().chain(new.sheets.iter()) {
+            let name_lower = session.strings.resolve(sheet.name).to_lowercase();
+            let key = (name_lower, sheet.kind.clone());
+            let cell_count = sheet.grid.cell_count() as u64;
+            match max_counts.entry(key) {
+                Entry::Occupied(mut entry) => {
+                    if cell_count > *entry.get() {
+                        entry.insert(cell_count);
+                    }
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(cell_count);
+                }
+            }
+        }
+        max_counts.values().copied().sum()
+    })
+}
+
+fn current_strings() -> Vec<String> {
+    excel_diff::with_default_session(|session| session.strings.strings().to_vec())
+}
+
+fn map_store_error(err: StoreError) -> DiffErrorPayload {
+    DiffErrorPayload::new("store", err.to_string(), false)
+}
+
+fn map_package_error(err: excel_diff::PackageError) -> DiffErrorPayload {
+    let trusted_retry = matches!(
+        err,
+        excel_diff::PackageError::Container(ContainerError::TooManyEntries { .. })
+            | excel_diff::PackageError::Container(ContainerError::PartTooLarge { .. })
+            | excel_diff::PackageError::Container(ContainerError::TotalTooLarge { .. })
     );
+    DiffErrorPayload::new(err.code(), err.to_string(), trusted_retry)
+}
+
+fn run_diff_with_progress<F, T>(f: F, cancel: &AtomicBool) -> Result<T, DiffErrorPayload>
+where
+    F: FnOnce() -> T,
+{
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(result) => Ok(result),
+        Err(_) => {
+            if cancel.load(Ordering::Relaxed) {
+                Err(DiffErrorPayload::new("canceled", "Diff canceled.", false))
+            } else {
+                Err(DiffErrorPayload::new("failed", "Diff failed unexpectedly.", false))
+            }
+        }
+    }
 }
 
 struct EngineProgress {
     app: AppHandle,
     run_id: u64,
     cancel: Arc<AtomicBool>,
-    last_phase: Mutex<Option<String>>,
+    last_phase: std::sync::Mutex<Option<String>>,
 }
 
 impl EngineProgress {
@@ -45337,7 +46638,7 @@ impl EngineProgress {
             app,
             run_id,
             cancel,
-            last_phase: Mutex::new(None),
+            last_phase: std::sync::Mutex::new(None),
         }
     }
 
@@ -45362,7 +46663,7 @@ impl EngineProgress {
     }
 }
 
-impl excel_diff::ProgressCallback for EngineProgress {
+impl ProgressCallback for EngineProgress {
     fn on_progress(&self, phase: &str, _percent: f32) {
         if self.cancel.load(Ordering::Relaxed) {
             panic!("diff canceled");
@@ -45373,10 +46674,571 @@ impl excel_diff::ProgressCallback for EngineProgress {
     }
 }
 
+fn emit_progress(app: &AppHandle, run_id: u64, stage: &str, detail: &str) {
+    let _ = app.emit(
+        "diff-progress",
+        ProgressEvent {
+            run_id,
+            stage: stage.to_string(),
+            detail: detail.to_string(),
+        },
+    );
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ProgressEvent {
+    run_id: u64,
+    stage: String,
+    detail: String,
+}
+
+pub fn export_audit_xlsx(diff_id: &str, store_path: &Path, output_path: &Path) -> Result<(), DiffErrorPayload> {
+    let store = OpStore::open(store_path).map_err(map_store_error)?;
+    export_audit_xlsx_from_store(&store, diff_id, output_path).map_err(|e| {
+        DiffErrorPayload::new("export", e.to_string(), false)
+    })
+}
+
+pub fn diff_error_from_diff(diff_error: DiffError) -> DiffErrorPayload {
+    DiffErrorPayload::new(diff_error.code(), diff_error.to_string(), false)
+}
+
+fn status_for_error(err: &DiffErrorPayload) -> RunStatus {
+    if err.code == "canceled" {
+        RunStatus::Canceled
+    } else {
+        RunStatus::Failed
+    }
+}
+
+```
+
+---
+
+### File: `desktop\src-tauri\src\export\audit_xlsx.rs`
+
+```rust
+use std::path::Path;
+
+use excel_diff::{CellAddress, CellValue, DiffOp, QueryChangeKind};
+use rust_xlsxwriter::{Format, Workbook, XlsxError};
+use thiserror::Error;
+
+use crate::store::{DiffRunSummary, OpStore, StoreError};
+
+#[derive(Debug, Error)]
+pub enum ExportError {
+    #[error("Store error: {0}")]
+    Store(#[from] StoreError),
+    #[error("XLSX error: {0}")]
+    Xlsx(#[from] XlsxError),
+    #[error("Export error: {0}")]
+    Other(String),
+}
+
+pub fn export_audit_xlsx_from_store(
+    store: &OpStore,
+    diff_id: &str,
+    path: &Path,
+) -> Result<(), ExportError> {
+    let summary = store.load_summary(diff_id)?;
+    let strings = store.load_strings(diff_id)?;
+
+    let mut workbook = Workbook::new();
+    let header_format = Format::new().set_bold();
+
+    {
+        let summary_sheet = workbook.add_worksheet();
+        summary_sheet.set_name("Summary")?;
+        write_summary_sheet(summary_sheet, &summary, &header_format);
+    }
+
+    {
+        let warnings_sheet = workbook.add_worksheet();
+        warnings_sheet.set_name("Warnings")?;
+        write_warnings_sheet(warnings_sheet, &summary, &header_format);
+    }
+
+    {
+        let cells_sheet = workbook.add_worksheet();
+        cells_sheet.set_name("Cells")?;
+        write_cells_header(cells_sheet, &header_format);
+    }
+
+    {
+        let structure_sheet = workbook.add_worksheet();
+        structure_sheet.set_name("Structure")?;
+        write_structure_header(structure_sheet, &header_format);
+    }
+
+    {
+        let query_sheet = workbook.add_worksheet();
+        query_sheet.set_name("PowerQuery")?;
+        write_query_header(query_sheet, &header_format);
+    }
+
+    {
+        let model_sheet = workbook.add_worksheet();
+        model_sheet.set_name("Model")?;
+        write_model_header(model_sheet, &header_format);
+    }
+
+    {
+        let other_sheet = workbook.add_worksheet();
+        other_sheet.set_name("OtherOps")?;
+        write_other_header(other_sheet, &header_format);
+    }
+
+    let mut rows = ExportRows::default();
+
+    store.stream_ops(diff_id, |op| {
+        write_op(&op, &strings, &mut workbook, &mut rows)?;
+        Ok(())
+    })?;
+
+    workbook.save(path)?;
+    Ok(())
+}
+
+#[derive(Default)]
+struct ExportRows {
+    cells: u32,
+    structure: u32,
+    query: u32,
+    model: u32,
+    other: u32,
+}
+
+fn sheet_mut<'a>(
+    workbook: &'a mut Workbook,
+    name: &str,
+) -> Result<&'a mut rust_xlsxwriter::Worksheet, StoreError> {
+    workbook
+        .worksheet_from_name(name)
+        .map_err(|e| StoreError::InvalidData(e.to_string()))
+}
+
+fn write_summary_sheet(sheet: &mut rust_xlsxwriter::Worksheet, summary: &DiffRunSummary, header: &Format) {
+    let mut row = 0;
+    sheet.write_string_with_format(row, 0, "Old path", header).ok();
+    sheet.write_string(row, 1, &summary.old_path).ok();
+    row += 1;
+    sheet.write_string_with_format(row, 0, "New path", header).ok();
+    sheet.write_string(row, 1, &summary.new_path).ok();
+    row += 1;
+    sheet.write_string_with_format(row, 0, "Started", header).ok();
+    sheet.write_string(row, 1, &summary.started_at).ok();
+    row += 1;
+    sheet.write_string_with_format(row, 0, "Finished", header).ok();
+    if let Some(finished) = &summary.finished_at {
+        sheet.write_string(row, 1, finished).ok();
+    }
+    row += 1;
+    sheet.write_string_with_format(row, 0, "Mode", header).ok();
+    sheet.write_string(row, 1, summary.mode.as_str()).ok();
+    row += 1;
+    sheet.write_string_with_format(row, 0, "Status", header).ok();
+    sheet.write_string(row, 1, summary.status.as_str()).ok();
+    row += 1;
+    sheet.write_string_with_format(row, 0, "Complete", header).ok();
+    sheet.write_string(row, 1, if summary.complete { "true" } else { "false" }).ok();
+    row += 1;
+    sheet.write_string_with_format(row, 0, "Op count", header).ok();
+    sheet.write_number(row, 1, summary.op_count as f64).ok();
+    row += 1;
+    sheet.write_string_with_format(row, 0, "Warnings", header).ok();
+    sheet.write_number(row, 1, summary.warnings.len() as f64).ok();
+    row += 1;
+    sheet.write_string_with_format(row, 0, "Engine version", header).ok();
+    sheet.write_string(row, 1, &summary.engine_version).ok();
+    row += 1;
+    sheet.write_string_with_format(row, 0, "App version", header).ok();
+    sheet.write_string(row, 1, &summary.app_version).ok();
+    row += 2;
+
+    sheet.write_string_with_format(row, 0, "Sheet", header).ok();
+    sheet.write_string_with_format(row, 1, "Ops", header).ok();
+    sheet.write_string_with_format(row, 2, "Added", header).ok();
+    sheet.write_string_with_format(row, 3, "Removed", header).ok();
+    sheet.write_string_with_format(row, 4, "Modified", header).ok();
+    sheet.write_string_with_format(row, 5, "Moved", header).ok();
+    row += 1;
+
+    for sheet_summary in &summary.sheets {
+        sheet.write_string(row, 0, &sheet_summary.sheet_name).ok();
+        sheet.write_number(row, 1, sheet_summary.op_count as f64).ok();
+        sheet.write_number(row, 2, sheet_summary.counts.added as f64).ok();
+        sheet.write_number(row, 3, sheet_summary.counts.removed as f64).ok();
+        sheet.write_number(row, 4, sheet_summary.counts.modified as f64).ok();
+        sheet.write_number(row, 5, sheet_summary.counts.moved as f64).ok();
+        row += 1;
+    }
+}
+
+fn write_warnings_sheet(sheet: &mut rust_xlsxwriter::Worksheet, summary: &DiffRunSummary, header: &Format) {
+    sheet.write_string_with_format(0, 0, "Warning", header).ok();
+    let mut row = 1;
+    for warning in &summary.warnings {
+        sheet.write_string(row, 0, warning).ok();
+        row += 1;
+    }
+}
+
+fn write_cells_header(sheet: &mut rust_xlsxwriter::Worksheet, header: &Format) {
+    let headers = [
+        "Sheet",
+        "Address",
+        "Old value",
+        "New value",
+        "Old formula",
+        "New formula",
+        "Classification",
+    ];
+    for (idx, title) in headers.iter().enumerate() {
+        sheet.write_string_with_format(0, idx as u16, *title, header).ok();
+    }
+}
+
+fn write_structure_header(sheet: &mut rust_xlsxwriter::Worksheet, header: &Format) {
+    let headers = ["Kind", "Sheet", "Detail"];
+    for (idx, title) in headers.iter().enumerate() {
+        sheet.write_string_with_format(0, idx as u16, *title, header).ok();
+    }
+}
+
+fn write_query_header(sheet: &mut rust_xlsxwriter::Worksheet, header: &Format) {
+    let headers = ["Kind", "Name", "Detail"];
+    for (idx, title) in headers.iter().enumerate() {
+        sheet.write_string_with_format(0, idx as u16, *title, header).ok();
+    }
+}
+
+fn write_model_header(sheet: &mut rust_xlsxwriter::Worksheet, header: &Format) {
+    let headers = ["Kind", "Name", "Detail"];
+    for (idx, title) in headers.iter().enumerate() {
+        sheet.write_string_with_format(0, idx as u16, *title, header).ok();
+    }
+}
+
+fn write_other_header(sheet: &mut rust_xlsxwriter::Worksheet, header: &Format) {
+    let headers = ["Kind", "Payload"];
+    for (idx, title) in headers.iter().enumerate() {
+        sheet.write_string_with_format(0, idx as u16, *title, header).ok();
+    }
+}
+
+fn write_op(
+    op: &DiffOp,
+    strings: &[String],
+    workbook: &mut Workbook,
+    rows: &mut ExportRows,
+) -> Result<(), StoreError> {
+    match op {
+        DiffOp::CellEdited { sheet, addr, from, to, .. } => {
+            let row = rows.cells + 1;
+            rows.cells += 1;
+            let sheet_name = resolve_string(strings, *sheet);
+            let addr_text = addr.to_a1();
+            let old_value = render_cell_value(strings, &from.value);
+            let new_value = render_cell_value(strings, &to.value);
+            let old_formula = render_formula(strings, from.formula);
+            let new_formula = render_formula(strings, to.formula);
+            let classification = classify_cell_change(&old_value, &new_value, &old_formula, &new_formula);
+
+            let cells_sheet = sheet_mut(workbook, "Cells")?;
+            cells_sheet.write_string(row, 0, sheet_name).ok();
+            cells_sheet.write_string(row, 1, &addr_text).ok();
+            cells_sheet.write_string(row, 2, &old_value).ok();
+            cells_sheet.write_string(row, 3, &new_value).ok();
+            cells_sheet.write_string(row, 4, &old_formula).ok();
+            cells_sheet.write_string(row, 5, &new_formula).ok();
+            cells_sheet.write_string(row, 6, classification).ok();
+        }
+        DiffOp::RowAdded { sheet, row_idx, .. } => {
+            let structure_sheet = sheet_mut(workbook, "Structure")?;
+            write_structure(structure_sheet, rows, "RowAdded", strings, *sheet, format!("Row {} added", row_idx + 1));
+        }
+        DiffOp::RowRemoved { sheet, row_idx, .. } => {
+            let structure_sheet = sheet_mut(workbook, "Structure")?;
+            write_structure(structure_sheet, rows, "RowRemoved", strings, *sheet, format!("Row {} removed", row_idx + 1));
+        }
+        DiffOp::RowReplaced { sheet, row_idx } => {
+            let structure_sheet = sheet_mut(workbook, "Structure")?;
+            write_structure(structure_sheet, rows, "RowReplaced", strings, *sheet, format!("Row {} replaced", row_idx + 1));
+        }
+        DiffOp::ColumnAdded { sheet, col_idx, .. } => {
+            let structure_sheet = sheet_mut(workbook, "Structure")?;
+            write_structure(structure_sheet, rows, "ColumnAdded", strings, *sheet, format!("Column {} added", col_idx + 1));
+        }
+        DiffOp::ColumnRemoved { sheet, col_idx, .. } => {
+            let structure_sheet = sheet_mut(workbook, "Structure")?;
+            write_structure(structure_sheet, rows, "ColumnRemoved", strings, *sheet, format!("Column {} removed", col_idx + 1));
+        }
+        DiffOp::BlockMovedRows { sheet, src_start_row, row_count, dst_start_row, .. } => {
+            let structure_sheet = sheet_mut(workbook, "Structure")?;
+            write_structure(structure_sheet, rows, "BlockMovedRows", strings, *sheet, format!("Rows {}-{} moved to {}", src_start_row + 1, src_start_row + row_count, dst_start_row + 1));
+        }
+        DiffOp::BlockMovedColumns { sheet, src_start_col, col_count, dst_start_col, .. } => {
+            let structure_sheet = sheet_mut(workbook, "Structure")?;
+            write_structure(structure_sheet, rows, "BlockMovedColumns", strings, *sheet, format!("Columns {}-{} moved to {}", src_start_col + 1, src_start_col + col_count, dst_start_col + 1));
+        }
+        DiffOp::BlockMovedRect { sheet, src_start_row, src_row_count, src_start_col, src_col_count, dst_start_row, dst_start_col, .. } => {
+            let src_end = CellAddress::from_coords(src_start_row + src_row_count.saturating_sub(1), src_start_col + src_col_count.saturating_sub(1));
+            let dst_start = CellAddress::from_coords(*dst_start_row, *dst_start_col);
+            let src_start = CellAddress::from_coords(*src_start_row, *src_start_col);
+            let structure_sheet = sheet_mut(workbook, "Structure")?;
+            write_structure(structure_sheet, rows, "BlockMovedRect", strings, *sheet, format!("{}:{} moved to {}", src_start.to_a1(), src_end.to_a1(), dst_start.to_a1()));
+        }
+        DiffOp::RectReplaced { sheet, start_row, row_count, start_col, col_count } => {
+            let start = CellAddress::from_coords(*start_row, *start_col);
+            let end = CellAddress::from_coords(start_row + row_count.saturating_sub(1), start_col + col_count.saturating_sub(1));
+            let structure_sheet = sheet_mut(workbook, "Structure")?;
+            write_structure(structure_sheet, rows, "RectReplaced", strings, *sheet, format!("{}:{} replaced", start.to_a1(), end.to_a1()));
+        }
+        DiffOp::SheetAdded { sheet } => {
+            let structure_sheet = sheet_mut(workbook, "Structure")?;
+            write_structure(structure_sheet, rows, "SheetAdded", strings, *sheet, "Sheet added".to_string());
+        }
+        DiffOp::SheetRemoved { sheet } => {
+            let structure_sheet = sheet_mut(workbook, "Structure")?;
+            write_structure(structure_sheet, rows, "SheetRemoved", strings, *sheet, "Sheet removed".to_string());
+        }
+        DiffOp::QueryAdded { name } => {
+            let query_sheet = sheet_mut(workbook, "PowerQuery")?;
+            write_query(query_sheet, rows, "QueryAdded", resolve_string(strings, *name), "");
+        }
+        DiffOp::QueryRemoved { name } => {
+            let query_sheet = sheet_mut(workbook, "PowerQuery")?;
+            write_query(query_sheet, rows, "QueryRemoved", resolve_string(strings, *name), "");
+        }
+        DiffOp::QueryRenamed { from, to } => {
+            let detail = format!("Renamed to {}", resolve_string(strings, *to));
+            let query_sheet = sheet_mut(workbook, "PowerQuery")?;
+            write_query(query_sheet, rows, "QueryRenamed", resolve_string(strings, *from), &detail);
+        }
+        DiffOp::QueryDefinitionChanged { name, change_kind, .. } => {
+            let detail = match change_kind {
+                QueryChangeKind::Semantic => "Semantic change",
+                QueryChangeKind::FormattingOnly => "Formatting only",
+                QueryChangeKind::Renamed => "Renamed",
+            };
+            let query_sheet = sheet_mut(workbook, "PowerQuery")?;
+            write_query(query_sheet, rows, "QueryDefinitionChanged", resolve_string(strings, *name), detail);
+        }
+        DiffOp::QueryMetadataChanged { name, field, .. } => {
+            let query_sheet = sheet_mut(workbook, "PowerQuery")?;
+            write_query(query_sheet, rows, "QueryMetadataChanged", resolve_string(strings, *name), &format!("{field:?}"));
+        }
+        #[cfg(feature = "model-diff")]
+        DiffOp::MeasureAdded { name } => {
+            let model_sheet = sheet_mut(workbook, "Model")?;
+            write_model(model_sheet, rows, "MeasureAdded", resolve_string(strings, *name));
+        }
+        #[cfg(feature = "model-diff")]
+        DiffOp::MeasureRemoved { name } => {
+            let model_sheet = sheet_mut(workbook, "Model")?;
+            write_model(model_sheet, rows, "MeasureRemoved", resolve_string(strings, *name));
+        }
+        #[cfg(feature = "model-diff")]
+        DiffOp::MeasureDefinitionChanged { name, .. } => {
+            let model_sheet = sheet_mut(workbook, "Model")?;
+            write_model(model_sheet, rows, "MeasureDefinitionChanged", resolve_string(strings, *name));
+        }
+        _ => {
+            let row = rows.other + 1;
+            rows.other += 1;
+            let payload = serde_json::to_string(op).unwrap_or_else(|_| "<unserializable>".to_string());
+            let other_sheet = sheet_mut(workbook, "OtherOps")?;
+            other_sheet.write_string(row, 0, op_kind_label(op)).ok();
+            other_sheet.write_string(row, 1, &payload).ok();
+        }
+    }
+
+    Ok(())
+}
+
+fn write_structure(
+    sheet: &mut rust_xlsxwriter::Worksheet,
+    rows: &mut ExportRows,
+    kind: &str,
+    strings: &[String],
+    sheet_id: excel_diff::StringId,
+    detail: String,
+) {
+    let row = rows.structure + 1;
+    rows.structure += 1;
+    sheet.write_string(row, 0, kind).ok();
+    sheet.write_string(row, 1, resolve_string(strings, sheet_id)).ok();
+    sheet.write_string(row, 2, &detail).ok();
+}
+
+fn write_query(
+    sheet: &mut rust_xlsxwriter::Worksheet,
+    rows: &mut ExportRows,
+    kind: &str,
+    name: &str,
+    detail: &str,
+) {
+    let row = rows.query + 1;
+    rows.query += 1;
+    sheet.write_string(row, 0, kind).ok();
+    sheet.write_string(row, 1, name).ok();
+    if !detail.is_empty() {
+        sheet.write_string(row, 2, detail).ok();
+    }
+}
+
+fn write_model(
+    sheet: &mut rust_xlsxwriter::Worksheet,
+    rows: &mut ExportRows,
+    kind: &str,
+    name: &str,
+) {
+    let row = rows.model + 1;
+    rows.model += 1;
+    sheet.write_string(row, 0, kind).ok();
+    sheet.write_string(row, 1, name).ok();
+}
+
+fn resolve_string(strings: &[String], id: excel_diff::StringId) -> &str {
+    strings.get(id.0 as usize).map(String::as_str).unwrap_or("<unknown>")
+}
+
+fn render_cell_value(strings: &[String], value: &Option<CellValue>) -> String {
+    match value {
+        None => String::new(),
+        Some(CellValue::Blank) => String::new(),
+        Some(CellValue::Number(n)) => n.to_string(),
+        Some(CellValue::Text(id)) => resolve_string(strings, *id).to_string(),
+        Some(CellValue::Bool(b)) => if *b { "TRUE" } else { "FALSE" }.to_string(),
+        Some(CellValue::Error(id)) => resolve_string(strings, *id).to_string(),
+    }
+}
+
+fn render_formula(strings: &[String], formula: Option<excel_diff::StringId>) -> String {
+    match formula {
+        Some(id) => {
+            let raw = resolve_string(strings, id);
+            if raw.is_empty() {
+                String::new()
+            } else if raw.starts_with('=') {
+                raw.to_string()
+            } else {
+                format!("={}", raw)
+            }
+        }
+        None => String::new(),
+    }
+}
+
+fn classify_cell_change(
+    old_value: &str,
+    new_value: &str,
+    old_formula: &str,
+    new_formula: &str,
+) -> &'static str {
+    let value_changed = old_value != new_value;
+    let formula_changed = old_formula != new_formula;
+
+    if value_changed && formula_changed {
+        "Value + Formula"
+    } else if value_changed {
+        if old_value.is_empty() && !new_value.is_empty() {
+            "Added value"
+        } else if !old_value.is_empty() && new_value.is_empty() {
+            "Removed value"
+        } else {
+            "Value change"
+        }
+    } else if formula_changed {
+        if old_formula.is_empty() && !new_formula.is_empty() {
+            "Added formula"
+        } else if !old_formula.is_empty() && new_formula.is_empty() {
+            "Removed formula"
+        } else {
+            "Formula change"
+        }
+    } else {
+        "Unchanged"
+    }
+}
+
+fn op_kind_label(op: &DiffOp) -> &str {
+    match op {
+        DiffOp::VbaModuleAdded { .. } => "VbaModuleAdded",
+        DiffOp::VbaModuleRemoved { .. } => "VbaModuleRemoved",
+        DiffOp::VbaModuleChanged { .. } => "VbaModuleChanged",
+        DiffOp::NamedRangeAdded { .. } => "NamedRangeAdded",
+        DiffOp::NamedRangeRemoved { .. } => "NamedRangeRemoved",
+        DiffOp::NamedRangeChanged { .. } => "NamedRangeChanged",
+        DiffOp::ChartAdded { .. } => "ChartAdded",
+        DiffOp::ChartRemoved { .. } => "ChartRemoved",
+        DiffOp::ChartChanged { .. } => "ChartChanged",
+        _ => "Other",
+    }
+}
+
+```
+
+---
+
+### File: `desktop\src-tauri\src\export\mod.rs`
+
+```rust
+mod audit_xlsx;
+
+pub use audit_xlsx::{export_audit_xlsx_from_store, ExportError};
+
+```
+
+---
+
+### File: `desktop\src-tauri\src\main.rs`
+
+```rust
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod diff_runner;
+mod export;
+mod store;
+mod batch;
+mod search;
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Manager, State};
+
+use crate::diff_runner::{
+    DiffErrorPayload, DiffOutcome, DiffRequest, DiffRunner, SheetPayloadRequest,
+};
+use crate::store::{DiffRunSummary, OpStore, StoreError};
+use crate::batch::{BatchOutcome, BatchRequest};
+use crate::search::{SearchIndexResult, SearchIndexSummary, SearchResult};
+
+struct ActiveDiff {
+    run_id: u64,
+    cancel: Arc<AtomicBool>,
+}
+
+#[derive(Default)]
+struct DiffState {
+    current: Mutex<Option<ActiveDiff>>,
+}
+
+struct DesktopState {
+    runner: DiffRunner,
+    store_path: PathBuf,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DiffOptions {
     ignore_blank_to_blank: Option<bool>,
+    trusted: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -45387,6 +47249,10 @@ struct RecentComparison {
     old_name: String,
     new_name: String,
     last_run_iso: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    diff_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mode: Option<String>,
 }
 
 fn recents_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -45397,6 +47263,16 @@ fn recents_path(app: &AppHandle) -> Result<PathBuf, String> {
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("Failed to create app data directory: {e}"))?;
     Ok(dir.join("recents.json"))
+}
+
+fn store_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("Unable to resolve app data directory: {e}"))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create app data directory: {e}"))?;
+    Ok(dir.join("diff_store.sqlite"))
 }
 
 fn load_recents_from_disk(path: &Path) -> Vec<RecentComparison> {
@@ -45433,19 +47309,25 @@ fn load_recents(app: AppHandle) -> Result<Vec<RecentComparison>, String> {
 
 #[tauri::command]
 fn save_recent(app: AppHandle, entry: RecentComparison) -> Result<Vec<RecentComparison>, String> {
-  let path = recents_path(&app)?;
-  let current = load_recents_from_disk(&path);
-  let updated = update_recents(current, entry);
-  save_recents_to_disk(&path, &updated)?;
-  Ok(updated)
+    let path = recents_path(&app)?;
+    let current = load_recents_from_disk(&path);
+    let updated = update_recents(current, entry);
+    save_recents_to_disk(&path, &updated)?;
+    Ok(updated)
 }
 
 #[tauri::command]
 fn pick_file() -> Option<String> {
-  let path = rfd::FileDialog::new()
-    .add_filter("Excel / PBIX", &["xlsx", "xlsm", "xltx", "xltm", "pbix", "pbit"])
-    .pick_file()?;
-  Some(path.display().to_string())
+    let path = rfd::FileDialog::new()
+        .add_filter("Excel / PBIX", &["xlsx", "xlsm", "xltx", "xltm", "pbix", "pbit"])
+        .pick_file()?;
+    Some(path.display().to_string())
+}
+
+#[tauri::command]
+fn pick_folder() -> Option<String> {
+    let path = rfd::FileDialog::new().pick_folder()?;
+    Some(path.display().to_string())
 }
 
 #[tauri::command]
@@ -45467,21 +47349,24 @@ fn cancel_diff(state: State<'_, DiffState>, run_id: u64) -> bool {
 async fn diff_paths_with_sheets(
     app: AppHandle,
     state: State<'_, DiffState>,
+    desktop: State<'_, DesktopState>,
     old_path: String,
     new_path: String,
     run_id: u64,
     options: Option<DiffOptions>,
-) -> Result<ui_payload::DiffWithSheets, String> {
-    if let Some(opts) = options {
+) -> Result<DiffOutcome, DiffErrorPayload> {
+    if let Some(opts) = options.as_ref() {
         let _ = opts.ignore_blank_to_blank;
     }
+
+    let trusted = options.and_then(|o| o.trusted).unwrap_or(false);
     let cancel_flag = {
         let mut current = match state.current.lock() {
             Ok(lock) => lock,
             Err(poisoned) => poisoned.into_inner(),
         };
         if current.is_some() {
-            return Err("Diff already in progress.".to_string());
+            return Err(DiffErrorPayload::new("busy", "Diff already in progress.", false));
         }
         let cancel = Arc::new(AtomicBool::new(false));
         *current = Some(ActiveDiff {
@@ -45491,80 +47376,23 @@ async fn diff_paths_with_sheets(
         cancel
     };
 
+    let runner = desktop.runner.clone();
     let app_handle = app.clone();
     let task = tauri::async_runtime::spawn_blocking(move || {
-        emit_progress(&app_handle, run_id, "read", "Reading files...");
-
-        let old_kind = ui_payload::host_kind_from_path(Path::new(&old_path))
-            .ok_or_else(|| "Unsupported old file extension".to_string())?;
-        let new_kind = ui_payload::host_kind_from_path(Path::new(&new_path))
-            .ok_or_else(|| "Unsupported new file extension".to_string())?;
-
-        if old_kind != new_kind {
-            return Err("Old/new files must be the same type".to_string());
-        }
-
-        if cancel_flag.load(Ordering::Relaxed) {
-            return Err("Diff canceled.".to_string());
-        }
-
-        let cfg = excel_diff::DiffConfig::default();
-
-        match old_kind {
-            ui_payload::HostKind::Workbook => {
-                let old_file = std::fs::File::open(&old_path)
-                    .map_err(|e| format!("Failed to open old file: {e}"))?;
-                let new_file = std::fs::File::open(&new_path)
-                    .map_err(|e| format!("Failed to open new file: {e}"))?;
-
-                let old_pkg = excel_diff::WorkbookPackage::open(old_file)
-                    .map_err(|e| format!("Failed to parse old workbook: {e}"))?;
-                let new_pkg = excel_diff::WorkbookPackage::open(new_file)
-                    .map_err(|e| format!("Failed to parse new workbook: {e}"))?;
-
-                emit_progress(&app_handle, run_id, "diff", "Diffing workbooks...");
-                let progress = EngineProgress::new(app_handle.clone(), run_id, cancel_flag.clone());
-                let report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    old_pkg.diff_with_progress(&new_pkg, &cfg, &progress)
-                })) {
-                    Ok(report) => report,
-                    Err(_) => {
-                        if cancel_flag.load(Ordering::Relaxed) {
-                            return Err("Diff canceled.".to_string());
-                        }
-                        return Err("Diff failed unexpectedly.".to_string());
-                    }
-                };
-
-                if cancel_flag.load(Ordering::Relaxed) {
-                    return Err("Diff canceled.".to_string());
-                }
-
-                emit_progress(&app_handle, run_id, "snapshot", "Building previews...");
-                Ok(ui_payload::build_payload_from_workbook_report(
-                    report, &old_pkg, &new_pkg,
-                ))
-            }
-            ui_payload::HostKind::Pbix => {
-                let old_file = std::fs::File::open(&old_path)
-                    .map_err(|e| format!("Failed to open old file: {e}"))?;
-                let new_file = std::fs::File::open(&new_path)
-                    .map_err(|e| format!("Failed to open new file: {e}"))?;
-
-                let old_pkg = excel_diff::PbixPackage::open(old_file)
-                    .map_err(|e| format!("Failed to parse old PBIX/PBIT: {e}"))?;
-                let new_pkg = excel_diff::PbixPackage::open(new_file)
-                    .map_err(|e| format!("Failed to parse new PBIX/PBIT: {e}"))?;
-
-                emit_progress(&app_handle, run_id, "diff", "Diffing PBIX metadata...");
-                Ok(ui_payload::build_payload_from_pbix(&old_pkg, &new_pkg, &cfg))
-            }
-        }
+        let request = DiffRequest {
+            old_path,
+            new_path,
+            run_id,
+            trusted,
+            cancel: cancel_flag,
+            app: app_handle,
+        };
+        runner.diff(request)
     });
 
     let result = match task.await {
         Ok(result) => result,
-        Err(e) => Err(format!("Diff task failed: {e}")),
+        Err(e) => Err(DiffErrorPayload::new("task", format!("Diff task failed: {e}"), false)),
     };
 
     let mut current = match state.current.lock() {
@@ -45580,19 +47408,1419 @@ async fn diff_paths_with_sheets(
     result
 }
 
+#[tauri::command]
+fn load_diff_summary(
+    desktop: State<'_, DesktopState>,
+    diff_id: String,
+) -> Result<DiffRunSummary, DiffErrorPayload> {
+    let store = OpStore::open(&desktop.store_path).map_err(map_store_error)?;
+    store.load_summary(&diff_id).map_err(map_store_error)
+}
+
+#[tauri::command]
+async fn load_sheet_payload(
+    app: AppHandle,
+    desktop: State<'_, DesktopState>,
+    diff_id: String,
+    sheet_name: String,
+) -> Result<ui_payload::DiffWithSheets, DiffErrorPayload> {
+    let runner = desktop.runner.clone();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let task = tauri::async_runtime::spawn_blocking(move || {
+        runner.load_sheet_payload(SheetPayloadRequest {
+            diff_id,
+            sheet_name,
+            cancel,
+            app,
+        })
+    });
+
+    match task.await {
+        Ok(result) => result,
+        Err(e) => Err(DiffErrorPayload::new("task", format!("Load task failed: {e}"), false)),
+    }
+}
+
+#[tauri::command]
+fn export_audit_xlsx(
+    app: AppHandle,
+    desktop: State<'_, DesktopState>,
+    diff_id: String,
+) -> Result<String, DiffErrorPayload> {
+    let store = OpStore::open(&desktop.store_path).map_err(map_store_error)?;
+    let summary = store.load_summary(&diff_id).map_err(map_store_error)?;
+    let filename = default_export_name(&summary, "audit", "xlsx");
+
+    let path = rfd::FileDialog::new()
+        .set_file_name(&filename)
+        .add_filter("Excel", &["xlsx"])
+        .save_file()
+        .ok_or_else(|| DiffErrorPayload::new("canceled", "Export canceled.", false))?;
+
+    diff_runner::export_audit_xlsx(&diff_id, &desktop.store_path, &path)?;
+    Ok(path.display().to_string())
+}
+
+#[tauri::command]
+async fn run_batch_compare(
+    app: AppHandle,
+    desktop: State<'_, DesktopState>,
+    request: BatchRequest,
+) -> Result<BatchOutcome, DiffErrorPayload> {
+    let runner = desktop.runner.clone();
+    let store_path = desktop.store_path.clone();
+    let task = tauri::async_runtime::spawn_blocking(move || {
+        batch::run_batch_compare(app, runner, &store_path, request)
+    });
+    match task.await {
+        Ok(result) => result,
+        Err(e) => Err(DiffErrorPayload::new("task", format!("Batch task failed: {e}"), false)),
+    }
+}
+
+#[tauri::command]
+fn load_batch_summary(
+    desktop: State<'_, DesktopState>,
+    batch_id: String,
+) -> Result<BatchOutcome, DiffErrorPayload> {
+    batch::load_batch_summary(&desktop.store_path, &batch_id)
+}
+
+#[tauri::command]
+fn search_diff_ops(
+    desktop: State<'_, DesktopState>,
+    diff_id: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<SearchResult>, DiffErrorPayload> {
+    let limit = limit.unwrap_or(100);
+    search::search_diff_ops(&desktop.store_path, &diff_id, &query, limit)
+}
+
+#[tauri::command]
+fn build_search_index(
+    app: AppHandle,
+    desktop: State<'_, DesktopState>,
+    path: String,
+    side: String,
+) -> Result<SearchIndexSummary, DiffErrorPayload> {
+    let path = PathBuf::from(path);
+    search::build_search_index(app, &desktop.store_path, &path, &side)
+}
+
+#[tauri::command]
+fn search_workbook_index(
+    desktop: State<'_, DesktopState>,
+    index_id: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<SearchIndexResult>, DiffErrorPayload> {
+    let limit = limit.unwrap_or(100);
+    search::search_workbook_index(&desktop.store_path, &index_id, &query, limit)
+}
+
+fn default_export_name(summary: &DiffRunSummary, prefix: &str, ext: &str) -> String {
+    let old = base_name(&summary.old_path);
+    let new = base_name(&summary.new_path);
+    let date = summary
+        .finished_at
+        .as_deref()
+        .unwrap_or(&summary.started_at)
+        .get(0..10)
+        .unwrap_or("report");
+    format!("excel-diff-{prefix}__{old}__{new}__{date}.{ext}")
+}
+
+fn base_name(path: &str) -> String {
+    let parts: Vec<&str> = path.split(['\\', '/']).collect();
+    parts.last().unwrap_or(&path).to_string()
+}
+
+fn map_store_error(err: StoreError) -> DiffErrorPayload {
+    DiffErrorPayload::new("store", err.to_string(), false)
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(DiffState::default())
+        .setup(|app| {
+            let store_path = store_path(&app.handle()).map_err(|e| e.to_string())?;
+            let app_version = env!("CARGO_PKG_VERSION").to_string();
+            let engine_version = app_version.clone();
+            let runner = DiffRunner::new(store_path.clone(), app_version, engine_version);
+            app.manage(DesktopState { runner, store_path });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_version,
             load_recents,
             save_recent,
             pick_file,
+            pick_folder,
             cancel_diff,
-            diff_paths_with_sheets
+            diff_paths_with_sheets,
+            load_diff_summary,
+            load_sheet_payload,
+            export_audit_xlsx,
+            run_batch_compare,
+            load_batch_summary,
+            search_diff_ops,
+            build_search_index,
+            search_workbook_index,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+```
+
+---
+
+### File: `desktop\src-tauri\src\search.rs`
+
+```rust
+use std::path::Path;
+
+use excel_diff::{CellValue, WorkbookPackage};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::Serialize;
+use tauri::AppHandle;
+use uuid::Uuid;
+
+use crate::diff_runner::DiffErrorPayload;
+use crate::store::{OpStore, StoreError};
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResult {
+    pub kind: String,
+    pub sheet: Option<String>,
+    pub address: Option<String>,
+    pub label: String,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchIndexResult {
+    pub sheet: String,
+    pub address: String,
+    pub kind: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchIndexSummary {
+    pub index_id: String,
+    pub path: String,
+    pub side: String,
+    pub created_at: String,
+}
+
+pub fn search_diff_ops(
+    store_path: &Path,
+    diff_id: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<SearchResult>, DiffErrorPayload> {
+    let store = OpStore::open(store_path).map_err(store_error)?;
+    let strings = store.load_strings(diff_id).map_err(store_error)?;
+    let mut conn = store.into_connection();
+
+    let pattern = format!("%{}%", query.to_lowercase());
+    let mut stmt = conn
+        .prepare(
+            "SELECT payload_json FROM diff_ops WHERE diff_id = ?1 AND lower(payload_json) LIKE ?2 LIMIT ?3",
+        )
+        .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
+    let rows = stmt
+        .query_map(params![diff_id, pattern, limit as i64], |row| row.get::<_, String>(0))
+        .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
+
+    let mut results = Vec::new();
+    for row in rows {
+        let payload = row.map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
+        let op: excel_diff::DiffOp = serde_json::from_str(&payload)
+            .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
+        if let Some(result) = match_op(&op, &strings, query) {
+            results.push(result);
+        }
+    }
+
+    Ok(results)
+}
+
+pub fn build_search_index(
+    _app: AppHandle,
+    store_path: &Path,
+    path: &Path,
+    side: &str,
+) -> Result<SearchIndexSummary, DiffErrorPayload> {
+    let store = OpStore::open(store_path).map_err(store_error)?;
+    let conn = store.connection();
+    let path_str = path.display().to_string();
+
+    let meta = std::fs::metadata(path).map_err(|e| DiffErrorPayload::new("io", e.to_string(), false))?;
+    let size = meta.len() as i64;
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    if let Some(existing) = find_existing_index(conn, &path_str, mtime, size, side)? {
+        return Ok(existing);
+    }
+
+    let index_id = Uuid::new_v4().to_string();
+    let created_at = now_iso();
+
+    conn.execute(
+        "INSERT INTO workbook_indexes (index_id, path, mtime, size, side, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![index_id, path_str, mtime, size, side, created_at],
+    )
+    .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
+
+    conn.execute(
+        "DELETE FROM cell_docs WHERE index_id NOT IN (SELECT index_id FROM workbook_indexes)",
+        [],
+    )
+    .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
+
+    index_workbook(conn, path, &index_id).map_err(|e| {
+        DiffErrorPayload::new("index", e.to_string(), false)
+    })?;
+
+    Ok(SearchIndexSummary {
+        index_id,
+        path: path.display().to_string(),
+        side: side.to_string(),
+        created_at: now_iso(),
+    })
+}
+
+pub fn search_workbook_index(
+    store_path: &Path,
+    index_id: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<SearchIndexResult>, DiffErrorPayload> {
+    let store = OpStore::open(store_path).map_err(store_error)?;
+    let conn = store.connection();
+
+    let mut stmt = conn
+        .prepare("SELECT sheet, addr, kind, text FROM cell_docs WHERE cell_docs MATCH ?1 LIMIT ?2")
+        .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
+    let query_text = format!("{}*", query);
+    let rows = stmt
+        .query_map(params![query_text, limit as i64], |row| {
+            Ok(SearchIndexResult {
+                sheet: row.get(0)?,
+                address: row.get(1)?,
+                kind: row.get(2)?,
+                text: row.get(3)?,
+            })
+        })
+        .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
+
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row.map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?);
+    }
+    Ok(results)
+}
+
+fn match_op(op: &excel_diff::DiffOp, strings: &[String], query: &str) -> Option<SearchResult> {
+    let query_lower = query.to_lowercase();
+    match op {
+        excel_diff::DiffOp::CellEdited { sheet, addr, from, to, .. } => {
+            let sheet_name = resolve_string(strings, *sheet).to_string();
+            let old_value = render_cell_value(strings, &from.value);
+            let new_value = render_cell_value(strings, &to.value);
+            let old_formula = render_formula(strings, from.formula);
+            let new_formula = render_formula(strings, to.formula);
+            let text = format!("{} {} {} {}", old_value, new_value, old_formula, new_formula).to_lowercase();
+            if text.contains(&query_lower) {
+                return Some(SearchResult {
+                    kind: "cell".to_string(),
+                    sheet: Some(sheet_name),
+                    address: Some(addr.to_a1()),
+                    label: "Cell change".to_string(),
+                    detail: Some(format!("{} -> {}", old_value, new_value)),
+                });
+            }
+        }
+        excel_diff::DiffOp::QueryAdded { name }
+        | excel_diff::DiffOp::QueryRemoved { name }
+        | excel_diff::DiffOp::QueryRenamed { from: name, .. }
+        | excel_diff::DiffOp::QueryDefinitionChanged { name, .. }
+        | excel_diff::DiffOp::QueryMetadataChanged { name, .. } => {
+            let query_name = resolve_string(strings, *name);
+            if query_name.to_lowercase().contains(&query_lower) {
+                return Some(SearchResult {
+                    kind: "query".to_string(),
+                    sheet: None,
+                    address: None,
+                    label: format!("Query: {query_name}"),
+                    detail: Some(op_kind(op).to_string()),
+                });
+            }
+        }
+        _ => {}
+    }
+
+    None
+}
+
+fn op_kind(op: &excel_diff::DiffOp) -> &'static str {
+    match op {
+        excel_diff::DiffOp::CellEdited { .. } => "CellEdited",
+        excel_diff::DiffOp::QueryAdded { .. } => "QueryAdded",
+        excel_diff::DiffOp::QueryRemoved { .. } => "QueryRemoved",
+        excel_diff::DiffOp::QueryRenamed { .. } => "QueryRenamed",
+        excel_diff::DiffOp::QueryDefinitionChanged { .. } => "QueryDefinitionChanged",
+        excel_diff::DiffOp::QueryMetadataChanged { .. } => "QueryMetadataChanged",
+        _ => "Other",
+    }
+}
+
+fn resolve_string(strings: &[String], id: excel_diff::StringId) -> &str {
+    strings.get(id.0 as usize).map(String::as_str).unwrap_or("<unknown>")
+}
+
+fn render_cell_value(strings: &[String], value: &Option<CellValue>) -> String {
+    match value {
+        None => String::new(),
+        Some(CellValue::Blank) => String::new(),
+        Some(CellValue::Number(n)) => n.to_string(),
+        Some(CellValue::Text(id)) => resolve_string(strings, *id).to_string(),
+        Some(CellValue::Bool(b)) => if *b { "TRUE" } else { "FALSE" }.to_string(),
+        Some(CellValue::Error(id)) => resolve_string(strings, *id).to_string(),
+    }
+}
+
+fn render_formula(strings: &[String], formula: Option<excel_diff::StringId>) -> String {
+    match formula {
+        Some(id) => {
+            let raw = resolve_string(strings, id);
+            if raw.is_empty() {
+                String::new()
+            } else if raw.starts_with('=') {
+                raw.to_string()
+            } else {
+                format!("={}", raw)
+            }
+        }
+        None => String::new(),
+    }
+}
+
+fn find_existing_index(
+    conn: &Connection,
+    path: &str,
+    mtime: i64,
+    size: i64,
+    side: &str,
+) -> Result<Option<SearchIndexSummary>, DiffErrorPayload> {
+    let row = conn
+        .query_row(
+            "SELECT index_id, created_at FROM workbook_indexes WHERE path = ?1 AND mtime = ?2 AND size = ?3 AND side = ?4",
+            params![path, mtime, size, side],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
+
+    Ok(row.map(|(index_id, created_at)| SearchIndexSummary {
+        index_id,
+        path: path.to_string(),
+        side: side.to_string(),
+        created_at,
+    }))
+}
+
+fn index_workbook(conn: &Connection, path: &Path, index_id: &str) -> Result<(), StoreError> {
+    let file = std::fs::File::open(path).map_err(|e| StoreError::InvalidData(e.to_string()))?;
+    let pkg = WorkbookPackage::open(file).map_err(|e| StoreError::InvalidData(e.to_string()))?;
+
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+
+    excel_diff::with_default_session(|session| {
+        for sheet in &pkg.workbook.sheets {
+            let sheet_name = session.strings.resolve(sheet.name).to_string();
+            for ((row, col), cell) in sheet.grid.iter_cells() {
+                let addr = excel_diff::CellAddress::from_coords(row, col).to_a1();
+                if let Some(value) = &cell.value {
+                    let text = match value {
+                        CellValue::Number(n) => n.to_string(),
+                        CellValue::Text(id) => session.strings.resolve(*id).to_string(),
+                        CellValue::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
+                        CellValue::Error(id) => session.strings.resolve(*id).to_string(),
+                        CellValue::Blank => String::new(),
+                    };
+                    if !text.is_empty() {
+                        let _ = conn.execute(
+                            "INSERT INTO cell_docs (index_id, sheet, addr, kind, text) VALUES (?1, ?2, ?3, ?4, ?5)",
+                            params![index_id, sheet_name, addr, "value", text],
+                        );
+                    }
+                }
+                if let Some(formula_id) = cell.formula {
+                    let formula = session.strings.resolve(formula_id).to_string();
+                    if !formula.is_empty() {
+                        let _ = conn.execute(
+                            "INSERT INTO cell_docs (index_id, sheet, addr, kind, text) VALUES (?1, ?2, ?3, ?4, ?5)",
+                            params![index_id, sheet_name, addr, "formula", formula],
+                        );
+                    }
+                }
+            }
+        }
+
+        if let Some(dm) = &pkg.data_mashup {
+            if let Ok(queries) = excel_diff::build_queries(dm) {
+                for query in queries {
+                    let text = query.expression_m;
+                    let name = query.metadata.formula_name;
+                    let _ = conn.execute(
+                        "INSERT INTO cell_docs (index_id, sheet, addr, kind, text) VALUES (?1, ?2, ?3, ?4, ?5)",
+                        params![index_id, name, "", "query", text],
+                    );
+                }
+            }
+        }
+
+        if let Some(vba_modules) = &pkg.vba_modules {
+            for module in vba_modules {
+                let _ = conn.execute(
+                    "INSERT INTO cell_docs (index_id, sheet, addr, kind, text) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![index_id, session.strings.resolve(module.name), "", "vba", module.code],
+                );
+            }
+        }
+    });
+
+    conn.execute_batch("COMMIT")?;
+    Ok(())
+}
+
+fn now_iso() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| "".to_string())
+}
+
+fn store_error(err: StoreError) -> DiffErrorPayload {
+    DiffErrorPayload::new("store", err.to_string(), false)
+}
+
+```
+
+---
+
+### File: `desktop\src-tauri\src\store\mod.rs`
+
+```rust
+mod op_sink;
+mod op_store;
+mod types;
+
+pub use op_sink::OpStoreSink;
+pub use op_store::{
+    DiffMode, DiffRunSummary, OpStore, RunStatus, SheetStatsResolved, StoreError,
+    resolve_sheet_stats,
+};
+pub use types::{ChangeCounts, SheetStats};
+
+```
+
+---
+
+### File: `desktop\src-tauri\src\store\op_sink.rs`
+
+```rust
+use std::collections::HashMap;
+
+use excel_diff::{DiffError, DiffOp, DiffSink};
+use rusqlite::{params, Connection};
+
+use super::types::{ChangeCounts, OpIndexFields, accumulate_sheet_stats, classify_op, op_index_fields, SheetStats};
+
+pub struct OpStoreSink {
+    conn: Connection,
+    diff_id: String,
+    op_idx: u64,
+    counts: ChangeCounts,
+    sheet_stats: HashMap<u32, SheetStats>,
+    committed: bool,
+}
+
+impl OpStoreSink {
+    pub fn new(conn: Connection, diff_id: String) -> Result<Self, DiffError> {
+        conn.execute_batch("BEGIN IMMEDIATE")
+            .map_err(|e| DiffError::SinkError { message: e.to_string() })?;
+        Ok(Self {
+            conn,
+            diff_id,
+            op_idx: 0,
+            counts: ChangeCounts::default(),
+            sheet_stats: HashMap::new(),
+            committed: false,
+        })
+    }
+
+    pub fn into_parts(self) -> (Connection, ChangeCounts, HashMap<u32, SheetStats>, u64) {
+        (self.conn, self.counts, self.sheet_stats, self.op_idx)
+    }
+
+    fn insert_op(&mut self, fields: OpIndexFields, payload_json: &str) -> Result<(), DiffError> {
+        self.conn
+            .execute(
+                "INSERT INTO diff_ops (diff_id, op_idx, kind, sheet_id, row, col, row_end, col_end, move_id, payload_json)\
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    self.diff_id,
+                    self.op_idx as i64,
+                    fields.kind,
+                    fields.sheet_id.map(|v| v as i64),
+                    fields.row.map(|v| v as i64),
+                    fields.col.map(|v| v as i64),
+                    fields.row_end.map(|v| v as i64),
+                    fields.col_end.map(|v| v as i64),
+                    fields.move_id,
+                    payload_json,
+                ],
+            )
+            .map_err(|e| DiffError::SinkError { message: e.to_string() })?;
+        Ok(())
+    }
+}
+
+impl DiffSink for OpStoreSink {
+    fn begin(&mut self, _pool: &excel_diff::StringPool) -> Result<(), DiffError> {
+        Ok(())
+    }
+
+    fn emit(&mut self, op: DiffOp) -> Result<(), DiffError> {
+        if let Some(kind) = classify_op(&op) {
+            self.counts.apply(kind);
+        }
+        accumulate_sheet_stats(&mut self.sheet_stats, &op);
+
+        let fields = op_index_fields(&op);
+        let payload_json = serde_json::to_string(&op)
+            .map_err(|e| DiffError::SinkError { message: e.to_string() })?;
+        self.insert_op(fields, &payload_json)?;
+
+        self.op_idx = self.op_idx.saturating_add(1);
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), DiffError> {
+        if self.committed {
+            return Ok(());
+        }
+        self.conn
+            .execute_batch("COMMIT")
+            .map_err(|e| DiffError::SinkError { message: e.to_string() })?;
+        self.committed = true;
+        Ok(())
+    }
+}
+
+```
+
+---
+
+### File: `desktop\src-tauri\src\store\op_store.rs`
+
+```rust
+use std::path::Path;
+
+use excel_diff::{DiffOp, DiffReport, DiffSummary};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+use uuid::Uuid;
+
+use super::types::{ChangeCounts, OpIndexFields, SheetStats, accumulate_sheet_stats, op_index_fields};
+
+const SCHEMA_VERSION: i64 = 1;
+
+#[derive(Debug, Error)]
+pub enum StoreError {
+    #[error("SQLite error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+    #[error("JSON error: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("Missing diff run: {0}")]
+    MissingRun(String),
+    #[error("Missing sheet: {0}")]
+    MissingSheet(String),
+    #[error("Invalid store data: {0}")]
+    InvalidData(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunStatus {
+    Running,
+    Complete,
+    Failed,
+    Canceled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiffMode {
+    Payload,
+    Large,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SheetSummary {
+    pub sheet_id: u32,
+    pub sheet_name: String,
+    pub op_count: u64,
+    pub counts: ChangeCounts,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffRunSummary {
+    pub diff_id: String,
+    pub old_path: String,
+    pub new_path: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub engine_version: String,
+    pub app_version: String,
+    pub mode: DiffMode,
+    pub status: RunStatus,
+    pub trusted: bool,
+    pub complete: bool,
+    pub op_count: u64,
+    pub warnings: Vec<String>,
+    pub counts: ChangeCounts,
+    pub sheets: Vec<SheetSummary>,
+}
+
+pub struct OpStore {
+    conn: Connection,
+}
+
+impl OpStore {
+    pub fn open(path: &Path) -> Result<Self, StoreError> {
+        let conn = Connection::open(path)?;
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        Self::apply_schema(&conn)?;
+        Ok(Self { conn })
+    }
+
+    pub fn open_in_memory() -> Result<Self, StoreError> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        Self::apply_schema(&conn)?;
+        Ok(Self { conn })
+    }
+
+    pub fn from_connection(conn: Connection) -> Self {
+        Self { conn }
+    }
+
+    pub fn connection(&self) -> &Connection {
+        &self.conn
+    }
+
+    pub fn into_connection(self) -> Connection {
+        self.conn
+    }
+
+    pub fn start_run(
+        &self,
+        old_path: &str,
+        new_path: &str,
+        config_json: &str,
+        engine_version: &str,
+        app_version: &str,
+        mode: DiffMode,
+        trusted: bool,
+    ) -> Result<String, StoreError> {
+        let diff_id = Uuid::new_v4().to_string();
+        let started_at = now_iso();
+        let status = RunStatus::Running;
+
+        self.conn.execute(
+            "INSERT INTO diff_runs (diff_id, old_path, new_path, started_at, config_json, engine_version, app_version, schema_version, mode, status, trusted)\
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                diff_id,
+                old_path,
+                new_path,
+                started_at,
+                config_json,
+                engine_version,
+                app_version,
+                SCHEMA_VERSION,
+                mode.as_str(),
+                status.as_str(),
+                if trusted { 1 } else { 0 },
+            ],
+        )?;
+
+        Ok(diff_id)
+    }
+
+    pub fn finish_run(
+        &self,
+        diff_id: &str,
+        summary: &DiffSummary,
+        strings: &[String],
+        counts: &ChangeCounts,
+        sheet_stats: &[SheetStatsResolved],
+        status: RunStatus,
+    ) -> Result<(), StoreError> {
+        let finished_at = now_iso();
+        let strings_json = serde_json::to_string(strings)?;
+
+        self.conn.execute(
+            "UPDATE diff_runs SET finished_at = ?1, status = ?2, complete = ?3, op_count = ?4, warnings_count = ?5,\
+             added_count = ?6, removed_count = ?7, modified_count = ?8, moved_count = ?9, strings_json = ?10 WHERE diff_id = ?11",
+            params![
+                finished_at,
+                status.as_str(),
+                if summary.complete { 1 } else { 0 },
+                summary.op_count as i64,
+                summary.warnings.len() as i64,
+                counts.added as i64,
+                counts.removed as i64,
+                counts.modified as i64,
+                counts.moved as i64,
+                strings_json,
+                diff_id,
+            ],
+        )?;
+
+        self.conn.execute("DELETE FROM diff_warnings WHERE diff_id = ?1", params![diff_id])?;
+        for (idx, warning) in summary.warnings.iter().enumerate() {
+            self.conn.execute(
+                "INSERT INTO diff_warnings (diff_id, idx, text) VALUES (?1, ?2, ?3)",
+                params![diff_id, idx as i64, warning],
+            )?;
+        }
+
+        self.conn.execute("DELETE FROM diff_sheets WHERE diff_id = ?1", params![diff_id])?;
+        for sheet in sheet_stats {
+            self.conn.execute(
+                "INSERT INTO diff_sheets (diff_id, sheet_id, sheet_name, op_count, added_count, removed_count, modified_count, moved_count)\
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    diff_id,
+                    sheet.sheet_id as i64,
+                    sheet.sheet_name,
+                    sheet.op_count as i64,
+                    sheet.counts.added as i64,
+                    sheet.counts.removed as i64,
+                    sheet.counts.modified as i64,
+                    sheet.counts.moved as i64,
+                ],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    pub fn fail_run(&self, diff_id: &str, status: RunStatus, message: &str) -> Result<(), StoreError> {
+        let finished_at = now_iso();
+        self.conn.execute(
+            "UPDATE diff_runs SET finished_at = ?1, status = ?2, complete = 0, warnings_count = warnings_count + 1 WHERE diff_id = ?3",
+            params![finished_at, status.as_str(), diff_id],
+        )?;
+        let idx: i64 = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(MAX(idx) + 1, 0) FROM diff_warnings WHERE diff_id = ?1",
+                params![diff_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        self.conn.execute(
+            "INSERT INTO diff_warnings (diff_id, idx, text) VALUES (?1, ?2, ?3)",
+            params![diff_id, idx, message],
+        )?;
+        Ok(())
+    }
+
+    pub fn insert_ops_from_report(
+        &self,
+        diff_id: &str,
+        report: &DiffReport,
+    ) -> Result<(ChangeCounts, Vec<SheetStats>), StoreError> {
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+
+        let mut counts = ChangeCounts::default();
+        let mut stats_map: std::collections::HashMap<u32, SheetStats> = std::collections::HashMap::new();
+
+        for (idx, op) in report.ops.iter().enumerate() {
+            counts.add_op(op);
+            accumulate_sheet_stats(&mut stats_map, op);
+
+            let fields: OpIndexFields = op_index_fields(op);
+            let payload_json = serde_json::to_string(op)?;
+
+            self.conn.execute(
+                "INSERT INTO diff_ops (diff_id, op_idx, kind, sheet_id, row, col, row_end, col_end, move_id, payload_json)\
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    diff_id,
+                    idx as i64,
+                    fields.kind,
+                    fields.sheet_id.map(|v| v as i64),
+                    fields.row.map(|v| v as i64),
+                    fields.col.map(|v| v as i64),
+                    fields.row_end.map(|v| v as i64),
+                    fields.col_end.map(|v| v as i64),
+                    fields.move_id,
+                    payload_json,
+                ],
+            )?;
+        }
+
+        self.conn.execute_batch("COMMIT")?;
+
+        let mut stats: Vec<SheetStats> = stats_map.into_values().collect();
+        stats.sort_by_key(|s| s.sheet_id);
+        Ok((counts, stats))
+    }
+
+    pub fn load_summary(&self, diff_id: &str) -> Result<DiffRunSummary, StoreError> {
+        let row = self.conn.query_row(
+            "SELECT old_path, new_path, started_at, finished_at, engine_version, app_version, mode, status, trusted, complete, op_count,\
+                    added_count, removed_count, modified_count, moved_count\
+             FROM diff_runs WHERE diff_id = ?1",
+            params![diff_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, i64>(9)?,
+                    row.get::<_, i64>(10)?,
+                    row.get::<_, i64>(11)?,
+                    row.get::<_, i64>(12)?,
+                    row.get::<_, i64>(13)?,
+                    row.get::<_, i64>(14)?,
+                ))
+            },
+        ).optional()?;
+
+        let Some((old_path, new_path, started_at, finished_at, engine_version, app_version, mode, status, trusted, complete, op_count, added, removed, modified, moved)) = row else {
+            return Err(StoreError::MissingRun(diff_id.to_string()));
+        };
+
+        let warnings = self.load_warnings(diff_id)?;
+        let sheets = self.load_sheet_summaries(diff_id)?;
+
+        Ok(DiffRunSummary {
+            diff_id: diff_id.to_string(),
+            old_path,
+            new_path,
+            started_at,
+            finished_at,
+            engine_version,
+            app_version,
+            mode: DiffMode::from_str(&mode),
+            status: RunStatus::from_str(&status),
+            trusted: trusted != 0,
+            complete: complete != 0,
+            op_count: op_count as u64,
+            warnings,
+            counts: ChangeCounts {
+                added: added as u64,
+                removed: removed as u64,
+                modified: modified as u64,
+                moved: moved as u64,
+            },
+            sheets,
+        })
+    }
+
+    pub fn load_report(&self, diff_id: &str) -> Result<DiffReport, StoreError> {
+        let summary = self.load_summary(diff_id)?;
+        let strings = self.load_strings(diff_id)?;
+        let ops = self.load_ops(diff_id)?;
+        let mut report = DiffReport::new(ops);
+        report.strings = strings;
+        report.complete = summary.complete;
+        report.warnings = summary.warnings;
+        Ok(report)
+    }
+
+    pub fn load_sheet_ops(&self, diff_id: &str, sheet_name: &str) -> Result<Vec<DiffOp>, StoreError> {
+        let sheet_id = self.sheet_id_for_name(diff_id, sheet_name)?;
+        let mut stmt = self.conn.prepare(
+            "SELECT payload_json FROM diff_ops WHERE diff_id = ?1 AND sheet_id = ?2 ORDER BY op_idx",
+        )?;
+        let rows = stmt.query_map(params![diff_id, sheet_id as i64], |row| row.get::<_, String>(0))?;
+        let mut ops = Vec::new();
+        for row in rows {
+            let payload = row?;
+            let op: DiffOp = serde_json::from_str(&payload)?;
+            ops.push(op);
+        }
+        Ok(ops)
+    }
+
+    pub fn load_ops(&self, diff_id: &str) -> Result<Vec<DiffOp>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT payload_json FROM diff_ops WHERE diff_id = ?1 ORDER BY op_idx",
+        )?;
+        let rows = stmt.query_map(params![diff_id], |row| row.get::<_, String>(0))?;
+        let mut ops = Vec::new();
+        for row in rows {
+            let payload = row?;
+            let op: DiffOp = serde_json::from_str(&payload)?;
+            ops.push(op);
+        }
+        Ok(ops)
+    }
+
+    pub fn stream_ops<F>(&self, diff_id: &str, mut f: F) -> Result<(), StoreError>
+    where
+        F: FnMut(DiffOp) -> Result<(), StoreError>,
+    {
+        let mut stmt = self.conn.prepare(
+            "SELECT payload_json FROM diff_ops WHERE diff_id = ?1 ORDER BY op_idx",
+        )?;
+        let rows = stmt.query_map(params![diff_id], |row| row.get::<_, String>(0))?;
+        for row in rows {
+            let payload = row?;
+            let op: DiffOp = serde_json::from_str(&payload)?;
+            f(op)?;
+        }
+        Ok(())
+    }
+
+    pub fn load_strings(&self, diff_id: &str) -> Result<Vec<String>, StoreError> {
+        let json = self.conn.query_row(
+            "SELECT strings_json FROM diff_runs WHERE diff_id = ?1",
+            params![diff_id],
+            |row| row.get::<_, Option<String>>(0),
+        )?.ok_or_else(|| StoreError::MissingRun(diff_id.to_string()))?;
+        let strings: Vec<String> = serde_json::from_str(&json)?;
+        Ok(strings)
+    }
+
+    pub fn sheet_id_for_name(&self, diff_id: &str, sheet_name: &str) -> Result<u32, StoreError> {
+        let id: Option<i64> = self.conn.query_row(
+            "SELECT sheet_id FROM diff_sheets WHERE diff_id = ?1 AND sheet_name = ?2 COLLATE NOCASE",
+            params![diff_id, sheet_name],
+            |row| row.get(0),
+        ).optional()?;
+        match id {
+            Some(value) => Ok(value as u32),
+            None => Err(StoreError::MissingSheet(sheet_name.to_string())),
+        }
+    }
+
+    fn load_warnings(&self, diff_id: &str) -> Result<Vec<String>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT text FROM diff_warnings WHERE diff_id = ?1 ORDER BY idx",
+        )?;
+        let rows = stmt.query_map(params![diff_id], |row| row.get::<_, String>(0))?;
+        let mut warnings = Vec::new();
+        for row in rows {
+            warnings.push(row?);
+        }
+        Ok(warnings)
+    }
+
+    fn load_sheet_summaries(&self, diff_id: &str) -> Result<Vec<SheetSummary>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT sheet_id, sheet_name, op_count, added_count, removed_count, modified_count, moved_count\
+             FROM diff_sheets WHERE diff_id = ?1 ORDER BY sheet_name",
+        )?;
+        let rows = stmt.query_map(params![diff_id], |row| {
+            Ok(SheetSummary {
+                sheet_id: row.get::<_, i64>(0)? as u32,
+                sheet_name: row.get(1)?,
+                op_count: row.get::<_, i64>(2)? as u64,
+                counts: ChangeCounts {
+                    added: row.get::<_, i64>(3)? as u64,
+                    removed: row.get::<_, i64>(4)? as u64,
+                    modified: row.get::<_, i64>(5)? as u64,
+                    moved: row.get::<_, i64>(6)? as u64,
+                },
+            })
+        })?;
+
+        let mut sheets = Vec::new();
+        for row in rows {
+            sheets.push(row?);
+        }
+        Ok(sheets)
+    }
+
+    fn apply_schema(conn: &Connection) -> Result<(), StoreError> {
+        let schema = include_str!("schema.sql");
+        conn.execute_batch(schema)?;
+        conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
+        Ok(())
+    }
+}
+
+fn now_iso() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| "".to_string())
+}
+
+impl DiffMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DiffMode::Payload => "payload",
+            DiffMode::Large => "large",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "large" => DiffMode::Large,
+            _ => DiffMode::Payload,
+        }
+    }
+}
+
+impl RunStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RunStatus::Running => "running",
+            RunStatus::Complete => "complete",
+            RunStatus::Failed => "failed",
+            RunStatus::Canceled => "canceled",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "complete" => RunStatus::Complete,
+            "failed" => RunStatus::Failed,
+            "canceled" => RunStatus::Canceled,
+            _ => RunStatus::Running,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SheetStatsResolved {
+    pub sheet_id: u32,
+    pub sheet_name: String,
+    pub counts: ChangeCounts,
+    pub op_count: u64,
+}
+
+pub fn resolve_sheet_stats(
+    strings: &[String],
+    stats: &[SheetStats],
+) -> Result<Vec<SheetStatsResolved>, StoreError> {
+    let mut resolved = Vec::with_capacity(stats.len());
+    for stat in stats {
+        let name = strings
+            .get(stat.sheet_id as usize)
+            .cloned()
+            .ok_or_else(|| StoreError::InvalidData("sheet id out of range".to_string()))?;
+        resolved.push(SheetStatsResolved {
+            sheet_id: stat.sheet_id,
+            sheet_name: name,
+            counts: stat.counts,
+            op_count: stat.op_count,
+        });
+    }
+    Ok(resolved)
+}
+
+```
+
+---
+
+### File: `desktop\src-tauri\src\store\types.rs`
+
+```rust
+use std::collections::HashMap;
+
+use excel_diff::{DiffOp, StringId};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeKind {
+    Added,
+    Removed,
+    Modified,
+    Moved,
+}
+
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangeCounts {
+    pub added: u64,
+    pub removed: u64,
+    pub modified: u64,
+    pub moved: u64,
+}
+
+impl ChangeCounts {
+    pub fn apply(&mut self, kind: ChangeKind) {
+        match kind {
+            ChangeKind::Added => self.added = self.added.saturating_add(1),
+            ChangeKind::Removed => self.removed = self.removed.saturating_add(1),
+            ChangeKind::Modified => self.modified = self.modified.saturating_add(1),
+            ChangeKind::Moved => self.moved = self.moved.saturating_add(1),
+        }
+    }
+
+    pub fn add_op(&mut self, op: &DiffOp) {
+        if let Some(kind) = classify_op(op) {
+            self.apply(kind);
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct SheetStats {
+    pub sheet_id: u32,
+    pub counts: ChangeCounts,
+    pub op_count: u64,
+}
+
+impl SheetStats {
+    pub fn new(sheet_id: u32) -> Self {
+        Self {
+            sheet_id,
+            counts: ChangeCounts::default(),
+            op_count: 0,
+        }
+    }
+
+    pub fn add_op(&mut self, op: &DiffOp) {
+        self.op_count = self.op_count.saturating_add(1);
+        self.counts.add_op(op);
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct OpIndexFields {
+    pub kind: String,
+    pub sheet_id: Option<u32>,
+    pub row: Option<u32>,
+    pub col: Option<u32>,
+    pub row_end: Option<u32>,
+    pub col_end: Option<u32>,
+    pub move_id: Option<String>,
+}
+
+pub fn op_sheet_id(op: &DiffOp) -> Option<StringId> {
+    match op {
+        DiffOp::SheetAdded { sheet }
+        | DiffOp::SheetRemoved { sheet }
+        | DiffOp::RowAdded { sheet, .. }
+        | DiffOp::RowRemoved { sheet, .. }
+        | DiffOp::RowReplaced { sheet, .. }
+        | DiffOp::ColumnAdded { sheet, .. }
+        | DiffOp::ColumnRemoved { sheet, .. }
+        | DiffOp::BlockMovedRows { sheet, .. }
+        | DiffOp::BlockMovedColumns { sheet, .. }
+        | DiffOp::BlockMovedRect { sheet, .. }
+        | DiffOp::RectReplaced { sheet, .. }
+        | DiffOp::CellEdited { sheet, .. } => Some(*sheet),
+        _ => None,
+    }
+}
+
+pub fn diff_op_kind(op: &DiffOp) -> &'static str {
+    match op {
+        DiffOp::SheetAdded { .. } => "SheetAdded",
+        DiffOp::SheetRemoved { .. } => "SheetRemoved",
+        DiffOp::RowAdded { .. } => "RowAdded",
+        DiffOp::RowRemoved { .. } => "RowRemoved",
+        DiffOp::RowReplaced { .. } => "RowReplaced",
+        DiffOp::ColumnAdded { .. } => "ColumnAdded",
+        DiffOp::ColumnRemoved { .. } => "ColumnRemoved",
+        DiffOp::BlockMovedRows { .. } => "BlockMovedRows",
+        DiffOp::BlockMovedColumns { .. } => "BlockMovedColumns",
+        DiffOp::BlockMovedRect { .. } => "BlockMovedRect",
+        DiffOp::RectReplaced { .. } => "RectReplaced",
+        DiffOp::CellEdited { .. } => "CellEdited",
+        DiffOp::VbaModuleAdded { .. } => "VbaModuleAdded",
+        DiffOp::VbaModuleRemoved { .. } => "VbaModuleRemoved",
+        DiffOp::VbaModuleChanged { .. } => "VbaModuleChanged",
+        DiffOp::NamedRangeAdded { .. } => "NamedRangeAdded",
+        DiffOp::NamedRangeRemoved { .. } => "NamedRangeRemoved",
+        DiffOp::NamedRangeChanged { .. } => "NamedRangeChanged",
+        DiffOp::ChartAdded { .. } => "ChartAdded",
+        DiffOp::ChartRemoved { .. } => "ChartRemoved",
+        DiffOp::ChartChanged { .. } => "ChartChanged",
+        DiffOp::QueryAdded { .. } => "QueryAdded",
+        DiffOp::QueryRemoved { .. } => "QueryRemoved",
+        DiffOp::QueryRenamed { .. } => "QueryRenamed",
+        DiffOp::QueryDefinitionChanged { .. } => "QueryDefinitionChanged",
+        DiffOp::QueryMetadataChanged { .. } => "QueryMetadataChanged",
+        #[cfg(feature = "model-diff")]
+        DiffOp::MeasureAdded { .. } => "MeasureAdded",
+        #[cfg(feature = "model-diff")]
+        DiffOp::MeasureRemoved { .. } => "MeasureRemoved",
+        #[cfg(feature = "model-diff")]
+        DiffOp::MeasureDefinitionChanged { .. } => "MeasureDefinitionChanged",
+        _ => "Unknown",
+    }
+}
+
+pub fn classify_op(op: &DiffOp) -> Option<ChangeKind> {
+    match op {
+        DiffOp::SheetAdded { .. }
+        | DiffOp::RowAdded { .. }
+        | DiffOp::ColumnAdded { .. }
+        | DiffOp::NamedRangeAdded { .. }
+        | DiffOp::ChartAdded { .. }
+        | DiffOp::VbaModuleAdded { .. }
+        | DiffOp::QueryAdded { .. }
+        | DiffOp::QueryMetadataChanged {
+            field: excel_diff::QueryMetadataField::LoadToSheet,
+            ..
+        } => Some(ChangeKind::Added),
+        DiffOp::SheetRemoved { .. }
+        | DiffOp::RowRemoved { .. }
+        | DiffOp::ColumnRemoved { .. }
+        | DiffOp::NamedRangeRemoved { .. }
+        | DiffOp::ChartRemoved { .. }
+        | DiffOp::VbaModuleRemoved { .. }
+        | DiffOp::QueryRemoved { .. } => Some(ChangeKind::Removed),
+        DiffOp::BlockMovedRows { .. }
+        | DiffOp::BlockMovedColumns { .. }
+        | DiffOp::BlockMovedRect { .. } => Some(ChangeKind::Moved),
+        DiffOp::RowReplaced { .. }
+        | DiffOp::RectReplaced { .. }
+        | DiffOp::CellEdited { .. }
+        | DiffOp::NamedRangeChanged { .. }
+        | DiffOp::ChartChanged { .. }
+        | DiffOp::VbaModuleChanged { .. }
+        | DiffOp::QueryRenamed { .. }
+        | DiffOp::QueryDefinitionChanged { .. }
+        | DiffOp::QueryMetadataChanged { .. } => Some(ChangeKind::Modified),
+        #[cfg(feature = "model-diff")]
+        DiffOp::MeasureAdded { .. } => Some(ChangeKind::Added),
+        #[cfg(feature = "model-diff")]
+        DiffOp::MeasureRemoved { .. } => Some(ChangeKind::Removed),
+        #[cfg(feature = "model-diff")]
+        DiffOp::MeasureDefinitionChanged { .. } => Some(ChangeKind::Modified),
+        _ => None,
+    }
+}
+
+pub fn op_index_fields(op: &DiffOp) -> OpIndexFields {
+    let mut fields = OpIndexFields {
+        kind: diff_op_kind(op).to_string(),
+        ..OpIndexFields::default()
+    };
+
+    if let Some(sheet) = op_sheet_id(op) {
+        fields.sheet_id = Some(sheet.0);
+    }
+
+    match op {
+        DiffOp::RowAdded { row_idx, .. }
+        | DiffOp::RowRemoved { row_idx, .. }
+        | DiffOp::RowReplaced { row_idx, .. } => {
+            fields.row = Some(*row_idx);
+            fields.row_end = Some(*row_idx);
+        }
+        DiffOp::ColumnAdded { col_idx, .. } | DiffOp::ColumnRemoved { col_idx, .. } => {
+            fields.col = Some(*col_idx);
+            fields.col_end = Some(*col_idx);
+        }
+        DiffOp::BlockMovedRows {
+            src_start_row,
+            row_count,
+            dst_start_row,
+            ..
+        } => {
+            fields.row = Some(*src_start_row);
+            fields.row_end = Some(src_start_row.saturating_add(*row_count).saturating_sub(1));
+            fields.move_id = Some(format!("r:{}+{}->{}", src_start_row, row_count, dst_start_row));
+        }
+        DiffOp::BlockMovedColumns {
+            src_start_col,
+            col_count,
+            dst_start_col,
+            ..
+        } => {
+            fields.col = Some(*src_start_col);
+            fields.col_end = Some(src_start_col.saturating_add(*col_count).saturating_sub(1));
+            fields.move_id = Some(format!("c:{}+{}->{}", src_start_col, col_count, dst_start_col));
+        }
+        DiffOp::BlockMovedRect {
+            src_start_row,
+            src_row_count,
+            src_start_col,
+            src_col_count,
+            dst_start_row,
+            dst_start_col,
+            ..
+        } => {
+            fields.row = Some(*src_start_row);
+            fields.col = Some(*src_start_col);
+            fields.row_end = Some(src_start_row.saturating_add(*src_row_count).saturating_sub(1));
+            fields.col_end = Some(src_start_col.saturating_add(*src_col_count).saturating_sub(1));
+            fields.move_id = Some(format!(
+                "rect:{},{}+{}x{}->{}", 
+                src_start_row, src_start_col, src_row_count, src_col_count, dst_start_row
+            ));
+            if fields.move_id.is_some() {
+                if let Some(id) = fields.move_id.as_mut() {
+                    id.push_str(&format!(",{}", dst_start_col));
+                }
+            }
+        }
+        DiffOp::RectReplaced {
+            start_row,
+            row_count,
+            start_col,
+            col_count,
+            ..
+        } => {
+            fields.row = Some(*start_row);
+            fields.col = Some(*start_col);
+            fields.row_end = Some(start_row.saturating_add(*row_count).saturating_sub(1));
+            fields.col_end = Some(start_col.saturating_add(*col_count).saturating_sub(1));
+        }
+        DiffOp::CellEdited { addr, .. } => {
+            fields.row = Some(addr.row);
+            fields.col = Some(addr.col);
+            fields.row_end = Some(addr.row);
+            fields.col_end = Some(addr.col);
+        }
+        _ => {}
+    }
+
+    fields
+}
+
+pub fn accumulate_sheet_stats(
+    stats: &mut HashMap<u32, SheetStats>,
+    op: &DiffOp,
+) {
+    if let Some(sheet_id) = op_sheet_id(op).map(|id| id.0) {
+        let entry = stats.entry(sheet_id).or_insert_with(|| SheetStats::new(sheet_id));
+        entry.add_op(op);
+    }
 }
 
 ```
@@ -46634,6 +49862,114 @@ scenarios:
       base_file: "generated/m_embedded_change_a.xlsx"
     output: "pbix_embedded_queries.pbix"
 
+
+```
+
+---
+
+### File: `fixtures\manifest_perf_e2e.yaml`
+
+```yaml
+scenarios:
+  - id: "e2e_p1_dense_a"
+    generator: "perf_large"
+    args:
+      rows: 50000
+      cols: 20
+      mode: "dense"
+    output: "e2e_p1_dense_a.xlsx"
+
+  - id: "e2e_p1_dense_b"
+    generator: "perf_large"
+    args:
+      rows: 50000
+      cols: 20
+      mode: "dense"
+      edit_row: 25000
+      edit_col: 10
+      edit_value: "E2E_EDIT"
+    output: "e2e_p1_dense_b.xlsx"
+
+  - id: "e2e_p2_noise_a"
+    generator: "perf_large"
+    args:
+      rows: 50000
+      cols: 20
+      mode: "noise"
+      seed: 12345
+    output: "e2e_p2_noise_a.xlsx"
+
+  - id: "e2e_p2_noise_b"
+    generator: "perf_large"
+    args:
+      rows: 50000
+      cols: 20
+      mode: "noise"
+      seed: 12345
+      edit_row: 25000
+      edit_col: 10
+      edit_value: 2.0
+    output: "e2e_p2_noise_b.xlsx"
+
+  - id: "e2e_p3_repetitive_a"
+    generator: "perf_large"
+    args:
+      rows: 50000
+      cols: 50
+      mode: "repetitive"
+      pattern_length: 100
+    output: "e2e_p3_repetitive_a.xlsx"
+
+  - id: "e2e_p3_repetitive_b"
+    generator: "perf_large"
+    args:
+      rows: 50000
+      cols: 50
+      mode: "repetitive"
+      pattern_length: 100
+      edit_row: 25000
+      edit_col: 25
+      edit_value: "E2E_EDIT"
+    output: "e2e_p3_repetitive_b.xlsx"
+
+  - id: "e2e_p4_sparse_a"
+    generator: "perf_large"
+    args:
+      rows: 50000
+      cols: 100
+      mode: "sparse"
+      fill_percent: 1
+      seed: 77777
+    output: "e2e_p4_sparse_a.xlsx"
+
+  - id: "e2e_p4_sparse_b"
+    generator: "perf_large"
+    args:
+      rows: 50000
+      cols: 100
+      mode: "sparse"
+      fill_percent: 1
+      seed: 77777
+      edit_row: 25000
+      edit_col: 50
+      edit_value: "E2E_EDIT"
+    output: "e2e_p4_sparse_b.xlsx"
+
+  - id: "e2e_p5_identical_a"
+    generator: "perf_large"
+    args:
+      rows: 50000
+      cols: 100
+      mode: "dense"
+    output: "e2e_p5_identical_a.xlsx"
+
+  - id: "e2e_p5_identical_b"
+    generator: "perf_large"
+    args:
+      rows: 50000
+      cols: 100
+      mode: "dense"
+    output: "e2e_p5_identical_b.xlsx"
 
 ```
 
@@ -49586,6 +52922,13 @@ class LargeGridGenerator(BaseGenerator):
         seed = self.args.get('seed', 0)
         pattern_length = self.args.get('pattern_length', 100)
         fill_percent = self.args.get('fill_percent', 100)
+        edit_row = self.args.get('edit_row')
+        edit_col = self.args.get('edit_col')
+        edit_value = self.args.get('edit_value')
+        if edit_row is not None:
+            edit_row = int(edit_row)
+        if edit_col is not None:
+            edit_col = int(edit_col)
 
         rng = random.Random(seed)
 
@@ -49616,7 +52959,11 @@ class LargeGridGenerator(BaseGenerator):
                             row_data.append(f"R{r}C{c}")
                         else:
                             row_data.append(None)
-                
+                if edit_row is not None and edit_col is not None and r == edit_row:
+                    idx = edit_col - 1
+                    if 0 <= idx < cols:
+                        row_data[idx] = edit_value
+
                 ws.append(row_data)
 
             wb.save(output_dir / name)
@@ -49638,7 +52985,8 @@ This script runs perf tests and enforces:
   - Baseline regression checks for total time and peak memory
 
 Usage:
-  python scripts/check_perf_thresholds.py [--full-scale] [--export-json PATH] [--export-csv PATH]
+  python scripts/check_perf_thresholds.py [--suite quick|gate|full-scale] [--export-json PATH] [--export-csv PATH]
+  python scripts/check_perf_thresholds.py --full-scale [--export-json PATH] [--export-csv PATH]
 """
 
 import argparse
@@ -49653,6 +53001,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 PERF_TEST_TIMEOUT_SECONDS = 120
+GATE_TIMEOUT_SECONDS = 300
 FULL_SCALE_TIMEOUT_SECONDS = 600
 
 QUICK_THRESHOLDS = {
@@ -49671,6 +53020,10 @@ FULL_SCALE_THRESHOLDS = {
     "perf_50k_identical": {"max_time_s": 15},
 }
 
+GATE_THRESHOLDS = {
+    "perf_50k_dense_single_edit": {"max_time_s": 30},
+}
+
 ENV_VAR_MAP = {
     "perf_p1_large_dense": "EXCEL_DIFF_PERF_P1_MAX_TIME_S",
     "perf_p2_large_noise": "EXCEL_DIFF_PERF_P2_MAX_TIME_S",
@@ -49681,8 +53034,10 @@ ENV_VAR_MAP = {
 
 QUICK_PATTERNS = ("perf_p1_", "perf_p2_", "perf_p3_", "perf_p4_", "perf_p5_")
 FULL_SCALE_PATTERNS = ("perf_50k_", "perf_100k_", "perf_many_sheets")
+GATE_TESTS = ("perf_50k_dense_single_edit",)
 
 BASELINE_SLACK_QUICK = 0.10
+BASELINE_SLACK_GATE = 0.15
 BASELINE_SLACK_FULL = 0.15
 
 CSV_FIELDS = [
@@ -49775,8 +53130,12 @@ def parse_perf_metrics(stdout: str) -> dict:
     return metrics
 
 
-def matches_patterns(name: str, patterns: tuple[str, ...]) -> bool:
-    return any(name.startswith(prefix) for prefix in patterns)
+def matches_patterns(name: str, patterns: tuple[str, ...], match_mode: str) -> bool:
+    if match_mode == "prefix":
+        return any(name.startswith(prefix) for prefix in patterns)
+    if match_mode == "exact":
+        return name in patterns
+    raise ValueError(f"Unknown match mode: {match_mode}")
 
 
 def collect_passed_tests(stdout: str) -> list[str]:
@@ -49796,12 +53155,13 @@ def collect_passed_tests(stdout: str) -> list[str]:
     return tests
 
 
-def export_json(path: Path, metrics: dict, full_scale: bool):
+def export_json(path: Path, metrics: dict, suite_name: str, full_scale: bool):
     timestamp = datetime.now(timezone.utc).isoformat()
     payload = {
         "timestamp": timestamp,
         "git_commit": get_git_commit(),
         "git_branch": get_git_branch(),
+        "suite": suite_name,
         "full_scale": full_scale,
         "tests": metrics,
         "summary": {
@@ -49839,7 +53199,18 @@ def parse_baseline_timestamp(value: str, fallback: float) -> float:
         return fallback
 
 
-def load_baseline(results_dir: Path, full_scale: bool):
+def load_baseline_file(path: Path):
+    if not path.exists():
+        return None, None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None, None
+    return data, path
+
+
+def load_baseline_dir(results_dir: Path, full_scale: bool):
     if not results_dir.exists():
         return None, None
 
@@ -49876,9 +53247,15 @@ def main():
         description="Run perf tests and enforce performance thresholds"
     )
     parser.add_argument(
+        "--suite",
+        choices=["quick", "gate", "full-scale"],
+        default=None,
+        help="Perf suite to run (default: quick)",
+    )
+    parser.add_argument(
         "--full-scale",
         action="store_true",
-        help="Run the ignored full-scale perf tests",
+        help="Run the ignored full-scale perf tests (deprecated; use --suite full-scale)",
     )
     parser.add_argument(
         "--export-json",
@@ -49893,24 +53270,87 @@ def main():
         help="Write perf results to CSV",
     )
     parser.add_argument(
+        "--baseline",
+        type=Path,
+        default=None,
+        help="Pinned baseline JSON file (overrides baseline-dir and suite lookup)",
+    )
+    parser.add_argument(
         "--baseline-dir",
         type=Path,
         default=Path(__file__).parent.parent / "benchmarks" / "results",
         help="Directory containing baseline JSON results",
     )
+    parser.add_argument(
+        "--test-target",
+        type=str,
+        default=None,
+        help="Run only a specific integration test target (e.g., perf_large_grid_tests)",
+    )
     args = parser.parse_args()
 
-    suite_name = "full-scale" if args.full_scale else "quick"
-    thresholds = FULL_SCALE_THRESHOLDS if args.full_scale else QUICK_THRESHOLDS
-    patterns = FULL_SCALE_PATTERNS if args.full_scale else QUICK_PATTERNS
-    baseline_slack = BASELINE_SLACK_FULL if args.full_scale else BASELINE_SLACK_QUICK
-    env_map = None if args.full_scale else ENV_VAR_MAP
+    if args.suite and args.full_scale:
+        parser.error("Use either --suite or --full-scale, not both")
+
+    suite_name = args.suite or ("full-scale" if args.full_scale else "quick")
+
+    suite_configs = {
+        "quick": {
+            "thresholds": QUICK_THRESHOLDS,
+            "patterns": QUICK_PATTERNS,
+            "match_mode": "prefix",
+            "timeout": PERF_TEST_TIMEOUT_SECONDS,
+            "baseline_slack": BASELINE_SLACK_QUICK,
+            "env_map": ENV_VAR_MAP,
+            "ignored": False,
+            "test_filter": "perf_",
+            "default_test_target": None,
+            "full_scale": False,
+        },
+        "gate": {
+            "thresholds": GATE_THRESHOLDS,
+            "patterns": GATE_TESTS,
+            "match_mode": "exact",
+            "timeout": GATE_TIMEOUT_SECONDS,
+            "baseline_slack": BASELINE_SLACK_GATE,
+            "env_map": None,
+            "ignored": True,
+            "test_filter": "perf_50k_dense_single_edit",
+            "default_test_target": "perf_large_grid_tests",
+            "full_scale": True,
+        },
+        "full-scale": {
+            "thresholds": FULL_SCALE_THRESHOLDS,
+            "patterns": FULL_SCALE_PATTERNS,
+            "match_mode": "prefix",
+            "timeout": FULL_SCALE_TIMEOUT_SECONDS,
+            "baseline_slack": BASELINE_SLACK_FULL,
+            "env_map": None,
+            "ignored": True,
+            "test_filter": "perf_",
+            "default_test_target": None,
+            "full_scale": True,
+        },
+    }
+
+    config = suite_configs[suite_name]
+    thresholds = config["thresholds"]
+    patterns = config["patterns"]
+    match_mode = config["match_mode"]
+    baseline_slack = config["baseline_slack"]
+    env_map = config["env_map"]
 
     print("=" * 60)
     print(f"Performance Threshold Check ({suite_name})")
     print("=" * 60)
     print("\nLoading thresholds...")
     effective_thresholds = get_effective_thresholds(thresholds, env_map)
+    print()
+
+    expected_tests = set(effective_thresholds.keys())
+    print("Expected tests:")
+    for test_name in sorted(expected_tests):
+        print(f"  - {test_name}")
     print()
 
     core_dir = Path(__file__).parent.parent / "core"
@@ -49923,27 +53363,22 @@ def main():
         "--release",
         "--features",
         "perf-metrics",
-        "perf_",
-        "--",
-        "--nocapture",
-        "--test-threads=1",
     ]
 
-    if args.full_scale:
-        cmd = [
-            "cargo",
-            "test",
-            "--release",
-            "--features",
-            "perf-metrics",
-            "perf_",
-            "--",
-            "--ignored",
-            "--nocapture",
-            "--test-threads=1",
-        ]
+    test_target = args.test_target or config["default_test_target"]
+    if test_target:
+        cmd.extend(["--test", test_target])
 
-    timeout = FULL_SCALE_TIMEOUT_SECONDS if args.full_scale else PERF_TEST_TIMEOUT_SECONDS
+    if config["test_filter"]:
+        cmd.append(config["test_filter"])
+
+    test_args = ["--nocapture", "--test-threads=1"]
+    if config["ignored"]:
+        test_args.insert(0, "--ignored")
+
+    cmd.extend(["--"] + test_args)
+
+    timeout = config["timeout"]
 
     start_time = time.time()
     try:
@@ -49969,28 +53404,29 @@ def main():
         return 1
 
     passed_tests = collect_passed_tests(result.stdout)
-    suite_passed = {t for t in passed_tests if matches_patterns(t, patterns)}
+    suite_passed = {t for t in passed_tests if matches_patterns(t, patterns, match_mode)}
 
     print(f"Passed suite tests: {len(suite_passed)}")
     for test in sorted(suite_passed):
         print(f"  - {test}")
     print()
 
-    expected_tests = set(effective_thresholds.keys())
     missing_tests = expected_tests - suite_passed
     if missing_tests:
         print(f"ERROR: Some expected perf tests did not run: {missing_tests}")
         return 1
 
     metrics = parse_perf_metrics(result.stdout)
-    suite_metrics = {k: v for k, v in metrics.items() if matches_patterns(k, patterns)}
+    suite_metrics = {
+        k: v for k, v in metrics.items() if matches_patterns(k, patterns, match_mode)
+    }
 
     if not suite_metrics:
         print("ERROR: No PERF_METRIC output captured for suite tests")
         return 1
 
     if args.export_json:
-        export_json(args.export_json, suite_metrics, args.full_scale)
+        export_json(args.export_json, suite_metrics, suite_name, config["full_scale"])
         print(f"Wrote JSON results to {args.export_json}")
 
     if args.export_csv:
@@ -50020,7 +53456,20 @@ def main():
     print()
 
     baseline_failures = []
-    baseline, baseline_path = load_baseline(args.baseline_dir, args.full_scale)
+    baseline = None
+    baseline_path = None
+    if args.baseline:
+        baseline, baseline_path = load_baseline_file(args.baseline)
+    else:
+        repo_root = Path(__file__).parent.parent
+        pinned = repo_root / "benchmarks" / "baselines" / f"{suite_name}.json"
+        if pinned.exists():
+            baseline, baseline_path = load_baseline_file(pinned)
+        else:
+            baseline, baseline_path = load_baseline_dir(
+                args.baseline_dir, config["full_scale"]
+            )
+
     if baseline and baseline_path:
         print(f"Baseline: {baseline_path}")
         baseline_tests = baseline.get("tests", {})
@@ -50068,7 +53517,10 @@ def main():
                 )
 
     else:
-        print(f"WARNING: No baseline results found in {args.baseline_dir}")
+        if args.baseline:
+            print(f"WARNING: Baseline file not found: {args.baseline}")
+        else:
+            print(f"WARNING: No baseline results found in {args.baseline_dir}")
 
     if failures or baseline_failures:
         print("=" * 60)
@@ -50424,6 +53876,518 @@ def main():
 if __name__ == "__main__":
     sys.exit(main())
 
+
+```
+
+---
+
+### File: `scripts\export_e2e_metrics.py`
+
+```python
+#!/usr/bin/env python3
+"""
+Export end-to-end workbook open + diff metrics to versioned JSON.
+
+This script generates the e2e fixtures, runs the ignored e2e perf tests, captures
+PERF_METRIC output, and writes timestamped results plus a latest JSON (and CSV).
+
+Usage:
+    python scripts/export_e2e_metrics.py [--output-dir DIR] [--export-csv PATH] [--skip-fixtures]
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+BASELINE_SLACK_E2E = 0.20
+
+E2E_THRESHOLDS = {
+    "e2e_p1_dense": {
+        "max_total_time_s": 25,
+        "max_parse_time_s": 20,
+        "max_diff_time_s": 10,
+    },
+    "e2e_p2_noise": {
+        "max_total_time_s": 20,
+        "max_parse_time_s": 15,
+        "max_diff_time_s": 10,
+    },
+    "e2e_p3_repetitive": {
+        "max_total_time_s": 30,
+        "max_parse_time_s": 25,
+        "max_diff_time_s": 10,
+    },
+    "e2e_p4_sparse": {
+        "max_total_time_s": 5,
+        "max_parse_time_s": 3,
+        "max_diff_time_s": 2,
+    },
+    "e2e_p5_identical": {
+        "max_total_time_s": 80,
+        "max_parse_time_s": 75,
+        "max_diff_time_s": 10,
+    },
+}
+
+
+CSV_FIELDS = [
+    "test_name",
+    "total_time_ms",
+    "parse_time_ms",
+    "diff_time_ms",
+    "signature_build_time_ms",
+    "move_detection_time_ms",
+    "alignment_time_ms",
+    "cell_diff_time_ms",
+    "op_emit_time_ms",
+    "report_serialize_time_ms",
+    "peak_memory_bytes",
+    "grid_storage_bytes",
+    "string_pool_bytes",
+    "op_buffer_bytes",
+    "alignment_buffer_bytes",
+    "rows_processed",
+    "cells_compared",
+    "anchors_found",
+    "moves_detected",
+    "hash_lookups_est",
+    "allocations_est",
+    "old_bytes",
+    "new_bytes",
+    "total_input_bytes",
+]
+
+
+def get_git_commit() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()[:12]
+    except Exception:
+        pass
+    return "unknown"
+
+
+def get_git_branch() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return "unknown"
+
+
+def run_command(
+    cmd: list[str], cwd: Path, *, capture_output: bool = False, timeout: int | None = None
+) -> subprocess.CompletedProcess[str]:
+    print(f"Running: {' '.join(cmd)}")
+    return subprocess.run(
+        cmd,
+        cwd=cwd,
+        capture_output=capture_output,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def install_fixture_generator(repo_root: Path) -> None:
+    python = sys.executable
+    requirements = repo_root / "fixtures" / "requirements.txt"
+    result = run_command(
+        [python, "-m", "pip", "install", "-r", str(requirements)],
+        cwd=repo_root,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("Failed to install fixture generator requirements.")
+
+    result = run_command(
+        [python, "-m", "pip", "install", "-e", "fixtures", "--no-deps"],
+        cwd=repo_root,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("Failed to install fixture generator package.")
+
+
+def generate_fixtures(repo_root: Path, manifest: Path) -> None:
+    result = run_command(
+        ["generate-fixtures", "--manifest", str(manifest), "--force"],
+        cwd=repo_root,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("Failed to generate e2e fixtures.")
+
+
+def parse_perf_metrics(stdout: str) -> dict:
+    metrics: dict[str, dict[str, int]] = {}
+    pattern = re.compile(r"PERF_METRIC\s+(\S+)\s+(.*)")
+
+    for line in stdout.split("\n"):
+        match = pattern.search(line)
+        if not match:
+            continue
+
+        test_name = match.group(1)
+        rest = match.group(2)
+        data = {key: int(val) for key, val in re.findall(r"(\w+)=([0-9]+)", rest)}
+
+        data.setdefault("total_time_ms", 0)
+        data.setdefault("parse_time_ms", 0)
+        data.setdefault("diff_time_ms", 0)
+        data.setdefault("peak_memory_bytes", 0)
+        data.setdefault("rows_processed", 0)
+        data.setdefault("cells_compared", 0)
+
+        metrics[test_name] = data
+
+    return metrics
+
+
+def run_e2e_tests(core_dir: Path) -> tuple[dict, bool]:
+    cmd = [
+        "cargo",
+        "test",
+        "--release",
+        "--features",
+        "perf-metrics",
+        "--test",
+        "e2e_perf_workbook_open",
+        "e2e_",
+        "--",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1",
+    ]
+
+    try:
+        result = run_command(cmd, cwd=core_dir, capture_output=True, timeout=1800)
+    except subprocess.TimeoutExpired:
+        print("ERROR: Tests timed out")
+        return {}, False
+    print(result.stdout)
+    if result.stderr:
+        print("STDERR:", result.stderr, file=sys.stderr)
+
+    metrics = parse_perf_metrics(result.stdout)
+    success = result.returncode == 0
+    return metrics, success
+
+
+def save_results(metrics: dict, output_dir: Path) -> tuple[Path, dict]:
+    timestamp = datetime.now(timezone.utc)
+    filename = timestamp.strftime("%Y-%m-%d_%H%M%S") + ".json"
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / filename
+
+    result = {
+        "timestamp": timestamp.isoformat(),
+        "git_commit": get_git_commit(),
+        "git_branch": get_git_branch(),
+        "tests": metrics,
+        "summary": {
+            "total_tests": len(metrics),
+            "total_time_ms": sum(m.get("total_time_ms", 0) for m in metrics.values()),
+            "total_rows_processed": sum(
+                m.get("rows_processed", 0) for m in metrics.values()
+            ),
+            "total_cells_compared": sum(
+                m.get("cells_compared", 0) for m in metrics.values()
+            ),
+        },
+    }
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=2)
+
+    print(f"\nResults saved to: {output_path}")
+    return output_path, result
+
+
+def write_latest(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+
+
+def export_csv(path: Path, metrics: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+        writer.writeheader()
+        for test_name, data in sorted(metrics.items()):
+            row = {"test_name": test_name}
+            for field in CSV_FIELDS:
+                if field == "test_name":
+                    continue
+                row[field] = data.get(field, 0)
+            writer.writerow(row)
+
+
+def load_baseline_file(path: Path) -> tuple[dict | None, Path | None]:
+    if not path.exists():
+        return None, None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None, None
+    return data, path
+
+
+def load_baseline_dir(results_dir: Path) -> tuple[dict | None, Path | None]:
+    if not results_dir.exists():
+        return None, None
+
+    candidates = sorted(results_dir.glob("*.json"), key=lambda p: p.stat().st_mtime)
+    if not candidates:
+        return None, None
+    path = candidates[-1]
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None, None
+    return data, path
+
+
+def get_effective_thresholds(thresholds: dict) -> dict:
+    slack_factor = float(os.environ.get("EXCEL_DIFF_E2E_SLACK_FACTOR", "1.0"))
+    effective = {}
+    for test_name, caps in thresholds.items():
+        scaled = {}
+        for key, value in caps.items():
+            scaled[key] = value * slack_factor
+        effective[test_name] = scaled
+
+    if slack_factor != 1.0:
+        print(f"  Slack factor: {slack_factor}x applied to absolute caps")
+
+    return effective
+
+
+def enforce_thresholds(metrics: dict, thresholds: dict) -> list[str]:
+    failures = []
+    print("Absolute threshold checks:")
+    for test_name, caps in thresholds.items():
+        data = metrics.get(test_name, {})
+        total_time_s = data.get("total_time_ms", 0) / 1000.0
+        parse_time_s = data.get("parse_time_ms", 0) / 1000.0
+        diff_time_s = data.get("diff_time_ms", 0) / 1000.0
+
+        max_total = caps.get("max_total_time_s")
+        max_parse = caps.get("max_parse_time_s")
+        max_diff = caps.get("max_diff_time_s")
+
+        if max_total is not None and total_time_s > max_total:
+            failures.append(
+                f"{test_name}: total_time {total_time_s:.3f}s > {max_total:.1f}s"
+            )
+        if max_parse is not None and parse_time_s > max_parse:
+            failures.append(
+                f"{test_name}: parse_time {parse_time_s:.3f}s > {max_parse:.1f}s"
+            )
+        if max_diff is not None and diff_time_s > max_diff:
+            failures.append(
+                f"{test_name}: diff_time {diff_time_s:.3f}s > {max_diff:.1f}s"
+            )
+
+        print(
+            f"  {test_name}: total={total_time_s:.3f}s (cap {max_total:.1f}s), "
+            f"parse={parse_time_s:.3f}s (cap {max_parse:.1f}s), "
+            f"diff={diff_time_s:.3f}s (cap {max_diff:.1f}s)"
+        )
+    print()
+    return failures
+
+
+def enforce_baseline(metrics: dict, baseline: dict, expected_tests: set[str]) -> list[str]:
+    failures = []
+    baseline_tests = baseline.get("tests", {})
+
+    print("Baseline regression checks:")
+    for test_name in sorted(expected_tests):
+        base = baseline_tests.get(test_name)
+        if not base:
+            print(f"  WARNING: No baseline for {test_name}; skipping")
+            continue
+
+        current = metrics.get(test_name, {})
+        for metric_key in ("total_time_ms", "parse_time_ms", "diff_time_ms"):
+            base_val = base.get(metric_key)
+            curr_val = current.get(metric_key)
+            if base_val is None or curr_val is None:
+                print(f"  WARNING: Missing {metric_key} for {test_name}; skipping")
+                continue
+
+            cap = base_val * (1.0 + BASELINE_SLACK_E2E)
+            if curr_val > cap:
+                failures.append(
+                    f"{test_name}: {metric_key} {curr_val} > {base_val} (+{int(BASELINE_SLACK_E2E*100)}%)"
+                )
+
+        base_peak = base.get("peak_memory_bytes")
+        curr_peak = current.get("peak_memory_bytes")
+        if base_peak and curr_peak:
+            cap = base_peak * (1.0 + BASELINE_SLACK_E2E)
+            if curr_peak > cap:
+                failures.append(
+                    f"{test_name}: peak_memory_bytes {curr_peak} > {base_peak} (+{int(BASELINE_SLACK_E2E*100)}%)"
+                )
+    print()
+    return failures
+
+
+def main() -> int:
+    repo_root = Path(__file__).resolve().parent.parent
+    core_dir = repo_root / "core"
+    manifest = repo_root / "fixtures" / "manifest_perf_e2e.yaml"
+
+    parser = argparse.ArgumentParser(
+        description="Export end-to-end workbook open perf metrics"
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=repo_root / "benchmarks" / "results_e2e",
+        help="Output directory for timestamped JSON results",
+    )
+    parser.add_argument(
+        "--latest-json",
+        type=Path,
+        default=repo_root / "benchmarks" / "latest_e2e.json",
+        help="Path to write latest JSON results",
+    )
+    parser.add_argument(
+        "--export-csv",
+        type=Path,
+        default=None,
+        help="Optional path to write latest CSV results",
+    )
+    parser.add_argument(
+        "--skip-fixtures",
+        action="store_true",
+        help="Skip fixture generator installation and generation",
+    )
+    parser.add_argument(
+        "--baseline",
+        type=Path,
+        default=None,
+        help="Pinned baseline JSON file (overrides baseline-dir and suite lookup)",
+    )
+    parser.add_argument(
+        "--baseline-dir",
+        type=Path,
+        default=repo_root / "benchmarks" / "results_e2e",
+        help="Directory containing baseline JSON results",
+    )
+    args = parser.parse_args()
+
+    print("=" * 70)
+    print("Excel Diff E2E Metrics Export")
+    print("=" * 70)
+    print(f"Output: {args.output_dir}")
+    print(f"Latest JSON: {args.latest_json}")
+    if args.export_csv:
+        print(f"Latest CSV: {args.export_csv}")
+    print(f"Git commit: {get_git_commit()}")
+    print(f"Git branch: {get_git_branch()}")
+    print()
+
+    try:
+        if not args.skip_fixtures:
+            install_fixture_generator(repo_root)
+            generate_fixtures(repo_root, manifest)
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}")
+        return 1
+
+    metrics, success = run_e2e_tests(core_dir)
+    if not metrics:
+        print("ERROR: No metrics captured from test output")
+        return 1
+
+    expected_tests = set(E2E_THRESHOLDS.keys())
+    missing_tests = expected_tests - set(metrics.keys())
+    if missing_tests:
+        print(f"ERROR: Missing metrics for expected tests: {missing_tests}")
+        return 1
+
+    _, payload = save_results(metrics, args.output_dir)
+    write_latest(args.latest_json, payload)
+    print(f"Latest JSON written to: {args.latest_json}")
+
+    if args.export_csv:
+        export_csv(args.export_csv, metrics)
+        print(f"Latest CSV written to: {args.export_csv}")
+
+    print("\nThreshold configuration:")
+    effective_thresholds = get_effective_thresholds(E2E_THRESHOLDS)
+    for test_name, caps in effective_thresholds.items():
+        print(
+            f"  {test_name}: total<={caps['max_total_time_s']}s "
+            f"parse<={caps['max_parse_time_s']}s diff<={caps['max_diff_time_s']}s"
+        )
+    print()
+
+    failures = enforce_thresholds(metrics, effective_thresholds)
+
+    baseline = None
+    baseline_path = None
+    if args.baseline:
+        baseline, baseline_path = load_baseline_file(args.baseline)
+    else:
+        pinned = repo_root / "benchmarks" / "baselines" / "e2e.json"
+        if pinned.exists():
+            baseline, baseline_path = load_baseline_file(pinned)
+        else:
+            baseline, baseline_path = load_baseline_dir(args.baseline_dir)
+
+    if baseline and baseline_path:
+        print(f"Baseline: {baseline_path}")
+        failures.extend(enforce_baseline(metrics, baseline, expected_tests))
+    else:
+        if args.baseline:
+            print(f"WARNING: Baseline file not found: {args.baseline}")
+        else:
+            print(f"WARNING: No baseline results found in {args.baseline_dir}")
+
+    if failures:
+        print("=" * 70)
+        print("E2E PERF FAILURES:")
+        for failure in failures:
+            print(f"  - {failure}")
+        print("=" * 70)
+        return 1
+
+    if not success:
+        print("\nWARNING: Some tests may have failed")
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
 
 ```
 
@@ -54439,6 +58403,207 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
         display: block;
       }
 
+      .batch-section,
+      .search-section {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-primary);
+        border-radius: 16px;
+        padding: 24px;
+        margin-bottom: 32px;
+        display: none;
+      }
+
+      .batch-section.visible,
+      .search-section.visible {
+        display: block;
+      }
+
+      .section-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 16px;
+      }
+
+      .section-header h2 {
+        font-size: 18px;
+        margin-bottom: 4px;
+      }
+
+      .section-header p {
+        font-size: 13px;
+        color: var(--text-secondary);
+      }
+
+      .batch-controls {
+        display: grid;
+        grid-template-columns: 1fr 1fr auto;
+        gap: 16px;
+        align-items: end;
+        margin-bottom: 16px;
+      }
+
+      .batch-picker {
+        background: var(--bg-primary);
+        border: 1px solid var(--border-primary);
+        border-radius: 12px;
+        padding: 12px;
+        display: grid;
+        gap: 8px;
+      }
+
+      .batch-label {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        color: var(--text-muted);
+      }
+
+      .batch-path {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--text-secondary);
+        word-break: break-all;
+        min-height: 16px;
+      }
+
+      .batch-run {
+        align-self: stretch;
+      }
+
+      .batch-results {
+        display: grid;
+        gap: 12px;
+      }
+
+      .batch-summary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        font-size: 12px;
+        color: var(--text-secondary);
+      }
+
+      .batch-table-wrap {
+        overflow-x: auto;
+        border: 1px solid var(--border-primary);
+        border-radius: 12px;
+        background: var(--bg-primary);
+      }
+
+      .batch-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+
+      .batch-table th,
+      .batch-table td {
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--border-secondary);
+        text-align: left;
+      }
+
+      .batch-table th {
+        background: var(--bg-tertiary);
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        font-size: 11px;
+      }
+
+      .batch-table tr:hover td {
+        background: var(--bg-hover);
+      }
+
+      .batch-table td:last-child {
+        white-space: nowrap;
+      }
+
+      .search-controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+        margin-bottom: 16px;
+      }
+
+      .search-input,
+      .search-select {
+        background: var(--bg-primary);
+        border: 1px solid var(--border-primary);
+        border-radius: 8px;
+        padding: 8px 12px;
+        color: var(--text-primary);
+        font-size: 13px;
+        font-family: inherit;
+      }
+
+      .search-input {
+        flex: 1 1 240px;
+      }
+
+      .search-input:focus,
+      .search-select:focus {
+        outline: none;
+        border-color: var(--accent-blue);
+        box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.2);
+      }
+
+      .search-results {
+        display: grid;
+        gap: 12px;
+      }
+
+      .search-summary {
+        font-size: 12px;
+        color: var(--text-secondary);
+      }
+
+      .search-item {
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border-primary);
+        border-radius: 12px;
+        padding: 12px 14px;
+        display: grid;
+        gap: 4px;
+      }
+
+      .search-title {
+        font-weight: 600;
+      }
+
+      .search-meta {
+        font-size: 11px;
+        color: var(--text-muted);
+        font-family: var(--font-mono);
+      }
+
+      .search-detail {
+        font-size: 12px;
+        color: var(--text-secondary);
+      }
+
+      .empty-state {
+        background: var(--bg-primary);
+        border: 1px dashed var(--border-primary);
+        border-radius: 10px;
+        padding: 12px 14px;
+        color: var(--text-muted);
+        font-size: 12px;
+      }
+
+      @media (max-width: 900px) {
+        .batch-controls {
+          grid-template-columns: 1fr;
+        }
+
+        .batch-run {
+          width: 100%;
+        }
+      }
+
       .recents-header {
         display: flex;
         align-items: center;
@@ -54651,6 +58816,131 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
 
       .results.visible {
         display: block;
+      }
+
+      .large-mode-nav {
+        display: none;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        padding: 12px 16px;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-primary);
+        border-radius: 12px;
+        margin-bottom: 16px;
+      }
+
+      .large-mode-nav.visible {
+        display: flex;
+      }
+
+      .large-mode-title {
+        font-weight: 600;
+        color: var(--text-primary);
+      }
+
+      .large-summary {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-primary);
+        border-radius: 16px;
+        padding: 24px;
+      }
+
+      .large-summary-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 20px;
+        flex-wrap: wrap;
+      }
+
+      .large-summary-header h2 {
+        font-size: 20px;
+        margin-bottom: 6px;
+      }
+
+      .large-summary-header p {
+        font-size: 13px;
+        color: var(--text-secondary);
+      }
+
+      .large-summary-meta {
+        display: flex;
+        gap: 12px;
+        font-size: 12px;
+        color: var(--text-muted);
+      }
+
+      .large-sheet-list {
+        display: grid;
+        gap: 12px;
+        margin-top: 16px;
+      }
+
+      .large-sheet-item {
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border-primary);
+        border-radius: 12px;
+        padding: 12px 16px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      .large-sheet-main {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        min-width: 200px;
+      }
+
+      .large-sheet-name {
+        font-weight: 600;
+      }
+
+      .large-sheet-meta {
+        font-size: 12px;
+        color: var(--text-secondary);
+      }
+
+      .large-sheet-counts {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+
+      .pill {
+        font-size: 11px;
+        padding: 4px 8px;
+        border-radius: 999px;
+        font-family: var(--font-mono);
+      }
+
+      .pill.added {
+        background: var(--diff-add-bg);
+        color: var(--accent-green);
+        border: 1px solid var(--diff-add-border);
+      }
+
+      .pill.removed {
+        background: var(--diff-remove-bg);
+        color: var(--accent-red);
+        border: 1px solid var(--diff-remove-border);
+      }
+
+      .pill.modified {
+        background: var(--diff-modify-bg);
+        color: var(--accent-yellow);
+        border: 1px solid var(--diff-modify-border);
+      }
+
+      .pill.moved {
+        background: var(--diff-move-bg);
+        color: var(--accent-purple);
+        border: 1px solid var(--diff-move-border);
       }
 
       .summary-cards {
@@ -55917,10 +60207,54 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
             <div class="export-group">
               <button class="secondary-btn" id="exportJson" disabled>Download report JSON</button>
               <button class="secondary-btn" id="exportHtml" disabled>Download HTML report</button>
+              <button class="secondary-btn" id="exportAudit" disabled>Export audit workbook</button>
             </div>
           </div>
           <div class="privacy-note">Runs locally in your browser. Files are not uploaded.</div>
         </div>
+      </section>
+
+      <section class="batch-section" id="batchSection">
+        <div class="section-header">
+          <div>
+            <h2>Batch compare</h2>
+            <p>Compare two folders and open any diff from the table.</p>
+          </div>
+        </div>
+        <div class="batch-controls">
+          <div class="batch-picker">
+            <div class="batch-label">Old folder</div>
+            <button class="secondary-btn" id="batchPickOld">Choose old folder</button>
+            <div class="batch-path" id="batchOldLabel">No folder selected.</div>
+          </div>
+          <div class="batch-picker">
+            <div class="batch-label">New folder</div>
+            <button class="secondary-btn" id="batchPickNew">Choose new folder</button>
+            <div class="batch-path" id="batchNewLabel">No folder selected.</div>
+          </div>
+          <button class="secondary-btn batch-run" id="batchRun" disabled>Run batch compare</button>
+        </div>
+        <div class="batch-results" id="batchResults"></div>
+      </section>
+
+      <section class="search-section" id="searchSection">
+        <div class="section-header">
+          <div>
+            <h2>Deep search</h2>
+            <p>Search changes or build an index to scan full workbooks.</p>
+          </div>
+        </div>
+        <div class="search-controls">
+          <input class="search-input" id="searchInput" type="text" placeholder="Search text, formula, or query" />
+          <select class="search-select" id="searchScope">
+            <option value="changes">Changes</option>
+            <option value="old">Old workbook</option>
+            <option value="new">New workbook</option>
+          </select>
+          <button class="secondary-btn" id="searchRun">Search</button>
+          <button class="secondary-btn" id="searchIndex">Build index</button>
+        </div>
+        <div class="search-results" id="searchResults"></div>
       </section>
 
       <section class="recents-section" id="recentsSection">
@@ -55932,6 +60266,8 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
       </section>
 
       <div id="status"></div>
+
+      <div class="large-mode-nav" id="largeModeNav"></div>
 
       <div id="results" class="results"></div>
 
@@ -55961,7 +60297,22 @@ import { renderWorkbookVm } from "./render.js";
 import { buildWorkbookViewModel } from "./view_model.js";
 import { mountSheetGridViewer } from "./grid_viewer.js";
 import { downloadReportJson, downloadHtmlReport } from "./export.js";
-import { createAppDiffClient, isDesktop, openFileDialog, loadRecents, saveRecent } from "./platform.js";
+import {
+  createAppDiffClient,
+  isDesktop,
+  openFileDialog,
+  openFolderDialog,
+  loadRecents,
+  saveRecent,
+  loadDiffSummary,
+  loadSheetPayload,
+  exportAuditXlsx,
+  runBatchCompare,
+  loadBatchSummary,
+  searchDiffOps,
+  buildSearchIndex,
+  searchWorkbookIndex
+} from "./platform.js";
 
 function byId(id) {
   const el = document.getElementById(id);
@@ -56008,6 +60359,9 @@ let isBusy = false;
 let activeRunId = 0;
 let lastReport = null;
 let lastMeta = null;
+let lastDiffId = null;
+let lastSummary = null;
+let lastMode = "payload";
 let isDesktopApp = false;
 let selectedOld = null;
 let selectedNew = null;
@@ -56015,6 +60369,21 @@ let recentComparisons = [];
 let recentsSection = null;
 let recentsList = null;
 let recentsEmpty = null;
+let largeModeNav = null;
+let selectedOldFolder = null;
+let selectedNewFolder = null;
+let batchSection = null;
+let batchResults = null;
+let batchOldLabel = null;
+let batchNewLabel = null;
+let batchRunBtn = null;
+let searchSection = null;
+let searchResults = null;
+let searchIndexCache = {
+  old: { id: null, path: null },
+  new: { id: null, path: null }
+};
+let largeSummaryCleanup = null;
 
 const FILE_SIDES = {
   old: { dropId: "dropOld", inputId: "fileOld", nameId: "nameOld" },
@@ -56028,11 +60397,13 @@ function setBusy(state) {
   if (cancelBtn) cancelBtn.disabled = !state;
 }
 
-function setExportsEnabled(enabled) {
+function setExportsEnabled({ json = false, html = false, audit = false } = {}) {
   const jsonBtn = byId("exportJson");
   const htmlBtn = byId("exportHtml");
-  if (jsonBtn) jsonBtn.disabled = !enabled;
-  if (htmlBtn) htmlBtn.disabled = !enabled;
+  const auditBtn = document.getElementById("exportAudit");
+  if (jsonBtn) jsonBtn.disabled = !json;
+  if (htmlBtn) htmlBtn.disabled = !html;
+  if (auditBtn) auditBtn.disabled = !audit;
 }
 
 function clearResults() {
@@ -56042,6 +60413,17 @@ function clearResults() {
   byId("rawJsonContent").classList.remove("visible");
   lastReport = null;
   lastMeta = null;
+  lastDiffId = null;
+  lastSummary = null;
+  lastMode = "payload";
+  if (largeModeNav) {
+    largeModeNav.innerHTML = "";
+    largeModeNav.classList.remove("visible");
+  }
+  if (largeSummaryCleanup) {
+    largeSummaryCleanup();
+    largeSummaryCleanup = null;
+  }
 }
 
 function updateDropDisplay(side, file) {
@@ -56164,12 +60546,260 @@ function handleWorkerStatus(status) {
   }
 }
 
+function setBatchFolder(side, path) {
+  if (side === "old") {
+    selectedOldFolder = path;
+  } else {
+    selectedNewFolder = path;
+  }
+  if (batchOldLabel) {
+    batchOldLabel.textContent = selectedOldFolder || "";
+  }
+  if (batchNewLabel) {
+    batchNewLabel.textContent = selectedNewFolder || "";
+  }
+  if (batchRunBtn) {
+    batchRunBtn.disabled = !selectedOldFolder || !selectedNewFolder;
+  }
+}
+
+function renderBatchResults(outcome) {
+  if (!batchResults) return;
+  const items = Array.isArray(outcome?.items) ? outcome.items : [];
+  const rows = items
+    .map(item => {
+      const status = item.status || "";
+      const diffId = item.diffId || "";
+      const opCount = item.opCount != null ? item.opCount : "";
+      const warnings = item.warningsCount != null ? item.warningsCount : "";
+      const action = diffId
+        ? `<button class="secondary-btn batch-open" data-diff-id="${diffId}">Open</button>`
+        : "";
+      return `
+        <tr>
+          <td>${status}</td>
+          <td>${item.oldPath || ""}</td>
+          <td>${item.newPath || ""}</td>
+          <td>${opCount}</td>
+          <td>${warnings}</td>
+          <td>${action}</td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  batchResults.innerHTML = `
+    <div class="batch-summary">
+      <div><strong>${outcome.itemCount || items.length}</strong> items</div>
+      <div><strong>${outcome.completedCount || 0}</strong> completed</div>
+      <div>Status: ${outcome.status || ""}</div>
+    </div>
+    <div class="batch-table-wrap">
+      <table class="batch-table">
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>Old path</th>
+            <th>New path</th>
+            <th>Ops</th>
+            <th>Warnings</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows || "<tr><td colspan=\"6\">No items.</td></tr>"}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function setupBatchSection() {
+  batchSection = document.getElementById("batchSection");
+  batchResults = document.getElementById("batchResults");
+  batchOldLabel = document.getElementById("batchOldLabel");
+  batchNewLabel = document.getElementById("batchNewLabel");
+  batchRunBtn = document.getElementById("batchRun");
+  if (!batchSection) return;
+  batchSection.classList.toggle("visible", isDesktopApp);
+
+  const pickOld = document.getElementById("batchPickOld");
+  const pickNew = document.getElementById("batchPickNew");
+
+  if (pickOld) {
+    pickOld.addEventListener("click", async () => {
+      const path = await openFolderDialog();
+      if (path) setBatchFolder("old", path);
+    });
+  }
+  if (pickNew) {
+    pickNew.addEventListener("click", async () => {
+      const path = await openFolderDialog();
+      if (path) setBatchFolder("new", path);
+    });
+  }
+
+  if (batchRunBtn) {
+    batchRunBtn.addEventListener("click", async () => {
+      if (!selectedOldFolder || !selectedNewFolder) return;
+      setStatus("Running batch compare...", "loading");
+      try {
+        const outcome = await runBatchCompare({
+          oldRoot: selectedOldFolder,
+          newRoot: selectedNewFolder,
+          strategy: "relative",
+          trusted: false
+        });
+        renderBatchResults(outcome);
+        setStatus("Batch complete.", "");
+      } catch (err) {
+        handleError(err);
+      }
+    });
+  }
+
+  if (batchResults) {
+    batchResults.addEventListener("click", event => {
+      const btn = event.target.closest(".batch-open");
+      if (!btn) return;
+      const diffId = btn.dataset.diffId;
+      if (diffId) {
+        openStoredDiff({ diffId });
+      }
+    });
+  }
+}
+
+function renderSearchResults(items, title) {
+  if (!searchResults) return;
+  const rows = items
+    .map(item => {
+      const sheet = item.sheet ? `<div class="search-meta">${item.sheet}</div>` : "";
+      const addr = item.address ? `<div class="search-meta">${item.address}</div>` : "";
+      const detail = item.detail ? `<div class="search-detail">${item.detail}</div>` : "";
+      return `
+        <div class="search-item">
+          <div class="search-title">${item.label || item.text || ""}</div>
+          ${sheet}
+          ${addr}
+          ${detail}
+        </div>
+      `;
+    })
+    .join("");
+
+  searchResults.innerHTML = `
+    <div class="search-summary">${title}</div>
+    ${rows || "<div class=\"empty-state\">No results.</div>"}
+  `;
+}
+
+function getSearchPath(side) {
+  if (lastSummary) {
+    return side === "old" ? lastSummary.oldPath : lastSummary.newPath;
+  }
+  if (side === "old" && selectedOld?.path) return selectedOld.path;
+  if (side === "new" && selectedNew?.path) return selectedNew.path;
+  return null;
+}
+
+async function ensureSearchIndex(side) {
+  const path = getSearchPath(side);
+  if (!path) throw new Error("Select files before building an index.");
+  const cached = searchIndexCache[side];
+  if (cached?.id && cached.path === path) return cached.id;
+  const summary = await buildSearchIndex(path, side);
+  searchIndexCache[side] = { id: summary.indexId, path: summary.path || path };
+  return summary.indexId;
+}
+
+function setupSearchSection() {
+  searchSection = document.getElementById("searchSection");
+  searchResults = document.getElementById("searchResults");
+  if (!searchSection) return;
+  searchSection.classList.toggle("visible", isDesktopApp);
+
+  const searchInput = document.getElementById("searchInput");
+  const searchScope = document.getElementById("searchScope");
+  const searchBtn = document.getElementById("searchRun");
+  const indexBtn = document.getElementById("searchIndex");
+
+  if (searchBtn) {
+    searchBtn.addEventListener("click", async () => {
+      const query = searchInput?.value || "";
+      const scope = searchScope?.value || "changes";
+      if (!query.trim()) return;
+
+      try {
+        if (scope === "changes") {
+          if (!lastDiffId) throw new Error("Run a diff before searching.");
+          const results = await searchDiffOps(lastDiffId, query, 100);
+          renderSearchResults(results, `Matches for \"${query}\" in changes`);
+        } else if (scope === "old" || scope === "new") {
+          const indexId = await ensureSearchIndex(scope);
+          const results = await searchWorkbookIndex(indexId, query, 100);
+          const mapped = results.map(item => ({
+            label: item.text,
+            sheet: item.sheet,
+            address: item.address,
+            detail: item.kind
+          }));
+          renderSearchResults(mapped, `Matches for \"${query}\" in ${scope} workbook`);
+        }
+      } catch (err) {
+        handleError(err);
+      }
+    });
+  }
+
+  if (indexBtn) {
+    indexBtn.addEventListener("click", async () => {
+      const scope = searchScope?.value || "changes";
+      if (scope !== "old" && scope !== "new") return;
+      try {
+        await ensureSearchIndex(scope);
+        setStatus(`Index ready for ${scope} workbook.`, "");
+      } catch (err) {
+        handleError(err);
+      }
+    });
+  }
+}
+
+function normalizeDiffOutcome(result) {
+  if (result && result.mode) {
+    return {
+      mode: result.mode || "payload",
+      diffId: result.diffId || null,
+      payload: result.payload || null,
+      summary: result.summary || null
+    };
+  }
+  return {
+    mode: "payload",
+    diffId: null,
+    payload: result,
+    summary: null
+  };
+}
+
 function buildMeta(oldFile, newFile) {
   return {
     version: engineVersion,
     oldName: fileDisplayName(oldFile) || "",
     newName: fileDisplayName(newFile) || "",
     createdAtIso: new Date().toISOString()
+  };
+}
+
+function buildMetaFromSummary(summary) {
+  const oldPath = summary?.oldPath || "";
+  const newPath = summary?.newPath || "";
+  return {
+    version: engineVersion,
+    oldName: baseName(oldPath),
+    newName: baseName(newPath),
+    createdAtIso: summary?.finishedAt || summary?.startedAt || new Date().toISOString()
   };
 }
 
@@ -56271,6 +60901,16 @@ function renderRecents() {
     loadBtn.dataset.recentIndex = String(index);
     loadBtn.textContent = "Load";
 
+    const openBtn = document.createElement("button");
+    openBtn.type = "button";
+    openBtn.className = "secondary-btn recent-action";
+    openBtn.dataset.recentAction = "open";
+    openBtn.dataset.recentIndex = String(index);
+    openBtn.textContent = "Open";
+    if (!entry.diffId) {
+      openBtn.disabled = true;
+    }
+
     const rerunBtn = document.createElement("button");
     rerunBtn.type = "button";
     rerunBtn.className = "secondary-btn recent-action";
@@ -56286,6 +60926,7 @@ function renderRecents() {
     swapBtn.textContent = "Swap";
 
     actions.appendChild(loadBtn);
+    actions.appendChild(openBtn);
     actions.appendChild(rerunBtn);
     actions.appendChild(swapBtn);
 
@@ -56315,6 +60956,11 @@ function handleRecentsClick(event) {
     return;
   }
 
+  if (action === "open") {
+    openStoredDiff(entry);
+    return;
+  }
+
   applyRecentSelection(entry);
   if (action === "rerun") {
     runDiff();
@@ -56328,7 +60974,9 @@ async function persistRecentComparison(oldFile, newFile, lastRunIso) {
     newPath: newFile.path,
     oldName: fileDisplayName(oldFile),
     newName: fileDisplayName(newFile),
-    lastRunIso: lastRunIso || new Date().toISOString()
+    lastRunIso: lastRunIso || new Date().toISOString(),
+    diffId: lastDiffId || undefined,
+    mode: lastMode || undefined
   };
   try {
     const updated = await saveRecent(entry);
@@ -56354,12 +61002,34 @@ async function loadRecentComparisons() {
   renderRecents();
 }
 
+async function openStoredDiff(entry) {
+  if (!isDesktopApp || !entry?.diffId) return;
+  cleanupViewers();
+  clearResults();
+  setExportsEnabled({ json: false, html: false, audit: false });
+  setStatus("Loading stored diff...", "loading");
+  try {
+    const summary = await loadDiffSummary(entry.diffId);
+    lastDiffId = entry.diffId;
+    lastSummary = summary;
+    lastMode = summary?.mode || "payload";
+    lastReport = null;
+    lastMeta = buildMetaFromSummary(summary);
+    renderLargeSummary(summary);
+    setExportsEnabled({ json: false, html: true, audit: isDesktopApp });
+    const opCount = summary?.opCount || 0;
+    setStatus(`Loaded ${opCount} change${opCount !== 1 ? "s" : ""}.`, "");
+  } catch (err) {
+    handleError(err);
+  }
+}
+
 function cancelDiff() {
   if (!isBusy) return;
   activeRunId += 1;
   diffClient.cancel();
   clearResults();
-  setExportsEnabled(false);
+  setExportsEnabled({ json: false, html: false, audit: false });
   setBusy(false);
   setStatus("Canceled.", "");
 }
@@ -56379,7 +61049,7 @@ async function runDiff() {
 
   cleanupViewers();
   clearResults();
-  setExportsEnabled(false);
+  setExportsEnabled({ json: false, html: false, audit: false });
 
   activeRunId += 1;
   const runId = activeRunId;
@@ -56423,21 +61093,45 @@ async function runDiff() {
     showStage("render");
     await nextFrame();
 
-    const report = payload.report || payload;
-    renderResults(payload, options);
-    byId("raw").textContent = JSON.stringify(report, null, 2);
+    const outcome = normalizeDiffOutcome(payload);
+    lastDiffId = outcome.diffId || null;
+    lastSummary = outcome.summary || null;
+    lastMode = outcome.mode || "payload";
 
-    const opCount = report.ops ? report.ops.length : 0;
-    if (opCount === 0) {
-      setStatus("Files are identical.", "");
+    if (outcome.mode === "payload" && outcome.payload) {
+      const report = outcome.payload.report || outcome.payload;
+      renderResults(outcome.payload, options);
+      byId("raw").textContent = JSON.stringify(report, null, 2);
+
+      const opCount = report.ops ? report.ops.length : 0;
+      if (opCount === 0) {
+        setStatus("Files are identical.", "");
+      } else {
+        setStatus(`Found ${opCount} difference${opCount !== 1 ? "s" : ""}.`, "");
+      }
+
+      lastReport = report;
+      lastMeta = buildMeta(oldFile, newFile);
+      setExportsEnabled({ json: true, html: true, audit: isDesktopApp });
+    } else if (outcome.summary) {
+      renderLargeSummary(outcome.summary);
+      byId("raw").textContent = JSON.stringify(outcome.summary, null, 2);
+      lastReport = null;
+      lastMeta = buildMetaFromSummary(outcome.summary);
+
+      const opCount = outcome.summary.opCount || 0;
+      if (opCount === 0) {
+        setStatus("Files are identical.", "");
+      } else {
+        setStatus(`Found ${opCount} difference${opCount !== 1 ? "s" : ""} (large mode).`, "");
+      }
+
+      setExportsEnabled({ json: false, html: true, audit: isDesktopApp });
     } else {
-      setStatus(`Found ${opCount} difference${opCount !== 1 ? "s" : ""}.`, "");
+      throw new Error("Unexpected diff response.");
     }
 
-    lastReport = report;
-    lastMeta = buildMeta(oldFile, newFile);
-    setExportsEnabled(true);
-    await persistRecentComparison(oldFile, newFile, lastMeta.createdAtIso);
+    await persistRecentComparison(oldFile, newFile, lastMeta?.createdAtIso || "");
   } catch (e) {
     if (!isBusy && String(e).toLowerCase().includes("canceled")) {
       return;
@@ -56460,6 +61154,7 @@ function cleanupViewers() {
 
 function renderResults(payload, options = {}, state = {}) {
   cleanupViewers();
+  hideLargeModeNav();
   const workbookVm = buildWorkbookViewModel(payload, options);
   const resultsEl = byId("results");
   resultsEl.innerHTML = renderWorkbookVm(workbookVm);
@@ -56467,6 +61162,156 @@ function renderResults(payload, options = {}, state = {}) {
   reviewController = setupReviewWorkflow(resultsEl, workbookVm, payload, options, state);
   activeViewerManager = reviewController.viewerManager || null;
   return workbookVm;
+}
+
+function renderSummaryCards(counts = {}) {
+  const added = counts.added || 0;
+  const removed = counts.removed || 0;
+  const modified = counts.modified || 0;
+  const moved = counts.moved || 0;
+  return `
+    <div class="summary-cards">
+      <div class="summary-card added">
+        <div class="count">${added}</div>
+        <div class="label">Added</div>
+      </div>
+      <div class="summary-card removed">
+        <div class="count">${removed}</div>
+        <div class="label">Removed</div>
+      </div>
+      <div class="summary-card modified">
+        <div class="count">${modified}</div>
+        <div class="label">Modified</div>
+      </div>
+      <div class="summary-card moved">
+        <div class="count">${moved}</div>
+        <div class="label">Moved</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderLargeSummary(summary) {
+  cleanupViewers();
+  hideLargeModeNav();
+  if (largeSummaryCleanup) {
+    largeSummaryCleanup();
+    largeSummaryCleanup = null;
+  }
+
+  const resultsEl = byId("results");
+  const warnings = Array.isArray(summary?.warnings) ? summary.warnings : [];
+  const warningsHtml = warnings.length
+    ? `
+      <div class="warnings-section">
+        <div class="warnings-title">
+          <span>!</span>
+          <span>Warnings</span>
+        </div>
+        <ul class="warnings-list">
+          ${warnings.map(w => `<li>${String(w)}</li>`).join("")}
+        </ul>
+      </div>
+    `
+    : "";
+
+  const sheets = Array.isArray(summary?.sheets) ? summary.sheets : [];
+  const sheetHtml = sheets
+    .map(sheet => {
+      const counts = sheet.counts || {};
+      return `
+        <div class="large-sheet-item" data-sheet="${sheet.sheetName}">
+          <div class="large-sheet-main">
+            <div class="large-sheet-name">${sheet.sheetName}</div>
+            <div class="large-sheet-meta">${sheet.opCount || 0} changes</div>
+          </div>
+          <div class="large-sheet-counts">
+            <span class="pill added">+${counts.added || 0}</span>
+            <span class="pill removed">-${counts.removed || 0}</span>
+            <span class="pill modified">~${counts.modified || 0}</span>
+            <span class="pill moved">&gt;${counts.moved || 0}</span>
+          </div>
+          <button class="secondary-btn large-sheet-load" data-sheet="${sheet.sheetName}">Load details</button>
+        </div>
+      `;
+    })
+    .join("");
+
+  resultsEl.innerHTML = `
+    <div class="large-summary">
+      <div class="large-summary-header">
+        <div>
+          <h2>Large Mode Summary</h2>
+          <p>Sheet details load on demand to keep huge diffs responsive.</p>
+        </div>
+        <div class="large-summary-meta">
+          <span>${summary?.opCount || 0} ops</span>
+          <span>${summary?.sheets?.length || 0} sheets</span>
+        </div>
+      </div>
+      ${warningsHtml}
+      ${renderSummaryCards(summary?.counts || {})}
+      <div class="large-sheet-list">
+        ${sheetHtml || "<div class=\"empty-state\">No sheet-level changes recorded.</div>"}
+      </div>
+    </div>
+  `;
+  resultsEl.classList.add("visible");
+
+  const onClick = event => {
+    const button = event.target.closest(".large-sheet-load");
+    if (!button) return;
+    const sheetName = button.dataset.sheet;
+    if (sheetName) {
+      loadLargeSheet(sheetName);
+    }
+  };
+
+  resultsEl.addEventListener("click", onClick);
+  largeSummaryCleanup = () => resultsEl.removeEventListener("click", onClick);
+}
+
+function showLargeModeNav(sheetName) {
+  if (!largeModeNav) return;
+  largeModeNav.innerHTML = `
+    <button class="secondary-btn" id="largeBack">Back to summary</button>
+    <span class="large-mode-title">${sheetName}</span>
+  `;
+  largeModeNav.classList.add("visible");
+  const backBtn = largeModeNav.querySelector("#largeBack");
+  if (backBtn) {
+    backBtn.addEventListener("click", () => {
+      if (lastSummary) {
+        renderLargeSummary(lastSummary);
+        setExportsEnabled({ json: false, html: true, audit: isDesktopApp });
+      }
+    });
+  }
+}
+
+function hideLargeModeNav() {
+  if (!largeModeNav) return;
+  largeModeNav.classList.remove("visible");
+  largeModeNav.innerHTML = "";
+}
+
+async function loadLargeSheet(sheetName) {
+  if (!isDesktopApp || !lastDiffId) return;
+  try {
+    showStage("render", `Loading ${sheetName}...`);
+    const payload = await loadSheetPayload(lastDiffId, sheetName);
+    if (!payload) {
+      throw new Error("No payload returned for sheet.");
+    }
+    renderResults(payload, { ignoreBlankToBlank: true });
+    lastReport = payload.report || payload;
+    lastMeta = buildMetaFromSummary(lastSummary || {});
+    showLargeModeNav(sheetName);
+    setExportsEnabled({ json: false, html: true, audit: isDesktopApp });
+    setStatus(`Loaded ${sheetName}.`, "");
+  } catch (err) {
+    handleError(err);
+  }
 }
 
 function buildReviewOrder(workbookVm) {
@@ -56878,6 +61723,9 @@ async function main() {
 
     setupFileDrop("old");
     setupFileDrop("new");
+    largeModeNav = byId("largeModeNav");
+    setupBatchSection();
+    setupSearchSection();
 
     recentsSection = byId("recentsSection");
     recentsList = byId("recentsList");
@@ -56902,10 +61750,10 @@ async function main() {
     const exportHtmlBtn = byId("exportHtml");
     if (exportHtmlBtn) {
       exportHtmlBtn.addEventListener("click", () => {
-        if (!lastReport || !lastMeta) return;
+        if (!lastMeta) return;
         const resultsHtml = byId("results").innerHTML;
         const cssText = document.querySelector("style")?.textContent || "";
-        const reportJsonText = JSON.stringify(lastReport, null, 2);
+        const reportJsonText = JSON.stringify(lastReport || lastSummary || {}, null, 2);
         const gridPreviews = collectGridPreviews();
         downloadHtmlReport({
           title: "Excel Diff Report",
@@ -56918,12 +61766,24 @@ async function main() {
       });
     }
 
+    const exportAuditBtn = document.getElementById("exportAudit");
+    if (exportAuditBtn) {
+      exportAuditBtn.addEventListener("click", async () => {
+        if (!lastDiffId) return;
+        try {
+          await exportAuditXlsx(lastDiffId);
+        } catch (err) {
+          handleError(err);
+        }
+      });
+    }
+
     byId("toggleJson").addEventListener("click", () => {
       byId("rawJsonContent").classList.toggle("visible");
     });
 
     setBusy(false);
-    setExportsEnabled(false);
+    setExportsEnabled({ json: false, html: false, audit: false });
   } catch (e) {
     setStatus("Failed to load: " + String(e), "error");
   }
@@ -56981,6 +61841,16 @@ export async function openNativeFileDialog() {
   return result;
 }
 
+export async function openNativeFolderDialog() {
+  const bridge = getNativeBridge();
+  if (!bridge) {
+    throw new Error("Native dialog unavailable.");
+  }
+  const result = await bridge.invoke("pick_folder");
+  if (!result) return null;
+  return result;
+}
+
 export async function loadNativeRecents() {
   const bridge = getNativeBridge();
   if (!bridge) return [];
@@ -56991,6 +61861,54 @@ export async function saveNativeRecent(entry) {
   const bridge = getNativeBridge();
   if (!bridge) return [];
   return bridge.invoke("save_recent", { entry });
+}
+
+export async function loadNativeDiffSummary(diffId) {
+  const bridge = getNativeBridge();
+  if (!bridge) throw new Error("Native bridge unavailable.");
+  return bridge.invoke("load_diff_summary", { diff_id: diffId });
+}
+
+export async function loadNativeSheetPayload(diffId, sheetName) {
+  const bridge = getNativeBridge();
+  if (!bridge) throw new Error("Native bridge unavailable.");
+  return bridge.invoke("load_sheet_payload", { diff_id: diffId, sheet_name: sheetName });
+}
+
+export async function exportNativeAuditXlsx(diffId) {
+  const bridge = getNativeBridge();
+  if (!bridge) throw new Error("Native bridge unavailable.");
+  return bridge.invoke("export_audit_xlsx", { diff_id: diffId });
+}
+
+export async function runNativeBatchCompare(request) {
+  const bridge = getNativeBridge();
+  if (!bridge) throw new Error("Native bridge unavailable.");
+  return bridge.invoke("run_batch_compare", { request });
+}
+
+export async function loadNativeBatchSummary(batchId) {
+  const bridge = getNativeBridge();
+  if (!bridge) throw new Error("Native bridge unavailable.");
+  return bridge.invoke("load_batch_summary", { batch_id: batchId });
+}
+
+export async function searchNativeDiffOps(diffId, query, limit) {
+  const bridge = getNativeBridge();
+  if (!bridge) throw new Error("Native bridge unavailable.");
+  return bridge.invoke("search_diff_ops", { diff_id: diffId, query, limit });
+}
+
+export async function buildNativeSearchIndex(path, side) {
+  const bridge = getNativeBridge();
+  if (!bridge) throw new Error("Native bridge unavailable.");
+  return bridge.invoke("build_search_index", { path, side });
+}
+
+export async function searchNativeWorkbookIndex(indexId, query, limit) {
+  const bridge = getNativeBridge();
+  if (!bridge) throw new Error("Native bridge unavailable.");
+  return bridge.invoke("search_workbook_index", { index_id: indexId, query, limit });
 }
 
 export function createNativeDiffClient({ onStatus } = {}) {
@@ -57089,7 +62007,15 @@ export function createNativeDiffClient({ onStatus } = {}) {
     ready,
     diff,
     cancel,
-    dispose
+    dispose,
+    loadSummary: loadNativeDiffSummary,
+    loadSheetPayload: loadNativeSheetPayload,
+    exportAuditXlsx: exportNativeAuditXlsx,
+    runBatchCompare: runNativeBatchCompare,
+    loadBatchSummary: loadNativeBatchSummary,
+    searchDiffOps: searchNativeDiffOps,
+    buildSearchIndex: buildNativeSearchIndex,
+    searchWorkbookIndex: searchNativeWorkbookIndex
   };
 }
 
@@ -57106,7 +62032,16 @@ import {
   getNativeBridge,
   loadNativeRecents,
   openNativeFileDialog,
-  saveNativeRecent
+  openNativeFolderDialog,
+  saveNativeRecent,
+  loadNativeDiffSummary,
+  loadNativeSheetPayload,
+  exportNativeAuditXlsx,
+  runNativeBatchCompare,
+  loadNativeBatchSummary,
+  searchNativeDiffOps,
+  buildNativeSearchIndex,
+  searchNativeWorkbookIndex
 } from "./native_diff_client.js";
 
 export function isDesktop() {
@@ -57125,6 +62060,11 @@ export async function openFileDialog() {
   return openNativeFileDialog();
 }
 
+export async function openFolderDialog() {
+  if (!isDesktop()) return null;
+  return openNativeFolderDialog();
+}
+
 export async function loadRecents() {
   if (!isDesktop()) return [];
   return loadNativeRecents();
@@ -57133,6 +62073,46 @@ export async function loadRecents() {
 export async function saveRecent(entry) {
   if (!isDesktop()) return [];
   return saveNativeRecent(entry);
+}
+
+export async function loadDiffSummary(diffId) {
+  if (!isDesktop()) return null;
+  return loadNativeDiffSummary(diffId);
+}
+
+export async function loadSheetPayload(diffId, sheetName) {
+  if (!isDesktop()) return null;
+  return loadNativeSheetPayload(diffId, sheetName);
+}
+
+export async function exportAuditXlsx(diffId) {
+  if (!isDesktop()) return null;
+  return exportNativeAuditXlsx(diffId);
+}
+
+export async function runBatchCompare(request) {
+  if (!isDesktop()) return null;
+  return runNativeBatchCompare(request);
+}
+
+export async function loadBatchSummary(batchId) {
+  if (!isDesktop()) return null;
+  return loadNativeBatchSummary(batchId);
+}
+
+export async function searchDiffOps(diffId, query, limit) {
+  if (!isDesktop()) return [];
+  return searchNativeDiffOps(diffId, query, limit);
+}
+
+export async function buildSearchIndex(path, side) {
+  if (!isDesktop()) return null;
+  return buildNativeSearchIndex(path, side);
+}
+
+export async function searchWorkbookIndex(indexId, query, limit) {
+  if (!isDesktop()) return [];
+  return searchNativeWorkbookIndex(indexId, query, limit);
 }
 
 ```

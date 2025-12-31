@@ -1,9 +1,12 @@
 use std::collections::HashMap;
 use std::hash::Hash;
+#[cfg(test)]
+use std::cell::Cell as ThreadLocalCell;
 
 use crate::config::DiffConfig;
 use crate::grid_metadata::classify_row_frequencies;
 use crate::hashing::{hash_cell_value, hash_row_content_128};
+use crate::memory_estimate::estimate_gridview_bytes;
 use crate::workbook::{Cell, CellValue, ColSignature, Grid, RowSignature};
 use xxhash_rust::xxh3::Xxh3;
 
@@ -11,6 +14,21 @@ pub use crate::grid_metadata::{FrequencyClass, RowMeta};
 
 pub type RowHash = RowSignature;
 pub type ColHash = ColSignature;
+
+#[cfg(test)]
+thread_local! {
+    static GRIDVIEW_BUILD_COUNT: ThreadLocalCell<usize> = ThreadLocalCell::new(0);
+}
+
+#[cfg(test)]
+pub(crate) fn reset_gridview_build_count() {
+    GRIDVIEW_BUILD_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn gridview_build_count() -> usize {
+    GRIDVIEW_BUILD_COUNT.with(|count| count.get())
+}
 
 #[derive(Debug)]
 pub struct RowView<'a> {
@@ -40,11 +58,12 @@ impl<'a> GridView<'a> {
     }
 
     pub fn from_grid_with_config(grid: &'a Grid, config: &DiffConfig) -> GridView<'a> {
+        #[cfg(test)]
+        {
+            GRIDVIEW_BUILD_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+        }
         let nrows = grid.nrows as usize;
         let ncols = grid.ncols as usize;
-
-        let mut rows: Vec<RowView<'a>> =
-            (0..nrows).map(|_| RowView { cells: Vec::new() }).collect();
 
         let mut row_counts = vec![0u32; nrows];
         let mut row_first_non_blank: Vec<Option<u32>> = vec![None; nrows];
@@ -62,7 +81,6 @@ impl<'a> GridView<'a> {
                 "cell coordinates must lie within the grid bounds"
             );
 
-            rows[r].cells.push((col, cell));
             total_cells = total_cells.saturating_add(1);
 
             if is_non_blank(cell) {
@@ -76,6 +94,21 @@ impl<'a> GridView<'a> {
             }
         }
 
+        let mut rows: Vec<RowView<'a>> = (0..nrows)
+            .map(|idx| RowView {
+                cells: Vec::with_capacity(row_counts[idx] as usize),
+            })
+            .collect();
+
+        for ((row, col), cell) in grid.iter_cells() {
+            let r = row as usize;
+            debug_assert!(
+                r < nrows && (col as usize) < ncols,
+                "cell coordinates must lie within the grid bounds"
+            );
+            rows[r].cells.push((col, cell));
+        }
+
         sort_row_cells(&mut rows, total_cells);
 
         let mut row_meta =
@@ -83,7 +116,14 @@ impl<'a> GridView<'a> {
 
         classify_row_frequencies(&mut row_meta, config);
 
-        let col_meta = build_col_meta(&rows, &col_counts, &col_first_non_blank, total_cells);
+        let allow_parallel_cols = !should_force_sequential_col_meta(grid, config);
+        let col_meta = build_col_meta(
+            &rows,
+            &col_counts,
+            &col_first_non_blank,
+            total_cells,
+            allow_parallel_cols,
+        );
 
         GridView {
             rows,
@@ -230,6 +270,10 @@ const PAR_MIN_CELLS: usize = 200_000;
 #[cfg(feature = "parallel")]
 const PAR_MIN_COLS: usize = 8;
 
+const BYTES_PER_MB: u64 = 1024 * 1024;
+const COL_META_BUDGET_RATIO_NUMERATOR: u64 = 4;
+const COL_META_BUDGET_RATIO_DENOMINATOR: u64 = 5;
+
 #[cfg(feature = "parallel")]
 fn should_parallelize_rows(row_len: usize, total_cells: usize) -> bool {
     row_len >= PAR_MIN_ROWS && total_cells >= PAR_MIN_CELLS
@@ -238,6 +282,16 @@ fn should_parallelize_rows(row_len: usize, total_cells: usize) -> bool {
 #[cfg(feature = "parallel")]
 fn should_parallelize_cols(col_len: usize, total_cells: usize) -> bool {
     col_len >= PAR_MIN_COLS && total_cells >= PAR_MIN_CELLS
+}
+
+fn should_force_sequential_col_meta(grid: &Grid, config: &DiffConfig) -> bool {
+    let Some(max_mb) = config.max_memory_mb else {
+        return false;
+    };
+    let max_bytes = (max_mb as u64).saturating_mul(BYTES_PER_MB);
+    let estimate = estimate_gridview_bytes(grid);
+    estimate.saturating_mul(COL_META_BUDGET_RATIO_DENOMINATOR)
+        >= max_bytes.saturating_mul(COL_META_BUDGET_RATIO_NUMERATOR)
 }
 
 #[cfg(feature = "parallel")]
@@ -338,9 +392,10 @@ fn build_col_meta<'a>(
     col_counts: &[u32],
     col_first_non_blank: &[Option<u32>],
     total_cells: usize,
+    allow_parallel: bool,
 ) -> Vec<ColMeta> {
     let ncols = col_counts.len();
-    if !should_parallelize_cols(ncols, total_cells) {
+    if !allow_parallel || !should_parallelize_cols(ncols, total_cells) {
         return build_col_meta_sequential(rows, col_counts, col_first_non_blank);
     }
 
@@ -388,6 +443,7 @@ fn build_col_meta<'a>(
     col_counts: &[u32],
     col_first_non_blank: &[Option<u32>],
     _total_cells: usize,
+    _allow_parallel: bool,
 ) -> Vec<ColMeta> {
     build_col_meta_sequential(rows, col_counts, col_first_non_blank)
 }

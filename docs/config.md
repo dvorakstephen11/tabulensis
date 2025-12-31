@@ -27,6 +27,7 @@ These fields are intended to keep large diffs from exhausting resources:
   - When exceeded, the engine may fall back to a cheaper positional strategy for the affected sheet and mark the overall result as incomplete with a warning.
 - `timeout_seconds: Option<u32>`: abort the diff after a wall-clock timeout.
   - When exceeded, the engine stops early, preserves already-produced ops, and marks the result as incomplete with a warning.
+- WASM bindings set a default `max_memory_mb` (256 MB) to reduce OOM risk in browser runtimes.
 
 ## Key options you actually tune
 

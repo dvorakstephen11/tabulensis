@@ -14,6 +14,7 @@ Usage:
 import argparse
 import csv
 import json
+import math
 import os
 import re
 import subprocess
@@ -32,6 +33,7 @@ QUICK_THRESHOLDS = {
     "perf_p3_adversarial_repetitive": {"max_time_s": 15},
     "perf_p4_99_percent_blank": {"max_time_s": 2},
     "perf_p5_identical": {"max_time_s": 1},
+    "perf_preflight_low_similarity": {"max_time_s": 5, "max_peak_memory_bytes": 105_048_755},
 }
 
 FULL_SCALE_THRESHOLDS = {
@@ -54,7 +56,14 @@ ENV_VAR_MAP = {
     "perf_p5_identical": "EXCEL_DIFF_PERF_P5_MAX_TIME_S",
 }
 
-QUICK_PATTERNS = ("perf_p1_", "perf_p2_", "perf_p3_", "perf_p4_", "perf_p5_")
+QUICK_PATTERNS = (
+    "perf_p1_",
+    "perf_p2_",
+    "perf_p3_",
+    "perf_p4_",
+    "perf_p5_",
+    "perf_preflight_low_similarity",
+)
 FULL_SCALE_PATTERNS = ("perf_50k_", "perf_100k_", "perf_many_sheets")
 GATE_TESTS = ("perf_50k_dense_single_edit",)
 
@@ -126,7 +135,11 @@ def get_effective_thresholds(thresholds, env_var_map=None):
                 except ValueError:
                     print(f"  WARNING: Invalid value for {env_var}, using default")
 
-        effective[test_name] = {"max_time_s": max_time_s * slack_factor}
+        entry = {"max_time_s": max_time_s * slack_factor}
+        max_peak = config.get("max_peak_memory_bytes")
+        if max_peak is not None:
+            entry["max_peak_memory_bytes"] = int(math.ceil(max_peak * slack_factor))
+        effective[test_name] = entry
 
     if slack_factor != 1.0:
         print(f"  Slack factor: {slack_factor}x applied to absolute caps")
@@ -466,6 +479,8 @@ def main():
         max_time_s = threshold["max_time_s"]
         actual_time_ms = suite_metrics[test_name]["total_time_ms"]
         actual_time_s = actual_time_ms / 1000.0
+        max_peak = threshold.get("max_peak_memory_bytes")
+        actual_peak = suite_metrics[test_name].get("peak_memory_bytes", 0)
 
         if actual_time_s > max_time_s:
             status = "FAIL"
@@ -473,7 +488,15 @@ def main():
         else:
             status = "PASS"
 
-        print(f"  {test_name}: {actual_time_s:.3f}s / {max_time_s:.1f}s [{status}]")
+        line = f"  {test_name}: {actual_time_s:.3f}s / {max_time_s:.1f}s [{status}]"
+        if max_peak is not None:
+            if actual_peak > max_peak:
+                failures.append((test_name, actual_peak, max_peak))
+                mem_status = "FAIL"
+            else:
+                mem_status = "PASS"
+            line += f", peak={actual_peak} / {max_peak} bytes [{mem_status}]"
+        print(line)
 
     print()
 
@@ -547,8 +570,11 @@ def main():
     if failures or baseline_failures:
         print("=" * 60)
         print("PERF FAILURES:")
-        for test_name, actual, max_time in failures:
-            print(f"  {test_name}: {actual:.3f}s exceeded max of {max_time:.1f}s")
+        for test_name, actual, max_cap in failures:
+            if isinstance(actual, float):
+                print(f"  {test_name}: {actual:.3f}s exceeded max of {max_cap:.1f}s")
+            else:
+                print(f"  {test_name}: peak_memory_bytes {actual} exceeded max of {max_cap}")
         if baseline_failures:
             print("Baseline regressions:")
             for test_name, metric, curr, base, slack in baseline_failures:
