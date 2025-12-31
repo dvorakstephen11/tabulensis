@@ -25,7 +25,12 @@ jobs:
           python-version: '3.11'
           
       - name: Check perf thresholds (quick suite)
-        run: python scripts/check_perf_thresholds.py --export-csv benchmarks/latest_quick.csv --export-json benchmarks/latest_quick.json
+        run: python scripts/check_perf_thresholds.py --suite quick --baseline benchmarks/baselines/quick.json --export-csv benchmarks/latest_quick.csv --export-json benchmarks/latest_quick.json
+
+      - name: Check perf thresholds (gate suite)
+        env:
+          EXCEL_DIFF_PERF_SLACK_FACTOR: "1.3"
+        run: python scripts/check_perf_thresholds.py --suite gate --baseline benchmarks/baselines/gate.json --test-target perf_large_grid_tests --export-csv benchmarks/latest_gate.csv --export-json benchmarks/latest_gate.json
 
       - name: Upload perf artifacts
         uses: actions/upload-artifact@v4
@@ -34,4 +39,12 @@ jobs:
           path: |
             benchmarks/latest_quick.csv
             benchmarks/latest_quick.json
+
+      - name: Upload gate perf artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-gate
+          path: |
+            benchmarks/latest_gate.csv
+            benchmarks/latest_gate.json
 

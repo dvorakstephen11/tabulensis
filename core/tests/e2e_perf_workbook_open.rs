@@ -4,7 +4,7 @@ mod common;
 
 use common::fixture_path;
 use excel_diff::perf::DiffMetrics;
-use excel_diff::{CallbackSink, DiffConfig, WorkbookPackage};
+use excel_diff::{CallbackSink, ContainerLimits, DiffConfig, WorkbookPackage};
 use std::fs::File;
 
 fn open_fixture_with_size(name: &str) -> (WorkbookPackage, u64) {
@@ -15,7 +15,12 @@ fn open_fixture_with_size(name: &str) -> (WorkbookPackage, u64) {
     let file = File::open(&path).unwrap_or_else(|e| {
         panic!("failed to open fixture {}: {e}", path.display());
     });
-    let pkg = WorkbookPackage::open(file).unwrap_or_else(|e| {
+    let limits = ContainerLimits {
+        max_entries: 10_000,
+        max_part_uncompressed_bytes: 512 * 1024 * 1024,
+        max_total_uncompressed_bytes: 1024 * 1024 * 1024,
+    };
+    let pkg = WorkbookPackage::open_with_limits(file, limits).unwrap_or_else(|e| {
         panic!("failed to parse fixture {}: {e}", path.display());
     });
     (pkg, bytes)

@@ -6,6 +6,7 @@ This directory contains performance benchmarking infrastructure for excel_diff.
 
 ```
 benchmarks/
+ƒ"oƒ"?ƒ"? baselines/          # Pinned baseline JSONs used for perf gates
 ├── README.md           # This file
 ├── results/            # Timestamped JSON performance data
 │   └── *.json          # Individual benchmark run results
@@ -13,6 +14,32 @@ benchmarks/
 ```
 
 ## Running Benchmarks
+
+### Perf Gate Suites (scripts used by CI)
+
+Quick suite (PR gate, small grids):
+
+```bash
+python scripts/check_perf_thresholds.py --suite quick --baseline benchmarks/baselines/quick.json --export-json benchmarks/latest_quick.json
+```
+
+Gate suite (PR gate, 50k sentinel):
+
+```bash
+python scripts/check_perf_thresholds.py --suite gate --baseline benchmarks/baselines/gate.json --test-target perf_large_grid_tests --export-json benchmarks/latest_gate.json
+```
+
+Full-scale suite (scheduled coverage):
+
+```bash
+python scripts/check_perf_thresholds.py --suite full-scale --baseline benchmarks/baselines/full-scale.json --export-json benchmarks/latest_fullscale.json
+```
+
+E2E parse+diff suite (scheduled, xlsx fixtures):
+
+```bash
+python scripts/export_e2e_metrics.py --baseline benchmarks/baselines/e2e.json --export-csv benchmarks/latest_e2e.csv
+```
 
 ### Quick Performance Tests (CI-friendly, ~1K rows)
 
@@ -54,6 +81,23 @@ python scripts/export_perf_metrics.py
 ```
 
 This runs the performance tests and saves timestamped results to `benchmarks/results/`.
+
+### Baseline Update Workflow
+
+1. Run the suite on a known-good commit (commands above).
+2. Copy the latest JSON into `benchmarks/baselines/`:
+   - `quick.json`, `gate.json`, `full-scale.json`, `e2e.json`
+3. Re-run the suite with `--baseline` to confirm no regressions.
+4. Use `python scripts/compare_perf_results.py` to summarize deltas in the PR.
+
+### Triage When a Gate Fails
+
+1. Re-run the failing suite locally with the same command.
+2. Inspect `benchmarks/latest_gate.json` (or the suite's latest JSON) for:
+   - `total_time_ms`, `parse_time_ms`, `diff_time_ms`, `peak_memory_bytes`
+   - `move_detection_time_ms` and `alignment_time_ms` for bailouts
+3. If regression is expected, update the baseline with a short rationale.
+4. Otherwise, optimize/fix and re-run the gate.
 
 ## Benchmark Categories
 

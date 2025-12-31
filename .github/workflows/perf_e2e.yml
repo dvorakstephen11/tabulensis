@@ -2,7 +2,7 @@ name: Performance E2E
 
 on:
   schedule:
-    - cron: "0 4 * * 1"
+    - cron: "0 4 * * *"
   workflow_dispatch: {}
 
 jobs:
@@ -28,8 +28,8 @@ jobs:
       - name: Generate e2e fixtures
         run: generate-fixtures --manifest fixtures/manifest_perf_e2e.yaml --force
 
-      - name: Export e2e metrics
-        run: python scripts/export_e2e_metrics.py --skip-fixtures --export-csv benchmarks/latest_e2e.csv
+      - name: Export + enforce e2e metrics
+        run: python scripts/export_e2e_metrics.py --skip-fixtures --baseline benchmarks/baselines/e2e.json --export-csv benchmarks/latest_e2e.csv
 
       - name: Upload perf artifacts
         uses: actions/upload-artifact@v4

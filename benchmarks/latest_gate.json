@@ -1,0 +1,37 @@
+{
+  "timestamp": "2025-12-31T14:53:56.265155+00:00",
+  "git_commit": "7f229fe2c6e9",
+  "git_branch": "2025-12-31-13-phase-plan-phase-2",
+  "suite": "gate",
+  "full_scale": true,
+  "tests": {
+    "perf_50k_dense_single_edit": {
+      "total_time_ms": 2651,
+      "parse_time_ms": 0,
+      "diff_time_ms": 2651,
+      "signature_build_time_ms": 2294,
+      "move_detection_time_ms": 0,
+      "alignment_time_ms": 0,
+      "cell_diff_time_ms": 0,
+      "op_emit_time_ms": 0,
+      "report_serialize_time_ms": 0,
+      "peak_memory_bytes": 695883607,
+      "grid_storage_bytes": 240000000,
+      "string_pool_bytes": 203,
+      "op_buffer_bytes": 448,
+      "alignment_buffer_bytes": 208527200,
+      "rows_processed": 100000,
+      "cells_compared": 700,
+      "anchors_found": 0,
+      "moves_detected": 0,
+      "hash_lookups_est": 10000000,
+      "allocations_est": 100200
+    }
+  },
+  "summary": {
+    "total_tests": 1,
+    "total_time_ms": 2651,
+    "total_rows_processed": 100000,
+    "total_cells_compared": 700
+  }
+}

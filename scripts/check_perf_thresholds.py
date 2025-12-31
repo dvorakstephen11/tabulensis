@@ -7,7 +7,8 @@ This script runs perf tests and enforces:
   - Baseline regression checks for total time and peak memory
 
 Usage:
-  python scripts/check_perf_thresholds.py [--full-scale] [--export-json PATH] [--export-csv PATH]
+  python scripts/check_perf_thresholds.py [--suite quick|gate|full-scale] [--export-json PATH] [--export-csv PATH]
+  python scripts/check_perf_thresholds.py --full-scale [--export-json PATH] [--export-csv PATH]
 """
 
 import argparse
@@ -22,6 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 PERF_TEST_TIMEOUT_SECONDS = 120
+GATE_TIMEOUT_SECONDS = 300
 FULL_SCALE_TIMEOUT_SECONDS = 600
 
 QUICK_THRESHOLDS = {
@@ -40,6 +42,10 @@ FULL_SCALE_THRESHOLDS = {
     "perf_50k_identical": {"max_time_s": 15},
 }
 
+GATE_THRESHOLDS = {
+    "perf_50k_dense_single_edit": {"max_time_s": 30},
+}
+
 ENV_VAR_MAP = {
     "perf_p1_large_dense": "EXCEL_DIFF_PERF_P1_MAX_TIME_S",
     "perf_p2_large_noise": "EXCEL_DIFF_PERF_P2_MAX_TIME_S",
@@ -50,8 +56,10 @@ ENV_VAR_MAP = {
 
 QUICK_PATTERNS = ("perf_p1_", "perf_p2_", "perf_p3_", "perf_p4_", "perf_p5_")
 FULL_SCALE_PATTERNS = ("perf_50k_", "perf_100k_", "perf_many_sheets")
+GATE_TESTS = ("perf_50k_dense_single_edit",)
 
 BASELINE_SLACK_QUICK = 0.10
+BASELINE_SLACK_GATE = 0.15
 BASELINE_SLACK_FULL = 0.15
 
 CSV_FIELDS = [
@@ -144,8 +152,12 @@ def parse_perf_metrics(stdout: str) -> dict:
     return metrics
 
 
-def matches_patterns(name: str, patterns: tuple[str, ...]) -> bool:
-    return any(name.startswith(prefix) for prefix in patterns)
+def matches_patterns(name: str, patterns: tuple[str, ...], match_mode: str) -> bool:
+    if match_mode == "prefix":
+        return any(name.startswith(prefix) for prefix in patterns)
+    if match_mode == "exact":
+        return name in patterns
+    raise ValueError(f"Unknown match mode: {match_mode}")
 
 
 def collect_passed_tests(stdout: str) -> list[str]:
@@ -165,12 +177,13 @@ def collect_passed_tests(stdout: str) -> list[str]:
     return tests
 
 
-def export_json(path: Path, metrics: dict, full_scale: bool):
+def export_json(path: Path, metrics: dict, suite_name: str, full_scale: bool):
     timestamp = datetime.now(timezone.utc).isoformat()
     payload = {
         "timestamp": timestamp,
         "git_commit": get_git_commit(),
         "git_branch": get_git_branch(),
+        "suite": suite_name,
         "full_scale": full_scale,
         "tests": metrics,
         "summary": {
@@ -208,7 +221,18 @@ def parse_baseline_timestamp(value: str, fallback: float) -> float:
         return fallback
 
 
-def load_baseline(results_dir: Path, full_scale: bool):
+def load_baseline_file(path: Path):
+    if not path.exists():
+        return None, None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None, None
+    return data, path
+
+
+def load_baseline_dir(results_dir: Path, full_scale: bool):
     if not results_dir.exists():
         return None, None
 
@@ -245,9 +269,15 @@ def main():
         description="Run perf tests and enforce performance thresholds"
     )
     parser.add_argument(
+        "--suite",
+        choices=["quick", "gate", "full-scale"],
+        default=None,
+        help="Perf suite to run (default: quick)",
+    )
+    parser.add_argument(
         "--full-scale",
         action="store_true",
-        help="Run the ignored full-scale perf tests",
+        help="Run the ignored full-scale perf tests (deprecated; use --suite full-scale)",
     )
     parser.add_argument(
         "--export-json",
@@ -262,24 +292,87 @@ def main():
         help="Write perf results to CSV",
     )
     parser.add_argument(
+        "--baseline",
+        type=Path,
+        default=None,
+        help="Pinned baseline JSON file (overrides baseline-dir and suite lookup)",
+    )
+    parser.add_argument(
         "--baseline-dir",
         type=Path,
         default=Path(__file__).parent.parent / "benchmarks" / "results",
         help="Directory containing baseline JSON results",
     )
+    parser.add_argument(
+        "--test-target",
+        type=str,
+        default=None,
+        help="Run only a specific integration test target (e.g., perf_large_grid_tests)",
+    )
     args = parser.parse_args()
 
-    suite_name = "full-scale" if args.full_scale else "quick"
-    thresholds = FULL_SCALE_THRESHOLDS if args.full_scale else QUICK_THRESHOLDS
-    patterns = FULL_SCALE_PATTERNS if args.full_scale else QUICK_PATTERNS
-    baseline_slack = BASELINE_SLACK_FULL if args.full_scale else BASELINE_SLACK_QUICK
-    env_map = None if args.full_scale else ENV_VAR_MAP
+    if args.suite and args.full_scale:
+        parser.error("Use either --suite or --full-scale, not both")
+
+    suite_name = args.suite or ("full-scale" if args.full_scale else "quick")
+
+    suite_configs = {
+        "quick": {
+            "thresholds": QUICK_THRESHOLDS,
+            "patterns": QUICK_PATTERNS,
+            "match_mode": "prefix",
+            "timeout": PERF_TEST_TIMEOUT_SECONDS,
+            "baseline_slack": BASELINE_SLACK_QUICK,
+            "env_map": ENV_VAR_MAP,
+            "ignored": False,
+            "test_filter": "perf_",
+            "default_test_target": None,
+            "full_scale": False,
+        },
+        "gate": {
+            "thresholds": GATE_THRESHOLDS,
+            "patterns": GATE_TESTS,
+            "match_mode": "exact",
+            "timeout": GATE_TIMEOUT_SECONDS,
+            "baseline_slack": BASELINE_SLACK_GATE,
+            "env_map": None,
+            "ignored": True,
+            "test_filter": "perf_50k_dense_single_edit",
+            "default_test_target": "perf_large_grid_tests",
+            "full_scale": True,
+        },
+        "full-scale": {
+            "thresholds": FULL_SCALE_THRESHOLDS,
+            "patterns": FULL_SCALE_PATTERNS,
+            "match_mode": "prefix",
+            "timeout": FULL_SCALE_TIMEOUT_SECONDS,
+            "baseline_slack": BASELINE_SLACK_FULL,
+            "env_map": None,
+            "ignored": True,
+            "test_filter": "perf_",
+            "default_test_target": None,
+            "full_scale": True,
+        },
+    }
+
+    config = suite_configs[suite_name]
+    thresholds = config["thresholds"]
+    patterns = config["patterns"]
+    match_mode = config["match_mode"]
+    baseline_slack = config["baseline_slack"]
+    env_map = config["env_map"]
 
     print("=" * 60)
     print(f"Performance Threshold Check ({suite_name})")
     print("=" * 60)
     print("\nLoading thresholds...")
     effective_thresholds = get_effective_thresholds(thresholds, env_map)
+    print()
+
+    expected_tests = set(effective_thresholds.keys())
+    print("Expected tests:")
+    for test_name in sorted(expected_tests):
+        print(f"  - {test_name}")
     print()
 
     core_dir = Path(__file__).parent.parent / "core"
@@ -292,27 +385,22 @@ def main():
         "--release",
         "--features",
         "perf-metrics",
-        "perf_",
-        "--",
-        "--nocapture",
-        "--test-threads=1",
     ]
 
-    if args.full_scale:
-        cmd = [
-            "cargo",
-            "test",
-            "--release",
-            "--features",
-            "perf-metrics",
-            "perf_",
-            "--",
-            "--ignored",
-            "--nocapture",
-            "--test-threads=1",
-        ]
+    test_target = args.test_target or config["default_test_target"]
+    if test_target:
+        cmd.extend(["--test", test_target])
 
-    timeout = FULL_SCALE_TIMEOUT_SECONDS if args.full_scale else PERF_TEST_TIMEOUT_SECONDS
+    if config["test_filter"]:
+        cmd.append(config["test_filter"])
+
+    test_args = ["--nocapture", "--test-threads=1"]
+    if config["ignored"]:
+        test_args.insert(0, "--ignored")
+
+    cmd.extend(["--"] + test_args)
+
+    timeout = config["timeout"]
 
     start_time = time.time()
     try:
@@ -338,28 +426,29 @@ def main():
         return 1
 
     passed_tests = collect_passed_tests(result.stdout)
-    suite_passed = {t for t in passed_tests if matches_patterns(t, patterns)}
+    suite_passed = {t for t in passed_tests if matches_patterns(t, patterns, match_mode)}
 
     print(f"Passed suite tests: {len(suite_passed)}")
     for test in sorted(suite_passed):
         print(f"  - {test}")
     print()
 
-    expected_tests = set(effective_thresholds.keys())
     missing_tests = expected_tests - suite_passed
     if missing_tests:
         print(f"ERROR: Some expected perf tests did not run: {missing_tests}")
         return 1
 
     metrics = parse_perf_metrics(result.stdout)
-    suite_metrics = {k: v for k, v in metrics.items() if matches_patterns(k, patterns)}
+    suite_metrics = {
+        k: v for k, v in metrics.items() if matches_patterns(k, patterns, match_mode)
+    }
 
     if not suite_metrics:
         print("ERROR: No PERF_METRIC output captured for suite tests")
         return 1
 
     if args.export_json:
-        export_json(args.export_json, suite_metrics, args.full_scale)
+        export_json(args.export_json, suite_metrics, suite_name, config["full_scale"])
         print(f"Wrote JSON results to {args.export_json}")
 
     if args.export_csv:
@@ -389,7 +478,20 @@ def main():
     print()
 
     baseline_failures = []
-    baseline, baseline_path = load_baseline(args.baseline_dir, args.full_scale)
+    baseline = None
+    baseline_path = None
+    if args.baseline:
+        baseline, baseline_path = load_baseline_file(args.baseline)
+    else:
+        repo_root = Path(__file__).parent.parent
+        pinned = repo_root / "benchmarks" / "baselines" / f"{suite_name}.json"
+        if pinned.exists():
+            baseline, baseline_path = load_baseline_file(pinned)
+        else:
+            baseline, baseline_path = load_baseline_dir(
+                args.baseline_dir, config["full_scale"]
+            )
+
     if baseline and baseline_path:
         print(f"Baseline: {baseline_path}")
         baseline_tests = baseline.get("tests", {})
@@ -437,7 +539,10 @@ def main():
                 )
 
     else:
-        print(f"WARNING: No baseline results found in {args.baseline_dir}")
+        if args.baseline:
+            print(f"WARNING: Baseline file not found: {args.baseline}")
+        else:
+            print(f"WARNING: No baseline results found in {args.baseline_dir}")
 
     if failures or baseline_failures:
         print("=" * 60)

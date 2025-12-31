@@ -14,11 +14,43 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import re
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+BASELINE_SLACK_E2E = 0.20
+
+E2E_THRESHOLDS = {
+    "e2e_p1_dense": {
+        "max_total_time_s": 25,
+        "max_parse_time_s": 20,
+        "max_diff_time_s": 10,
+    },
+    "e2e_p2_noise": {
+        "max_total_time_s": 20,
+        "max_parse_time_s": 15,
+        "max_diff_time_s": 10,
+    },
+    "e2e_p3_repetitive": {
+        "max_total_time_s": 30,
+        "max_parse_time_s": 25,
+        "max_diff_time_s": 10,
+    },
+    "e2e_p4_sparse": {
+        "max_total_time_s": 5,
+        "max_parse_time_s": 3,
+        "max_diff_time_s": 2,
+    },
+    "e2e_p5_identical": {
+        "max_total_time_s": 80,
+        "max_parse_time_s": 75,
+        "max_diff_time_s": 10,
+    },
+}
 
 
 CSV_FIELDS = [
@@ -133,6 +165,9 @@ def parse_perf_metrics(stdout: str) -> dict:
         data = {key: int(val) for key, val in re.findall(r"(\w+)=([0-9]+)", rest)}
 
         data.setdefault("total_time_ms", 0)
+        data.setdefault("parse_time_ms", 0)
+        data.setdefault("diff_time_ms", 0)
+        data.setdefault("peak_memory_bytes", 0)
         data.setdefault("rows_processed", 0)
         data.setdefault("cells_compared", 0)
 
@@ -222,6 +257,120 @@ def export_csv(path: Path, metrics: dict) -> None:
             writer.writerow(row)
 
 
+def load_baseline_file(path: Path) -> tuple[dict | None, Path | None]:
+    if not path.exists():
+        return None, None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None, None
+    return data, path
+
+
+def load_baseline_dir(results_dir: Path) -> tuple[dict | None, Path | None]:
+    if not results_dir.exists():
+        return None, None
+
+    candidates = sorted(results_dir.glob("*.json"), key=lambda p: p.stat().st_mtime)
+    if not candidates:
+        return None, None
+    path = candidates[-1]
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None, None
+    return data, path
+
+
+def get_effective_thresholds(thresholds: dict) -> dict:
+    slack_factor = float(os.environ.get("EXCEL_DIFF_E2E_SLACK_FACTOR", "1.0"))
+    effective = {}
+    for test_name, caps in thresholds.items():
+        scaled = {}
+        for key, value in caps.items():
+            scaled[key] = value * slack_factor
+        effective[test_name] = scaled
+
+    if slack_factor != 1.0:
+        print(f"  Slack factor: {slack_factor}x applied to absolute caps")
+
+    return effective
+
+
+def enforce_thresholds(metrics: dict, thresholds: dict) -> list[str]:
+    failures = []
+    print("Absolute threshold checks:")
+    for test_name, caps in thresholds.items():
+        data = metrics.get(test_name, {})
+        total_time_s = data.get("total_time_ms", 0) / 1000.0
+        parse_time_s = data.get("parse_time_ms", 0) / 1000.0
+        diff_time_s = data.get("diff_time_ms", 0) / 1000.0
+
+        max_total = caps.get("max_total_time_s")
+        max_parse = caps.get("max_parse_time_s")
+        max_diff = caps.get("max_diff_time_s")
+
+        if max_total is not None and total_time_s > max_total:
+            failures.append(
+                f"{test_name}: total_time {total_time_s:.3f}s > {max_total:.1f}s"
+            )
+        if max_parse is not None and parse_time_s > max_parse:
+            failures.append(
+                f"{test_name}: parse_time {parse_time_s:.3f}s > {max_parse:.1f}s"
+            )
+        if max_diff is not None and diff_time_s > max_diff:
+            failures.append(
+                f"{test_name}: diff_time {diff_time_s:.3f}s > {max_diff:.1f}s"
+            )
+
+        print(
+            f"  {test_name}: total={total_time_s:.3f}s (cap {max_total:.1f}s), "
+            f"parse={parse_time_s:.3f}s (cap {max_parse:.1f}s), "
+            f"diff={diff_time_s:.3f}s (cap {max_diff:.1f}s)"
+        )
+    print()
+    return failures
+
+
+def enforce_baseline(metrics: dict, baseline: dict, expected_tests: set[str]) -> list[str]:
+    failures = []
+    baseline_tests = baseline.get("tests", {})
+
+    print("Baseline regression checks:")
+    for test_name in sorted(expected_tests):
+        base = baseline_tests.get(test_name)
+        if not base:
+            print(f"  WARNING: No baseline for {test_name}; skipping")
+            continue
+
+        current = metrics.get(test_name, {})
+        for metric_key in ("total_time_ms", "parse_time_ms", "diff_time_ms"):
+            base_val = base.get(metric_key)
+            curr_val = current.get(metric_key)
+            if base_val is None or curr_val is None:
+                print(f"  WARNING: Missing {metric_key} for {test_name}; skipping")
+                continue
+
+            cap = base_val * (1.0 + BASELINE_SLACK_E2E)
+            if curr_val > cap:
+                failures.append(
+                    f"{test_name}: {metric_key} {curr_val} > {base_val} (+{int(BASELINE_SLACK_E2E*100)}%)"
+                )
+
+        base_peak = base.get("peak_memory_bytes")
+        curr_peak = current.get("peak_memory_bytes")
+        if base_peak and curr_peak:
+            cap = base_peak * (1.0 + BASELINE_SLACK_E2E)
+            if curr_peak > cap:
+                failures.append(
+                    f"{test_name}: peak_memory_bytes {curr_peak} > {base_peak} (+{int(BASELINE_SLACK_E2E*100)}%)"
+                )
+    print()
+    return failures
+
+
 def main() -> int:
     repo_root = Path(__file__).resolve().parent.parent
     core_dir = repo_root / "core"
@@ -253,6 +402,18 @@ def main() -> int:
         action="store_true",
         help="Skip fixture generator installation and generation",
     )
+    parser.add_argument(
+        "--baseline",
+        type=Path,
+        default=None,
+        help="Pinned baseline JSON file (overrides baseline-dir and suite lookup)",
+    )
+    parser.add_argument(
+        "--baseline-dir",
+        type=Path,
+        default=repo_root / "benchmarks" / "results_e2e",
+        help="Directory containing baseline JSON results",
+    )
     args = parser.parse_args()
 
     print("=" * 70)
@@ -279,6 +440,12 @@ def main() -> int:
         print("ERROR: No metrics captured from test output")
         return 1
 
+    expected_tests = set(E2E_THRESHOLDS.keys())
+    missing_tests = expected_tests - set(metrics.keys())
+    if missing_tests:
+        print(f"ERROR: Missing metrics for expected tests: {missing_tests}")
+        return 1
+
     _, payload = save_results(metrics, args.output_dir)
     write_latest(args.latest_json, payload)
     print(f"Latest JSON written to: {args.latest_json}")
@@ -286,6 +453,45 @@ def main() -> int:
     if args.export_csv:
         export_csv(args.export_csv, metrics)
         print(f"Latest CSV written to: {args.export_csv}")
+
+    print("\nThreshold configuration:")
+    effective_thresholds = get_effective_thresholds(E2E_THRESHOLDS)
+    for test_name, caps in effective_thresholds.items():
+        print(
+            f"  {test_name}: total<={caps['max_total_time_s']}s "
+            f"parse<={caps['max_parse_time_s']}s diff<={caps['max_diff_time_s']}s"
+        )
+    print()
+
+    failures = enforce_thresholds(metrics, effective_thresholds)
+
+    baseline = None
+    baseline_path = None
+    if args.baseline:
+        baseline, baseline_path = load_baseline_file(args.baseline)
+    else:
+        pinned = repo_root / "benchmarks" / "baselines" / "e2e.json"
+        if pinned.exists():
+            baseline, baseline_path = load_baseline_file(pinned)
+        else:
+            baseline, baseline_path = load_baseline_dir(args.baseline_dir)
+
+    if baseline and baseline_path:
+        print(f"Baseline: {baseline_path}")
+        failures.extend(enforce_baseline(metrics, baseline, expected_tests))
+    else:
+        if args.baseline:
+            print(f"WARNING: Baseline file not found: {args.baseline}")
+        else:
+            print(f"WARNING: No baseline results found in {args.baseline_dir}")
+
+    if failures:
+        print("=" * 70)
+        print("E2E PERF FAILURES:")
+        for failure in failures:
+            print(f"  - {failure}")
+        print("=" * 70)
+        return 1
 
     if not success:
         print("\nWARNING: Some tests may have failed")

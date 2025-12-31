@@ -2,7 +2,7 @@ name: Performance Full Scale
 
 on:
   schedule:
-    - cron: "0 3 * * 1"
+    - cron: "0 3 * * *"
   workflow_dispatch: {}
 
 jobs:
@@ -20,7 +20,7 @@ jobs:
           python-version: '3.11'
 
       - name: Run full-scale perf suite + gates
-        run: python scripts/check_perf_thresholds.py --full-scale --export-csv benchmarks/latest_fullscale.csv --export-json benchmarks/latest_fullscale.json
+        run: python scripts/check_perf_thresholds.py --suite full-scale --baseline benchmarks/baselines/full-scale.json --export-csv benchmarks/latest_fullscale.csv --export-json benchmarks/latest_fullscale.json
 
       - name: Upload perf artifacts
         uses: actions/upload-artifact@v4
