@@ -15,6 +15,22 @@ fn fixture_path(name: &str) -> String {
     p.to_string_lossy().into_owned()
 }
 
+fn run_jsonl_diff(old_path: &str, new_path: &str) -> String {
+    let output = excel_diff_cmd()
+        .args(["diff", "--format", "jsonl", old_path, new_path])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "jsonl diff should detect changes: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
 #[test]
 fn identical_files_exit_0() {
     let output = excel_diff_cmd()
@@ -441,24 +457,243 @@ fn diff_pbix_jsonl_writes_header_and_ops() {
     let header: serde_json::Value =
         serde_json::from_str(first_line).expect("header line should be valid JSON");
     assert_eq!(header.get("kind").and_then(|v| v.as_str()), Some("Header"));
-    assert!(header.get("strings").is_some(), "header should include string table");
+    let strings = header
+        .get("strings")
+        .and_then(|v| v.as_array())
+        .expect("header should include string table");
+    assert!(!strings.is_empty(), "header string table should be non-empty");
 
     let mut has_query_op = false;
     for line in lines {
-        let op: serde_json::Value =
+        let op: excel_diff::DiffOp =
             serde_json::from_str(line).expect("jsonl op line should be valid JSON");
-        if op
-            .get("kind")
-            .and_then(|k| k.as_str())
-            .map(|k| k.starts_with("Query"))
-            .unwrap_or(false)
-        {
+        for id in collect_string_ids(&op) {
+            assert!(
+                (id.0 as usize) < strings.len(),
+                "StringId {} out of range for header string table (len={})",
+                id.0,
+                strings.len()
+            );
+        }
+
+        if op.is_m_op() {
             has_query_op = true;
-            break;
         }
     }
 
     assert!(has_query_op, "expected at least one Query op in jsonl output");
+}
+
+#[test]
+fn jsonl_output_is_deterministic_for_xlsx() {
+    let first = run_jsonl_diff(
+        &fixture_path("single_cell_value_a.xlsx"),
+        &fixture_path("single_cell_value_b.xlsx"),
+    );
+    let second = run_jsonl_diff(
+        &fixture_path("single_cell_value_a.xlsx"),
+        &fixture_path("single_cell_value_b.xlsx"),
+    );
+
+    assert_eq!(first, second, "jsonl output should be deterministic");
+}
+
+#[test]
+fn jsonl_output_is_deterministic_for_pbix() {
+    let first = run_jsonl_diff(
+        &fixture_path("pbix_legacy_multi_query_a.pbix"),
+        &fixture_path("pbix_legacy_multi_query_b.pbix"),
+    );
+    let second = run_jsonl_diff(
+        &fixture_path("pbix_legacy_multi_query_a.pbix"),
+        &fixture_path("pbix_legacy_multi_query_b.pbix"),
+    );
+
+    assert_eq!(first, second, "jsonl output should be deterministic");
+}
+
+fn collect_string_ids(op: &excel_diff::DiffOp) -> Vec<excel_diff::StringId> {
+    fn collect_cell_value(ids: &mut Vec<excel_diff::StringId>, value: &excel_diff::CellValue) {
+        match value {
+            excel_diff::CellValue::Text(id) | excel_diff::CellValue::Error(id) => ids.push(*id),
+            excel_diff::CellValue::Number(_) | excel_diff::CellValue::Bool(_) | excel_diff::CellValue::Blank => {}
+        }
+    }
+
+    fn collect_snapshot(ids: &mut Vec<excel_diff::StringId>, snap: &excel_diff::CellSnapshot) {
+        if let Some(value) = &snap.value {
+            collect_cell_value(ids, value);
+        }
+        if let Some(formula) = snap.formula {
+            ids.push(formula);
+        }
+    }
+
+    fn collect_extracted_string(ids: &mut Vec<excel_diff::StringId>, value: &excel_diff::ExtractedString) {
+        if let excel_diff::ExtractedString::Known { value } = value {
+            ids.push(*value);
+        }
+    }
+
+    fn collect_extracted_string_list(
+        ids: &mut Vec<excel_diff::StringId>,
+        value: &excel_diff::ExtractedStringList,
+    ) {
+        if let excel_diff::ExtractedStringList::Known { values } = value {
+            ids.extend(values.iter().copied());
+        }
+    }
+
+    fn collect_rename_pairs(
+        ids: &mut Vec<excel_diff::StringId>,
+        value: &excel_diff::ExtractedRenamePairs,
+    ) {
+        if let excel_diff::ExtractedRenamePairs::Known { pairs } = value {
+            for excel_diff::RenamePair { from, to } in pairs {
+                ids.push(*from);
+                ids.push(*to);
+            }
+        }
+    }
+
+    fn collect_column_type_changes(
+        ids: &mut Vec<excel_diff::StringId>,
+        value: &excel_diff::ExtractedColumnTypeChanges,
+    ) {
+        if let excel_diff::ExtractedColumnTypeChanges::Known { changes } = value {
+            for change in changes {
+                ids.push(change.column);
+            }
+        }
+    }
+
+    fn collect_step_params(ids: &mut Vec<excel_diff::StringId>, params: &excel_diff::StepParams) {
+        match params {
+            excel_diff::StepParams::TableSelectRows { .. } => {}
+            excel_diff::StepParams::TableRemoveColumns { columns } => collect_extracted_string_list(ids, columns),
+            excel_diff::StepParams::TableRenameColumns { renames } => collect_rename_pairs(ids, renames),
+            excel_diff::StepParams::TableTransformColumnTypes { transforms } => {
+                collect_column_type_changes(ids, transforms);
+            }
+            excel_diff::StepParams::TableNestedJoin {
+                left_keys,
+                right_keys,
+                new_column,
+                ..
+            } => {
+                collect_extracted_string_list(ids, left_keys);
+                collect_extracted_string_list(ids, right_keys);
+                collect_extracted_string(ids, new_column);
+            }
+            excel_diff::StepParams::TableJoin {
+                left_keys,
+                right_keys,
+                ..
+            } => {
+                collect_extracted_string_list(ids, left_keys);
+                collect_extracted_string_list(ids, right_keys);
+            }
+            excel_diff::StepParams::Other { .. } => {}
+        }
+    }
+
+    fn collect_step_snapshot(ids: &mut Vec<excel_diff::StringId>, snapshot: &excel_diff::StepSnapshot) {
+        ids.push(snapshot.name);
+        ids.extend(snapshot.source_refs.iter().copied());
+        if let Some(params) = &snapshot.params {
+            collect_step_params(ids, params);
+        }
+    }
+
+    fn collect_step_diff(ids: &mut Vec<excel_diff::StringId>, diff: &excel_diff::StepDiff) {
+        match diff {
+            excel_diff::StepDiff::StepAdded { step } | excel_diff::StepDiff::StepRemoved { step } => {
+                collect_step_snapshot(ids, step);
+            }
+            excel_diff::StepDiff::StepReordered { name, .. } => ids.push(*name),
+            excel_diff::StepDiff::StepModified { before, after, changes } => {
+                collect_step_snapshot(ids, before);
+                collect_step_snapshot(ids, after);
+                for change in changes {
+                    if let excel_diff::StepChange::Renamed { from, to } = change {
+                        ids.push(*from);
+                        ids.push(*to);
+                    }
+                    if let excel_diff::StepChange::SourceRefsChanged { removed, added } = change {
+                        ids.extend(removed.iter().copied());
+                        ids.extend(added.iter().copied());
+                    }
+                }
+            }
+        }
+    }
+
+    fn collect_semantic_detail(ids: &mut Vec<excel_diff::StringId>, detail: &excel_diff::QuerySemanticDetail) {
+        for diff in &detail.step_diffs {
+            collect_step_diff(ids, diff);
+        }
+    }
+
+    let mut ids = Vec::new();
+    match op {
+        excel_diff::DiffOp::SheetAdded { sheet } | excel_diff::DiffOp::SheetRemoved { sheet } => ids.push(*sheet),
+        excel_diff::DiffOp::RowAdded { sheet, .. }
+        | excel_diff::DiffOp::RowRemoved { sheet, .. }
+        | excel_diff::DiffOp::RowReplaced { sheet, .. } => ids.push(*sheet),
+        excel_diff::DiffOp::ColumnAdded { sheet, .. } | excel_diff::DiffOp::ColumnRemoved { sheet, .. } => ids.push(*sheet),
+        excel_diff::DiffOp::BlockMovedRows { sheet, .. }
+        | excel_diff::DiffOp::BlockMovedColumns { sheet, .. }
+        | excel_diff::DiffOp::BlockMovedRect { sheet, .. }
+        | excel_diff::DiffOp::RectReplaced { sheet, .. } => ids.push(*sheet),
+        excel_diff::DiffOp::CellEdited { sheet, from, to, .. } => {
+            ids.push(*sheet);
+            collect_snapshot(&mut ids, from);
+            collect_snapshot(&mut ids, to);
+        }
+        excel_diff::DiffOp::VbaModuleAdded { name }
+        | excel_diff::DiffOp::VbaModuleRemoved { name }
+        | excel_diff::DiffOp::VbaModuleChanged { name } => ids.push(*name),
+        excel_diff::DiffOp::NamedRangeAdded { name } | excel_diff::DiffOp::NamedRangeRemoved { name } => ids.push(*name),
+        excel_diff::DiffOp::NamedRangeChanged { name, old_ref, new_ref } => {
+            ids.push(*name);
+            ids.push(*old_ref);
+            ids.push(*new_ref);
+        }
+        excel_diff::DiffOp::ChartAdded { sheet, name }
+        | excel_diff::DiffOp::ChartRemoved { sheet, name }
+        | excel_diff::DiffOp::ChartChanged { sheet, name } => {
+            ids.push(*sheet);
+            ids.push(*name);
+        }
+        excel_diff::DiffOp::QueryAdded { name }
+        | excel_diff::DiffOp::QueryRemoved { name }
+        | excel_diff::DiffOp::QueryDefinitionChanged { name, .. } => ids.push(*name),
+        excel_diff::DiffOp::QueryRenamed { from, to } => {
+            ids.push(*from);
+            ids.push(*to);
+        }
+        excel_diff::DiffOp::QueryMetadataChanged { name, old, new, .. } => {
+            ids.push(*name);
+            if let Some(old) = old {
+                ids.push(*old);
+            }
+            if let Some(new) = new {
+                ids.push(*new);
+            }
+        }
+        excel_diff::DiffOp::MeasureAdded { name }
+        | excel_diff::DiffOp::MeasureRemoved { name }
+        | excel_diff::DiffOp::MeasureDefinitionChanged { name, .. } => ids.push(*name),
+        _ => {}
+    }
+
+    if let excel_diff::DiffOp::QueryDefinitionChanged { semantic_detail, .. } = op {
+        if let Some(detail) = semantic_detail {
+            collect_semantic_detail(&mut ids, detail);
+        }
+    }
+
+    ids
 }
 
 #[test]

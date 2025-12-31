@@ -86,6 +86,12 @@
       2025-12-31_150514.json
       2025-12-31_150704.json
       2025-12-31_150906.json
+      2025-12-31_164706.json
+      2025-12-31_164838.json
+      2025-12-31_165012.json
+      2025-12-31_165858.json
+      2025-12-31_170022.json
+    wasm_memory_budgets.json
   Cargo.lock
   Cargo.toml
   cli/
@@ -188,6 +194,7 @@
       matching/
         hungarian.rs
         mod.rs
+      memory_estimate.rs
       memory_metrics.rs
       model.rs
       model_diff.rs
@@ -336,6 +343,7 @@
     export_perf_metrics.py
     verify_release_versions.py
     visualize_benchmarks.py
+    wasm_memory_harness.cjs
   ui_payload/
     Cargo.toml
     src/
@@ -1183,6 +1191,12 @@ jobs:
             echo "Web demo WASM size $SIZE exceeds 10MB limit"
             exit 1
           fi
+
+      - name: Build WASM package (nodejs)
+        run: wasm-pack build wasm --release --target nodejs --out-dir pkg-node
+
+      - name: Enforce WASM memory budgets
+        run: node scripts/wasm_memory_harness.cjs --pkg wasm/pkg-node --budgets benchmarks/wasm_memory_budgets.json
 
 ```
 
@@ -12958,13 +12972,13 @@ use crate::perf::{DiffMetrics, Phase};
 use crate::sink::{DiffSink, VecSink};
 use crate::string_pool::StringPool;
 use crate::workbook::{Grid, RowSignature};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::SheetId;
 use super::context::{DiffContext, EmitCtx, emit_op};
 use super::grid_primitives::{
-    cells_content_equal, compute_formula_diff, run_positional_diff_from_views_with_metrics,
-    run_positional_diff_with_metrics, snapshot_with_addr, positional_diff_from_views_for_rows,
+    cells_content_equal, compute_formula_diff, positional_diff_for_rows,
+    run_positional_diff_with_metrics, snapshot_with_addr,
 };
 use super::move_mask::SheetGridDiffer;
 
@@ -13094,7 +13108,7 @@ fn diff_grids_core<'p, S: DiffSink>(
     let sheet_name = pool.resolve(sheet_id);
     let context = format!("sheet '{sheet_name}'");
     if hardening.memory_guard_or_warn(
-        super::hardening::estimate_advanced_sheet_diff_peak(old, new),
+        crate::memory_estimate::estimate_advanced_sheet_diff_peak(old, new),
         &mut ctx.warnings,
         &context,
     ) {
@@ -13118,29 +13132,16 @@ fn diff_grids_core<'p, S: DiffSink>(
     if let Some(m) = metrics.as_mut() {
         m.start_phase(Phase::SignatureBuild);
     }
-    let old_view = GridView::from_grid_with_config(old, config);
-    let new_view = GridView::from_grid_with_config(new, config);
-    #[cfg(feature = "perf-metrics")]
-    if let Some(m) = metrics.as_mut() {
-        let lookups = old.cell_count() as u64 + new.cell_count() as u64;
-        let allocations = old.nrows as u64
-            + old.ncols as u64
-            + new.nrows as u64
-            + new.ncols as u64;
-        m.add_hash_lookups_est(lookups);
-        m.add_allocations_est(allocations);
-    }
-
-    let preflight = should_short_circuit_to_positional(&old_view, &new_view, config);
-    #[cfg(feature = "perf-metrics")]
-    if let Some(m) = metrics.as_mut() {
-        m.end_phase(Phase::SignatureBuild);
-    }
+    let preflight = preflight_decision_from_grids(old, new, config);
 
     if matches!(
-        preflight,
+        preflight.decision,
         PreflightDecision::ShortCircuitNearIdentical | PreflightDecision::ShortCircuitDissimilar
     ) {
+        #[cfg(feature = "perf-metrics")]
+        if let Some(m) = metrics.as_mut() {
+            m.end_phase(Phase::SignatureBuild);
+        }
         let mut emit_ctx = EmitCtx::new(
             sheet_id,
             pool,
@@ -13154,12 +13155,12 @@ fn diff_grids_core<'p, S: DiffSink>(
             metrics.as_deref_mut(),
         );
 
-        if preflight == PreflightDecision::ShortCircuitNearIdentical
+        if preflight.decision == PreflightDecision::ShortCircuitNearIdentical
             && old.nrows == new.nrows
             && old.ncols == new.ncols
         {
             let rows = rows_with_context(
-                &mismatched_rows(&old_view, &new_view),
+                &preflight.mismatched_rows,
                 config.max_context_rows,
                 old.nrows,
             );
@@ -13167,14 +13168,7 @@ fn diff_grids_core<'p, S: DiffSink>(
             if let Some(m) = emit_ctx.metrics.as_deref_mut() {
                 m.start_phase(Phase::CellDiff);
             }
-            let compared = positional_diff_from_views_for_rows(
-                &mut emit_ctx,
-                old,
-                new,
-                &old_view,
-                &new_view,
-                &rows,
-            )?;
+            let compared = positional_diff_for_rows(&mut emit_ctx, old, new, &rows)?;
             #[cfg(feature = "perf-metrics")]
             if let Some(m) = emit_ctx.metrics.as_deref_mut() {
                 m.add_cells_compared(compared);
@@ -13183,16 +13177,24 @@ fn diff_grids_core<'p, S: DiffSink>(
             #[cfg(not(feature = "perf-metrics"))]
             let _ = compared;
         } else {
-            run_positional_diff_from_views_with_metrics(
-                &mut emit_ctx,
-                old,
-                new,
-                &old_view,
-                &new_view,
-            )?;
+            run_positional_diff_with_metrics(&mut emit_ctx, old, new)?;
         }
 
         return Ok(());
+    }
+
+    let old_view = GridView::from_grid_with_config(old, config);
+    let new_view = GridView::from_grid_with_config(new, config);
+    #[cfg(feature = "perf-metrics")]
+    if let Some(m) = metrics.as_mut() {
+        let lookups = old.cell_count() as u64 + new.cell_count() as u64;
+        let allocations = old.nrows as u64
+            + old.ncols as u64
+            + new.nrows as u64
+            + new.ncols as u64;
+        m.add_hash_lookups_est(lookups);
+        m.add_allocations_est(allocations);
+        m.end_phase(Phase::SignatureBuild);
     }
 
     let emit_ctx = EmitCtx::new(
@@ -13499,27 +13501,42 @@ pub(super) enum PreflightDecision {
     ShortCircuitDissimilar,
 }
 
-pub(super) fn should_short_circuit_to_positional(
-    old_view: &GridView<'_>,
-    new_view: &GridView<'_>,
+#[derive(Debug)]
+struct PreflightLite {
+    decision: PreflightDecision,
+    mismatched_rows: Vec<u32>,
+}
+
+fn preflight_decision_from_grids(
+    old: &Grid,
+    new: &Grid,
     config: &DiffConfig,
-) -> PreflightDecision {
-    let nrows_old = old_view.row_meta.len();
-    let nrows_new = new_view.row_meta.len();
-    let ncols_old = old_view.col_meta.len();
-    let ncols_new = new_view.col_meta.len();
+) -> PreflightLite {
+    let nrows_old = old.nrows as usize;
+    let nrows_new = new.nrows as usize;
+    let ncols_old = old.ncols as usize;
+    let ncols_new = new.ncols as usize;
 
     if nrows_old != nrows_new || ncols_old != ncols_new {
-        return PreflightDecision::RunFullPipeline;
+        return PreflightLite {
+            decision: PreflightDecision::RunFullPipeline,
+            mismatched_rows: Vec::new(),
+        };
     }
 
     let nrows = nrows_old;
     if nrows < config.preflight_min_rows as usize {
-        return PreflightDecision::RunFullPipeline;
+        return PreflightLite {
+            decision: PreflightDecision::RunFullPipeline,
+            mismatched_rows: Vec::new(),
+        };
     }
 
+    let old_signatures = row_signatures_for_grid(old);
+    let new_signatures = row_signatures_for_grid(new);
+
     let (in_order_matches, old_sig_set, new_sig_set) =
-        compute_row_signature_stats(old_view, new_view);
+        compute_row_signature_stats(&old_signatures, &new_signatures);
 
     let in_order_mismatches = nrows.saturating_sub(in_order_matches);
     let in_order_match_ratio = if nrows > 0 {
@@ -13536,8 +13553,15 @@ pub(super) fn should_short_circuit_to_positional(
         1.0
     };
 
+    if jaccard < config.bailout_similarity_threshold {
+        return PreflightLite {
+            decision: PreflightDecision::ShortCircuitDissimilar,
+            mismatched_rows: Vec::new(),
+        };
+    }
+
     let (multiset_equal, multiset_edit_distance_rows) =
-        multiset_equal_and_edit_distance(old_view, new_view);
+        multiset_equal_and_edit_distance(&old_signatures, &new_signatures);
 
     let reorder_suspected = (in_order_mismatches as u64) > multiset_edit_distance_rows;
 
@@ -13547,44 +13571,47 @@ pub(super) fn should_short_circuit_to_positional(
         && !reorder_suspected;
 
     if near_identical {
-        return PreflightDecision::ShortCircuitNearIdentical;
+        return PreflightLite {
+            decision: PreflightDecision::ShortCircuitNearIdentical,
+            mismatched_rows: mismatched_rows_from_signatures(&old_signatures, &new_signatures),
+        };
     }
 
-    if jaccard < config.bailout_similarity_threshold {
-        return PreflightDecision::ShortCircuitDissimilar;
+    PreflightLite {
+        decision: PreflightDecision::RunFullPipeline,
+        mismatched_rows: Vec::new(),
     }
-
-    PreflightDecision::RunFullPipeline
 }
 
 fn compute_row_signature_stats(
-    old_view: &GridView<'_>,
-    new_view: &GridView<'_>,
+    old_signatures: &[RowSignature],
+    new_signatures: &[RowSignature],
 ) -> (usize, HashSet<RowSignature>, HashSet<RowSignature>) {
     let mut in_order_matches = 0usize;
-    let mut old_sig_set = HashSet::with_capacity(old_view.row_meta.len());
-    let mut new_sig_set = HashSet::with_capacity(new_view.row_meta.len());
+    let mut old_sig_set = HashSet::with_capacity(old_signatures.len());
+    let mut new_sig_set = HashSet::with_capacity(new_signatures.len());
 
-    for (old_meta, new_meta) in old_view.row_meta.iter().zip(new_view.row_meta.iter()) {
-        if old_meta.signature == new_meta.signature {
+    for (old_sig, new_sig) in old_signatures.iter().zip(new_signatures.iter()) {
+        if old_sig == new_sig {
             in_order_matches += 1;
         }
-        old_sig_set.insert(old_meta.signature);
-        new_sig_set.insert(new_meta.signature);
+        old_sig_set.insert(*old_sig);
+        new_sig_set.insert(*new_sig);
     }
 
     (in_order_matches, old_sig_set, new_sig_set)
 }
 
-fn multiset_equal_and_edit_distance(old_view: &GridView<'_>, new_view: &GridView<'_>) -> (bool, u64) {
-    use std::collections::HashMap;
-
+fn multiset_equal_and_edit_distance(
+    old_signatures: &[RowSignature],
+    new_signatures: &[RowSignature],
+) -> (bool, u64) {
     let mut delta: HashMap<RowSignature, i32> = HashMap::new();
-    for meta in &old_view.row_meta {
-        *delta.entry(meta.signature).or_insert(0) += 1;
+    for sig in old_signatures {
+        *delta.entry(*sig).or_insert(0) += 1;
     }
-    for meta in &new_view.row_meta {
-        *delta.entry(meta.signature).or_insert(0) -= 1;
+    for sig in new_signatures {
+        *delta.entry(*sig).or_insert(0) -= 1;
     }
 
     let mut equal = true;
@@ -13599,17 +13626,31 @@ fn multiset_equal_and_edit_distance(old_view: &GridView<'_>, new_view: &GridView
     (equal, sum_abs / 2)
 }
 
-fn mismatched_rows(old_view: &GridView<'_>, new_view: &GridView<'_>) -> Vec<u32> {
+fn mismatched_rows_from_signatures(
+    old_signatures: &[RowSignature],
+    new_signatures: &[RowSignature],
+) -> Vec<u32> {
     let mut rows = Vec::new();
-    let count = old_view.row_meta.len().min(new_view.row_meta.len());
+    let count = old_signatures.len().min(new_signatures.len());
     for idx in 0..count {
-        let a = old_view.row_meta[idx].signature;
-        let b = new_view.row_meta[idx].signature;
+        let a = old_signatures[idx];
+        let b = new_signatures[idx];
         if a != b {
             rows.push(idx as u32);
         }
     }
     rows
+}
+
+fn row_signatures_for_grid(grid: &Grid) -> Vec<RowSignature> {
+    if let Some(sigs) = &grid.row_signatures {
+        return sigs.clone();
+    }
+    let mut out = Vec::with_capacity(grid.nrows as usize);
+    for row in 0..grid.nrows {
+        out.push(grid.compute_row_signature(row));
+    }
+    out
 }
 
 fn rows_with_context(rows: &[u32], context: u32, max_rows: u32) -> Vec<u32> {
@@ -13788,15 +13829,82 @@ mod tests {
         grid_b.insert_cell(2999, 5, Some(CellValue::Number(999999.0)), None);
 
         let config = DiffConfig::default();
-        let old_view = GridView::from_grid_with_config(&grid_a, &config);
-        let new_view = GridView::from_grid_with_config(&grid_b, &config);
-
-        let decision = should_short_circuit_to_positional(&old_view, &new_view, &config);
+        let decision = preflight_decision_from_grids(&grid_a, &grid_b, &config);
 
         assert_eq!(
-            decision,
+            decision.decision,
             PreflightDecision::RunFullPipeline,
             "small row swap + edit should NOT short-circuit to near-identical"
+        );
+    }
+
+    #[test]
+    fn preflight_short_circuit_dissimilar_skips_gridview_build() {
+        use crate::grid_view::{gridview_build_count, reset_gridview_build_count};
+
+        let mut grid_a = Grid::new(200, 10);
+        let mut grid_b = Grid::new(200, 10);
+
+        for row in 0..200u32 {
+            for col in 0..10u32 {
+                let value = (row * 1000 + col) as f64;
+                grid_a.insert_cell(row, col, Some(CellValue::Number(value)), None);
+                grid_b.insert_cell(row, col, Some(CellValue::Number(value + 1.0)), None);
+            }
+        }
+
+        let config = DiffConfig::builder()
+            .preflight_min_rows(0)
+            .bailout_similarity_threshold(0.05)
+            .build()
+            .expect("valid config");
+
+        let mut pool = StringPool::new();
+        let sheet_id: SheetId = pool.intern("PreflightTest");
+        let mut sink = VecSink::new();
+        let mut op_count = 0usize;
+        let mut ctx = DiffContext::default();
+        let mut hardening = super::super::hardening::HardeningController::new(&config, None);
+
+        reset_gridview_build_count();
+
+        #[cfg(feature = "perf-metrics")]
+        {
+            diff_grids_core(
+                sheet_id,
+                &grid_a,
+                &grid_b,
+                &config,
+                &pool,
+                &mut sink,
+                &mut op_count,
+                &mut ctx,
+                &mut hardening,
+                None,
+            )
+            .expect("diff should succeed");
+        }
+
+        #[cfg(not(feature = "perf-metrics"))]
+        {
+            diff_grids_core(
+                sheet_id,
+                &grid_a,
+                &grid_b,
+                &config,
+                &pool,
+                &mut sink,
+                &mut op_count,
+                &mut ctx,
+                &mut hardening,
+            )
+            .expect("diff should succeed");
+        }
+
+        assert_eq!(
+            gridview_build_count(),
+            0,
+            "low-similarity preflight should avoid GridView construction"
         );
     }
 
@@ -13817,11 +13925,11 @@ mod tests {
             }
         }
 
-        let config = DiffConfig::default();
-        let old_view = GridView::from_grid_with_config(&grid_a, &config);
-        let new_view = GridView::from_grid_with_config(&grid_b, &config);
+        let old_signatures = row_signatures_for_grid(&grid_a);
+        let new_signatures = row_signatures_for_grid(&grid_b);
 
-        let (equal, edit_distance) = multiset_equal_and_edit_distance(&old_view, &new_view);
+        let (equal, edit_distance) =
+            multiset_equal_and_edit_distance(&old_signatures, &new_signatures);
         assert!(equal);
         assert_eq!(edit_distance, 0);
 
@@ -13829,8 +13937,9 @@ mod tests {
             grid_b.insert_cell(0, col, Some(CellValue::Number(99999.0 + col as f64)), None);
         }
 
-        let new_view_edited = GridView::from_grid_with_config(&grid_b, &config);
-        let (equal2, edit_distance2) = multiset_equal_and_edit_distance(&old_view, &new_view_edited);
+        let new_signatures_edited = row_signatures_for_grid(&grid_b);
+        let (equal2, edit_distance2) =
+            multiset_equal_and_edit_distance(&old_signatures, &new_signatures_edited);
         assert!(!equal2);
         assert_eq!(edit_distance2, 1);
     }
@@ -14752,12 +14861,10 @@ pub(super) fn positional_diff_from_views<S: DiffSink>(
     Ok(compared)
 }
 
-pub(super) fn positional_diff_from_views_for_rows<S: DiffSink>(
+pub(super) fn positional_diff_for_rows<S: DiffSink>(
     ctx: &mut EmitCtx<'_, '_, S>,
     old: &Grid,
     new: &Grid,
-    old_view: &GridView,
-    new_view: &GridView,
     rows: &[u32],
 ) -> Result<u64, DiffError> {
     let overlap_rows = old.nrows.min(new.nrows);
@@ -14787,25 +14894,7 @@ pub(super) fn positional_diff_from_views_for_rows<S: DiffSink>(
             continue;
         }
 
-        let old_cells = old_view
-            .rows
-            .get(row as usize)
-            .map(|r| r.cells.as_slice())
-            .unwrap_or(&[]);
-        let new_cells = new_view
-            .rows
-            .get(row as usize)
-            .map(|r| r.cells.as_slice())
-            .unwrap_or(&[]);
-
-        let result = diff_row_pair_sparse(
-            ctx,
-            row,
-            row,
-            overlap_cols,
-            old_cells,
-            new_cells,
-        )?;
+        let result = diff_row_pair(ctx, old, new, row, row, overlap_cols)?;
         compared = compared.saturating_add(result.compared);
         if result.replaced {
             if let Some(existing) = pending_rect.as_mut() {
@@ -15008,8 +15097,6 @@ pub(super) fn try_single_column_alignment_internal<S: DiffSink>(
 ```rust
 use crate::config::DiffConfig;
 use crate::progress::ProgressCallback;
-use crate::workbook::{Cell, Grid};
-use std::mem::size_of;
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{Duration, Instant};
@@ -15183,51 +15270,6 @@ impl<'a> HardeningController<'a> {
         self.last_progress_percent = Some(clamped);
         callback.on_progress(phase, clamped);
     }
-}
-
-pub(super) fn estimate_gridview_bytes(grid: &Grid) -> u64 {
-    let nrows = grid.nrows as u64;
-    let ncols = grid.ncols as u64;
-    let cell_count = grid.cell_count() as u64;
-
-    let row_view_bytes = nrows.saturating_mul(size_of::<crate::grid_view::RowView<'static>>() as u64);
-    let row_meta_bytes = nrows.saturating_mul(size_of::<crate::grid_view::RowMeta>() as u64);
-    let col_meta_bytes = ncols.saturating_mul(size_of::<crate::grid_view::ColMeta>() as u64);
-
-    let cell_entry_bytes = cell_count
-        .saturating_mul(size_of::<(u32, &'static Cell)>() as u64)
-        .saturating_mul(5)
-        .saturating_div(4);
-
-    let build_row_counts_bytes = nrows
-        .saturating_mul(size_of::<u32>() as u64)
-        .saturating_add(nrows.saturating_mul(size_of::<Option<u32>>() as u64));
-    let build_col_counts_bytes = ncols
-        .saturating_mul(size_of::<u32>() as u64)
-        .saturating_add(ncols.saturating_mul(size_of::<Option<u32>>() as u64));
-    let build_hashers_bytes =
-        ncols.saturating_mul(size_of::<xxhash_rust::xxh3::Xxh3>() as u64);
-
-    row_view_bytes
-        .saturating_add(row_meta_bytes)
-        .saturating_add(col_meta_bytes)
-        .saturating_add(cell_entry_bytes)
-        .saturating_add(build_row_counts_bytes)
-        .saturating_add(build_col_counts_bytes)
-        .saturating_add(build_hashers_bytes)
-}
-
-pub(super) fn estimate_advanced_sheet_diff_peak(old: &Grid, new: &Grid) -> u64 {
-    let base = estimate_gridview_bytes(old).saturating_add(estimate_gridview_bytes(new));
-    let max_rows = old.nrows.max(new.nrows) as u64;
-    let max_cols = old.ncols.max(new.ncols) as u64;
-
-    let alignment_overhead = max_rows
-        .saturating_add(max_cols)
-        .saturating_mul(size_of::<u32>() as u64)
-        .saturating_mul(8);
-
-    base.saturating_add(alignment_overhead)
 }
 
 fn bytes_to_mb_ceil(bytes: u64) -> u64 {
@@ -16874,7 +16916,7 @@ fn estimate_alignment_buffer_bytes(
     let mut max_estimate = 0u64;
     for (key, old_sheet) in &old_sheets {
         if let Some(new_sheet) = new_sheets.get(key) {
-            let estimate = super::hardening::estimate_advanced_sheet_diff_peak(
+            let estimate = crate::memory_estimate::estimate_advanced_sheet_diff_peak(
                 &old_sheet.grid,
                 &new_sheet.grid,
             );
@@ -19820,10 +19862,13 @@ mod tests {
 ```rust
 use std::collections::HashMap;
 use std::hash::Hash;
+#[cfg(test)]
+use std::cell::Cell as ThreadLocalCell;
 
 use crate::config::DiffConfig;
 use crate::grid_metadata::classify_row_frequencies;
 use crate::hashing::{hash_cell_value, hash_row_content_128};
+use crate::memory_estimate::estimate_gridview_bytes;
 use crate::workbook::{Cell, CellValue, ColSignature, Grid, RowSignature};
 use xxhash_rust::xxh3::Xxh3;
 
@@ -19831,6 +19876,21 @@ pub use crate::grid_metadata::{FrequencyClass, RowMeta};
 
 pub type RowHash = RowSignature;
 pub type ColHash = ColSignature;
+
+#[cfg(test)]
+thread_local! {
+    static GRIDVIEW_BUILD_COUNT: ThreadLocalCell<usize> = ThreadLocalCell::new(0);
+}
+
+#[cfg(test)]
+pub(crate) fn reset_gridview_build_count() {
+    GRIDVIEW_BUILD_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn gridview_build_count() -> usize {
+    GRIDVIEW_BUILD_COUNT.with(|count| count.get())
+}
 
 #[derive(Debug)]
 pub struct RowView<'a> {
@@ -19860,11 +19920,12 @@ impl<'a> GridView<'a> {
     }
 
     pub fn from_grid_with_config(grid: &'a Grid, config: &DiffConfig) -> GridView<'a> {
+        #[cfg(test)]
+        {
+            GRIDVIEW_BUILD_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+        }
         let nrows = grid.nrows as usize;
         let ncols = grid.ncols as usize;
-
-        let mut rows: Vec<RowView<'a>> =
-            (0..nrows).map(|_| RowView { cells: Vec::new() }).collect();
 
         let mut row_counts = vec![0u32; nrows];
         let mut row_first_non_blank: Vec<Option<u32>> = vec![None; nrows];
@@ -19882,7 +19943,6 @@ impl<'a> GridView<'a> {
                 "cell coordinates must lie within the grid bounds"
             );
 
-            rows[r].cells.push((col, cell));
             total_cells = total_cells.saturating_add(1);
 
             if is_non_blank(cell) {
@@ -19896,6 +19956,21 @@ impl<'a> GridView<'a> {
             }
         }
 
+        let mut rows: Vec<RowView<'a>> = (0..nrows)
+            .map(|idx| RowView {
+                cells: Vec::with_capacity(row_counts[idx] as usize),
+            })
+            .collect();
+
+        for ((row, col), cell) in grid.iter_cells() {
+            let r = row as usize;
+            debug_assert!(
+                r < nrows && (col as usize) < ncols,
+                "cell coordinates must lie within the grid bounds"
+            );
+            rows[r].cells.push((col, cell));
+        }
+
         sort_row_cells(&mut rows, total_cells);
 
         let mut row_meta =
@@ -19903,7 +19978,14 @@ impl<'a> GridView<'a> {
 
         classify_row_frequencies(&mut row_meta, config);
 
-        let col_meta = build_col_meta(&rows, &col_counts, &col_first_non_blank, total_cells);
+        let allow_parallel_cols = !should_force_sequential_col_meta(grid, config);
+        let col_meta = build_col_meta(
+            &rows,
+            &col_counts,
+            &col_first_non_blank,
+            total_cells,
+            allow_parallel_cols,
+        );
 
         GridView {
             rows,
@@ -20050,6 +20132,10 @@ const PAR_MIN_CELLS: usize = 200_000;
 #[cfg(feature = "parallel")]
 const PAR_MIN_COLS: usize = 8;
 
+const BYTES_PER_MB: u64 = 1024 * 1024;
+const COL_META_BUDGET_RATIO_NUMERATOR: u64 = 4;
+const COL_META_BUDGET_RATIO_DENOMINATOR: u64 = 5;
+
 #[cfg(feature = "parallel")]
 fn should_parallelize_rows(row_len: usize, total_cells: usize) -> bool {
     row_len >= PAR_MIN_ROWS && total_cells >= PAR_MIN_CELLS
@@ -20058,6 +20144,16 @@ fn should_parallelize_rows(row_len: usize, total_cells: usize) -> bool {
 #[cfg(feature = "parallel")]
 fn should_parallelize_cols(col_len: usize, total_cells: usize) -> bool {
     col_len >= PAR_MIN_COLS && total_cells >= PAR_MIN_CELLS
+}
+
+fn should_force_sequential_col_meta(grid: &Grid, config: &DiffConfig) -> bool {
+    let Some(max_mb) = config.max_memory_mb else {
+        return false;
+    };
+    let max_bytes = (max_mb as u64).saturating_mul(BYTES_PER_MB);
+    let estimate = estimate_gridview_bytes(grid);
+    estimate.saturating_mul(COL_META_BUDGET_RATIO_DENOMINATOR)
+        >= max_bytes.saturating_mul(COL_META_BUDGET_RATIO_NUMERATOR)
 }
 
 #[cfg(feature = "parallel")]
@@ -20158,9 +20254,10 @@ fn build_col_meta<'a>(
     col_counts: &[u32],
     col_first_non_blank: &[Option<u32>],
     total_cells: usize,
+    allow_parallel: bool,
 ) -> Vec<ColMeta> {
     let ncols = col_counts.len();
-    if !should_parallelize_cols(ncols, total_cells) {
+    if !allow_parallel || !should_parallelize_cols(ncols, total_cells) {
         return build_col_meta_sequential(rows, col_counts, col_first_non_blank);
     }
 
@@ -20208,6 +20305,7 @@ fn build_col_meta<'a>(
     col_counts: &[u32],
     col_first_non_blank: &[Option<u32>],
     _total_cells: usize,
+    _allow_parallel: bool,
 ) -> Vec<ColMeta> {
     build_col_meta_sequential(rows, col_counts, col_first_non_blank)
 }
@@ -20631,6 +20729,7 @@ mod formula_diff;
 mod grid_metadata;
 mod grid_parser;
 mod grid_view;
+mod memory_estimate;
 pub(crate) mod hashing;
 mod matching;
 mod m_ast;
@@ -25878,6 +25977,59 @@ pub(crate) fn solve_rect(costs: &[Vec<i64>], pad_cost: i64) -> Vec<usize> {
 
 ```rust
 pub(crate) mod hungarian;
+
+```
+
+---
+
+### File: `core\src\memory_estimate.rs`
+
+```rust
+use crate::grid_view::{ColMeta, RowMeta, RowView};
+use crate::workbook::{Cell, Grid};
+use std::mem::size_of;
+
+pub(crate) fn estimate_gridview_bytes(grid: &Grid) -> u64 {
+    let nrows = grid.nrows as u64;
+    let ncols = grid.ncols as u64;
+    let cell_count = grid.cell_count() as u64;
+
+    let row_view_bytes = nrows.saturating_mul(size_of::<RowView<'static>>() as u64);
+    let row_meta_bytes = nrows.saturating_mul(size_of::<RowMeta>() as u64);
+    let col_meta_bytes = ncols.saturating_mul(size_of::<ColMeta>() as u64);
+
+    let cell_entry_bytes = cell_count.saturating_mul(size_of::<(u32, &'static Cell)>() as u64);
+
+    let build_row_counts_bytes = nrows
+        .saturating_mul(size_of::<u32>() as u64)
+        .saturating_add(nrows.saturating_mul(size_of::<Option<u32>>() as u64));
+    let build_col_counts_bytes = ncols
+        .saturating_mul(size_of::<u32>() as u64)
+        .saturating_add(ncols.saturating_mul(size_of::<Option<u32>>() as u64));
+    let build_hashers_bytes =
+        ncols.saturating_mul(size_of::<xxhash_rust::xxh3::Xxh3>() as u64);
+
+    row_view_bytes
+        .saturating_add(row_meta_bytes)
+        .saturating_add(col_meta_bytes)
+        .saturating_add(cell_entry_bytes)
+        .saturating_add(build_row_counts_bytes)
+        .saturating_add(build_col_counts_bytes)
+        .saturating_add(build_hashers_bytes)
+}
+
+pub(crate) fn estimate_advanced_sheet_diff_peak(old: &Grid, new: &Grid) -> u64 {
+    let base = estimate_gridview_bytes(old).saturating_add(estimate_gridview_bytes(new));
+    let max_rows = old.nrows.max(new.nrows) as u64;
+    let max_cols = old.ncols.max(new.ncols) as u64;
+
+    let alignment_overhead = max_rows
+        .saturating_add(max_cols)
+        .saturating_mul(size_of::<u32>() as u64)
+        .saturating_mul(8);
+
+    base.saturating_add(alignment_overhead)
+}
 
 ```
 
@@ -42416,7 +42568,7 @@ fn preflight_skips_move_and_alignment_for_single_cell_edit_same_shape() {
 }
 
 #[test]
-fn preflight_skips_move_and_alignment_for_low_similarity_same_shape() {
+fn perf_preflight_low_similarity() {
     let grid_a = create_large_grid(6000, 50, 0);
     let grid_b = create_large_grid(6000, 50, 100_000_000);
 
@@ -42466,7 +42618,7 @@ fn preflight_skips_move_and_alignment_for_low_similarity_same_shape() {
     );
 
     log_perf_metric(
-        "preflight_low_similarity",
+        "perf_preflight_low_similarity",
         &metrics,
         " (dissimilar bailout)",
     );
@@ -52992,6 +53144,7 @@ Usage:
 import argparse
 import csv
 import json
+import math
 import os
 import re
 import subprocess
@@ -53010,6 +53163,7 @@ QUICK_THRESHOLDS = {
     "perf_p3_adversarial_repetitive": {"max_time_s": 15},
     "perf_p4_99_percent_blank": {"max_time_s": 2},
     "perf_p5_identical": {"max_time_s": 1},
+    "perf_preflight_low_similarity": {"max_time_s": 5, "max_peak_memory_bytes": 105_048_755},
 }
 
 FULL_SCALE_THRESHOLDS = {
@@ -53032,7 +53186,14 @@ ENV_VAR_MAP = {
     "perf_p5_identical": "EXCEL_DIFF_PERF_P5_MAX_TIME_S",
 }
 
-QUICK_PATTERNS = ("perf_p1_", "perf_p2_", "perf_p3_", "perf_p4_", "perf_p5_")
+QUICK_PATTERNS = (
+    "perf_p1_",
+    "perf_p2_",
+    "perf_p3_",
+    "perf_p4_",
+    "perf_p5_",
+    "perf_preflight_low_similarity",
+)
 FULL_SCALE_PATTERNS = ("perf_50k_", "perf_100k_", "perf_many_sheets")
 GATE_TESTS = ("perf_50k_dense_single_edit",)
 
@@ -53104,7 +53265,11 @@ def get_effective_thresholds(thresholds, env_var_map=None):
                 except ValueError:
                     print(f"  WARNING: Invalid value for {env_var}, using default")
 
-        effective[test_name] = {"max_time_s": max_time_s * slack_factor}
+        entry = {"max_time_s": max_time_s * slack_factor}
+        max_peak = config.get("max_peak_memory_bytes")
+        if max_peak is not None:
+            entry["max_peak_memory_bytes"] = int(math.ceil(max_peak * slack_factor))
+        effective[test_name] = entry
 
     if slack_factor != 1.0:
         print(f"  Slack factor: {slack_factor}x applied to absolute caps")
@@ -53444,6 +53609,8 @@ def main():
         max_time_s = threshold["max_time_s"]
         actual_time_ms = suite_metrics[test_name]["total_time_ms"]
         actual_time_s = actual_time_ms / 1000.0
+        max_peak = threshold.get("max_peak_memory_bytes")
+        actual_peak = suite_metrics[test_name].get("peak_memory_bytes", 0)
 
         if actual_time_s > max_time_s:
             status = "FAIL"
@@ -53451,7 +53618,15 @@ def main():
         else:
             status = "PASS"
 
-        print(f"  {test_name}: {actual_time_s:.3f}s / {max_time_s:.1f}s [{status}]")
+        line = f"  {test_name}: {actual_time_s:.3f}s / {max_time_s:.1f}s [{status}]"
+        if max_peak is not None:
+            if actual_peak > max_peak:
+                failures.append((test_name, actual_peak, max_peak))
+                mem_status = "FAIL"
+            else:
+                mem_status = "PASS"
+            line += f", peak={actual_peak} / {max_peak} bytes [{mem_status}]"
+        print(line)
 
     print()
 
@@ -53525,8 +53700,11 @@ def main():
     if failures or baseline_failures:
         print("=" * 60)
         print("PERF FAILURES:")
-        for test_name, actual, max_time in failures:
-            print(f"  {test_name}: {actual:.3f}s exceeded max of {max_time:.1f}s")
+        for test_name, actual, max_cap in failures:
+            if isinstance(actual, float):
+                print(f"  {test_name}: {actual:.3f}s exceeded max of {max_cap:.1f}s")
+            else:
+                print(f"  {test_name}: peak_memory_bytes {actual} exceeded max of {max_cap}")
         if baseline_failures:
             print("Baseline regressions:")
             for test_name, metric, curr, base, slack in baseline_failures:
@@ -53900,6 +54078,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import re
 import subprocess
@@ -53915,26 +54094,31 @@ E2E_THRESHOLDS = {
         "max_total_time_s": 25,
         "max_parse_time_s": 20,
         "max_diff_time_s": 10,
+        "max_peak_memory_bytes": 199_327_436,
     },
     "e2e_p2_noise": {
         "max_total_time_s": 20,
         "max_parse_time_s": 15,
         "max_diff_time_s": 10,
+        "max_peak_memory_bytes": 66_108_831,
     },
     "e2e_p3_repetitive": {
         "max_total_time_s": 30,
         "max_parse_time_s": 25,
         "max_diff_time_s": 10,
+        "max_peak_memory_bytes": 149_252_565,
     },
     "e2e_p4_sparse": {
         "max_total_time_s": 5,
         "max_parse_time_s": 3,
         "max_diff_time_s": 2,
+        "max_peak_memory_bytes": 19_226_538,
     },
     "e2e_p5_identical": {
         "max_total_time_s": 80,
         "max_parse_time_s": 75,
         "max_diff_time_s": 10,
+        "max_peak_memory_bytes": 966_180_894,
     },
 }
 
@@ -54176,7 +54360,10 @@ def get_effective_thresholds(thresholds: dict) -> dict:
     for test_name, caps in thresholds.items():
         scaled = {}
         for key, value in caps.items():
-            scaled[key] = value * slack_factor
+            if key == "max_peak_memory_bytes":
+                scaled[key] = int(math.ceil(value * slack_factor))
+            else:
+                scaled[key] = value * slack_factor
         effective[test_name] = scaled
 
     if slack_factor != 1.0:
@@ -54193,10 +54380,12 @@ def enforce_thresholds(metrics: dict, thresholds: dict) -> list[str]:
         total_time_s = data.get("total_time_ms", 0) / 1000.0
         parse_time_s = data.get("parse_time_ms", 0) / 1000.0
         diff_time_s = data.get("diff_time_ms", 0) / 1000.0
+        peak_bytes = data.get("peak_memory_bytes", 0)
 
         max_total = caps.get("max_total_time_s")
         max_parse = caps.get("max_parse_time_s")
         max_diff = caps.get("max_diff_time_s")
+        max_peak = caps.get("max_peak_memory_bytes")
 
         if max_total is not None and total_time_s > max_total:
             failures.append(
@@ -54210,11 +54399,16 @@ def enforce_thresholds(metrics: dict, thresholds: dict) -> list[str]:
             failures.append(
                 f"{test_name}: diff_time {diff_time_s:.3f}s > {max_diff:.1f}s"
             )
+        if max_peak is not None and peak_bytes > max_peak:
+            failures.append(
+                f"{test_name}: peak_memory_bytes {peak_bytes} > {max_peak}"
+            )
 
         print(
             f"  {test_name}: total={total_time_s:.3f}s (cap {max_total:.1f}s), "
             f"parse={parse_time_s:.3f}s (cap {max_parse:.1f}s), "
-            f"diff={diff_time_s:.3f}s (cap {max_diff:.1f}s)"
+            f"diff={diff_time_s:.3f}s (cap {max_diff:.1f}s), "
+            f"peak={peak_bytes} bytes (cap {max_peak})"
         )
     print()
     return failures
@@ -54345,7 +54539,8 @@ def main() -> int:
     for test_name, caps in effective_thresholds.items():
         print(
             f"  {test_name}: total<={caps['max_total_time_s']}s "
-            f"parse<={caps['max_parse_time_s']}s diff<={caps['max_diff_time_s']}s"
+            f"parse<={caps['max_parse_time_s']}s diff<={caps['max_diff_time_s']}s "
+            f"peak<={caps['max_peak_memory_bytes']} bytes"
         )
     print()
 
@@ -56327,7 +56522,17 @@ ui_payload = { path = "../ui_payload" }
 ```rust
 use std::io::Cursor;
 
+use excel_diff::advanced::{CallbackSink, diff_workbooks_streaming};
+use excel_diff::{CellValue, DiffConfig, Grid, Sheet, SheetKind, StringPool, Workbook};
 use wasm_bindgen::prelude::*;
+
+const WASM_DEFAULT_MAX_MEMORY_MB: u32 = 256;
+
+fn wasm_default_config() -> DiffConfig {
+    let mut cfg = DiffConfig::default();
+    cfg.max_memory_mb = Some(WASM_DEFAULT_MAX_MEMORY_MB);
+    cfg
+}
 
 #[wasm_bindgen(start)]
 pub fn init_panic_hook() {
@@ -56353,7 +56558,7 @@ pub fn diff_files_json(
     let old_cursor = Cursor::new(old_bytes);
     let new_cursor = Cursor::new(new_bytes);
 
-    let cfg = excel_diff::DiffConfig::default();
+    let cfg = wasm_default_config();
 
     let report = match kind_old {
         ui_payload::HostKind::Workbook => {
@@ -56394,7 +56599,7 @@ pub fn diff_files_with_sheets_json(
 
     let old_cursor = Cursor::new(old_bytes);
     let new_cursor = Cursor::new(new_bytes);
-    let cfg = excel_diff::DiffConfig::default();
+    let cfg = wasm_default_config();
 
     let payload = match kind_old {
         ui_payload::HostKind::Workbook => {
@@ -56444,13 +56649,80 @@ pub fn diff_summary(old_bytes: Vec<u8>, new_bytes: Vec<u8>) -> Result<DiffSummar
     let pkg_new = excel_diff::WorkbookPackage::open(new_cursor)
         .map_err(|e| JsValue::from_str(&format!("Failed to open new file: {}", e)))?;
 
-    let report = pkg_old.diff(&pkg_new, &excel_diff::DiffConfig::default());
+    let report = pkg_old.diff(&pkg_new, &wasm_default_config());
 
     Ok(DiffSummary {
         op_count: report.ops.len(),
         sheets_old: pkg_old.workbook.sheets.len(),
         sheets_new: pkg_new.workbook.sheets.len(),
     })
+}
+
+fn create_dense_grid(nrows: u32, ncols: u32, base_value: i64) -> Grid {
+    let mut grid = Grid::new(nrows, ncols);
+    for row in 0..nrows {
+        for col in 0..ncols {
+            let value = base_value + row as i64 * 1000 + col as i64;
+            grid.insert_cell(row, col, Some(CellValue::Number(value as f64)), None);
+        }
+    }
+    grid
+}
+
+fn single_sheet_workbook(pool: &mut StringPool, grid: Grid) -> Workbook {
+    let sheet_name = pool.intern("Sheet1");
+    Workbook {
+        sheets: vec![Sheet {
+            name: sheet_name,
+            kind: SheetKind::Worksheet,
+            grid,
+        }],
+        named_ranges: Vec::new(),
+        charts: Vec::new(),
+    }
+}
+
+#[wasm_bindgen]
+pub fn run_memory_benchmark(case_name: &str) -> Result<u32, JsValue> {
+    let (old_grid, new_grid) = match case_name {
+        "low_similarity" => (
+            create_dense_grid(6000, 50, 0),
+            create_dense_grid(6000, 50, 100_000_000),
+        ),
+        "near_identical" => {
+            let grid_a = create_dense_grid(6000, 50, 0);
+            let mut grid_b = grid_a.clone();
+            grid_b.insert_cell(3000, 25, Some(CellValue::Number(999999.0)), None);
+            (grid_a, grid_b)
+        }
+        _ => {
+            return Err(JsValue::from_str(
+                "Unknown benchmark case (expected 'low_similarity' or 'near_identical')",
+            ))
+        }
+    };
+
+    let mut pool = StringPool::new();
+    let old = single_sheet_workbook(&mut pool, old_grid);
+    let new = single_sheet_workbook(&mut pool, new_grid);
+    let cfg = wasm_default_config();
+
+    let mut sink = CallbackSink::new(|_op| {});
+    let summary = diff_workbooks_streaming(&old, &new, &mut pool, &cfg, &mut sink);
+    Ok(summary.op_count as u32)
+}
+
+#[wasm_bindgen]
+pub fn wasm_memory_bytes() -> u32 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let pages = core::arch::wasm32::memory_size(0) as u32;
+        pages.saturating_mul(65536)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        0
+    }
 }
 
 ```

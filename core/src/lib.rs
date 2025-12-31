@@ -182,7 +182,8 @@ pub mod advanced {
     pub use crate::engine::{
         diff_grids_database_mode, diff_workbooks as diff_workbooks_with_pool,
         diff_workbooks_streaming, diff_workbooks_streaming_with_progress, diff_workbooks_with_progress,
-        try_diff_workbooks as try_diff_workbooks_with_pool, try_diff_workbooks_streaming,
+        try_diff_grids_database_mode_streaming, try_diff_workbooks as try_diff_workbooks_with_pool,
+        try_diff_workbooks_streaming,
         try_diff_workbooks_streaming_with_progress, try_diff_workbooks_with_progress,
     };
     pub use crate::session::DiffSession;
@@ -216,7 +217,8 @@ pub use diffable::{DiffContext, Diffable};
 pub use engine::{
     diff_grids_database_mode, diff_workbooks as diff_workbooks_with_pool, diff_workbooks_streaming,
     diff_workbooks_streaming_with_progress, diff_workbooks_with_progress,
-    try_diff_workbooks as try_diff_workbooks_with_pool, try_diff_workbooks_streaming,
+    try_diff_grids_database_mode_streaming, try_diff_workbooks as try_diff_workbooks_with_pool,
+    try_diff_workbooks_streaming,
     try_diff_workbooks_streaming_with_progress, try_diff_workbooks_with_progress,
 };
 #[cfg(feature = "excel-open-xml")]

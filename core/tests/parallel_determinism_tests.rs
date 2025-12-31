@@ -1,6 +1,10 @@
 #![cfg(feature = "parallel")]
 
-use excel_diff::{CellValue, DiffConfig, DiffContext, Diffable, Grid, with_default_session};
+use excel_diff::{
+    CellValue, DiffConfig, DiffContext, DiffSession, Diffable, Grid, Sheet, SheetKind, StringPool,
+    VecSink, Workbook, try_diff_grids_database_mode_streaming, try_diff_workbooks_streaming,
+    with_default_session,
+};
 use rayon::ThreadPoolBuilder;
 
 fn run_in_pool<T>(threads: usize, f: impl FnOnce() -> T + Send) -> T
@@ -12,6 +16,32 @@ where
         .build()
         .expect("build pool");
     pool.install(f)
+}
+
+fn make_workbook(pool: &mut StringPool, value: f64) -> Workbook {
+    let mut grid = Grid::new(1, 1);
+    grid.insert_cell(0, 0, Some(CellValue::Number(value)), None);
+
+    Workbook {
+        sheets: vec![Sheet {
+            name: pool.intern("Sheet1"),
+            kind: SheetKind::Worksheet,
+            grid,
+        }],
+        ..Default::default()
+    }
+}
+
+fn make_keyed_grid(keys: &[i32], values: &[i32]) -> Grid {
+    let rows = keys.len().max(values.len());
+    let mut grid = Grid::new(rows as u32, 2);
+    for row in 0..rows {
+        let key = keys.get(row).copied().unwrap_or_default() as f64;
+        let value = values.get(row).copied().unwrap_or_default() as f64;
+        grid.insert_cell(row as u32, 0, Some(CellValue::Number(key)), None);
+        grid.insert_cell(row as u32, 1, Some(CellValue::Number(value)), None);
+    }
+    grid
 }
 
 #[test]
@@ -98,4 +128,92 @@ fn ops_are_identical_across_thread_counts_block_move() {
     });
 
     assert_eq!(ops_1, ops_4);
+}
+
+#[test]
+fn streaming_workbook_ops_are_identical_across_thread_counts() {
+    let config = DiffConfig::default();
+
+    let output_1 = run_in_pool(1, || {
+        let mut session = DiffSession::new();
+        let wb_a = make_workbook(&mut session.strings, 1.0);
+        let wb_b = make_workbook(&mut session.strings, 2.0);
+        let mut sink = VecSink::new();
+        let summary = try_diff_workbooks_streaming(
+            &wb_a,
+            &wb_b,
+            &mut session.strings,
+            &config,
+            &mut sink,
+        )
+        .expect("streaming diff should succeed");
+        (sink.into_ops(), summary)
+    });
+
+    let output_4 = run_in_pool(4, || {
+        let mut session = DiffSession::new();
+        let wb_a = make_workbook(&mut session.strings, 1.0);
+        let wb_b = make_workbook(&mut session.strings, 2.0);
+        let mut sink = VecSink::new();
+        let summary = try_diff_workbooks_streaming(
+            &wb_a,
+            &wb_b,
+            &mut session.strings,
+            &config,
+            &mut sink,
+        )
+        .expect("streaming diff should succeed");
+        (sink.into_ops(), summary)
+    });
+
+    assert_eq!(output_1, output_4);
+}
+
+#[test]
+fn streaming_database_mode_ops_are_identical_across_thread_counts() {
+    let config = DiffConfig::default();
+
+    let output_1 = run_in_pool(1, || {
+        let mut session = DiffSession::new();
+        let grid_a = make_keyed_grid(&[1, 2], &[10, 20]);
+        let grid_b = make_keyed_grid(&[1, 2], &[10, 25]);
+        let sheet_id = session.strings.intern("Data");
+        let mut sink = VecSink::new();
+        let mut op_count = 0usize;
+        let summary = try_diff_grids_database_mode_streaming(
+            sheet_id,
+            &grid_a,
+            &grid_b,
+            &[0],
+            &mut session.strings,
+            &config,
+            &mut sink,
+            &mut op_count,
+        )
+        .expect("database streaming diff should succeed");
+        (sink.into_ops(), summary)
+    });
+
+    let output_4 = run_in_pool(4, || {
+        let mut session = DiffSession::new();
+        let grid_a = make_keyed_grid(&[1, 2], &[10, 20]);
+        let grid_b = make_keyed_grid(&[1, 2], &[10, 25]);
+        let sheet_id = session.strings.intern("Data");
+        let mut sink = VecSink::new();
+        let mut op_count = 0usize;
+        let summary = try_diff_grids_database_mode_streaming(
+            sheet_id,
+            &grid_a,
+            &grid_b,
+            &[0],
+            &mut session.strings,
+            &config,
+            &mut sink,
+            &mut op_count,
+        )
+        .expect("database streaming diff should succeed");
+        (sink.into_ops(), summary)
+    });
+
+    assert_eq!(output_1, output_4);
 }

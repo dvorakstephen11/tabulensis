@@ -23,7 +23,7 @@ use crate::diff::SheetId;
 use context::emit_op;
 
 pub use grid_diff::diff_grids_database_mode;
-pub(crate) use grid_diff::try_diff_grids_database_mode_streaming;
+pub use grid_diff::try_diff_grids_database_mode_streaming;
 pub use workbook_diff::{
     diff_workbooks, diff_workbooks_streaming, diff_workbooks_streaming_with_progress,
     diff_workbooks_with_progress, try_diff_workbooks, try_diff_workbooks_streaming,

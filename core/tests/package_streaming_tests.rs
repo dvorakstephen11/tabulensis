@@ -1,8 +1,13 @@
+mod common;
+
+use common::collect_string_ids;
 use excel_diff::{
-    CallbackSink, CellValue, DataMashup, DiffConfig, DiffError, DiffOp, DiffSink, Grid,
-    JsonLinesSink, Metadata, PackageParts, PackageXml, Permissions, SectionDocument, Sheet,
-    SheetKind, StringId, Workbook, WorkbookPackage,
+    DataMashup, DiffConfig, DiffError, DiffOp, DiffSink, Grid, JsonLinesSink, Metadata,
+    PackageParts, PackageXml, Permissions, SectionDocument, Sheet, SheetKind, Workbook,
+    WorkbookPackage,
 };
+#[cfg(feature = "perf-metrics")]
+use excel_diff::{CallbackSink, CellValue};
 use serde::Deserialize;
 
 #[derive(Default)]
@@ -321,60 +326,6 @@ fn package_streaming_json_lines_header_includes_m_strings() {
     struct Header {
         kind: String,
         strings: Vec<String>,
-    }
-
-    fn collect_string_ids(op: &DiffOp) -> Vec<StringId> {
-        fn collect_cell_value(ids: &mut Vec<StringId>, value: &CellValue) {
-            match value {
-                CellValue::Text(id) | CellValue::Error(id) => ids.push(*id),
-                CellValue::Number(_) | CellValue::Bool(_) | CellValue::Blank => {}
-            }
-        }
-
-        fn collect_snapshot(ids: &mut Vec<StringId>, snap: &excel_diff::CellSnapshot) {
-            if let Some(value) = &snap.value {
-                collect_cell_value(ids, value);
-            }
-            if let Some(formula) = snap.formula {
-                ids.push(formula);
-            }
-        }
-
-        let mut ids = Vec::new();
-        match op {
-            DiffOp::SheetAdded { sheet } | DiffOp::SheetRemoved { sheet } => ids.push(*sheet),
-            DiffOp::RowAdded { sheet, .. }
-            | DiffOp::RowRemoved { sheet, .. }
-            | DiffOp::RowReplaced { sheet, .. } => ids.push(*sheet),
-            DiffOp::ColumnAdded { sheet, .. } | DiffOp::ColumnRemoved { sheet, .. } => {
-                ids.push(*sheet);
-            }
-            DiffOp::BlockMovedRows { sheet, .. }
-            | DiffOp::BlockMovedColumns { sheet, .. }
-            | DiffOp::BlockMovedRect { sheet, .. }
-            | DiffOp::RectReplaced { sheet, .. } => ids.push(*sheet),
-            DiffOp::CellEdited {
-                sheet, from, to, ..
-            } => {
-                ids.push(*sheet);
-                collect_snapshot(&mut ids, from);
-                collect_snapshot(&mut ids, to);
-            }
-            DiffOp::QueryAdded { name }
-            | DiffOp::QueryRemoved { name }
-            | DiffOp::QueryDefinitionChanged { name, .. } => ids.push(*name),
-            DiffOp::QueryRenamed { from, to } => {
-                ids.push(*from);
-                ids.push(*to);
-            }
-            DiffOp::QueryMetadataChanged { name, old, new, .. } => {
-                ids.push(*name);
-                ids.extend(old.iter().copied());
-                ids.extend(new.iter().copied());
-            }
-            _ => {}
-        }
-        ids
     }
 
     let wb = make_workbook("Sheet1");

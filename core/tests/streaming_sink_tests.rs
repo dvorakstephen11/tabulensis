@@ -1,3 +1,6 @@
+mod common;
+
+use common::{StructuredOutput, assert_structured_determinism_with_fresh_sessions};
 use excel_diff::{
     CallbackSink, CellValue, DiffConfig, DiffOp, DiffSession, Grid, Sheet, SheetKind, VecSink,
     Workbook, try_diff_workbooks_streaming,
@@ -80,31 +83,20 @@ fn vec_sink_and_callback_sink_produce_identical_ops() {
 
 #[test]
 fn streaming_produces_ops_in_consistent_order() {
-    let mut session = DiffSession::new();
-
-    let wb_a = make_test_workbook(&mut session, &[1.0, 2.0]);
-    let wb_b = make_test_workbook(&mut session, &[3.0, 4.0]);
-
     let config = DiffConfig::default();
+    assert_structured_determinism_with_fresh_sessions(2, |session| {
+        let wb_a = make_test_workbook(session, &[1.0, 2.0]);
+        let wb_b = make_test_workbook(session, &[3.0, 4.0]);
 
-    let mut first_run_ops: Vec<DiffOp> = Vec::new();
-    {
-        let mut sink = CallbackSink::new(|op| first_run_ops.push(op));
-        try_diff_workbooks_streaming(&wb_a, &wb_b, &mut session.strings, &config, &mut sink)
-            .expect("first run should succeed");
-    }
-
-    let mut second_run_ops: Vec<DiffOp> = Vec::new();
-    {
-        let mut sink = CallbackSink::new(|op| second_run_ops.push(op));
-        try_diff_workbooks_streaming(&wb_a, &wb_b, &mut session.strings, &config, &mut sink)
-            .expect("second run should succeed");
-    }
-
-    assert_eq!(
-        first_run_ops, second_run_ops,
-        "streaming output should be deterministic across runs"
-    );
+        let mut sink = VecSink::new();
+        let summary =
+            try_diff_workbooks_streaming(&wb_a, &wb_b, &mut session.strings, &config, &mut sink)
+                .expect("streaming should succeed");
+        StructuredOutput {
+            ops: sink.into_ops(),
+            summary,
+        }
+    });
 }
 
 #[test]

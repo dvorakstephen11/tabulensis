@@ -4,7 +4,7 @@ use crate::datamashup::DataMashup;
 use crate::diff::{DiffError, DiffReport, DiffSummary, SheetId};
 use crate::diffable::{DiffContext, Diffable};
 use crate::progress::ProgressCallback;
-use crate::sink::{DiffSink, NoFinishSink, VecSink};
+use crate::sink::{DiffSink, NoFinishSink, SinkFinishGuard, VecSink};
 use crate::string_pool::StringId;
 use crate::string_pool::StringPool;
 use crate::workbook::{Sheet, Workbook};
@@ -257,6 +257,9 @@ impl WorkbookPackage {
     /// This is the preferred API for very large workbooks because it does not require holding
     /// the entire op list in memory. Instead, ops are emitted incrementally and a [`DiffSummary`]
     /// is returned at the end.
+    ///
+    /// Streaming output follows the contract in `docs/streaming_contract.md` (determinism,
+    /// sink lifecycle, and JSONL string table invariants).
     ///
     /// # Examples
     ///
@@ -546,6 +549,8 @@ impl WorkbookPackage {
     }
 
     /// Streaming database mode diff. Emits ops into `sink` and returns a [`DiffSummary`].
+    ///
+    /// Streaming output follows the contract in `docs/streaming_contract.md`.
     pub fn diff_database_mode_streaming<S: DiffSink>(
         &self,
         other: &Self,
@@ -788,6 +793,9 @@ impl PbixPackage {
         })
     }
 
+    /// Stream a PBIX/PBIT diff into `sink`.
+    ///
+    /// Streaming output follows the contract in `docs/streaming_contract.md`.
     pub fn diff_streaming<S: DiffSink>(
         &self,
         other: &Self,
@@ -806,8 +814,6 @@ impl PbixPackage {
         config: &DiffConfig,
         sink: &mut S,
     ) -> Result<DiffSummary, DiffError> {
-        sink.begin(pool)?;
-
         let m_ops = crate::m_diff::diff_m_ops_for_packages(
             &self.data_mashup,
             &other.data_mashup,
@@ -815,14 +821,8 @@ impl PbixPackage {
             config,
         );
 
-        let mut op_count = 0usize;
-        for op in m_ops {
-            sink.emit(op)?;
-            op_count = op_count.saturating_add(1);
-        }
-
         #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
-        {
+        let model_ops = {
             let old_raw = self.model_schema.as_ref();
             let new_raw = other.model_schema.as_ref();
 
@@ -835,15 +835,30 @@ impl PbixPackage {
                     .map(|r| crate::tabular_schema::build_model(r, pool))
                     .unwrap_or_default();
 
-                let model_ops = crate::model_diff::diff_models(&old_model, &new_model, pool);
-                for op in model_ops {
-                    sink.emit(op)?;
-                    op_count = op_count.saturating_add(1);
-                }
+                Some(crate::model_diff::diff_models(&old_model, &new_model, pool))
+            } else {
+                None
+            }
+        };
+
+        sink.begin(pool)?;
+        let mut finish_guard = SinkFinishGuard::new(sink);
+
+        let mut op_count = 0usize;
+        for op in m_ops {
+            sink.emit(op)?;
+            op_count = op_count.saturating_add(1);
+        }
+
+        #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+        if let Some(model_ops) = model_ops {
+            for op in model_ops {
+                sink.emit(op)?;
+                op_count = op_count.saturating_add(1);
             }
         }
 
-        sink.finish()?;
+        finish_guard.finish_and_disarm()?;
 
         Ok(DiffSummary {
             complete: true,
@@ -938,6 +953,98 @@ fn find_sheets_case_insensitive<'a>(
                 requested: sheet_name.to_string(),
                 available,
             })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+    use crate::{DiffOp, Metadata, PackageParts, PackageXml, Permissions, SectionDocument};
+
+    #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+    use crate::tabular_schema::{RawMeasure, RawTabularModel};
+
+    #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+    fn make_dm(section_source: &str) -> DataMashup {
+        DataMashup {
+            version: 0,
+            package_parts: PackageParts {
+                package_xml: PackageXml {
+                    raw_xml: "<Package/>".to_string(),
+                },
+                main_section: SectionDocument {
+                    source: section_source.to_string(),
+                },
+                embedded_contents: Vec::new(),
+            },
+            permissions: Permissions::default(),
+            metadata: Metadata { formulas: Vec::new() },
+            permission_bindings_raw: Vec::new(),
+        }
+    }
+
+    #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+    #[test]
+    fn pbix_streaming_orders_query_ops_before_measure_ops() {
+        let dm_a = make_dm("section Section1;\nshared Foo = 1;");
+        let dm_b = make_dm("section Section1;\nshared Bar = 1;");
+
+        let raw_a = RawTabularModel {
+            measures: vec![RawMeasure {
+                full_name: "Table/Measure1".to_string(),
+                expression: "1".to_string(),
+            }],
+        };
+        let raw_b = RawTabularModel {
+            measures: vec![RawMeasure {
+                full_name: "Table/Measure1".to_string(),
+                expression: "2".to_string(),
+            }],
+        };
+
+        let pkg_a = PbixPackage {
+            data_mashup: Some(dm_a),
+            model_schema: Some(raw_a),
+        };
+        let pkg_b = PbixPackage {
+            data_mashup: Some(dm_b),
+            model_schema: Some(raw_b),
+        };
+
+        let mut pool = StringPool::new();
+        let mut sink = VecSink::new();
+        pkg_a
+            .diff_streaming_with_pool(&pkg_b, &mut pool, &DiffConfig::default(), &mut sink)
+            .expect("pbix streaming should succeed");
+        let ops = sink.into_ops();
+
+        assert!(ops.iter().any(DiffOp::is_m_op), "expected query ops");
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                DiffOp::MeasureAdded { .. }
+                    | DiffOp::MeasureRemoved { .. }
+                    | DiffOp::MeasureDefinitionChanged { .. }
+            )),
+            "expected measure ops"
+        );
+
+        let mut seen_measure = false;
+        for op in ops {
+            if matches!(
+                op,
+                DiffOp::MeasureAdded { .. }
+                    | DiffOp::MeasureRemoved { .. }
+                    | DiffOp::MeasureDefinitionChanged { .. }
+            ) {
+                seen_measure = true;
+                continue;
+            }
+            if op.is_m_op() && seen_measure {
+                panic!("query op appeared after measure ops");
+            }
         }
     }
 }

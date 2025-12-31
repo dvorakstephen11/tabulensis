@@ -4,7 +4,7 @@ use crate::formula_diff::FormulaParseCache;
 use crate::grid_view::GridView;
 #[cfg(feature = "perf-metrics")]
 use crate::perf::{DiffMetrics, Phase};
-use crate::sink::{DiffSink, VecSink};
+use crate::sink::{DiffSink, SinkFinishGuard, VecSink};
 use crate::string_pool::StringPool;
 use crate::workbook::{Grid, RowSignature};
 use std::collections::{HashMap, HashSet};
@@ -375,7 +375,10 @@ pub fn diff_grids_database_mode(
     }
 }
 
-pub(crate) fn try_diff_grids_database_mode_streaming<S: DiffSink>(
+/// Stream a database-mode grid diff into `sink`.
+///
+/// Streaming output follows the contract in `docs/streaming_contract.md`.
+pub fn try_diff_grids_database_mode_streaming<S: DiffSink>(
     sheet_id: SheetId,
     old: &Grid,
     new: &Grid,
@@ -391,8 +394,9 @@ pub(crate) fn try_diff_grids_database_mode_streaming<S: DiffSink>(
     let spec = KeyColumnSpec::new(key_columns.to_vec());
 
     sink.begin(pool)?;
+    let mut finish_guard = SinkFinishGuard::new(sink);
     if hardening.check_timeout(&mut warnings) {
-        sink.finish()?;
+        finish_guard.finish_and_disarm()?;
         return Ok(DiffSummary {
             complete: false,
             warnings,
@@ -424,7 +428,7 @@ pub(crate) fn try_diff_grids_database_mode_streaming<S: DiffSink>(
                 #[cfg(feature = "perf-metrics")]
                 None,
             )?;
-            sink.finish()?;
+            finish_guard.finish_and_disarm()?;
             let complete = ctx.warnings.is_empty();
             return Ok(DiffSummary {
                 complete,
@@ -494,7 +498,7 @@ pub(crate) fn try_diff_grids_database_mode_streaming<S: DiffSink>(
         }
     }
 
-    sink.finish()?;
+    finish_guard.finish_and_disarm()?;
     Ok(DiffSummary {
         complete: warnings.is_empty(),
         warnings,

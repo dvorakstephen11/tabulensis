@@ -15,6 +15,9 @@ struct JsonLinesHeader<'a> {
 ///
 /// The first line is a header containing the schema version and the string table. Each
 /// subsequent line is a JSON-serialized [`DiffOp`].
+///
+/// All strings referenced by emitted ops must be interned before `begin`, because the
+/// header captures the string table once. See `docs/streaming_contract.md`.
 pub struct JsonLinesSink<W: Write> {
     w: W,
     wrote_header: bool,

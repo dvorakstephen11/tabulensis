@@ -2,7 +2,7 @@ use crate::config::DiffConfig;
 use crate::diff::{DiffError, DiffOp, DiffReport, DiffSummary};
 #[cfg(feature = "perf-metrics")]
 use crate::perf::{DiffMetrics, Phase};
-use crate::sink::{DiffSink, VecSink};
+use crate::sink::{DiffSink, SinkFinishGuard, VecSink};
 use crate::string_pool::StringPool;
 use crate::workbook::{Sheet, SheetKind, Workbook};
 use crate::progress::ProgressCallback;
@@ -85,6 +85,9 @@ pub fn diff_workbooks_with_progress(
     }
 }
 
+/// Stream a workbook diff into `sink`.
+///
+/// Streaming output follows the contract in `docs/streaming_contract.md`.
 pub fn diff_workbooks_streaming<S: DiffSink>(
     old: &Workbook,
     new: &Workbook,
@@ -168,6 +171,7 @@ pub fn try_diff_workbooks_with_progress(
     ))
 }
 
+/// Like [`diff_workbooks_streaming`], but returns errors instead of embedding them in the summary.
 pub fn try_diff_workbooks_streaming<S: DiffSink>(
     old: &Workbook,
     new: &Workbook,
@@ -208,20 +212,21 @@ fn try_diff_workbooks_streaming_impl<'p, S: DiffSink>(
     hardening.progress("parse", 0.0);
 
     sink.begin(pool)?;
+    let mut finish_guard = SinkFinishGuard::new(sink);
 
     let mut ctx = DiffContext::default();
     let mut op_count = 0usize;
 
-        if hardening.check_timeout(&mut ctx.warnings) {
-            #[cfg(feature = "perf-metrics")]
-            {
-                metrics.end_phase(Phase::Parse);
-                metrics.end_phase(Phase::Total);
-                apply_accounted_peak(&mut metrics, old, new, pool);
-            }
-            sink.finish()?;
-            return Ok(DiffSummary {
-                complete: false,
+    if hardening.check_timeout(&mut ctx.warnings) {
+        #[cfg(feature = "perf-metrics")]
+        {
+            metrics.end_phase(Phase::Parse);
+            metrics.end_phase(Phase::Total);
+            apply_accounted_peak(&mut metrics, old, new, pool);
+        }
+        finish_guard.finish_and_disarm()?;
+        return Ok(DiffSummary {
+            complete: false,
             warnings: ctx.warnings,
             op_count,
             #[cfg(feature = "perf-metrics")]
@@ -331,7 +336,7 @@ fn try_diff_workbooks_streaming_impl<'p, S: DiffSink>(
         metrics.end_phase(Phase::Total);
         apply_accounted_peak(&mut metrics, old, new, pool);
     }
-    sink.finish()?;
+    finish_guard.finish_and_disarm()?;
     let complete = ctx.warnings.is_empty();
     Ok(DiffSummary {
         complete,

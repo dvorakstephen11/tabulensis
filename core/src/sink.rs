@@ -1,7 +1,10 @@
 use crate::diff::{DiffError, DiffOp};
 use crate::string_pool::StringPool;
+use std::marker::PhantomData;
 
 /// Trait for streaming diff operations to a consumer.
+///
+/// See `docs/streaming_contract.md` for determinism, lifecycle, and string table rules.
 ///
 /// Streaming entry points call sinks in this order:
 ///
@@ -25,6 +28,41 @@ pub trait DiffSink {
     /// Finish the stream (flush/close output destinations).
     fn finish(&mut self) -> Result<(), DiffError> {
         Ok(())
+    }
+}
+
+pub(crate) struct SinkFinishGuard<S: DiffSink> {
+    sink: *mut S,
+    armed: bool,
+    _marker: PhantomData<*mut S>,
+}
+
+impl<S: DiffSink> SinkFinishGuard<S> {
+    pub(crate) fn new(sink: &mut S) -> Self {
+        Self {
+            sink,
+            armed: true,
+            _marker: PhantomData,
+        }
+    }
+
+    pub(crate) fn finish_and_disarm(&mut self) -> Result<(), DiffError> {
+        self.armed = false;
+        // Safety: the guard is created from an exclusive borrow of `sink` and
+        // tied to its lifetime via PhantomData, so the pointer remains valid.
+        unsafe { (&mut *self.sink).finish() }
+    }
+}
+
+impl<S: DiffSink> Drop for SinkFinishGuard<S> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        // Best-effort finish; ignore errors to avoid masking the original error.
+        unsafe {
+            let _ = (&mut *self.sink).finish();
+        }
     }
 }
 
