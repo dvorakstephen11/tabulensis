@@ -34,6 +34,9 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+      - name: Architecture guard
+        run: python scripts/arch_guard.py
+
       - name: Run parallel feature tests
         run: cargo test -p excel_diff --features parallel
 

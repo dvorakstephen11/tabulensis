@@ -119,6 +119,7 @@ pub(crate) mod row_alignment;
 mod session;
 mod sink;
 mod string_pool;
+mod vba;
 mod workbook;
 
 #[cfg(all(feature = "perf-metrics", not(target_arch = "wasm32")))]
@@ -311,11 +312,12 @@ pub use output::json::diff_report_to_cell_diffs;
 pub use output::json::diff_workbooks_to_json;
 pub use output::json::{CellDiff, serialize_cell_diffs, serialize_diff_report};
 pub use output::json_lines::JsonLinesSink;
-pub use package::{PbixPackage, VbaModule, VbaModuleType, WorkbookPackage};
+pub use package::{PbixPackage, WorkbookPackage};
 pub use progress::{NoProgress, ProgressCallback};
 pub use session::DiffSession;
 pub use sink::{CallbackSink, DiffSink, VecSink};
 pub use string_pool::{StringId, StringPool};
+pub use vba::{VbaModule, VbaModuleType};
 pub use workbook::{
     Cell, CellAddress, CellSnapshot, CellValue, ChartInfo, ChartObject, ColSignature, Grid,
     NamedRange, RowSignature, Sheet, SheetKind, Workbook,

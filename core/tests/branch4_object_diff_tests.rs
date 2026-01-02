@@ -1,7 +1,7 @@
 mod common;
 
 use common::open_fixture_pkg;
-use excel_diff::{DiffConfig, DiffOp, DiffReport, StringId};
+use excel_diff::{DiffConfig, DiffOp, DiffReport, StringId, with_default_session};
 
 fn resolve<'a>(report: &'a DiffReport, id: StringId) -> &'a str {
     report.strings[id.0 as usize].as_str()
@@ -126,4 +126,40 @@ fn branch4_vba_modules_emit_added_removed_changed() {
         }
     }
     assert!(saw_module1_changed, "expected VbaModuleChanged(Module1)");
+}
+
+#[test]
+fn branch4_vba_modules_open_returns_modules() {
+    let pkg_base = open_fixture_pkg("vba_base.xlsm");
+    let pkg_added = open_fixture_pkg("vba_added.xlsm");
+
+    let base_modules = pkg_base
+        .vba_modules
+        .as_ref()
+        .expect("expected VBA modules in base fixture");
+    let base_names: Vec<String> = with_default_session(|session| {
+        base_modules
+            .iter()
+            .map(|module| session.strings.resolve(module.name).to_string())
+            .collect()
+    });
+    assert!(
+        base_names.iter().any(|name| name == "Module1"),
+        "expected Module1 in base fixture"
+    );
+
+    let added_modules = pkg_added
+        .vba_modules
+        .as_ref()
+        .expect("expected VBA modules in added fixture");
+    let added_names: Vec<String> = with_default_session(|session| {
+        added_modules
+            .iter()
+            .map(|module| session.strings.resolve(module.name).to_string())
+            .collect()
+    });
+    assert!(
+        added_names.iter().any(|name| name == "Module2"),
+        "expected Module2 in added fixture"
+    );
 }

@@ -1,6 +1,6 @@
 use crate::diff::DiffOp;
-use crate::package::VbaModule;
 use crate::string_pool::StringPool;
+use crate::vba::VbaModule;
 use crate::workbook::{ChartObject, NamedRange, Workbook};
 use std::collections::{BTreeMap, BTreeSet};
 

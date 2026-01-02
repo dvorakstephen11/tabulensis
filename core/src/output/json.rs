@@ -2,7 +2,7 @@
 use crate::config::DiffConfig;
 #[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 use crate::datamashup::build_data_mashup;
-use crate::diff::DiffReport;
+use crate::diff::{DiffReport, DiffSummary};
 #[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 use crate::excel_open_xml::{PackageError, open_data_mashup, open_vba_modules, open_workbook};
 #[allow(unused_imports)]
@@ -62,15 +62,27 @@ pub fn diff_workbooks(
     let vba_b = open_vba_modules(path_b, session.strings_mut())?;
 
     let mut sink = VecSink::new();
-    let summary = crate::engine::try_diff_workbooks_streaming(
+    let grid_result = crate::engine::try_diff_workbooks_streaming(
         &wb_a,
         &wb_b,
         session.strings_mut(),
         config,
         &mut sink,
-    )?;
+    );
 
-    let mut ops = sink.into_ops();
+    let (mut ops, summary) = match grid_result {
+        Ok(summary) => (sink.into_ops(), summary),
+        Err(err) => (
+            Vec::new(),
+            DiffSummary {
+                complete: false,
+                warnings: vec![err.to_string()],
+                op_count: 0,
+                #[cfg(feature = "perf-metrics")]
+                metrics: None,
+            },
+        ),
+    };
 
     let mut object_ops = crate::object_diff::diff_named_ranges(&wb_a, &wb_b, session.strings());
     object_ops.extend(crate::object_diff::diff_charts(

@@ -27,6 +27,7 @@ fn diff_pbix_emits_query_ops() {
 }
 
 #[test]
+#[cfg(feature = "model-diff")]
 fn pbix_missing_datamashup_uses_model_schema() {
     let path = fixture_path("pbix_no_datamashup.pbix");
     let file = File::open(&path).expect("fixture should exist");

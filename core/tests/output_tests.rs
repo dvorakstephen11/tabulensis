@@ -3,7 +3,7 @@ mod common;
 use common::{fixture_path, open_fixture_workbook};
 use excel_diff::{
     CellAddress, CellDiff, CellSnapshot, CellValue, ContainerError, DiffConfig, DiffOp, DiffReport,
-    FormulaDiffResult, PackageError, WorkbookPackage, diff_report_to_cell_diffs,
+    FormulaDiffResult, LimitBehavior, PackageError, WorkbookPackage, diff_report_to_cell_diffs,
     diff_workbooks_to_json, serialize_cell_diffs, serialize_diff_report,
 };
 use serde_json::Value;
@@ -428,6 +428,36 @@ fn test_json_case_only_sheet_name_cell_edit_via_helper() {
         }
         other => panic!("expected CellEdited, got {other:?}"),
     }
+}
+
+#[test]
+fn diff_workbooks_to_json_converts_diff_error_to_warning_report() {
+    let path = fixture_path("pg1_basic_two_sheets.xlsx");
+
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_rows = 1;
+    config.alignment.max_align_cols = 1;
+    config.hardening.on_limit_exceeded = LimitBehavior::ReturnError;
+
+    let json = diff_workbooks_to_json(&path, &path, &config)
+        .expect("diff errors should be converted into warning reports");
+    let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
+
+    assert!(
+        !report.complete,
+        "limit errors should mark the report as incomplete"
+    );
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("limits exceeded")),
+        "expected limits-exceeded warning"
+    );
+    assert!(
+        report.ops.is_empty(),
+        "diff errors should not leak partial grid ops into the report"
+    );
 }
 
 #[test]

@@ -13,11 +13,11 @@ use crate::grid_parser::{
     GridParseError, parse_defined_names, parse_relationships, parse_relationships_all,
     parse_shared_strings, parse_sheet_xml, parse_workbook_xml, resolve_sheet_target,
 };
-use crate::package::VbaModule;
 #[cfg(feature = "vba")]
-use crate::package::VbaModuleType;
+use crate::vba::VbaModuleType;
 use crate::string_pool::StringId;
 use crate::string_pool::StringPool;
+use crate::vba::VbaModule;
 use crate::workbook::{ChartInfo, ChartObject, Sheet, SheetKind, Workbook};
 use std::collections::HashMap;
 #[cfg(feature = "std-fs")]
@@ -38,8 +38,6 @@ pub enum PackageError {
     WorkbookXmlMissing,
     #[error("[EXDIFF_PKG_003] worksheet XML missing for sheet {sheet_name}. Suggestion: re-save the file in Excel or verify it is a valid .xlsx.")]
     WorksheetXmlMissing { sheet_name: String },
-    #[error("{0}")]
-    Diff(#[from] crate::diff::DiffError),
     #[error("[EXDIFF_PKG_009] serialization error: {0}. Suggestion: verify the workbook is a standard .xlsx saved by Excel.")]
     SerializationError(String),
 
@@ -85,7 +83,6 @@ impl PackageError {
             PackageError::DataMashup(e) => e.code(),
             PackageError::WorkbookXmlMissing => error_codes::PKG_MISSING_PART,
             PackageError::WorksheetXmlMissing { .. } => error_codes::PKG_MISSING_PART,
-            PackageError::Diff(_) => error_codes::DIFF_INTERNAL_ERROR,
             PackageError::SerializationError(_) => error_codes::PKG_UNSUPPORTED_FORMAT,
             PackageError::NotAZip { .. } => error_codes::PKG_NOT_ZIP,
             PackageError::NoDataMashupUseTabularModel => {
