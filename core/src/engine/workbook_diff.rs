@@ -11,10 +11,10 @@ use std::collections::HashMap;
 #[cfg(feature = "perf-metrics")]
 use std::mem::size_of;
 
-use super::context::DiffContext;
-use super::grid_diff::try_diff_grids;
+use super::context::{DiffContext, emit_op};
+use super::grid_diff::try_diff_grids_internal;
 use super::hardening::HardeningController;
-use super::{SheetId, emit_op};
+use crate::diff::SheetId;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SheetKey {
@@ -307,7 +307,7 @@ fn try_diff_workbooks_streaming_impl<'p, S: DiffSink>(
             }
             (Some(old_sheet), Some(new_sheet)) => {
                 let sheet_id: SheetId = old_sheet.name;
-                try_diff_grids(
+                try_diff_grids_internal(
                     sheet_id,
                     &old_sheet.grid,
                     &new_sheet.grid,

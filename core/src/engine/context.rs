@@ -6,7 +6,7 @@ use crate::perf::{DiffMetrics, Phase};
 use crate::sink::DiffSink;
 use crate::string_pool::StringPool;
 
-use super::SheetId;
+use crate::diff::SheetId;
 use super::hardening::HardeningController;
 
 #[derive(Debug, Default)]

@@ -92,6 +92,8 @@
       2025-12-31_165858.json
       2025-12-31_170022.json
       2025-12-31_194404.json
+      2026-01-01_213949.json
+      2026-01-01_214159.json
     wasm_memory_budgets.json
   Cargo.lock
   Cargo.toml
@@ -1421,9 +1423,9 @@ pub fn run(
     };
 
     let mut config = build_config(fast, precise);
-    config.max_memory_mb = max_memory;
-    config.timeout_seconds = timeout;
-    config.max_ops = max_ops;
+    config.hardening.max_memory_mb = max_memory;
+    config.hardening.timeout_seconds = timeout;
+    config.hardening.max_ops = max_ops;
 
     let old_host = open_host(old_path, old_kind, "old")?;
     let new_host = open_host(new_path, new_kind, "new")?;
@@ -5231,8 +5233,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let new_pkg = WorkbookPackage::open(File::open(&new_path)?)?;
 
     let mut cfg = DiffConfig::fastest();
-    cfg.max_memory_mb = Some(256);
-    cfg.timeout_seconds = Some(10);
+    cfg.hardening.max_memory_mb = Some(256);
+    cfg.hardening.timeout_seconds = Some(10);
 
     let report = old_pkg.diff(&new_pkg, &cfg);
 
@@ -5545,11 +5547,9 @@ fuzz_target!(|input: FuzzInput| {
         ..Default::default()
     };
 
-    let config = DiffConfig {
-        max_align_rows: 50,
-        max_align_cols: 50,
-        ..Default::default()
-    };
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_rows = 50;
+    config.alignment.max_align_cols = 50;
 
     let _ = try_diff_workbooks_with_pool(&old_wb, &new_wb, &mut pool, &config);
 });
@@ -6267,7 +6267,7 @@ fn align_rows_from_meta(
     }
 
     let anchors = build_anchor_chain(discover_anchors_from_meta(rows_a, rows_b));
-    let global_moves = if config.max_move_iterations > 0 {
+    let global_moves = if config.moves.max_move_iterations > 0 {
         #[cfg(feature = "perf-metrics")]
         let _guard = metrics
             .as_deref_mut()
@@ -6368,7 +6368,7 @@ fn fill_gap(
 ) -> GapAlignmentResult {
     let ctx = GapCtx::new(old_meta, new_meta, old_gap, new_gap);
     let moves_in_gap = moves_within_gap(&ctx.old_range, &ctx.new_range, global_moves);
-    let has_recursed = depth >= config.max_recursion_depth;
+    let has_recursed = depth >= config.alignment.max_recursion_depth;
     let strategy = select_gap_strategy(
         ctx.old_slice,
         ctx.new_slice,
@@ -6426,7 +6426,7 @@ fn align_gap_without_global(
     config: &DiffConfig,
     depth: u32,
 ) -> GapAlignmentResult {
-    let has_recursed = depth >= config.max_recursion_depth;
+    let has_recursed = depth >= config.alignment.max_recursion_depth;
     let strategy = select_gap_strategy(old_slice, new_slice, config, has_recursed, false);
 
     match strategy {
@@ -6497,8 +6497,8 @@ fn align_gap_default(
     new_slice: &[RowMeta],
     config: &DiffConfig,
 ) -> GapAlignmentResult {
-    if old_slice.len() as u32 > config.max_lcs_gap_size
-        || new_slice.len() as u32 > config.max_lcs_gap_size
+    if old_slice.len() as u32 > config.alignment.max_lcs_gap_size
+        || new_slice.len() as u32 > config.alignment.max_lcs_gap_size
     {
         return align_gap_via_hash(old_slice, new_slice);
     }
@@ -6518,8 +6518,8 @@ fn align_gap_with_moves(
     new_slice: &[RowMeta],
     config: &DiffConfig,
 ) -> GapAlignmentResult {
-    let mut result = if old_slice.len() as u32 > config.max_lcs_gap_size
-        || new_slice.len() as u32 > config.max_lcs_gap_size
+    let mut result = if old_slice.len() as u32 > config.alignment.max_lcs_gap_size
+        || new_slice.len() as u32 > config.alignment.max_lcs_gap_size
     {
         align_gap_via_hash(old_slice, new_slice)
     } else {
@@ -6536,7 +6536,12 @@ fn align_gap_with_moves(
 
         if has_nonzero_offset
             && let Some(mv) =
-                find_block_move(old_slice, new_slice, config.min_block_size_for_move, config)
+                find_block_move(
+                    old_slice,
+                    new_slice,
+                    config.moves.min_block_size_for_move,
+                    config,
+                )
         {
             detected_moves.push(mv);
         }
@@ -6556,8 +6561,8 @@ fn recursive_anchor_candidates(
         return discover_anchors_from_meta(old_slice, new_slice);
     }
 
-    let k1 = config.context_anchor_k1 as usize;
-    let k2 = config.context_anchor_k2 as usize;
+    let k1 = config.alignment.context_anchor_k1 as usize;
+    let k2 = config.alignment.context_anchor_k2 as usize;
 
     let mut anchors = discover_local_anchors(old_slice, new_slice);
     if anchors.is_empty() {
@@ -6583,7 +6588,7 @@ fn align_gap_recursive(
     depth: u32,
     global_moves: &[RowBlockMove],
 ) -> GapAlignmentResult {
-    let at_limit = depth >= config.max_recursion_depth;
+    let at_limit = depth >= config.alignment.max_recursion_depth;
     if at_limit {
         return align_gap_default(old_slice, new_slice, config);
     }
@@ -6700,11 +6705,13 @@ fn align_small_gap(
         return GapAlignmentResult::default();
     }
 
-    if m as u32 > config.max_lcs_gap_size || n as u32 > config.max_lcs_gap_size {
+    if m as u32 > config.alignment.max_lcs_gap_size
+        || n as u32 > config.alignment.max_lcs_gap_size
+    {
         return align_gap_via_hash(old_slice, new_slice);
     }
 
-    if m.saturating_mul(n) > config.lcs_dp_work_limit {
+    if m.saturating_mul(n) > config.alignment.lcs_dp_work_limit {
         return align_gap_via_myers(old_slice, new_slice);
     }
 
@@ -7155,11 +7162,9 @@ mod tests {
         ];
         let grid_b = grid_with_unique_rows(&rows_b);
 
-        let config = DiffConfig {
-            recursive_align_threshold: 5,
-            small_gap_threshold: 2,
-            ..Default::default()
-        };
+        let mut config = DiffConfig::default();
+        config.alignment.recursive_align_threshold = 5;
+        config.alignment.small_gap_threshold = 2;
 
         let alignment = align_rows_amr(&grid_a, &grid_b, &config)
             .expect("alignment should succeed with recursive gaps");
@@ -7290,7 +7295,7 @@ mod tests {
     #[test]
     fn align_small_gap_enforces_cap_with_hash_fallback() {
         let config = DiffConfig::default();
-        let large = (config.max_lcs_gap_size + 1) as usize;
+        let large = (config.alignment.max_lcs_gap_size + 1) as usize;
         let old_hashes: Vec<u128> = (0..large as u32).map(|i| i as u128).collect();
         let new_hashes: Vec<u128> = (0..large as u32).map(|i| (10_000 + i) as u128).collect();
 
@@ -7412,7 +7417,10 @@ pub fn select_gap_strategy(
 
     let is_move_candidate = has_matching_signatures(old_slice, new_slice);
 
-    let small_threshold = config.small_gap_threshold.min(config.max_lcs_gap_size);
+    let small_threshold = config
+        .alignment
+        .small_gap_threshold
+        .min(config.alignment.max_lcs_gap_size);
     if old_len <= small_threshold && new_len <= small_threshold {
         return if is_move_candidate {
             GapStrategy::MoveCandidate
@@ -7421,7 +7429,8 @@ pub fn select_gap_strategy(
         };
     }
 
-    if (old_len > config.recursive_align_threshold || new_len > config.recursive_align_threshold)
+    if (old_len > config.alignment.recursive_align_threshold
+        || new_len > config.alignment.recursive_align_threshold)
         && !has_recursed
     {
         return GapStrategy::RecursiveAlign;
@@ -7431,7 +7440,7 @@ pub fn select_gap_strategy(
         return GapStrategy::MoveCandidate;
     }
 
-    if old_len > config.max_lcs_gap_size || new_len > config.max_lcs_gap_size {
+    if old_len > config.alignment.max_lcs_gap_size || new_len > config.alignment.max_lcs_gap_size {
         return GapStrategy::HashFallback;
     }
 
@@ -7471,11 +7480,9 @@ mod tests {
 
     #[test]
     fn respects_configured_max_lcs_gap_size() {
-        let config = DiffConfig {
-            max_lcs_gap_size: 2,
-            small_gap_threshold: 10,
-            ..Default::default()
-        };
+        let mut config = DiffConfig::default();
+        config.alignment.max_lcs_gap_size = 2;
+        config.alignment.small_gap_threshold = 10;
         let rows_a = vec![meta(0, 1), meta(1, 2), meta(2, 3)];
         let rows_b = vec![meta(0, 4), meta(1, 5), meta(2, 6)];
 
@@ -7690,7 +7697,7 @@ pub fn find_block_move(
     min_len: u32,
     config: &DiffConfig,
 ) -> Option<RowBlockMove> {
-    let max_slice_len = config.move_extraction_max_slice_len as usize;
+    let max_slice_len = config.moves.move_extraction_max_slice_len as usize;
     if old_slice.len() > max_slice_len || new_slice.len() > max_slice_len {
         return None;
     }
@@ -7715,7 +7722,7 @@ pub fn find_block_move(
             continue;
         };
 
-        let max_candidates = config.move_extraction_max_candidates_per_sig as usize;
+        let max_candidates = config.moves.move_extraction_max_candidates_per_sig as usize;
         for &old_idx in candidates.iter().take(max_candidates) {
             let max_possible = (old_slice.len() - old_idx).min(new_slice.len() - new_idx);
             if max_possible <= best_len {
@@ -7860,8 +7867,8 @@ fn collect_unanchored_pairs(
     let old_map = collect_unanchored_by_signature(old_meta, &anchored_old, config);
     let new_map = collect_unanchored_by_signature(new_meta, &anchored_new, config);
 
-    let max_per_sig = config.move_extraction_max_candidates_per_sig as usize;
-    let max_total = config.move_extraction_max_slice_len as usize;
+    let max_per_sig = config.moves.move_extraction_max_candidates_per_sig as usize;
+    let max_total = config.moves.move_extraction_max_slice_len as usize;
 
     let mut pairs = Vec::new();
     for (sig, old_rows) in old_map {
@@ -7901,7 +7908,7 @@ fn collect_unanchored_by_signature(
         if !matches!(meta.frequency_class, FrequencyClass::Unique | FrequencyClass::Rare) {
             continue;
         }
-        if config.move_extraction_max_candidates_per_sig == 0 {
+        if config.moves.move_extraction_max_candidates_per_sig == 0 {
             continue;
         }
         map.entry(meta.signature).or_default().push(meta.row_idx);
@@ -7920,9 +7927,9 @@ fn build_candidate_blocks(
         return Vec::new();
     }
 
-    let max_gap = config.small_gap_threshold.max(1) as u32;
-    let min_len = config.min_block_size_for_move.max(1);
-    let max_len = config.move_extraction_max_slice_len.max(1);
+    let max_gap = config.alignment.small_gap_threshold.max(1) as u32;
+    let min_len = config.moves.min_block_size_for_move.max(1);
+    let max_len = config.moves.move_extraction_max_slice_len.max(1);
     let threshold = move_similarity_threshold(config);
 
     let mut sorted: Vec<MatchPair> = pairs
@@ -8269,8 +8276,8 @@ fn block_similarity(
 }
 
 fn move_similarity_threshold(config: &DiffConfig) -> f64 {
-    if config.enable_fuzzy_moves {
-        config.fuzzy_similarity_threshold
+    if config.moves.enable_fuzzy_moves {
+        config.moves.fuzzy_similarity_threshold
     } else {
         1.0
     }
@@ -8349,8 +8356,8 @@ mod tests {
         }
 
         let mut config = DiffConfig::default();
-        config.move_extraction_max_candidates_per_sig = 2;
-        config.move_extraction_max_slice_len = 100;
+        config.moves.move_extraction_max_candidates_per_sig = 2;
+        config.moves.move_extraction_max_slice_len = 100;
 
         let pairs = collect_unanchored_pairs(&old, &new, &[], &config);
         assert!(pairs.len() <= 4);
@@ -8716,7 +8723,7 @@ pub(crate) fn detect_exact_column_block_move(
     }
 
     let stats = HashStats::from_col_meta(&col_meta_a, &col_meta_b);
-    if stats.has_heavy_repetition(config.max_hash_repeat) {
+    if stats.has_heavy_repetition(config.alignment.max_hash_repeat) {
         return None;
     }
 
@@ -8859,7 +8866,7 @@ pub(crate) fn align_single_column_change_from_views(
     }
 
     let stats = HashStats::from_col_meta(&view_a.col_meta, &view_b.col_meta);
-    if stats.has_heavy_repetition(config.max_hash_repeat) {
+    if stats.has_heavy_repetition(config.alignment.max_hash_repeat) {
         return None;
     }
 
@@ -8886,7 +8893,7 @@ pub(crate) fn align_columns_amr_from_views(
     config: &DiffConfig,
 ) -> Option<ColumnAlignment> {
     let stats = HashStats::from_col_meta(&view_a.col_meta, &view_b.col_meta);
-    if stats.has_heavy_repetition(config.max_hash_repeat) {
+    if stats.has_heavy_repetition(config.alignment.max_hash_repeat) {
         return None;
     }
 
@@ -9065,7 +9072,7 @@ fn is_monotonic(pairs: &[(u32, u32)]) -> bool {
 fn is_within_size_bounds(old: &Grid, new: &Grid, config: &DiffConfig) -> bool {
     let rows = old.nrows.max(new.nrows);
     let cols = old.ncols.max(new.ncols);
-    rows <= config.max_align_rows && cols <= config.max_align_cols
+    rows <= config.alignment.max_align_rows && cols <= config.alignment.max_align_cols
 }
 
 #[cfg(test)]
@@ -9285,16 +9292,39 @@ pub enum SemanticNoisePolicy {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct DiffConfig {
-    /// Maximum number of masked move-detection iterations per sheet.
-    /// Set to 0 to disable move detection and represent moves as insert/delete.
-    pub max_move_iterations: u32,
+pub struct PreflightConfig {
+    /// Preflight: minimum row count to consider short-circuit bailouts.
+    /// Grids smaller than this always run full move detection/alignment.
+    pub preflight_min_rows: u32,
+    /// Preflight: maximum number of in-order row mismatches to trigger near-identical bailout.
+    pub preflight_in_order_mismatch_max: u32,
+    /// Preflight: minimum ratio of in-order matching rows (0.0..=1.0) for near-identical bailout.
+    pub preflight_in_order_match_ratio_min: f64,
+    /// Preflight: Jaccard similarity threshold below which grids are considered dissimilar
+    /// and move detection/alignment are skipped.
+    pub bailout_similarity_threshold: f64,
+    pub max_context_rows: u32,
+}
+
+impl Default for PreflightConfig {
+    fn default() -> Self {
+        Self {
+            preflight_min_rows: 5000,
+            preflight_in_order_mismatch_max: 32,
+            preflight_in_order_match_ratio_min: 0.995,
+            bailout_similarity_threshold: 0.05,
+            max_context_rows: 3,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AlignmentConfig {
     pub max_align_rows: u32,
     pub max_align_cols: u32,
     pub max_block_gap: u32,
     pub max_hash_repeat: u32,
-    pub fuzzy_similarity_threshold: f64,
-    pub max_fuzzy_block_rows: u32,
     #[serde(alias = "rare_frequency_threshold")]
     pub rare_threshold: u32,
     #[serde(alias = "low_info_cell_threshold")]
@@ -9304,8 +9334,69 @@ pub struct DiffConfig {
     pub recursive_align_threshold: u32,
     pub small_gap_threshold: u32,
     pub max_recursion_depth: u32,
-    pub on_limit_exceeded: LimitBehavior,
+    pub max_lcs_gap_size: u32,
+    pub lcs_dp_work_limit: usize,
+    pub context_anchor_k1: u32,
+    pub context_anchor_k2: u32,
+}
+
+impl Default for AlignmentConfig {
+    fn default() -> Self {
+        Self {
+            max_align_rows: 500_000,
+            max_align_cols: 16_384,
+            max_block_gap: 10_000,
+            max_hash_repeat: 8,
+            rare_threshold: 5,
+            low_info_threshold: 2,
+            recursive_align_threshold: 200,
+            small_gap_threshold: 50,
+            max_recursion_depth: 10,
+            max_lcs_gap_size: 1_500,
+            lcs_dp_work_limit: 20_000,
+            context_anchor_k1: 4,
+            context_anchor_k2: 8,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MoveConfig {
+    /// Maximum number of masked move-detection iterations per sheet.
+    /// Set to 0 to disable move detection and represent moves as insert/delete.
+    pub max_move_iterations: u32,
     pub enable_fuzzy_moves: bool,
+    pub fuzzy_similarity_threshold: f64,
+    pub max_fuzzy_block_rows: u32,
+    pub min_block_size_for_move: u32,
+    pub move_extraction_max_slice_len: u32,
+    pub move_extraction_max_candidates_per_sig: u32,
+    /// Masked move detection runs only when max(old.nrows, new.nrows) <= this.
+    pub max_move_detection_rows: u32,
+    /// Masked move detection runs only when max(old.ncols, new.ncols) <= this.
+    pub max_move_detection_cols: u32,
+}
+
+impl Default for MoveConfig {
+    fn default() -> Self {
+        Self {
+            max_move_iterations: 20,
+            enable_fuzzy_moves: true,
+            fuzzy_similarity_threshold: 0.80,
+            max_fuzzy_block_rows: 32,
+            min_block_size_for_move: 3,
+            move_extraction_max_slice_len: 10_000,
+            move_extraction_max_candidates_per_sig: 16,
+            max_move_detection_rows: 200,
+            max_move_detection_cols: 256,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SemanticConfig {
     pub enable_m_semantic_diff: bool,
     pub enable_formula_semantic_diff: bool,
     /// Policy for handling formatting-only M changes when semantic diff is enabled.
@@ -9320,28 +9411,26 @@ pub struct DiffConfig {
     pub dense_row_replace_min_cols: u32,
     /// Minimum consecutive replaced rows to emit a RectReplaced op.
     pub dense_rect_replace_min_rows: u32,
-    pub max_context_rows: u32,
-    pub min_block_size_for_move: u32,
-    pub max_lcs_gap_size: u32,
-    pub lcs_dp_work_limit: usize,
-    pub move_extraction_max_slice_len: u32,
-    pub move_extraction_max_candidates_per_sig: u32,
-    pub context_anchor_k1: u32,
-    pub context_anchor_k2: u32,
-    /// Masked move detection runs only when max(old.nrows, new.nrows) <= this.
-    pub max_move_detection_rows: u32,
-    /// Masked move detection runs only when max(old.ncols, new.ncols) <= this.
-    pub max_move_detection_cols: u32,
-    /// Preflight: minimum row count to consider short-circuit bailouts.
-    /// Grids smaller than this always run full move detection/alignment.
-    pub preflight_min_rows: u32,
-    /// Preflight: maximum number of in-order row mismatches to trigger near-identical bailout.
-    pub preflight_in_order_mismatch_max: u32,
-    /// Preflight: minimum ratio of in-order matching rows (0.0..=1.0) for near-identical bailout.
-    pub preflight_in_order_match_ratio_min: f64,
-    /// Preflight: Jaccard similarity threshold below which grids are considered dissimilar
-    /// and move detection/alignment are skipped.
-    pub bailout_similarity_threshold: f64,
+}
+
+impl Default for SemanticConfig {
+    fn default() -> Self {
+        Self {
+            enable_m_semantic_diff: true,
+            enable_formula_semantic_diff: false,
+            semantic_noise_policy: SemanticNoisePolicy::ReportFormattingOnly,
+            include_unchanged_cells: false,
+            dense_row_replace_ratio: 0.90,
+            dense_row_replace_min_cols: 64,
+            dense_rect_replace_min_rows: 4,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HardeningConfig {
+    pub on_limit_exceeded: LimitBehavior,
     /// Optional soft cap on estimated memory usage (in MB) for advanced strategies.
     ///
     /// When the estimate exceeds this cap, the engine falls back to positional diff for the
@@ -9360,44 +9449,10 @@ pub struct DiffConfig {
     pub max_ops: Option<usize>,
 }
 
-impl Default for DiffConfig {
+impl Default for HardeningConfig {
     fn default() -> Self {
         Self {
-            max_move_iterations: 20,
-            max_align_rows: 500_000,
-            max_align_cols: 16_384,
-            max_block_gap: 10_000,
-            max_hash_repeat: 8,
-            fuzzy_similarity_threshold: 0.80,
-            max_fuzzy_block_rows: 32,
-            rare_threshold: 5,
-            low_info_threshold: 2,
-            small_gap_threshold: 50,
-            recursive_align_threshold: 200,
-            max_recursion_depth: 10,
             on_limit_exceeded: LimitBehavior::FallbackToPositional,
-            enable_fuzzy_moves: true,
-            enable_m_semantic_diff: true,
-            enable_formula_semantic_diff: false,
-            semantic_noise_policy: SemanticNoisePolicy::ReportFormattingOnly,
-            include_unchanged_cells: false,
-            dense_row_replace_ratio: 0.90,
-            dense_row_replace_min_cols: 64,
-            dense_rect_replace_min_rows: 4,
-            max_context_rows: 3,
-            min_block_size_for_move: 3,
-            max_lcs_gap_size: 1_500,
-            lcs_dp_work_limit: 20_000,
-            move_extraction_max_slice_len: 10_000,
-            move_extraction_max_candidates_per_sig: 16,
-            context_anchor_k1: 4,
-            context_anchor_k2: 8,
-            max_move_detection_rows: 200,
-            max_move_detection_cols: 256,
-            preflight_min_rows: 5000,
-            preflight_in_order_mismatch_max: 32,
-            preflight_in_order_match_ratio_min: 0.995,
-            bailout_similarity_threshold: 0.05,
             max_memory_mb: None,
             timeout_seconds: None,
             max_ops: None,
@@ -9405,18 +9460,44 @@ impl Default for DiffConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DiffConfig {
+    #[serde(flatten)]
+    pub preflight: PreflightConfig,
+    #[serde(flatten)]
+    pub alignment: AlignmentConfig,
+    #[serde(flatten)]
+    pub moves: MoveConfig,
+    #[serde(flatten)]
+    pub semantic: SemanticConfig,
+    #[serde(flatten)]
+    pub hardening: HardeningConfig,
+}
+
+impl Default for DiffConfig {
+    fn default() -> Self {
+        Self {
+            preflight: PreflightConfig::default(),
+            alignment: AlignmentConfig::default(),
+            moves: MoveConfig::default(),
+            semantic: SemanticConfig::default(),
+            hardening: HardeningConfig::default(),
+        }
+    }
+}
+
 impl DiffConfig {
     pub fn fastest() -> Self {
-        Self {
-            max_move_iterations: 5,
-            max_block_gap: 1_000,
-            small_gap_threshold: 20,
-            recursive_align_threshold: 80,
-            max_move_detection_rows: 80,
-            enable_fuzzy_moves: false,
-            enable_m_semantic_diff: false,
-            ..Default::default()
-        }
+        let mut cfg = Self::default();
+        cfg.moves.max_move_iterations = 5;
+        cfg.alignment.max_block_gap = 1_000;
+        cfg.alignment.small_gap_threshold = 20;
+        cfg.alignment.recursive_align_threshold = 80;
+        cfg.moves.max_move_detection_rows = 80;
+        cfg.moves.enable_fuzzy_moves = false;
+        cfg.semantic.enable_m_semantic_diff = false;
+        cfg
     }
 
     pub fn balanced() -> Self {
@@ -9424,21 +9505,20 @@ impl DiffConfig {
     }
 
     pub fn most_precise() -> Self {
-        Self {
-            max_move_iterations: 30,
-            max_block_gap: 20_000,
-            fuzzy_similarity_threshold: 0.95,
-            small_gap_threshold: 80,
-            recursive_align_threshold: 400,
-            enable_formula_semantic_diff: true,
-            max_lcs_gap_size: 1_500,
-            lcs_dp_work_limit: 20_000,
-            move_extraction_max_slice_len: 10_000,
-            move_extraction_max_candidates_per_sig: 16,
-            max_move_detection_rows: 400,
-            max_move_detection_cols: 256,
-            ..Default::default()
-        }
+        let mut cfg = Self::default();
+        cfg.moves.max_move_iterations = 30;
+        cfg.alignment.max_block_gap = 20_000;
+        cfg.moves.fuzzy_similarity_threshold = 0.95;
+        cfg.alignment.small_gap_threshold = 80;
+        cfg.alignment.recursive_align_threshold = 400;
+        cfg.semantic.enable_formula_semantic_diff = true;
+        cfg.alignment.max_lcs_gap_size = 1_500;
+        cfg.alignment.lcs_dp_work_limit = 20_000;
+        cfg.moves.move_extraction_max_slice_len = 10_000;
+        cfg.moves.move_extraction_max_candidates_per_sig = 16;
+        cfg.moves.max_move_detection_rows = 400;
+        cfg.moves.max_move_detection_cols = 256;
+        cfg
     }
 
     pub fn builder() -> DiffConfigBuilder {
@@ -9448,64 +9528,64 @@ impl DiffConfig {
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
-        if !self.fuzzy_similarity_threshold.is_finite()
-            || self.fuzzy_similarity_threshold < 0.0
-            || self.fuzzy_similarity_threshold > 1.0
+        if !self.moves.fuzzy_similarity_threshold.is_finite()
+            || self.moves.fuzzy_similarity_threshold < 0.0
+            || self.moves.fuzzy_similarity_threshold > 1.0
         {
             return Err(ConfigError::InvalidFuzzySimilarity {
-                value: self.fuzzy_similarity_threshold,
+                value: self.moves.fuzzy_similarity_threshold,
             });
         }
 
-        ensure_non_zero_u32(self.max_align_rows, "max_align_rows")?;
-        ensure_non_zero_u32(self.max_align_cols, "max_align_cols")?;
-        ensure_non_zero_u32(self.max_lcs_gap_size, "max_lcs_gap_size")?;
+        ensure_non_zero_u32(self.alignment.max_align_rows, "max_align_rows")?;
+        ensure_non_zero_u32(self.alignment.max_align_cols, "max_align_cols")?;
+        ensure_non_zero_u32(self.alignment.max_lcs_gap_size, "max_lcs_gap_size")?;
         ensure_non_zero_u32(
-            self.move_extraction_max_slice_len,
+            self.moves.move_extraction_max_slice_len,
             "move_extraction_max_slice_len",
         )?;
         ensure_non_zero_u32(
-            self.move_extraction_max_candidates_per_sig,
+            self.moves.move_extraction_max_candidates_per_sig,
             "move_extraction_max_candidates_per_sig",
         )?;
-        ensure_non_zero_u32(self.context_anchor_k1, "context_anchor_k1")?;
-        ensure_non_zero_u32(self.context_anchor_k2, "context_anchor_k2")?;
-        ensure_non_zero_u32(self.max_move_detection_rows, "max_move_detection_rows")?;
-        ensure_non_zero_u32(self.max_move_detection_cols, "max_move_detection_cols")?;
-        ensure_non_zero_u32(self.max_context_rows, "max_context_rows")?;
-        ensure_non_zero_u32(self.min_block_size_for_move, "min_block_size_for_move")?;
+        ensure_non_zero_u32(self.alignment.context_anchor_k1, "context_anchor_k1")?;
+        ensure_non_zero_u32(self.alignment.context_anchor_k2, "context_anchor_k2")?;
+        ensure_non_zero_u32(self.moves.max_move_detection_rows, "max_move_detection_rows")?;
+        ensure_non_zero_u32(self.moves.max_move_detection_cols, "max_move_detection_cols")?;
+        ensure_non_zero_u32(self.preflight.max_context_rows, "max_context_rows")?;
+        ensure_non_zero_u32(self.moves.min_block_size_for_move, "min_block_size_for_move")?;
 
-        if self.lcs_dp_work_limit == 0 {
+        if self.alignment.lcs_dp_work_limit == 0 {
             return Err(ConfigError::NonPositiveLimit {
                 field: "lcs_dp_work_limit",
                 value: 0,
             });
         }
 
-        if !self.preflight_in_order_match_ratio_min.is_finite()
-            || self.preflight_in_order_match_ratio_min < 0.0
-            || self.preflight_in_order_match_ratio_min > 1.0
+        if !self.preflight.preflight_in_order_match_ratio_min.is_finite()
+            || self.preflight.preflight_in_order_match_ratio_min < 0.0
+            || self.preflight.preflight_in_order_match_ratio_min > 1.0
         {
             return Err(ConfigError::InvalidPreflightRatio {
-                value: self.preflight_in_order_match_ratio_min,
+                value: self.preflight.preflight_in_order_match_ratio_min,
             });
         }
 
-        if !self.dense_row_replace_ratio.is_finite()
-            || self.dense_row_replace_ratio < 0.0
-            || self.dense_row_replace_ratio > 1.0
+        if !self.semantic.dense_row_replace_ratio.is_finite()
+            || self.semantic.dense_row_replace_ratio < 0.0
+            || self.semantic.dense_row_replace_ratio > 1.0
         {
             return Err(ConfigError::InvalidDenseRowReplaceRatio {
-                value: self.dense_row_replace_ratio,
+                value: self.semantic.dense_row_replace_ratio,
             });
         }
 
-        if !self.bailout_similarity_threshold.is_finite()
-            || self.bailout_similarity_threshold < 0.0
-            || self.bailout_similarity_threshold > 1.0
+        if !self.preflight.bailout_similarity_threshold.is_finite()
+            || self.preflight.bailout_similarity_threshold < 0.0
+            || self.preflight.bailout_similarity_threshold > 1.0
         {
             return Err(ConfigError::InvalidBailoutSimilarity {
-                value: self.bailout_similarity_threshold,
+                value: self.preflight.bailout_similarity_threshold,
             });
         }
 
@@ -9554,192 +9634,192 @@ impl DiffConfigBuilder {
     }
 
     pub fn max_move_iterations(mut self, value: u32) -> Self {
-        self.inner.max_move_iterations = value;
+        self.inner.moves.max_move_iterations = value;
         self
     }
 
     pub fn max_align_rows(mut self, value: u32) -> Self {
-        self.inner.max_align_rows = value;
+        self.inner.alignment.max_align_rows = value;
         self
     }
 
     pub fn max_align_cols(mut self, value: u32) -> Self {
-        self.inner.max_align_cols = value;
+        self.inner.alignment.max_align_cols = value;
         self
     }
 
     pub fn max_block_gap(mut self, value: u32) -> Self {
-        self.inner.max_block_gap = value;
+        self.inner.alignment.max_block_gap = value;
         self
     }
 
     pub fn max_hash_repeat(mut self, value: u32) -> Self {
-        self.inner.max_hash_repeat = value;
+        self.inner.alignment.max_hash_repeat = value;
         self
     }
 
     pub fn fuzzy_similarity_threshold(mut self, value: f64) -> Self {
-        self.inner.fuzzy_similarity_threshold = value;
+        self.inner.moves.fuzzy_similarity_threshold = value;
         self
     }
 
     pub fn max_fuzzy_block_rows(mut self, value: u32) -> Self {
-        self.inner.max_fuzzy_block_rows = value;
+        self.inner.moves.max_fuzzy_block_rows = value;
         self
     }
 
     pub fn rare_threshold(mut self, value: u32) -> Self {
-        self.inner.rare_threshold = value;
+        self.inner.alignment.rare_threshold = value;
         self
     }
 
     pub fn low_info_threshold(mut self, value: u32) -> Self {
-        self.inner.low_info_threshold = value;
+        self.inner.alignment.low_info_threshold = value;
         self
     }
 
     pub fn recursive_align_threshold(mut self, value: u32) -> Self {
-        self.inner.recursive_align_threshold = value;
+        self.inner.alignment.recursive_align_threshold = value;
         self
     }
 
     pub fn small_gap_threshold(mut self, value: u32) -> Self {
-        self.inner.small_gap_threshold = value;
+        self.inner.alignment.small_gap_threshold = value;
         self
     }
 
     pub fn max_recursion_depth(mut self, value: u32) -> Self {
-        self.inner.max_recursion_depth = value;
+        self.inner.alignment.max_recursion_depth = value;
         self
     }
 
     pub fn on_limit_exceeded(mut self, value: LimitBehavior) -> Self {
-        self.inner.on_limit_exceeded = value;
+        self.inner.hardening.on_limit_exceeded = value;
         self
     }
 
     pub fn enable_fuzzy_moves(mut self, value: bool) -> Self {
-        self.inner.enable_fuzzy_moves = value;
+        self.inner.moves.enable_fuzzy_moves = value;
         self
     }
 
     pub fn enable_m_semantic_diff(mut self, value: bool) -> Self {
-        self.inner.enable_m_semantic_diff = value;
+        self.inner.semantic.enable_m_semantic_diff = value;
         self
     }
 
     pub fn enable_formula_semantic_diff(mut self, value: bool) -> Self {
-        self.inner.enable_formula_semantic_diff = value;
+        self.inner.semantic.enable_formula_semantic_diff = value;
         self
     }
 
     pub fn semantic_noise_policy(mut self, value: SemanticNoisePolicy) -> Self {
-        self.inner.semantic_noise_policy = value;
+        self.inner.semantic.semantic_noise_policy = value;
         self
     }
 
     pub fn include_unchanged_cells(mut self, value: bool) -> Self {
-        self.inner.include_unchanged_cells = value;
+        self.inner.semantic.include_unchanged_cells = value;
         self
     }
 
     pub fn dense_row_replace_ratio(mut self, value: f64) -> Self {
-        self.inner.dense_row_replace_ratio = value;
+        self.inner.semantic.dense_row_replace_ratio = value;
         self
     }
 
     pub fn dense_row_replace_min_cols(mut self, value: u32) -> Self {
-        self.inner.dense_row_replace_min_cols = value;
+        self.inner.semantic.dense_row_replace_min_cols = value;
         self
     }
 
     pub fn dense_rect_replace_min_rows(mut self, value: u32) -> Self {
-        self.inner.dense_rect_replace_min_rows = value;
+        self.inner.semantic.dense_rect_replace_min_rows = value;
         self
     }
 
     pub fn max_context_rows(mut self, value: u32) -> Self {
-        self.inner.max_context_rows = value;
+        self.inner.preflight.max_context_rows = value;
         self
     }
 
     pub fn min_block_size_for_move(mut self, value: u32) -> Self {
-        self.inner.min_block_size_for_move = value;
+        self.inner.moves.min_block_size_for_move = value;
         self
     }
 
     pub fn max_lcs_gap_size(mut self, value: u32) -> Self {
-        self.inner.max_lcs_gap_size = value;
+        self.inner.alignment.max_lcs_gap_size = value;
         self
     }
 
     pub fn lcs_dp_work_limit(mut self, value: usize) -> Self {
-        self.inner.lcs_dp_work_limit = value;
+        self.inner.alignment.lcs_dp_work_limit = value;
         self
     }
 
     pub fn move_extraction_max_slice_len(mut self, value: u32) -> Self {
-        self.inner.move_extraction_max_slice_len = value;
+        self.inner.moves.move_extraction_max_slice_len = value;
         self
     }
 
     pub fn move_extraction_max_candidates_per_sig(mut self, value: u32) -> Self {
-        self.inner.move_extraction_max_candidates_per_sig = value;
+        self.inner.moves.move_extraction_max_candidates_per_sig = value;
         self
     }
 
     pub fn context_anchor_k1(mut self, value: u32) -> Self {
-        self.inner.context_anchor_k1 = value;
+        self.inner.alignment.context_anchor_k1 = value;
         self
     }
 
     pub fn context_anchor_k2(mut self, value: u32) -> Self {
-        self.inner.context_anchor_k2 = value;
+        self.inner.alignment.context_anchor_k2 = value;
         self
     }
 
     pub fn max_move_detection_rows(mut self, value: u32) -> Self {
-        self.inner.max_move_detection_rows = value;
+        self.inner.moves.max_move_detection_rows = value;
         self
     }
 
     pub fn max_move_detection_cols(mut self, value: u32) -> Self {
-        self.inner.max_move_detection_cols = value;
+        self.inner.moves.max_move_detection_cols = value;
         self
     }
 
     pub fn preflight_min_rows(mut self, value: u32) -> Self {
-        self.inner.preflight_min_rows = value;
+        self.inner.preflight.preflight_min_rows = value;
         self
     }
 
     pub fn preflight_in_order_mismatch_max(mut self, value: u32) -> Self {
-        self.inner.preflight_in_order_mismatch_max = value;
+        self.inner.preflight.preflight_in_order_mismatch_max = value;
         self
     }
 
     pub fn preflight_in_order_match_ratio_min(mut self, value: f64) -> Self {
-        self.inner.preflight_in_order_match_ratio_min = value;
+        self.inner.preflight.preflight_in_order_match_ratio_min = value;
         self
     }
 
     pub fn bailout_similarity_threshold(mut self, value: f64) -> Self {
-        self.inner.bailout_similarity_threshold = value;
+        self.inner.preflight.bailout_similarity_threshold = value;
         self
     }
 
     pub fn max_memory_mb(mut self, value: Option<u32>) -> Self {
-        self.inner.max_memory_mb = value;
+        self.inner.hardening.max_memory_mb = value;
         self
     }
 
     pub fn timeout_seconds(mut self, value: Option<u32>) -> Self {
-        self.inner.timeout_seconds = value;
+        self.inner.hardening.timeout_seconds = value;
         self
     }
 
     pub fn max_ops(mut self, value: Option<usize>) -> Self {
-        self.inner.max_ops = value;
+        self.inner.hardening.max_ops = value;
         self
     }
 
@@ -9757,46 +9837,46 @@ mod tests {
     fn defaults_match_limit_spec() {
         let cfg = DiffConfig::default();
 
-        assert_eq!(cfg.max_align_rows, 500_000);
-        assert_eq!(cfg.max_align_cols, 16_384);
-        assert_eq!(cfg.max_recursion_depth, 10);
+        assert_eq!(cfg.alignment.max_align_rows, 500_000);
+        assert_eq!(cfg.alignment.max_align_cols, 16_384);
+        assert_eq!(cfg.alignment.max_recursion_depth, 10);
         assert!(matches!(
-            cfg.on_limit_exceeded,
+            cfg.hardening.on_limit_exceeded,
             LimitBehavior::FallbackToPositional
         ));
 
-        assert_eq!(cfg.fuzzy_similarity_threshold, 0.80);
-        assert_eq!(cfg.min_block_size_for_move, 3);
-        assert_eq!(cfg.max_move_iterations, 20);
+        assert_eq!(cfg.moves.fuzzy_similarity_threshold, 0.80);
+        assert_eq!(cfg.moves.min_block_size_for_move, 3);
+        assert_eq!(cfg.moves.max_move_iterations, 20);
 
-        assert_eq!(cfg.recursive_align_threshold, 200);
-        assert_eq!(cfg.small_gap_threshold, 50);
-        assert_eq!(cfg.low_info_threshold, 2);
-        assert_eq!(cfg.rare_threshold, 5);
-        assert_eq!(cfg.max_block_gap, 10_000);
+        assert_eq!(cfg.alignment.recursive_align_threshold, 200);
+        assert_eq!(cfg.alignment.small_gap_threshold, 50);
+        assert_eq!(cfg.alignment.low_info_threshold, 2);
+        assert_eq!(cfg.alignment.rare_threshold, 5);
+        assert_eq!(cfg.alignment.max_block_gap, 10_000);
 
-        assert_eq!(cfg.max_move_detection_rows, 200);
-        assert_eq!(cfg.max_move_detection_cols, 256);
+        assert_eq!(cfg.moves.max_move_detection_rows, 200);
+        assert_eq!(cfg.moves.max_move_detection_cols, 256);
 
-        assert_eq!(cfg.preflight_min_rows, 5000);
-        assert_eq!(cfg.preflight_in_order_mismatch_max, 32);
-        assert!((cfg.preflight_in_order_match_ratio_min - 0.995).abs() < f64::EPSILON);
-        assert!((cfg.bailout_similarity_threshold - 0.05).abs() < f64::EPSILON);
+        assert_eq!(cfg.preflight.preflight_min_rows, 5000);
+        assert_eq!(cfg.preflight.preflight_in_order_mismatch_max, 32);
+        assert!((cfg.preflight.preflight_in_order_match_ratio_min - 0.995).abs() < f64::EPSILON);
+        assert!((cfg.preflight.bailout_similarity_threshold - 0.05).abs() < f64::EPSILON);
 
-        assert_eq!(cfg.max_memory_mb, None);
-        assert_eq!(cfg.timeout_seconds, None);
+        assert_eq!(cfg.hardening.max_memory_mb, None);
+        assert_eq!(cfg.hardening.timeout_seconds, None);
 
-        assert!(!cfg.include_unchanged_cells);
-        assert!((cfg.dense_row_replace_ratio - 0.90).abs() < f64::EPSILON);
-        assert_eq!(cfg.dense_row_replace_min_cols, 64);
-        assert_eq!(cfg.dense_rect_replace_min_rows, 4);
-        assert_eq!(cfg.max_context_rows, 3);
+        assert!(!cfg.semantic.include_unchanged_cells);
+        assert!((cfg.semantic.dense_row_replace_ratio - 0.90).abs() < f64::EPSILON);
+        assert_eq!(cfg.semantic.dense_row_replace_min_cols, 64);
+        assert_eq!(cfg.semantic.dense_rect_replace_min_rows, 4);
+        assert_eq!(cfg.preflight.max_context_rows, 3);
 
-        assert!(cfg.enable_fuzzy_moves);
-        assert!(cfg.enable_m_semantic_diff);
-        assert!(!cfg.enable_formula_semantic_diff);
+        assert!(cfg.moves.enable_fuzzy_moves);
+        assert!(cfg.semantic.enable_m_semantic_diff);
+        assert!(!cfg.semantic.enable_formula_semantic_diff);
         assert!(matches!(
-            cfg.semantic_noise_policy,
+            cfg.semantic.semantic_noise_policy,
             SemanticNoisePolicy::ReportFormattingOnly
         ));
     }
@@ -9810,6 +9890,21 @@ mod tests {
     }
 
     #[test]
+    fn serde_flatten_keeps_flat_shape() {
+        let cfg = DiffConfig::default();
+        let value = serde_json::to_value(&cfg).expect("serialize default config");
+        let obj = value
+            .as_object()
+            .expect("default config should serialize to an object");
+        assert!(obj.contains_key("max_align_rows"));
+        assert!(!obj.contains_key("alignment"));
+        assert!(!obj.contains_key("moves"));
+        assert!(!obj.contains_key("preflight"));
+        assert!(!obj.contains_key("semantic"));
+        assert!(!obj.contains_key("hardening"));
+    }
+
+    #[test]
     fn serde_aliases_populate_fields() {
         let json = r#"{
             "rare_frequency_threshold": 9,
@@ -9817,9 +9912,9 @@ mod tests {
             "recursive_threshold": 123
         }"#;
         let cfg: DiffConfig = serde_json::from_str(json).expect("deserialize with aliases");
-        assert_eq!(cfg.rare_threshold, 9);
-        assert_eq!(cfg.low_info_threshold, 3);
-        assert_eq!(cfg.recursive_align_threshold, 123);
+        assert_eq!(cfg.alignment.rare_threshold, 9);
+        assert_eq!(cfg.alignment.low_info_threshold, 3);
+        assert_eq!(cfg.alignment.recursive_align_threshold, 123);
     }
 
     #[test]
@@ -9840,18 +9935,20 @@ mod tests {
         let balanced = DiffConfig::balanced();
         let precise = DiffConfig::most_precise();
 
-        assert!(!fastest.enable_fuzzy_moves);
-        assert!(!fastest.enable_m_semantic_diff);
-        assert!(precise.max_move_iterations >= balanced.max_move_iterations);
-        assert!(precise.max_block_gap >= balanced.max_block_gap);
-        assert!(precise.fuzzy_similarity_threshold >= balanced.fuzzy_similarity_threshold);
+        assert!(!fastest.moves.enable_fuzzy_moves);
+        assert!(!fastest.semantic.enable_m_semantic_diff);
+        assert!(precise.moves.max_move_iterations >= balanced.moves.max_move_iterations);
+        assert!(precise.alignment.max_block_gap >= balanced.alignment.max_block_gap);
+        assert!(
+            precise.moves.fuzzy_similarity_threshold >= balanced.moves.fuzzy_similarity_threshold
+        );
     }
 
     #[test]
     fn most_precise_matches_sprint_plan_values() {
         let cfg = DiffConfig::most_precise();
-        assert_eq!(cfg.fuzzy_similarity_threshold, 0.95);
-        assert!(cfg.enable_formula_semantic_diff);
+        assert_eq!(cfg.moves.fuzzy_similarity_threshold, 0.95);
+        assert!(cfg.semantic.enable_formula_semantic_diff);
     }
 
     #[test]
@@ -9924,17 +10021,17 @@ mod tests {
             .build()
             .expect("valid config should build");
 
-        assert_eq!(cfg.preflight_min_rows, 10000);
-        assert_eq!(cfg.preflight_in_order_mismatch_max, 64);
-        assert!((cfg.preflight_in_order_match_ratio_min - 0.99).abs() < f64::EPSILON);
-        assert!((cfg.bailout_similarity_threshold - 0.10).abs() < f64::EPSILON);
-        assert_eq!(cfg.max_memory_mb, Some(64));
-        assert_eq!(cfg.timeout_seconds, Some(5));
-        assert!((cfg.dense_row_replace_ratio - 0.75).abs() < f64::EPSILON);
-        assert_eq!(cfg.dense_row_replace_min_cols, 16);
-        assert_eq!(cfg.dense_rect_replace_min_rows, 2);
+        assert_eq!(cfg.preflight.preflight_min_rows, 10000);
+        assert_eq!(cfg.preflight.preflight_in_order_mismatch_max, 64);
+        assert!((cfg.preflight.preflight_in_order_match_ratio_min - 0.99).abs() < f64::EPSILON);
+        assert!((cfg.preflight.bailout_similarity_threshold - 0.10).abs() < f64::EPSILON);
+        assert_eq!(cfg.hardening.max_memory_mb, Some(64));
+        assert_eq!(cfg.hardening.timeout_seconds, Some(5));
+        assert!((cfg.semantic.dense_row_replace_ratio - 0.75).abs() < f64::EPSILON);
+        assert_eq!(cfg.semantic.dense_row_replace_min_cols, 16);
+        assert_eq!(cfg.semantic.dense_rect_replace_min_rows, 2);
         assert!(matches!(
-            cfg.semantic_noise_policy,
+            cfg.semantic.semantic_noise_policy,
             SemanticNoisePolicy::SuppressFormattingOnly
         ));
     }
@@ -12900,7 +12997,7 @@ fn amr_should_fallback_row_edits_with_structural(
         .iter()
         .any(|(a, b)| row_signature_at(old, *a) != row_signature_at(new, *b));
 
-    has_row_edits && config.max_move_iterations > 0
+    has_row_edits && config.moves.max_move_iterations > 0
 }
 
 fn amr_alignment_is_trivial_identity(old: &Grid, new: &Grid, alignment: &RowAlignment) -> bool {
@@ -12922,7 +13019,7 @@ fn amr_should_fallback_multiset_reorder(
     !is_trivial
         && alignment.moves.is_empty()
         && row_signature_multiset_equal(old, new)
-        && config.max_move_iterations > 0
+        && config.moves.max_move_iterations > 0
 }
 
 fn amr_can_try_column_alignment(alignment: &RowAlignment) -> bool {
@@ -13032,7 +13129,7 @@ pub(super) fn try_diff_with_amr<S: DiffSink>(
 
     let mut alignment = amr_result.alignment;
 
-    if emit_ctx.config.max_move_iterations > 0 {
+    if emit_ctx.config.moves.max_move_iterations > 0 {
         inject_moves_from_insert_delete(
             old,
             new,
@@ -13253,8 +13350,8 @@ pub(super) fn try_diff_grids<'p, S: DiffSink>(
             .saturating_add(new.nrows as u64);
     }
 
-    let exceeds_limits = old.nrows.max(new.nrows) > config.max_align_rows
-        || old.ncols.max(new.ncols) > config.max_align_cols;
+    let exceeds_limits = old.nrows.max(new.nrows) > config.alignment.max_align_rows
+        || old.ncols.max(new.ncols) > config.alignment.max_align_cols;
 
     if exceeds_limits {
         let warning = format!(
@@ -13262,18 +13359,18 @@ pub(super) fn try_diff_grids<'p, S: DiffSink>(
             pool.resolve(sheet_id),
             old.nrows.max(new.nrows),
             old.ncols.max(new.ncols),
-            config.max_align_rows,
-            config.max_align_cols
+            config.alignment.max_align_rows,
+            config.alignment.max_align_cols
         );
 
-        match config.on_limit_exceeded {
+        match config.hardening.on_limit_exceeded {
             LimitBehavior::ReturnError => {
                 return Err(DiffError::LimitsExceeded {
                     sheet: sheet_id,
                     rows: old.nrows.max(new.nrows),
                     cols: old.ncols.max(new.ncols),
-                    max_rows: config.max_align_rows,
-                    max_cols: config.max_align_cols,
+                    max_rows: config.alignment.max_align_rows,
+                    max_cols: config.alignment.max_align_cols,
                 });
             }
             behavior => {
@@ -13399,7 +13496,7 @@ fn diff_grids_core<'p, S: DiffSink>(
         {
             let rows = rows_with_context(
                 &preflight.mismatched_rows,
-                config.max_context_rows,
+                config.preflight.max_context_rows,
                 old.nrows,
             );
             #[cfg(feature = "perf-metrics")]
@@ -13767,7 +13864,7 @@ fn preflight_decision_from_grids(
     }
 
     let nrows = nrows_old;
-    if nrows < config.preflight_min_rows as usize {
+    if nrows < config.preflight.preflight_min_rows as usize {
         return PreflightLite {
             decision: PreflightDecision::RunFullPipeline,
             mismatched_rows: Vec::new(),
@@ -13795,7 +13892,7 @@ fn preflight_decision_from_grids(
         1.0
     };
 
-    if jaccard < config.bailout_similarity_threshold {
+    if jaccard < config.preflight.bailout_similarity_threshold {
         return PreflightLite {
             decision: PreflightDecision::ShortCircuitDissimilar,
             mismatched_rows: Vec::new(),
@@ -13807,8 +13904,9 @@ fn preflight_decision_from_grids(
 
     let reorder_suspected = (in_order_mismatches as u64) > multiset_edit_distance_rows;
 
-    let near_identical = in_order_mismatches <= config.preflight_in_order_mismatch_max as usize
-        && in_order_match_ratio >= config.preflight_in_order_match_ratio_min
+    let near_identical = in_order_mismatches
+        <= config.preflight.preflight_in_order_mismatch_max as usize
+        && in_order_match_ratio >= config.preflight.preflight_in_order_match_ratio_min
         && !multiset_equal
         && !reorder_suspected;
 
@@ -14276,16 +14374,18 @@ pub(super) fn emit_cell_edit<S: DiffSink>(
 }
 
 fn dense_row_replace_threshold(config: &DiffConfig, total_cols: u32) -> Option<usize> {
-    if config.include_unchanged_cells || total_cols == 0 {
+    if config.semantic.include_unchanged_cells || total_cols == 0 {
         return None;
     }
 
-    let ratio = config.dense_row_replace_ratio;
+    let ratio = config.semantic.dense_row_replace_ratio;
     if !ratio.is_finite() || ratio <= 0.0 {
         return None;
     }
 
-    if config.dense_row_replace_min_cols > 0 && total_cols < config.dense_row_replace_min_cols {
+    if config.semantic.dense_row_replace_min_cols > 0
+        && total_cols < config.semantic.dense_row_replace_min_cols
+    {
         return None;
     }
 
@@ -14306,7 +14406,7 @@ fn flush_pending_rect<S: DiffSink>(
         return Ok(());
     }
 
-    let min_rows = ctx.config.dense_rect_replace_min_rows;
+    let min_rows = ctx.config.semantic.dense_rect_replace_min_rows;
     if min_rows > 0 && rect.row_count >= min_rows {
         ctx.emit(DiffOp::RectReplaced {
             sheet: ctx.sheet_id,
@@ -14503,7 +14603,7 @@ fn diff_row_pair_sparse_plan<'a>(
         compared = compared.saturating_add(1);
 
         if cells_content_equal(old_cell, new_cell) {
-            if config.include_unchanged_cells {
+            if config.semantic.include_unchanged_cells {
                 pending.push(PendingCell {
                     col,
                     old_cell,
@@ -14578,7 +14678,7 @@ fn diff_row_pair_sparse_thresholdless<'a>(
 
         compared = compared.saturating_add(1);
 
-        if config.include_unchanged_cells || !cells_content_equal(old_cell, new_cell) {
+        if config.semantic.include_unchanged_cells || !cells_content_equal(old_cell, new_cell) {
             pending.push(PendingCell {
                 col,
                 old_cell,
@@ -14642,7 +14742,7 @@ pub(super) fn diff_row_pair<'a, S: DiffSink>(
             }
         }
 
-        if changed || ctx.config.include_unchanged_cells {
+        if changed || ctx.config.semantic.include_unchanged_cells {
             pending.push(PendingCell {
                 col,
                 old_cell,
@@ -14724,7 +14824,7 @@ fn plan_one_row_pair<'a>(
         };
     };
 
-    if !config.include_unchanged_cells {
+    if !config.semantic.include_unchanged_cells {
         let sig_a = old_view.row_meta.get(row_a as usize).map(|m| m.signature);
         let sig_b = new_view.row_meta.get(row_b as usize).map(|m| m.signature);
         if let (Some(a), Some(b)) = (sig_a, sig_b) {
@@ -15007,7 +15107,7 @@ pub(super) fn positional_diff_from_views<S: DiffSink>(
                 .progress("cell_diff", (row as f32) / (overlap_rows as f32));
         }
 
-        if !ctx.config.include_unchanged_cells {
+        if !ctx.config.semantic.include_unchanged_cells {
             let old_sig = old_view.row_meta.get(row as usize).map(|m| m.signature);
             let new_sig = new_view.row_meta.get(row as usize).map(|m| m.signature);
             if let (Some(a), Some(b)) = (old_sig, new_sig) {
@@ -15375,12 +15475,14 @@ impl<'a> HardeningController<'a> {
             start: Instant::now(),
             #[cfg(not(target_arch = "wasm32"))]
             timeout: config
+                .hardening
                 .timeout_seconds
                 .map(|secs| Duration::from_secs(secs as u64)),
             max_memory_bytes: config
+                .hardening
                 .max_memory_mb
                 .map(|mb| (mb as u64).saturating_mul(BYTES_PER_MB)),
-            max_ops: config.max_ops,
+            max_ops: config.hardening.max_ops,
             aborted: false,
             #[cfg(not(target_arch = "wasm32"))]
             warned_timeout: false,
@@ -15621,8 +15723,8 @@ impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
     }
 
     fn move_detection_enabled(&self) -> bool {
-        self.old.nrows.max(self.new.nrows) <= self.emit_ctx.config.max_move_detection_rows
-            && self.old.ncols.max(self.new.ncols) <= self.emit_ctx.config.max_move_detection_cols
+        self.old.nrows.max(self.new.nrows) <= self.emit_ctx.config.moves.max_move_detection_rows
+            && self.old.ncols.max(self.new.ncols) <= self.emit_ctx.config.moves.max_move_detection_cols
     }
 
     pub(super) fn detect_moves(&mut self) -> Result<u32, DiffError> {
@@ -15634,7 +15736,7 @@ impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
         let config = self.emit_ctx.config;
 
         loop {
-            if iteration >= config.max_move_iterations {
+            if iteration >= config.moves.max_move_iterations {
                 break;
             }
 
@@ -15725,7 +15827,7 @@ impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
             }
 
             if !found_move
-                && config.enable_fuzzy_moves
+                && config.moves.enable_fuzzy_moves
                 && let Some(mv) = detect_fuzzy_row_block_move_masked(
                     self.old,
                     self.new,
@@ -19119,7 +19221,7 @@ pub(crate) fn diff_cell_formulas_ids(
         _ => {}
     }
 
-    if !config.enable_formula_semantic_diff {
+    if !config.semantic.enable_formula_semantic_diff {
         return FormulaDiffResult::TextChange;
     }
 
@@ -19215,11 +19317,11 @@ pub fn classify_row_frequencies(row_meta: &mut [RowMeta], config: &DiffConfig) {
         let mut class = match count {
             1 => FrequencyClass::Unique,
             0 => FrequencyClass::Common,
-            c if c <= config.rare_threshold => FrequencyClass::Rare,
+            c if c <= config.alignment.rare_threshold => FrequencyClass::Rare,
             _ => FrequencyClass::Common,
         };
 
-        if (meta.non_blank_count as u32) < config.low_info_threshold || meta.is_low_info {
+        if (meta.non_blank_count as u32) < config.alignment.low_info_threshold || meta.is_low_info {
             class = FrequencyClass::LowInfo;
             meta.is_low_info = true;
         }
@@ -19250,8 +19352,8 @@ mod tests {
         let mut meta = vec![make_meta(0, 1, 3), make_meta(1, 1, 3), make_meta(2, 2, 1)];
 
         let mut config = DiffConfig::default();
-        config.rare_threshold = 2;
-        config.low_info_threshold = 2;
+        config.alignment.rare_threshold = 2;
+        config.alignment.low_info_threshold = 2;
 
         classify_row_frequencies(&mut meta, &config);
 
@@ -20394,7 +20496,7 @@ fn should_parallelize_cols(col_len: usize, total_cells: usize) -> bool {
 }
 
 fn should_force_sequential_col_meta(grid: &Grid, config: &DiffConfig) -> bool {
-    let Some(max_mb) = config.max_memory_mb else {
+    let Some(max_mb) = config.hardening.max_memory_mb else {
         return false;
     };
     let max_bytes = (max_mb as u64).saturating_mul(BYTES_PER_MB);
@@ -24922,7 +25024,7 @@ fn diff_queries_to_ops(
     let rename_pairs = match_query_renames(
         &old_only,
         &new_only,
-        config.fuzzy_similarity_threshold,
+        config.moves.fuzzy_similarity_threshold,
     );
     for (old_idx, new_idx) in rename_pairs {
         let old_q = old_only[old_idx];
@@ -24947,11 +25049,11 @@ fn diff_queries_to_ops(
         if let Some((kind, old_h, new_h)) = definition_change(
             &old_q.expression_m,
             &new_q.expression_m,
-            config.enable_m_semantic_diff,
-            config.semantic_noise_policy,
+            config.semantic.enable_m_semantic_diff,
+            config.semantic.semantic_noise_policy,
         ) {
             let semantic_detail =
-                if config.enable_m_semantic_diff && kind == DiffQueryChangeKind::Semantic {
+                if config.semantic.enable_m_semantic_diff && kind == DiffQueryChangeKind::Semantic {
                     crate::m_semantic_detail::build_query_semantic_detail(
                         &old_q.expression_m,
                         &new_q.expression_m,
@@ -25001,11 +25103,12 @@ fn diff_queries_to_ops(
                 if let Some((kind, old_h, new_h)) = definition_change(
                     &old_q.expression_m,
                     &new_q.expression_m,
-                    config.enable_m_semantic_diff,
-                    config.semantic_noise_policy,
+                    config.semantic.enable_m_semantic_diff,
+                    config.semantic.semantic_noise_policy,
                 ) {
                     let semantic_detail =
-                        if config.enable_m_semantic_diff && kind == DiffQueryChangeKind::Semantic
+                        if config.semantic.enable_m_semantic_diff
+                            && kind == DiffQueryChangeKind::Semantic
                         {
                             crate::m_semantic_detail::build_query_semantic_detail(
                                 &old_q.expression_m,
@@ -28166,8 +28269,8 @@ pub(crate) fn detect_exact_rect_block_move(
     let row_stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
     let col_stats = HashStats::from_col_meta(&view_a.col_meta, &view_b.col_meta);
 
-    if row_stats.has_heavy_repetition(config.max_hash_repeat)
-        || col_stats.has_heavy_repetition(config.max_hash_repeat)
+    if row_stats.has_heavy_repetition(config.alignment.max_hash_repeat)
+        || col_stats.has_heavy_repetition(config.alignment.max_hash_repeat)
     {
         return None;
     }
@@ -28440,7 +28543,7 @@ fn ranges_overlap(a: (u32, u32), b: (u32, u32)) -> bool {
 fn is_within_size_bounds(old: &Grid, new: &Grid, config: &DiffConfig) -> bool {
     let rows = old.nrows.max(new.nrows);
     let cols = old.ncols.max(new.ncols);
-    rows <= config.max_align_rows && cols <= config.max_align_cols
+    rows <= config.alignment.max_align_rows && cols <= config.alignment.max_align_cols
 }
 
 fn unique_in_a<H>(hash: H, stats: &HashStats<H>) -> bool
@@ -28645,9 +28748,9 @@ mod tests {
     #[test]
     fn detect_bails_on_oversized_row_count() {
         let mut config = DiffConfig::default();
-        config.max_align_rows = 10;
-        let old = Grid::new(config.max_align_rows + 1, 10);
-        let new = Grid::new(config.max_align_rows + 1, 10);
+        config.alignment.max_align_rows = 10;
+        let old = Grid::new(config.alignment.max_align_rows + 1, 10);
+        let new = Grid::new(config.alignment.max_align_rows + 1, 10);
 
         let result = detect_exact_rect_block_move(&old, &new, &config);
         assert!(
@@ -28660,9 +28763,9 @@ mod tests {
     #[test]
     fn detect_bails_on_oversized_col_count() {
         let mut config = DiffConfig::default();
-        config.max_align_cols = 8;
-        let old = Grid::new(10, config.max_align_cols + 1);
-        let new = Grid::new(10, config.max_align_cols + 1);
+        config.alignment.max_align_cols = 8;
+        let old = Grid::new(10, config.alignment.max_align_cols + 1);
+        let new = Grid::new(10, config.alignment.max_align_cols + 1);
 
         let result = detect_exact_rect_block_move(&old, &new, &config);
         assert!(
@@ -29124,7 +29227,7 @@ pub(crate) fn detect_exact_row_block_move(
     }
 
     let stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
-    if stats.has_heavy_repetition(config.max_hash_repeat) {
+    if stats.has_heavy_repetition(config.alignment.max_hash_repeat) {
         return None;
     }
 
@@ -29262,7 +29365,7 @@ pub(crate) fn detect_fuzzy_row_block_move(
     }
 
     let stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
-    if stats.has_heavy_repetition(config.max_hash_repeat) {
+    if stats.has_heavy_repetition(config.alignment.max_hash_repeat) {
         return None;
     }
 
@@ -29309,7 +29412,7 @@ pub(crate) fn detect_fuzzy_row_block_move(
 
     let max_block_len = mid_len
         .saturating_sub(1)
-        .min(config.max_fuzzy_block_rows as usize);
+        .min(config.moves.max_fuzzy_block_rows as usize);
     if max_block_len == 0 {
         return None;
     }
@@ -29327,7 +29430,7 @@ pub(crate) fn detect_fuzzy_row_block_move(
             let src_block = &meta_a[prefix + remaining..mismatch_end];
             let dst_block = &meta_b[prefix..prefix + block_len];
 
-            if block_similarity(src_block, dst_block) >= config.fuzzy_similarity_threshold {
+            if block_similarity(src_block, dst_block) >= config.moves.fuzzy_similarity_threshold {
                 let mv = RowBlockMove {
                     src_start_row: src_block[0].row_idx,
                     dst_start_row: dst_block[0].row_idx,
@@ -29350,7 +29453,7 @@ pub(crate) fn detect_fuzzy_row_block_move(
             let src_block = &meta_a[prefix..prefix + block_len];
             let dst_block = &meta_b[prefix + remaining..mismatch_end];
 
-            if block_similarity(src_block, dst_block) >= config.fuzzy_similarity_threshold {
+            if block_similarity(src_block, dst_block) >= config.moves.fuzzy_similarity_threshold {
                 let mv = RowBlockMove {
                     src_start_row: src_block[0].row_idx,
                     dst_start_row: dst_block[0].row_idx,
@@ -29437,7 +29540,7 @@ fn align_rows_internal(
         return None;
     }
 
-    if abs_diff != 1 && (!allow_blocks || abs_diff > config.max_block_gap) {
+    if abs_diff != 1 && (!allow_blocks || abs_diff > config.alignment.max_block_gap) {
         return None;
     }
 
@@ -29446,7 +29549,7 @@ fn align_rows_internal(
     }
 
     let stats = HashStats::from_row_meta(&old_view.row_meta, &new_view.row_meta);
-    if stats.has_heavy_repetition(config.max_hash_repeat) {
+    if stats.has_heavy_repetition(config.alignment.max_hash_repeat) {
         return None;
     }
 
@@ -29697,7 +29800,7 @@ fn is_monotonic(pairs: &[(u32, u32)]) -> bool {
 fn is_within_size_bounds(old: &Grid, new: &Grid, config: &DiffConfig) -> bool {
     let rows = old.nrows.max(new.nrows);
     let cols = old.ncols.max(new.ncols);
-    rows <= config.max_align_rows && cols <= config.max_align_cols
+    rows <= config.alignment.max_align_rows && cols <= config.alignment.max_align_cols
 }
 
 fn hashes_match(slice_a: &[RowMeta], slice_b: &[RowMeta]) -> bool {
@@ -30001,7 +30104,7 @@ mod tests {
             RowBlockMove {
                 src_start_row: 4,
                 dst_start_row: 36,
-                row_count: config.max_fuzzy_block_rows
+                row_count: config.moves.max_fuzzy_block_rows
             }
         );
     }
@@ -33747,11 +33850,9 @@ fn database_mode_wrapper_limits_exceeded_returns_incomplete_report() {
     grid_b.insert_cell(0, 0, Some(CellValue::Number(1.0)), None);
     grid_b.insert_cell(1, 0, Some(CellValue::Number(1.0)), None);
 
-    let config = DiffConfig {
-        max_align_rows: 1,
-        on_limit_exceeded: LimitBehavior::ReturnError,
-        ..Default::default()
-    };
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_rows = 1;
+    config.hardening.on_limit_exceeded = LimitBehavior::ReturnError;
 
     let result = std::panic::catch_unwind(|| {
         with_default_session(|session| {
@@ -34336,10 +34437,8 @@ fn move_detection_respects_column_gate() {
         "default gate should skip block move detection on wide sheets"
     );
 
-    let wide_gate = DiffConfig {
-        max_move_detection_cols: 512,
-        ..DiffConfig::default()
-    };
+    let mut wide_gate = DiffConfig::default();
+    wide_gate.moves.max_move_detection_cols = 512;
     let wide_report = diff_workbooks(&wb_a, &wb_b, &wide_gate);
     assert!(
         !wide_report.ops.is_empty(),
@@ -34963,7 +35062,7 @@ fn formatting_only_vs_text_change_respects_flag() {
     let new = workbook_with_formula(&mut pool, sheet, 0, 0, "SUM(A1,B1)");
 
     let mut enabled = DiffConfig::default();
-    enabled.enable_formula_semantic_diff = true;
+    enabled.semantic.enable_formula_semantic_diff = true;
     let disabled = DiffConfig::default();
 
     let report_enabled = diff_workbooks_with_pool(&old, &new, &mut pool, &enabled);
@@ -34989,7 +35088,7 @@ fn filled_down_formulas_detect_row_shift() {
     let mut pool = StringPool::new();
 
     let mut config = DiffConfig::default();
-    config.enable_formula_semantic_diff = true;
+    config.semantic.enable_formula_semantic_diff = true;
 
     let mut old = Grid::new(1, 2);
     old.insert_cell(0, 0, Some(CellValue::Number(1.0)), None);
@@ -35821,10 +35920,8 @@ fn g13_fuzzy_row_move_can_be_disabled() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let disabled = DiffConfig {
-        enable_fuzzy_moves: false,
-        ..DiffConfig::default()
-    };
+    let mut disabled = DiffConfig::default();
+    disabled.moves.enable_fuzzy_moves = false;
     let report_disabled = diff_workbooks(&wb_a, &wb_b, &disabled);
     let disabled_moves = report_disabled
         .ops
@@ -36687,10 +36784,8 @@ fn g14_move_detection_disabled_falls_back_to_positional() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let config = DiffConfig {
-        max_move_iterations: 0,
-        ..DiffConfig::default()
-    };
+    let mut config = DiffConfig::default();
+    config.moves.max_move_iterations = 0;
     let report = diff_workbooks(&wb_a, &wb_b, &config);
 
     assert!(
@@ -36737,11 +36832,9 @@ fn g14_masked_move_detection_not_gated_by_recursive_align_threshold() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let config = DiffConfig {
-        recursive_align_threshold: 1,
-        max_move_detection_rows: 10,
-        ..DiffConfig::default()
-    };
+    let mut config = DiffConfig::default();
+    config.alignment.recursive_align_threshold = 1;
+    config.moves.max_move_detection_rows = 10;
 
     let report = diff_workbooks(&wb_a, &wb_b, &config);
 
@@ -36780,10 +36873,8 @@ fn g14_max_move_iterations_limits_detected_moves() {
     let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
     let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
 
-    let limited_config = DiffConfig {
-        max_move_iterations: 2,
-        ..DiffConfig::default()
-    };
+    let mut limited_config = DiffConfig::default();
+    limited_config.moves.max_move_iterations = 2;
     let report_limited = diff_workbooks(&wb_a, &wb_b, &limited_config);
 
     let rect_moves_limited = collect_rect_moves(&report_limited);
@@ -38197,7 +38288,7 @@ fn gridview_formula_only_row_respects_threshold() {
     assert!(view_default.row_meta[0].is_low_info);
 
     let mut config = DiffConfig::default();
-    config.low_info_threshold = 1;
+    config.alignment.low_info_threshold = 1;
     let view_tuned = GridView::from_grid_with_config(&grid, &config);
     assert_eq!(view_tuned.row_meta[0].non_blank_count, 1);
     assert!(!view_tuned.row_meta[0].is_low_info);
@@ -38350,10 +38441,8 @@ fn memory_budget_forces_positional_fallback_and_warning() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let config = DiffConfig {
-        max_memory_mb: Some(0),
-        ..Default::default()
-    };
+    let mut config = DiffConfig::default();
+    config.hardening.max_memory_mb = Some(0);
 
     let report = WorkbookPackage::from(wb_a).diff(&WorkbookPackage::from(wb_b), &config);
 
@@ -38389,10 +38478,8 @@ fn timeout_yields_partial_report_and_warning() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let config = DiffConfig {
-        timeout_seconds: Some(0),
-        ..Default::default()
-    };
+    let mut config = DiffConfig::default();
+    config.hardening.timeout_seconds = Some(0);
 
     let report = WorkbookPackage::from(wb_a).diff(&WorkbookPackage::from(wb_b), &config);
 
@@ -38574,11 +38661,9 @@ fn limit_exceeded_fallback_to_positional() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let config = DiffConfig {
-        max_align_rows: 50,
-        on_limit_exceeded: LimitBehavior::FallbackToPositional,
-        ..Default::default()
-    };
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_rows = 50;
+    config.hardening.on_limit_exceeded = LimitBehavior::FallbackToPositional;
 
     let report = diff_workbooks(&wb_a, &wb_b, &config);
 
@@ -38605,11 +38690,9 @@ fn limit_exceeded_return_partial_result() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let config = DiffConfig {
-        max_align_rows: 50,
-        on_limit_exceeded: LimitBehavior::ReturnPartialResult,
-        ..Default::default()
-    };
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_rows = 50;
+    config.hardening.on_limit_exceeded = LimitBehavior::ReturnPartialResult;
 
     let report = diff_workbooks(&wb_a, &wb_b, &config);
 
@@ -38639,11 +38722,9 @@ fn limit_exceeded_return_error_returns_structured_error() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let config = DiffConfig {
-        max_align_rows: 50,
-        on_limit_exceeded: LimitBehavior::ReturnError,
-        ..Default::default()
-    };
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_rows = 50;
+    config.hardening.on_limit_exceeded = LimitBehavior::ReturnError;
 
     let result = try_diff_workbooks(&wb_a, &wb_b, &config);
     assert!(result.is_err(), "should return error when limits exceeded");
@@ -38675,11 +38756,9 @@ fn limit_exceeded_return_error_produces_warning_via_legacy_api() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let config = DiffConfig {
-        max_align_rows: 50,
-        on_limit_exceeded: LimitBehavior::ReturnError,
-        ..Default::default()
-    };
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_rows = 50;
+    config.hardening.on_limit_exceeded = LimitBehavior::ReturnError;
 
     let report = diff_workbooks(&wb_a, &wb_b, &config);
     assert!(!report.complete, "report should be incomplete");
@@ -38699,11 +38778,9 @@ fn column_limit_exceeded() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let config = DiffConfig {
-        max_align_cols: 50,
-        on_limit_exceeded: LimitBehavior::ReturnPartialResult,
-        ..Default::default()
-    };
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_cols = 50;
+    config.hardening.on_limit_exceeded = LimitBehavior::ReturnPartialResult;
 
     let report = diff_workbooks(&wb_a, &wb_b, &config);
 
@@ -38726,11 +38803,9 @@ fn within_limits_no_warning() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let config = DiffConfig {
-        max_align_rows: 50,
-        on_limit_exceeded: LimitBehavior::ReturnPartialResult,
-        ..Default::default()
-    };
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_rows = 50;
+    config.hardening.on_limit_exceeded = LimitBehavior::ReturnPartialResult;
 
     let report = diff_workbooks(&wb_a, &wb_b, &config);
 
@@ -38779,11 +38854,9 @@ fn multiple_sheets_limit_warning_includes_sheet_name() {
         ..Default::default()
     };
 
-    let config = DiffConfig {
-        max_align_rows: 50,
-        on_limit_exceeded: LimitBehavior::ReturnPartialResult,
-        ..Default::default()
-    };
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_rows = 50;
+    config.hardening.on_limit_exceeded = LimitBehavior::ReturnPartialResult;
 
     let report = diff_workbooks(&wb_a, &wb_b, &config);
 
@@ -40498,10 +40571,8 @@ fn semantic_gate_disabled_produces_semantic_change() {
     let pkg_a = load_package("m_formatting_only_a.xlsx");
     let pkg_b = load_package("m_formatting_only_b.xlsx");
 
-    let config = DiffConfig {
-        enable_m_semantic_diff: false,
-        ..DiffConfig::default()
-    };
+    let mut config = DiffConfig::default();
+    config.semantic.enable_m_semantic_diff = false;
 
     let report = pkg_a.diff(&pkg_b, &config);
     let ops = m_ops(&report);
@@ -40585,10 +40656,8 @@ fn formatting_only_can_be_suppressed_by_policy() {
     let pkg_a = load_package("m_formatting_only_a.xlsx");
     let pkg_b = load_package("m_formatting_only_b.xlsx");
 
-    let config = DiffConfig {
-        semantic_noise_policy: SemanticNoisePolicy::SuppressFormattingOnly,
-        ..DiffConfig::default()
-    };
+    let mut config = DiffConfig::default();
+    config.semantic.semantic_noise_policy = SemanticNoisePolicy::SuppressFormattingOnly;
 
     let report = pkg_a.diff(&pkg_b, &config);
     let ops = m_ops(&report);
@@ -40867,10 +40936,8 @@ fn record_reorder_is_masked_by_semantic_canonicalization() {
     let a = load_pkg("m_record_equiv_a.xlsx");
     let b = load_pkg("m_record_equiv_b.xlsx");
 
-    let cfg = DiffConfig {
-        enable_m_semantic_diff: true,
-        ..DiffConfig::default()
-    };
+    let mut cfg = DiffConfig::default();
+    cfg.semantic.enable_m_semantic_diff = true;
     let diff = a.diff(&b, &cfg);
 
     let ops = m_ops(&diff.ops);
@@ -40895,10 +40962,8 @@ fn list_formatting_only_is_masked() {
     let a = load_pkg("m_list_formatting_a.xlsx");
     let b = load_pkg("m_list_formatting_b.xlsx");
 
-    let cfg = DiffConfig {
-        enable_m_semantic_diff: true,
-        ..DiffConfig::default()
-    };
+    let mut cfg = DiffConfig::default();
+    cfg.semantic.enable_m_semantic_diff = true;
     let diff = a.diff(&b, &cfg);
 
     let ops = m_ops(&diff.ops);
@@ -40923,10 +40988,8 @@ fn call_formatting_only_is_masked() {
     let a = load_pkg("m_call_formatting_a.xlsx");
     let b = load_pkg("m_call_formatting_b.xlsx");
 
-    let cfg = DiffConfig {
-        enable_m_semantic_diff: true,
-        ..DiffConfig::default()
-    };
+    let mut cfg = DiffConfig::default();
+    cfg.semantic.enable_m_semantic_diff = true;
     let diff = a.diff(&b, &cfg);
 
     let ops = m_ops(&diff.ops);
@@ -40951,10 +41014,8 @@ fn primitive_formatting_only_is_masked() {
     let a = load_pkg("m_primitive_formatting_a.xlsx");
     let b = load_pkg("m_primitive_formatting_b.xlsx");
 
-    let cfg = DiffConfig {
-        enable_m_semantic_diff: true,
-        ..DiffConfig::default()
-    };
+    let mut cfg = DiffConfig::default();
+    cfg.semantic.enable_m_semantic_diff = true;
     let diff = a.diff(&b, &cfg);
 
     let ops = m_ops(&diff.ops);
@@ -46535,12 +46596,10 @@ fn engine_workbook_streaming_finishes_on_limit_error() {
     let wb_a = make_workbook(&mut pool, &[1.0, 2.0]);
     let wb_b = make_workbook(&mut pool, &[1.0, 3.0]);
 
-    let config = DiffConfig {
-        max_align_rows: 1,
-        max_align_cols: 1,
-        on_limit_exceeded: LimitBehavior::ReturnError,
-        ..DiffConfig::default()
-    };
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_rows = 1;
+    config.alignment.max_align_cols = 1;
+    config.hardening.on_limit_exceeded = LimitBehavior::ReturnError;
 
     let mut sink = StrictLifecycleSink::default();
     let result = try_diff_workbooks_streaming(&wb_a, &wb_b, &mut pool, &config, &mut sink);
@@ -46767,10 +46826,8 @@ fn streaming_timeout_sets_complete_false_and_warns() {
     let wb_a = make_workbook(&mut pool, &[1.0, 2.0]);
     let wb_b = make_workbook(&mut pool, &[1.0, 3.0]);
 
-    let config = DiffConfig {
-        timeout_seconds: Some(0),
-        ..DiffConfig::default()
-    };
+    let mut config = DiffConfig::default();
+    config.hardening.timeout_seconds = Some(0);
 
     let mut sink = StrictLifecycleSink::default();
     let summary =
@@ -57961,7 +58018,7 @@ const WASM_DEFAULT_MAX_MEMORY_MB: u32 = 256;
 
 fn wasm_default_config() -> DiffConfig {
     let mut cfg = DiffConfig::default();
-    cfg.max_memory_mb = Some(WASM_DEFAULT_MAX_MEMORY_MB);
+    cfg.hardening.max_memory_mb = Some(WASM_DEFAULT_MAX_MEMORY_MB);
     cfg
 }
 

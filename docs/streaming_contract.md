@@ -85,6 +85,14 @@ by detection order.
   - begin(pool) once, emit ops via EmitCtx, finish once.
   - Must finish even when errors occur after begin.
 
+- try_diff_grids_streaming(...) / try_diff_grids_streaming_with_progress(...)
+  - begin once, emit ops, finish once.
+  - Must finish even when errors occur after begin.
+
+- try_diff_sheets_streaming(...) / try_diff_sheets_streaming_with_progress(...)
+  - begin once, emit ops, finish once.
+  - Must finish even when errors occur after begin.
+
 - try_diff_grids_database_mode_streaming(...)
   - begin once, emit ops, finish once.
   - Must finish on timeout, duplicate-key fallback, and error paths.

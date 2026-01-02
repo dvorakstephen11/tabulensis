@@ -6,7 +6,7 @@
 use crate::config::DiffConfig;
 use crate::diff::DiffReport;
 use crate::string_pool::StringPool;
-use crate::workbook::{Grid, Sheet, SheetKind, Workbook};
+use crate::workbook::{Grid, Sheet, Workbook};
 
 /// Shared context for Diffable implementations.
 pub struct DiffContext<'a> {
@@ -40,15 +40,7 @@ impl Diffable for Sheet {
     type Output = DiffReport;
 
     fn diff(&self, other: &Self, ctx: &mut DiffContext<'_>) -> DiffReport {
-        let wb_a = Workbook {
-            sheets: vec![self.clone()],
-            ..Default::default()
-        };
-        let wb_b = Workbook {
-            sheets: vec![other.clone()],
-            ..Default::default()
-        };
-        crate::engine::diff_workbooks(&wb_a, &wb_b, ctx.pool, ctx.config)
+        crate::engine::diff_sheets(self, other, ctx.pool, ctx.config)
     }
 }
 
@@ -56,23 +48,6 @@ impl Diffable for Grid {
     type Output = DiffReport;
 
     fn diff(&self, other: &Self, ctx: &mut DiffContext<'_>) -> DiffReport {
-        let sheet_id = ctx.pool.intern("<grid>");
-        let wb_a = Workbook {
-            sheets: vec![Sheet {
-                name: sheet_id,
-                kind: SheetKind::Worksheet,
-                grid: self.clone(),
-            }],
-            ..Default::default()
-        };
-        let wb_b = Workbook {
-            sheets: vec![Sheet {
-                name: sheet_id,
-                kind: SheetKind::Worksheet,
-                grid: other.clone(),
-            }],
-            ..Default::default()
-        };
-        crate::engine::diff_workbooks(&wb_a, &wb_b, ctx.pool, ctx.config)
+        crate::engine::diff_grids(self, other, ctx.pool, ctx.config)
     }
 }

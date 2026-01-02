@@ -5,7 +5,8 @@ use excel_diff::{
     CellValue, DataMashup, DiffConfig, DiffError, DiffOp, DiffSink, Grid, JsonLinesSink,
     LimitBehavior, Metadata, PackageParts, PackageXml, PbixPackage, Permissions, SectionDocument,
     Sheet, SheetKind, StringPool, VbaModule, VbaModuleType, Workbook, WorkbookPackage,
-    try_diff_grids_database_mode_streaming, try_diff_workbooks_streaming,
+    try_diff_grids_database_mode_streaming, try_diff_grids_streaming, try_diff_sheets_streaming,
+    try_diff_workbooks_streaming,
 };
 use serde::Deserialize;
 use std::fs::File;
@@ -129,10 +130,7 @@ impl DiffSink for FrozenPoolSink {
 }
 
 fn make_workbook(pool: &mut StringPool, values: &[f64]) -> Workbook {
-    let mut grid = Grid::new(values.len() as u32, 1);
-    for (idx, val) in values.iter().enumerate() {
-        grid.insert_cell(idx as u32, 0, Some(CellValue::Number(*val)), None);
-    }
+    let grid = make_grid(values);
 
     Workbook {
         sheets: vec![Sheet {
@@ -141,6 +139,22 @@ fn make_workbook(pool: &mut StringPool, values: &[f64]) -> Workbook {
             grid,
         }],
         ..Default::default()
+    }
+}
+
+fn make_grid(values: &[f64]) -> Grid {
+    let mut grid = Grid::new(values.len() as u32, 1);
+    for (idx, val) in values.iter().enumerate() {
+        grid.insert_cell(idx as u32, 0, Some(CellValue::Number(*val)), None);
+    }
+    grid
+}
+
+fn make_sheet(pool: &mut StringPool, name: &str, values: &[f64]) -> Sheet {
+    Sheet {
+        name: pool.intern(name),
+        kind: SheetKind::Worksheet,
+        grid: make_grid(values),
     }
 }
 
@@ -245,6 +259,131 @@ fn engine_workbook_streaming_finishes_on_limit_error() {
 }
 
 #[test]
+fn engine_grid_streaming_calls_finish_once() {
+    let mut pool = StringPool::new();
+    let grid_a = make_grid(&[1.0, 2.0]);
+    let grid_b = make_grid(&[1.0, 3.0]);
+
+    let mut sink = StrictLifecycleSink::default();
+    let summary = try_diff_grids_streaming(
+        &grid_a,
+        &grid_b,
+        &mut pool,
+        &DiffConfig::default(),
+        &mut sink,
+    )
+    .expect("grid streaming diff should succeed");
+
+    assert!(sink.begin_seen, "begin should be called");
+    assert_eq!(sink.finish_calls, 1, "finish should be called exactly once");
+    assert!(sink.finish_seen, "finish should be seen");
+    assert!(sink.emit_calls > 0, "expected at least one emit");
+    assert_eq!(
+        summary.op_count, sink.emit_calls,
+        "summary op_count should match emitted ops"
+    );
+}
+
+#[test]
+fn engine_grid_streaming_finishes_on_emit_error() {
+    let mut pool = StringPool::new();
+    let grid_a = make_grid(&[1.0]);
+    let grid_b = make_grid(&[2.0]);
+
+    let mut sink = FailAfterNSink::new(0);
+    let result =
+        try_diff_grids_streaming(&grid_a, &grid_b, &mut pool, &DiffConfig::default(), &mut sink);
+
+    assert!(result.is_err(), "expected sink error");
+    assert!(sink.finish_seen, "finish should be called on emit error");
+    assert_eq!(sink.finish_calls, 1, "finish should be called once");
+}
+
+#[test]
+fn engine_grid_streaming_finishes_on_limit_error() {
+    let mut pool = StringPool::new();
+    let grid_a = make_grid(&[1.0, 2.0]);
+    let grid_b = make_grid(&[1.0, 3.0]);
+
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_rows = 1;
+    config.alignment.max_align_cols = 1;
+    config.hardening.on_limit_exceeded = LimitBehavior::ReturnError;
+
+    let mut sink = StrictLifecycleSink::default();
+    let result = try_diff_grids_streaming(&grid_a, &grid_b, &mut pool, &config, &mut sink);
+
+    assert!(matches!(result, Err(DiffError::LimitsExceeded { .. })));
+    assert!(sink.finish_seen, "finish should be called on error");
+    assert_eq!(sink.finish_calls, 1, "finish should be called once");
+}
+
+#[test]
+fn engine_sheet_streaming_calls_finish_once() {
+    let mut pool = StringPool::new();
+    let sheet_a = make_sheet(&mut pool, "Sheet1", &[1.0, 2.0]);
+    let sheet_b = make_sheet(&mut pool, "Sheet1", &[1.0, 3.0]);
+
+    let mut sink = StrictLifecycleSink::default();
+    let summary = try_diff_sheets_streaming(
+        &sheet_a,
+        &sheet_b,
+        &mut pool,
+        &DiffConfig::default(),
+        &mut sink,
+    )
+    .expect("sheet streaming diff should succeed");
+
+    assert!(sink.begin_seen, "begin should be called");
+    assert_eq!(sink.finish_calls, 1, "finish should be called exactly once");
+    assert!(sink.finish_seen, "finish should be seen");
+    assert!(sink.emit_calls > 0, "expected at least one emit");
+    assert_eq!(
+        summary.op_count, sink.emit_calls,
+        "summary op_count should match emitted ops"
+    );
+}
+
+#[test]
+fn engine_sheet_streaming_finishes_on_emit_error() {
+    let mut pool = StringPool::new();
+    let sheet_a = make_sheet(&mut pool, "Sheet1", &[1.0]);
+    let sheet_b = make_sheet(&mut pool, "Sheet1", &[2.0]);
+
+    let mut sink = FailAfterNSink::new(0);
+    let result = try_diff_sheets_streaming(
+        &sheet_a,
+        &sheet_b,
+        &mut pool,
+        &DiffConfig::default(),
+        &mut sink,
+    );
+
+    assert!(result.is_err(), "expected sink error");
+    assert!(sink.finish_seen, "finish should be called on emit error");
+    assert_eq!(sink.finish_calls, 1, "finish should be called once");
+}
+
+#[test]
+fn engine_sheet_streaming_finishes_on_limit_error() {
+    let mut pool = StringPool::new();
+    let sheet_a = make_sheet(&mut pool, "Sheet1", &[1.0, 2.0]);
+    let sheet_b = make_sheet(&mut pool, "Sheet1", &[1.0, 3.0]);
+
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_rows = 1;
+    config.alignment.max_align_cols = 1;
+    config.hardening.on_limit_exceeded = LimitBehavior::ReturnError;
+
+    let mut sink = StrictLifecycleSink::default();
+    let result = try_diff_sheets_streaming(&sheet_a, &sheet_b, &mut pool, &config, &mut sink);
+
+    assert!(matches!(result, Err(DiffError::LimitsExceeded { .. })));
+    assert!(sink.finish_seen, "finish should be called on error");
+    assert_eq!(sink.finish_calls, 1, "finish should be called once");
+}
+
+#[test]
 fn engine_database_streaming_calls_finish_once() {
     let mut pool = StringPool::new();
     let sheet_id = pool.intern("Data");
@@ -294,6 +433,42 @@ fn engine_database_streaming_finishes_on_emit_error() {
 
     assert!(result.is_err(), "expected sink error");
     assert!(sink.finish_seen, "finish should be called on emit error");
+    assert_eq!(sink.finish_calls, 1, "finish should be called once");
+}
+
+#[test]
+fn grid_leaf_streaming_does_not_intern_after_begin() {
+    let mut pool = StringPool::new();
+    let grid_a = make_grid(&[1.0]);
+    let grid_b = make_grid(&[2.0]);
+
+    let mut sink = FrozenPoolSink::default();
+    try_diff_grids_streaming(
+        &grid_a,
+        &grid_b,
+        &mut pool,
+        &DiffConfig::default(),
+        &mut sink,
+    )
+    .expect("grid streaming should succeed");
+    assert_eq!(sink.finish_calls, 1, "finish should be called once");
+}
+
+#[test]
+fn sheet_leaf_streaming_does_not_intern_after_begin() {
+    let mut pool = StringPool::new();
+    let sheet_a = make_sheet(&mut pool, "Sheet1", &[1.0]);
+    let sheet_b = make_sheet(&mut pool, "Sheet1", &[2.0]);
+
+    let mut sink = FrozenPoolSink::default();
+    try_diff_sheets_streaming(
+        &sheet_a,
+        &sheet_b,
+        &mut pool,
+        &DiffConfig::default(),
+        &mut sink,
+    )
+    .expect("sheet streaming should succeed");
     assert_eq!(sink.finish_calls, 1, "finish should be called once");
 }
 

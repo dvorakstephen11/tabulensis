@@ -178,13 +178,64 @@ pub fn open_workbook(path: impl AsRef<std::path::Path>) -> Result<Workbook, Exce
 /// The recommended entry point for most callers is [`WorkbookPackage`]. This module exposes
 /// lower-level functions and types for callers who want to manage their own sessions/pools or
 /// stream ops directly.
+///
+/// ## Leaf diffs
+///
+/// Leaf diffs compare individual grids or sheets without workbook orchestration. Grid diffs
+/// use a default sheet id of "<grid>".
+///
+/// ```no_run
+/// use excel_diff::{DiffConfig, Grid, StringPool};
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut pool = StringPool::new();
+/// let old = Grid::new(1, 1);
+/// let new = Grid::new(1, 1);
+/// let report =
+///     excel_diff::advanced::diff_grids_with_pool(&old, &new, &mut pool, &DiffConfig::default());
+/// println!("ops={}", report.ops.len());
+/// # Ok(())
+/// # }
+/// ```
+///
+/// ```no_run
+/// use excel_diff::{DiffConfig, Grid, Sheet, SheetKind, StringPool};
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut pool = StringPool::new();
+/// let sheet_id = pool.intern("Sheet1");
+/// let old = Sheet {
+///     name: sheet_id,
+///     kind: SheetKind::Worksheet,
+///     grid: Grid::new(1, 1),
+/// };
+/// let new = Sheet {
+///     name: sheet_id,
+///     kind: SheetKind::Worksheet,
+///     grid: Grid::new(1, 1),
+/// };
+/// let report =
+///     excel_diff::advanced::diff_sheets_with_pool(&old, &new, &mut pool, &DiffConfig::default());
+/// println!("ops={}", report.ops.len());
+/// # Ok(())
+/// # }
+/// ```
+///
+/// When streaming leaf diffs, all strings referenced by emitted ops must be interned before
+/// `begin()` is called. See `docs/streaming_contract.md` for the full contract.
 pub mod advanced {
     pub use crate::engine::{
-        diff_grids_database_mode, diff_workbooks as diff_workbooks_with_pool,
-        diff_workbooks_streaming, diff_workbooks_streaming_with_progress, diff_workbooks_with_progress,
-        try_diff_grids_database_mode_streaming, try_diff_workbooks as try_diff_workbooks_with_pool,
-        try_diff_workbooks_streaming,
-        try_diff_workbooks_streaming_with_progress, try_diff_workbooks_with_progress,
+        diff_grids as diff_grids_with_pool, diff_grids_database_mode, diff_grids_streaming,
+        diff_grids_streaming_with_progress, diff_sheets as diff_sheets_with_pool,
+        diff_sheets_streaming, diff_sheets_streaming_with_progress,
+        diff_workbooks as diff_workbooks_with_pool, diff_workbooks_streaming,
+        diff_workbooks_streaming_with_progress, diff_workbooks_with_progress,
+        try_diff_grids as try_diff_grids_with_pool, try_diff_grids_database_mode_streaming,
+        try_diff_grids_streaming, try_diff_grids_streaming_with_progress,
+        try_diff_sheets as try_diff_sheets_with_pool, try_diff_sheets_streaming,
+        try_diff_sheets_streaming_with_progress, try_diff_workbooks as try_diff_workbooks_with_pool,
+        try_diff_workbooks_streaming, try_diff_workbooks_streaming_with_progress,
+        try_diff_workbooks_with_progress,
     };
     pub use crate::session::DiffSession;
     pub use crate::sink::{CallbackSink, DiffSink, VecSink};
@@ -215,11 +266,17 @@ pub use diff::{
 pub use diffable::{DiffContext, Diffable};
 #[doc(hidden)]
 pub use engine::{
-    diff_grids_database_mode, diff_workbooks as diff_workbooks_with_pool, diff_workbooks_streaming,
+    diff_grids as diff_grids_with_pool, diff_grids_database_mode, diff_grids_streaming,
+    diff_grids_streaming_with_progress, diff_sheets as diff_sheets_with_pool,
+    diff_sheets_streaming, diff_sheets_streaming_with_progress,
+    diff_workbooks as diff_workbooks_with_pool, diff_workbooks_streaming,
     diff_workbooks_streaming_with_progress, diff_workbooks_with_progress,
-    try_diff_grids_database_mode_streaming, try_diff_workbooks as try_diff_workbooks_with_pool,
-    try_diff_workbooks_streaming,
-    try_diff_workbooks_streaming_with_progress, try_diff_workbooks_with_progress,
+    try_diff_grids as try_diff_grids_with_pool, try_diff_grids_database_mode_streaming,
+    try_diff_grids_streaming, try_diff_grids_streaming_with_progress,
+    try_diff_sheets as try_diff_sheets_with_pool, try_diff_sheets_streaming,
+    try_diff_sheets_streaming_with_progress, try_diff_workbooks as try_diff_workbooks_with_pool,
+    try_diff_workbooks_streaming, try_diff_workbooks_streaming_with_progress,
+    try_diff_workbooks_with_progress,
 };
 #[cfg(feature = "excel-open-xml")]
 #[allow(deprecated)]
