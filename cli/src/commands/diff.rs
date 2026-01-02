@@ -101,9 +101,9 @@ pub fn run(
     };
 
     let mut config = build_config(fast, precise);
-    config.max_memory_mb = max_memory;
-    config.timeout_seconds = timeout;
-    config.max_ops = max_ops;
+    config.hardening.max_memory_mb = max_memory;
+    config.hardening.timeout_seconds = timeout;
+    config.hardening.max_ops = max_ops;
 
     let old_host = open_host(old_path, old_kind, "old")?;
     let new_host = open_host(new_path, new_kind, "new")?;

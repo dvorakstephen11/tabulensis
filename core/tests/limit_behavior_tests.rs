@@ -76,11 +76,9 @@ fn limit_exceeded_fallback_to_positional() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let config = DiffConfig {
-        max_align_rows: 50,
-        on_limit_exceeded: LimitBehavior::FallbackToPositional,
-        ..Default::default()
-    };
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_rows = 50;
+    config.hardening.on_limit_exceeded = LimitBehavior::FallbackToPositional;
 
     let report = diff_workbooks(&wb_a, &wb_b, &config);
 
@@ -107,11 +105,9 @@ fn limit_exceeded_return_partial_result() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let config = DiffConfig {
-        max_align_rows: 50,
-        on_limit_exceeded: LimitBehavior::ReturnPartialResult,
-        ..Default::default()
-    };
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_rows = 50;
+    config.hardening.on_limit_exceeded = LimitBehavior::ReturnPartialResult;
 
     let report = diff_workbooks(&wb_a, &wb_b, &config);
 
@@ -141,11 +137,9 @@ fn limit_exceeded_return_error_returns_structured_error() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let config = DiffConfig {
-        max_align_rows: 50,
-        on_limit_exceeded: LimitBehavior::ReturnError,
-        ..Default::default()
-    };
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_rows = 50;
+    config.hardening.on_limit_exceeded = LimitBehavior::ReturnError;
 
     let result = try_diff_workbooks(&wb_a, &wb_b, &config);
     assert!(result.is_err(), "should return error when limits exceeded");
@@ -177,11 +171,9 @@ fn limit_exceeded_return_error_produces_warning_via_legacy_api() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let config = DiffConfig {
-        max_align_rows: 50,
-        on_limit_exceeded: LimitBehavior::ReturnError,
-        ..Default::default()
-    };
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_rows = 50;
+    config.hardening.on_limit_exceeded = LimitBehavior::ReturnError;
 
     let report = diff_workbooks(&wb_a, &wb_b, &config);
     assert!(!report.complete, "report should be incomplete");
@@ -201,11 +193,9 @@ fn column_limit_exceeded() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let config = DiffConfig {
-        max_align_cols: 50,
-        on_limit_exceeded: LimitBehavior::ReturnPartialResult,
-        ..Default::default()
-    };
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_cols = 50;
+    config.hardening.on_limit_exceeded = LimitBehavior::ReturnPartialResult;
 
     let report = diff_workbooks(&wb_a, &wb_b, &config);
 
@@ -228,11 +218,9 @@ fn within_limits_no_warning() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let config = DiffConfig {
-        max_align_rows: 50,
-        on_limit_exceeded: LimitBehavior::ReturnPartialResult,
-        ..Default::default()
-    };
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_rows = 50;
+    config.hardening.on_limit_exceeded = LimitBehavior::ReturnPartialResult;
 
     let report = diff_workbooks(&wb_a, &wb_b, &config);
 
@@ -281,11 +269,9 @@ fn multiple_sheets_limit_warning_includes_sheet_name() {
         ..Default::default()
     };
 
-    let config = DiffConfig {
-        max_align_rows: 50,
-        on_limit_exceeded: LimitBehavior::ReturnPartialResult,
-        ..Default::default()
-    };
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_rows = 50;
+    config.hardening.on_limit_exceeded = LimitBehavior::ReturnPartialResult;
 
     let report = diff_workbooks(&wb_a, &wb_b, &config);
 

@@ -50,8 +50,8 @@ pub(super) fn try_diff_grids<'p, S: DiffSink>(
             .saturating_add(new.nrows as u64);
     }
 
-    let exceeds_limits = old.nrows.max(new.nrows) > config.max_align_rows
-        || old.ncols.max(new.ncols) > config.max_align_cols;
+    let exceeds_limits = old.nrows.max(new.nrows) > config.alignment.max_align_rows
+        || old.ncols.max(new.ncols) > config.alignment.max_align_cols;
 
     if exceeds_limits {
         let warning = format!(
@@ -59,18 +59,18 @@ pub(super) fn try_diff_grids<'p, S: DiffSink>(
             pool.resolve(sheet_id),
             old.nrows.max(new.nrows),
             old.ncols.max(new.ncols),
-            config.max_align_rows,
-            config.max_align_cols
+            config.alignment.max_align_rows,
+            config.alignment.max_align_cols
         );
 
-        match config.on_limit_exceeded {
+        match config.hardening.on_limit_exceeded {
             LimitBehavior::ReturnError => {
                 return Err(DiffError::LimitsExceeded {
                     sheet: sheet_id,
                     rows: old.nrows.max(new.nrows),
                     cols: old.ncols.max(new.ncols),
-                    max_rows: config.max_align_rows,
-                    max_cols: config.max_align_cols,
+                    max_rows: config.alignment.max_align_rows,
+                    max_cols: config.alignment.max_align_cols,
                 });
             }
             behavior => {
@@ -196,7 +196,7 @@ fn diff_grids_core<'p, S: DiffSink>(
         {
             let rows = rows_with_context(
                 &preflight.mismatched_rows,
-                config.max_context_rows,
+                config.preflight.max_context_rows,
                 old.nrows,
             );
             #[cfg(feature = "perf-metrics")]
@@ -564,7 +564,7 @@ fn preflight_decision_from_grids(
     }
 
     let nrows = nrows_old;
-    if nrows < config.preflight_min_rows as usize {
+    if nrows < config.preflight.preflight_min_rows as usize {
         return PreflightLite {
             decision: PreflightDecision::RunFullPipeline,
             mismatched_rows: Vec::new(),
@@ -592,7 +592,7 @@ fn preflight_decision_from_grids(
         1.0
     };
 
-    if jaccard < config.bailout_similarity_threshold {
+    if jaccard < config.preflight.bailout_similarity_threshold {
         return PreflightLite {
             decision: PreflightDecision::ShortCircuitDissimilar,
             mismatched_rows: Vec::new(),
@@ -604,8 +604,9 @@ fn preflight_decision_from_grids(
 
     let reorder_suspected = (in_order_mismatches as u64) > multiset_edit_distance_rows;
 
-    let near_identical = in_order_mismatches <= config.preflight_in_order_mismatch_max as usize
-        && in_order_match_ratio >= config.preflight_in_order_match_ratio_min
+    let near_identical = in_order_mismatches
+        <= config.preflight.preflight_in_order_mismatch_max as usize
+        && in_order_match_ratio >= config.preflight.preflight_in_order_match_ratio_min
         && !multiset_equal
         && !reorder_suspected;
 

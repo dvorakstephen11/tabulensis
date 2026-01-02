@@ -29,7 +29,7 @@ pub fn find_block_move(
     min_len: u32,
     config: &DiffConfig,
 ) -> Option<RowBlockMove> {
-    let max_slice_len = config.move_extraction_max_slice_len as usize;
+    let max_slice_len = config.moves.move_extraction_max_slice_len as usize;
     if old_slice.len() > max_slice_len || new_slice.len() > max_slice_len {
         return None;
     }
@@ -54,7 +54,7 @@ pub fn find_block_move(
             continue;
         };
 
-        let max_candidates = config.move_extraction_max_candidates_per_sig as usize;
+        let max_candidates = config.moves.move_extraction_max_candidates_per_sig as usize;
         for &old_idx in candidates.iter().take(max_candidates) {
             let max_possible = (old_slice.len() - old_idx).min(new_slice.len() - new_idx);
             if max_possible <= best_len {
@@ -199,8 +199,8 @@ fn collect_unanchored_pairs(
     let old_map = collect_unanchored_by_signature(old_meta, &anchored_old, config);
     let new_map = collect_unanchored_by_signature(new_meta, &anchored_new, config);
 
-    let max_per_sig = config.move_extraction_max_candidates_per_sig as usize;
-    let max_total = config.move_extraction_max_slice_len as usize;
+    let max_per_sig = config.moves.move_extraction_max_candidates_per_sig as usize;
+    let max_total = config.moves.move_extraction_max_slice_len as usize;
 
     let mut pairs = Vec::new();
     for (sig, old_rows) in old_map {
@@ -240,7 +240,7 @@ fn collect_unanchored_by_signature(
         if !matches!(meta.frequency_class, FrequencyClass::Unique | FrequencyClass::Rare) {
             continue;
         }
-        if config.move_extraction_max_candidates_per_sig == 0 {
+        if config.moves.move_extraction_max_candidates_per_sig == 0 {
             continue;
         }
         map.entry(meta.signature).or_default().push(meta.row_idx);
@@ -259,9 +259,9 @@ fn build_candidate_blocks(
         return Vec::new();
     }
 
-    let max_gap = config.small_gap_threshold.max(1) as u32;
-    let min_len = config.min_block_size_for_move.max(1);
-    let max_len = config.move_extraction_max_slice_len.max(1);
+    let max_gap = config.alignment.small_gap_threshold.max(1) as u32;
+    let min_len = config.moves.min_block_size_for_move.max(1);
+    let max_len = config.moves.move_extraction_max_slice_len.max(1);
     let threshold = move_similarity_threshold(config);
 
     let mut sorted: Vec<MatchPair> = pairs
@@ -608,8 +608,8 @@ fn block_similarity(
 }
 
 fn move_similarity_threshold(config: &DiffConfig) -> f64 {
-    if config.enable_fuzzy_moves {
-        config.fuzzy_similarity_threshold
+    if config.moves.enable_fuzzy_moves {
+        config.moves.fuzzy_similarity_threshold
     } else {
         1.0
     }
@@ -688,8 +688,8 @@ mod tests {
         }
 
         let mut config = DiffConfig::default();
-        config.move_extraction_max_candidates_per_sig = 2;
-        config.move_extraction_max_slice_len = 100;
+        config.moves.move_extraction_max_candidates_per_sig = 2;
+        config.moves.move_extraction_max_slice_len = 100;
 
         let pairs = collect_unanchored_pairs(&old, &new, &[], &config);
         assert!(pairs.len() <= 4);

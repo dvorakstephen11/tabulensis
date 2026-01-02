@@ -15,8 +15,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let new_pkg = WorkbookPackage::open(File::open(&new_path)?)?;
 
     let mut cfg = DiffConfig::fastest();
-    cfg.max_memory_mb = Some(256);
-    cfg.timeout_seconds = Some(10);
+    cfg.hardening.max_memory_mb = Some(256);
+    cfg.hardening.timeout_seconds = Some(10);
 
     let report = old_pkg.diff(&new_pkg, &cfg);
 

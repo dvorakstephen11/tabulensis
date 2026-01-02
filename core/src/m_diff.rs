@@ -308,7 +308,7 @@ fn diff_queries_to_ops(
     let rename_pairs = match_query_renames(
         &old_only,
         &new_only,
-        config.fuzzy_similarity_threshold,
+        config.moves.fuzzy_similarity_threshold,
     );
     for (old_idx, new_idx) in rename_pairs {
         let old_q = old_only[old_idx];
@@ -333,11 +333,11 @@ fn diff_queries_to_ops(
         if let Some((kind, old_h, new_h)) = definition_change(
             &old_q.expression_m,
             &new_q.expression_m,
-            config.enable_m_semantic_diff,
-            config.semantic_noise_policy,
+            config.semantic.enable_m_semantic_diff,
+            config.semantic.semantic_noise_policy,
         ) {
             let semantic_detail =
-                if config.enable_m_semantic_diff && kind == DiffQueryChangeKind::Semantic {
+                if config.semantic.enable_m_semantic_diff && kind == DiffQueryChangeKind::Semantic {
                     crate::m_semantic_detail::build_query_semantic_detail(
                         &old_q.expression_m,
                         &new_q.expression_m,
@@ -387,11 +387,12 @@ fn diff_queries_to_ops(
                 if let Some((kind, old_h, new_h)) = definition_change(
                     &old_q.expression_m,
                     &new_q.expression_m,
-                    config.enable_m_semantic_diff,
-                    config.semantic_noise_policy,
+                    config.semantic.enable_m_semantic_diff,
+                    config.semantic.semantic_noise_policy,
                 ) {
                     let semantic_detail =
-                        if config.enable_m_semantic_diff && kind == DiffQueryChangeKind::Semantic
+                        if config.semantic.enable_m_semantic_diff
+                            && kind == DiffQueryChangeKind::Semantic
                         {
                             crate::m_semantic_detail::build_query_semantic_detail(
                                 &old_q.expression_m,

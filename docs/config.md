@@ -23,24 +23,25 @@
 
 These fields are intended to keep large diffs from exhausting resources:
 
-- `max_memory_mb: Option<u32>`: soft cap on estimated memory usage for advanced strategies.
+- `hardening.max_memory_mb: Option<u32>`: soft cap on estimated memory usage for advanced strategies.
   - When exceeded, the engine may fall back to a cheaper positional strategy for the affected sheet and mark the overall result as incomplete with a warning.
-- `timeout_seconds: Option<u32>`: abort the diff after a wall-clock timeout.
+- `hardening.timeout_seconds: Option<u32>`: abort the diff after a wall-clock timeout.
   - When exceeded, the engine stops early, preserves already-produced ops, and marks the result as incomplete with a warning.
-- WASM bindings set a default `max_memory_mb` (256 MB) to reduce OOM risk in browser runtimes.
+- WASM bindings set a default `hardening.max_memory_mb` (256 MB) to reduce OOM risk in browser runtimes.
 
 ## Key options you actually tune
 
 - Limit behavior:
-  - `on_limit_exceeded: LimitBehavior` controls what happens when algorithm limits are hit.
+  - `hardening.on_limit_exceeded: LimitBehavior` controls what happens when algorithm limits are hit.
 - Move detection:
-  - `enable_fuzzy_moves`, `max_move_iterations`, `max_move_detection_rows`, `max_move_detection_cols`
+  - `moves.enable_fuzzy_moves`, `moves.max_move_iterations`
+  - `moves.max_move_detection_rows`, `moves.max_move_detection_cols`
 - Output context / diagnostics:
-  - `max_context_rows`
-  - `include_unchanged_cells` (diagnostic; emits `CellEdited` even when values are unchanged)
+  - `preflight.max_context_rows`
+  - `semantic.include_unchanged_cells` (diagnostic; emits `CellEdited` even when values are unchanged)
 - Semantic diff toggles:
-  - `enable_m_semantic_diff`
-  - `enable_formula_semantic_diff`
+  - `semantic.enable_m_semantic_diff`
+  - `semantic.enable_formula_semantic_diff`
 
 ## When to use database mode
 
@@ -70,8 +71,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let new = WorkbookPackage::open(File::open("new.xlsx")?)?;
 
     let mut cfg = DiffConfig::default();
-    cfg.max_memory_mb = Some(512);
-    cfg.timeout_seconds = Some(10);
+    cfg.hardening.max_memory_mb = Some(512);
+    cfg.hardening.timeout_seconds = Some(10);
 
     let stdout = io::stdout();
     let mut sink = JsonLinesSink::new(BufWriter::new(stdout.lock()));
@@ -84,4 +85,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### I care about correctness above all
 
 - Start from `DiffConfig::most_precise()` (or CLI `--precise`).
-- If you hit alignment limits, increase `max_align_rows` / `max_align_cols` (or change `on_limit_exceeded`) and rerun.
+- If you hit alignment limits, increase `alignment.max_align_rows` / `alignment.max_align_cols`
+  (or change `hardening.on_limit_exceeded`) and rerun.

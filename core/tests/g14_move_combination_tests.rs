@@ -738,10 +738,8 @@ fn g14_move_detection_disabled_falls_back_to_positional() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let config = DiffConfig {
-        max_move_iterations: 0,
-        ..DiffConfig::default()
-    };
+    let mut config = DiffConfig::default();
+    config.moves.max_move_iterations = 0;
     let report = diff_workbooks(&wb_a, &wb_b, &config);
 
     assert!(
@@ -788,11 +786,9 @@ fn g14_masked_move_detection_not_gated_by_recursive_align_threshold() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let config = DiffConfig {
-        recursive_align_threshold: 1,
-        max_move_detection_rows: 10,
-        ..DiffConfig::default()
-    };
+    let mut config = DiffConfig::default();
+    config.alignment.recursive_align_threshold = 1;
+    config.moves.max_move_detection_rows = 10;
 
     let report = diff_workbooks(&wb_a, &wb_b, &config);
 
@@ -831,10 +827,8 @@ fn g14_max_move_iterations_limits_detected_moves() {
     let wb_a = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_a));
     let wb_b = single_sheet_workbook("Sheet1", grid_from_matrix(&grid_b));
 
-    let limited_config = DiffConfig {
-        max_move_iterations: 2,
-        ..DiffConfig::default()
-    };
+    let mut limited_config = DiffConfig::default();
+    limited_config.moves.max_move_iterations = 2;
     let report_limited = diff_workbooks(&wb_a, &wb_b, &limited_config);
 
     let rect_moves_limited = collect_rect_moves(&report_limited);

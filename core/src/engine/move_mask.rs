@@ -52,8 +52,8 @@ impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
     }
 
     fn move_detection_enabled(&self) -> bool {
-        self.old.nrows.max(self.new.nrows) <= self.emit_ctx.config.max_move_detection_rows
-            && self.old.ncols.max(self.new.ncols) <= self.emit_ctx.config.max_move_detection_cols
+        self.old.nrows.max(self.new.nrows) <= self.emit_ctx.config.moves.max_move_detection_rows
+            && self.old.ncols.max(self.new.ncols) <= self.emit_ctx.config.moves.max_move_detection_cols
     }
 
     pub(super) fn detect_moves(&mut self) -> Result<u32, DiffError> {
@@ -65,7 +65,7 @@ impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
         let config = self.emit_ctx.config;
 
         loop {
-            if iteration >= config.max_move_iterations {
+            if iteration >= config.moves.max_move_iterations {
                 break;
             }
 
@@ -156,7 +156,7 @@ impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
             }
 
             if !found_move
-                && config.enable_fuzzy_moves
+                && config.moves.enable_fuzzy_moves
                 && let Some(mv) = detect_fuzzy_row_block_move_masked(
                     self.old,
                     self.new,

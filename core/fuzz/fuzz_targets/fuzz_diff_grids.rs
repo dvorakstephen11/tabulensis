@@ -81,11 +81,9 @@ fuzz_target!(|input: FuzzInput| {
         ..Default::default()
     };
 
-    let config = DiffConfig {
-        max_align_rows: 50,
-        max_align_cols: 50,
-        ..Default::default()
-    };
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_rows = 50;
+    config.alignment.max_align_cols = 50;
 
     let _ = try_diff_workbooks_with_pool(&old_wb, &new_wb, &mut pool, &config);
 });

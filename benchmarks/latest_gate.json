@@ -1,15 +1,15 @@
 {
-  "timestamp": "2025-12-31T19:36:33.560576+00:00",
-  "git_commit": "1f37d212195b",
-  "git_branch": "2025-12-31-13-phase-plan-phase-4",
+  "timestamp": "2026-01-01T21:31:57.258665+00:00",
+  "git_commit": "7425ec0ad1d2",
+  "git_branch": "2025-12-31-13-phase-plan-phase-5",
   "suite": "gate",
   "full_scale": true,
   "tests": {
     "perf_50k_dense_single_edit": {
-      "total_time_ms": 1143,
+      "total_time_ms": 1061,
       "parse_time_ms": 0,
-      "diff_time_ms": 1143,
-      "signature_build_time_ms": 863,
+      "diff_time_ms": 1061,
+      "signature_build_time_ms": 817,
       "move_detection_time_ms": 0,
       "alignment_time_ms": 0,
       "cell_diff_time_ms": 0,
@@ -30,7 +30,7 @@
   },
   "summary": {
     "total_tests": 1,
-    "total_time_ms": 1143,
+    "total_time_ms": 1061,
     "total_rows_processed": 100000,
     "total_cells_compared": 700
   }

@@ -83,7 +83,7 @@ pub(crate) fn detect_exact_column_block_move(
     }
 
     let stats = HashStats::from_col_meta(&col_meta_a, &col_meta_b);
-    if stats.has_heavy_repetition(config.max_hash_repeat) {
+    if stats.has_heavy_repetition(config.alignment.max_hash_repeat) {
         return None;
     }
 
@@ -226,7 +226,7 @@ pub(crate) fn align_single_column_change_from_views(
     }
 
     let stats = HashStats::from_col_meta(&view_a.col_meta, &view_b.col_meta);
-    if stats.has_heavy_repetition(config.max_hash_repeat) {
+    if stats.has_heavy_repetition(config.alignment.max_hash_repeat) {
         return None;
     }
 
@@ -253,7 +253,7 @@ pub(crate) fn align_columns_amr_from_views(
     config: &DiffConfig,
 ) -> Option<ColumnAlignment> {
     let stats = HashStats::from_col_meta(&view_a.col_meta, &view_b.col_meta);
-    if stats.has_heavy_repetition(config.max_hash_repeat) {
+    if stats.has_heavy_repetition(config.alignment.max_hash_repeat) {
         return None;
     }
 
@@ -432,7 +432,7 @@ fn is_monotonic(pairs: &[(u32, u32)]) -> bool {
 fn is_within_size_bounds(old: &Grid, new: &Grid, config: &DiffConfig) -> bool {
     let rows = old.nrows.max(new.nrows);
     let cols = old.ncols.max(new.ncols);
-    rows <= config.max_align_rows && cols <= config.max_align_cols
+    rows <= config.alignment.max_align_rows && cols <= config.alignment.max_align_cols
 }
 
 #[cfg(test)]

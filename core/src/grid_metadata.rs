@@ -51,11 +51,11 @@ pub fn classify_row_frequencies(row_meta: &mut [RowMeta], config: &DiffConfig) {
         let mut class = match count {
             1 => FrequencyClass::Unique,
             0 => FrequencyClass::Common,
-            c if c <= config.rare_threshold => FrequencyClass::Rare,
+            c if c <= config.alignment.rare_threshold => FrequencyClass::Rare,
             _ => FrequencyClass::Common,
         };
 
-        if (meta.non_blank_count as u32) < config.low_info_threshold || meta.is_low_info {
+        if (meta.non_blank_count as u32) < config.alignment.low_info_threshold || meta.is_low_info {
             class = FrequencyClass::LowInfo;
             meta.is_low_info = true;
         }
@@ -86,8 +86,8 @@ mod tests {
         let mut meta = vec![make_meta(0, 1, 3), make_meta(1, 1, 3), make_meta(2, 2, 1)];
 
         let mut config = DiffConfig::default();
-        config.rare_threshold = 2;
-        config.low_info_threshold = 2;
+        config.alignment.rare_threshold = 2;
+        config.alignment.low_info_threshold = 2;
 
         classify_row_frequencies(&mut meta, &config);
 

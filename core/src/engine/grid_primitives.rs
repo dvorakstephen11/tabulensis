@@ -80,16 +80,18 @@ pub(super) fn emit_cell_edit<S: DiffSink>(
 }
 
 fn dense_row_replace_threshold(config: &DiffConfig, total_cols: u32) -> Option<usize> {
-    if config.include_unchanged_cells || total_cols == 0 {
+    if config.semantic.include_unchanged_cells || total_cols == 0 {
         return None;
     }
 
-    let ratio = config.dense_row_replace_ratio;
+    let ratio = config.semantic.dense_row_replace_ratio;
     if !ratio.is_finite() || ratio <= 0.0 {
         return None;
     }
 
-    if config.dense_row_replace_min_cols > 0 && total_cols < config.dense_row_replace_min_cols {
+    if config.semantic.dense_row_replace_min_cols > 0
+        && total_cols < config.semantic.dense_row_replace_min_cols
+    {
         return None;
     }
 
@@ -110,7 +112,7 @@ fn flush_pending_rect<S: DiffSink>(
         return Ok(());
     }
 
-    let min_rows = ctx.config.dense_rect_replace_min_rows;
+    let min_rows = ctx.config.semantic.dense_rect_replace_min_rows;
     if min_rows > 0 && rect.row_count >= min_rows {
         ctx.emit(DiffOp::RectReplaced {
             sheet: ctx.sheet_id,
@@ -307,7 +309,7 @@ fn diff_row_pair_sparse_plan<'a>(
         compared = compared.saturating_add(1);
 
         if cells_content_equal(old_cell, new_cell) {
-            if config.include_unchanged_cells {
+            if config.semantic.include_unchanged_cells {
                 pending.push(PendingCell {
                     col,
                     old_cell,
@@ -382,7 +384,7 @@ fn diff_row_pair_sparse_thresholdless<'a>(
 
         compared = compared.saturating_add(1);
 
-        if config.include_unchanged_cells || !cells_content_equal(old_cell, new_cell) {
+        if config.semantic.include_unchanged_cells || !cells_content_equal(old_cell, new_cell) {
             pending.push(PendingCell {
                 col,
                 old_cell,
@@ -446,7 +448,7 @@ pub(super) fn diff_row_pair<'a, S: DiffSink>(
             }
         }
 
-        if changed || ctx.config.include_unchanged_cells {
+        if changed || ctx.config.semantic.include_unchanged_cells {
             pending.push(PendingCell {
                 col,
                 old_cell,
@@ -528,7 +530,7 @@ fn plan_one_row_pair<'a>(
         };
     };
 
-    if !config.include_unchanged_cells {
+    if !config.semantic.include_unchanged_cells {
         let sig_a = old_view.row_meta.get(row_a as usize).map(|m| m.signature);
         let sig_b = new_view.row_meta.get(row_b as usize).map(|m| m.signature);
         if let (Some(a), Some(b)) = (sig_a, sig_b) {
@@ -811,7 +813,7 @@ pub(super) fn positional_diff_from_views<S: DiffSink>(
                 .progress("cell_diff", (row as f32) / (overlap_rows as f32));
         }
 
-        if !ctx.config.include_unchanged_cells {
+        if !ctx.config.semantic.include_unchanged_cells {
             let old_sig = old_view.row_meta.get(row as usize).map(|m| m.signature);
             let new_sig = new_view.row_meta.get(row as usize).map(|m| m.signature);
             if let (Some(a), Some(b)) = (old_sig, new_sig) {

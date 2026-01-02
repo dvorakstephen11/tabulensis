@@ -8,7 +8,7 @@ const WASM_DEFAULT_MAX_MEMORY_MB: u32 = 256;
 
 fn wasm_default_config() -> DiffConfig {
     let mut cfg = DiffConfig::default();
-    cfg.max_memory_mb = Some(WASM_DEFAULT_MAX_MEMORY_MB);
+    cfg.hardening.max_memory_mb = Some(WASM_DEFAULT_MAX_MEMORY_MB);
     cfg
 }
 

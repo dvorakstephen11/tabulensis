@@ -30,10 +30,8 @@ fn memory_budget_forces_positional_fallback_and_warning() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let config = DiffConfig {
-        max_memory_mb: Some(0),
-        ..Default::default()
-    };
+    let mut config = DiffConfig::default();
+    config.hardening.max_memory_mb = Some(0);
 
     let report = WorkbookPackage::from(wb_a).diff(&WorkbookPackage::from(wb_b), &config);
 
@@ -69,10 +67,8 @@ fn timeout_yields_partial_report_and_warning() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let config = DiffConfig {
-        timeout_seconds: Some(0),
-        ..Default::default()
-    };
+    let mut config = DiffConfig::default();
+    config.hardening.timeout_seconds = Some(0);
 
     let report = WorkbookPackage::from(wb_a).diff(&WorkbookPackage::from(wb_b), &config);
 

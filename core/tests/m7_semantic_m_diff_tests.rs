@@ -74,10 +74,8 @@ fn semantic_gate_disabled_produces_semantic_change() {
     let pkg_a = load_package("m_formatting_only_a.xlsx");
     let pkg_b = load_package("m_formatting_only_b.xlsx");
 
-    let config = DiffConfig {
-        enable_m_semantic_diff: false,
-        ..DiffConfig::default()
-    };
+    let mut config = DiffConfig::default();
+    config.semantic.enable_m_semantic_diff = false;
 
     let report = pkg_a.diff(&pkg_b, &config);
     let ops = m_ops(&report);
@@ -161,10 +159,8 @@ fn formatting_only_can_be_suppressed_by_policy() {
     let pkg_a = load_package("m_formatting_only_a.xlsx");
     let pkg_b = load_package("m_formatting_only_b.xlsx");
 
-    let config = DiffConfig {
-        semantic_noise_policy: SemanticNoisePolicy::SuppressFormattingOnly,
-        ..DiffConfig::default()
-    };
+    let mut config = DiffConfig::default();
+    config.semantic.semantic_noise_policy = SemanticNoisePolicy::SuppressFormattingOnly;
 
     let report = pkg_a.diff(&pkg_b, &config);
     let ops = m_ops(&report);

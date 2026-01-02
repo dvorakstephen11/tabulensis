@@ -36,12 +36,14 @@ impl<'a> HardeningController<'a> {
             start: Instant::now(),
             #[cfg(not(target_arch = "wasm32"))]
             timeout: config
+                .hardening
                 .timeout_seconds
                 .map(|secs| Duration::from_secs(secs as u64)),
             max_memory_bytes: config
+                .hardening
                 .max_memory_mb
                 .map(|mb| (mb as u64).saturating_mul(BYTES_PER_MB)),
-            max_ops: config.max_ops,
+            max_ops: config.hardening.max_ops,
             aborted: false,
             #[cfg(not(target_arch = "wasm32"))]
             warned_timeout: false,

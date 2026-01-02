@@ -41,7 +41,7 @@ fn formatting_only_vs_text_change_respects_flag() {
     let new = workbook_with_formula(&mut pool, sheet, 0, 0, "SUM(A1,B1)");
 
     let mut enabled = DiffConfig::default();
-    enabled.enable_formula_semantic_diff = true;
+    enabled.semantic.enable_formula_semantic_diff = true;
     let disabled = DiffConfig::default();
 
     let report_enabled = diff_workbooks_with_pool(&old, &new, &mut pool, &enabled);
@@ -67,7 +67,7 @@ fn filled_down_formulas_detect_row_shift() {
     let mut pool = StringPool::new();
 
     let mut config = DiffConfig::default();
-    config.enable_formula_semantic_diff = true;
+    config.semantic.enable_formula_semantic_diff = true;
 
     let mut old = Grid::new(1, 2);
     old.insert_cell(0, 0, Some(CellValue::Number(1.0)), None);

@@ -231,12 +231,10 @@ fn engine_workbook_streaming_finishes_on_limit_error() {
     let wb_a = make_workbook(&mut pool, &[1.0, 2.0]);
     let wb_b = make_workbook(&mut pool, &[1.0, 3.0]);
 
-    let config = DiffConfig {
-        max_align_rows: 1,
-        max_align_cols: 1,
-        on_limit_exceeded: LimitBehavior::ReturnError,
-        ..DiffConfig::default()
-    };
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_rows = 1;
+    config.alignment.max_align_cols = 1;
+    config.hardening.on_limit_exceeded = LimitBehavior::ReturnError;
 
     let mut sink = StrictLifecycleSink::default();
     let result = try_diff_workbooks_streaming(&wb_a, &wb_b, &mut pool, &config, &mut sink);
@@ -463,10 +461,8 @@ fn streaming_timeout_sets_complete_false_and_warns() {
     let wb_a = make_workbook(&mut pool, &[1.0, 2.0]);
     let wb_b = make_workbook(&mut pool, &[1.0, 3.0]);
 
-    let config = DiffConfig {
-        timeout_seconds: Some(0),
-        ..DiffConfig::default()
-    };
+    let mut config = DiffConfig::default();
+    config.hardening.timeout_seconds = Some(0);
 
     let mut sink = StrictLifecycleSink::default();
     let summary =

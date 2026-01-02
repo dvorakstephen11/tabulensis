@@ -84,7 +84,7 @@ fn gridview_formula_only_row_respects_threshold() {
     assert!(view_default.row_meta[0].is_low_info);
 
     let mut config = DiffConfig::default();
-    config.low_info_threshold = 1;
+    config.alignment.low_info_threshold = 1;
     let view_tuned = GridView::from_grid_with_config(&grid, &config);
     assert_eq!(view_tuned.row_meta[0].non_blank_count, 1);
     assert!(!view_tuned.row_meta[0].is_low_info);

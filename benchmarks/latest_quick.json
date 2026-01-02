@@ -1,15 +1,15 @@
 {
-  "timestamp": "2025-12-31T19:36:22.625767+00:00",
-  "git_commit": "1f37d212195b",
-  "git_branch": "2025-12-31-13-phase-plan-phase-4",
+  "timestamp": "2026-01-01T21:31:42.481157+00:00",
+  "git_commit": "7425ec0ad1d2",
+  "git_branch": "2025-12-31-13-phase-plan-phase-5",
   "suite": "quick",
   "full_scale": false,
   "tests": {
     "perf_p1_large_dense": {
-      "total_time_ms": 13,
+      "total_time_ms": 11,
       "parse_time_ms": 0,
-      "diff_time_ms": 13,
-      "signature_build_time_ms": 10,
+      "diff_time_ms": 11,
+      "signature_build_time_ms": 8,
       "move_detection_time_ms": 0,
       "alignment_time_ms": 0,
       "cell_diff_time_ms": 0,
@@ -28,12 +28,12 @@
       "allocations_est": 2040
     },
     "perf_p2_large_noise": {
-      "total_time_ms": 77,
+      "total_time_ms": 83,
       "parse_time_ms": 0,
-      "diff_time_ms": 77,
-      "signature_build_time_ms": 7,
-      "move_detection_time_ms": 0,
-      "alignment_time_ms": 69,
+      "diff_time_ms": 83,
+      "signature_build_time_ms": 11,
+      "move_detection_time_ms": 1,
+      "alignment_time_ms": 71,
       "cell_diff_time_ms": 2,
       "op_emit_time_ms": 0,
       "report_serialize_time_ms": 0,
@@ -50,12 +50,12 @@
       "allocations_est": 2040
     },
     "perf_p3_adversarial_repetitive": {
-      "total_time_ms": 34,
+      "total_time_ms": 44,
       "parse_time_ms": 0,
-      "diff_time_ms": 34,
-      "signature_build_time_ms": 14,
+      "diff_time_ms": 44,
+      "signature_build_time_ms": 22,
       "move_detection_time_ms": 0,
-      "alignment_time_ms": 16,
+      "alignment_time_ms": 19,
       "cell_diff_time_ms": 0,
       "op_emit_time_ms": 0,
       "report_serialize_time_ms": 0,
@@ -116,14 +116,14 @@
       "allocations_est": 0
     },
     "perf_preflight_low_similarity": {
-      "total_time_ms": 213,
+      "total_time_ms": 179,
       "parse_time_ms": 0,
-      "diff_time_ms": 213,
-      "signature_build_time_ms": 48,
+      "diff_time_ms": 179,
+      "signature_build_time_ms": 55,
       "move_detection_time_ms": 0,
       "alignment_time_ms": 0,
-      "cell_diff_time_ms": 164,
-      "op_emit_time_ms": 33,
+      "cell_diff_time_ms": 123,
+      "op_emit_time_ms": 25,
       "report_serialize_time_ms": 0,
       "peak_memory_bytes": 87540629,
       "grid_storage_bytes": 14400000,
@@ -140,7 +140,7 @@
   },
   "summary": {
     "total_tests": 6,
-    "total_time_ms": 350,
+    "total_time_ms": 330,
     "total_rows_processed": 22000,
     "total_cells_compared": 419020
   }

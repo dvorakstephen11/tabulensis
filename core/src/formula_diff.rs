@@ -49,7 +49,7 @@ pub(crate) fn diff_cell_formulas_ids(
         _ => {}
     }
 
-    if !config.enable_formula_semantic_diff {
+    if !config.semantic.enable_formula_semantic_diff {
         return FormulaDiffResult::TextChange;
     }
 

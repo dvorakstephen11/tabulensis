@@ -91,6 +91,7 @@
       2025-12-31_165012.json
       2025-12-31_165858.json
       2025-12-31_170022.json
+      2025-12-31_194404.json
     wasm_memory_budgets.json
   Cargo.lock
   Cargo.toml
@@ -274,6 +275,8 @@
       pg6_object_vs_grid_tests.rs
       signature_tests.rs
       sparse_grid_tests.rs
+      streaming_contract_tests.rs
+      streaming_determinism_tests.rs
       streaming_sink_tests.rs
       string_pool_tests.rs
   desktop/
@@ -3742,6 +3745,22 @@ fn fixture_path(name: &str) -> String {
     p.to_string_lossy().into_owned()
 }
 
+fn run_jsonl_diff(old_path: &str, new_path: &str) -> String {
+    let output = excel_diff_cmd()
+        .args(["diff", "--format", "jsonl", old_path, new_path])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "jsonl diff should detect changes: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
 #[test]
 fn identical_files_exit_0() {
     let output = excel_diff_cmd()
@@ -4168,24 +4187,243 @@ fn diff_pbix_jsonl_writes_header_and_ops() {
     let header: serde_json::Value =
         serde_json::from_str(first_line).expect("header line should be valid JSON");
     assert_eq!(header.get("kind").and_then(|v| v.as_str()), Some("Header"));
-    assert!(header.get("strings").is_some(), "header should include string table");
+    let strings = header
+        .get("strings")
+        .and_then(|v| v.as_array())
+        .expect("header should include string table");
+    assert!(!strings.is_empty(), "header string table should be non-empty");
 
     let mut has_query_op = false;
     for line in lines {
-        let op: serde_json::Value =
+        let op: excel_diff::DiffOp =
             serde_json::from_str(line).expect("jsonl op line should be valid JSON");
-        if op
-            .get("kind")
-            .and_then(|k| k.as_str())
-            .map(|k| k.starts_with("Query"))
-            .unwrap_or(false)
-        {
+        for id in collect_string_ids(&op) {
+            assert!(
+                (id.0 as usize) < strings.len(),
+                "StringId {} out of range for header string table (len={})",
+                id.0,
+                strings.len()
+            );
+        }
+
+        if op.is_m_op() {
             has_query_op = true;
-            break;
         }
     }
 
     assert!(has_query_op, "expected at least one Query op in jsonl output");
+}
+
+#[test]
+fn jsonl_output_is_deterministic_for_xlsx() {
+    let first = run_jsonl_diff(
+        &fixture_path("single_cell_value_a.xlsx"),
+        &fixture_path("single_cell_value_b.xlsx"),
+    );
+    let second = run_jsonl_diff(
+        &fixture_path("single_cell_value_a.xlsx"),
+        &fixture_path("single_cell_value_b.xlsx"),
+    );
+
+    assert_eq!(first, second, "jsonl output should be deterministic");
+}
+
+#[test]
+fn jsonl_output_is_deterministic_for_pbix() {
+    let first = run_jsonl_diff(
+        &fixture_path("pbix_legacy_multi_query_a.pbix"),
+        &fixture_path("pbix_legacy_multi_query_b.pbix"),
+    );
+    let second = run_jsonl_diff(
+        &fixture_path("pbix_legacy_multi_query_a.pbix"),
+        &fixture_path("pbix_legacy_multi_query_b.pbix"),
+    );
+
+    assert_eq!(first, second, "jsonl output should be deterministic");
+}
+
+fn collect_string_ids(op: &excel_diff::DiffOp) -> Vec<excel_diff::StringId> {
+    fn collect_cell_value(ids: &mut Vec<excel_diff::StringId>, value: &excel_diff::CellValue) {
+        match value {
+            excel_diff::CellValue::Text(id) | excel_diff::CellValue::Error(id) => ids.push(*id),
+            excel_diff::CellValue::Number(_) | excel_diff::CellValue::Bool(_) | excel_diff::CellValue::Blank => {}
+        }
+    }
+
+    fn collect_snapshot(ids: &mut Vec<excel_diff::StringId>, snap: &excel_diff::CellSnapshot) {
+        if let Some(value) = &snap.value {
+            collect_cell_value(ids, value);
+        }
+        if let Some(formula) = snap.formula {
+            ids.push(formula);
+        }
+    }
+
+    fn collect_extracted_string(ids: &mut Vec<excel_diff::StringId>, value: &excel_diff::ExtractedString) {
+        if let excel_diff::ExtractedString::Known { value } = value {
+            ids.push(*value);
+        }
+    }
+
+    fn collect_extracted_string_list(
+        ids: &mut Vec<excel_diff::StringId>,
+        value: &excel_diff::ExtractedStringList,
+    ) {
+        if let excel_diff::ExtractedStringList::Known { values } = value {
+            ids.extend(values.iter().copied());
+        }
+    }
+
+    fn collect_rename_pairs(
+        ids: &mut Vec<excel_diff::StringId>,
+        value: &excel_diff::ExtractedRenamePairs,
+    ) {
+        if let excel_diff::ExtractedRenamePairs::Known { pairs } = value {
+            for excel_diff::RenamePair { from, to } in pairs {
+                ids.push(*from);
+                ids.push(*to);
+            }
+        }
+    }
+
+    fn collect_column_type_changes(
+        ids: &mut Vec<excel_diff::StringId>,
+        value: &excel_diff::ExtractedColumnTypeChanges,
+    ) {
+        if let excel_diff::ExtractedColumnTypeChanges::Known { changes } = value {
+            for change in changes {
+                ids.push(change.column);
+            }
+        }
+    }
+
+    fn collect_step_params(ids: &mut Vec<excel_diff::StringId>, params: &excel_diff::StepParams) {
+        match params {
+            excel_diff::StepParams::TableSelectRows { .. } => {}
+            excel_diff::StepParams::TableRemoveColumns { columns } => collect_extracted_string_list(ids, columns),
+            excel_diff::StepParams::TableRenameColumns { renames } => collect_rename_pairs(ids, renames),
+            excel_diff::StepParams::TableTransformColumnTypes { transforms } => {
+                collect_column_type_changes(ids, transforms);
+            }
+            excel_diff::StepParams::TableNestedJoin {
+                left_keys,
+                right_keys,
+                new_column,
+                ..
+            } => {
+                collect_extracted_string_list(ids, left_keys);
+                collect_extracted_string_list(ids, right_keys);
+                collect_extracted_string(ids, new_column);
+            }
+            excel_diff::StepParams::TableJoin {
+                left_keys,
+                right_keys,
+                ..
+            } => {
+                collect_extracted_string_list(ids, left_keys);
+                collect_extracted_string_list(ids, right_keys);
+            }
+            excel_diff::StepParams::Other { .. } => {}
+        }
+    }
+
+    fn collect_step_snapshot(ids: &mut Vec<excel_diff::StringId>, snapshot: &excel_diff::StepSnapshot) {
+        ids.push(snapshot.name);
+        ids.extend(snapshot.source_refs.iter().copied());
+        if let Some(params) = &snapshot.params {
+            collect_step_params(ids, params);
+        }
+    }
+
+    fn collect_step_diff(ids: &mut Vec<excel_diff::StringId>, diff: &excel_diff::StepDiff) {
+        match diff {
+            excel_diff::StepDiff::StepAdded { step } | excel_diff::StepDiff::StepRemoved { step } => {
+                collect_step_snapshot(ids, step);
+            }
+            excel_diff::StepDiff::StepReordered { name, .. } => ids.push(*name),
+            excel_diff::StepDiff::StepModified { before, after, changes } => {
+                collect_step_snapshot(ids, before);
+                collect_step_snapshot(ids, after);
+                for change in changes {
+                    if let excel_diff::StepChange::Renamed { from, to } = change {
+                        ids.push(*from);
+                        ids.push(*to);
+                    }
+                    if let excel_diff::StepChange::SourceRefsChanged { removed, added } = change {
+                        ids.extend(removed.iter().copied());
+                        ids.extend(added.iter().copied());
+                    }
+                }
+            }
+        }
+    }
+
+    fn collect_semantic_detail(ids: &mut Vec<excel_diff::StringId>, detail: &excel_diff::QuerySemanticDetail) {
+        for diff in &detail.step_diffs {
+            collect_step_diff(ids, diff);
+        }
+    }
+
+    let mut ids = Vec::new();
+    match op {
+        excel_diff::DiffOp::SheetAdded { sheet } | excel_diff::DiffOp::SheetRemoved { sheet } => ids.push(*sheet),
+        excel_diff::DiffOp::RowAdded { sheet, .. }
+        | excel_diff::DiffOp::RowRemoved { sheet, .. }
+        | excel_diff::DiffOp::RowReplaced { sheet, .. } => ids.push(*sheet),
+        excel_diff::DiffOp::ColumnAdded { sheet, .. } | excel_diff::DiffOp::ColumnRemoved { sheet, .. } => ids.push(*sheet),
+        excel_diff::DiffOp::BlockMovedRows { sheet, .. }
+        | excel_diff::DiffOp::BlockMovedColumns { sheet, .. }
+        | excel_diff::DiffOp::BlockMovedRect { sheet, .. }
+        | excel_diff::DiffOp::RectReplaced { sheet, .. } => ids.push(*sheet),
+        excel_diff::DiffOp::CellEdited { sheet, from, to, .. } => {
+            ids.push(*sheet);
+            collect_snapshot(&mut ids, from);
+            collect_snapshot(&mut ids, to);
+        }
+        excel_diff::DiffOp::VbaModuleAdded { name }
+        | excel_diff::DiffOp::VbaModuleRemoved { name }
+        | excel_diff::DiffOp::VbaModuleChanged { name } => ids.push(*name),
+        excel_diff::DiffOp::NamedRangeAdded { name } | excel_diff::DiffOp::NamedRangeRemoved { name } => ids.push(*name),
+        excel_diff::DiffOp::NamedRangeChanged { name, old_ref, new_ref } => {
+            ids.push(*name);
+            ids.push(*old_ref);
+            ids.push(*new_ref);
+        }
+        excel_diff::DiffOp::ChartAdded { sheet, name }
+        | excel_diff::DiffOp::ChartRemoved { sheet, name }
+        | excel_diff::DiffOp::ChartChanged { sheet, name } => {
+            ids.push(*sheet);
+            ids.push(*name);
+        }
+        excel_diff::DiffOp::QueryAdded { name }
+        | excel_diff::DiffOp::QueryRemoved { name }
+        | excel_diff::DiffOp::QueryDefinitionChanged { name, .. } => ids.push(*name),
+        excel_diff::DiffOp::QueryRenamed { from, to } => {
+            ids.push(*from);
+            ids.push(*to);
+        }
+        excel_diff::DiffOp::QueryMetadataChanged { name, old, new, .. } => {
+            ids.push(*name);
+            if let Some(old) = old {
+                ids.push(*old);
+            }
+            if let Some(new) = new {
+                ids.push(*new);
+            }
+        }
+        excel_diff::DiffOp::MeasureAdded { name }
+        | excel_diff::DiffOp::MeasureRemoved { name }
+        | excel_diff::DiffOp::MeasureDefinitionChanged { name, .. } => ids.push(*name),
+        _ => {}
+    }
+
+    if let excel_diff::DiffOp::QueryDefinitionChanged { semantic_detail, .. } = op {
+        if let Some(detail) = semantic_detail {
+            collect_semantic_detail(&mut ids, detail);
+        }
+    }
+
+    ids
 }
 
 #[test]
@@ -12969,7 +13207,7 @@ use crate::formula_diff::FormulaParseCache;
 use crate::grid_view::GridView;
 #[cfg(feature = "perf-metrics")]
 use crate::perf::{DiffMetrics, Phase};
-use crate::sink::{DiffSink, VecSink};
+use crate::sink::{DiffSink, SinkFinishGuard, VecSink};
 use crate::string_pool::StringPool;
 use crate::workbook::{Grid, RowSignature};
 use std::collections::{HashMap, HashSet};
@@ -13340,7 +13578,10 @@ pub fn diff_grids_database_mode(
     }
 }
 
-pub(crate) fn try_diff_grids_database_mode_streaming<S: DiffSink>(
+/// Stream a database-mode grid diff into `sink`.
+///
+/// Streaming output follows the contract in `docs/streaming_contract.md`.
+pub fn try_diff_grids_database_mode_streaming<S: DiffSink>(
     sheet_id: SheetId,
     old: &Grid,
     new: &Grid,
@@ -13356,8 +13597,9 @@ pub(crate) fn try_diff_grids_database_mode_streaming<S: DiffSink>(
     let spec = KeyColumnSpec::new(key_columns.to_vec());
 
     sink.begin(pool)?;
+    let mut finish_guard = SinkFinishGuard::new(sink);
     if hardening.check_timeout(&mut warnings) {
-        sink.finish()?;
+        finish_guard.finish_and_disarm()?;
         return Ok(DiffSummary {
             complete: false,
             warnings,
@@ -13389,7 +13631,7 @@ pub(crate) fn try_diff_grids_database_mode_streaming<S: DiffSink>(
                 #[cfg(feature = "perf-metrics")]
                 None,
             )?;
-            sink.finish()?;
+            finish_guard.finish_and_disarm()?;
             let complete = ctx.warnings.is_empty();
             return Ok(DiffSummary {
                 complete,
@@ -13459,7 +13701,7 @@ pub(crate) fn try_diff_grids_database_mode_streaming<S: DiffSink>(
         }
     }
 
-    sink.finish()?;
+    finish_guard.finish_and_disarm()?;
     Ok(DiffSummary {
         complete: warnings.is_empty(),
         warnings,
@@ -15311,7 +15553,7 @@ use crate::diff::SheetId;
 use context::emit_op;
 
 pub use grid_diff::diff_grids_database_mode;
-pub(crate) use grid_diff::try_diff_grids_database_mode_streaming;
+pub use grid_diff::try_diff_grids_database_mode_streaming;
 pub use workbook_diff::{
     diff_workbooks, diff_workbooks_streaming, diff_workbooks_streaming_with_progress,
     diff_workbooks_with_progress, try_diff_workbooks, try_diff_workbooks_streaming,
@@ -16536,7 +16778,7 @@ use crate::config::DiffConfig;
 use crate::diff::{DiffError, DiffOp, DiffReport, DiffSummary};
 #[cfg(feature = "perf-metrics")]
 use crate::perf::{DiffMetrics, Phase};
-use crate::sink::{DiffSink, VecSink};
+use crate::sink::{DiffSink, SinkFinishGuard, VecSink};
 use crate::string_pool::StringPool;
 use crate::workbook::{Sheet, SheetKind, Workbook};
 use crate::progress::ProgressCallback;
@@ -16619,6 +16861,9 @@ pub fn diff_workbooks_with_progress(
     }
 }
 
+/// Stream a workbook diff into `sink`.
+///
+/// Streaming output follows the contract in `docs/streaming_contract.md`.
 pub fn diff_workbooks_streaming<S: DiffSink>(
     old: &Workbook,
     new: &Workbook,
@@ -16702,6 +16947,7 @@ pub fn try_diff_workbooks_with_progress(
     ))
 }
 
+/// Like [`diff_workbooks_streaming`], but returns errors instead of embedding them in the summary.
 pub fn try_diff_workbooks_streaming<S: DiffSink>(
     old: &Workbook,
     new: &Workbook,
@@ -16742,20 +16988,21 @@ fn try_diff_workbooks_streaming_impl<'p, S: DiffSink>(
     hardening.progress("parse", 0.0);
 
     sink.begin(pool)?;
+    let mut finish_guard = SinkFinishGuard::new(sink);
 
     let mut ctx = DiffContext::default();
     let mut op_count = 0usize;
 
-        if hardening.check_timeout(&mut ctx.warnings) {
-            #[cfg(feature = "perf-metrics")]
-            {
-                metrics.end_phase(Phase::Parse);
-                metrics.end_phase(Phase::Total);
-                apply_accounted_peak(&mut metrics, old, new, pool);
-            }
-            sink.finish()?;
-            return Ok(DiffSummary {
-                complete: false,
+    if hardening.check_timeout(&mut ctx.warnings) {
+        #[cfg(feature = "perf-metrics")]
+        {
+            metrics.end_phase(Phase::Parse);
+            metrics.end_phase(Phase::Total);
+            apply_accounted_peak(&mut metrics, old, new, pool);
+        }
+        finish_guard.finish_and_disarm()?;
+        return Ok(DiffSummary {
+            complete: false,
             warnings: ctx.warnings,
             op_count,
             #[cfg(feature = "perf-metrics")]
@@ -16865,7 +17112,7 @@ fn try_diff_workbooks_streaming_impl<'p, S: DiffSink>(
         metrics.end_phase(Phase::Total);
         apply_accounted_peak(&mut metrics, old, new, pool);
     }
-    sink.finish()?;
+    finish_guard.finish_and_disarm()?;
     let complete = ctx.warnings.is_empty();
     Ok(DiffSummary {
         complete,
@@ -20821,7 +21068,8 @@ pub mod advanced {
     pub use crate::engine::{
         diff_grids_database_mode, diff_workbooks as diff_workbooks_with_pool,
         diff_workbooks_streaming, diff_workbooks_streaming_with_progress, diff_workbooks_with_progress,
-        try_diff_workbooks as try_diff_workbooks_with_pool, try_diff_workbooks_streaming,
+        try_diff_grids_database_mode_streaming, try_diff_workbooks as try_diff_workbooks_with_pool,
+        try_diff_workbooks_streaming,
         try_diff_workbooks_streaming_with_progress, try_diff_workbooks_with_progress,
     };
     pub use crate::session::DiffSession;
@@ -20855,7 +21103,8 @@ pub use diffable::{DiffContext, Diffable};
 pub use engine::{
     diff_grids_database_mode, diff_workbooks as diff_workbooks_with_pool, diff_workbooks_streaming,
     diff_workbooks_streaming_with_progress, diff_workbooks_with_progress,
-    try_diff_workbooks as try_diff_workbooks_with_pool, try_diff_workbooks_streaming,
+    try_diff_grids_database_mode_streaming, try_diff_workbooks as try_diff_workbooks_with_pool,
+    try_diff_workbooks_streaming,
     try_diff_workbooks_streaming_with_progress, try_diff_workbooks_with_progress,
 };
 #[cfg(feature = "excel-open-xml")]
@@ -26571,6 +26820,9 @@ struct JsonLinesHeader<'a> {
 ///
 /// The first line is a header containing the schema version and the string table. Each
 /// subsequent line is a JSON-serialized [`DiffOp`].
+///
+/// All strings referenced by emitted ops must be interned before `begin`, because the
+/// header captures the string table once. See `docs/streaming_contract.md`.
 pub struct JsonLinesSink<W: Write> {
     w: W,
     wrote_header: bool,
@@ -26663,7 +26915,7 @@ use crate::datamashup::DataMashup;
 use crate::diff::{DiffError, DiffReport, DiffSummary, SheetId};
 use crate::diffable::{DiffContext, Diffable};
 use crate::progress::ProgressCallback;
-use crate::sink::{DiffSink, NoFinishSink, VecSink};
+use crate::sink::{DiffSink, NoFinishSink, SinkFinishGuard, VecSink};
 use crate::string_pool::StringId;
 use crate::string_pool::StringPool;
 use crate::workbook::{Sheet, Workbook};
@@ -26916,6 +27168,9 @@ impl WorkbookPackage {
     /// This is the preferred API for very large workbooks because it does not require holding
     /// the entire op list in memory. Instead, ops are emitted incrementally and a [`DiffSummary`]
     /// is returned at the end.
+    ///
+    /// Streaming output follows the contract in `docs/streaming_contract.md` (determinism,
+    /// sink lifecycle, and JSONL string table invariants).
     ///
     /// # Examples
     ///
@@ -27205,6 +27460,8 @@ impl WorkbookPackage {
     }
 
     /// Streaming database mode diff. Emits ops into `sink` and returns a [`DiffSummary`].
+    ///
+    /// Streaming output follows the contract in `docs/streaming_contract.md`.
     pub fn diff_database_mode_streaming<S: DiffSink>(
         &self,
         other: &Self,
@@ -27447,6 +27704,9 @@ impl PbixPackage {
         })
     }
 
+    /// Stream a PBIX/PBIT diff into `sink`.
+    ///
+    /// Streaming output follows the contract in `docs/streaming_contract.md`.
     pub fn diff_streaming<S: DiffSink>(
         &self,
         other: &Self,
@@ -27465,8 +27725,6 @@ impl PbixPackage {
         config: &DiffConfig,
         sink: &mut S,
     ) -> Result<DiffSummary, DiffError> {
-        sink.begin(pool)?;
-
         let m_ops = crate::m_diff::diff_m_ops_for_packages(
             &self.data_mashup,
             &other.data_mashup,
@@ -27474,14 +27732,8 @@ impl PbixPackage {
             config,
         );
 
-        let mut op_count = 0usize;
-        for op in m_ops {
-            sink.emit(op)?;
-            op_count = op_count.saturating_add(1);
-        }
-
         #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
-        {
+        let model_ops = {
             let old_raw = self.model_schema.as_ref();
             let new_raw = other.model_schema.as_ref();
 
@@ -27494,15 +27746,30 @@ impl PbixPackage {
                     .map(|r| crate::tabular_schema::build_model(r, pool))
                     .unwrap_or_default();
 
-                let model_ops = crate::model_diff::diff_models(&old_model, &new_model, pool);
-                for op in model_ops {
-                    sink.emit(op)?;
-                    op_count = op_count.saturating_add(1);
-                }
+                Some(crate::model_diff::diff_models(&old_model, &new_model, pool))
+            } else {
+                None
+            }
+        };
+
+        sink.begin(pool)?;
+        let mut finish_guard = SinkFinishGuard::new(sink);
+
+        let mut op_count = 0usize;
+        for op in m_ops {
+            sink.emit(op)?;
+            op_count = op_count.saturating_add(1);
+        }
+
+        #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+        if let Some(model_ops) = model_ops {
+            for op in model_ops {
+                sink.emit(op)?;
+                op_count = op_count.saturating_add(1);
             }
         }
 
-        sink.finish()?;
+        finish_guard.finish_and_disarm()?;
 
         Ok(DiffSummary {
             complete: true,
@@ -27597,6 +27864,98 @@ fn find_sheets_case_insensitive<'a>(
                 requested: sheet_name.to_string(),
                 available,
             })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+    use crate::{DiffOp, Metadata, PackageParts, PackageXml, Permissions, SectionDocument};
+
+    #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+    use crate::tabular_schema::{RawMeasure, RawTabularModel};
+
+    #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+    fn make_dm(section_source: &str) -> DataMashup {
+        DataMashup {
+            version: 0,
+            package_parts: PackageParts {
+                package_xml: PackageXml {
+                    raw_xml: "<Package/>".to_string(),
+                },
+                main_section: SectionDocument {
+                    source: section_source.to_string(),
+                },
+                embedded_contents: Vec::new(),
+            },
+            permissions: Permissions::default(),
+            metadata: Metadata { formulas: Vec::new() },
+            permission_bindings_raw: Vec::new(),
+        }
+    }
+
+    #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+    #[test]
+    fn pbix_streaming_orders_query_ops_before_measure_ops() {
+        let dm_a = make_dm("section Section1;\nshared Foo = 1;");
+        let dm_b = make_dm("section Section1;\nshared Bar = 1;");
+
+        let raw_a = RawTabularModel {
+            measures: vec![RawMeasure {
+                full_name: "Table/Measure1".to_string(),
+                expression: "1".to_string(),
+            }],
+        };
+        let raw_b = RawTabularModel {
+            measures: vec![RawMeasure {
+                full_name: "Table/Measure1".to_string(),
+                expression: "2".to_string(),
+            }],
+        };
+
+        let pkg_a = PbixPackage {
+            data_mashup: Some(dm_a),
+            model_schema: Some(raw_a),
+        };
+        let pkg_b = PbixPackage {
+            data_mashup: Some(dm_b),
+            model_schema: Some(raw_b),
+        };
+
+        let mut pool = StringPool::new();
+        let mut sink = VecSink::new();
+        pkg_a
+            .diff_streaming_with_pool(&pkg_b, &mut pool, &DiffConfig::default(), &mut sink)
+            .expect("pbix streaming should succeed");
+        let ops = sink.into_ops();
+
+        assert!(ops.iter().any(DiffOp::is_m_op), "expected query ops");
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                DiffOp::MeasureAdded { .. }
+                    | DiffOp::MeasureRemoved { .. }
+                    | DiffOp::MeasureDefinitionChanged { .. }
+            )),
+            "expected measure ops"
+        );
+
+        let mut seen_measure = false;
+        for op in ops {
+            if matches!(
+                op,
+                DiffOp::MeasureAdded { .. }
+                    | DiffOp::MeasureRemoved { .. }
+                    | DiffOp::MeasureDefinitionChanged { .. }
+            ) {
+                seen_measure = true;
+                continue;
+            }
+            if op.is_m_op() && seen_measure {
+                panic!("query op appeared after measure ops");
+            }
         }
     }
 }
@@ -30029,8 +30388,11 @@ impl DiffSession {
 ```rust
 use crate::diff::{DiffError, DiffOp};
 use crate::string_pool::StringPool;
+use std::marker::PhantomData;
 
 /// Trait for streaming diff operations to a consumer.
+///
+/// See `docs/streaming_contract.md` for determinism, lifecycle, and string table rules.
 ///
 /// Streaming entry points call sinks in this order:
 ///
@@ -30054,6 +30416,41 @@ pub trait DiffSink {
     /// Finish the stream (flush/close output destinations).
     fn finish(&mut self) -> Result<(), DiffError> {
         Ok(())
+    }
+}
+
+pub(crate) struct SinkFinishGuard<S: DiffSink> {
+    sink: *mut S,
+    armed: bool,
+    _marker: PhantomData<*mut S>,
+}
+
+impl<S: DiffSink> SinkFinishGuard<S> {
+    pub(crate) fn new(sink: &mut S) -> Self {
+        Self {
+            sink,
+            armed: true,
+            _marker: PhantomData,
+        }
+    }
+
+    pub(crate) fn finish_and_disarm(&mut self) -> Result<(), DiffError> {
+        self.armed = false;
+        // Safety: the guard is created from an exclusive borrow of `sink` and
+        // tied to its lifetime via PhantomData, so the pointer remains valid.
+        unsafe { (&mut *self.sink).finish() }
+    }
+}
+
+impl<S: DiffSink> Drop for SinkFinishGuard<S> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        // Best-effort finish; ignore errors to avoid masking the original error.
+        unsafe {
+            let _ = (&mut *self.sink).finish();
+        }
     }
 }
 
@@ -31938,9 +32335,12 @@ fn branch4_vba_modules_emit_added_removed_changed() {
 #![allow(dead_code)]
 
 use excel_diff::{
-    CellValue, DiffConfig, DiffReport, Grid, Sheet, SheetKind, StringId, Workbook, WorkbookPackage,
-    with_default_session,
+    CellSnapshot, CellValue, DiffConfig, DiffOp, DiffReport, DiffSession, DiffSummary,
+    ExtractedColumnTypeChanges, ExtractedRenamePairs, ExtractedString, ExtractedStringList, Grid,
+    QuerySemanticDetail, RenamePair, Sheet, SheetKind, StepChange, StepDiff, StepParams,
+    StepSnapshot, StringId, Workbook, WorkbookPackage, with_default_session,
 };
+use serde::Deserialize;
 use std::fs::File;
 use std::path::PathBuf;
 
@@ -32002,6 +32402,265 @@ pub fn single_sheet_workbook(name: &str, grid: Grid) -> Workbook {
         }],
         ..Default::default()
     })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructuredOutput {
+    pub ops: Vec<DiffOp>,
+    pub summary: DiffSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JsonlOutput {
+    pub strings: Vec<String>,
+    pub ops: Vec<DiffOp>,
+}
+
+pub fn assert_structured_determinism_with_fresh_sessions<F>(runs: usize, mut f: F)
+where
+    F: FnMut(&mut DiffSession) -> StructuredOutput,
+{
+    let mut baseline: Option<StructuredOutput> = None;
+    for _ in 0..runs {
+        let mut session = DiffSession::new();
+        let output = f(&mut session);
+        match &baseline {
+            None => baseline = Some(output),
+            Some(expected) => assert_eq!(
+                expected, &output,
+                "structured streaming output should be deterministic"
+            ),
+        }
+    }
+}
+
+pub fn assert_jsonl_determinism_with_fresh_sessions<F>(runs: usize, mut f: F)
+where
+    F: FnMut(&mut DiffSession) -> Vec<u8>,
+{
+    let mut baseline: Option<JsonlOutput> = None;
+    for _ in 0..runs {
+        let mut session = DiffSession::new();
+        let output = parse_jsonl_output(&f(&mut session));
+        match &baseline {
+            None => baseline = Some(output),
+            Some(expected) => assert_eq!(
+                expected, &output,
+                "JSONL streaming output should be deterministic"
+            ),
+        }
+    }
+}
+
+pub fn parse_jsonl_output(bytes: &[u8]) -> JsonlOutput {
+    #[derive(Deserialize)]
+    struct Header {
+        kind: String,
+        strings: Vec<String>,
+    }
+
+    let text = std::str::from_utf8(bytes).expect("output should be UTF-8");
+    let mut lines = text.lines().filter(|l| !l.trim().is_empty());
+    let header_line = lines.next().expect("expected a JSON Lines header line");
+    let header: Header = serde_json::from_str(header_line).expect("header should parse");
+    assert_eq!(header.kind, "Header");
+
+    let mut ops = Vec::new();
+    for line in lines {
+        let op: DiffOp = serde_json::from_str(line).expect("op line should parse as DiffOp");
+        for id in collect_string_ids(&op) {
+            assert!(
+                (id.0 as usize) < header.strings.len(),
+                "StringId {} out of range for header string table (len={})",
+                id.0,
+                header.strings.len()
+            );
+        }
+        ops.push(op);
+    }
+
+    JsonlOutput {
+        strings: header.strings,
+        ops,
+    }
+}
+
+pub fn collect_string_ids(op: &DiffOp) -> Vec<StringId> {
+    fn collect_cell_value(ids: &mut Vec<StringId>, value: &CellValue) {
+        match value {
+            CellValue::Text(id) | CellValue::Error(id) => ids.push(*id),
+            CellValue::Number(_) | CellValue::Bool(_) | CellValue::Blank => {}
+        }
+    }
+
+    fn collect_snapshot(ids: &mut Vec<StringId>, snap: &CellSnapshot) {
+        if let Some(value) = &snap.value {
+            collect_cell_value(ids, value);
+        }
+        if let Some(formula) = snap.formula {
+            ids.push(formula);
+        }
+    }
+
+    fn collect_extracted_string(ids: &mut Vec<StringId>, value: &ExtractedString) {
+        if let ExtractedString::Known { value } = value {
+            ids.push(*value);
+        }
+    }
+
+    fn collect_extracted_string_list(ids: &mut Vec<StringId>, value: &ExtractedStringList) {
+        if let ExtractedStringList::Known { values } = value {
+            ids.extend(values.iter().copied());
+        }
+    }
+
+    fn collect_rename_pairs(ids: &mut Vec<StringId>, value: &ExtractedRenamePairs) {
+        if let ExtractedRenamePairs::Known { pairs } = value {
+            for RenamePair { from, to } in pairs {
+                ids.push(*from);
+                ids.push(*to);
+            }
+        }
+    }
+
+    fn collect_column_type_changes(ids: &mut Vec<StringId>, value: &ExtractedColumnTypeChanges) {
+        if let ExtractedColumnTypeChanges::Known { changes } = value {
+            for change in changes {
+                ids.push(change.column);
+            }
+        }
+    }
+
+    fn collect_step_params(ids: &mut Vec<StringId>, params: &StepParams) {
+        match params {
+            StepParams::TableSelectRows { .. } => {}
+            StepParams::TableRemoveColumns { columns } => collect_extracted_string_list(ids, columns),
+            StepParams::TableRenameColumns { renames } => collect_rename_pairs(ids, renames),
+            StepParams::TableTransformColumnTypes { transforms } => {
+                collect_column_type_changes(ids, transforms);
+            }
+            StepParams::TableNestedJoin {
+                left_keys,
+                right_keys,
+                new_column,
+                ..
+            } => {
+                collect_extracted_string_list(ids, left_keys);
+                collect_extracted_string_list(ids, right_keys);
+                collect_extracted_string(ids, new_column);
+            }
+            StepParams::TableJoin {
+                left_keys,
+                right_keys,
+                ..
+            } => {
+                collect_extracted_string_list(ids, left_keys);
+                collect_extracted_string_list(ids, right_keys);
+            }
+            StepParams::Other { .. } => {}
+        }
+    }
+
+    fn collect_step_snapshot(ids: &mut Vec<StringId>, snapshot: &StepSnapshot) {
+        ids.push(snapshot.name);
+        ids.extend(snapshot.source_refs.iter().copied());
+        if let Some(params) = &snapshot.params {
+            collect_step_params(ids, params);
+        }
+    }
+
+    fn collect_step_diff(ids: &mut Vec<StringId>, diff: &StepDiff) {
+        match diff {
+            StepDiff::StepAdded { step } | StepDiff::StepRemoved { step } => {
+                collect_step_snapshot(ids, step);
+            }
+            StepDiff::StepReordered { name, .. } => ids.push(*name),
+            StepDiff::StepModified { before, after, changes } => {
+                collect_step_snapshot(ids, before);
+                collect_step_snapshot(ids, after);
+                for change in changes {
+                    if let StepChange::Renamed { from, to } = change {
+                        ids.push(*from);
+                        ids.push(*to);
+                    }
+                    if let StepChange::SourceRefsChanged { removed, added } = change {
+                        ids.extend(removed.iter().copied());
+                        ids.extend(added.iter().copied());
+                    }
+                }
+            }
+        }
+    }
+
+    fn collect_semantic_detail(ids: &mut Vec<StringId>, detail: &QuerySemanticDetail) {
+        for diff in &detail.step_diffs {
+            collect_step_diff(ids, diff);
+        }
+    }
+
+    let mut ids = Vec::new();
+    match op {
+        DiffOp::SheetAdded { sheet } | DiffOp::SheetRemoved { sheet } => ids.push(*sheet),
+        DiffOp::RowAdded { sheet, .. }
+        | DiffOp::RowRemoved { sheet, .. }
+        | DiffOp::RowReplaced { sheet, .. } => ids.push(*sheet),
+        DiffOp::ColumnAdded { sheet, .. } | DiffOp::ColumnRemoved { sheet, .. } => ids.push(*sheet),
+        DiffOp::BlockMovedRows { sheet, .. }
+        | DiffOp::BlockMovedColumns { sheet, .. }
+        | DiffOp::BlockMovedRect { sheet, .. }
+        | DiffOp::RectReplaced { sheet, .. } => ids.push(*sheet),
+        DiffOp::CellEdited {
+            sheet, from, to, ..
+        } => {
+            ids.push(*sheet);
+            collect_snapshot(&mut ids, from);
+            collect_snapshot(&mut ids, to);
+        }
+        DiffOp::VbaModuleAdded { name }
+        | DiffOp::VbaModuleRemoved { name }
+        | DiffOp::VbaModuleChanged { name } => ids.push(*name),
+        DiffOp::NamedRangeAdded { name } | DiffOp::NamedRangeRemoved { name } => ids.push(*name),
+        DiffOp::NamedRangeChanged { name, old_ref, new_ref } => {
+            ids.push(*name);
+            ids.push(*old_ref);
+            ids.push(*new_ref);
+        }
+        DiffOp::ChartAdded { sheet, name }
+        | DiffOp::ChartRemoved { sheet, name }
+        | DiffOp::ChartChanged { sheet, name } => {
+            ids.push(*sheet);
+            ids.push(*name);
+        }
+        DiffOp::QueryAdded { name }
+        | DiffOp::QueryRemoved { name }
+        | DiffOp::QueryDefinitionChanged { name, .. } => ids.push(*name),
+        DiffOp::QueryRenamed { from, to } => {
+            ids.push(*from);
+            ids.push(*to);
+        }
+        DiffOp::QueryMetadataChanged { name, old, new, .. } => {
+            ids.push(*name);
+            if let Some(old) = old {
+                ids.push(*old);
+            }
+            if let Some(new) = new {
+                ids.push(*new);
+            }
+        }
+        #[cfg(feature = "model-diff")]
+        DiffOp::MeasureAdded { name }
+        | DiffOp::MeasureRemoved { name }
+        | DiffOp::MeasureDefinitionChanged { name, .. } => ids.push(*name),
+        _ => {}
+    }
+
+    if let DiffOp::QueryDefinitionChanged { semantic_detail, .. } = op {
+        if let Some(detail) = semantic_detail {
+            collect_semantic_detail(&mut ids, detail);
+        }
+    }
+
+    ids
 }
 
 ```
@@ -41433,11 +42092,16 @@ fn serialize_diff_report_with_metrics_includes_metrics_object() {
 ### File: `core\tests\package_streaming_tests.rs`
 
 ```rust
+mod common;
+
+use common::collect_string_ids;
 use excel_diff::{
-    CallbackSink, CellValue, DataMashup, DiffConfig, DiffError, DiffOp, DiffSink, Grid,
-    JsonLinesSink, Metadata, PackageParts, PackageXml, Permissions, SectionDocument, Sheet,
-    SheetKind, StringId, Workbook, WorkbookPackage,
+    DataMashup, DiffConfig, DiffError, DiffOp, DiffSink, Grid, JsonLinesSink, Metadata,
+    PackageParts, PackageXml, Permissions, SectionDocument, Sheet, SheetKind, Workbook,
+    WorkbookPackage,
 };
+#[cfg(feature = "perf-metrics")]
+use excel_diff::{CallbackSink, CellValue};
 use serde::Deserialize;
 
 #[derive(Default)]
@@ -41758,60 +42422,6 @@ fn package_streaming_json_lines_header_includes_m_strings() {
         strings: Vec<String>,
     }
 
-    fn collect_string_ids(op: &DiffOp) -> Vec<StringId> {
-        fn collect_cell_value(ids: &mut Vec<StringId>, value: &CellValue) {
-            match value {
-                CellValue::Text(id) | CellValue::Error(id) => ids.push(*id),
-                CellValue::Number(_) | CellValue::Bool(_) | CellValue::Blank => {}
-            }
-        }
-
-        fn collect_snapshot(ids: &mut Vec<StringId>, snap: &excel_diff::CellSnapshot) {
-            if let Some(value) = &snap.value {
-                collect_cell_value(ids, value);
-            }
-            if let Some(formula) = snap.formula {
-                ids.push(formula);
-            }
-        }
-
-        let mut ids = Vec::new();
-        match op {
-            DiffOp::SheetAdded { sheet } | DiffOp::SheetRemoved { sheet } => ids.push(*sheet),
-            DiffOp::RowAdded { sheet, .. }
-            | DiffOp::RowRemoved { sheet, .. }
-            | DiffOp::RowReplaced { sheet, .. } => ids.push(*sheet),
-            DiffOp::ColumnAdded { sheet, .. } | DiffOp::ColumnRemoved { sheet, .. } => {
-                ids.push(*sheet);
-            }
-            DiffOp::BlockMovedRows { sheet, .. }
-            | DiffOp::BlockMovedColumns { sheet, .. }
-            | DiffOp::BlockMovedRect { sheet, .. }
-            | DiffOp::RectReplaced { sheet, .. } => ids.push(*sheet),
-            DiffOp::CellEdited {
-                sheet, from, to, ..
-            } => {
-                ids.push(*sheet);
-                collect_snapshot(&mut ids, from);
-                collect_snapshot(&mut ids, to);
-            }
-            DiffOp::QueryAdded { name }
-            | DiffOp::QueryRemoved { name }
-            | DiffOp::QueryDefinitionChanged { name, .. } => ids.push(*name),
-            DiffOp::QueryRenamed { from, to } => {
-                ids.push(*from);
-                ids.push(*to);
-            }
-            DiffOp::QueryMetadataChanged { name, old, new, .. } => {
-                ids.push(*name);
-                ids.extend(old.iter().copied());
-                ids.extend(new.iter().copied());
-            }
-            _ => {}
-        }
-        ids
-    }
-
     let wb = make_workbook("Sheet1");
 
     let dm_a = make_dm("section Section1;\nshared Foo = 1;");
@@ -41884,7 +42494,11 @@ fn package_streaming_json_lines_header_includes_m_strings() {
 ```rust
 #![cfg(feature = "parallel")]
 
-use excel_diff::{CellValue, DiffConfig, DiffContext, Diffable, Grid, with_default_session};
+use excel_diff::{
+    CellValue, DiffConfig, DiffContext, DiffSession, Diffable, Grid, Sheet, SheetKind, StringPool,
+    VecSink, Workbook, try_diff_grids_database_mode_streaming, try_diff_workbooks_streaming,
+    with_default_session,
+};
 use rayon::ThreadPoolBuilder;
 
 fn run_in_pool<T>(threads: usize, f: impl FnOnce() -> T + Send) -> T
@@ -41896,6 +42510,32 @@ where
         .build()
         .expect("build pool");
     pool.install(f)
+}
+
+fn make_workbook(pool: &mut StringPool, value: f64) -> Workbook {
+    let mut grid = Grid::new(1, 1);
+    grid.insert_cell(0, 0, Some(CellValue::Number(value)), None);
+
+    Workbook {
+        sheets: vec![Sheet {
+            name: pool.intern("Sheet1"),
+            kind: SheetKind::Worksheet,
+            grid,
+        }],
+        ..Default::default()
+    }
+}
+
+fn make_keyed_grid(keys: &[i32], values: &[i32]) -> Grid {
+    let rows = keys.len().max(values.len());
+    let mut grid = Grid::new(rows as u32, 2);
+    for row in 0..rows {
+        let key = keys.get(row).copied().unwrap_or_default() as f64;
+        let value = values.get(row).copied().unwrap_or_default() as f64;
+        grid.insert_cell(row as u32, 0, Some(CellValue::Number(key)), None);
+        grid.insert_cell(row as u32, 1, Some(CellValue::Number(value)), None);
+    }
+    grid
 }
 
 #[test]
@@ -41982,6 +42622,94 @@ fn ops_are_identical_across_thread_counts_block_move() {
     });
 
     assert_eq!(ops_1, ops_4);
+}
+
+#[test]
+fn streaming_workbook_ops_are_identical_across_thread_counts() {
+    let config = DiffConfig::default();
+
+    let output_1 = run_in_pool(1, || {
+        let mut session = DiffSession::new();
+        let wb_a = make_workbook(&mut session.strings, 1.0);
+        let wb_b = make_workbook(&mut session.strings, 2.0);
+        let mut sink = VecSink::new();
+        let summary = try_diff_workbooks_streaming(
+            &wb_a,
+            &wb_b,
+            &mut session.strings,
+            &config,
+            &mut sink,
+        )
+        .expect("streaming diff should succeed");
+        (sink.into_ops(), summary)
+    });
+
+    let output_4 = run_in_pool(4, || {
+        let mut session = DiffSession::new();
+        let wb_a = make_workbook(&mut session.strings, 1.0);
+        let wb_b = make_workbook(&mut session.strings, 2.0);
+        let mut sink = VecSink::new();
+        let summary = try_diff_workbooks_streaming(
+            &wb_a,
+            &wb_b,
+            &mut session.strings,
+            &config,
+            &mut sink,
+        )
+        .expect("streaming diff should succeed");
+        (sink.into_ops(), summary)
+    });
+
+    assert_eq!(output_1, output_4);
+}
+
+#[test]
+fn streaming_database_mode_ops_are_identical_across_thread_counts() {
+    let config = DiffConfig::default();
+
+    let output_1 = run_in_pool(1, || {
+        let mut session = DiffSession::new();
+        let grid_a = make_keyed_grid(&[1, 2], &[10, 20]);
+        let grid_b = make_keyed_grid(&[1, 2], &[10, 25]);
+        let sheet_id = session.strings.intern("Data");
+        let mut sink = VecSink::new();
+        let mut op_count = 0usize;
+        let summary = try_diff_grids_database_mode_streaming(
+            sheet_id,
+            &grid_a,
+            &grid_b,
+            &[0],
+            &mut session.strings,
+            &config,
+            &mut sink,
+            &mut op_count,
+        )
+        .expect("database streaming diff should succeed");
+        (sink.into_ops(), summary)
+    });
+
+    let output_4 = run_in_pool(4, || {
+        let mut session = DiffSession::new();
+        let grid_a = make_keyed_grid(&[1, 2], &[10, 20]);
+        let grid_b = make_keyed_grid(&[1, 2], &[10, 25]);
+        let sheet_id = session.strings.intern("Data");
+        let mut sink = VecSink::new();
+        let mut op_count = 0usize;
+        let summary = try_diff_grids_database_mode_streaming(
+            sheet_id,
+            &grid_a,
+            &grid_b,
+            &[0],
+            &mut session.strings,
+            &config,
+            &mut sink,
+            &mut op_count,
+        )
+        .expect("database streaming diff should succeed");
+        (sink.into_ops(), summary)
+    });
+
+    assert_eq!(output_1, output_4);
 }
 
 ```
@@ -45571,9 +46299,723 @@ fn compute_all_signatures_matches_direct_computation() {
 
 ---
 
+### File: `core\tests\streaming_contract_tests.rs`
+
+```rust
+mod common;
+
+use common::{collect_string_ids, fixture_path};
+use excel_diff::{
+    CellValue, DataMashup, DiffConfig, DiffError, DiffOp, DiffSink, Grid, JsonLinesSink,
+    LimitBehavior, Metadata, PackageParts, PackageXml, PbixPackage, Permissions, SectionDocument,
+    Sheet, SheetKind, StringPool, VbaModule, VbaModuleType, Workbook, WorkbookPackage,
+    try_diff_grids_database_mode_streaming, try_diff_workbooks_streaming,
+};
+use serde::Deserialize;
+use std::fs::File;
+
+#[derive(Default)]
+struct StrictLifecycleSink {
+    begin_seen: bool,
+    finish_seen: bool,
+    finish_calls: usize,
+    emit_calls: usize,
+}
+
+impl DiffSink for StrictLifecycleSink {
+    fn begin(&mut self, _pool: &StringPool) -> Result<(), DiffError> {
+        if self.begin_seen {
+            return Err(DiffError::SinkError {
+                message: "begin called twice".to_string(),
+            });
+        }
+        self.begin_seen = true;
+        Ok(())
+    }
+
+    fn emit(&mut self, _op: DiffOp) -> Result<(), DiffError> {
+        if !self.begin_seen {
+            return Err(DiffError::SinkError {
+                message: "emit before begin".to_string(),
+            });
+        }
+        if self.finish_seen {
+            return Err(DiffError::SinkError {
+                message: "emit after finish".to_string(),
+            });
+        }
+        self.emit_calls += 1;
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), DiffError> {
+        self.finish_calls += 1;
+        self.finish_seen = true;
+        Ok(())
+    }
+}
+
+struct FailAfterNSink {
+    fail_after: usize,
+    emit_calls: usize,
+    finish_calls: usize,
+    finish_seen: bool,
+}
+
+impl FailAfterNSink {
+    fn new(fail_after: usize) -> Self {
+        Self {
+            fail_after,
+            emit_calls: 0,
+            finish_calls: 0,
+            finish_seen: false,
+        }
+    }
+}
+
+impl DiffSink for FailAfterNSink {
+    fn emit(&mut self, _op: DiffOp) -> Result<(), DiffError> {
+        self.emit_calls += 1;
+        if self.emit_calls > self.fail_after {
+            return Err(DiffError::SinkError {
+                message: "intentional emit failure".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), DiffError> {
+        self.finish_calls += 1;
+        self.finish_seen = true;
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct FrozenPoolSink {
+    pool_ptr: Option<*const StringPool>,
+    pool_len: Option<usize>,
+    finish_calls: usize,
+}
+
+impl DiffSink for FrozenPoolSink {
+    fn begin(&mut self, pool: &StringPool) -> Result<(), DiffError> {
+        self.pool_ptr = Some(pool as *const StringPool);
+        self.pool_len = Some(pool.len());
+        Ok(())
+    }
+
+    fn emit(&mut self, _op: DiffOp) -> Result<(), DiffError> {
+        let Some(ptr) = self.pool_ptr else {
+            return Err(DiffError::SinkError {
+                message: "emit before begin".to_string(),
+            });
+        };
+        let Some(len) = self.pool_len else {
+            return Err(DiffError::SinkError {
+                message: "missing pool length".to_string(),
+            });
+        };
+        // Safety: the pool pointer is captured from begin and remains valid for the diff.
+        let current = unsafe { (&*ptr).len() };
+        assert_eq!(
+            current, len,
+            "string pool length changed after begin ({} -> {})",
+            len, current
+        );
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), DiffError> {
+        self.finish_calls += 1;
+        Ok(())
+    }
+}
+
+fn make_workbook(pool: &mut StringPool, values: &[f64]) -> Workbook {
+    let mut grid = Grid::new(values.len() as u32, 1);
+    for (idx, val) in values.iter().enumerate() {
+        grid.insert_cell(idx as u32, 0, Some(CellValue::Number(*val)), None);
+    }
+
+    Workbook {
+        sheets: vec![Sheet {
+            name: pool.intern("Sheet1"),
+            kind: SheetKind::Worksheet,
+            grid,
+        }],
+        ..Default::default()
+    }
+}
+
+fn make_keyed_grid(keys: &[i32], values: &[i32]) -> Grid {
+    let rows = keys.len().max(values.len());
+    let mut grid = Grid::new(rows as u32, 2);
+    for row in 0..rows {
+        let key = keys.get(row).copied().unwrap_or_default() as f64;
+        let value = values.get(row).copied().unwrap_or_default() as f64;
+        grid.insert_cell(row as u32, 0, Some(CellValue::Number(key)), None);
+        grid.insert_cell(row as u32, 1, Some(CellValue::Number(value)), None);
+    }
+    grid
+}
+
+fn make_dm(section_source: &str) -> DataMashup {
+    DataMashup {
+        version: 0,
+        package_parts: PackageParts {
+            package_xml: PackageXml {
+                raw_xml: "<Package/>".to_string(),
+            },
+            main_section: SectionDocument {
+                source: section_source.to_string(),
+            },
+            embedded_contents: Vec::new(),
+        },
+        permissions: Permissions::default(),
+        metadata: Metadata { formulas: Vec::new() },
+        permission_bindings_raw: Vec::new(),
+    }
+}
+
+fn is_object_op(op: &DiffOp) -> bool {
+    matches!(
+        op,
+        DiffOp::NamedRangeAdded { .. }
+            | DiffOp::NamedRangeRemoved { .. }
+            | DiffOp::NamedRangeChanged { .. }
+            | DiffOp::ChartAdded { .. }
+            | DiffOp::ChartRemoved { .. }
+            | DiffOp::ChartChanged { .. }
+            | DiffOp::VbaModuleAdded { .. }
+            | DiffOp::VbaModuleRemoved { .. }
+            | DiffOp::VbaModuleChanged { .. }
+    )
+}
+
+#[test]
+fn engine_workbook_streaming_calls_finish_once() {
+    let mut pool = StringPool::new();
+    let wb_a = make_workbook(&mut pool, &[1.0, 2.0]);
+    let wb_b = make_workbook(&mut pool, &[1.0, 3.0]);
+
+    let mut sink = StrictLifecycleSink::default();
+    let summary =
+        try_diff_workbooks_streaming(&wb_a, &wb_b, &mut pool, &DiffConfig::default(), &mut sink)
+            .expect("streaming diff should succeed");
+
+    assert!(sink.begin_seen, "begin should be called");
+    assert_eq!(sink.finish_calls, 1, "finish should be called exactly once");
+    assert!(sink.finish_seen, "finish should be seen");
+    assert!(sink.emit_calls > 0, "expected at least one emit");
+    assert_eq!(
+        summary.op_count, sink.emit_calls,
+        "summary op_count should match emitted ops"
+    );
+}
+
+#[test]
+fn engine_workbook_streaming_finishes_on_emit_error() {
+    let mut pool = StringPool::new();
+    let wb_a = make_workbook(&mut pool, &[1.0]);
+    let wb_b = make_workbook(&mut pool, &[2.0]);
+
+    let mut sink = FailAfterNSink::new(0);
+    let result =
+        try_diff_workbooks_streaming(&wb_a, &wb_b, &mut pool, &DiffConfig::default(), &mut sink);
+
+    assert!(result.is_err(), "expected sink error");
+    assert!(sink.finish_seen, "finish should be called on emit error");
+    assert_eq!(sink.finish_calls, 1, "finish should be called once");
+}
+
+#[test]
+fn engine_workbook_streaming_finishes_on_limit_error() {
+    let mut pool = StringPool::new();
+    let wb_a = make_workbook(&mut pool, &[1.0, 2.0]);
+    let wb_b = make_workbook(&mut pool, &[1.0, 3.0]);
+
+    let config = DiffConfig {
+        max_align_rows: 1,
+        max_align_cols: 1,
+        on_limit_exceeded: LimitBehavior::ReturnError,
+        ..DiffConfig::default()
+    };
+
+    let mut sink = StrictLifecycleSink::default();
+    let result = try_diff_workbooks_streaming(&wb_a, &wb_b, &mut pool, &config, &mut sink);
+
+    assert!(matches!(result, Err(DiffError::LimitsExceeded { .. })));
+    assert!(sink.finish_seen, "finish should be called on error");
+    assert_eq!(sink.finish_calls, 1, "finish should be called once");
+}
+
+#[test]
+fn engine_database_streaming_calls_finish_once() {
+    let mut pool = StringPool::new();
+    let sheet_id = pool.intern("Data");
+
+    let grid_a = make_keyed_grid(&[1, 2], &[10, 20]);
+    let grid_b = make_keyed_grid(&[1, 2], &[10, 25]);
+
+    let mut sink = StrictLifecycleSink::default();
+    let mut op_count = 0usize;
+    let summary = try_diff_grids_database_mode_streaming(
+        sheet_id,
+        &grid_a,
+        &grid_b,
+        &[0],
+        &mut pool,
+        &DiffConfig::default(),
+        &mut sink,
+        &mut op_count,
+    )
+    .expect("database streaming diff should succeed");
+
+    assert!(sink.begin_seen, "begin should be called");
+    assert_eq!(sink.finish_calls, 1, "finish should be called exactly once");
+    assert!(summary.op_count > 0, "expected at least one op");
+}
+
+#[test]
+fn engine_database_streaming_finishes_on_emit_error() {
+    let mut pool = StringPool::new();
+    let sheet_id = pool.intern("Data");
+
+    let grid_a = make_keyed_grid(&[1, 2], &[10, 20]);
+    let grid_b = make_keyed_grid(&[1, 2], &[10, 25]);
+
+    let mut sink = FailAfterNSink::new(0);
+    let mut op_count = 0usize;
+    let result = try_diff_grids_database_mode_streaming(
+        sheet_id,
+        &grid_a,
+        &grid_b,
+        &[0],
+        &mut pool,
+        &DiffConfig::default(),
+        &mut sink,
+        &mut op_count,
+    );
+
+    assert!(result.is_err(), "expected sink error");
+    assert!(sink.finish_seen, "finish should be called on emit error");
+    assert_eq!(sink.finish_calls, 1, "finish should be called once");
+}
+
+#[test]
+fn pbix_streaming_calls_finish_once() {
+    let path_a = fixture_path("pbix_legacy_multi_query_a.pbix");
+    let path_b = fixture_path("pbix_legacy_multi_query_b.pbix");
+    let pkg_a = PbixPackage::open(File::open(&path_a).expect("fixture should exist"))
+        .expect("pbix A should parse");
+    let pkg_b = PbixPackage::open(File::open(&path_b).expect("fixture should exist"))
+        .expect("pbix B should parse");
+
+    let mut sink = StrictLifecycleSink::default();
+    let summary = pkg_a
+        .diff_streaming(&pkg_b, &DiffConfig::default(), &mut sink)
+        .expect("pbix streaming should succeed");
+
+    assert!(sink.begin_seen, "begin should be called");
+    assert_eq!(sink.finish_calls, 1, "finish should be called exactly once");
+    assert!(summary.op_count > 0, "expected at least one op");
+}
+
+#[test]
+fn pbix_streaming_does_not_intern_after_begin() {
+    let path_a = fixture_path("pbix_legacy_multi_query_a.pbix");
+    let path_b = fixture_path("pbix_legacy_multi_query_b.pbix");
+    let pkg_a = PbixPackage::open(File::open(&path_a).expect("fixture should exist"))
+        .expect("pbix A should parse");
+    let pkg_b = PbixPackage::open(File::open(&path_b).expect("fixture should exist"))
+        .expect("pbix B should parse");
+
+    let mut sink = FrozenPoolSink::default();
+    pkg_a
+        .diff_streaming(&pkg_b, &DiffConfig::default(), &mut sink)
+        .expect("pbix streaming should succeed");
+    assert_eq!(sink.finish_calls, 1, "finish should be called once");
+}
+
+#[test]
+fn pbix_streaming_jsonl_header_includes_all_string_ids() {
+    #[derive(Deserialize)]
+    struct Header {
+        kind: String,
+        strings: Vec<String>,
+    }
+
+    let path_a = fixture_path("pbix_legacy_multi_query_a.pbix");
+    let path_b = fixture_path("pbix_legacy_multi_query_b.pbix");
+    let pkg_a = PbixPackage::open(File::open(&path_a).expect("fixture should exist"))
+        .expect("pbix A should parse");
+    let pkg_b = PbixPackage::open(File::open(&path_b).expect("fixture should exist"))
+        .expect("pbix B should parse");
+
+    let mut out = Vec::<u8>::new();
+    let mut sink = JsonLinesSink::new(&mut out);
+    let summary = pkg_a
+        .diff_streaming(&pkg_b, &DiffConfig::default(), &mut sink)
+        .expect("pbix streaming should succeed");
+
+    let text = std::str::from_utf8(&out).expect("output should be UTF-8");
+    let mut lines = text.lines().filter(|l| !l.trim().is_empty());
+    let header_line = lines.next().expect("expected a JSON Lines header line");
+    let header: Header = serde_json::from_str(header_line).expect("header should parse");
+    assert_eq!(header.kind, "Header");
+
+    let mut op_lines = 0usize;
+    for line in lines {
+        let op: DiffOp = serde_json::from_str(line).expect("op line should parse as DiffOp");
+        for id in collect_string_ids(&op) {
+            assert!(
+                (id.0 as usize) < header.strings.len(),
+                "StringId {} out of range for header string table (len={})",
+                id.0,
+                header.strings.len()
+            );
+        }
+        op_lines += 1;
+    }
+
+    assert!(op_lines > 0, "expected at least one op line after header");
+    assert_eq!(
+        summary.op_count, op_lines,
+        "summary op_count should match ops written after the header"
+    );
+}
+
+#[test]
+fn workbook_package_streaming_orders_categories() {
+    let mut pool = StringPool::new();
+
+    let wb_a = make_workbook(&mut pool, &[1.0]);
+    let wb_b = make_workbook(&mut pool, &[2.0]);
+
+    let dm_a = make_dm("section Section1;\nshared Foo = 1;");
+    let dm_b = make_dm("section Section1;\nshared Bar = 1;");
+
+    let vba_name = pool.intern("Module1");
+    let vba_modules = Some(vec![VbaModule {
+        name: vba_name,
+        module_type: VbaModuleType::Standard,
+        code: "Sub Foo()\nEnd Sub".to_string(),
+    }]);
+
+    let pkg_a = WorkbookPackage {
+        workbook: wb_a,
+        data_mashup: Some(dm_a),
+        vba_modules: None,
+        #[cfg(feature = "perf-metrics")]
+        parse_time_ms: 0,
+    };
+    let pkg_b = WorkbookPackage {
+        workbook: wb_b,
+        data_mashup: Some(dm_b),
+        vba_modules,
+        #[cfg(feature = "perf-metrics")]
+        parse_time_ms: 0,
+    };
+
+    let mut sink = excel_diff::VecSink::new();
+    pkg_a
+        .diff_streaming_with_pool(&pkg_b, &mut pool, &DiffConfig::default(), &mut sink)
+        .expect("streaming diff should succeed");
+    let ops = sink.into_ops();
+
+    assert!(
+        ops.iter().any(|op| !op.is_m_op() && !is_object_op(op)),
+        "expected at least one grid op"
+    );
+    assert!(ops.iter().any(is_object_op), "expected at least one object op");
+    assert!(ops.iter().any(DiffOp::is_m_op), "expected at least one M op");
+
+    enum Stage {
+        Grid,
+        Object,
+        M,
+    }
+
+    let mut stage = Stage::Grid;
+    for op in &ops {
+        if op.is_m_op() {
+            stage = Stage::M;
+            continue;
+        }
+
+        if is_object_op(op) {
+            match stage {
+                Stage::M => panic!("object op appeared after M ops"),
+                Stage::Grid => stage = Stage::Object,
+                Stage::Object => {}
+            }
+            continue;
+        }
+
+        match stage {
+            Stage::Grid => {}
+            Stage::Object => panic!("grid op appeared after object ops"),
+            Stage::M => panic!("grid op appeared after M ops"),
+        }
+    }
+}
+
+#[test]
+fn streaming_timeout_sets_complete_false_and_warns() {
+    let mut pool = StringPool::new();
+    let wb_a = make_workbook(&mut pool, &[1.0, 2.0]);
+    let wb_b = make_workbook(&mut pool, &[1.0, 3.0]);
+
+    let config = DiffConfig {
+        timeout_seconds: Some(0),
+        ..DiffConfig::default()
+    };
+
+    let mut sink = StrictLifecycleSink::default();
+    let summary =
+        try_diff_workbooks_streaming(&wb_a, &wb_b, &mut pool, &config, &mut sink)
+            .expect("streaming diff should return summary on timeout");
+
+    assert!(!summary.complete, "summary should be incomplete on timeout");
+    assert!(
+        summary
+            .warnings
+            .iter()
+            .any(|w| w.to_lowercase().contains("timeout")),
+        "expected timeout warning"
+    );
+    assert_eq!(sink.finish_calls, 1, "finish should be called once");
+}
+
+#[test]
+fn database_streaming_duplicate_key_fallback_warns_and_finishes() {
+    let mut pool = StringPool::new();
+    let sheet_id = pool.intern("Data");
+
+    let grid_a = make_keyed_grid(&[1, 1, 2], &[10, 20, 30]);
+    let grid_b = make_keyed_grid(&[1, 2, 3], &[10, 25, 35]);
+
+    let mut sink = StrictLifecycleSink::default();
+    let mut op_count = 0usize;
+    let summary = try_diff_grids_database_mode_streaming(
+        sheet_id,
+        &grid_a,
+        &grid_b,
+        &[0],
+        &mut pool,
+        &DiffConfig::default(),
+        &mut sink,
+        &mut op_count,
+    )
+    .expect("streaming should fall back to spreadsheet mode");
+
+    assert!(!summary.complete, "summary should be incomplete on fallback");
+    assert_eq!(
+        summary.warnings,
+        vec![
+            "database-mode: duplicate keys for requested columns; falling back to spreadsheet mode"
+                .to_string()
+        ],
+        "warning should be deterministic"
+    );
+    assert_eq!(sink.finish_calls, 1, "finish should be called once");
+}
+
+```
+
+---
+
+### File: `core\tests\streaming_determinism_tests.rs`
+
+```rust
+mod common;
+
+use common::{
+    StructuredOutput, assert_jsonl_determinism_with_fresh_sessions,
+    assert_structured_determinism_with_fresh_sessions, fixture_path,
+};
+use excel_diff::{
+    CellValue, DataMashup, DiffConfig, DiffSession, Grid, JsonLinesSink, Metadata, PackageParts,
+    PackageXml, PbixPackage, Permissions, SectionDocument, Sheet, SheetKind, StringPool, VbaModule,
+    VbaModuleType, Workbook, WorkbookPackage, VecSink, try_diff_grids_database_mode_streaming,
+};
+use std::fs::File;
+
+fn make_workbook(pool: &mut StringPool, value: f64) -> Workbook {
+    let mut grid = Grid::new(1, 1);
+    grid.insert_cell(0, 0, Some(CellValue::Number(value)), None);
+
+    Workbook {
+        sheets: vec![Sheet {
+            name: pool.intern("Sheet1"),
+            kind: SheetKind::Worksheet,
+            grid,
+        }],
+        ..Default::default()
+    }
+}
+
+fn make_keyed_grid(keys: &[i32], values: &[i32]) -> Grid {
+    let rows = keys.len().max(values.len());
+    let mut grid = Grid::new(rows as u32, 2);
+    for row in 0..rows {
+        let key = keys.get(row).copied().unwrap_or_default() as f64;
+        let value = values.get(row).copied().unwrap_or_default() as f64;
+        grid.insert_cell(row as u32, 0, Some(CellValue::Number(key)), None);
+        grid.insert_cell(row as u32, 1, Some(CellValue::Number(value)), None);
+    }
+    grid
+}
+
+fn make_dm(section_source: &str) -> DataMashup {
+    DataMashup {
+        version: 0,
+        package_parts: PackageParts {
+            package_xml: PackageXml {
+                raw_xml: "<Package/>".to_string(),
+            },
+            main_section: SectionDocument {
+                source: section_source.to_string(),
+            },
+            embedded_contents: Vec::new(),
+        },
+        permissions: Permissions::default(),
+        metadata: Metadata { formulas: Vec::new() },
+        permission_bindings_raw: Vec::new(),
+    }
+}
+
+fn build_packages(pool: &mut StringPool) -> (WorkbookPackage, WorkbookPackage) {
+    let wb_a = make_workbook(pool, 1.0);
+    let wb_b = make_workbook(pool, 2.0);
+
+    let dm_a = make_dm("section Section1;\nshared Foo = 1;");
+    let dm_b = make_dm("section Section1;\nshared Bar = 1;");
+
+    let vba_name = pool.intern("Module1");
+    let vba_modules = Some(vec![VbaModule {
+        name: vba_name,
+        module_type: VbaModuleType::Standard,
+        code: "Sub Foo()\nEnd Sub".to_string(),
+    }]);
+
+    let pkg_a = WorkbookPackage {
+        workbook: wb_a,
+        data_mashup: Some(dm_a),
+        vba_modules: None,
+        #[cfg(feature = "perf-metrics")]
+        parse_time_ms: 0,
+    };
+    let pkg_b = WorkbookPackage {
+        workbook: wb_b,
+        data_mashup: Some(dm_b),
+        vba_modules,
+        #[cfg(feature = "perf-metrics")]
+        parse_time_ms: 0,
+    };
+
+    (pkg_a, pkg_b)
+}
+
+#[test]
+fn workbook_package_streaming_is_deterministic_with_fresh_sessions() {
+    assert_structured_determinism_with_fresh_sessions(2, |session| {
+        let (pkg_a, pkg_b) = build_packages(&mut session.strings);
+        let mut sink = VecSink::new();
+        let summary = pkg_a
+            .diff_streaming_with_pool(&pkg_b, &mut session.strings, &DiffConfig::default(), &mut sink)
+            .expect("streaming diff should succeed");
+        StructuredOutput {
+            ops: sink.into_ops(),
+            summary,
+        }
+    });
+}
+
+#[test]
+fn database_mode_streaming_is_deterministic_with_fresh_sessions() {
+    assert_structured_determinism_with_fresh_sessions(2, |session| {
+        let grid_a = make_keyed_grid(&[1, 2], &[10, 20]);
+        let grid_b = make_keyed_grid(&[1, 2], &[10, 25]);
+        let sheet_id = session.strings.intern("Data");
+
+        let mut sink = VecSink::new();
+        let mut op_count = 0usize;
+        let summary = try_diff_grids_database_mode_streaming(
+            sheet_id,
+            &grid_a,
+            &grid_b,
+            &[0],
+            &mut session.strings,
+            &DiffConfig::default(),
+            &mut sink,
+            &mut op_count,
+        )
+        .expect("database streaming diff should succeed");
+
+        StructuredOutput {
+            ops: sink.into_ops(),
+            summary,
+        }
+    });
+}
+
+#[test]
+fn pbix_streaming_jsonl_is_deterministic_with_fresh_sessions() {
+    let path_a = fixture_path("pbix_legacy_multi_query_a.pbix");
+    let path_b = fixture_path("pbix_legacy_multi_query_b.pbix");
+
+    assert_jsonl_determinism_with_fresh_sessions(2, |_session| {
+        excel_diff::with_default_session(|session| *session = DiffSession::new());
+
+        let pkg_a = PbixPackage::open(File::open(&path_a).expect("fixture should exist"))
+            .expect("pbix A should parse");
+        let pkg_b = PbixPackage::open(File::open(&path_b).expect("fixture should exist"))
+            .expect("pbix B should parse");
+
+        let mut out = Vec::<u8>::new();
+        let mut sink = JsonLinesSink::new(&mut out);
+        pkg_a
+            .diff_streaming(&pkg_b, &DiffConfig::default(), &mut sink)
+            .expect("pbix streaming should succeed");
+        out
+    });
+}
+
+#[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+#[test]
+fn pbit_streaming_jsonl_is_deterministic_with_fresh_sessions() {
+    let path_a = fixture_path("pbit_model_a.pbit");
+    let path_b = fixture_path("pbit_model_b.pbit");
+
+    assert_jsonl_determinism_with_fresh_sessions(2, |_session| {
+        excel_diff::with_default_session(|session| *session = DiffSession::new());
+
+        let pkg_a = PbixPackage::open(File::open(&path_a).expect("fixture should exist"))
+            .expect("pbit A should parse");
+        let pkg_b = PbixPackage::open(File::open(&path_b).expect("fixture should exist"))
+            .expect("pbit B should parse");
+
+        let mut out = Vec::<u8>::new();
+        let mut sink = JsonLinesSink::new(&mut out);
+        pkg_a
+            .diff_streaming(&pkg_b, &DiffConfig::default(), &mut sink)
+            .expect("pbit streaming should succeed");
+        out
+    });
+}
+
+```
+
+---
+
 ### File: `core\tests\streaming_sink_tests.rs`
 
 ```rust
+mod common;
+
+use common::{StructuredOutput, assert_structured_determinism_with_fresh_sessions};
 use excel_diff::{
     CallbackSink, CellValue, DiffConfig, DiffOp, DiffSession, Grid, Sheet, SheetKind, VecSink,
     Workbook, try_diff_workbooks_streaming,
@@ -45656,31 +47098,20 @@ fn vec_sink_and_callback_sink_produce_identical_ops() {
 
 #[test]
 fn streaming_produces_ops_in_consistent_order() {
-    let mut session = DiffSession::new();
-
-    let wb_a = make_test_workbook(&mut session, &[1.0, 2.0]);
-    let wb_b = make_test_workbook(&mut session, &[3.0, 4.0]);
-
     let config = DiffConfig::default();
+    assert_structured_determinism_with_fresh_sessions(2, |session| {
+        let wb_a = make_test_workbook(session, &[1.0, 2.0]);
+        let wb_b = make_test_workbook(session, &[3.0, 4.0]);
 
-    let mut first_run_ops: Vec<DiffOp> = Vec::new();
-    {
-        let mut sink = CallbackSink::new(|op| first_run_ops.push(op));
-        try_diff_workbooks_streaming(&wb_a, &wb_b, &mut session.strings, &config, &mut sink)
-            .expect("first run should succeed");
-    }
-
-    let mut second_run_ops: Vec<DiffOp> = Vec::new();
-    {
-        let mut sink = CallbackSink::new(|op| second_run_ops.push(op));
-        try_diff_workbooks_streaming(&wb_a, &wb_b, &mut session.strings, &config, &mut sink)
-            .expect("second run should succeed");
-    }
-
-    assert_eq!(
-        first_run_ops, second_run_ops,
-        "streaming output should be deterministic across runs"
-    );
+        let mut sink = VecSink::new();
+        let summary =
+            try_diff_workbooks_streaming(&wb_a, &wb_b, &mut session.strings, &config, &mut sink)
+                .expect("streaming should succeed");
+        StructuredOutput {
+            ops: sink.into_ops(),
+            summary,
+        }
+    });
 }
 
 #[test]

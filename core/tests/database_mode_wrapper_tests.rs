@@ -12,11 +12,9 @@ fn database_mode_wrapper_limits_exceeded_returns_incomplete_report() {
     grid_b.insert_cell(0, 0, Some(CellValue::Number(1.0)), None);
     grid_b.insert_cell(1, 0, Some(CellValue::Number(1.0)), None);
 
-    let config = DiffConfig {
-        max_align_rows: 1,
-        on_limit_exceeded: LimitBehavior::ReturnError,
-        ..Default::default()
-    };
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_rows = 1;
+    config.hardening.on_limit_exceeded = LimitBehavior::ReturnError;
 
     let result = std::panic::catch_unwind(|| {
         with_default_session(|session| {

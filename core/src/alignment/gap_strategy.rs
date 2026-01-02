@@ -56,7 +56,10 @@ pub fn select_gap_strategy(
 
     let is_move_candidate = has_matching_signatures(old_slice, new_slice);
 
-    let small_threshold = config.small_gap_threshold.min(config.max_lcs_gap_size);
+    let small_threshold = config
+        .alignment
+        .small_gap_threshold
+        .min(config.alignment.max_lcs_gap_size);
     if old_len <= small_threshold && new_len <= small_threshold {
         return if is_move_candidate {
             GapStrategy::MoveCandidate
@@ -65,7 +68,8 @@ pub fn select_gap_strategy(
         };
     }
 
-    if (old_len > config.recursive_align_threshold || new_len > config.recursive_align_threshold)
+    if (old_len > config.alignment.recursive_align_threshold
+        || new_len > config.alignment.recursive_align_threshold)
         && !has_recursed
     {
         return GapStrategy::RecursiveAlign;
@@ -75,7 +79,7 @@ pub fn select_gap_strategy(
         return GapStrategy::MoveCandidate;
     }
 
-    if old_len > config.max_lcs_gap_size || new_len > config.max_lcs_gap_size {
+    if old_len > config.alignment.max_lcs_gap_size || new_len > config.alignment.max_lcs_gap_size {
         return GapStrategy::HashFallback;
     }
 
@@ -115,11 +119,9 @@ mod tests {
 
     #[test]
     fn respects_configured_max_lcs_gap_size() {
-        let config = DiffConfig {
-            max_lcs_gap_size: 2,
-            small_gap_threshold: 10,
-            ..Default::default()
-        };
+        let mut config = DiffConfig::default();
+        config.alignment.max_lcs_gap_size = 2;
+        config.alignment.small_gap_threshold = 10;
         let rows_a = vec![meta(0, 1), meta(1, 2), meta(2, 3)];
         let rows_b = vec![meta(0, 4), meta(1, 5), meta(2, 6)];
 

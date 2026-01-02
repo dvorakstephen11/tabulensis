@@ -53,8 +53,8 @@ pub(crate) fn detect_exact_rect_block_move(
     let row_stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
     let col_stats = HashStats::from_col_meta(&view_a.col_meta, &view_b.col_meta);
 
-    if row_stats.has_heavy_repetition(config.max_hash_repeat)
-        || col_stats.has_heavy_repetition(config.max_hash_repeat)
+    if row_stats.has_heavy_repetition(config.alignment.max_hash_repeat)
+        || col_stats.has_heavy_repetition(config.alignment.max_hash_repeat)
     {
         return None;
     }
@@ -327,7 +327,7 @@ fn ranges_overlap(a: (u32, u32), b: (u32, u32)) -> bool {
 fn is_within_size_bounds(old: &Grid, new: &Grid, config: &DiffConfig) -> bool {
     let rows = old.nrows.max(new.nrows);
     let cols = old.ncols.max(new.ncols);
-    rows <= config.max_align_rows && cols <= config.max_align_cols
+    rows <= config.alignment.max_align_rows && cols <= config.alignment.max_align_cols
 }
 
 fn unique_in_a<H>(hash: H, stats: &HashStats<H>) -> bool
@@ -532,9 +532,9 @@ mod tests {
     #[test]
     fn detect_bails_on_oversized_row_count() {
         let mut config = DiffConfig::default();
-        config.max_align_rows = 10;
-        let old = Grid::new(config.max_align_rows + 1, 10);
-        let new = Grid::new(config.max_align_rows + 1, 10);
+        config.alignment.max_align_rows = 10;
+        let old = Grid::new(config.alignment.max_align_rows + 1, 10);
+        let new = Grid::new(config.alignment.max_align_rows + 1, 10);
 
         let result = detect_exact_rect_block_move(&old, &new, &config);
         assert!(
@@ -547,9 +547,9 @@ mod tests {
     #[test]
     fn detect_bails_on_oversized_col_count() {
         let mut config = DiffConfig::default();
-        config.max_align_cols = 8;
-        let old = Grid::new(10, config.max_align_cols + 1);
-        let new = Grid::new(10, config.max_align_cols + 1);
+        config.alignment.max_align_cols = 8;
+        let old = Grid::new(10, config.alignment.max_align_cols + 1);
+        let new = Grid::new(10, config.alignment.max_align_cols + 1);
 
         let result = detect_exact_rect_block_move(&old, &new, &config);
         assert!(

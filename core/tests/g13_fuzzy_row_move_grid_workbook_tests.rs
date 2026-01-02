@@ -86,10 +86,8 @@ fn g13_fuzzy_row_move_can_be_disabled() {
     let wb_a = single_sheet_workbook("Sheet1", grid_a);
     let wb_b = single_sheet_workbook("Sheet1", grid_b);
 
-    let disabled = DiffConfig {
-        enable_fuzzy_moves: false,
-        ..DiffConfig::default()
-    };
+    let mut disabled = DiffConfig::default();
+    disabled.moves.enable_fuzzy_moves = false;
     let report_disabled = diff_workbooks(&wb_a, &wb_b, &disabled);
     let disabled_moves = report_disabled
         .ops

@@ -98,7 +98,7 @@ fn amr_should_fallback_row_edits_with_structural(
         .iter()
         .any(|(a, b)| row_signature_at(old, *a) != row_signature_at(new, *b));
 
-    has_row_edits && config.max_move_iterations > 0
+    has_row_edits && config.moves.max_move_iterations > 0
 }
 
 fn amr_alignment_is_trivial_identity(old: &Grid, new: &Grid, alignment: &RowAlignment) -> bool {
@@ -120,7 +120,7 @@ fn amr_should_fallback_multiset_reorder(
     !is_trivial
         && alignment.moves.is_empty()
         && row_signature_multiset_equal(old, new)
-        && config.max_move_iterations > 0
+        && config.moves.max_move_iterations > 0
 }
 
 fn amr_can_try_column_alignment(alignment: &RowAlignment) -> bool {
@@ -230,7 +230,7 @@ pub(super) fn try_diff_with_amr<S: DiffSink>(
 
     let mut alignment = amr_result.alignment;
 
-    if emit_ctx.config.max_move_iterations > 0 {
+    if emit_ctx.config.moves.max_move_iterations > 0 {
         inject_moves_from_insert_delete(
             old,
             new,

@@ -226,7 +226,7 @@ fn align_rows_from_meta(
     }
 
     let anchors = build_anchor_chain(discover_anchors_from_meta(rows_a, rows_b));
-    let global_moves = if config.max_move_iterations > 0 {
+    let global_moves = if config.moves.max_move_iterations > 0 {
         #[cfg(feature = "perf-metrics")]
         let _guard = metrics
             .as_deref_mut()
@@ -327,7 +327,7 @@ fn fill_gap(
 ) -> GapAlignmentResult {
     let ctx = GapCtx::new(old_meta, new_meta, old_gap, new_gap);
     let moves_in_gap = moves_within_gap(&ctx.old_range, &ctx.new_range, global_moves);
-    let has_recursed = depth >= config.max_recursion_depth;
+    let has_recursed = depth >= config.alignment.max_recursion_depth;
     let strategy = select_gap_strategy(
         ctx.old_slice,
         ctx.new_slice,
@@ -385,7 +385,7 @@ fn align_gap_without_global(
     config: &DiffConfig,
     depth: u32,
 ) -> GapAlignmentResult {
-    let has_recursed = depth >= config.max_recursion_depth;
+    let has_recursed = depth >= config.alignment.max_recursion_depth;
     let strategy = select_gap_strategy(old_slice, new_slice, config, has_recursed, false);
 
     match strategy {
@@ -456,8 +456,8 @@ fn align_gap_default(
     new_slice: &[RowMeta],
     config: &DiffConfig,
 ) -> GapAlignmentResult {
-    if old_slice.len() as u32 > config.max_lcs_gap_size
-        || new_slice.len() as u32 > config.max_lcs_gap_size
+    if old_slice.len() as u32 > config.alignment.max_lcs_gap_size
+        || new_slice.len() as u32 > config.alignment.max_lcs_gap_size
     {
         return align_gap_via_hash(old_slice, new_slice);
     }
@@ -477,8 +477,8 @@ fn align_gap_with_moves(
     new_slice: &[RowMeta],
     config: &DiffConfig,
 ) -> GapAlignmentResult {
-    let mut result = if old_slice.len() as u32 > config.max_lcs_gap_size
-        || new_slice.len() as u32 > config.max_lcs_gap_size
+    let mut result = if old_slice.len() as u32 > config.alignment.max_lcs_gap_size
+        || new_slice.len() as u32 > config.alignment.max_lcs_gap_size
     {
         align_gap_via_hash(old_slice, new_slice)
     } else {
@@ -495,7 +495,12 @@ fn align_gap_with_moves(
 
         if has_nonzero_offset
             && let Some(mv) =
-                find_block_move(old_slice, new_slice, config.min_block_size_for_move, config)
+                find_block_move(
+                    old_slice,
+                    new_slice,
+                    config.moves.min_block_size_for_move,
+                    config,
+                )
         {
             detected_moves.push(mv);
         }
@@ -515,8 +520,8 @@ fn recursive_anchor_candidates(
         return discover_anchors_from_meta(old_slice, new_slice);
     }
 
-    let k1 = config.context_anchor_k1 as usize;
-    let k2 = config.context_anchor_k2 as usize;
+    let k1 = config.alignment.context_anchor_k1 as usize;
+    let k2 = config.alignment.context_anchor_k2 as usize;
 
     let mut anchors = discover_local_anchors(old_slice, new_slice);
     if anchors.is_empty() {
@@ -542,7 +547,7 @@ fn align_gap_recursive(
     depth: u32,
     global_moves: &[RowBlockMove],
 ) -> GapAlignmentResult {
-    let at_limit = depth >= config.max_recursion_depth;
+    let at_limit = depth >= config.alignment.max_recursion_depth;
     if at_limit {
         return align_gap_default(old_slice, new_slice, config);
     }
@@ -659,11 +664,13 @@ fn align_small_gap(
         return GapAlignmentResult::default();
     }
 
-    if m as u32 > config.max_lcs_gap_size || n as u32 > config.max_lcs_gap_size {
+    if m as u32 > config.alignment.max_lcs_gap_size
+        || n as u32 > config.alignment.max_lcs_gap_size
+    {
         return align_gap_via_hash(old_slice, new_slice);
     }
 
-    if m.saturating_mul(n) > config.lcs_dp_work_limit {
+    if m.saturating_mul(n) > config.alignment.lcs_dp_work_limit {
         return align_gap_via_myers(old_slice, new_slice);
     }
 
@@ -1114,11 +1121,9 @@ mod tests {
         ];
         let grid_b = grid_with_unique_rows(&rows_b);
 
-        let config = DiffConfig {
-            recursive_align_threshold: 5,
-            small_gap_threshold: 2,
-            ..Default::default()
-        };
+        let mut config = DiffConfig::default();
+        config.alignment.recursive_align_threshold = 5;
+        config.alignment.small_gap_threshold = 2;
 
         let alignment = align_rows_amr(&grid_a, &grid_b, &config)
             .expect("alignment should succeed with recursive gaps");
@@ -1249,7 +1254,7 @@ mod tests {
     #[test]
     fn align_small_gap_enforces_cap_with_hash_fallback() {
         let config = DiffConfig::default();
-        let large = (config.max_lcs_gap_size + 1) as usize;
+        let large = (config.alignment.max_lcs_gap_size + 1) as usize;
         let old_hashes: Vec<u128> = (0..large as u32).map(|i| i as u128).collect();
         let new_hashes: Vec<u128> = (0..large as u32).map(|i| (10_000 + i) as u128).collect();
 

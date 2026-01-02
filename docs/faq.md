@@ -17,8 +17,8 @@ In the CLI, warnings are printed to stderr as `Warning: ...`.
   - CLI: `--format jsonl` (writes JSON Lines)
   - Rust: `diff_streaming` / `diff_database_mode_streaming` with a `DiffSink` (e.g., `JsonLinesSink`)
 - Consider safety rails:
-  - `--max-memory <MB>` / `DiffConfig.max_memory_mb`
-  - `--timeout <SECONDS>` / `DiffConfig.timeout_seconds`
+  - `--max-memory <MB>` / `DiffConfig.hardening.max_memory_mb`
+  - `--timeout <SECONDS>` / `DiffConfig.hardening.timeout_seconds`
 
 ## Why are chart diffs "shallow"?
 

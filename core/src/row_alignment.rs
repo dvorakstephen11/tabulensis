@@ -59,7 +59,7 @@ pub(crate) fn detect_exact_row_block_move(
     }
 
     let stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
-    if stats.has_heavy_repetition(config.max_hash_repeat) {
+    if stats.has_heavy_repetition(config.alignment.max_hash_repeat) {
         return None;
     }
 
@@ -197,7 +197,7 @@ pub(crate) fn detect_fuzzy_row_block_move(
     }
 
     let stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
-    if stats.has_heavy_repetition(config.max_hash_repeat) {
+    if stats.has_heavy_repetition(config.alignment.max_hash_repeat) {
         return None;
     }
 
@@ -244,7 +244,7 @@ pub(crate) fn detect_fuzzy_row_block_move(
 
     let max_block_len = mid_len
         .saturating_sub(1)
-        .min(config.max_fuzzy_block_rows as usize);
+        .min(config.moves.max_fuzzy_block_rows as usize);
     if max_block_len == 0 {
         return None;
     }
@@ -262,7 +262,7 @@ pub(crate) fn detect_fuzzy_row_block_move(
             let src_block = &meta_a[prefix + remaining..mismatch_end];
             let dst_block = &meta_b[prefix..prefix + block_len];
 
-            if block_similarity(src_block, dst_block) >= config.fuzzy_similarity_threshold {
+            if block_similarity(src_block, dst_block) >= config.moves.fuzzy_similarity_threshold {
                 let mv = RowBlockMove {
                     src_start_row: src_block[0].row_idx,
                     dst_start_row: dst_block[0].row_idx,
@@ -285,7 +285,7 @@ pub(crate) fn detect_fuzzy_row_block_move(
             let src_block = &meta_a[prefix..prefix + block_len];
             let dst_block = &meta_b[prefix + remaining..mismatch_end];
 
-            if block_similarity(src_block, dst_block) >= config.fuzzy_similarity_threshold {
+            if block_similarity(src_block, dst_block) >= config.moves.fuzzy_similarity_threshold {
                 let mv = RowBlockMove {
                     src_start_row: src_block[0].row_idx,
                     dst_start_row: dst_block[0].row_idx,
@@ -372,7 +372,7 @@ fn align_rows_internal(
         return None;
     }
 
-    if abs_diff != 1 && (!allow_blocks || abs_diff > config.max_block_gap) {
+    if abs_diff != 1 && (!allow_blocks || abs_diff > config.alignment.max_block_gap) {
         return None;
     }
 
@@ -381,7 +381,7 @@ fn align_rows_internal(
     }
 
     let stats = HashStats::from_row_meta(&old_view.row_meta, &new_view.row_meta);
-    if stats.has_heavy_repetition(config.max_hash_repeat) {
+    if stats.has_heavy_repetition(config.alignment.max_hash_repeat) {
         return None;
     }
 
@@ -632,7 +632,7 @@ fn is_monotonic(pairs: &[(u32, u32)]) -> bool {
 fn is_within_size_bounds(old: &Grid, new: &Grid, config: &DiffConfig) -> bool {
     let rows = old.nrows.max(new.nrows);
     let cols = old.ncols.max(new.ncols);
-    rows <= config.max_align_rows && cols <= config.max_align_cols
+    rows <= config.alignment.max_align_rows && cols <= config.alignment.max_align_cols
 }
 
 fn hashes_match(slice_a: &[RowMeta], slice_b: &[RowMeta]) -> bool {
@@ -936,7 +936,7 @@ mod tests {
             RowBlockMove {
                 src_start_row: 4,
                 dst_start_row: 36,
-                row_count: config.max_fuzzy_block_rows
+                row_count: config.moves.max_fuzzy_block_rows
             }
         );
     }

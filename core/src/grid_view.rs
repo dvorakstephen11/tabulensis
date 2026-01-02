@@ -285,7 +285,7 @@ fn should_parallelize_cols(col_len: usize, total_cells: usize) -> bool {
 }
 
 fn should_force_sequential_col_meta(grid: &Grid, config: &DiffConfig) -> bool {
-    let Some(max_mb) = config.max_memory_mb else {
+    let Some(max_mb) = config.hardening.max_memory_mb else {
         return false;
     };
     let max_bytes = (max_mb as u64).saturating_mul(BYTES_PER_MB);

@@ -29,10 +29,8 @@ fn record_reorder_is_masked_by_semantic_canonicalization() {
     let a = load_pkg("m_record_equiv_a.xlsx");
     let b = load_pkg("m_record_equiv_b.xlsx");
 
-    let cfg = DiffConfig {
-        enable_m_semantic_diff: true,
-        ..DiffConfig::default()
-    };
+    let mut cfg = DiffConfig::default();
+    cfg.semantic.enable_m_semantic_diff = true;
     let diff = a.diff(&b, &cfg);
 
     let ops = m_ops(&diff.ops);
@@ -57,10 +55,8 @@ fn list_formatting_only_is_masked() {
     let a = load_pkg("m_list_formatting_a.xlsx");
     let b = load_pkg("m_list_formatting_b.xlsx");
 
-    let cfg = DiffConfig {
-        enable_m_semantic_diff: true,
-        ..DiffConfig::default()
-    };
+    let mut cfg = DiffConfig::default();
+    cfg.semantic.enable_m_semantic_diff = true;
     let diff = a.diff(&b, &cfg);
 
     let ops = m_ops(&diff.ops);
@@ -85,10 +81,8 @@ fn call_formatting_only_is_masked() {
     let a = load_pkg("m_call_formatting_a.xlsx");
     let b = load_pkg("m_call_formatting_b.xlsx");
 
-    let cfg = DiffConfig {
-        enable_m_semantic_diff: true,
-        ..DiffConfig::default()
-    };
+    let mut cfg = DiffConfig::default();
+    cfg.semantic.enable_m_semantic_diff = true;
     let diff = a.diff(&b, &cfg);
 
     let ops = m_ops(&diff.ops);
@@ -113,10 +107,8 @@ fn primitive_formatting_only_is_masked() {
     let a = load_pkg("m_primitive_formatting_a.xlsx");
     let b = load_pkg("m_primitive_formatting_b.xlsx");
 
-    let cfg = DiffConfig {
-        enable_m_semantic_diff: true,
-        ..DiffConfig::default()
-    };
+    let mut cfg = DiffConfig::default();
+    cfg.semantic.enable_m_semantic_diff = true;
     let diff = a.diff(&b, &cfg);
 
     let ops = m_ops(&diff.ops);

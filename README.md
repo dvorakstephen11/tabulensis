@@ -140,7 +140,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-For large workbooks, prefer streaming output (`diff_streaming`) and consider setting `DiffConfig.max_memory_mb` / `DiffConfig.timeout_seconds`.
+For large workbooks, prefer streaming output (`diff_streaming`) and consider setting `DiffConfig.hardening.max_memory_mb` / `DiffConfig.hardening.timeout_seconds`.
 
 ## Limits and Knobs
 
@@ -149,9 +149,9 @@ For large workbooks, prefer streaming output (`diff_streaming`) and consider set
 - Semantic M diff is enabled by default. The CLI `--fast` preset disables it; use default or
   `--precise` to keep semantic detail.
 - Resource ceilings:
-  - `--max-memory` (`DiffConfig.max_memory_mb`) can trigger a positional fallback with warnings.
-  - `--timeout` (`DiffConfig.timeout_seconds`) aborts with a partial report and warnings.
-  - Alignment limits (`max_align_rows` / `max_align_cols`) are enforced via `on_limit_exceeded`.
+  - `--max-memory` (`DiffConfig.hardening.max_memory_mb`) can trigger a positional fallback with warnings.
+  - `--timeout` (`DiffConfig.hardening.timeout_seconds`) aborts with a partial report and warnings.
+  - Alignment limits (`alignment.max_align_rows` / `alignment.max_align_cols`) are enforced via `hardening.on_limit_exceeded`.
 
 ## Documentation
 
