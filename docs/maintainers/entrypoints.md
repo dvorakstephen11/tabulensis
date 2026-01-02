@@ -1,0 +1,39 @@
+# Maintainer Entry Points
+
+This document maps the main entry points across the codebase so new changes can be scoped fast.
+
+## Core library (public API)
+
+- `core/src/package.rs`: `WorkbookPackage::open`, `WorkbookPackage::diff`, and streaming variants for workbook and PBIX.
+- `core/src/config.rs`: `DiffConfig` and hardening/config builders.
+- `core/src/session.rs` + `core/src/string_pool.rs`: `DiffSession`, `StringPool`, and `StringId` (also `with_default_session` in `core/src/lib.rs`).
+- `core/src/sink.rs`: `DiffSink` trait and lifecycle enforcement; streaming sinks in `core/src/output/json_lines.rs`.
+
+## CLI
+
+- `cli/src/commands/diff.rs`: primary diff command path (opens packages, selects format, runs diff).
+- `cli/src/commands/host.rs`: `HostKind` selection + open helpers for workbook vs PBIX.
+- `cli/src/output/`: rendering to text/JSON/JSONL and git diff formatting.
+
+## WASM
+
+- `wasm/src/lib.rs`: exported diff functions; host selection via `ui_payload::host_kind_from_name`; memory cap in `wasm_default_config`.
+- `ui_payload/src/lib.rs`: host-kind helpers + UI payload builders used by web/desktop.
+
+## Desktop (Tauri)
+
+- `desktop/src-tauri/src/main.rs`: Tauri command registration + app wiring.
+- `desktop/src-tauri/src/diff_runner.rs`: diff orchestration, store integration, and progress events.
+- `desktop/src-tauri/src/store`: persisted op storage + diff summaries.
+
+## Web
+
+- `web/diff_worker.js`: web worker that initializes WASM and runs diffs.
+- `web/main.js`: UI orchestration + client selection.
+- `web/native_diff_client.js` + `web/platform.js`: desktop bridge vs browser worker selection.
+
+## If you're changing X, start here
+
+- Alignment/moves: `core/src/engine/grid_diff.rs`, `core/src/engine/move_mask.rs`, `core/src/alignment/`.
+- Streaming behavior: `core/src/sink.rs`, `core/src/output/json_lines.rs`, `core/src/package.rs`.
+- Parsing: `core/src/excel_open_xml.rs`, `core/src/grid_parser.rs`, `core/src/datamashup_framing.rs`, `core/src/datamashup_package.rs`.

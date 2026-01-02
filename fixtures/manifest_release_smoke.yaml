@@ -1,0 +1,16 @@
+scenarios:
+  - id: "smoke_minimal"
+    generator: "basic_grid"
+    args: { rows: 1, cols: 1 }
+    output: "minimal.xlsx"
+
+  - id: "g7_col_append_right"
+    generator: "grid_tail_diff"
+    args:
+      mode: "col_append_right"
+      sheet: "Sheet1"
+      base_cols: 4
+      tail_cols: 2
+    output:
+      - "col_append_right_a.xlsx"
+      - "col_append_right_b.xlsx"

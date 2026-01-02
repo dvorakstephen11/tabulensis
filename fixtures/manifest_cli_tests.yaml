@@ -1,15 +1,53 @@
 scenarios:
+  # --- Phase 1.1: Basic File Opening ---
+  - id: "smoke_minimal"
+    generator: "basic_grid"
+    args: { rows: 1, cols: 1 }
+    output: "minimal.xlsx"
+
+  # --- Phase 1.2: Is this a ZIP? ---
+  - id: "container_random_zip"
+    generator: "corrupt_container"
+    args: { mode: "random_zip" }
+    output: "random_zip.zip"
+    
+  - id: "container_no_content_types"
+    generator: "corrupt_container"
+    args: { mode: "no_content_types" }
+    output: "no_content_types.xlsx"
+
+  - id: "container_not_zip_text"
+    generator: "corrupt_container"
+    args: { mode: "not_zip_text" }
+    output: "not_a_zip.txt"
+
+  # --- PG1: Workbook -> Sheet -> Grid IR sanity ---
   - id: "pg1_basic_two_sheets"
     generator: "basic_grid"
-    args: { rows: 3, cols: 3, two_sheets: true }
+    args: { rows: 3, cols: 3, two_sheets: true } # Sheet1 3x3, Sheet2 5x2 (logic in generator)
     output: "pg1_basic_two_sheets.xlsx"
 
-  - id: "m4_packageparts_one_query"
-    generator: "mashup:one_query"
-    args:
-      base_file: "templates/base_query.xlsx"
-    output: "one_query.xlsx"
+  - id: "pg1_sparse"
+    generator: "sparse_grid"
+    output: "pg1_sparse_used_range.xlsx"
 
+  - id: "pg1_mixed"
+    generator: "edge_case"
+    output: "pg1_empty_and_mixed_sheets.xlsx"
+
+  # --- PG2: Addressing and index invariants ---
+  - id: "pg2_addressing"
+    generator: "address_sanity"
+    args:
+      targets: ["A1", "B2", "C3", "Z1", "Z10", "AA1", "AA10", "AB7", "AZ5", "BA1", "ZZ10", "AAA1"]
+    output: "pg2_addressing_matrix.xlsx"
+
+  # --- PG3: Cell snapshots and comparison semantics ---
+  - id: "pg3_types"
+    generator: "value_formula"
+    output: "pg3_value_and_formula_cells.xlsx"
+
+  # --- Phase 3: Spreadsheet-mode G1/G2 ---
   - id: "g1_equal_sheet"
     generator: "basic_grid"
     args:
@@ -33,6 +71,68 @@ scenarios:
       - "single_cell_value_a.xlsx"
       - "single_cell_value_b.xlsx"
 
+  # --- Phase 3: Spreadsheet-mode G5-G7 ---
+
+  - id: "g5_multi_cell_edits"
+    generator: "multi_cell_diff"
+    args:
+      rows: 20
+      cols: 10
+      sheet: "Sheet1"
+      edits:
+        - { addr: "B2", value_a: 1.0, value_b: 42.0 }
+        - { addr: "D5", value_a: 2.0, value_b: 99.0 }
+        - { addr: "H7", value_a: 3.0, value_b: 3.5 }
+        - { addr: "J10", value_a: "x", value_b: "y" }
+    output:
+      - "multi_cell_edits_a.xlsx"
+      - "multi_cell_edits_b.xlsx"
+
+  - id: "g6_row_append_bottom"
+    generator: "grid_tail_diff"
+    args:
+      mode: "row_append_bottom"
+      sheet: "Sheet1"
+      base_rows: 10
+      tail_rows: 2
+    output:
+      - "row_append_bottom_a.xlsx"
+      - "row_append_bottom_b.xlsx"
+
+  - id: "g6_row_delete_bottom"
+    generator: "grid_tail_diff"
+    args:
+      mode: "row_delete_bottom"
+      sheet: "Sheet1"
+      base_rows: 10
+      tail_rows: 2
+    output:
+      - "row_delete_bottom_a.xlsx"
+      - "row_delete_bottom_b.xlsx"
+
+  - id: "g7_col_append_right"
+    generator: "grid_tail_diff"
+    args:
+      mode: "col_append_right"
+      sheet: "Sheet1"
+      base_cols: 4
+      tail_cols: 2
+    output:
+      - "col_append_right_a.xlsx"
+      - "col_append_right_b.xlsx"
+
+  - id: "g7_col_delete_right"
+    generator: "grid_tail_diff"
+    args:
+      mode: "col_delete_right"
+      sheet: "Sheet1"
+      base_cols: 4
+      tail_cols: 2
+    output:
+      - "col_delete_right_a.xlsx"
+      - "col_delete_right_b.xlsx"
+
+  # --- Phase 4: Spreadsheet-mode G8 ---
   - id: "g8_row_insert_middle"
     generator: "row_alignment_g8"
     args:
@@ -45,6 +145,33 @@ scenarios:
       - "row_insert_middle_a.xlsx"
       - "row_insert_middle_b.xlsx"
 
+  - id: "g8_row_delete_middle"
+    generator: "row_alignment_g8"
+    args:
+      mode: "delete"
+      sheet: "Sheet1"
+      base_rows: 10
+      cols: 5
+      delete_row: 6
+    output:
+      - "row_delete_middle_a.xlsx"
+      - "row_delete_middle_b.xlsx"
+
+  - id: "g8_row_insert_with_edit_below"
+    generator: "row_alignment_g8"
+    args:
+      mode: "insert_with_edit"
+      sheet: "Sheet1"
+      base_rows: 10
+      cols: 5
+      insert_at: 6
+      edit_row: 8
+      edit_col: 3
+    output:
+      - "row_insert_with_edit_a.xlsx"
+      - "row_insert_with_edit_b.xlsx"
+
+  # --- Phase 4: Spreadsheet-mode G9 ---
   - id: "g9_col_insert_middle"
     generator: "column_alignment_g9"
     args:
@@ -57,6 +184,329 @@ scenarios:
       - "col_insert_middle_a.xlsx"
       - "col_insert_middle_b.xlsx"
 
+  - id: "g9_col_delete_middle"
+    generator: "column_alignment_g9"
+    args:
+      mode: "delete"
+      sheet: "Data"
+      cols: 8
+      data_rows: 9
+      delete_col: 4
+    output:
+      - "col_delete_middle_a.xlsx"
+      - "col_delete_middle_b.xlsx"
+
+  - id: "g9_col_insert_with_edit"
+    generator: "column_alignment_g9"
+    args:
+      mode: "insert_with_edit"
+      sheet: "Data"
+      cols: 8
+      data_rows: 9
+      insert_at: 4
+      edit_row: 8
+      edit_col_after_insert: 7
+    output:
+      - "col_insert_with_edit_a.xlsx"
+      - "col_insert_with_edit_b.xlsx"
+
+  # --- Phase 4: Spreadsheet-mode G10 ---
+  - id: "g10_row_block_insert"
+    generator: "row_alignment_g10"
+    args:
+      mode: "block_insert"
+      sheet: "Sheet1"
+      base_rows: 10
+      cols: 5
+      block_rows: 4
+      insert_at: 4
+    output:
+      - "row_block_insert_a.xlsx"
+      - "row_block_insert_b.xlsx"
+
+  - id: "g10_row_block_delete"
+    generator: "row_alignment_g10"
+    args:
+      mode: "block_delete"
+      sheet: "Sheet1"
+      base_rows: 10
+      cols: 5
+      block_rows: 4
+      delete_start: 4
+    output:
+      - "row_block_delete_a.xlsx"
+      - "row_block_delete_b.xlsx"
+
+  # --- Phase 4: Spreadsheet-mode G11 ---
+  - id: "g11_row_block_move"
+    generator: "row_block_move_g11"
+    args:
+      sheet: "Sheet1"
+      total_rows: 20
+      cols: 5
+      block_rows: 4
+      src_start: 5    # 1-based in A
+      dst_start: 13   # 1-based in B
+    output:
+      - "row_block_move_a.xlsx"
+      - "row_block_move_b.xlsx"
+
+  # --- Phase 4: Spreadsheet-mode G12 (column move only - G12a) ---
+  - id: "g12_column_block_move"
+    generator: "column_move_g12"
+    args:
+      sheet: "Data"
+      cols: 8
+      data_rows: 9
+      src_col: 3      # 1-based: C
+      dst_col: 6      # 1-based: F
+    output:
+      - "column_move_a.xlsx"
+      - "column_move_b.xlsx"
+
+  - id: "g12_rect_block_move"
+    generator: "rect_block_move_g12"
+    args:
+      sheet: "Data"
+      rows: 15
+      cols: 15
+      src_top: 3      # 1-based row in A (Excel row 3)
+      src_left: 2     # 1-based column in A (Excel column B)
+      dst_top: 10     # 1-based row in B (Excel row 10)
+      dst_left: 7     # 1-based column in B (Excel column G)
+      block_rows: 3
+      block_cols: 3
+    output:
+      - "rect_block_move_a.xlsx"
+      - "rect_block_move_b.xlsx"
+
+  # --- Phase 4: Spreadsheet-mode G13 ---
+  - id: "g13_fuzzy_row_move"
+    generator: "row_fuzzy_move_g13"
+    args:
+      sheet: "Data"
+      total_rows: 24
+      cols: 6
+      block_rows: 4
+      src_start: 5      # 1-based in A
+      dst_start: 14     # 1-based in B
+      edits:
+        - { row_offset: 1, col: 3, delta: 1 }
+    output:
+      - "grid_move_and_edit_a.xlsx"
+      - "grid_move_and_edit_b.xlsx"
+
+  # --- JSON diff: simple non-empty change ---
+  - id: "json_diff_single_cell"
+    generator: "single_cell_diff"
+    args:
+      rows: 3
+      cols: 3
+      sheet: "Sheet1"
+      target_cell: "C3"
+      value_a: "1"
+      value_b: "2"
+    output:
+      - "json_diff_single_cell_a.xlsx"
+      - "json_diff_single_cell_b.xlsx"
+
+  - id: "json_diff_single_bool"
+    generator: "single_cell_diff"
+    args:
+      rows: 3
+      cols: 3
+      sheet: "Sheet1"
+      target_cell: "C3"
+      value_a: true
+      value_b: false
+    output:
+      - "json_diff_bool_a.xlsx"
+      - "json_diff_bool_b.xlsx"
+
+  - id: "json_diff_value_to_empty"
+    generator: "single_cell_diff"
+    args:
+      rows: 3
+      cols: 3
+      sheet: "Sheet1"
+      target_cell: "C3"
+      value_a: "1"
+      value_b: null
+    output:
+      - "json_diff_value_to_empty_a.xlsx"
+      - "json_diff_value_to_empty_b.xlsx"
+
+  # --- Sheet identity: case-only renames ---
+  - id: "sheet_case_only_rename"
+    generator: "sheet_case_rename"
+    args:
+      sheet_a: "Sheet1"
+      sheet_b: "sheet1"
+      cell: "A1"
+      value_a: 1.0
+      value_b: 1.0
+    output:
+      - "sheet_case_only_rename_a.xlsx"
+      - "sheet_case_only_rename_b.xlsx"
+
+  - id: "sheet_case_only_rename_cell_edit"
+    generator: "sheet_case_rename"
+    args:
+      sheet_a: "Sheet1"
+      sheet_b: "sheet1"
+      cell: "A1"
+      value_a: 1.0
+      value_b: 2.0
+    output:
+      - "sheet_case_only_rename_edit_a.xlsx"
+      - "sheet_case_only_rename_edit_b.xlsx"
+
+  # --- PG6: Object graph vs grid responsibilities ---
+  - id: "pg6_sheet_added"
+    generator: "pg6_sheet_scenario"
+    args:
+      mode: "sheet_added"
+    output:
+      - "pg6_sheet_added_a.xlsx"
+      - "pg6_sheet_added_b.xlsx"
+
+  - id: "pg6_sheet_removed"
+    generator: "pg6_sheet_scenario"
+    args:
+      mode: "sheet_removed"
+    output:
+      - "pg6_sheet_removed_a.xlsx"
+      - "pg6_sheet_removed_b.xlsx"
+
+  - id: "pg6_sheet_renamed"
+    generator: "pg6_sheet_scenario"
+    args:
+      mode: "sheet_renamed"
+    output:
+      - "pg6_sheet_renamed_a.xlsx"
+      - "pg6_sheet_renamed_b.xlsx"
+
+  - id: "pg6_sheet_and_grid_change"
+    generator: "pg6_sheet_scenario"
+    args:
+      mode: "sheet_and_grid_change"
+    output:
+      - "pg6_sheet_and_grid_change_a.xlsx"
+      - "pg6_sheet_and_grid_change_b.xlsx"
+
+  # --- Milestone 2.2: Base64 Correctness ---
+  - id: "corrupt_base64"
+    generator: "mashup_corrupt"
+    args: 
+      base_file: "templates/base_query.xlsx"
+      mode: "byte_flip"
+    output: "corrupt_base64.xlsx"
+
+  - id: "duplicate_datamashup_parts"
+    generator: "mashup_duplicate"
+    args:
+      base_file: "templates/base_query.xlsx"
+    output: "duplicate_datamashup_parts.xlsx"
+
+  - id: "duplicate_datamashup_elements"
+    generator: "mashup_duplicate"
+    args:
+      base_file: "templates/base_query.xlsx"
+      mode: "element"
+    output: "duplicate_datamashup_elements.xlsx"
+
+  - id: "mashup_utf16_le"
+    generator: "mashup_encode"
+    args:
+      base_file: "templates/base_query.xlsx"
+      encoding: "utf-16-le"
+    output: "mashup_utf16_le.xlsx"
+
+  - id: "mashup_utf16_be"
+    generator: "mashup_encode"
+    args:
+      base_file: "templates/base_query.xlsx"
+      encoding: "utf-16-be"
+    output: "mashup_utf16_be.xlsx"
+
+  - id: "mashup_base64_whitespace"
+    generator: "mashup_encode"
+    args:
+      base_file: "templates/base_query.xlsx"
+      whitespace: true
+    output: "mashup_base64_whitespace.xlsx"
+
+  # --- Milestone 4.1: PackageParts ---
+  - id: "m4_packageparts_one_query"
+    generator: "mashup:one_query"
+    args:
+      base_file: "templates/base_query.xlsx"
+    output: "one_query.xlsx"
+
+  - id: "m4_packageparts_multi_embedded"
+    generator: "mashup:multi_query_with_embedded"
+    args:
+      base_file: "templates/base_query.xlsx"
+    output: "multi_query_with_embedded.xlsx"
+
+  # --- Milestone 4.2-4.4: Permissions / Metadata ---
+  - id: "permissions_defaults"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "permissions_defaults"
+      base_file: "templates/base_query.xlsx"
+    output: "permissions_defaults.xlsx"
+
+  - id: "permissions_firewall_off"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "permissions_firewall_off"
+      base_file: "templates/base_query.xlsx"
+    output: "permissions_firewall_off.xlsx"
+
+  - id: "metadata_simple"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "metadata_simple"
+      base_file: "templates/base_query.xlsx"
+    output: "metadata_simple.xlsx"
+
+  - id: "metadata_query_groups"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "metadata_query_groups"
+      base_file: "templates/base_query.xlsx"
+    output: "metadata_query_groups.xlsx"
+
+  - id: "metadata_hidden_queries"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "metadata_hidden_queries"
+      base_file: "templates/base_query.xlsx"
+    output: "metadata_hidden_queries.xlsx"
+
+  - id: "metadata_missing_entry"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "metadata_missing_entry"
+      base_file: "templates/base_query.xlsx"
+    output: "metadata_missing_entry.xlsx"
+
+  - id: "metadata_url_encoding"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "metadata_url_encoding"
+      base_file: "templates/base_query.xlsx"
+    output: "metadata_url_encoding.xlsx"
+
+  - id: "metadata_orphan_entries"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "metadata_orphan_entries"
+      base_file: "templates/base_query.xlsx"
+    output: "metadata_orphan_entries.xlsx"
+
+  # --- Milestone 6: Basic M Diffs ---
   - id: "m_add_query_a"
     generator: "mashup:permissions_metadata"
     args:
@@ -70,6 +520,20 @@ scenarios:
       mode: "m_add_query_b"
       base_file: "templates/base_query.xlsx"
     output: "m_add_query_b.xlsx"
+
+  - id: "m_remove_query_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_remove_query_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_remove_query_a.xlsx"
+
+  - id: "m_remove_query_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_remove_query_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_remove_query_b.xlsx"
 
   - id: "m_change_literal_a"
     generator: "mashup:permissions_metadata"
@@ -85,32 +549,221 @@ scenarios:
       base_file: "templates/base_query.xlsx"
     output: "m_change_literal_b.xlsx"
 
-  - id: "m_embedded_change_a"
-    generator: "mashup:multi_query_with_embedded"
+  - id: "m_metadata_only_change_a"
+    generator: "mashup:permissions_metadata"
     args:
+      mode: "m_metadata_only_change_a"
       base_file: "templates/base_query.xlsx"
-      embedded_guid: "efgh"
-      embedded_section: |
-        section Section1;
-        shared Inner = let
-          Source = 1
-        in
-          Source;
-    output: "m_embedded_change_a.xlsx"
+    output: "m_metadata_only_change_a.xlsx"
 
-  - id: "m_embedded_change_b"
-    generator: "mashup:multi_query_with_embedded"
+  - id: "m_metadata_only_change_b"
+    generator: "mashup:permissions_metadata"
     args:
+      mode: "m_metadata_only_change_b"
       base_file: "templates/base_query.xlsx"
-      embedded_guid: "efgh"
-      embedded_section: |
-        section Section1;
-        shared Inner = let
-          Source = 2
-        in
-          Source;
-    output: "m_embedded_change_b.xlsx"
+    output: "m_metadata_only_change_b.xlsx"
 
+  - id: "m_def_and_metadata_change_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_def_and_metadata_change_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_def_and_metadata_change_a.xlsx"
+
+  - id: "m_def_and_metadata_change_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_def_and_metadata_change_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_def_and_metadata_change_b.xlsx"
+
+  - id: "m_rename_query_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_rename_query_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_rename_query_a.xlsx"
+
+  - id: "m_rename_query_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_rename_query_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_rename_query_b.xlsx"
+
+  # --- Milestone 7: M AST canonicalization ---
+  - id: "m_formatting_only_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_formatting_only_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_formatting_only_a.xlsx"
+
+  - id: "m_formatting_only_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_formatting_only_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_formatting_only_b.xlsx"
+
+  - id: "m_formatting_only_b_variant"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_formatting_only_b_variant"
+      base_file: "templates/base_query.xlsx"
+    output: "m_formatting_only_b_variant.xlsx"
+
+  # --- Milestone 8: M Parser Expansion ---
+  - id: "m_record_equiv_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_record_equiv_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_record_equiv_a.xlsx"
+
+  - id: "m_record_equiv_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_record_equiv_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_record_equiv_b.xlsx"
+
+  - id: "m_list_formatting_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_list_formatting_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_list_formatting_a.xlsx"
+
+  - id: "m_list_formatting_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_list_formatting_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_list_formatting_b.xlsx"
+
+  - id: "m_call_formatting_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_call_formatting_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_call_formatting_a.xlsx"
+
+  - id: "m_call_formatting_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_call_formatting_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_call_formatting_b.xlsx"
+
+  - id: "m_primitive_formatting_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_primitive_formatting_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_primitive_formatting_a.xlsx"
+
+  - id: "m_primitive_formatting_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_primitive_formatting_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_primitive_formatting_b.xlsx"
+
+  # --- P1: Large Dense Grid (Performance Baseline) ---
+  - id: "p1_large_dense"
+    generator: "perf_large"
+    args: 
+      rows: 50000 
+      cols: 20
+      mode: "dense" # Deterministic "R1C1" style data
+    output: "grid_large_dense.xlsx"
+
+  # --- P2: Large Noise Grid (Worst-case Alignment) ---
+  - id: "p2_large_noise"
+    generator: "perf_large"
+    args: 
+      rows: 50000 
+      cols: 20
+      mode: "noise" # Random float data
+      seed: 12345
+    output: "grid_large_noise.xlsx"
+
+  # --- D1: Keyed Equality (Database Mode) ---
+  # File A: Ordered IDs 1..1000
+  - id: "db_equal_ordered_a"
+    generator: "db_keyed"
+    args: { count: 1000, shuffle: false, seed: 42 }
+    output: "db_equal_ordered_a.xlsx"
+
+  # File B: Same data, random order (Tests O(N) alignment)
+  - id: "db_equal_ordered_b"
+    generator: "db_keyed"
+    args: { count: 1000, shuffle: true, seed: 42 }
+    output: "db_equal_ordered_b.xlsx"
+
+  # --- D2: Row Added (Database Mode) ---
+  - id: "db_row_added_b"
+    generator: "db_keyed"
+    args: 
+      count: 1000 
+      seed: 42 
+      extra_rows: [{id: 1001, name: "New Row", amount: 999}]
+    output: "db_row_added_b.xlsx"
+
+  # --- D3: Row Update (Database Mode) ---
+  - id: "db_row_update_b"
+    generator: "db_keyed"
+    args:
+      count: 1000
+      seed: 42
+      updates:
+        - { id: 7, amount: 120 }
+    output: "db_row_update_b.xlsx"
+
+  # --- D4: Reorder + Change (Database Mode) ---
+  - id: "db_reorder_and_change_b"
+    generator: "db_keyed"
+    args:
+      count: 1000
+      seed: 42
+      shuffle: true
+      updates:
+        - { id: 7, amount: 120 }
+    output: "db_reorder_and_change_b.xlsx"
+
+  # --- P3: Adversarial Repetitive Grid (RLE stress test) ---
+  - id: "p3_adversarial_repetitive"
+    generator: "perf_large"
+    args: 
+      rows: 50000 
+      cols: 50
+      mode: "repetitive"
+      pattern_length: 100
+      seed: 99999
+    output: "grid_adversarial_repetitive.xlsx"
+
+  # --- P4: 99% Blank Grid (Sparse stress test) ---
+  - id: "p4_99_percent_blank"
+    generator: "perf_large"
+    args: 
+      rows: 50000 
+      cols: 100
+      mode: "sparse"
+      fill_percent: 1
+      seed: 77777
+    output: "grid_99_percent_blank.xlsx"
+
+  # --- P5: Identical Grids (Fast-path baseline) ---
+  - id: "p5_identical"
+    generator: "perf_large"
+    args: 
+      rows: 50000 
+      cols: 100
+      mode: "dense"
+    output: "grid_identical.xlsx"
+
+  # --- Branch 4: Workbook Object Graph ---
   - id: "branch4_named_ranges"
     generator: "named_ranges"
     output:
@@ -140,6 +793,33 @@ scenarios:
     args:
       template: "templates/vba_changed.xlsm"
     output: "vba_changed.xlsm"
+
+  # --- Branch 1: PBIX/PBIT + embedded query fixtures ---
+  - id: "m_embedded_change_a"
+    generator: "mashup:multi_query_with_embedded"
+    args:
+      base_file: "templates/base_query.xlsx"
+      embedded_guid: "efgh"
+      embedded_section: |
+        section Section1;
+        shared Inner = let
+          Source = 1
+        in
+          Source;
+    output: "m_embedded_change_a.xlsx"
+
+  - id: "m_embedded_change_b"
+    generator: "mashup:multi_query_with_embedded"
+    args:
+      base_file: "templates/base_query.xlsx"
+      embedded_guid: "efgh"
+      embedded_section: |
+        section Section1;
+        shared Inner = let
+          Source = 2
+        in
+          Source;
+    output: "m_embedded_change_b.xlsx"
 
   - id: "branch1_pbix_legacy_one_query_a"
     generator: "pbix"
@@ -226,4 +906,3 @@ scenarios:
       mode: "from_xlsx"
       base_file: "generated/m_embedded_change_a.xlsx"
     output: "pbix_embedded_queries.pbix"
-

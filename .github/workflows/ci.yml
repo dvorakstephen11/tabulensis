@@ -28,8 +28,14 @@ jobs:
       - name: Install fixture generator
         run: python -m pip install -e fixtures --no-deps
 
+      - name: Fixture reference guard
+        run: python scripts/check_fixture_references.py
+
       - name: Generate test fixtures
-        run: generate-fixtures --manifest fixtures/manifest_cli_tests.yaml --force
+        run: generate-fixtures --manifest fixtures/manifest_cli_tests.yaml --force --clean
+
+      - name: Verify fixture checksums
+        run: generate-fixtures --manifest fixtures/manifest_cli_tests.yaml --verify-lock fixtures/manifest_cli_tests.lock.json
 
       - name: Run tests
         run: cargo test --workspace

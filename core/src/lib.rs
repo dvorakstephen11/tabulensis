@@ -8,6 +8,11 @@
 //! - object ops (named ranges, charts, VBA modules)
 //! - Power Query ops (M query add/remove/rename and definition/metadata changes)
 //!
+//! # Architecture overview
+//!
+//! The pipeline is Parse -> IR -> Diff -> Output. For the detailed narrative and entry-point map,
+//! see `docs/maintainers/architecture.md` and `docs/maintainers/entrypoints.md`.
+//!
 //! # Quick start
 //!
 //! ```no_run

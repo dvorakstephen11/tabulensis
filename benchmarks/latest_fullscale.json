@@ -1,15 +1,15 @@
 {
-  "timestamp": "2026-01-02T14:48:08.887026+00:00",
-  "git_commit": "b314f6066f94",
-  "git_branch": "2026-01-02-phase-7",
+  "timestamp": "2026-01-02T15:53:45.399977+00:00",
+  "git_commit": "160b95511f09",
+  "git_branch": "2026-01-02-phase-8",
   "suite": "full-scale",
   "full_scale": true,
   "tests": {
     "perf_50k_99_percent_blank": {
-      "total_time_ms": 136,
+      "total_time_ms": 135,
       "parse_time_ms": 0,
-      "diff_time_ms": 136,
-      "signature_build_time_ms": 136,
+      "diff_time_ms": 135,
+      "signature_build_time_ms": 135,
       "move_detection_time_ms": 0,
       "alignment_time_ms": 0,
       "cell_diff_time_ms": 0,
@@ -28,10 +28,10 @@
       "allocations_est": 0
     },
     "perf_50k_adversarial_repetitive": {
-      "total_time_ms": 604,
+      "total_time_ms": 489,
       "parse_time_ms": 0,
-      "diff_time_ms": 604,
-      "signature_build_time_ms": 469,
+      "diff_time_ms": 489,
+      "signature_build_time_ms": 373,
       "move_detection_time_ms": 0,
       "alignment_time_ms": 0,
       "cell_diff_time_ms": 0,
@@ -50,13 +50,13 @@
       "allocations_est": 0
     },
     "perf_50k_alignment_block_move": {
-      "total_time_ms": 15306,
+      "total_time_ms": 13664,
       "parse_time_ms": 0,
-      "diff_time_ms": 15306,
-      "signature_build_time_ms": 873,
-      "move_detection_time_ms": 14296,
+      "diff_time_ms": 13664,
+      "signature_build_time_ms": 899,
+      "move_detection_time_ms": 12629,
       "alignment_time_ms": 0,
-      "cell_diff_time_ms": 98,
+      "cell_diff_time_ms": 93,
       "op_emit_time_ms": 0,
       "report_serialize_time_ms": 0,
       "peak_memory_bytes": 564945120,
@@ -72,13 +72,13 @@
       "allocations_est": 100100
     },
     "perf_50k_completely_different": {
-      "total_time_ms": 1893,
+      "total_time_ms": 1510,
       "parse_time_ms": 0,
-      "diff_time_ms": 1893,
-      "signature_build_time_ms": 906,
+      "diff_time_ms": 1510,
+      "signature_build_time_ms": 979,
       "move_detection_time_ms": 0,
       "alignment_time_ms": 0,
-      "cell_diff_time_ms": 986,
+      "cell_diff_time_ms": 530,
       "op_emit_time_ms": 0,
       "report_serialize_time_ms": 0,
       "peak_memory_bytes": 483844032,
@@ -94,10 +94,10 @@
       "allocations_est": 0
     },
     "perf_50k_dense_single_edit": {
-      "total_time_ms": 1155,
+      "total_time_ms": 1025,
       "parse_time_ms": 0,
-      "diff_time_ms": 1155,
-      "signature_build_time_ms": 883,
+      "diff_time_ms": 1025,
+      "signature_build_time_ms": 793,
       "move_detection_time_ms": 0,
       "alignment_time_ms": 0,
       "cell_diff_time_ms": 0,
@@ -116,9 +116,9 @@
       "allocations_est": 0
     },
     "perf_50k_identical": {
-      "total_time_ms": 554,
+      "total_time_ms": 548,
       "parse_time_ms": 0,
-      "diff_time_ms": 554,
+      "diff_time_ms": 548,
       "signature_build_time_ms": 0,
       "move_detection_time_ms": 0,
       "alignment_time_ms": 0,
@@ -140,7 +140,7 @@
   },
   "summary": {
     "total_tests": 6,
-    "total_time_ms": 19648,
+    "total_time_ms": 17371,
     "total_rows_processed": 600000,
     "total_cells_compared": 10001750
   }
