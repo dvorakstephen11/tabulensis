@@ -1,0 +1,84 @@
+fixtures:
+  - file: "minimal.xlsx"
+    type: "xlsx"
+    expectation:
+      result: "ok"
+    invariants:
+      self_diff_empty: true
+      deterministic_open: true
+
+  - file: "one_query.xlsx"
+    type: "xlsx"
+    expectation:
+      result: "ok"
+    invariants:
+      self_diff_empty: true
+      deterministic_open: true
+
+  - file: "mashup_utf16_le.xlsx"
+    type: "xlsx"
+    expectation:
+      result: "ok"
+    invariants:
+      self_diff_empty: true
+      deterministic_open: true
+
+  - file: "mashup_base64_whitespace.xlsx"
+    type: "xlsx"
+    expectation:
+      result: "ok"
+    invariants:
+      self_diff_empty: true
+      deterministic_open: true
+
+  - file: "pbix_legacy_one_query_a.pbix"
+    type: "pbix"
+    expectation:
+      result: "ok"
+    invariants:
+      self_diff_empty: true
+      deterministic_open: true
+
+  - file: "pbix_legacy_multi_query_a.pbix"
+    type: "pbix"
+    expectation:
+      result: "ok"
+    invariants:
+      self_diff_empty: true
+      deterministic_open: true
+
+  - file: "random_zip.zip"
+    type: "xlsx"
+    expectation:
+      result: "error"
+      error_code: "EXDIFF_CTR_004"
+
+  - file: "no_content_types.xlsx"
+    type: "xlsx"
+    expectation:
+      result: "error"
+      error_code: "EXDIFF_CTR_004"
+
+  - file: "not_a_zip.txt"
+    type: "xlsx"
+    expectation:
+      result: "error"
+      error_code: "EXDIFF_CTR_003"
+
+  - file: "corrupt_base64.xlsx"
+    type: "xlsx"
+    expectation:
+      result: "error"
+      error_code: "EXDIFF_DM_001"
+
+  - file: "duplicate_datamashup_parts.xlsx"
+    type: "xlsx"
+    expectation:
+      result: "error"
+      error_code: "EXDIFF_DM_003"
+
+  - file: "pbix_no_datamashup_no_schema.pbix"
+    type: "pbix"
+    expectation:
+      result: "error"
+      error_code: "EXDIFF_PKG_010"

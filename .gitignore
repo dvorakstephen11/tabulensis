@@ -12,6 +12,7 @@ __pycache__/
 
 # Local scratch
 tmp/
+corpus_private/
 
 # Shared Generated Data
 fixtures/generated/*.xlsx

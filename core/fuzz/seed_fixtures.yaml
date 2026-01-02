@@ -1,0 +1,68 @@
+fixtures:
+  - file: "minimal.xlsx"
+    targets: ["fuzz_open_workbook"]
+    smoke: true
+
+  - file: "one_query.xlsx"
+    targets: ["fuzz_open_workbook", "fuzz_datamashup_parse"]
+    smoke: true
+
+  - file: "multi_query_with_embedded.xlsx"
+    targets: ["fuzz_open_workbook", "fuzz_datamashup_parse"]
+    smoke: true
+
+  - file: "duplicate_datamashup_parts.xlsx"
+    targets: ["fuzz_open_workbook", "fuzz_datamashup_parse"]
+    smoke: false
+
+  - file: "mashup_utf16_le.xlsx"
+    targets: ["fuzz_open_workbook", "fuzz_datamashup_parse"]
+    smoke: true
+
+  - file: "mashup_base64_whitespace.xlsx"
+    targets: ["fuzz_open_workbook", "fuzz_datamashup_parse"]
+    smoke: true
+
+  - file: "corrupt_base64.xlsx"
+    targets: ["fuzz_open_workbook", "fuzz_datamashup_parse"]
+    smoke: false
+
+  - file: "permissions_defaults.xlsx"
+    targets: ["fuzz_open_workbook", "fuzz_datamashup_parse"]
+    smoke: false
+
+  - file: "vba_base.xlsm"
+    targets: ["fuzz_open_workbook"]
+    smoke: true
+
+  - file: "random_zip.zip"
+    targets: ["fuzz_open_workbook"]
+    smoke: true
+
+  - file: "no_content_types.xlsx"
+    targets: ["fuzz_open_workbook"]
+    smoke: true
+
+  - file: "not_a_zip.txt"
+    targets: ["fuzz_open_workbook"]
+    smoke: true
+
+  - file: "pbix_legacy_one_query_a.pbix"
+    targets: ["fuzz_open_pbix", "fuzz_datamashup_parse"]
+    smoke: true
+
+  - file: "pbix_legacy_multi_query_a.pbix"
+    targets: ["fuzz_open_pbix", "fuzz_datamashup_parse"]
+    smoke: true
+
+  - file: "pbix_embedded_queries.pbix"
+    targets: ["fuzz_open_pbix", "fuzz_datamashup_parse"]
+    smoke: false
+
+  - file: "pbix_no_datamashup_no_schema.pbix"
+    targets: ["fuzz_open_pbix"]
+    smoke: true
+
+  - file: "pbit_model_a.pbit"
+    targets: ["fuzz_open_pbix"]
+    smoke: false

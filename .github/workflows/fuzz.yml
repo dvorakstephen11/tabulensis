@@ -23,7 +23,7 @@ jobs:
         working-directory: core/fuzz
         run: |
           set -e
-          for target in fuzz_datamashup_parse fuzz_diff_grids fuzz_m_section_and_ast; do
+          for target in fuzz_datamashup_parse fuzz_diff_grids fuzz_m_section_and_ast fuzz_open_workbook fuzz_open_pbix; do
             echo "Running $target"
             cargo fuzz run "$target" -max_total_time=60
           done

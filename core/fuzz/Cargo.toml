@@ -24,6 +24,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "fuzz_open_pbix"
+path = "fuzz_targets/fuzz_open_pbix.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "fuzz_datamashup_parse"
 path = "fuzz_targets/fuzz_datamashup_parse.rs"
 test = false

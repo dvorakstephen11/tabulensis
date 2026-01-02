@@ -94,6 +94,9 @@
       2025-12-31_194404.json
       2026-01-01_213949.json
       2026-01-01_214159.json
+      2026-01-02_132622.json
+      2026-01-02_145448.json
+      2026-01-02_160100.json
     wasm_memory_budgets.json
   Cargo.lock
   Cargo.toml
@@ -155,6 +158,7 @@
         move_extraction.rs
         runs.rs
       alignment_types.rs
+      architecture.md
       bin/
         wasm_smoke.rs
       column_alignment.rs
@@ -174,6 +178,7 @@
         hardening.rs
         mod.rs
         move_mask.rs
+        sheet_diff.rs
         workbook_diff.rs
       error_codes.rs
       excel_open_xml.rs
@@ -216,6 +221,7 @@
       sink.rs
       string_pool.rs
       tabular_schema.rs
+      vba.rs
       workbook.rs
     tests/
       addressing_pg2_tests.rs
@@ -249,6 +255,7 @@
       grid_view_tests.rs
       hardening_tests.rs
       integration_test.rs
+      leaf_diff_equivalence_tests.rs
       limit_behavior_tests.rs
       m10_embedded_m_diff_tests.rs
       m10_m_parser_tier2_tests.rs
@@ -310,8 +317,10 @@
       tauri.conf.json
   fixtures/
     manifest.yaml
+    manifest_cli_tests.lock.json
     manifest_cli_tests.yaml
     manifest_perf_e2e.yaml
+    manifest_release_smoke.yaml
     pyproject.toml
     README.md
     requirements.txt
@@ -341,6 +350,8 @@
   README.md
   related_files.txt.md
   scripts/
+    arch_guard.py
+    check_fixture_references.py
     check_perf_thresholds.py
     combine_results_to_csv.py
     compare_perf_results.py
@@ -414,11 +425,20 @@ jobs:
       - name: Install fixture generator
         run: python -m pip install -e fixtures --no-deps
 
+      - name: Fixture reference guard
+        run: python scripts/check_fixture_references.py
+
       - name: Generate test fixtures
-        run: generate-fixtures --manifest fixtures/manifest_cli_tests.yaml --force
+        run: generate-fixtures --manifest fixtures/manifest_cli_tests.yaml --force --clean
+
+      - name: Verify fixture checksums
+        run: generate-fixtures --manifest fixtures/manifest_cli_tests.yaml --verify-lock fixtures/manifest_cli_tests.lock.json
 
       - name: Run tests
         run: cargo test --workspace
+
+      - name: Architecture guard
+        run: python scripts/arch_guard.py
 
       - name: Run parallel feature tests
         run: cargo test -p excel_diff --features parallel
@@ -629,7 +649,7 @@ jobs:
         run: python -m pip install -e fixtures --no-deps
 
       - name: Generate e2e fixtures
-        run: generate-fixtures --manifest fixtures/manifest_perf_e2e.yaml --force
+        run: generate-fixtures --manifest fixtures/manifest_perf_e2e.yaml --force --clean
 
       - name: Export + enforce e2e metrics
         run: python scripts/export_e2e_metrics.py --skip-fixtures --baseline benchmarks/baselines/e2e.json --export-csv benchmarks/latest_e2e.csv
@@ -921,6 +941,20 @@ jobs:
     needs: [build-macos-universal]
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install fixture generator deps
+        run: python -m pip install -r fixtures/requirements.txt
+
+      - name: Install fixture generator
+        run: python -m pip install -e fixtures --no-deps
+
+      - name: Generate smoke fixtures
+        run: generate-fixtures --manifest fixtures/manifest_release_smoke.yaml --force --clean
 
       - name: Download macOS universal artifact
         uses: actions/download-artifact@v4
@@ -12819,7 +12853,7 @@ impl DiffOp {
 use crate::config::DiffConfig;
 use crate::diff::DiffReport;
 use crate::string_pool::StringPool;
-use crate::workbook::{Grid, Sheet, SheetKind, Workbook};
+use crate::workbook::{Grid, Sheet, Workbook};
 
 /// Shared context for Diffable implementations.
 pub struct DiffContext<'a> {
@@ -12853,15 +12887,7 @@ impl Diffable for Sheet {
     type Output = DiffReport;
 
     fn diff(&self, other: &Self, ctx: &mut DiffContext<'_>) -> DiffReport {
-        let wb_a = Workbook {
-            sheets: vec![self.clone()],
-            ..Default::default()
-        };
-        let wb_b = Workbook {
-            sheets: vec![other.clone()],
-            ..Default::default()
-        };
-        crate::engine::diff_workbooks(&wb_a, &wb_b, ctx.pool, ctx.config)
+        crate::engine::diff_sheets(self, other, ctx.pool, ctx.config)
     }
 }
 
@@ -12869,24 +12895,7 @@ impl Diffable for Grid {
     type Output = DiffReport;
 
     fn diff(&self, other: &Self, ctx: &mut DiffContext<'_>) -> DiffReport {
-        let sheet_id = ctx.pool.intern("<grid>");
-        let wb_a = Workbook {
-            sheets: vec![Sheet {
-                name: sheet_id,
-                kind: SheetKind::Worksheet,
-                grid: self.clone(),
-            }],
-            ..Default::default()
-        };
-        let wb_b = Workbook {
-            sheets: vec![Sheet {
-                name: sheet_id,
-                kind: SheetKind::Worksheet,
-                grid: other.clone(),
-            }],
-            ..Default::default()
-        };
-        crate::engine::diff_workbooks(&wb_a, &wb_b, ctx.pool, ctx.config)
+        crate::engine::diff_grids(self, other, ctx.pool, ctx.config)
     }
 }
 
@@ -13220,7 +13229,7 @@ use crate::perf::{DiffMetrics, Phase};
 use crate::sink::DiffSink;
 use crate::string_pool::StringPool;
 
-use super::SheetId;
+use crate::diff::SheetId;
 use super::hardening::HardeningController;
 
 #[derive(Debug, Default)]
@@ -13304,12 +13313,13 @@ use crate::formula_diff::FormulaParseCache;
 use crate::grid_view::GridView;
 #[cfg(feature = "perf-metrics")]
 use crate::perf::{DiffMetrics, Phase};
+use crate::progress::ProgressCallback;
 use crate::sink::{DiffSink, SinkFinishGuard, VecSink};
 use crate::string_pool::StringPool;
 use crate::workbook::{Grid, RowSignature};
 use std::collections::{HashMap, HashSet};
 
-use super::SheetId;
+use crate::diff::SheetId;
 use super::context::{DiffContext, EmitCtx, emit_op};
 use super::grid_primitives::{
     cells_content_equal, compute_formula_diff, positional_diff_for_rows,
@@ -13319,10 +13329,182 @@ use super::move_mask::SheetGridDiffer;
 
 use crate::database_alignment::{KeyColumnSpec, diff_table_by_key};
 
+const GRID_MODE_SHEET_ID: &str = "<grid>";
 const DATABASE_MODE_SHEET_ID: &str = "<database>";
 
+pub fn diff_grids(
+    old: &Grid,
+    new: &Grid,
+    pool: &mut StringPool,
+    config: &DiffConfig,
+) -> DiffReport {
+    let mut sink = VecSink::new();
+    match try_diff_grids_streaming(old, new, pool, config, &mut sink) {
+        Ok(summary) => {
+            let strings = pool.strings().to_vec();
+            DiffReport::from_ops_and_summary(sink.into_ops(), summary, strings)
+        }
+        Err(e) => {
+            let strings = pool.strings().to_vec();
+            DiffReport {
+                version: DiffReport::SCHEMA_VERSION.to_string(),
+                strings,
+                ops: sink.into_ops(),
+                complete: false,
+                warnings: vec![e.to_string()],
+                #[cfg(feature = "perf-metrics")]
+                metrics: None,
+            }
+        }
+    }
+}
+
+pub fn try_diff_grids(
+    old: &Grid,
+    new: &Grid,
+    pool: &mut StringPool,
+    config: &DiffConfig,
+) -> Result<DiffReport, DiffError> {
+    let mut sink = VecSink::new();
+    let summary = try_diff_grids_streaming(old, new, pool, config, &mut sink)?;
+    let strings = pool.strings().to_vec();
+    Ok(DiffReport::from_ops_and_summary(
+        sink.into_ops(),
+        summary,
+        strings,
+    ))
+}
+
+/// Stream a grid diff into `sink`.
+///
+/// Streaming output follows the contract in `docs/streaming_contract.md`.
+pub fn diff_grids_streaming<S: DiffSink>(
+    old: &Grid,
+    new: &Grid,
+    pool: &mut StringPool,
+    config: &DiffConfig,
+    sink: &mut S,
+) -> DiffSummary {
+    match try_diff_grids_streaming(old, new, pool, config, sink) {
+        Ok(summary) => summary,
+        Err(e) => DiffSummary {
+            complete: false,
+            warnings: vec![e.to_string()],
+            op_count: 0,
+            #[cfg(feature = "perf-metrics")]
+            metrics: None,
+        },
+    }
+}
+
+pub fn diff_grids_streaming_with_progress<S: DiffSink>(
+    old: &Grid,
+    new: &Grid,
+    pool: &mut StringPool,
+    config: &DiffConfig,
+    sink: &mut S,
+    progress: &dyn ProgressCallback,
+) -> DiffSummary {
+    match try_diff_grids_streaming_with_progress(old, new, pool, config, sink, progress) {
+        Ok(summary) => summary,
+        Err(e) => DiffSummary {
+            complete: false,
+            warnings: vec![e.to_string()],
+            op_count: 0,
+            #[cfg(feature = "perf-metrics")]
+            metrics: None,
+        },
+    }
+}
+
+/// Like [`diff_grids_streaming`], but returns errors instead of embedding them in the summary.
+pub fn try_diff_grids_streaming<S: DiffSink>(
+    old: &Grid,
+    new: &Grid,
+    pool: &mut StringPool,
+    config: &DiffConfig,
+    sink: &mut S,
+) -> Result<DiffSummary, DiffError> {
+    let mut op_count = 0usize;
+    try_diff_grids_streaming_with_op_count(old, new, pool, config, sink, &mut op_count, None)
+}
+
+pub fn try_diff_grids_streaming_with_progress<S: DiffSink>(
+    old: &Grid,
+    new: &Grid,
+    pool: &mut StringPool,
+    config: &DiffConfig,
+    sink: &mut S,
+    progress: &dyn ProgressCallback,
+) -> Result<DiffSummary, DiffError> {
+    let mut op_count = 0usize;
+    try_diff_grids_streaming_with_op_count(
+        old,
+        new,
+        pool,
+        config,
+        sink,
+        &mut op_count,
+        Some(progress),
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
-pub(super) fn try_diff_grids<'p, S: DiffSink>(
+fn try_diff_grids_streaming_with_op_count<'p, S: DiffSink>(
+    old: &Grid,
+    new: &Grid,
+    pool: &mut StringPool,
+    config: &DiffConfig,
+    sink: &mut S,
+    op_count: &mut usize,
+    progress: Option<&'p dyn ProgressCallback>,
+) -> Result<DiffSummary, DiffError> {
+    let sheet_id: SheetId = pool.intern(GRID_MODE_SHEET_ID);
+
+    sink.begin(pool)?;
+    let mut finish_guard = SinkFinishGuard::new(sink);
+
+    let mut ctx = DiffContext::default();
+    let mut hardening = super::hardening::HardeningController::new(config, progress);
+
+    if hardening.check_timeout(&mut ctx.warnings) {
+        finish_guard.finish_and_disarm()?;
+        return Ok(DiffSummary {
+            complete: false,
+            warnings: ctx.warnings,
+            op_count: *op_count,
+            #[cfg(feature = "perf-metrics")]
+            metrics: None,
+        });
+    }
+
+    try_diff_grids_internal(
+        sheet_id,
+        old,
+        new,
+        config,
+        pool,
+        sink,
+        op_count,
+        &mut ctx,
+        &mut hardening,
+        #[cfg(feature = "perf-metrics")]
+        None,
+    )?;
+
+    finish_guard.finish_and_disarm()?;
+    let complete = ctx.warnings.is_empty();
+    Ok(DiffSummary {
+        complete,
+        warnings: ctx.warnings,
+        op_count: *op_count,
+        #[cfg(feature = "perf-metrics")]
+        metrics: None,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn try_diff_grids_internal<'p, S: DiffSink>(
     sheet_id: SheetId,
     old: &Grid,
     new: &Grid,
@@ -13715,7 +13897,7 @@ pub fn try_diff_grids_database_mode_streaming<S: DiffSink>(
                     .to_string(),
             );
             ctx.warnings = warnings;
-            try_diff_grids(
+            try_diff_grids_internal(
                 sheet_id,
                 old,
                 new,
@@ -15640,6 +15822,7 @@ fn bytes_to_mb_ceil(bytes: u64) -> u64 {
 //! - `workbook_diff`: Workbook-level diff orchestration and sheet enumeration
 //! - `grid_diff`: Grid diffing pipeline, cell comparison, and positional diff
 //! - `move_mask`: Move detection with region masks and SheetGridDiffer
+//! - `sheet_diff`: Sheet-level leaf diff entry points
 //! - `amr`: AMR (Adaptive Move Recognition) alignment and decision helpers
 //! - `context`: Shared types for diff context and emission
 
@@ -15649,13 +15832,18 @@ mod grid_diff;
 mod grid_primitives;
 mod hardening;
 mod move_mask;
+mod sheet_diff;
 mod workbook_diff;
 
-use crate::diff::SheetId;
-use context::emit_op;
-
-pub use grid_diff::diff_grids_database_mode;
-pub use grid_diff::try_diff_grids_database_mode_streaming;
+pub use grid_diff::{
+    diff_grids, diff_grids_database_mode, diff_grids_streaming, diff_grids_streaming_with_progress,
+    try_diff_grids, try_diff_grids_database_mode_streaming, try_diff_grids_streaming,
+    try_diff_grids_streaming_with_progress,
+};
+pub use sheet_diff::{
+    diff_sheets, diff_sheets_streaming, diff_sheets_streaming_with_progress, try_diff_sheets,
+    try_diff_sheets_streaming, try_diff_sheets_streaming_with_progress,
+};
 pub use workbook_diff::{
     diff_workbooks, diff_workbooks_streaming, diff_workbooks_streaming_with_progress,
     diff_workbooks_with_progress, try_diff_workbooks, try_diff_workbooks_streaming,
@@ -16873,6 +17061,196 @@ mod tests {
 
 ---
 
+### File: `core\src\engine\sheet_diff.rs`
+
+```rust
+use crate::config::DiffConfig;
+use crate::diff::{DiffError, DiffReport, DiffSummary};
+use crate::progress::ProgressCallback;
+use crate::sink::{DiffSink, SinkFinishGuard, VecSink};
+use crate::string_pool::StringPool;
+use crate::workbook::Sheet;
+
+use crate::diff::SheetId;
+use super::context::DiffContext;
+use super::grid_diff::try_diff_grids_internal;
+use super::hardening::HardeningController;
+
+pub fn diff_sheets(
+    old: &Sheet,
+    new: &Sheet,
+    pool: &mut StringPool,
+    config: &DiffConfig,
+) -> DiffReport {
+    let mut sink = VecSink::new();
+    match try_diff_sheets_streaming(old, new, pool, config, &mut sink) {
+        Ok(summary) => {
+            let strings = pool.strings().to_vec();
+            DiffReport::from_ops_and_summary(sink.into_ops(), summary, strings)
+        }
+        Err(e) => {
+            let strings = pool.strings().to_vec();
+            DiffReport {
+                version: DiffReport::SCHEMA_VERSION.to_string(),
+                strings,
+                ops: sink.into_ops(),
+                complete: false,
+                warnings: vec![e.to_string()],
+                #[cfg(feature = "perf-metrics")]
+                metrics: None,
+            }
+        }
+    }
+}
+
+pub fn try_diff_sheets(
+    old: &Sheet,
+    new: &Sheet,
+    pool: &mut StringPool,
+    config: &DiffConfig,
+) -> Result<DiffReport, DiffError> {
+    let mut sink = VecSink::new();
+    let summary = try_diff_sheets_streaming(old, new, pool, config, &mut sink)?;
+    let strings = pool.strings().to_vec();
+    Ok(DiffReport::from_ops_and_summary(
+        sink.into_ops(),
+        summary,
+        strings,
+    ))
+}
+
+/// Stream a sheet diff into `sink`.
+///
+/// Streaming output follows the contract in `docs/streaming_contract.md`.
+pub fn diff_sheets_streaming<S: DiffSink>(
+    old: &Sheet,
+    new: &Sheet,
+    pool: &mut StringPool,
+    config: &DiffConfig,
+    sink: &mut S,
+) -> DiffSummary {
+    match try_diff_sheets_streaming(old, new, pool, config, sink) {
+        Ok(summary) => summary,
+        Err(e) => DiffSummary {
+            complete: false,
+            warnings: vec![e.to_string()],
+            op_count: 0,
+            #[cfg(feature = "perf-metrics")]
+            metrics: None,
+        },
+    }
+}
+
+pub fn diff_sheets_streaming_with_progress<S: DiffSink>(
+    old: &Sheet,
+    new: &Sheet,
+    pool: &mut StringPool,
+    config: &DiffConfig,
+    sink: &mut S,
+    progress: &dyn ProgressCallback,
+) -> DiffSummary {
+    match try_diff_sheets_streaming_with_progress(old, new, pool, config, sink, progress) {
+        Ok(summary) => summary,
+        Err(e) => DiffSummary {
+            complete: false,
+            warnings: vec![e.to_string()],
+            op_count: 0,
+            #[cfg(feature = "perf-metrics")]
+            metrics: None,
+        },
+    }
+}
+
+/// Like [`diff_sheets_streaming`], but returns errors instead of embedding them in the summary.
+pub fn try_diff_sheets_streaming<S: DiffSink>(
+    old: &Sheet,
+    new: &Sheet,
+    pool: &mut StringPool,
+    config: &DiffConfig,
+    sink: &mut S,
+) -> Result<DiffSummary, DiffError> {
+    let mut op_count = 0usize;
+    try_diff_sheets_streaming_with_op_count(old, new, pool, config, sink, &mut op_count, None)
+}
+
+pub fn try_diff_sheets_streaming_with_progress<S: DiffSink>(
+    old: &Sheet,
+    new: &Sheet,
+    pool: &mut StringPool,
+    config: &DiffConfig,
+    sink: &mut S,
+    progress: &dyn ProgressCallback,
+) -> Result<DiffSummary, DiffError> {
+    let mut op_count = 0usize;
+    try_diff_sheets_streaming_with_op_count(
+        old,
+        new,
+        pool,
+        config,
+        sink,
+        &mut op_count,
+        Some(progress),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn try_diff_sheets_streaming_with_op_count<'p, S: DiffSink>(
+    old: &Sheet,
+    new: &Sheet,
+    pool: &mut StringPool,
+    config: &DiffConfig,
+    sink: &mut S,
+    op_count: &mut usize,
+    progress: Option<&'p dyn ProgressCallback>,
+) -> Result<DiffSummary, DiffError> {
+    let sheet_id: SheetId = old.name;
+
+    sink.begin(pool)?;
+    let mut finish_guard = SinkFinishGuard::new(sink);
+
+    let mut ctx = DiffContext::default();
+    let mut hardening = HardeningController::new(config, progress);
+
+    if hardening.check_timeout(&mut ctx.warnings) {
+        finish_guard.finish_and_disarm()?;
+        return Ok(DiffSummary {
+            complete: false,
+            warnings: ctx.warnings,
+            op_count: *op_count,
+            #[cfg(feature = "perf-metrics")]
+            metrics: None,
+        });
+    }
+
+    try_diff_grids_internal(
+        sheet_id,
+        &old.grid,
+        &new.grid,
+        config,
+        pool,
+        sink,
+        op_count,
+        &mut ctx,
+        &mut hardening,
+        #[cfg(feature = "perf-metrics")]
+        None,
+    )?;
+
+    finish_guard.finish_and_disarm()?;
+    let complete = ctx.warnings.is_empty();
+    Ok(DiffSummary {
+        complete,
+        warnings: ctx.warnings,
+        op_count: *op_count,
+        #[cfg(feature = "perf-metrics")]
+        metrics: None,
+    })
+}
+
+```
+
+---
+
 ### File: `core\src\engine\workbook_diff.rs`
 
 ```rust
@@ -16889,10 +17267,10 @@ use std::collections::HashMap;
 #[cfg(feature = "perf-metrics")]
 use std::mem::size_of;
 
-use super::context::DiffContext;
-use super::grid_diff::try_diff_grids;
+use super::context::{DiffContext, emit_op};
+use super::grid_diff::try_diff_grids_internal;
 use super::hardening::HardeningController;
-use super::{SheetId, emit_op};
+use crate::diff::SheetId;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SheetKey {
@@ -17185,7 +17563,7 @@ fn try_diff_workbooks_streaming_impl<'p, S: DiffSink>(
             }
             (Some(old_sheet), Some(new_sheet)) => {
                 let sheet_id: SheetId = old_sheet.name;
-                try_diff_grids(
+                try_diff_grids_internal(
                     sheet_id,
                     &old_sheet.grid,
                     &new_sheet.grid,
@@ -17393,11 +17771,11 @@ use crate::grid_parser::{
     GridParseError, parse_defined_names, parse_relationships, parse_relationships_all,
     parse_shared_strings, parse_sheet_xml, parse_workbook_xml, resolve_sheet_target,
 };
-use crate::package::VbaModule;
 #[cfg(feature = "vba")]
-use crate::package::VbaModuleType;
+use crate::vba::VbaModuleType;
 use crate::string_pool::StringId;
 use crate::string_pool::StringPool;
+use crate::vba::VbaModule;
 use crate::workbook::{ChartInfo, ChartObject, Sheet, SheetKind, Workbook};
 use std::collections::HashMap;
 #[cfg(feature = "std-fs")]
@@ -17418,8 +17796,6 @@ pub enum PackageError {
     WorkbookXmlMissing,
     #[error("[EXDIFF_PKG_003] worksheet XML missing for sheet {sheet_name}. Suggestion: re-save the file in Excel or verify it is a valid .xlsx.")]
     WorksheetXmlMissing { sheet_name: String },
-    #[error("{0}")]
-    Diff(#[from] crate::diff::DiffError),
     #[error("[EXDIFF_PKG_009] serialization error: {0}. Suggestion: verify the workbook is a standard .xlsx saved by Excel.")]
     SerializationError(String),
 
@@ -17465,7 +17841,6 @@ impl PackageError {
             PackageError::DataMashup(e) => e.code(),
             PackageError::WorkbookXmlMissing => error_codes::PKG_MISSING_PART,
             PackageError::WorksheetXmlMissing { .. } => error_codes::PKG_MISSING_PART,
-            PackageError::Diff(_) => error_codes::DIFF_INTERNAL_ERROR,
             PackageError::SerializationError(_) => error_codes::PKG_UNSUPPORTED_FORMAT,
             PackageError::NotAZip { .. } => error_codes::PKG_NOT_ZIP,
             PackageError::NoDataMashupUseTabularModel => {
@@ -20996,6 +21371,11 @@ mod tests {
 //! - object ops (named ranges, charts, VBA modules)
 //! - Power Query ops (M query add/remove/rename and definition/metadata changes)
 //!
+//! # Architecture overview
+//!
+//! The pipeline is Parse -> IR -> Diff -> Output. For the detailed narrative and entry-point map,
+//! see `docs/maintainers/architecture.md` and `docs/maintainers/entrypoints.md`.
+//!
 //! # Quick start
 //!
 //! ```no_run
@@ -21107,6 +21487,7 @@ pub(crate) mod row_alignment;
 mod session;
 mod sink;
 mod string_pool;
+mod vba;
 mod workbook;
 
 #[cfg(all(feature = "perf-metrics", not(target_arch = "wasm32")))]
@@ -21166,13 +21547,64 @@ pub fn open_workbook(path: impl AsRef<std::path::Path>) -> Result<Workbook, Exce
 /// The recommended entry point for most callers is [`WorkbookPackage`]. This module exposes
 /// lower-level functions and types for callers who want to manage their own sessions/pools or
 /// stream ops directly.
+///
+/// ## Leaf diffs
+///
+/// Leaf diffs compare individual grids or sheets without workbook orchestration. Grid diffs
+/// use a default sheet id of "<grid>".
+///
+/// ```no_run
+/// use excel_diff::{DiffConfig, Grid, StringPool};
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut pool = StringPool::new();
+/// let old = Grid::new(1, 1);
+/// let new = Grid::new(1, 1);
+/// let report =
+///     excel_diff::advanced::diff_grids_with_pool(&old, &new, &mut pool, &DiffConfig::default());
+/// println!("ops={}", report.ops.len());
+/// # Ok(())
+/// # }
+/// ```
+///
+/// ```no_run
+/// use excel_diff::{DiffConfig, Grid, Sheet, SheetKind, StringPool};
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut pool = StringPool::new();
+/// let sheet_id = pool.intern("Sheet1");
+/// let old = Sheet {
+///     name: sheet_id,
+///     kind: SheetKind::Worksheet,
+///     grid: Grid::new(1, 1),
+/// };
+/// let new = Sheet {
+///     name: sheet_id,
+///     kind: SheetKind::Worksheet,
+///     grid: Grid::new(1, 1),
+/// };
+/// let report =
+///     excel_diff::advanced::diff_sheets_with_pool(&old, &new, &mut pool, &DiffConfig::default());
+/// println!("ops={}", report.ops.len());
+/// # Ok(())
+/// # }
+/// ```
+///
+/// When streaming leaf diffs, all strings referenced by emitted ops must be interned before
+/// `begin()` is called. See `docs/streaming_contract.md` for the full contract.
 pub mod advanced {
     pub use crate::engine::{
-        diff_grids_database_mode, diff_workbooks as diff_workbooks_with_pool,
-        diff_workbooks_streaming, diff_workbooks_streaming_with_progress, diff_workbooks_with_progress,
-        try_diff_grids_database_mode_streaming, try_diff_workbooks as try_diff_workbooks_with_pool,
-        try_diff_workbooks_streaming,
-        try_diff_workbooks_streaming_with_progress, try_diff_workbooks_with_progress,
+        diff_grids as diff_grids_with_pool, diff_grids_database_mode, diff_grids_streaming,
+        diff_grids_streaming_with_progress, diff_sheets as diff_sheets_with_pool,
+        diff_sheets_streaming, diff_sheets_streaming_with_progress,
+        diff_workbooks as diff_workbooks_with_pool, diff_workbooks_streaming,
+        diff_workbooks_streaming_with_progress, diff_workbooks_with_progress,
+        try_diff_grids as try_diff_grids_with_pool, try_diff_grids_database_mode_streaming,
+        try_diff_grids_streaming, try_diff_grids_streaming_with_progress,
+        try_diff_sheets as try_diff_sheets_with_pool, try_diff_sheets_streaming,
+        try_diff_sheets_streaming_with_progress, try_diff_workbooks as try_diff_workbooks_with_pool,
+        try_diff_workbooks_streaming, try_diff_workbooks_streaming_with_progress,
+        try_diff_workbooks_with_progress,
     };
     pub use crate::session::DiffSession;
     pub use crate::sink::{CallbackSink, DiffSink, VecSink};
@@ -21203,11 +21635,17 @@ pub use diff::{
 pub use diffable::{DiffContext, Diffable};
 #[doc(hidden)]
 pub use engine::{
-    diff_grids_database_mode, diff_workbooks as diff_workbooks_with_pool, diff_workbooks_streaming,
+    diff_grids as diff_grids_with_pool, diff_grids_database_mode, diff_grids_streaming,
+    diff_grids_streaming_with_progress, diff_sheets as diff_sheets_with_pool,
+    diff_sheets_streaming, diff_sheets_streaming_with_progress,
+    diff_workbooks as diff_workbooks_with_pool, diff_workbooks_streaming,
     diff_workbooks_streaming_with_progress, diff_workbooks_with_progress,
-    try_diff_grids_database_mode_streaming, try_diff_workbooks as try_diff_workbooks_with_pool,
-    try_diff_workbooks_streaming,
-    try_diff_workbooks_streaming_with_progress, try_diff_workbooks_with_progress,
+    try_diff_grids as try_diff_grids_with_pool, try_diff_grids_database_mode_streaming,
+    try_diff_grids_streaming, try_diff_grids_streaming_with_progress,
+    try_diff_sheets as try_diff_sheets_with_pool, try_diff_sheets_streaming,
+    try_diff_sheets_streaming_with_progress, try_diff_workbooks as try_diff_workbooks_with_pool,
+    try_diff_workbooks_streaming, try_diff_workbooks_streaming_with_progress,
+    try_diff_workbooks_with_progress,
 };
 #[cfg(feature = "excel-open-xml")]
 #[allow(deprecated)]
@@ -21242,11 +21680,12 @@ pub use output::json::diff_report_to_cell_diffs;
 pub use output::json::diff_workbooks_to_json;
 pub use output::json::{CellDiff, serialize_cell_diffs, serialize_diff_report};
 pub use output::json_lines::JsonLinesSink;
-pub use package::{PbixPackage, VbaModule, VbaModuleType, WorkbookPackage};
+pub use package::{PbixPackage, WorkbookPackage};
 pub use progress::{NoProgress, ProgressCallback};
 pub use session::DiffSession;
 pub use sink::{CallbackSink, DiffSink, VecSink};
 pub use string_pool::{StringId, StringPool};
+pub use vba::{VbaModule, VbaModuleType};
 pub use workbook::{
     Cell, CellAddress, CellSnapshot, CellValue, ChartInfo, ChartObject, ColSignature, Grid,
     NamedRange, RowSignature, Sheet, SheetKind, Workbook,
@@ -26588,8 +27027,8 @@ pub fn diff_models(old: &Model, new: &Model, pool: &mut StringPool) -> Vec<DiffO
 
 ```rust
 use crate::diff::DiffOp;
-use crate::package::VbaModule;
 use crate::string_pool::StringPool;
+use crate::vba::VbaModule;
 use crate::workbook::{ChartObject, NamedRange, Workbook};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -26750,7 +27189,7 @@ pub(crate) fn diff_vba_modules(
 use crate::config::DiffConfig;
 #[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 use crate::datamashup::build_data_mashup;
-use crate::diff::DiffReport;
+use crate::diff::{DiffReport, DiffSummary};
 #[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 use crate::excel_open_xml::{PackageError, open_data_mashup, open_vba_modules, open_workbook};
 #[allow(unused_imports)]
@@ -26810,15 +27249,27 @@ pub fn diff_workbooks(
     let vba_b = open_vba_modules(path_b, session.strings_mut())?;
 
     let mut sink = VecSink::new();
-    let summary = crate::engine::try_diff_workbooks_streaming(
+    let grid_result = crate::engine::try_diff_workbooks_streaming(
         &wb_a,
         &wb_b,
         session.strings_mut(),
         config,
         &mut sink,
-    )?;
+    );
 
-    let mut ops = sink.into_ops();
+    let (mut ops, summary) = match grid_result {
+        Ok(summary) => (sink.into_ops(), summary),
+        Err(err) => (
+            Vec::new(),
+            DiffSummary {
+                complete: false,
+                warnings: vec![err.to_string()],
+                op_count: 0,
+                #[cfg(feature = "perf-metrics")]
+                metrics: None,
+            },
+        ),
+    };
 
     let mut object_ops = crate::object_diff::diff_named_ranges(&wb_a, &wb_b, session.strings());
     object_ops.extend(crate::object_diff::diff_charts(
@@ -27019,35 +27470,11 @@ use crate::diff::{DiffError, DiffReport, DiffSummary, SheetId};
 use crate::diffable::{DiffContext, Diffable};
 use crate::progress::ProgressCallback;
 use crate::sink::{DiffSink, NoFinishSink, SinkFinishGuard, VecSink};
-use crate::string_pool::StringId;
 use crate::string_pool::StringPool;
+use crate::vba::VbaModule;
 use crate::workbook::{Sheet, Workbook};
 #[cfg(feature = "perf-metrics")]
 use crate::perf::DiffMetrics;
-
-/// The kind of VBA module contained in an `.xlsm` workbook.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VbaModuleType {
-    /// A standard module (e.g., `Module1`).
-    Standard,
-    /// A class module.
-    Class,
-    /// A form module.
-    Form,
-    /// A document module (e.g., `ThisWorkbook`, sheet modules).
-    Document,
-}
-
-/// A VBA module extracted from a workbook.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VbaModule {
-    /// Module name (interned in the associated string pool).
-    pub name: StringId,
-    /// Module type (standard/class/form/document).
-    pub module_type: VbaModuleType,
-    /// Raw module source code.
-    pub code: String,
-}
 
 /// A parsed workbook plus optional associated content (Power Query and VBA).
 ///
@@ -30840,6 +31267,39 @@ pub(crate) fn build_model(raw: &RawTabularModel, pool: &mut StringPool) -> Model
 
 ---
 
+### File: `core\src\vba.rs`
+
+```rust
+use crate::string_pool::StringId;
+
+/// The kind of VBA module contained in an `.xlsm` workbook.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VbaModuleType {
+    /// A standard module (e.g., `Module1`).
+    Standard,
+    /// A class module.
+    Class,
+    /// A form module.
+    Form,
+    /// A document module (e.g., `ThisWorkbook`, sheet modules).
+    Document,
+}
+
+/// A VBA module extracted from a workbook.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VbaModule {
+    /// Module name (interned in the associated string pool).
+    pub name: StringId,
+    /// Module type (standard/class/form/document).
+    pub module_type: VbaModuleType,
+    /// Raw module source code.
+    pub code: String,
+}
+
+```
+
+---
+
 ### File: `core\src\workbook.rs`
 
 ```rust
@@ -32299,7 +32759,7 @@ fn amr_recursive_gap_alignment() {
 mod common;
 
 use common::open_fixture_pkg;
-use excel_diff::{DiffConfig, DiffOp, DiffReport, StringId};
+use excel_diff::{DiffConfig, DiffOp, DiffReport, StringId, with_default_session};
 
 fn resolve<'a>(report: &'a DiffReport, id: StringId) -> &'a str {
     report.strings[id.0 as usize].as_str()
@@ -32424,6 +32884,42 @@ fn branch4_vba_modules_emit_added_removed_changed() {
         }
     }
     assert!(saw_module1_changed, "expected VbaModuleChanged(Module1)");
+}
+
+#[test]
+fn branch4_vba_modules_open_returns_modules() {
+    let pkg_base = open_fixture_pkg("vba_base.xlsm");
+    let pkg_added = open_fixture_pkg("vba_added.xlsm");
+
+    let base_modules = pkg_base
+        .vba_modules
+        .as_ref()
+        .expect("expected VBA modules in base fixture");
+    let base_names: Vec<String> = with_default_session(|session| {
+        base_modules
+            .iter()
+            .map(|module| session.strings.resolve(module.name).to_string())
+            .collect()
+    });
+    assert!(
+        base_names.iter().any(|name| name == "Module1"),
+        "expected Module1 in base fixture"
+    );
+
+    let added_modules = pkg_added
+        .vba_modules
+        .as_ref()
+        .expect("expected VBA modules in added fixture");
+    let added_names: Vec<String> = with_default_session(|session| {
+        added_modules
+            .iter()
+            .map(|module| session.strings.resolve(module.name).to_string())
+            .collect()
+    });
+    assert!(
+        added_names.iter().any(|name| name == "Module2"),
+        "expected Module2 in added fixture"
+    );
 }
 
 ```
@@ -38580,6 +39076,95 @@ fn test_locate_fixture() {
 
 ---
 
+### File: `core\tests\leaf_diff_equivalence_tests.rs`
+
+```rust
+use excel_diff::advanced::{diff_grids_with_pool, diff_sheets_with_pool, diff_workbooks_with_pool};
+use excel_diff::{DiffConfig, Grid, Sheet, SheetKind, StringPool, Workbook};
+
+fn make_grid(values: &[f64]) -> Grid {
+    let mut grid = Grid::new(values.len() as u32, 1);
+    for (idx, val) in values.iter().enumerate() {
+        grid.insert_cell(idx as u32, 0, Some(excel_diff::CellValue::Number(*val)), None);
+    }
+    grid
+}
+
+#[test]
+fn grid_leaf_diff_matches_single_sheet_workbook() {
+    let mut pool = StringPool::new();
+    let sheet_id = pool.intern("<grid>");
+
+    let grid_a = make_grid(&[1.0, 2.0]);
+    let grid_b = make_grid(&[1.0, 3.0]);
+
+    let wb_a = Workbook {
+        sheets: vec![Sheet {
+            name: sheet_id,
+            kind: SheetKind::Worksheet,
+            grid: grid_a.clone(),
+        }],
+        ..Default::default()
+    };
+    let wb_b = Workbook {
+        sheets: vec![Sheet {
+            name: sheet_id,
+            kind: SheetKind::Worksheet,
+            grid: grid_b.clone(),
+        }],
+        ..Default::default()
+    };
+
+    let config = DiffConfig::default();
+    let leaf_report = diff_grids_with_pool(&grid_a, &grid_b, &mut pool, &config);
+    let wb_report = diff_workbooks_with_pool(&wb_a, &wb_b, &mut pool, &config);
+
+    assert_eq!(leaf_report.ops, wb_report.ops);
+    assert_eq!(leaf_report.complete, wb_report.complete);
+    assert_eq!(leaf_report.warnings, wb_report.warnings);
+}
+
+#[test]
+fn sheet_leaf_diff_matches_single_sheet_workbook() {
+    let mut pool = StringPool::new();
+    let sheet_id = pool.intern("Sheet1");
+
+    let grid_a = make_grid(&[1.0, 2.0]);
+    let grid_b = make_grid(&[1.0, 3.0]);
+
+    let sheet_a = Sheet {
+        name: sheet_id,
+        kind: SheetKind::Worksheet,
+        grid: grid_a.clone(),
+    };
+    let sheet_b = Sheet {
+        name: sheet_id,
+        kind: SheetKind::Worksheet,
+        grid: grid_b.clone(),
+    };
+
+    let wb_a = Workbook {
+        sheets: vec![sheet_a.clone()],
+        ..Default::default()
+    };
+    let wb_b = Workbook {
+        sheets: vec![sheet_b.clone()],
+        ..Default::default()
+    };
+
+    let config = DiffConfig::default();
+    let leaf_report = diff_sheets_with_pool(&sheet_a, &sheet_b, &mut pool, &config);
+    let wb_report = diff_workbooks_with_pool(&wb_a, &wb_b, &mut pool, &config);
+
+    assert_eq!(leaf_report.ops, wb_report.ops);
+    assert_eq!(leaf_report.complete, wb_report.complete);
+    assert_eq!(leaf_report.warnings, wb_report.warnings);
+}
+
+```
+
+---
+
 ### File: `core\tests\limit_behavior_tests.rs`
 
 ```rust
@@ -41462,7 +42047,7 @@ mod common;
 use common::{fixture_path, open_fixture_workbook};
 use excel_diff::{
     CellAddress, CellDiff, CellSnapshot, CellValue, ContainerError, DiffConfig, DiffOp, DiffReport,
-    FormulaDiffResult, PackageError, WorkbookPackage, diff_report_to_cell_diffs,
+    FormulaDiffResult, LimitBehavior, PackageError, WorkbookPackage, diff_report_to_cell_diffs,
     diff_workbooks_to_json, serialize_cell_diffs, serialize_diff_report,
 };
 use serde_json::Value;
@@ -41887,6 +42472,36 @@ fn test_json_case_only_sheet_name_cell_edit_via_helper() {
         }
         other => panic!("expected CellEdited, got {other:?}"),
     }
+}
+
+#[test]
+fn diff_workbooks_to_json_converts_diff_error_to_warning_report() {
+    let path = fixture_path("pg1_basic_two_sheets.xlsx");
+
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_rows = 1;
+    config.alignment.max_align_cols = 1;
+    config.hardening.on_limit_exceeded = LimitBehavior::ReturnError;
+
+    let json = diff_workbooks_to_json(&path, &path, &config)
+        .expect("diff errors should be converted into warning reports");
+    let report: DiffReport = serde_json::from_str(&json).expect("json should parse");
+
+    assert!(
+        !report.complete,
+        "limit errors should mark the report as incomplete"
+    );
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("limits exceeded")),
+        "expected limits-exceeded warning"
+    );
+    assert!(
+        report.ops.is_empty(),
+        "diff errors should not leak partial grid ops into the report"
+    );
 }
 
 #[test]
@@ -42809,6 +43424,7 @@ fn diff_pbix_emits_query_ops() {
 }
 
 #[test]
+#[cfg(feature = "model-diff")]
 fn pbix_missing_datamashup_uses_model_schema() {
     let path = fixture_path("pbix_no_datamashup.pbix");
     let file = File::open(&path).expect("fixture should exist");
@@ -46370,7 +46986,8 @@ use excel_diff::{
     CellValue, DataMashup, DiffConfig, DiffError, DiffOp, DiffSink, Grid, JsonLinesSink,
     LimitBehavior, Metadata, PackageParts, PackageXml, PbixPackage, Permissions, SectionDocument,
     Sheet, SheetKind, StringPool, VbaModule, VbaModuleType, Workbook, WorkbookPackage,
-    try_diff_grids_database_mode_streaming, try_diff_workbooks_streaming,
+    try_diff_grids_database_mode_streaming, try_diff_grids_streaming, try_diff_sheets_streaming,
+    try_diff_workbooks_streaming,
 };
 use serde::Deserialize;
 use std::fs::File;
@@ -46494,10 +47111,7 @@ impl DiffSink for FrozenPoolSink {
 }
 
 fn make_workbook(pool: &mut StringPool, values: &[f64]) -> Workbook {
-    let mut grid = Grid::new(values.len() as u32, 1);
-    for (idx, val) in values.iter().enumerate() {
-        grid.insert_cell(idx as u32, 0, Some(CellValue::Number(*val)), None);
-    }
+    let grid = make_grid(values);
 
     Workbook {
         sheets: vec![Sheet {
@@ -46506,6 +47120,22 @@ fn make_workbook(pool: &mut StringPool, values: &[f64]) -> Workbook {
             grid,
         }],
         ..Default::default()
+    }
+}
+
+fn make_grid(values: &[f64]) -> Grid {
+    let mut grid = Grid::new(values.len() as u32, 1);
+    for (idx, val) in values.iter().enumerate() {
+        grid.insert_cell(idx as u32, 0, Some(CellValue::Number(*val)), None);
+    }
+    grid
+}
+
+fn make_sheet(pool: &mut StringPool, name: &str, values: &[f64]) -> Sheet {
+    Sheet {
+        name: pool.intern(name),
+        kind: SheetKind::Worksheet,
+        grid: make_grid(values),
     }
 }
 
@@ -46610,6 +47240,131 @@ fn engine_workbook_streaming_finishes_on_limit_error() {
 }
 
 #[test]
+fn engine_grid_streaming_calls_finish_once() {
+    let mut pool = StringPool::new();
+    let grid_a = make_grid(&[1.0, 2.0]);
+    let grid_b = make_grid(&[1.0, 3.0]);
+
+    let mut sink = StrictLifecycleSink::default();
+    let summary = try_diff_grids_streaming(
+        &grid_a,
+        &grid_b,
+        &mut pool,
+        &DiffConfig::default(),
+        &mut sink,
+    )
+    .expect("grid streaming diff should succeed");
+
+    assert!(sink.begin_seen, "begin should be called");
+    assert_eq!(sink.finish_calls, 1, "finish should be called exactly once");
+    assert!(sink.finish_seen, "finish should be seen");
+    assert!(sink.emit_calls > 0, "expected at least one emit");
+    assert_eq!(
+        summary.op_count, sink.emit_calls,
+        "summary op_count should match emitted ops"
+    );
+}
+
+#[test]
+fn engine_grid_streaming_finishes_on_emit_error() {
+    let mut pool = StringPool::new();
+    let grid_a = make_grid(&[1.0]);
+    let grid_b = make_grid(&[2.0]);
+
+    let mut sink = FailAfterNSink::new(0);
+    let result =
+        try_diff_grids_streaming(&grid_a, &grid_b, &mut pool, &DiffConfig::default(), &mut sink);
+
+    assert!(result.is_err(), "expected sink error");
+    assert!(sink.finish_seen, "finish should be called on emit error");
+    assert_eq!(sink.finish_calls, 1, "finish should be called once");
+}
+
+#[test]
+fn engine_grid_streaming_finishes_on_limit_error() {
+    let mut pool = StringPool::new();
+    let grid_a = make_grid(&[1.0, 2.0]);
+    let grid_b = make_grid(&[1.0, 3.0]);
+
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_rows = 1;
+    config.alignment.max_align_cols = 1;
+    config.hardening.on_limit_exceeded = LimitBehavior::ReturnError;
+
+    let mut sink = StrictLifecycleSink::default();
+    let result = try_diff_grids_streaming(&grid_a, &grid_b, &mut pool, &config, &mut sink);
+
+    assert!(matches!(result, Err(DiffError::LimitsExceeded { .. })));
+    assert!(sink.finish_seen, "finish should be called on error");
+    assert_eq!(sink.finish_calls, 1, "finish should be called once");
+}
+
+#[test]
+fn engine_sheet_streaming_calls_finish_once() {
+    let mut pool = StringPool::new();
+    let sheet_a = make_sheet(&mut pool, "Sheet1", &[1.0, 2.0]);
+    let sheet_b = make_sheet(&mut pool, "Sheet1", &[1.0, 3.0]);
+
+    let mut sink = StrictLifecycleSink::default();
+    let summary = try_diff_sheets_streaming(
+        &sheet_a,
+        &sheet_b,
+        &mut pool,
+        &DiffConfig::default(),
+        &mut sink,
+    )
+    .expect("sheet streaming diff should succeed");
+
+    assert!(sink.begin_seen, "begin should be called");
+    assert_eq!(sink.finish_calls, 1, "finish should be called exactly once");
+    assert!(sink.finish_seen, "finish should be seen");
+    assert!(sink.emit_calls > 0, "expected at least one emit");
+    assert_eq!(
+        summary.op_count, sink.emit_calls,
+        "summary op_count should match emitted ops"
+    );
+}
+
+#[test]
+fn engine_sheet_streaming_finishes_on_emit_error() {
+    let mut pool = StringPool::new();
+    let sheet_a = make_sheet(&mut pool, "Sheet1", &[1.0]);
+    let sheet_b = make_sheet(&mut pool, "Sheet1", &[2.0]);
+
+    let mut sink = FailAfterNSink::new(0);
+    let result = try_diff_sheets_streaming(
+        &sheet_a,
+        &sheet_b,
+        &mut pool,
+        &DiffConfig::default(),
+        &mut sink,
+    );
+
+    assert!(result.is_err(), "expected sink error");
+    assert!(sink.finish_seen, "finish should be called on emit error");
+    assert_eq!(sink.finish_calls, 1, "finish should be called once");
+}
+
+#[test]
+fn engine_sheet_streaming_finishes_on_limit_error() {
+    let mut pool = StringPool::new();
+    let sheet_a = make_sheet(&mut pool, "Sheet1", &[1.0, 2.0]);
+    let sheet_b = make_sheet(&mut pool, "Sheet1", &[1.0, 3.0]);
+
+    let mut config = DiffConfig::default();
+    config.alignment.max_align_rows = 1;
+    config.alignment.max_align_cols = 1;
+    config.hardening.on_limit_exceeded = LimitBehavior::ReturnError;
+
+    let mut sink = StrictLifecycleSink::default();
+    let result = try_diff_sheets_streaming(&sheet_a, &sheet_b, &mut pool, &config, &mut sink);
+
+    assert!(matches!(result, Err(DiffError::LimitsExceeded { .. })));
+    assert!(sink.finish_seen, "finish should be called on error");
+    assert_eq!(sink.finish_calls, 1, "finish should be called once");
+}
+
+#[test]
 fn engine_database_streaming_calls_finish_once() {
     let mut pool = StringPool::new();
     let sheet_id = pool.intern("Data");
@@ -46659,6 +47414,42 @@ fn engine_database_streaming_finishes_on_emit_error() {
 
     assert!(result.is_err(), "expected sink error");
     assert!(sink.finish_seen, "finish should be called on emit error");
+    assert_eq!(sink.finish_calls, 1, "finish should be called once");
+}
+
+#[test]
+fn grid_leaf_streaming_does_not_intern_after_begin() {
+    let mut pool = StringPool::new();
+    let grid_a = make_grid(&[1.0]);
+    let grid_b = make_grid(&[2.0]);
+
+    let mut sink = FrozenPoolSink::default();
+    try_diff_grids_streaming(
+        &grid_a,
+        &grid_b,
+        &mut pool,
+        &DiffConfig::default(),
+        &mut sink,
+    )
+    .expect("grid streaming should succeed");
+    assert_eq!(sink.finish_calls, 1, "finish should be called once");
+}
+
+#[test]
+fn sheet_leaf_streaming_does_not_intern_after_begin() {
+    let mut pool = StringPool::new();
+    let sheet_a = make_sheet(&mut pool, "Sheet1", &[1.0]);
+    let sheet_b = make_sheet(&mut pool, "Sheet1", &[2.0]);
+
+    let mut sink = FrozenPoolSink::default();
+    try_diff_sheets_streaming(
+        &sheet_a,
+        &sheet_b,
+        &mut pool,
+        &DiffConfig::default(),
+        &mut sink,
+    )
+    .expect("sheet streaming should succeed");
     assert_eq!(sink.finish_calls, 1, "finish should be called once");
 }
 
@@ -51274,17 +52065,55 @@ scenarios:
 
 ```yaml
 scenarios:
+  # --- Phase 1.1: Basic File Opening ---
+  - id: "smoke_minimal"
+    generator: "basic_grid"
+    args: { rows: 1, cols: 1 }
+    output: "minimal.xlsx"
+
+  # --- Phase 1.2: Is this a ZIP? ---
+  - id: "container_random_zip"
+    generator: "corrupt_container"
+    args: { mode: "random_zip" }
+    output: "random_zip.zip"
+    
+  - id: "container_no_content_types"
+    generator: "corrupt_container"
+    args: { mode: "no_content_types" }
+    output: "no_content_types.xlsx"
+
+  - id: "container_not_zip_text"
+    generator: "corrupt_container"
+    args: { mode: "not_zip_text" }
+    output: "not_a_zip.txt"
+
+  # --- PG1: Workbook -> Sheet -> Grid IR sanity ---
   - id: "pg1_basic_two_sheets"
     generator: "basic_grid"
-    args: { rows: 3, cols: 3, two_sheets: true }
+    args: { rows: 3, cols: 3, two_sheets: true } # Sheet1 3x3, Sheet2 5x2 (logic in generator)
     output: "pg1_basic_two_sheets.xlsx"
 
-  - id: "m4_packageparts_one_query"
-    generator: "mashup:one_query"
-    args:
-      base_file: "templates/base_query.xlsx"
-    output: "one_query.xlsx"
+  - id: "pg1_sparse"
+    generator: "sparse_grid"
+    output: "pg1_sparse_used_range.xlsx"
 
+  - id: "pg1_mixed"
+    generator: "edge_case"
+    output: "pg1_empty_and_mixed_sheets.xlsx"
+
+  # --- PG2: Addressing and index invariants ---
+  - id: "pg2_addressing"
+    generator: "address_sanity"
+    args:
+      targets: ["A1", "B2", "C3", "Z1", "Z10", "AA1", "AA10", "AB7", "AZ5", "BA1", "ZZ10", "AAA1"]
+    output: "pg2_addressing_matrix.xlsx"
+
+  # --- PG3: Cell snapshots and comparison semantics ---
+  - id: "pg3_types"
+    generator: "value_formula"
+    output: "pg3_value_and_formula_cells.xlsx"
+
+  # --- Phase 3: Spreadsheet-mode G1/G2 ---
   - id: "g1_equal_sheet"
     generator: "basic_grid"
     args:
@@ -51308,6 +52137,68 @@ scenarios:
       - "single_cell_value_a.xlsx"
       - "single_cell_value_b.xlsx"
 
+  # --- Phase 3: Spreadsheet-mode G5-G7 ---
+
+  - id: "g5_multi_cell_edits"
+    generator: "multi_cell_diff"
+    args:
+      rows: 20
+      cols: 10
+      sheet: "Sheet1"
+      edits:
+        - { addr: "B2", value_a: 1.0, value_b: 42.0 }
+        - { addr: "D5", value_a: 2.0, value_b: 99.0 }
+        - { addr: "H7", value_a: 3.0, value_b: 3.5 }
+        - { addr: "J10", value_a: "x", value_b: "y" }
+    output:
+      - "multi_cell_edits_a.xlsx"
+      - "multi_cell_edits_b.xlsx"
+
+  - id: "g6_row_append_bottom"
+    generator: "grid_tail_diff"
+    args:
+      mode: "row_append_bottom"
+      sheet: "Sheet1"
+      base_rows: 10
+      tail_rows: 2
+    output:
+      - "row_append_bottom_a.xlsx"
+      - "row_append_bottom_b.xlsx"
+
+  - id: "g6_row_delete_bottom"
+    generator: "grid_tail_diff"
+    args:
+      mode: "row_delete_bottom"
+      sheet: "Sheet1"
+      base_rows: 10
+      tail_rows: 2
+    output:
+      - "row_delete_bottom_a.xlsx"
+      - "row_delete_bottom_b.xlsx"
+
+  - id: "g7_col_append_right"
+    generator: "grid_tail_diff"
+    args:
+      mode: "col_append_right"
+      sheet: "Sheet1"
+      base_cols: 4
+      tail_cols: 2
+    output:
+      - "col_append_right_a.xlsx"
+      - "col_append_right_b.xlsx"
+
+  - id: "g7_col_delete_right"
+    generator: "grid_tail_diff"
+    args:
+      mode: "col_delete_right"
+      sheet: "Sheet1"
+      base_cols: 4
+      tail_cols: 2
+    output:
+      - "col_delete_right_a.xlsx"
+      - "col_delete_right_b.xlsx"
+
+  # --- Phase 4: Spreadsheet-mode G8 ---
   - id: "g8_row_insert_middle"
     generator: "row_alignment_g8"
     args:
@@ -51320,6 +52211,33 @@ scenarios:
       - "row_insert_middle_a.xlsx"
       - "row_insert_middle_b.xlsx"
 
+  - id: "g8_row_delete_middle"
+    generator: "row_alignment_g8"
+    args:
+      mode: "delete"
+      sheet: "Sheet1"
+      base_rows: 10
+      cols: 5
+      delete_row: 6
+    output:
+      - "row_delete_middle_a.xlsx"
+      - "row_delete_middle_b.xlsx"
+
+  - id: "g8_row_insert_with_edit_below"
+    generator: "row_alignment_g8"
+    args:
+      mode: "insert_with_edit"
+      sheet: "Sheet1"
+      base_rows: 10
+      cols: 5
+      insert_at: 6
+      edit_row: 8
+      edit_col: 3
+    output:
+      - "row_insert_with_edit_a.xlsx"
+      - "row_insert_with_edit_b.xlsx"
+
+  # --- Phase 4: Spreadsheet-mode G9 ---
   - id: "g9_col_insert_middle"
     generator: "column_alignment_g9"
     args:
@@ -51332,6 +52250,329 @@ scenarios:
       - "col_insert_middle_a.xlsx"
       - "col_insert_middle_b.xlsx"
 
+  - id: "g9_col_delete_middle"
+    generator: "column_alignment_g9"
+    args:
+      mode: "delete"
+      sheet: "Data"
+      cols: 8
+      data_rows: 9
+      delete_col: 4
+    output:
+      - "col_delete_middle_a.xlsx"
+      - "col_delete_middle_b.xlsx"
+
+  - id: "g9_col_insert_with_edit"
+    generator: "column_alignment_g9"
+    args:
+      mode: "insert_with_edit"
+      sheet: "Data"
+      cols: 8
+      data_rows: 9
+      insert_at: 4
+      edit_row: 8
+      edit_col_after_insert: 7
+    output:
+      - "col_insert_with_edit_a.xlsx"
+      - "col_insert_with_edit_b.xlsx"
+
+  # --- Phase 4: Spreadsheet-mode G10 ---
+  - id: "g10_row_block_insert"
+    generator: "row_alignment_g10"
+    args:
+      mode: "block_insert"
+      sheet: "Sheet1"
+      base_rows: 10
+      cols: 5
+      block_rows: 4
+      insert_at: 4
+    output:
+      - "row_block_insert_a.xlsx"
+      - "row_block_insert_b.xlsx"
+
+  - id: "g10_row_block_delete"
+    generator: "row_alignment_g10"
+    args:
+      mode: "block_delete"
+      sheet: "Sheet1"
+      base_rows: 10
+      cols: 5
+      block_rows: 4
+      delete_start: 4
+    output:
+      - "row_block_delete_a.xlsx"
+      - "row_block_delete_b.xlsx"
+
+  # --- Phase 4: Spreadsheet-mode G11 ---
+  - id: "g11_row_block_move"
+    generator: "row_block_move_g11"
+    args:
+      sheet: "Sheet1"
+      total_rows: 20
+      cols: 5
+      block_rows: 4
+      src_start: 5    # 1-based in A
+      dst_start: 13   # 1-based in B
+    output:
+      - "row_block_move_a.xlsx"
+      - "row_block_move_b.xlsx"
+
+  # --- Phase 4: Spreadsheet-mode G12 (column move only - G12a) ---
+  - id: "g12_column_block_move"
+    generator: "column_move_g12"
+    args:
+      sheet: "Data"
+      cols: 8
+      data_rows: 9
+      src_col: 3      # 1-based: C
+      dst_col: 6      # 1-based: F
+    output:
+      - "column_move_a.xlsx"
+      - "column_move_b.xlsx"
+
+  - id: "g12_rect_block_move"
+    generator: "rect_block_move_g12"
+    args:
+      sheet: "Data"
+      rows: 15
+      cols: 15
+      src_top: 3      # 1-based row in A (Excel row 3)
+      src_left: 2     # 1-based column in A (Excel column B)
+      dst_top: 10     # 1-based row in B (Excel row 10)
+      dst_left: 7     # 1-based column in B (Excel column G)
+      block_rows: 3
+      block_cols: 3
+    output:
+      - "rect_block_move_a.xlsx"
+      - "rect_block_move_b.xlsx"
+
+  # --- Phase 4: Spreadsheet-mode G13 ---
+  - id: "g13_fuzzy_row_move"
+    generator: "row_fuzzy_move_g13"
+    args:
+      sheet: "Data"
+      total_rows: 24
+      cols: 6
+      block_rows: 4
+      src_start: 5      # 1-based in A
+      dst_start: 14     # 1-based in B
+      edits:
+        - { row_offset: 1, col: 3, delta: 1 }
+    output:
+      - "grid_move_and_edit_a.xlsx"
+      - "grid_move_and_edit_b.xlsx"
+
+  # --- JSON diff: simple non-empty change ---
+  - id: "json_diff_single_cell"
+    generator: "single_cell_diff"
+    args:
+      rows: 3
+      cols: 3
+      sheet: "Sheet1"
+      target_cell: "C3"
+      value_a: "1"
+      value_b: "2"
+    output:
+      - "json_diff_single_cell_a.xlsx"
+      - "json_diff_single_cell_b.xlsx"
+
+  - id: "json_diff_single_bool"
+    generator: "single_cell_diff"
+    args:
+      rows: 3
+      cols: 3
+      sheet: "Sheet1"
+      target_cell: "C3"
+      value_a: true
+      value_b: false
+    output:
+      - "json_diff_bool_a.xlsx"
+      - "json_diff_bool_b.xlsx"
+
+  - id: "json_diff_value_to_empty"
+    generator: "single_cell_diff"
+    args:
+      rows: 3
+      cols: 3
+      sheet: "Sheet1"
+      target_cell: "C3"
+      value_a: "1"
+      value_b: null
+    output:
+      - "json_diff_value_to_empty_a.xlsx"
+      - "json_diff_value_to_empty_b.xlsx"
+
+  # --- Sheet identity: case-only renames ---
+  - id: "sheet_case_only_rename"
+    generator: "sheet_case_rename"
+    args:
+      sheet_a: "Sheet1"
+      sheet_b: "sheet1"
+      cell: "A1"
+      value_a: 1.0
+      value_b: 1.0
+    output:
+      - "sheet_case_only_rename_a.xlsx"
+      - "sheet_case_only_rename_b.xlsx"
+
+  - id: "sheet_case_only_rename_cell_edit"
+    generator: "sheet_case_rename"
+    args:
+      sheet_a: "Sheet1"
+      sheet_b: "sheet1"
+      cell: "A1"
+      value_a: 1.0
+      value_b: 2.0
+    output:
+      - "sheet_case_only_rename_edit_a.xlsx"
+      - "sheet_case_only_rename_edit_b.xlsx"
+
+  # --- PG6: Object graph vs grid responsibilities ---
+  - id: "pg6_sheet_added"
+    generator: "pg6_sheet_scenario"
+    args:
+      mode: "sheet_added"
+    output:
+      - "pg6_sheet_added_a.xlsx"
+      - "pg6_sheet_added_b.xlsx"
+
+  - id: "pg6_sheet_removed"
+    generator: "pg6_sheet_scenario"
+    args:
+      mode: "sheet_removed"
+    output:
+      - "pg6_sheet_removed_a.xlsx"
+      - "pg6_sheet_removed_b.xlsx"
+
+  - id: "pg6_sheet_renamed"
+    generator: "pg6_sheet_scenario"
+    args:
+      mode: "sheet_renamed"
+    output:
+      - "pg6_sheet_renamed_a.xlsx"
+      - "pg6_sheet_renamed_b.xlsx"
+
+  - id: "pg6_sheet_and_grid_change"
+    generator: "pg6_sheet_scenario"
+    args:
+      mode: "sheet_and_grid_change"
+    output:
+      - "pg6_sheet_and_grid_change_a.xlsx"
+      - "pg6_sheet_and_grid_change_b.xlsx"
+
+  # --- Milestone 2.2: Base64 Correctness ---
+  - id: "corrupt_base64"
+    generator: "mashup_corrupt"
+    args: 
+      base_file: "templates/base_query.xlsx"
+      mode: "byte_flip"
+    output: "corrupt_base64.xlsx"
+
+  - id: "duplicate_datamashup_parts"
+    generator: "mashup_duplicate"
+    args:
+      base_file: "templates/base_query.xlsx"
+    output: "duplicate_datamashup_parts.xlsx"
+
+  - id: "duplicate_datamashup_elements"
+    generator: "mashup_duplicate"
+    args:
+      base_file: "templates/base_query.xlsx"
+      mode: "element"
+    output: "duplicate_datamashup_elements.xlsx"
+
+  - id: "mashup_utf16_le"
+    generator: "mashup_encode"
+    args:
+      base_file: "templates/base_query.xlsx"
+      encoding: "utf-16-le"
+    output: "mashup_utf16_le.xlsx"
+
+  - id: "mashup_utf16_be"
+    generator: "mashup_encode"
+    args:
+      base_file: "templates/base_query.xlsx"
+      encoding: "utf-16-be"
+    output: "mashup_utf16_be.xlsx"
+
+  - id: "mashup_base64_whitespace"
+    generator: "mashup_encode"
+    args:
+      base_file: "templates/base_query.xlsx"
+      whitespace: true
+    output: "mashup_base64_whitespace.xlsx"
+
+  # --- Milestone 4.1: PackageParts ---
+  - id: "m4_packageparts_one_query"
+    generator: "mashup:one_query"
+    args:
+      base_file: "templates/base_query.xlsx"
+    output: "one_query.xlsx"
+
+  - id: "m4_packageparts_multi_embedded"
+    generator: "mashup:multi_query_with_embedded"
+    args:
+      base_file: "templates/base_query.xlsx"
+    output: "multi_query_with_embedded.xlsx"
+
+  # --- Milestone 4.2-4.4: Permissions / Metadata ---
+  - id: "permissions_defaults"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "permissions_defaults"
+      base_file: "templates/base_query.xlsx"
+    output: "permissions_defaults.xlsx"
+
+  - id: "permissions_firewall_off"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "permissions_firewall_off"
+      base_file: "templates/base_query.xlsx"
+    output: "permissions_firewall_off.xlsx"
+
+  - id: "metadata_simple"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "metadata_simple"
+      base_file: "templates/base_query.xlsx"
+    output: "metadata_simple.xlsx"
+
+  - id: "metadata_query_groups"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "metadata_query_groups"
+      base_file: "templates/base_query.xlsx"
+    output: "metadata_query_groups.xlsx"
+
+  - id: "metadata_hidden_queries"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "metadata_hidden_queries"
+      base_file: "templates/base_query.xlsx"
+    output: "metadata_hidden_queries.xlsx"
+
+  - id: "metadata_missing_entry"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "metadata_missing_entry"
+      base_file: "templates/base_query.xlsx"
+    output: "metadata_missing_entry.xlsx"
+
+  - id: "metadata_url_encoding"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "metadata_url_encoding"
+      base_file: "templates/base_query.xlsx"
+    output: "metadata_url_encoding.xlsx"
+
+  - id: "metadata_orphan_entries"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "metadata_orphan_entries"
+      base_file: "templates/base_query.xlsx"
+    output: "metadata_orphan_entries.xlsx"
+
+  # --- Milestone 6: Basic M Diffs ---
   - id: "m_add_query_a"
     generator: "mashup:permissions_metadata"
     args:
@@ -51345,6 +52586,20 @@ scenarios:
       mode: "m_add_query_b"
       base_file: "templates/base_query.xlsx"
     output: "m_add_query_b.xlsx"
+
+  - id: "m_remove_query_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_remove_query_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_remove_query_a.xlsx"
+
+  - id: "m_remove_query_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_remove_query_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_remove_query_b.xlsx"
 
   - id: "m_change_literal_a"
     generator: "mashup:permissions_metadata"
@@ -51360,32 +52615,221 @@ scenarios:
       base_file: "templates/base_query.xlsx"
     output: "m_change_literal_b.xlsx"
 
-  - id: "m_embedded_change_a"
-    generator: "mashup:multi_query_with_embedded"
+  - id: "m_metadata_only_change_a"
+    generator: "mashup:permissions_metadata"
     args:
+      mode: "m_metadata_only_change_a"
       base_file: "templates/base_query.xlsx"
-      embedded_guid: "efgh"
-      embedded_section: |
-        section Section1;
-        shared Inner = let
-          Source = 1
-        in
-          Source;
-    output: "m_embedded_change_a.xlsx"
+    output: "m_metadata_only_change_a.xlsx"
 
-  - id: "m_embedded_change_b"
-    generator: "mashup:multi_query_with_embedded"
+  - id: "m_metadata_only_change_b"
+    generator: "mashup:permissions_metadata"
     args:
+      mode: "m_metadata_only_change_b"
       base_file: "templates/base_query.xlsx"
-      embedded_guid: "efgh"
-      embedded_section: |
-        section Section1;
-        shared Inner = let
-          Source = 2
-        in
-          Source;
-    output: "m_embedded_change_b.xlsx"
+    output: "m_metadata_only_change_b.xlsx"
 
+  - id: "m_def_and_metadata_change_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_def_and_metadata_change_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_def_and_metadata_change_a.xlsx"
+
+  - id: "m_def_and_metadata_change_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_def_and_metadata_change_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_def_and_metadata_change_b.xlsx"
+
+  - id: "m_rename_query_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_rename_query_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_rename_query_a.xlsx"
+
+  - id: "m_rename_query_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_rename_query_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_rename_query_b.xlsx"
+
+  # --- Milestone 7: M AST canonicalization ---
+  - id: "m_formatting_only_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_formatting_only_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_formatting_only_a.xlsx"
+
+  - id: "m_formatting_only_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_formatting_only_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_formatting_only_b.xlsx"
+
+  - id: "m_formatting_only_b_variant"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_formatting_only_b_variant"
+      base_file: "templates/base_query.xlsx"
+    output: "m_formatting_only_b_variant.xlsx"
+
+  # --- Milestone 8: M Parser Expansion ---
+  - id: "m_record_equiv_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_record_equiv_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_record_equiv_a.xlsx"
+
+  - id: "m_record_equiv_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_record_equiv_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_record_equiv_b.xlsx"
+
+  - id: "m_list_formatting_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_list_formatting_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_list_formatting_a.xlsx"
+
+  - id: "m_list_formatting_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_list_formatting_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_list_formatting_b.xlsx"
+
+  - id: "m_call_formatting_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_call_formatting_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_call_formatting_a.xlsx"
+
+  - id: "m_call_formatting_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_call_formatting_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_call_formatting_b.xlsx"
+
+  - id: "m_primitive_formatting_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_primitive_formatting_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_primitive_formatting_a.xlsx"
+
+  - id: "m_primitive_formatting_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_primitive_formatting_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_primitive_formatting_b.xlsx"
+
+  # --- P1: Large Dense Grid (Performance Baseline) ---
+  - id: "p1_large_dense"
+    generator: "perf_large"
+    args: 
+      rows: 50000 
+      cols: 20
+      mode: "dense" # Deterministic "R1C1" style data
+    output: "grid_large_dense.xlsx"
+
+  # --- P2: Large Noise Grid (Worst-case Alignment) ---
+  - id: "p2_large_noise"
+    generator: "perf_large"
+    args: 
+      rows: 50000 
+      cols: 20
+      mode: "noise" # Random float data
+      seed: 12345
+    output: "grid_large_noise.xlsx"
+
+  # --- D1: Keyed Equality (Database Mode) ---
+  # File A: Ordered IDs 1..1000
+  - id: "db_equal_ordered_a"
+    generator: "db_keyed"
+    args: { count: 1000, shuffle: false, seed: 42 }
+    output: "db_equal_ordered_a.xlsx"
+
+  # File B: Same data, random order (Tests O(N) alignment)
+  - id: "db_equal_ordered_b"
+    generator: "db_keyed"
+    args: { count: 1000, shuffle: true, seed: 42 }
+    output: "db_equal_ordered_b.xlsx"
+
+  # --- D2: Row Added (Database Mode) ---
+  - id: "db_row_added_b"
+    generator: "db_keyed"
+    args: 
+      count: 1000 
+      seed: 42 
+      extra_rows: [{id: 1001, name: "New Row", amount: 999}]
+    output: "db_row_added_b.xlsx"
+
+  # --- D3: Row Update (Database Mode) ---
+  - id: "db_row_update_b"
+    generator: "db_keyed"
+    args:
+      count: 1000
+      seed: 42
+      updates:
+        - { id: 7, amount: 120 }
+    output: "db_row_update_b.xlsx"
+
+  # --- D4: Reorder + Change (Database Mode) ---
+  - id: "db_reorder_and_change_b"
+    generator: "db_keyed"
+    args:
+      count: 1000
+      seed: 42
+      shuffle: true
+      updates:
+        - { id: 7, amount: 120 }
+    output: "db_reorder_and_change_b.xlsx"
+
+  # --- P3: Adversarial Repetitive Grid (RLE stress test) ---
+  - id: "p3_adversarial_repetitive"
+    generator: "perf_large"
+    args: 
+      rows: 50000 
+      cols: 50
+      mode: "repetitive"
+      pattern_length: 100
+      seed: 99999
+    output: "grid_adversarial_repetitive.xlsx"
+
+  # --- P4: 99% Blank Grid (Sparse stress test) ---
+  - id: "p4_99_percent_blank"
+    generator: "perf_large"
+    args: 
+      rows: 50000 
+      cols: 100
+      mode: "sparse"
+      fill_percent: 1
+      seed: 77777
+    output: "grid_99_percent_blank.xlsx"
+
+  # --- P5: Identical Grids (Fast-path baseline) ---
+  - id: "p5_identical"
+    generator: "perf_large"
+    args: 
+      rows: 50000 
+      cols: 100
+      mode: "dense"
+    output: "grid_identical.xlsx"
+
+  # --- Branch 4: Workbook Object Graph ---
   - id: "branch4_named_ranges"
     generator: "named_ranges"
     output:
@@ -51415,6 +52859,33 @@ scenarios:
     args:
       template: "templates/vba_changed.xlsm"
     output: "vba_changed.xlsm"
+
+  # --- Branch 1: PBIX/PBIT + embedded query fixtures ---
+  - id: "m_embedded_change_a"
+    generator: "mashup:multi_query_with_embedded"
+    args:
+      base_file: "templates/base_query.xlsx"
+      embedded_guid: "efgh"
+      embedded_section: |
+        section Section1;
+        shared Inner = let
+          Source = 1
+        in
+          Source;
+    output: "m_embedded_change_a.xlsx"
+
+  - id: "m_embedded_change_b"
+    generator: "mashup:multi_query_with_embedded"
+    args:
+      base_file: "templates/base_query.xlsx"
+      embedded_guid: "efgh"
+      embedded_section: |
+        section Section1;
+        shared Inner = let
+          Source = 2
+        in
+          Source;
+    output: "m_embedded_change_b.xlsx"
 
   - id: "branch1_pbix_legacy_one_query_a"
     generator: "pbix"
@@ -51501,7 +52972,6 @@ scenarios:
       mode: "from_xlsx"
       base_file: "generated/m_embedded_change_a.xlsx"
     output: "pbix_embedded_queries.pbix"
-
 
 ```
 
@@ -51615,6 +53085,30 @@ scenarios:
 
 ---
 
+### File: `fixtures\manifest_release_smoke.yaml`
+
+```yaml
+scenarios:
+  - id: "smoke_minimal"
+    generator: "basic_grid"
+    args: { rows: 1, cols: 1 }
+    output: "minimal.xlsx"
+
+  - id: "g7_col_append_right"
+    generator: "grid_tail_diff"
+    args:
+      mode: "col_append_right"
+      sheet: "Sheet1"
+      base_cols: 4
+      tail_cols: 2
+    output:
+      - "col_append_right_a.xlsx"
+      - "col_append_right_b.xlsx"
+
+```
+
+---
+
 ### File: `fixtures\pyproject.toml`
 
 ```toml
@@ -51659,10 +53153,16 @@ packages = ["src"]
 
 ```python
 import argparse
-import yaml
+import hashlib
+import json
+import shutil
 import sys
+import zipfile
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Tuple
+from xml.etree import ElementTree as ET
+
+import yaml
 
 # Import generators
 try:
@@ -51769,66 +53269,501 @@ GENERATORS: Dict[str, Any] = {
     "copy_template": CopyTemplateGenerator,
 }
 
+FILE_ARG_KEYS = ("template", "base_file", "model_schema_file")
+ZIP_EXTENSIONS = {".xlsx", ".xlsm", ".pbix", ".pbit", ".zip"}
+
+
 def load_manifest(manifest_path: Path) -> Dict[str, Any]:
     if not manifest_path.exists():
-        print(f"Error: Manifest file not found at {manifest_path}")
+        print(f"Error: Manifest file not found at {manifest_path}", file=sys.stderr)
         sys.exit(1)
-    
-    with open(manifest_path, 'r') as f:
+
+    with open(manifest_path, "r", encoding="utf-8") as f:
         try:
             return yaml.safe_load(f)
         except yaml.YAMLError as e:
-            print(f"Error parsing manifest: {e}")
+            print(f"Error parsing manifest: {e}", file=sys.stderr)
             sys.exit(1)
+
 
 def ensure_output_dir(output_dir: Path):
     output_dir.mkdir(parents=True, exist_ok=True)
 
+
+def clean_output_dir(output_dir: Path):
+    if not output_dir.exists():
+        return
+    resolved = output_dir.resolve()
+    if resolved == Path(resolved.anchor):
+        raise RuntimeError(f"Refusing to clean root directory: {resolved}")
+    for child in output_dir.iterdir():
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+
+def list_output_names(outputs: Any) -> List[str]:
+    if isinstance(outputs, list):
+        return [str(name) for name in outputs]
+    if isinstance(outputs, str):
+        return [outputs]
+    return []
+
+
+def scenario_label(scenario: Dict[str, Any], idx: int) -> str:
+    return scenario.get("id") or f"index {idx}"
+
+
+def resolve_fixture_path(path_value: str, fixtures_root: Path) -> Optional[Path]:
+    candidate = Path(path_value)
+    if candidate.exists():
+        return candidate
+    fallback = fixtures_root / path_value
+    if fallback.exists():
+        return fallback
+    return None
+
+
+def generated_dependency(path_value: str) -> Optional[Path]:
+    parts = Path(path_value).parts
+    if "generated" not in parts:
+        return None
+    idx = parts.index("generated")
+    if idx + 1 >= len(parts):
+        return None
+    return Path(*parts[idx + 1 :])
+
+
+def preflight_manifest(
+    manifest: Dict[str, Any],
+    output_dir: Path,
+    fixtures_root: Path,
+) -> List[str]:
+    errors: List[str] = []
+    scenarios = manifest.get("scenarios", [])
+    output_to_info: Dict[str, str] = {}
+    output_to_index: Dict[str, int] = {}
+
+    for idx, scenario in enumerate(scenarios):
+        label = scenario_label(scenario, idx)
+        generator_name = scenario.get("generator")
+        outputs = list_output_names(scenario.get("output"))
+
+        if not scenario.get("id") or not generator_name or not outputs:
+            errors.append(f"Scenario {label} is missing id, generator, or output.")
+            continue
+
+        if generator_name not in GENERATORS:
+            errors.append(f"Scenario {label} uses unknown generator '{generator_name}'.")
+
+        for name in outputs:
+            if name in output_to_info:
+                prev = output_to_info[name]
+                errors.append(
+                    f"Output '{name}' is duplicated in scenarios {prev} and {label}."
+                )
+            else:
+                output_to_info[name] = label
+                output_to_index[name] = idx
+
+    for idx, scenario in enumerate(scenarios):
+        label = scenario_label(scenario, idx)
+        args = scenario.get("args", {}) or {}
+
+        for key in FILE_ARG_KEYS:
+            value = args.get(key)
+            if not value:
+                continue
+            if not isinstance(value, str):
+                errors.append(f"Scenario {label} arg '{key}' must be a string.")
+                continue
+
+            if key == "base_file":
+                dep = generated_dependency(value)
+                if dep is not None:
+                    dep_name = dep.as_posix()
+                    if dep_name in output_to_index:
+                        if output_to_index[dep_name] >= idx:
+                            errors.append(
+                                f"Scenario {label} depends on generated/{dep_name} "
+                                "but it is not produced earlier in the manifest."
+                            )
+                    elif not (output_dir / dep).exists():
+                        errors.append(
+                            f"Scenario {label} depends on generated/{dep_name} "
+                            "but it is not produced by this manifest or present in the output dir."
+                        )
+                else:
+                    if resolve_fixture_path(value, fixtures_root) is None:
+                        errors.append(
+                            f"Scenario {label} arg '{key}' file '{value}' not found."
+                        )
+            else:
+                if resolve_fixture_path(value, fixtures_root) is None:
+                    errors.append(
+                        f"Scenario {label} arg '{key}' file '{value}' not found."
+                    )
+
+    return errors
+
+
+def normalize_core_xml(data: bytes) -> bytes:
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError:
+        return data
+
+    for elem in root.iter():
+        tag = elem.tag
+        if tag.endswith("created") or tag.endswith("modified"):
+            elem.text = "1970-01-01T00:00:00Z"
+
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def hash_zip_contents(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with zipfile.ZipFile(path, "r") as zin:
+        entries = [info for info in zin.infolist() if not info.is_dir()]
+        entries.sort(key=lambda info: info.filename)
+        for info in entries:
+            data = zin.read(info.filename)
+            if info.filename == "docProps/core.xml":
+                data = normalize_core_xml(data)
+            entry_hash = hashlib.sha256(data).hexdigest()
+            hasher.update(info.filename.encode("utf-8"))
+            hasher.update(b"\0")
+            hasher.update(entry_hash.encode("utf-8"))
+            hasher.update(b"\n")
+    return hasher.hexdigest()
+
+
+def compute_checksum(path: Path) -> Tuple[str, str]:
+    ext = path.suffix.lower()
+    if ext in ZIP_EXTENSIONS:
+        digest = hash_zip_contents(path)
+        return digest, "zip-entries-v1"
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    return digest, "raw"
+
+
+def collect_outputs_with_meta(
+    manifest: Dict[str, Any],
+) -> Dict[str, Dict[str, Any]]:
+    output_map: Dict[str, Dict[str, Any]] = {}
+    for idx, scenario in enumerate(manifest.get("scenarios", [])):
+        outputs = list_output_names(scenario.get("output"))
+        for name in outputs:
+            output_map[name] = {
+                "id": scenario_label(scenario, idx),
+                "generator": scenario.get("generator"),
+                "args": scenario.get("args", {}) or {},
+            }
+    return output_map
+
+
+def verify_outputs(
+    manifest: Dict[str, Any],
+    output_dir: Path,
+) -> List[str]:
+    errors: List[str] = []
+    output_map = collect_outputs_with_meta(manifest)
+
+    for name, meta in output_map.items():
+        path = output_dir / name
+        if not path.exists():
+            errors.append(f"Missing output: {name}")
+            continue
+
+        ext = path.suffix.lower()
+        if ext in ZIP_EXTENSIONS:
+            try:
+                with zipfile.ZipFile(path, "r") as zin:
+                    if ext in (".xlsx", ".xlsm"):
+                        requires_content_types = True
+                        if (
+                            meta.get("generator") == "corrupt_container"
+                            and meta.get("args", {}).get("mode") == "no_content_types"
+                        ):
+                            requires_content_types = False
+                        if requires_content_types and "[Content_Types].xml" not in zin.namelist():
+                            errors.append(
+                                f"{name} is missing [Content_Types].xml"
+                            )
+            except zipfile.BadZipFile:
+                errors.append(f"{name} is not a valid ZIP container")
+
+    return errors
+
+
+def write_lock_file(
+    manifest_path: Path,
+    manifest: Dict[str, Any],
+    output_dir: Path,
+    lock_path: Path,
+) -> List[str]:
+    errors: List[str] = []
+    output_map = collect_outputs_with_meta(manifest)
+    checksums: Dict[str, Dict[str, str]] = {}
+
+    for name in sorted(output_map.keys()):
+        path = output_dir / name
+        if not path.exists():
+            errors.append(f"Missing output: {name}")
+            continue
+        try:
+            digest, mode = compute_checksum(path)
+        except zipfile.BadZipFile:
+            errors.append(f"{name} is not a valid ZIP container")
+            continue
+        checksums[name] = {
+            "hash": f"sha256:{digest}",
+            "mode": mode,
+        }
+
+    if errors:
+        return errors
+
+    payload = {
+        "version": 1,
+        "manifest": str(manifest_path).replace("\\", "/"),
+        "output_dir": str(output_dir).replace("\\", "/"),
+        "algorithm": "sha256",
+        "files": checksums,
+    }
+
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return errors
+
+
+def verify_lock_file(
+    manifest_path: Path,
+    manifest: Dict[str, Any],
+    output_dir: Path,
+    lock_path: Path,
+) -> List[str]:
+    errors: List[str] = []
+    if not lock_path.exists():
+        return [f"Lock file not found: {lock_path}"]
+
+    try:
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        return [f"Failed to parse lock file {lock_path}: {e}"]
+
+    expected_outputs = set(collect_outputs_with_meta(manifest).keys())
+    lock_files = lock.get("files", {})
+    if not isinstance(lock_files, dict):
+        return [f"Lock file {lock_path} has invalid 'files' section"]
+
+    if lock.get("manifest") and lock.get("manifest") != str(manifest_path).replace("\\", "/"):
+        errors.append(
+            f"Lock file manifest mismatch: {lock.get('manifest')} != {manifest_path}"
+        )
+
+    missing_in_lock = expected_outputs - set(lock_files.keys())
+    extra_in_lock = set(lock_files.keys()) - expected_outputs
+
+    if missing_in_lock:
+        errors.append(
+            "Lock file is missing entries for: " + ", ".join(sorted(missing_in_lock))
+        )
+    if extra_in_lock:
+        errors.append(
+            "Lock file has extra entries not in manifest: "
+            + ", ".join(sorted(extra_in_lock))
+        )
+
+    for name in sorted(expected_outputs):
+        path = output_dir / name
+        if not path.exists():
+            errors.append(f"Missing output: {name}")
+            continue
+        try:
+            digest, mode = compute_checksum(path)
+        except zipfile.BadZipFile:
+            errors.append(f"{name} is not a valid ZIP container")
+            continue
+
+        expected = lock_files.get(name, {})
+        expected_hash = expected.get("hash")
+        expected_mode = expected.get("mode")
+        actual_hash = f"sha256:{digest}"
+
+        if expected_hash != actual_hash:
+            errors.append(
+                f"Checksum mismatch for {name}: expected {expected_hash}, got {actual_hash}"
+            )
+        if expected_mode and expected_mode != mode:
+            errors.append(
+                f"Checksum mode mismatch for {name}: expected {expected_mode}, got {mode}"
+            )
+
+    return errors
+
+
+def generate_fixtures(
+    manifest: Dict[str, Any],
+    output_dir: Path,
+    force: bool,
+) -> List[str]:
+    errors: List[str] = []
+    scenarios = manifest.get("scenarios", [])
+    print(f"Found {len(scenarios)} scenarios in manifest.")
+
+    for idx, scenario in enumerate(scenarios):
+        label = scenario_label(scenario, idx)
+        scenario_id = scenario.get("id")
+        generator_name = scenario.get("generator")
+        generator_args = scenario.get("args", {})
+        outputs = scenario.get("output")
+        output_names = list_output_names(outputs)
+
+        if not scenario_id or not generator_name or not output_names:
+            errors.append(f"Scenario {label} is missing id, generator, or output.")
+            continue
+
+        print(f"Processing scenario: {scenario_id} (Generator: {generator_name})")
+
+        if generator_name not in GENERATORS:
+            errors.append(f"Scenario {scenario_id}: unknown generator '{generator_name}'.")
+            continue
+
+        output_paths = [output_dir / name for name in output_names]
+        existing = [path for path in output_paths if path.exists()]
+        if existing and not force:
+            names = ", ".join(path.name for path in existing)
+            errors.append(
+                f"Scenario {scenario_id} would overwrite existing outputs: {names}"
+            )
+            continue
+        if force:
+            for path in existing:
+                if path.is_dir():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
+
+        try:
+            generator_class = GENERATORS[generator_name]
+            generator = generator_class(generator_args)
+            generator.generate(output_dir, outputs)
+            print(f"  Success: Generated {outputs}")
+        except Exception as e:
+            errors.append(f"Scenario {scenario_id} failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+    return errors
+
+
+def report_errors(errors: List[str]):
+    for error in errors:
+        print(f"Error: {error}", file=sys.stderr)
+
+
 def main():
     script_dir = Path(__file__).parent.resolve()
     fixtures_root = script_dir.parent
-    
+
     default_manifest = fixtures_root / "manifest.yaml"
     default_output = fixtures_root / "generated"
 
     parser = argparse.ArgumentParser(description="Generate Excel fixtures based on a manifest.")
-    parser.add_argument("--manifest", type=Path, default=default_manifest, help="Path to the manifest YAML file.")
-    parser.add_argument("--output-dir", type=Path, default=default_output, help="Directory to output generated files.")
-    parser.add_argument("--force", action="store_true", help="Force regeneration of existing files.")
-    
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=default_manifest,
+        help="Path to the manifest YAML file.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=default_output,
+        help="Directory to output generated files.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing outputs.",
+    )
+    parser.add_argument(
+        "--clean",
+        action="store_true",
+        help="Delete existing outputs in the output directory before generating.",
+    )
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="Verify expected outputs exist and are structurally valid.",
+    )
+    parser.add_argument(
+        "--write-lock",
+        type=Path,
+        help="Write a checksum lock file after generation.",
+    )
+    parser.add_argument(
+        "--verify-lock",
+        type=Path,
+        help="Verify outputs against a checksum lock file.",
+    )
+    parser.add_argument(
+        "--continue-on-error",
+        action="store_true",
+        help="Continue and exit 0 even if some scenarios fail.",
+    )
+
     args = parser.parse_args()
-    
+
     manifest = load_manifest(args.manifest)
-    ensure_output_dir(args.output_dir)
-    
-    scenarios = manifest.get('scenarios', [])
-    print(f"Found {len(scenarios)} scenarios in manifest.")
-    
-    for scenario in scenarios:
-        scenario_id = scenario.get('id')
-        generator_name = scenario.get('generator')
-        generator_args = scenario.get('args', {})
-        outputs = scenario.get('output')
-        
-        if not scenario_id or not generator_name or not outputs:
-            print(f"Skipping invalid scenario: {scenario}")
-            continue
-            
-        print(f"Processing scenario: {scenario_id} (Generator: {generator_name})")
-        
-        if generator_name not in GENERATORS:
-            print(f"  Warning: Generator '{generator_name}' not implemented yet. Skipping.")
-            continue
-        
-        try:
-            generator_class = GENERATORS[generator_name]
-            generator = generator_class(generator_args)
-            generator.generate(args.output_dir, outputs)
-            print(f"  Success: Generated {outputs}")
-        except Exception as e:
-            print(f"  Error generating scenario {scenario_id}: {e}")
-            import traceback
-            traceback.print_exc()
+
+    if args.clean:
+        clean_output_dir(args.output_dir)
+
+    preflight_errors = preflight_manifest(manifest, args.output_dir, fixtures_root)
+    if preflight_errors:
+        report_errors(preflight_errors)
+        sys.exit(1)
+
+    generate = True
+    if args.verify or args.verify_lock:
+        generate = False
+    if args.write_lock:
+        generate = True
+
+    errors: List[str] = []
+
+    if generate:
+        ensure_output_dir(args.output_dir)
+        errors.extend(generate_fixtures(manifest, args.output_dir, args.force))
+        if errors and not args.continue_on_error:
+            report_errors(errors)
+            sys.exit(1)
+
+    if args.verify:
+        errors.extend(verify_outputs(manifest, args.output_dir))
+
+    if args.verify_lock:
+        errors.extend(
+            verify_lock_file(
+                args.manifest, manifest, args.output_dir, args.verify_lock
+            )
+        )
+
+    if args.write_lock:
+        errors.extend(
+            write_lock_file(
+                args.manifest, manifest, args.output_dir, args.write_lock
+            )
+        )
+
+    if errors:
+        report_errors(errors)
+        if not args.continue_on_error:
+            sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
@@ -54608,6 +56543,211 @@ class LargeGridGenerator(BaseGenerator):
 
             wb.save(output_dir / name)
 
+
+```
+
+---
+
+### File: `scripts\arch_guard.py`
+
+```python
+from __future__ import annotations
+
+from pathlib import Path
+import sys
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+PARSE_FILES = [
+    "core/src/excel_open_xml.rs",
+    "core/src/grid_parser.rs",
+    "core/src/datamashup_framing.rs",
+]
+
+DIFF_FILES = [
+    "core/src/diff.rs",
+    "core/src/object_diff.rs",
+    "core/src/m_diff.rs",
+    "core/src/formula_diff.rs",
+]
+DIFF_GLOBS = [
+    "core/src/engine/*.rs",
+    "core/src/m_ast_diff/*.rs",
+]
+
+PARSE_FORBIDDEN = [
+    "crate::diff",
+    "crate::engine",
+    "crate::package",
+]
+
+DIFF_FORBIDDEN = [
+    "crate::excel_open_xml",
+    "crate::grid_parser",
+    "crate::container",
+    "crate::datamashup_framing",
+]
+
+
+def expand_globs(globs: list[str]) -> list[str]:
+    files: list[str] = []
+    for pattern in globs:
+        files.extend(str(p.relative_to(ROOT)) for p in ROOT.glob(pattern))
+    return sorted(set(files))
+
+
+def scan_files(files: list[str], forbidden: list[str], label: str) -> list[str]:
+    violations: list[str] = []
+    for rel in files:
+        path = ROOT / rel
+        if not path.exists():
+            violations.append(f"{label}: missing {rel}")
+            continue
+        text = path.read_text(encoding="utf-8")
+        for token in forbidden:
+            if token in text:
+                violations.append(f"{label}: {rel} contains {token}")
+    return violations
+
+
+def main() -> int:
+    diff_files = DIFF_FILES + expand_globs(DIFF_GLOBS)
+    violations = []
+    violations.extend(scan_files(PARSE_FILES, PARSE_FORBIDDEN, "parse"))
+    violations.extend(scan_files(diff_files, DIFF_FORBIDDEN, "diff"))
+
+    if violations:
+        print("Architecture guard violations:")
+        for entry in violations:
+            print(f"- {entry}")
+        return 1
+
+    print("Architecture guard: OK")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+
+```
+
+---
+
+### File: `scripts\check_fixture_references.py`
+
+```python
+import re
+import sys
+from pathlib import Path
+
+import yaml
+
+RE_FIXTURE_NAME = re.compile(r'"([A-Za-z0-9._-]+\.(?:xlsx|xlsm|pbix|pbit|zip|txt))"')
+RE_WORKFLOW_REF = re.compile(r"fixtures/generated/([A-Za-z0-9._-]+\.(?:xlsx|xlsm|pbix|pbit|zip|txt))")
+
+IGNORED_FIXTURE_NAMES = {
+    "definitely_missing.xlsx",
+    "missing_mashup.xlsx",
+    "nonexistent_a.xlsx",
+    "nonexistent_b.xlsx",
+    "book.xlsx",
+    "excel_diff_not_zip.txt",
+    "Foo.txt",
+    "Bar.txt",
+    "Baz.txt",
+}
+
+
+def load_manifest_outputs(path: Path) -> set[str]:
+    if not path.exists():
+        raise FileNotFoundError(f"Manifest not found: {path}")
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    outputs: set[str] = set()
+    for scenario in data.get("scenarios", []):
+        out = scenario.get("output")
+        if isinstance(out, list):
+            outputs.update(str(name) for name in out)
+        elif out:
+            outputs.add(str(out))
+    return outputs
+
+
+def scan_test_fixtures(paths: list[Path]) -> set[str]:
+    fixtures: set[str] = set()
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        if '#![cfg(feature = "perf-metrics")]' in text:
+            continue
+        for name in RE_FIXTURE_NAME.findall(text):
+            if name in IGNORED_FIXTURE_NAMES:
+                continue
+            fixtures.add(name)
+    return fixtures
+
+
+def scan_workflow_fixtures(paths: list[Path]) -> set[str]:
+    fixtures: set[str] = set()
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        for name in RE_WORKFLOW_REF.findall(text):
+            fixtures.add(name)
+    return fixtures
+
+
+def main() -> int:
+    repo_root = Path(__file__).resolve().parents[1]
+    core_tests = repo_root / "core" / "tests"
+    cli_tests = repo_root / "cli" / "tests"
+    workflows = repo_root / ".github" / "workflows"
+
+    test_files = list(core_tests.rglob("*.rs")) + list(cli_tests.rglob("*.rs"))
+    workflow_files = list(workflows.rglob("*.yml")) + list(workflows.rglob("*.yaml"))
+
+    manifest_tests = repo_root / "fixtures" / "manifest_cli_tests.yaml"
+    manifest_release = repo_root / "fixtures" / "manifest_release_smoke.yaml"
+
+    errors: list[str] = []
+
+    try:
+        test_manifest_outputs = load_manifest_outputs(manifest_tests)
+    except FileNotFoundError as exc:
+        errors.append(str(exc))
+        test_manifest_outputs = set()
+
+    try:
+        release_manifest_outputs = load_manifest_outputs(manifest_release)
+    except FileNotFoundError as exc:
+        errors.append(str(exc))
+        release_manifest_outputs = set()
+
+    test_refs = scan_test_fixtures(test_files)
+    missing_tests = sorted(test_refs - test_manifest_outputs)
+    if missing_tests:
+        errors.append(
+            "Tests reference fixtures not present in fixtures/manifest_cli_tests.yaml: "
+            + ", ".join(missing_tests)
+        )
+
+    workflow_refs = scan_workflow_fixtures(workflow_files)
+    missing_workflows = sorted(workflow_refs - release_manifest_outputs)
+    if missing_workflows:
+        errors.append(
+            "Workflows reference fixtures not present in fixtures/manifest_release_smoke.yaml: "
+            + ", ".join(missing_workflows)
+        )
+
+    if errors:
+        for error in errors:
+            print(f"Error: {error}", file=sys.stderr)
+        return 1
+
+    print("Fixture reference guard passed.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
 
 ```
 
