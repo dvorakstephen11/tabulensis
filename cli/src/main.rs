@@ -23,9 +23,9 @@ pub struct Cli {
 pub enum Commands {
     #[command(about = "Compare two Excel workbooks or PBIX/PBIT packages")]
     Diff {
-        #[arg(help = "Path to the old/base file (.xlsx, .xlsm, .xltx, .xltm, .pbix, .pbit)")]
+        #[arg(help = "Path to the old/base file (.xlsx, .xlsm, .xltx, .xltm, .xlsb, .pbix, .pbit)")]
         old: String,
-        #[arg(help = "Path to the new/changed file (.xlsx, .xlsm, .xltx, .xltm, .pbix, .pbit)")]
+        #[arg(help = "Path to the new/changed file (.xlsx, .xlsm, .xltx, .xltm, .xlsb, .pbix, .pbit)")]
         new: String,
         #[arg(long, short, value_enum, default_value = "text", help = "Output format")]
         format: OutputFormat,
@@ -62,7 +62,7 @@ pub enum Commands {
     },
     #[command(about = "Show information about a workbook or PBIX/PBIT package")]
     Info {
-        #[arg(help = "Path to the file (.xlsx, .xlsm, .xltx, .xltm, .pbix, .pbit)")]
+        #[arg(help = "Path to the file (.xlsx, .xlsm, .xltx, .xltm, .xlsb, .pbix, .pbit)")]
         path: String,
         #[arg(long, help = "Include Power Query information")]
         queries: bool,

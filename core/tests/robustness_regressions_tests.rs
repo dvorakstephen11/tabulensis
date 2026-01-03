@@ -29,6 +29,7 @@ struct FixtureSpec {
 enum FixtureKind {
     Xlsx,
     Xlsm,
+    Xlsb,
     Pbix,
     Pbit,
     DmBytes,
@@ -78,7 +79,7 @@ fn run_fixture(fixture: &FixtureSpec) {
     let path = fixture_path(&fixture.file);
 
     match fixture.kind {
-        FixtureKind::Xlsx | FixtureKind::Xlsm => {
+        FixtureKind::Xlsx | FixtureKind::Xlsm | FixtureKind::Xlsb => {
             let limits = container_limits();
             let result = open_workbook(&path, limits);
             assert_expectation(result, fixture);

@@ -21,6 +21,18 @@ scenarios:
     args: { mode: "not_zip_text" }
     output: "not_a_zip.txt"
 
+  - id: "xlsb_stub"
+    generator: "xlsb_stub"
+    output: "xlsb_stub.xlsb"
+
+  - id: "dpapi_blob_present"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "permissions_firewall_off"
+      base_file: "templates/base_query.xlsx"
+      bindings_override: "01020304"
+    output: "dpapi_blob_present.xlsx"
+
   # --- PG1: Workbook -> Sheet -> Grid IR sanity ---
   - id: "pg1_basic_two_sheets"
     generator: "basic_grid"

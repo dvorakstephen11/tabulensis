@@ -85,6 +85,7 @@ mod database_alignment;
 mod datamashup;
 mod datamashup_framing;
 mod datamashup_package;
+mod permission_bindings;
 pub mod error_codes;
 mod diff;
 mod diffable;
@@ -262,12 +263,15 @@ pub use container::{ContainerError, ContainerLimits, OpcContainer, ZipContainer}
 pub use datamashup::parse_metadata;
 pub use datamashup::{
     DataMashup, Metadata, Permissions, Query, QueryMetadata, build_data_mashup,
-    build_embedded_queries, build_queries,
+    build_data_mashup_with_decryptor, build_embedded_queries, build_queries,
 };
 pub use datamashup_framing::{DataMashupError, RawDataMashup, parse_data_mashup};
 pub use datamashup_package::{
     DataMashupLimits, EmbeddedContent, PackageParts, PackageXml, SectionDocument,
     parse_package_parts, parse_package_parts_with_limits,
+};
+pub use permission_bindings::{
+    DpapiDecryptError, DpapiDecryptor, PermissionBindingsKind, PermissionBindingsStatus,
 };
 pub use diff::{
     AstDiffMode, AstDiffSummary, AstMoveHint, ColumnTypeChange, DiffError, DiffOp, DiffReport,

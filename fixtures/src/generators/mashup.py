@@ -673,7 +673,13 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
             self._process_excel_container(base.resolve(), target_path, self._rewrite_datamashup)
 
     def _rewrite_datamashup(self, raw_bytes: bytes) -> bytes:
+        if self.args.get("inspect_bindings"):
+            self._log_permission_bindings(raw_bytes)
+
         version, package_parts, _, _, bindings = self._split_sections(raw_bytes)
+        bindings_override = self._bindings_override()
+        if bindings_override is not None:
+            bindings = bindings_override
         scenario = self._scenario_definition()
 
         updated_package_parts = self._replace_section(
@@ -690,6 +696,27 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
             metadata_bytes,
             bindings,
         )
+
+    def _log_permission_bindings(self, raw_bytes: bytes):
+        _, _, _, _, bindings = self._split_sections(raw_bytes)
+        head = bindings[:16]
+        print(
+            f"Permission bindings length={len(bindings)} head={head!r}"
+        )
+
+    def _bindings_override(self) -> Optional[bytes]:
+        override = self.args.get("bindings_override")
+        if not override:
+            return None
+        if not isinstance(override, str):
+            raise ValueError("bindings_override must be a hex string")
+        cleaned = override.strip().replace(" ", "")
+        if len(cleaned) % 2 != 0:
+            raise ValueError("bindings_override hex string must have even length")
+        try:
+            return bytes.fromhex(cleaned)
+        except ValueError as exc:
+            raise ValueError("bindings_override must be valid hex") from exc
 
     def _scenario_definition(self):
         shared_section_simple = "\n".join(

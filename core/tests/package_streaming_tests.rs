@@ -4,7 +4,7 @@ use common::collect_string_ids;
 use excel_diff::{
     DataMashup, DiffConfig, DiffError, DiffOp, DiffSink, Grid, JsonLinesSink, Metadata,
     PackageParts, PackageXml, Permissions, SectionDocument, Sheet, SheetKind, Workbook,
-    WorkbookPackage,
+    WorkbookPackage, PermissionBindingsStatus,
 };
 #[cfg(feature = "perf-metrics")]
 use excel_diff::{CallbackSink, CellValue};
@@ -36,9 +36,9 @@ impl DiffSink for StrictSink {
 }
 
 fn make_dm(section_source: &str) -> DataMashup {
-    DataMashup {
-        version: 0,
-        package_parts: PackageParts {
+    DataMashup::new(
+        0,
+        PackageParts {
             package_xml: PackageXml {
                 raw_xml: "<Package/>".to_string(),
             },
@@ -47,12 +47,11 @@ fn make_dm(section_source: &str) -> DataMashup {
             },
             embedded_contents: Vec::new(),
         },
-        permissions: Permissions::default(),
-        metadata: Metadata {
-            formulas: Vec::new(),
-        },
-        permission_bindings_raw: Vec::new(),
-    }
+        Permissions::default(),
+        Metadata { formulas: Vec::new() },
+        Vec::new(),
+        PermissionBindingsStatus::Missing,
+    )
 }
 
 fn make_workbook(sheet_name: &str) -> Workbook {

@@ -88,7 +88,7 @@ pub fn host_kind_from_name(name: &str) -> Option<HostKind> {
     let lower = name.to_ascii_lowercase();
     let ext = lower.rsplit('.').next().unwrap_or("");
     match ext {
-        "xlsx" | "xlsm" | "xltx" | "xltm" => Some(HostKind::Workbook),
+        "xlsx" | "xlsm" | "xltx" | "xltm" | "xlsb" => Some(HostKind::Workbook),
         "pbix" | "pbit" => Some(HostKind::Pbix),
         _ => None,
     }
@@ -97,7 +97,7 @@ pub fn host_kind_from_name(name: &str) -> Option<HostKind> {
 pub fn host_kind_from_path(path: &Path) -> Option<HostKind> {
     let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
     match ext.as_str() {
-        "xlsx" | "xlsm" | "xltx" | "xltm" => Some(HostKind::Workbook),
+        "xlsx" | "xlsm" | "xltx" | "xltm" | "xlsb" => Some(HostKind::Workbook),
         "pbix" | "pbit" => Some(HostKind::Pbix),
         _ => None,
     }

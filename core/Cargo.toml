@@ -12,7 +12,7 @@ name = "excel_diff"
 path = "src/lib.rs"
 
 [features]
-default = ["excel-open-xml", "std-fs", "vba"]
+default = ["excel-open-xml", "std-fs", "vba", "dpapi"]
 excel-open-xml = []
 vba = ["dep:ovba"]
 std-fs = []
@@ -21,6 +21,7 @@ dev-apis = []
 model-diff = []
 legacy-api = []
 parallel = ["dep:rayon"]
+dpapi = []
 
 [dependencies]
 quick-xml = "0.32"
@@ -33,6 +34,10 @@ serde_json = "1.0"
 xxhash-rust = { version = "0.8", features = ["xxh64", "xxh3"] }
 rustc-hash = "1.1"
 ovba = { version = "0.7.1", optional = true }
+sha2 = "0.10"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
 
 [dev-dependencies]
 pretty_assertions = "1.4"

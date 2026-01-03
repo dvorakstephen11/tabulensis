@@ -452,6 +452,13 @@ jobs:
             ### Web Demo
             Try it in your browser at https://dvora.github.io/excel_diff
 
+            ## Format Support
+            - Supported: `.xlsx`, `.xlsm`, `.xltx`, `.xltm`, `.pbix`, `.pbit`
+            - Unsupported (detected): `.xlsb` returns `EXDIFF_PKG_009` with a convert hint
+
+            ## Permission bindings
+            - DPAPI-encrypted permission bindings that cannot be validated default permissions and emit warning `EXDIFF_DM_009` (results may be marked incomplete).
+
             ## Checksums
             See `checksums.txt` for SHA256 hashes of all artifacts.
 

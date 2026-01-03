@@ -48,6 +48,9 @@ This document lists all error codes returned by excel_diff, their meanings, like
 | `EXDIFF_DM_006` | Invalid header | DataMashup header malformed | File may be corrupt |
 | `EXDIFF_DM_007` | Inner package too many entries | Embedded package contains too many entries | Potential nested ZIP bomb |
 | `EXDIFF_DM_008` | Inner package total too large | Embedded package total uncompressed size too large | Potential nested ZIP bomb |
+| `EXDIFF_DM_009` | Permission bindings unverifiable | DPAPI bindings present but cannot be validated or plaintext is malformed | Permissions defaulted to Excel fallback; re-save on the same Windows user or expect defaults |
+
+Note: `EXDIFF_DM_009` is surfaced as a warning and marks the diff `complete=false` rather than aborting the parse.
 
 ## Diff Errors (EXDIFF_DIFF_xxx)
 

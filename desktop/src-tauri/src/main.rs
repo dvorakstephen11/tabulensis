@@ -122,7 +122,7 @@ fn save_recent(app: AppHandle, entry: RecentComparison) -> Result<Vec<RecentComp
 #[tauri::command]
 fn pick_file() -> Option<String> {
     let path = rfd::FileDialog::new()
-        .add_filter("Excel / PBIX", &["xlsx", "xlsm", "xltx", "xltm", "pbix", "pbit"])
+        .add_filter("Excel / PBIX", &["xlsx", "xlsm", "xltx", "xltm", "xlsb", "pbix", "pbit"])
         .pick_file()?;
     Some(path.display().to_string())
 }

@@ -9,6 +9,7 @@ This document defines the host parity contract for excel_diff and the invariants
 - Outcome `mode` semantics are consistent:
   - `payload`: full report + payload (snapshots + alignments where available).
   - `large`: summary-only artifact with details streamed or stored.
+- Permission bindings warnings (`EXDIFF_DM_009`) are surfaced consistently across hosts.
 
 ## Intended feature sets
 
@@ -19,7 +20,7 @@ This document defines the host parity contract for excel_diff and the invariants
 
 | Surface | CLI | Desktop (Tauri) | Web/WASM |
 | --- | --- | --- | --- |
-| Input kinds | XLSX/XLSM/Xltx/Xltm + PBIX/PBIT | XLSX/XLSM/Xltx/Xltm + PBIX/PBIT | XLSX/XLSM/Xltx/Xltm + PBIX/PBIT |
+| Input kinds | XLSX/XLSM/Xltx/Xltm + PBIX/PBIT (XLSB detected -> unsupported) | XLSX/XLSM/Xltx/Xltm + PBIX/PBIT (XLSB detected -> unsupported) | XLSX/XLSM/Xltx/Xltm + PBIX/PBIT (XLSB detected -> unsupported) |
 | Config surface | Presets + limits + hardening flags | Presets + limits + trusted | Presets + limits (host defaults: max memory 256MB) |
 | Output surface | `text`, `json` (DiffReport), `jsonl`, `payload`, `outcome` | `DiffOutcome { diffId, mode, payload?, summary?, config? }` | `DiffOutcome` JSON from WASM |
 | Large mode policy | Auto-switch to JSONL when `should_use_large_mode` | `mode=large` for workbooks via cell-volume estimate; PBIX streams to store and uses `mode=large` when op count exceeds threshold | `mode=large` for workbooks via cell-volume estimate; PBIX stays payload |

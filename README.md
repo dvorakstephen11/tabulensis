@@ -1,6 +1,6 @@
 # Excel Diff
 
-Excel Diff compares two Excel workbooks (`.xlsx` / `.xlsm`) and emits a structured diff: cell edits, sheet structure, named ranges, charts/VBA modules (shallow), and Power Query (M) changes.
+Excel Diff compares Excel workbooks (`.xlsx` / `.xlsm` / `.xltx` / `.xltm`) and Power BI packages (`.pbix` / `.pbit`) and emits a structured diff: cell edits, sheet structure, named ranges, charts/VBA modules (shallow), and Power Query (M) changes.
 
 Use it via:
 - CLI: `excel-diff`
@@ -121,6 +121,12 @@ excel-diff info workbook.xlsx --queries  # Include Power Query info
 - `1`: Files differ (or results are incomplete)
 - `2`: Error (file not found, parse error, invalid arguments)
 
+## Supported Formats
+
+- Workbooks: `.xlsx`, `.xlsm`, `.xltx`, `.xltm`
+- Power BI: `.pbix`, `.pbit`
+- `.xlsb` is detected but not supported; Excel Diff returns `EXDIFF_PKG_009` with a "convert to .xlsx/.xlsm" hint.
+
 ## Library Usage (Rust)
 
 ```rust
@@ -146,6 +152,8 @@ For large workbooks, prefer streaming output (`diff_streaming`) and consider set
 
 - PBIX/PBIT support is limited to legacy DataMashup extraction. Tabular-only PBIX files return
   `NoDataMashupUseTabularModel` (`EXDIFF_PKG_010`).
+- DataMashup permissions are guarded by permission bindings. If DPAPI bindings cannot be validated,
+  Excel Diff defaults permissions and emits warning `EXDIFF_DM_009` (the diff may be marked incomplete).
 - Semantic M diff is enabled by default. The CLI `--fast` preset disables it; use default or
   `--precise` to keep semantic detail.
 - Resource ceilings:

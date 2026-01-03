@@ -65,6 +65,12 @@ fixtures:
       result: "error"
       error_code: "EXDIFF_CTR_003"
 
+  - file: "xlsb_stub.xlsb"
+    type: "xlsb"
+    expectation:
+      result: "error"
+      error_code: "EXDIFF_PKG_009"
+
   - file: "corrupt_base64.xlsx"
     type: "xlsx"
     expectation:

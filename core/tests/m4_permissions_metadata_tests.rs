@@ -1,6 +1,6 @@
 use excel_diff::{
-    DataMashupError, Permissions, RawDataMashup, build_data_mashup, build_queries,
-    open_data_mashup, parse_metadata, parse_package_parts, parse_section_members,
+    DataMashupError, Permissions, PermissionBindingsStatus, RawDataMashup, build_data_mashup,
+    build_queries, open_data_mashup, parse_metadata, parse_package_parts, parse_section_members,
 };
 
 mod common;
@@ -258,6 +258,13 @@ fn metadata_itempath_decodes_space_and_slash() {
 fn permission_bindings_present_flag() {
     let dm = load_datamashup("permissions_defaults.xlsx");
     assert!(!dm.permission_bindings_raw.is_empty());
+}
+
+#[test]
+fn permission_bindings_dpapi_blob_defaults_permissions() {
+    let dm = load_datamashup("dpapi_blob_present.xlsx");
+    assert_eq!(dm.permission_bindings_status, PermissionBindingsStatus::Unverifiable);
+    assert_eq!(dm.permissions, Permissions::default());
 }
 
 #[test]

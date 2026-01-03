@@ -12,6 +12,12 @@ excel-diff diff --help
 excel-diff info --help
 ```
 
+## Supported formats
+
+- Workbooks: `.xlsx`, `.xlsm`, `.xltx`, `.xltm`
+- Power BI: `.pbix`, `.pbit`
+- `.xlsb` is detected but not supported yet; Excel Diff returns `EXDIFF_PKG_009` with a convert hint.
+
 ## `excel-diff diff <OLD> <NEW>`
 
 Compare two workbooks and emit a diff.
@@ -54,6 +60,11 @@ Validation rules:
 - `--progress`: show a progress indicator on stderr
 - `--max-memory <MB>`: set a soft memory budget (may trigger fallback + `complete=false`)
 - `--timeout <SECONDS>`: abort the diff after this many seconds (partial result + `complete=false`)
+
+### Warnings
+
+- Permission bindings (DPAPI) that cannot be validated cause permissions to default and emit
+  warning `EXDIFF_DM_009`. This sets `complete=false` and triggers exit code `1` even if no ops.
 
 ### Exit codes
 

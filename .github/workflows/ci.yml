@@ -52,6 +52,41 @@ jobs:
       - name: Run clippy (deny unwrap/expect)
         run: cargo clippy --workspace -- -D clippy::unwrap_used -D clippy::expect_used
 
+  test-smoke-matrix:
+    name: Smoke Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install fixture generator deps
+        run: python -m pip install -r fixtures/requirements.txt
+
+      - name: Install fixture generator
+        run: python -m pip install -e fixtures --no-deps
+
+      - name: Generate test fixtures
+        run: generate-fixtures --manifest fixtures/manifest_cli_tests.yaml --force --clean
+
+      - name: Run core smoke tests
+        run: cargo test -p excel_diff
+
+      - name: Run CLI smoke tests
+        run: cargo test -p excel_diff_cli
+
   build-matrix:
     runs-on: ubuntu-latest
 

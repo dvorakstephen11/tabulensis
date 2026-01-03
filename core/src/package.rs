@@ -3,6 +3,7 @@ use crate::container::ZipContainer;
 use crate::datamashup::DataMashup;
 use crate::diff::{DiffError, DiffReport, DiffSummary, SheetId};
 use crate::diffable::{DiffContext, Diffable};
+use crate::permission_bindings::{PermissionBindingsStatus, permission_bindings_warning};
 use crate::progress::ProgressCallback;
 use crate::sink::{DiffSink, NoFinishSink, SinkFinishGuard, VecSink};
 use crate::string_pool::StringPool;
@@ -182,6 +183,7 @@ impl WorkbookPackage {
         report.strings = pool.strings().to_vec();
         #[cfg(feature = "perf-metrics")]
         apply_parse_metrics(self, other, &mut report.metrics);
+        append_permission_bindings_warnings(&mut report, &self.data_mashup, &other.data_mashup);
         report
     }
 
@@ -225,6 +227,7 @@ impl WorkbookPackage {
         report.strings = pool.strings().to_vec();
         #[cfg(feature = "perf-metrics")]
         apply_parse_metrics(self, other, &mut report.metrics);
+        append_permission_bindings_warnings(&mut report, &self.data_mashup, &other.data_mashup);
         report
     }
 
@@ -356,6 +359,7 @@ impl WorkbookPackage {
         #[cfg(feature = "perf-metrics")]
         apply_parse_metrics(self, other, &mut summary.metrics);
 
+        append_permission_bindings_warnings_summary(&mut summary, &self.data_mashup, &other.data_mashup);
         Ok(summary)
     }
 
@@ -428,6 +432,7 @@ impl WorkbookPackage {
         #[cfg(feature = "perf-metrics")]
         apply_parse_metrics(self, other, &mut summary.metrics);
 
+        append_permission_bindings_warnings_summary(&mut summary, &self.data_mashup, &other.data_mashup);
         Ok(summary)
     }
 
@@ -521,7 +526,9 @@ impl WorkbookPackage {
         ops.extend(m_ops);
 
         let strings = pool.strings().to_vec();
-        Ok(DiffReport::from_ops_and_summary(ops, summary, strings))
+        let mut report = DiffReport::from_ops_and_summary(ops, summary, strings);
+        append_permission_bindings_warnings(&mut report, &self.data_mashup, &other.data_mashup);
+        Ok(report)
     }
 
     /// Streaming database mode diff. Emits ops into `sink` and returns a [`DiffSummary`].
@@ -620,6 +627,7 @@ impl WorkbookPackage {
 
         sink.finish()?;
 
+        append_permission_bindings_warnings_summary(&mut summary, &self.data_mashup, &other.data_mashup);
         Ok(summary)
     }
 }
@@ -773,6 +781,7 @@ impl PbixPackage {
             }
 
             report.strings = session.strings.strings().to_vec();
+            append_permission_bindings_warnings(&mut report, &self.data_mashup, &other.data_mashup);
             report
         })
     }
@@ -851,13 +860,15 @@ impl PbixPackage {
 
         finish_guard.finish_and_disarm()?;
 
-        Ok(DiffSummary {
+        let mut summary = DiffSummary {
             complete,
             warnings,
             op_count,
             #[cfg(feature = "perf-metrics")]
             metrics: None,
-        })
+        };
+        append_permission_bindings_warnings_summary(&mut summary, &self.data_mashup, &other.data_mashup);
+        Ok(summary)
     }
 
     pub fn diff_streaming_with_progress<S: DiffSink>(
@@ -948,11 +959,70 @@ fn find_sheets_case_insensitive<'a>(
     }
 }
 
+fn append_permission_bindings_warnings(
+    report: &mut DiffReport,
+    old_dm: &Option<DataMashup>,
+    new_dm: &Option<DataMashup>,
+) {
+    for warning in collect_permission_bindings_warnings(old_dm, new_dm) {
+        report.add_warning(warning);
+    }
+}
+
+fn append_permission_bindings_warnings_summary(
+    summary: &mut DiffSummary,
+    old_dm: &Option<DataMashup>,
+    new_dm: &Option<DataMashup>,
+) {
+    let warnings = collect_permission_bindings_warnings(old_dm, new_dm);
+    if warnings.is_empty() {
+        return;
+    }
+    summary.complete = false;
+    summary.warnings.extend(warnings);
+}
+
+fn collect_permission_bindings_warnings(
+    old_dm: &Option<DataMashup>,
+    new_dm: &Option<DataMashup>,
+) -> Vec<String> {
+    let mut warn_unverifiable = false;
+    let mut warn_invalid = false;
+
+    for dm in [old_dm, new_dm].iter().filter_map(|dm| dm.as_ref()) {
+        match dm.permission_bindings_status {
+            PermissionBindingsStatus::Unverifiable => warn_unverifiable = true,
+            PermissionBindingsStatus::InvalidOrTampered => warn_invalid = true,
+            _ => {}
+        }
+    }
+
+    let mut warnings = Vec::new();
+    if warn_invalid {
+        if let Some(warning) =
+            permission_bindings_warning(PermissionBindingsStatus::InvalidOrTampered)
+        {
+            warnings.push(warning);
+        }
+    }
+    if warn_unverifiable {
+        if let Some(warning) =
+            permission_bindings_warning(PermissionBindingsStatus::Unverifiable)
+        {
+            warnings.push(warning);
+        }
+    }
+    warnings
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
-    use crate::{DiffOp, Metadata, PackageParts, PackageXml, Permissions, SectionDocument};
+    use crate::{
+        DiffOp, Metadata, PackageParts, PackageXml, PermissionBindingsStatus, Permissions,
+        SectionDocument,
+    };
 
     #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
     use crate::tabular_schema::{RawMeasure, RawTabularModel};
@@ -973,6 +1043,7 @@ mod tests {
             permissions: Permissions::default(),
             metadata: Metadata { formulas: Vec::new() },
             permission_bindings_raw: Vec::new(),
+            permission_bindings_status: PermissionBindingsStatus::Missing,
         }
     }
 

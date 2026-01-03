@@ -45,6 +45,7 @@ try:
     from .generators.pbix import PbixGenerator
     from .generators.objects import ChartsGenerator, CopyTemplateGenerator, NamedRangesGenerator
     from .generators.perf import LargeGridGenerator
+    from .generators.xlsb import XlsbStubGenerator
 except ImportError:
     from generators.corrupt import ContainerCorruptGenerator
     from generators.database import KeyedTableGenerator
@@ -79,6 +80,7 @@ except ImportError:
     from generators.pbix import PbixGenerator
     from generators.objects import ChartsGenerator, CopyTemplateGenerator, NamedRangesGenerator
     from generators.perf import LargeGridGenerator
+    from generators.xlsb import XlsbStubGenerator
 
 # Registry of generators
 GENERATORS: Dict[str, Any] = {
@@ -113,10 +115,11 @@ GENERATORS: Dict[str, Any] = {
     "named_ranges": NamedRangesGenerator,
     "charts": ChartsGenerator,
     "copy_template": CopyTemplateGenerator,
+    "xlsb_stub": XlsbStubGenerator,
 }
 
 FILE_ARG_KEYS = ("template", "base_file", "model_schema_file")
-ZIP_EXTENSIONS = {".xlsx", ".xlsm", ".pbix", ".pbit", ".zip"}
+ZIP_EXTENSIONS = {".xlsx", ".xlsm", ".xlsb", ".pbix", ".pbit", ".zip"}
 
 
 def load_manifest(manifest_path: Path) -> Dict[str, Any]:

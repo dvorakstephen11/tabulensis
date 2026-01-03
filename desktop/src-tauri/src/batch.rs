@@ -314,7 +314,7 @@ fn group_files(root: &Path, files: &[PathBuf], strategy: &str) -> HashMap<String
 
 fn is_supported(path: &Path) -> bool {
     let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-    matches!(ext.as_str(), "xlsx" | "xlsm" | "xltx" | "xltm" | "pbix" | "pbit")
+    matches!(ext.as_str(), "xlsx" | "xlsm" | "xltx" | "xltm" | "xlsb" | "pbix" | "pbit")
 }
 
 fn insert_batch_run(conn: &Connection, batch_id: &str, req: &BatchRequest, item_count: usize) -> Result<(), DiffErrorPayload> {

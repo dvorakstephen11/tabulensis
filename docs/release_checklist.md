@@ -8,3 +8,5 @@
   - .xlsx with Power Query M (step diffs render).
   - .pbix/.pbit with DataMashup (query diffs render).
   - .pbix/.pbit without DataMashup (measure diffs render or actionable error).
+  - .xlsb input returns `EXDIFF_PKG_009` with a "convert to .xlsx/.xlsm" hint.
+  - Permission bindings warning (`EXDIFF_DM_009`) defaults permissions and marks results incomplete.

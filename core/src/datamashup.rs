@@ -8,16 +8,42 @@ use std::collections::HashMap;
 use crate::datamashup_framing::{DataMashupError, RawDataMashup};
 use crate::datamashup_package::{PackageParts, parse_package_parts};
 use crate::m_section::{SectionParseError, parse_section_members};
+use crate::permission_bindings::{
+    DpapiDecryptor, PermissionBindingsStatus, default_dpapi_decryptor, effective_permissions,
+    validate_permission_bindings,
+};
 use quick_xml::Reader;
 use quick_xml::events::Event;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DataMashup {
     pub version: u32,
     pub package_parts: PackageParts,
     pub permissions: Permissions,
     pub metadata: Metadata,
     pub permission_bindings_raw: Vec<u8>,
+    pub permission_bindings_status: PermissionBindingsStatus,
+}
+
+impl DataMashup {
+    pub fn new(
+        version: u32,
+        package_parts: PackageParts,
+        permissions: Permissions,
+        metadata: Metadata,
+        permission_bindings_raw: Vec<u8>,
+        permission_bindings_status: PermissionBindingsStatus,
+    ) -> Self {
+        Self {
+            version,
+            package_parts,
+            permissions,
+            metadata,
+            permission_bindings_raw,
+            permission_bindings_status,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,8 +88,18 @@ pub struct Query {
 }
 
 pub fn build_data_mashup(raw: &RawDataMashup) -> Result<DataMashup, DataMashupError> {
+    let decryptor = default_dpapi_decryptor();
+    build_data_mashup_with_decryptor(raw, decryptor)
+}
+
+pub fn build_data_mashup_with_decryptor(
+    raw: &RawDataMashup,
+    decryptor: &dyn DpapiDecryptor,
+) -> Result<DataMashup, DataMashupError> {
     let package_parts = parse_package_parts(&raw.package_parts)?;
-    let permissions = parse_permissions(&raw.permissions);
+    let parsed_permissions = parse_permissions(&raw.permissions);
+    let permission_bindings_status = validate_permission_bindings(raw, decryptor);
+    let permissions = effective_permissions(parsed_permissions, permission_bindings_status);
     let metadata = parse_metadata(&raw.metadata)?;
 
     Ok(DataMashup {
@@ -72,6 +108,7 @@ pub fn build_data_mashup(raw: &RawDataMashup) -> Result<DataMashup, DataMashupEr
         permissions,
         metadata,
         permission_bindings_raw: raw.permission_bindings.clone(),
+        permission_bindings_status,
     })
 }
 

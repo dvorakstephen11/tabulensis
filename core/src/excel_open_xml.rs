@@ -122,9 +122,18 @@ pub(crate) fn open_workbook_from_container(
     let workbook_bytes = container
         .read_file_checked("xl/workbook.xml")
         .map_err(|e| match e {
-            ContainerError::FileNotFound { .. } => PackageError::MissingPart {
-                path: "xl/workbook.xml".to_string(),
-            },
+            ContainerError::FileNotFound { .. } => {
+                if container.file_names().any(|name| name == "xl/workbook.bin") {
+                    PackageError::UnsupportedFormat {
+                        message: "XLSB detected (xl/workbook.bin present); convert to .xlsx/.xlsm"
+                            .to_string(),
+                    }
+                } else {
+                    PackageError::MissingPart {
+                        path: "xl/workbook.xml".to_string(),
+                    }
+                }
+            }
             other => PackageError::ReadPartFailed {
                 part: "xl/workbook.xml".to_string(),
                 message: other.to_string(),

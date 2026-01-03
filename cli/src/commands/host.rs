@@ -17,7 +17,7 @@ pub(crate) enum Host {
 pub(crate) fn host_kind_from_path(path: &Path) -> Option<HostKind> {
     let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
     match ext.as_str() {
-        "xlsx" | "xlsm" | "xltx" | "xltm" => Some(HostKind::Workbook),
+        "xlsx" | "xlsm" | "xltx" | "xltm" | "xlsb" => Some(HostKind::Workbook),
         "pbix" | "pbit" => Some(HostKind::Pbix),
         _ => None,
     }

@@ -5,8 +5,8 @@ use excel_diff::{
     CellValue, DataMashup, DiffConfig, DiffError, DiffOp, DiffSink, Grid, JsonLinesSink,
     LimitBehavior, Metadata, PackageParts, PackageXml, PbixPackage, Permissions, SectionDocument,
     Sheet, SheetKind, StringPool, VbaModule, VbaModuleType, Workbook, WorkbookPackage,
-    try_diff_grids_database_mode_streaming, try_diff_grids_streaming, try_diff_sheets_streaming,
-    try_diff_workbooks_streaming,
+    PermissionBindingsStatus, try_diff_grids_database_mode_streaming, try_diff_grids_streaming,
+    try_diff_sheets_streaming, try_diff_workbooks_streaming,
 };
 use serde::Deserialize;
 use std::fs::File;
@@ -173,9 +173,9 @@ fn make_keyed_grid(keys: &[i32], values: &[i32]) -> Grid {
 }
 
 fn make_dm(section_source: &str) -> DataMashup {
-    DataMashup {
-        version: 0,
-        package_parts: PackageParts {
+    DataMashup::new(
+        0,
+        PackageParts {
             package_xml: PackageXml {
                 raw_xml: "<Package/>".to_string(),
             },
@@ -184,10 +184,11 @@ fn make_dm(section_source: &str) -> DataMashup {
             },
             embedded_contents: Vec::new(),
         },
-        permissions: Permissions::default(),
-        metadata: Metadata { formulas: Vec::new() },
-        permission_bindings_raw: Vec::new(),
-    }
+        Permissions::default(),
+        Metadata { formulas: Vec::new() },
+        Vec::new(),
+        PermissionBindingsStatus::Missing,
+    )
 }
 
 fn is_object_op(op: &DiffOp) -> bool {
