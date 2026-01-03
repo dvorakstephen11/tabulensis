@@ -224,6 +224,7 @@ fn op_sheet_id(op: &DiffOp) -> Option<StringId> {
     match op {
         DiffOp::SheetAdded { sheet }
         | DiffOp::SheetRemoved { sheet }
+        | DiffOp::SheetRenamed { sheet, .. }
         | DiffOp::RowAdded { sheet, .. }
         | DiffOp::RowRemoved { sheet, .. }
         | DiffOp::RowReplaced { sheet, .. }
@@ -264,6 +265,7 @@ fn classify_op(op: &DiffOp) -> Option<ChangeKind> {
         DiffOp::RowReplaced { .. }
         | DiffOp::RectReplaced { .. }
         | DiffOp::CellEdited { .. }
+        | DiffOp::SheetRenamed { .. }
         | DiffOp::NamedRangeChanged { .. }
         | DiffOp::ChartChanged { .. }
         | DiffOp::VbaModuleChanged { .. }

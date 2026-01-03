@@ -247,7 +247,7 @@ function buildSheetGridDataLegacy(report, ops, oldSheet, newSheet) {
       maxRow = Math.max(maxRow, op.src_start_row + op.src_row_count - 1, op.dst_start_row + op.src_row_count - 1);
       minCol = Math.min(minCol, op.src_start_col, op.dst_start_col);
       maxCol = Math.max(maxCol, op.src_start_col + op.src_col_count - 1, op.dst_start_col + op.src_col_count - 1);
-    } else if (op.kind === "SheetAdded" || op.kind === "SheetRemoved") {
+    } else if (op.kind === "SheetAdded" || op.kind === "SheetRemoved" || op.kind === "SheetRenamed") {
       hasSheetOp = true;
     }
   }
@@ -602,6 +602,11 @@ function categorizeOps(report) {
       sheetOps.get(sheetName).push(op);
       if (kind === "SheetAdded") addedCount++;
       else removedCount++;
+    } else if (kind === "SheetRenamed") {
+      const sheetName = resolveString(report, op.sheet ?? op.to);
+      if (!sheetOps.has(sheetName)) sheetOps.set(sheetName, []);
+      sheetOps.get(sheetName).push(op);
+      modifiedCount++;
     } else if (kind.startsWith("Row") || kind.startsWith("Column") || kind.startsWith("Cell") || kind.startsWith("Block") || kind.startsWith("Rect")) {
       const sheetName = resolveString(report, op.sheet);
       if (!sheetOps.has(sheetName)) sheetOps.set(sheetName, []);
@@ -716,6 +721,17 @@ function renderSheetOp(report, op) {
     `;
   }
   
+  if (kind === "SheetRenamed") {
+    const fromName = resolveString(report, op.from);
+    const toName = resolveString(report, op.to ?? op.sheet);
+    return `
+      <div class="change-item modified">
+        <div class="change-icon">~</div>
+        <span>Sheet renamed: ${esc(fromName)} &rarr; ${esc(toName)}</span>
+      </div>
+    `;
+  }
+
   if (kind === "SheetRemoved") {
     return `
       <div class="change-item removed">
@@ -879,7 +895,7 @@ function renderSheetSection(report, sheetName, ops, sheetLookup, alignmentLookup
   const colOps = ops.filter(o => o.kind.startsWith("Column"));
   const cellOps = ops.filter(o => o.kind === "CellEdited");
   const moveOps = ops.filter(o => o.kind.startsWith("Block"));
-  const otherOps = ops.filter(o => !o.kind.startsWith("Row") && !o.kind.startsWith("Column") && o.kind !== "CellEdited" && !o.kind.startsWith("Block") && o.kind !== "SheetAdded" && o.kind !== "SheetRemoved");
+  const otherOps = ops.filter(o => !o.kind.startsWith("Row") && !o.kind.startsWith("Column") && o.kind !== "CellEdited" && !o.kind.startsWith("Block") && o.kind !== "SheetAdded" && o.kind !== "SheetRemoved" && o.kind !== "SheetRenamed");
   
   const oldSheet = sheetLookup ? sheetLookup.old.get(sheetName) : null;
   const newSheet = sheetLookup ? sheetLookup.new.get(sheetName) : null;

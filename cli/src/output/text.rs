@@ -133,6 +133,7 @@ fn get_sheet_id(op: &DiffOp) -> Option<StringId> {
     match op {
         DiffOp::SheetAdded { sheet } => Some(*sheet),
         DiffOp::SheetRemoved { sheet } => Some(*sheet),
+        DiffOp::SheetRenamed { sheet, .. } => Some(*sheet),
         DiffOp::RowAdded { sheet, .. } => Some(*sheet),
         DiffOp::RowRemoved { sheet, .. } => Some(*sheet),
         DiffOp::RowReplaced { sheet, .. } => Some(*sheet),
@@ -162,6 +163,13 @@ fn render_op(report: &DiffReport, op: &DiffOp, verbosity: Verbosity) -> Vec<Stri
             vec![format!(
                 "Sheet \"{}\": REMOVED",
                 report.resolve(*sheet).unwrap_or("<unknown>")
+            )]
+        }
+        DiffOp::SheetRenamed { from, to, .. } => {
+            vec![format!(
+                "Sheet renamed: \"{}\" -> \"{}\"",
+                report.resolve(*from).unwrap_or("<unknown>"),
+                report.resolve(*to).unwrap_or("<unknown>")
             )]
         }
         DiffOp::RowAdded { row_idx, .. } => {
@@ -655,7 +663,9 @@ fn count_ops(report: &DiffReport) -> OpCounts {
 
     for op in &report.ops {
         match op {
-            DiffOp::SheetAdded { .. } | DiffOp::SheetRemoved { .. } => counts.sheets += 1,
+            DiffOp::SheetAdded { .. }
+            | DiffOp::SheetRemoved { .. }
+            | DiffOp::SheetRenamed { .. } => counts.sheets += 1,
             DiffOp::RowAdded { .. } | DiffOp::RowRemoved { .. } | DiffOp::RowReplaced { .. } => {
                 counts.rows += 1
             }

@@ -20,6 +20,7 @@ fn grid_leaf_diff_matches_single_sheet_workbook() {
     let wb_a = Workbook {
         sheets: vec![Sheet {
             name: sheet_id,
+            workbook_sheet_id: None,
             kind: SheetKind::Worksheet,
             grid: grid_a.clone(),
         }],
@@ -28,6 +29,7 @@ fn grid_leaf_diff_matches_single_sheet_workbook() {
     let wb_b = Workbook {
         sheets: vec![Sheet {
             name: sheet_id,
+            workbook_sheet_id: None,
             kind: SheetKind::Worksheet,
             grid: grid_b.clone(),
         }],
@@ -53,11 +55,13 @@ fn sheet_leaf_diff_matches_single_sheet_workbook() {
 
     let sheet_a = Sheet {
         name: sheet_id,
+        workbook_sheet_id: None,
         kind: SheetKind::Worksheet,
         grid: grid_a.clone(),
     };
     let sheet_b = Sheet {
         name: sheet_id,
+        workbook_sheet_id: None,
         kind: SheetKind::Worksheet,
         grid: grid_b.clone(),
     };

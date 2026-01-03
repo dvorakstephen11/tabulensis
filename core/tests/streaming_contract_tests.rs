@@ -135,6 +135,7 @@ fn make_workbook(pool: &mut StringPool, values: &[f64]) -> Workbook {
     Workbook {
         sheets: vec![Sheet {
             name: pool.intern("Sheet1"),
+            workbook_sheet_id: None,
             kind: SheetKind::Worksheet,
             grid,
         }],
@@ -153,6 +154,7 @@ fn make_grid(values: &[f64]) -> Grid {
 fn make_sheet(pool: &mut StringPool, name: &str, values: &[f64]) -> Sheet {
     Sheet {
         name: pool.intern(name),
+        workbook_sheet_id: None,
         kind: SheetKind::Worksheet,
         grid: make_grid(values),
     }

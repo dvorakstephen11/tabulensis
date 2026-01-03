@@ -65,6 +65,7 @@ pub fn single_sheet_workbook(name: &str, grid: Grid) -> Workbook {
     with_default_session(|session| Workbook {
         sheets: vec![Sheet {
             name: session.strings.intern(name),
+            workbook_sheet_id: None,
             kind: SheetKind::Worksheet,
             grid,
         }],
@@ -269,6 +270,11 @@ pub fn collect_string_ids(op: &DiffOp) -> Vec<StringId> {
     let mut ids = Vec::new();
     match op {
         DiffOp::SheetAdded { sheet } | DiffOp::SheetRemoved { sheet } => ids.push(*sheet),
+        DiffOp::SheetRenamed { sheet, from, to } => {
+            ids.push(*sheet);
+            ids.push(*from);
+            ids.push(*to);
+        }
         DiffOp::RowAdded { sheet, .. }
         | DiffOp::RowRemoved { sheet, .. }
         | DiffOp::RowReplaced { sheet, .. } => ids.push(*sheet),

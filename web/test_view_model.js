@@ -306,6 +306,45 @@ function testIgnoreBlankToBlank() {
   assert.ok(sheetInclude.changes.anchors.length > 0);
 }
 
+function testSheetRenameMapping() {
+  const report = {
+    strings: ["OldSheet", "NewSheet"],
+    ops: [
+      { kind: "SheetRenamed", sheet: 1, from: 0, to: 1 }
+    ],
+    warnings: []
+  };
+  const oldSheet = {
+    name: "OldSheet",
+    nrows: 1,
+    ncols: 1,
+    cells: [{ row: 0, col: 0, value: "A", formula: null }]
+  };
+  const newSheet = {
+    name: "NewSheet",
+    nrows: 1,
+    ncols: 1,
+    cells: [{ row: 0, col: 0, value: "B", formula: null }]
+  };
+  const alignment = {
+    sheet: "NewSheet",
+    rows: [{ old: 0, new: 0, kind: "match" }],
+    cols: [{ old: 0, new: 0, kind: "match" }],
+    moves: [],
+    skipped: false
+  };
+  const payload = {
+    report,
+    sheets: { old: { sheets: [oldSheet] }, new: { sheets: [newSheet] } },
+    alignments: [alignment]
+  };
+  const vm = buildWorkbookViewModel(payload);
+  const sheetVm = findSheet(vm, "NewSheet");
+  const cell = sheetVm.cellAt(0, 0);
+  assert.equal(cell.old.cell.value, "A");
+  assert.equal(cell.new.cell.value, "B");
+}
+
 testRowInsertionMapping();
 testMoveIdentity();
 testRowGrouping();
@@ -313,5 +352,6 @@ testRegionCompaction();
 testRegionMaxCells();
 testAnchorsForRowChanges();
 testIgnoreBlankToBlank();
+testSheetRenameMapping();
 
 console.log("ok");

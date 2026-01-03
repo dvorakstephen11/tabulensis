@@ -214,11 +214,13 @@ pub fn open_workbook(path: impl AsRef<std::path::Path>) -> Result<Workbook, Exce
 /// let sheet_id = pool.intern("Sheet1");
 /// let old = Sheet {
 ///     name: sheet_id,
+///     workbook_sheet_id: None,
 ///     kind: SheetKind::Worksheet,
 ///     grid: Grid::new(1, 1),
 /// };
 /// let new = Sheet {
 ///     name: sheet_id,
+///     workbook_sheet_id: None,
 ///     kind: SheetKind::Worksheet,
 ///     grid: Grid::new(1, 1),
 /// };

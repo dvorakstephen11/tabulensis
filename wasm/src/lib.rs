@@ -408,6 +408,7 @@ fn single_sheet_workbook(pool: &mut StringPool, grid: Grid) -> Workbook {
     Workbook {
         sheets: vec![Sheet {
             name: sheet_name,
+            workbook_sheet_id: None,
             kind: SheetKind::Worksheet,
             grid,
         }],
@@ -470,6 +471,7 @@ mod tests {
         Workbook {
             sheets: vec![Sheet {
                 name: name_id,
+                workbook_sheet_id: None,
                 kind: SheetKind::Worksheet,
                 grid,
             }],

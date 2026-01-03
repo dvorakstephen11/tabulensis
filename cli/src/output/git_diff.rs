@@ -99,6 +99,7 @@ fn get_sheet_id(op: &DiffOp) -> Option<excel_diff::StringId> {
     match op {
         DiffOp::SheetAdded { sheet } => Some(*sheet),
         DiffOp::SheetRemoved { sheet } => Some(*sheet),
+        DiffOp::SheetRenamed { sheet, .. } => Some(*sheet),
         DiffOp::RowAdded { sheet, .. } => Some(*sheet),
         DiffOp::RowRemoved { sheet, .. } => Some(*sheet),
         DiffOp::RowReplaced { sheet, .. } => Some(*sheet),
@@ -130,6 +131,14 @@ fn write_op_diff_lines<W: Write>(w: &mut W, report: &DiffReport, op: &DiffOp) ->
                 w,
                 "- Sheet \"{}\": REMOVED",
                 report.resolve(*sheet).unwrap_or("<unknown>")
+            )?;
+        }
+        DiffOp::SheetRenamed { from, to, .. } => {
+            writeln!(
+                w,
+                "~ Sheet renamed: \"{}\" -> \"{}\"",
+                report.resolve(*from).unwrap_or("<unknown>"),
+                report.resolve(*to).unwrap_or("<unknown>")
             )?;
         }
         DiffOp::RowAdded { row_idx, .. } => {

@@ -710,6 +710,11 @@ fn collect_string_ids(op: &excel_diff::DiffOp) -> Vec<excel_diff::StringId> {
     let mut ids = Vec::new();
     match op {
         excel_diff::DiffOp::SheetAdded { sheet } | excel_diff::DiffOp::SheetRemoved { sheet } => ids.push(*sheet),
+        excel_diff::DiffOp::SheetRenamed { sheet, from, to } => {
+            ids.push(*sheet);
+            ids.push(*from);
+            ids.push(*to);
+        }
         excel_diff::DiffOp::RowAdded { sheet, .. }
         | excel_diff::DiffOp::RowRemoved { sheet, .. }
         | excel_diff::DiffOp::RowReplaced { sheet, .. } => ids.push(*sheet),

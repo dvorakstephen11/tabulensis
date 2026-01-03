@@ -17,6 +17,7 @@ fn workbook_with_formula(
     Workbook {
         sheets: vec![Sheet {
             name: sheet,
+            workbook_sheet_id: None,
             kind: SheetKind::Worksheet,
             grid,
         }],

@@ -694,6 +694,7 @@ mod tests {
         Workbook {
             sheets: vec![Sheet {
                 name: name_id,
+                workbook_sheet_id: None,
                 kind: SheetKind::Worksheet,
                 grid,
             }],

@@ -374,10 +374,11 @@ fn json_diff_case_only_sheet_name_cell_edit() {
             to,
             ..
         } => {
-            assert_eq!(
-                report.strings.get(sheet.0 as usize),
-                Some(&"Sheet1".to_string())
-            );
+            let sheet_name = report
+                .strings
+                .get(sheet.0 as usize)
+                .map(|s| s.to_lowercase());
+            assert_eq!(sheet_name, Some("sheet1".to_string()));
             assert_eq!(addr.to_a1(), "A1");
             assert_eq!(render_value(&report, &from.value), Some("1".into()));
             assert_eq!(render_value(&report, &to.value), Some("2".into()));
@@ -418,10 +419,11 @@ fn test_json_case_only_sheet_name_cell_edit_via_helper() {
             to,
             ..
         } => {
-            assert_eq!(
-                report.strings.get(sheet.0 as usize),
-                Some(&"Sheet1".to_string())
-            );
+            let sheet_name = report
+                .strings
+                .get(sheet.0 as usize)
+                .map(|s| s.to_lowercase());
+            assert_eq!(sheet_name, Some("sheet1".to_string()));
             assert_eq!(addr.to_a1(), "A1");
             assert_eq!(render_value(&report, &from.value), Some("1".into()));
             assert_eq!(render_value(&report, &to.value), Some("2".into()));

@@ -109,6 +109,7 @@ function buildAlignmentLookup(alignments) {
 function categorizeOps(report) {
   const ops = Array.isArray(report?.ops) ? report.ops : [];
   const sheetOps = new Map();
+  const renameMap = new Map();
   const vbaOps = [];
   const namedRangeOps = [];
   const chartOps = [];
@@ -128,6 +129,13 @@ function categorizeOps(report) {
       sheetOps.get(sheetName).push(op);
       if (kind === "SheetAdded") addedCount++;
       else removedCount++;
+    } else if (kind === "SheetRenamed") {
+      const sheetName = resolveString(report, op.sheet ?? op.to);
+      const fromName = resolveString(report, op.from);
+      if (!sheetOps.has(sheetName)) sheetOps.set(sheetName, []);
+      sheetOps.get(sheetName).push(op);
+      renameMap.set(sheetName, fromName);
+      modifiedCount++;
     } else if (kind.startsWith("Row") || kind.startsWith("Column") || kind.startsWith("Cell") || kind.startsWith("Block") || kind.startsWith("Rect")) {
       const sheetName = resolveString(report, op.sheet);
       if (!sheetOps.has(sheetName)) sheetOps.set(sheetName, []);
@@ -166,6 +174,7 @@ function categorizeOps(report) {
 
   return {
     sheetOps,
+    renameMap,
     vbaOps,
     namedRangeOps,
     chartOps,
@@ -764,6 +773,22 @@ function buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions }) {
     }
   }
 
+  for (const op of ops) {
+    if (op.kind === "SheetRenamed") {
+      const fromName = resolveString(report, op.from);
+      const toName = resolveString(report, op.to ?? op.sheet);
+      const fromId = op.from ?? "unknown";
+      const toId = op.to ?? op.sheet ?? "unknown";
+      items.push({
+        id: `sheet-renamed-${fromId}-${toId}`,
+        group: "other",
+        changeType: "modified",
+        label: "Sheet renamed",
+        detail: `${fromName} -> ${toName}`
+      });
+    }
+  }
+
   const handledKinds = new Set([
     "RowAdded",
     "RowRemoved",
@@ -776,7 +801,8 @@ function buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions }) {
     "BlockMovedColumns",
     "BlockMovedRect",
     "SheetAdded",
-    "SheetRemoved"
+    "SheetRemoved",
+    "SheetRenamed"
   ]);
 
   for (const op of ops) {
@@ -1220,7 +1246,7 @@ function buildOtherItems(report, ops, prefix) {
 export function buildWorkbookViewModel(payloadOrReport, opts = {}) {
   const { report, sheets, alignments } = normalizePayload(payloadOrReport);
   const options = { ...DEFAULT_OPTS, ...opts };
-  const { sheetOps, vbaOps, namedRangeOps, chartOps, queryOps, measureOps, counts } = categorizeOps(report);
+  const { sheetOps, renameMap, vbaOps, namedRangeOps, chartOps, queryOps, measureOps, counts } = categorizeOps(report);
 
   const oldLookup = buildSheetLookup(sheets.oldSheets);
   const newLookup = buildSheetLookup(sheets.newSheets);
@@ -1232,9 +1258,9 @@ export function buildWorkbookViewModel(payloadOrReport, opts = {}) {
       report,
       sheetName,
       ops,
-      oldSheet: oldLookup.get(sheetName) || null,
+      oldSheet: oldLookup.get(sheetName) || oldLookup.get(renameMap.get(sheetName)) || null,
       newSheet: newLookup.get(sheetName) || null,
-      alignment: alignmentLookup.get(sheetName) || null,
+      alignment: alignmentLookup.get(sheetName) || alignmentLookup.get(renameMap.get(sheetName)) || null,
       opts: options
     });
     sheetVms.push(sheetVm);

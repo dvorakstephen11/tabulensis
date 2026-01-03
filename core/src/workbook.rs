@@ -69,6 +69,8 @@ pub struct ChartInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChartObject {
     pub sheet: StringId,
+    /// Optional workbook-internal sheet id for rename-safe matching.
+    pub workbook_sheet_id: Option<u32>,
     pub info: ChartInfo,
     pub xml_hash: u128,
 }
@@ -78,6 +80,8 @@ pub struct ChartObject {
 pub struct Sheet {
     /// The display name of the sheet (e.g., "Sheet1", "Data").
     pub name: StringId,
+    /// Optional workbook-internal sheet id for rename-safe matching.
+    pub workbook_sheet_id: Option<u32>,
     /// The type of sheet (worksheet, chart, macro, etc.).
     pub kind: SheetKind,
     /// The grid of cell data.

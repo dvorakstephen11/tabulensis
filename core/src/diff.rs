@@ -286,6 +286,11 @@ pub enum DiffOp {
     SheetRemoved {
         sheet: SheetId,
     },
+    SheetRenamed {
+        sheet: SheetId,
+        from: SheetId,
+        to: SheetId,
+    },
     RowAdded {
         sheet: SheetId,
         row_idx: u32,

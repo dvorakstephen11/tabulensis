@@ -80,20 +80,23 @@ fn pg6_2_sheet_removed_no_grid_ops_on_main() {
 }
 
 #[test]
-fn pg6_3_rename_as_remove_plus_add_no_grid_ops() {
+fn pg6_3_rename_emits_sheet_renamed_no_grid_ops() {
     let old = open_fixture_workbook("pg6_sheet_renamed_a.xlsx");
     let new = open_fixture_workbook("pg6_sheet_renamed_b.xlsx");
 
     let report =
         WorkbookPackage::from(old).diff(&WorkbookPackage::from(new), &DiffConfig::default());
 
-    let mut added = 0;
-    let mut removed = 0;
+    let mut renamed = 0;
 
     for op in &report.ops {
         match op {
-            DiffOp::SheetAdded { sheet } if *sheet == sid("NewName") => added += 1,
-            DiffOp::SheetRemoved { sheet } if *sheet == sid("OldName") => removed += 1,
+            DiffOp::SheetRenamed { sheet, from, to } => {
+                assert_eq!(sheet, &sid("NewName"));
+                assert_eq!(from, &sid("OldName"));
+                assert_eq!(to, &sid("NewName"));
+                renamed += 1;
+            }
             DiffOp::SheetAdded { sheet } => panic!("unexpected sheet added: {sheet}"),
             DiffOp::SheetRemoved { sheet } => panic!("unexpected sheet removed: {sheet}"),
             DiffOp::RowAdded { .. }
@@ -109,13 +112,8 @@ fn pg6_3_rename_as_remove_plus_add_no_grid_ops() {
         }
     }
 
-    assert_eq!(
-        report.ops.len(),
-        2,
-        "rename should produce one add and one remove"
-    );
-    assert_eq!(added, 1, "expected one NewName addition");
-    assert_eq!(removed, 1, "expected one OldName removal");
+    assert_eq!(report.ops.len(), 1, "expected only a rename op");
+    assert_eq!(renamed, 1, "expected one sheet rename");
 }
 
 #[test]

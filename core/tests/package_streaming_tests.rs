@@ -61,6 +61,7 @@ fn make_workbook(sheet_name: &str) -> Workbook {
     Workbook {
         sheets: vec![Sheet {
             name: sheet_id,
+            workbook_sheet_id: None,
             kind: SheetKind::Worksheet,
             grid: Grid::new(0, 0),
         }],
@@ -154,6 +155,7 @@ fn package_diff_streaming_finishes_on_error() {
     let wb_a = Workbook {
         sheets: vec![Sheet {
             name: sheet_id,
+            workbook_sheet_id: None,
             kind: SheetKind::Worksheet,
             grid: grid_a,
         }],
@@ -162,6 +164,7 @@ fn package_diff_streaming_finishes_on_error() {
     let wb_b = Workbook {
         sheets: vec![Sheet {
             name: sheet_id,
+            workbook_sheet_id: None,
             kind: SheetKind::Worksheet,
             grid: grid_b,
         }],
@@ -268,6 +271,7 @@ fn package_diff_streaming_includes_package_parse_time_in_total() {
     let wb_a = Workbook {
         sheets: vec![Sheet {
             name: sheet_id,
+            workbook_sheet_id: None,
             kind: SheetKind::Worksheet,
             grid: grid_a,
         }],
@@ -276,6 +280,7 @@ fn package_diff_streaming_includes_package_parse_time_in_total() {
     let wb_b = Workbook {
         sheets: vec![Sheet {
             name: sheet_id,
+            workbook_sheet_id: None,
             kind: SheetKind::Worksheet,
             grid: grid_b,
         }],

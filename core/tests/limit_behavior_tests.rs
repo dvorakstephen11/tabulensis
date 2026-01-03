@@ -241,11 +241,13 @@ fn multiple_sheets_limit_warning_includes_sheet_name() {
         sheets: vec![
             excel_diff::Sheet {
                 name: sid("SmallSheet"),
+                workbook_sheet_id: None,
                 kind: excel_diff::SheetKind::Worksheet,
                 grid: grid_small.clone(),
             },
             excel_diff::Sheet {
                 name: sid("LargeSheet"),
+                workbook_sheet_id: None,
                 kind: excel_diff::SheetKind::Worksheet,
                 grid: grid_large_a,
             },
@@ -257,11 +259,13 @@ fn multiple_sheets_limit_warning_includes_sheet_name() {
         sheets: vec![
             excel_diff::Sheet {
                 name: sid("SmallSheet"),
+                workbook_sheet_id: None,
                 kind: excel_diff::SheetKind::Worksheet,
                 grid: grid_small,
             },
             excel_diff::Sheet {
                 name: sid("LargeSheet"),
+                workbook_sheet_id: None,
                 kind: excel_diff::SheetKind::Worksheet,
                 grid: grid_large_b,
             },

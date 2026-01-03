@@ -281,6 +281,15 @@ fn write_op(
             let structure_sheet = sheet_mut(workbook, "Structure")?;
             write_structure(structure_sheet, rows, "SheetRemoved", strings, *sheet, "Sheet removed".to_string());
         }
+        DiffOp::SheetRenamed { sheet, from, to } => {
+            let structure_sheet = sheet_mut(workbook, "Structure")?;
+            let detail = format!(
+                "Sheet renamed: {} -> {}",
+                resolve_string(strings, *from),
+                resolve_string(strings, *to)
+            );
+            write_structure(structure_sheet, rows, "SheetRenamed", strings, *sheet, detail);
+        }
         DiffOp::QueryAdded { name } => {
             let query_sheet = sheet_mut(workbook, "PowerQuery")?;
             write_query(query_sheet, rows, "QueryAdded", resolve_string(strings, *name), "");

@@ -165,6 +165,7 @@ pub(crate) fn open_workbook_from_container(
             .map_err(|e| wrap_grid_parse_error(e, &target))?;
         sheet_ir.push(Sheet {
             name: sheet_name_id,
+            workbook_sheet_id: sheet.sheet_id,
             kind: SheetKind::Worksheet,
             grid,
         });
@@ -238,6 +239,7 @@ pub(crate) fn open_workbook_from_container(
 
                 charts.push(ChartObject {
                     sheet: sheet_name_id,
+                    workbook_sheet_id: sheet.sheet_id,
                     info: ChartInfo {
                         name: pool.intern(&name),
                         chart_type: entry.chart_type,

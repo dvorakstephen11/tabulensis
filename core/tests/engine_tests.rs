@@ -24,6 +24,7 @@ fn make_workbook(sheets: Vec<SheetSpec<'_>>) -> Workbook {
             }
             Sheet {
                 name: sid(name),
+                workbook_sheet_id: None,
                 kind: SheetKind::Worksheet,
                 grid,
             }
@@ -36,6 +37,15 @@ fn make_workbook(sheets: Vec<SheetSpec<'_>>) -> Workbook {
 }
 
 fn make_sheet_with_kind(name: &str, kind: SheetKind, cells: Vec<(u32, u32, f64)>) -> Sheet {
+    make_sheet_with_kind_and_id(name, kind, None, cells)
+}
+
+fn make_sheet_with_kind_and_id(
+    name: &str,
+    kind: SheetKind,
+    workbook_sheet_id: Option<u32>,
+    cells: Vec<(u32, u32, f64)>,
+) -> Sheet {
     let (nrows, ncols) = if cells.is_empty() {
         (0, 0)
     } else {
@@ -51,6 +61,7 @@ fn make_sheet_with_kind(name: &str, kind: SheetKind, cells: Vec<(u32, u32, f64)>
 
     Sheet {
         name: sid(name),
+        workbook_sheet_id,
         kind,
         grid,
     }
@@ -169,12 +180,14 @@ fn sheet_identity_includes_kind() {
 
     let worksheet = Sheet {
         name: sid("Sheet1"),
+        workbook_sheet_id: None,
         kind: SheetKind::Worksheet,
         grid: grid.clone(),
     };
 
     let chart = Sheet {
         name: sid("Sheet1"),
+        workbook_sheet_id: None,
         kind: SheetKind::Chart,
         grid,
     };
@@ -261,18 +274,123 @@ fn deterministic_sheet_op_ordering() {
 }
 
 #[test]
+fn sheet_rename_with_id_emits_rename_and_uses_new_name_for_grid_ops() {
+    let old_sheet = make_sheet_with_kind_and_id(
+        "OldName",
+        SheetKind::Worksheet,
+        Some(7),
+        vec![(0, 0, 1.0)],
+    );
+    let new_sheet = make_sheet_with_kind_and_id(
+        "NewName",
+        SheetKind::Worksheet,
+        Some(7),
+        vec![(0, 0, 2.0)],
+    );
+    let old = Workbook {
+        sheets: vec![old_sheet],
+        ..Default::default()
+    };
+    let new = Workbook {
+        sheets: vec![new_sheet],
+        ..Default::default()
+    };
+
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
+    assert_eq!(report.ops.len(), 2, "expected rename plus one cell edit");
+
+    let mut saw_rename = false;
+    let mut saw_edit = false;
+    for op in &report.ops {
+        match op {
+            DiffOp::SheetRenamed { sheet, from, to } => {
+                assert_eq!(sheet, &sid("NewName"));
+                assert_eq!(from, &sid("OldName"));
+                assert_eq!(to, &sid("NewName"));
+                saw_rename = true;
+            }
+            DiffOp::CellEdited { sheet, .. } => {
+                assert_eq!(sheet, &sid("NewName"));
+                saw_edit = true;
+            }
+            other => panic!("unexpected op: {other:?}"),
+        }
+    }
+    assert!(saw_rename, "expected SheetRenamed op");
+    assert!(saw_edit, "expected CellEdited op");
+}
+
+#[test]
+fn sheet_name_swap_prefers_id_matching() {
+    let old_a = make_sheet_with_kind_and_id(
+        "Alpha",
+        SheetKind::Worksheet,
+        Some(1),
+        vec![(0, 0, 1.0)],
+    );
+    let old_b = make_sheet_with_kind_and_id(
+        "Beta",
+        SheetKind::Worksheet,
+        Some(2),
+        vec![(0, 0, 10.0)],
+    );
+    let new_a = make_sheet_with_kind_and_id(
+        "Beta",
+        SheetKind::Worksheet,
+        Some(1),
+        vec![(0, 0, 2.0)],
+    );
+    let new_b = make_sheet_with_kind_and_id(
+        "Alpha",
+        SheetKind::Worksheet,
+        Some(2),
+        vec![(0, 0, 11.0)],
+    );
+
+    let old = Workbook {
+        sheets: vec![old_a, old_b],
+        ..Default::default()
+    };
+    let new = Workbook {
+        sheets: vec![new_a, new_b],
+        ..Default::default()
+    };
+
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
+    assert_eq!(report.ops.len(), 4, "expected two renames and two edits");
+
+    let mut renames = Vec::new();
+    let mut edits = Vec::new();
+    for op in &report.ops {
+        match op {
+            DiffOp::SheetRenamed { from, to, .. } => renames.push((*from, *to)),
+            DiffOp::CellEdited { sheet, .. } => edits.push(*sheet),
+            other => panic!("unexpected op: {other:?}"),
+        }
+    }
+
+    assert_eq!(renames.len(), 2);
+    assert!(renames.contains(&(sid("Alpha"), sid("Beta"))));
+    assert!(renames.contains(&(sid("Beta"), sid("Alpha"))));
+    assert!(edits.contains(&sid("Alpha")));
+    assert!(edits.contains(&sid("Beta")));
+}
+
+#[test]
 fn sheet_identity_includes_kind_for_macro_and_other() {
     let mut grid = Grid::new(1, 1);
     grid.insert_cell(0, 0, Some(CellValue::Number(1.0)), None);
 
     let macro_sheet = Sheet {
         name: sid("Code"),
+        workbook_sheet_id: None,
         kind: SheetKind::Macro,
         grid: grid.clone(),
     };
 
     let other_sheet = Sheet {
         name: sid("Code"),
+        workbook_sheet_id: None,
         kind: SheetKind::Other,
         grid,
     };
@@ -301,6 +419,37 @@ fn sheet_identity_includes_kind_for_macro_and_other() {
     assert_eq!(added, 1, "expected one SheetAdded for Other 'Code'");
     assert_eq!(removed, 1, "expected one SheetRemoved for Macro 'Code'");
     assert_eq!(report.ops.len(), 2, "no other ops expected");
+}
+
+#[test]
+fn sheet_id_matching_respects_kind() {
+    let old_sheet = make_sheet_with_kind_and_id(
+        "Sheet1",
+        SheetKind::Worksheet,
+        Some(42),
+        vec![(0, 0, 1.0)],
+    );
+    let new_sheet = make_sheet_with_kind_and_id(
+        "Sheet1",
+        SheetKind::Chart,
+        Some(42),
+        Vec::new(),
+    );
+
+    let old = Workbook {
+        sheets: vec![old_sheet],
+        ..Default::default()
+    };
+    let new = Workbook {
+        sheets: vec![new_sheet],
+        ..Default::default()
+    };
+
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
+    assert_eq!(report.ops.len(), 2, "expected add/remove due to kind mismatch");
+    assert!(report.ops.iter().any(|op| matches!(op, DiffOp::SheetRemoved { sheet } if *sheet == sid("Sheet1"))));
+    assert!(report.ops.iter().any(|op| matches!(op, DiffOp::SheetAdded { sheet } if *sheet == sid("Sheet1"))));
+    assert!(!report.ops.iter().any(|op| matches!(op, DiffOp::SheetRenamed { .. })));
 }
 
 #[cfg(not(debug_assertions))]
@@ -366,6 +515,7 @@ fn move_detection_respects_column_gate() {
     let wb_a = Workbook {
         sheets: vec![Sheet {
             name: sid("Sheet1"),
+            workbook_sheet_id: None,
             kind: SheetKind::Worksheet,
             grid: grid_a,
         }],
@@ -374,6 +524,7 @@ fn move_detection_respects_column_gate() {
     let wb_b = Workbook {
         sheets: vec![Sheet {
             name: sid("Sheet1"),
+            workbook_sheet_id: None,
             kind: SheetKind::Worksheet,
             grid: grid_b,
         }],
@@ -430,4 +581,47 @@ fn duplicate_sheet_identity_emits_warning() {
         "should emit warning about duplicate sheet identity; warnings: {:?}",
         report.warnings
     );
+}
+
+#[test]
+fn duplicate_workbook_sheet_id_falls_back_to_name_matching() {
+    let first = make_sheet_with_kind_and_id(
+        "First",
+        SheetKind::Worksheet,
+        Some(1),
+        vec![(0, 0, 1.0)],
+    );
+    let second = make_sheet_with_kind_and_id(
+        "Second",
+        SheetKind::Worksheet,
+        Some(1),
+        vec![(0, 0, 2.0)],
+    );
+    let old = Workbook {
+        sheets: vec![first, second],
+        ..Default::default()
+    };
+    let new = Workbook {
+        sheets: Vec::new(),
+        ..Default::default()
+    };
+
+    let report = diff_workbooks(&old, &new, &DiffConfig::default());
+    assert!(
+        report.warnings.iter().any(|w| w.contains("duplicate workbook sheetId in old workbook: id=1")),
+        "expected duplicate workbook sheetId warning, warnings: {:?}",
+        report.warnings
+    );
+
+    let removed: Vec<_> = report
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            DiffOp::SheetRemoved { sheet } => Some(*sheet),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(removed.len(), 2, "expected both sheets removed via fallback");
+    assert!(removed.contains(&sid("First")));
+    assert!(removed.contains(&sid("Second")));
 }

@@ -52,13 +52,20 @@ pub fn build_alignments(
     sheets: &SheetPairSnapshot,
 ) -> Vec<SheetAlignment> {
     let ops_by_sheet = group_ops_by_sheet(report);
+    let rename_map = build_rename_map(report);
+    let renamed_old: HashSet<String> = rename_map.values().cloned().collect();
     let old_lookup = build_sheet_lookup(&sheets.old.sheets);
     let new_lookup = build_sheet_lookup(&sheets.new.sheets);
 
     let mut names = HashSet::new();
     names.extend(ops_by_sheet.keys().cloned());
-    names.extend(old_lookup.keys().cloned());
     names.extend(new_lookup.keys().cloned());
+    for name in old_lookup.keys() {
+        if renamed_old.contains(name) {
+            continue;
+        }
+        names.insert(name.clone());
+    }
 
     let mut names: Vec<String> = names.into_iter().collect();
     names.sort();
@@ -71,7 +78,10 @@ pub fn build_alignments(
             .get(&sheet)
             .map(Vec::as_slice)
             .unwrap_or(empty_ops.as_slice());
-        let old_sheet = old_lookup.get(&sheet).copied();
+        let old_sheet = old_lookup
+            .get(&sheet)
+            .copied()
+            .or_else(|| rename_map.get(&sheet).and_then(|old| old_lookup.get(old).copied()));
         let new_sheet = new_lookup.get(&sheet).copied();
         alignments.push(build_sheet_alignment(&sheet, old_sheet, new_sheet, ops));
     }
@@ -95,6 +105,7 @@ fn group_ops_by_sheet<'a>(
         let sheet = match op {
             excel_diff::DiffOp::SheetAdded { sheet }
             | excel_diff::DiffOp::SheetRemoved { sheet }
+            | excel_diff::DiffOp::SheetRenamed { sheet, .. }
             | excel_diff::DiffOp::RowAdded { sheet, .. }
             | excel_diff::DiffOp::RowRemoved { sheet, .. }
             | excel_diff::DiffOp::RowReplaced { sheet, .. }
@@ -116,6 +127,19 @@ fn group_ops_by_sheet<'a>(
         map.entry(sheet_name.to_string())
             .or_insert_with(Vec::new)
             .push(op);
+    }
+    map
+}
+
+fn build_rename_map(report: &excel_diff::DiffReport) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for op in &report.ops {
+        let excel_diff::DiffOp::SheetRenamed { sheet, from, .. } = op else {
+            continue;
+        };
+        let new_name = report.resolve(*sheet).unwrap_or("<unknown>");
+        let old_name = report.resolve(*from).unwrap_or("<unknown>");
+        map.insert(new_name.to_string(), old_name.to_string());
     }
     map
 }

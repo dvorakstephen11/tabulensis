@@ -13,6 +13,7 @@ fn make_workbook(session: &mut DiffSession, value: f64) -> Workbook {
     Workbook {
         sheets: vec![Sheet {
             name: sheet_name,
+            workbook_sheet_id: None,
             kind: SheetKind::Worksheet,
             grid,
         }],

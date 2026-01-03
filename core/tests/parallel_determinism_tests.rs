@@ -25,6 +25,7 @@ fn make_workbook(pool: &mut StringPool, value: f64) -> Workbook {
     Workbook {
         sheets: vec![Sheet {
             name: pool.intern("Sheet1"),
+            workbook_sheet_id: None,
             kind: SheetKind::Worksheet,
             grid,
         }],

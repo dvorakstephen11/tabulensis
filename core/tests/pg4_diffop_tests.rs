@@ -59,6 +59,7 @@ fn op_kind(op: &DiffOp) -> &'static str {
     match op {
         DiffOp::SheetAdded { .. } => "SheetAdded",
         DiffOp::SheetRemoved { .. } => "SheetRemoved",
+        DiffOp::SheetRenamed { .. } => "SheetRenamed",
         DiffOp::RowAdded { .. } => "RowAdded",
         DiffOp::RowRemoved { .. } => "RowRemoved",
         DiffOp::RowReplaced { .. } => "RowReplaced",
@@ -589,6 +590,24 @@ fn pg4_sheet_added_and_removed_json_shape() {
 }
 
 #[test]
+fn pg4_sheet_renamed_json_shape() {
+    let renamed = DiffOp::SheetRenamed {
+        sheet: sid("SheetNew"),
+        from: sid("SheetOld"),
+        to: sid("SheetNew"),
+    };
+    let renamed_json = serde_json::to_value(&renamed).expect("serialize sheet renamed");
+    assert_eq!(renamed_json["kind"], "SheetRenamed");
+    assert_eq!(renamed_json["sheet"], sid_json("SheetNew"));
+    assert_eq!(renamed_json["from"], sid_json("SheetOld"));
+    assert_eq!(renamed_json["to"], sid_json("SheetNew"));
+    let renamed_keys = json_keys(&renamed_json);
+    let expected_keys: BTreeSet<String> =
+        ["kind", "sheet", "from", "to"].into_iter().map(String::from).collect();
+    assert_eq!(renamed_keys, expected_keys);
+}
+
+#[test]
 fn pg4_row_and_column_json_shape_keysets() {
     let expected_row_with_sig: BTreeSet<String> = ["kind", "row_idx", "row_signature", "sheet"]
         .into_iter()
@@ -921,6 +940,11 @@ fn pg4_diffop_roundtrip_each_variant() {
         },
         DiffOp::SheetRemoved {
             sheet: sid("SheetB"),
+        },
+        DiffOp::SheetRenamed {
+            sheet: sid("SheetC"),
+            from: sid("SheetB"),
+            to: sid("SheetC"),
         },
         DiffOp::RowAdded {
             sheet: sid("Sheet1"),

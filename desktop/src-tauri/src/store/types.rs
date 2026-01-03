@@ -74,6 +74,7 @@ pub fn op_sheet_id(op: &DiffOp) -> Option<StringId> {
     match op {
         DiffOp::SheetAdded { sheet }
         | DiffOp::SheetRemoved { sheet }
+        | DiffOp::SheetRenamed { sheet, .. }
         | DiffOp::RowAdded { sheet, .. }
         | DiffOp::RowRemoved { sheet, .. }
         | DiffOp::RowReplaced { sheet, .. }
@@ -92,6 +93,7 @@ pub fn diff_op_kind(op: &DiffOp) -> &'static str {
     match op {
         DiffOp::SheetAdded { .. } => "SheetAdded",
         DiffOp::SheetRemoved { .. } => "SheetRemoved",
+        DiffOp::SheetRenamed { .. } => "SheetRenamed",
         DiffOp::RowAdded { .. } => "RowAdded",
         DiffOp::RowRemoved { .. } => "RowRemoved",
         DiffOp::RowReplaced { .. } => "RowReplaced",
@@ -152,6 +154,7 @@ pub fn classify_op(op: &DiffOp) -> Option<ChangeKind> {
         DiffOp::RowReplaced { .. }
         | DiffOp::RectReplaced { .. }
         | DiffOp::CellEdited { .. }
+        | DiffOp::SheetRenamed { .. }
         | DiffOp::NamedRangeChanged { .. }
         | DiffOp::ChartChanged { .. }
         | DiffOp::VbaModuleChanged { .. }

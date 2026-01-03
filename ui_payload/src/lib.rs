@@ -191,6 +191,11 @@ pub fn build_payload_from_workbook_report(
 fn collect_sheet_ids(ops: &[excel_diff::DiffOp]) -> HashSet<excel_diff::StringId> {
     let mut sheets = HashSet::new();
     for op in ops {
+        if let excel_diff::DiffOp::SheetRenamed { sheet, from, .. } = op {
+            sheets.insert(*sheet);
+            sheets.insert(*from);
+            continue;
+        }
         let sheet = match op {
             excel_diff::DiffOp::SheetAdded { sheet }
             | excel_diff::DiffOp::SheetRemoved { sheet }
@@ -221,6 +226,7 @@ fn group_ops_by_sheet(
         let sheet = match op {
             excel_diff::DiffOp::SheetAdded { sheet }
             | excel_diff::DiffOp::SheetRemoved { sheet }
+            | excel_diff::DiffOp::SheetRenamed { sheet, .. }
             | excel_diff::DiffOp::RowAdded { sheet, .. }
             | excel_diff::DiffOp::RowRemoved { sheet, .. }
             | excel_diff::DiffOp::RowReplaced { sheet, .. }

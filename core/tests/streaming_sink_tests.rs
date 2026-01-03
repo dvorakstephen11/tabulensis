@@ -17,6 +17,7 @@ fn make_test_workbook(session: &mut DiffSession, values: &[f64]) -> Workbook {
     Workbook {
         sheets: vec![Sheet {
             name: sheet_name,
+            workbook_sheet_id: None,
             kind: SheetKind::Worksheet,
             grid,
         }],

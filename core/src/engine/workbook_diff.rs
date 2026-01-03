@@ -7,7 +7,7 @@ use crate::string_pool::StringPool;
 use crate::workbook::{Sheet, SheetKind, Workbook};
 use crate::progress::ProgressCallback;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 #[cfg(feature = "perf-metrics")]
 use std::mem::size_of;
 
@@ -22,11 +22,21 @@ struct SheetKey {
     kind: SheetKind,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SheetIdKey {
+    id: u32,
+    kind: SheetKind,
+}
+
 fn make_sheet_key(sheet: &Sheet, pool: &StringPool) -> SheetKey {
     SheetKey {
         name_lower: pool.resolve(sheet.name).to_lowercase(),
         kind: sheet.kind.clone(),
     }
+}
+
+fn sheet_name_lower(sheet: &Sheet, pool: &StringPool) -> String {
+    pool.resolve(sheet.name).to_lowercase()
 }
 
 fn sheet_kind_order(kind: &SheetKind) -> u8 {
@@ -234,10 +244,10 @@ fn try_diff_workbooks_streaming_impl<'p, S: DiffSink>(
         });
     }
 
-    let mut old_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
+    let mut old_sheets_by_name: HashMap<SheetKey, &Sheet> = HashMap::new();
     for sheet in &old.sheets {
         let key = make_sheet_key(sheet, pool);
-        if let Some(previous) = old_sheets.insert(key.clone(), sheet) {
+        if let Some(previous) = old_sheets_by_name.insert(key.clone(), sheet) {
             ctx.warnings.push(format!(
                 "duplicate sheet identity in old workbook: '{}' ({:?}); \
                  later definition '{}' overwrites earlier one '{}'. The file may be corrupt.",
@@ -249,10 +259,10 @@ fn try_diff_workbooks_streaming_impl<'p, S: DiffSink>(
         }
     }
 
-    let mut new_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
+    let mut new_sheets_by_name: HashMap<SheetKey, &Sheet> = HashMap::new();
     for sheet in &new.sheets {
         let key = make_sheet_key(sheet, pool);
-        if let Some(previous) = new_sheets.insert(key.clone(), sheet) {
+        if let Some(previous) = new_sheets_by_name.insert(key.clone(), sheet) {
             ctx.warnings.push(format!(
                 "duplicate sheet identity in new workbook: '{}' ({:?}); \
                  later definition '{}' overwrites earlier one '{}'. The file may be corrupt.",
@@ -264,16 +274,173 @@ fn try_diff_workbooks_streaming_impl<'p, S: DiffSink>(
         }
     }
 
-    let mut all_keys: Vec<SheetKey> = old_sheets
+    let mut id_counts_old: HashMap<u32, usize> = HashMap::new();
+    for sheet in &old.sheets {
+        if let Some(id) = sheet.workbook_sheet_id {
+            *id_counts_old.entry(id).or_insert(0) += 1;
+        }
+    }
+    for (id, count) in id_counts_old.iter() {
+        if *count > 1 {
+            ctx.warnings.push(format!(
+                "duplicate workbook sheetId in old workbook: id={}, falling back to name-based matching for those sheets.",
+                id
+            ));
+        }
+    }
+
+    let mut id_counts_new: HashMap<u32, usize> = HashMap::new();
+    for sheet in &new.sheets {
+        if let Some(id) = sheet.workbook_sheet_id {
+            *id_counts_new.entry(id).or_insert(0) += 1;
+        }
+    }
+    for (id, count) in id_counts_new.iter() {
+        if *count > 1 {
+            ctx.warnings.push(format!(
+                "duplicate workbook sheetId in new workbook: id={}, falling back to name-based matching for those sheets.",
+                id
+            ));
+        }
+    }
+
+    let mut old_by_id: HashMap<SheetIdKey, &Sheet> = HashMap::new();
+    for sheet in &old.sheets {
+        let Some(id) = sheet.workbook_sheet_id else {
+            continue;
+        };
+        if id_counts_old.get(&id) != Some(&1) {
+            continue;
+        }
+        let key = SheetIdKey {
+            id,
+            kind: sheet.kind.clone(),
+        };
+        old_by_id.insert(key, sheet);
+    }
+
+    let mut new_by_id: HashMap<SheetIdKey, &Sheet> = HashMap::new();
+    for sheet in &new.sheets {
+        let Some(id) = sheet.workbook_sheet_id else {
+            continue;
+        };
+        if id_counts_new.get(&id) != Some(&1) {
+            continue;
+        }
+        let key = SheetIdKey {
+            id,
+            kind: sheet.kind.clone(),
+        };
+        new_by_id.insert(key, sheet);
+    }
+
+    struct SheetEntry<'a> {
+        old: Option<&'a Sheet>,
+        new: Option<&'a Sheet>,
+        by_id: bool,
+        sort_name_lower: String,
+        kind: SheetKind,
+        id: Option<u32>,
+    }
+
+    let mut entries: Vec<SheetEntry<'_>> = Vec::new();
+    let mut consumed_old: HashSet<*const Sheet> = HashSet::new();
+    let mut consumed_new: HashSet<*const Sheet> = HashSet::new();
+
+    let mut id_keys: HashSet<SheetIdKey> = HashSet::new();
+    id_keys.extend(old_by_id.keys().cloned());
+    id_keys.extend(new_by_id.keys().cloned());
+
+    for key in id_keys {
+        let old_sheet = old_by_id.get(&key).copied();
+        let new_sheet = new_by_id.get(&key).copied();
+        if let Some(sheet) = old_sheet {
+            consumed_old.insert(sheet as *const Sheet);
+        }
+        if let Some(sheet) = new_sheet {
+            consumed_new.insert(sheet as *const Sheet);
+        }
+
+        let sort_name_lower = if let Some(new_sheet) = new_sheet {
+            sheet_name_lower(new_sheet, pool)
+        } else {
+            sheet_name_lower(
+                old_sheet.expect("id entry must have old or new sheet"),
+                pool,
+            )
+        };
+        let kind = new_sheet
+            .map(|sheet| sheet.kind.clone())
+            .unwrap_or_else(|| old_sheet.expect("entry has sheet").kind.clone());
+        entries.push(SheetEntry {
+            old: old_sheet,
+            new: new_sheet,
+            by_id: true,
+            sort_name_lower,
+            kind,
+            id: Some(key.id),
+        });
+    }
+
+    let mut name_keys: Vec<SheetKey> = old_sheets_by_name
         .keys()
-        .chain(new_sheets.keys())
+        .chain(new_sheets_by_name.keys())
         .cloned()
         .collect();
-    all_keys.sort_by(|a, b| match a.name_lower.cmp(&b.name_lower) {
+    name_keys.sort_by(|a, b| match a.name_lower.cmp(&b.name_lower) {
         std::cmp::Ordering::Equal => sheet_kind_order(&a.kind).cmp(&sheet_kind_order(&b.kind)),
         other => other,
     });
-    all_keys.dedup();
+    name_keys.dedup();
+
+    for key in name_keys {
+        let old_sheet = old_sheets_by_name
+            .get(&key)
+            .copied()
+            .filter(|sheet| !consumed_old.contains(&(*sheet as *const Sheet)));
+        let new_sheet = new_sheets_by_name
+            .get(&key)
+            .copied()
+            .filter(|sheet| !consumed_new.contains(&(*sheet as *const Sheet)));
+        if old_sheet.is_none() && new_sheet.is_none() {
+            continue;
+        }
+        let sort_name_lower = if let Some(new_sheet) = new_sheet {
+            sheet_name_lower(new_sheet, pool)
+        } else {
+            sheet_name_lower(
+                old_sheet.expect("name entry must have old or new sheet"),
+                pool,
+            )
+        };
+        let kind = new_sheet
+            .map(|sheet| sheet.kind.clone())
+            .unwrap_or_else(|| old_sheet.expect("entry has sheet").kind.clone());
+        entries.push(SheetEntry {
+            old: old_sheet,
+            new: new_sheet,
+            by_id: false,
+            sort_name_lower,
+            kind,
+            id: None,
+        });
+    }
+
+    entries.sort_by(|a, b| match a.sort_name_lower.cmp(&b.sort_name_lower) {
+        std::cmp::Ordering::Equal => {
+            let kind_cmp = sheet_kind_order(&a.kind).cmp(&sheet_kind_order(&b.kind));
+            if kind_cmp != std::cmp::Ordering::Equal {
+                return kind_cmp;
+            }
+            match (a.by_id, b.by_id) {
+                (true, true) => a.id.cmp(&b.id),
+                (false, false) => std::cmp::Ordering::Equal,
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+            }
+        }
+        other => other,
+    });
 
     hardening.progress("parse", 1.0);
     #[cfg(feature = "perf-metrics")]
@@ -281,12 +448,12 @@ fn try_diff_workbooks_streaming_impl<'p, S: DiffSink>(
         metrics.end_phase(Phase::Parse);
     }
 
-    for key in all_keys {
+    for entry in entries {
         if hardening.check_timeout(&mut ctx.warnings) {
             break;
         }
 
-        match (old_sheets.get(&key), new_sheets.get(&key)) {
+        match (entry.old, entry.new) {
             (None, Some(new_sheet)) => {
                 emit_op(
                     sink,
@@ -306,7 +473,27 @@ fn try_diff_workbooks_streaming_impl<'p, S: DiffSink>(
                 )?;
             }
             (Some(old_sheet), Some(new_sheet)) => {
-                let sheet_id: SheetId = old_sheet.name;
+                if entry.by_id {
+                    let old_lower = sheet_name_lower(old_sheet, pool);
+                    let new_lower = sheet_name_lower(new_sheet, pool);
+                    if old_lower != new_lower {
+                        emit_op(
+                            sink,
+                            &mut op_count,
+                            DiffOp::SheetRenamed {
+                                sheet: new_sheet.name,
+                                from: old_sheet.name,
+                                to: new_sheet.name,
+                            },
+                        )?;
+                    }
+                }
+
+                let sheet_id: SheetId = if entry.by_id {
+                    new_sheet.name
+                } else {
+                    old_sheet.name
+                };
                 try_diff_grids_internal(
                     sheet_id,
                     &old_sheet.grid,
@@ -325,7 +512,7 @@ fn try_diff_workbooks_streaming_impl<'p, S: DiffSink>(
                 }
             }
             (None, None) => {
-                debug_assert!(false, "sheet key in all_keys but not in either map");
+                debug_assert!(false, "entry without old or new sheet");
                 continue;
             }
         }

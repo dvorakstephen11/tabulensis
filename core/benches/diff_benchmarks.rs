@@ -70,6 +70,7 @@ fn single_sheet_workbook(session: &mut DiffSession, name: &str, grid: Grid) -> W
     Workbook {
         sheets: vec![Sheet {
             name: sheet_name,
+            workbook_sheet_id: None,
             kind: SheetKind::Worksheet,
             grid,
         }],

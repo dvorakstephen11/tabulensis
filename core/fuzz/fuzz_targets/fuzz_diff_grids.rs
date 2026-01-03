@@ -67,6 +67,7 @@ fuzz_target!(|input: FuzzInput| {
     let old_wb = Workbook {
         sheets: vec![Sheet {
             name: sheet_name,
+            workbook_sheet_id: None,
             kind: SheetKind::Worksheet,
             grid: old_grid,
         }],
@@ -75,6 +76,7 @@ fuzz_target!(|input: FuzzInput| {
     let new_wb = Workbook {
         sheets: vec![Sheet {
             name: sheet_name,
+            workbook_sheet_id: None,
             kind: SheetKind::Worksheet,
             grid: new_grid,
         }],

@@ -12,6 +12,7 @@ fn workbook_with_number(value: f64) -> Workbook {
     Workbook {
         sheets: vec![Sheet {
             name: sid("Sheet1"),
+            workbook_sheet_id: None,
             kind: SheetKind::Worksheet,
             grid,
         }],
