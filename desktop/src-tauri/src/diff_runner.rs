@@ -10,7 +10,7 @@ use std::thread;
 
 use excel_diff::{
     should_use_large_mode, ContainerError, ContainerLimits, DiffConfig, DiffError, DiffReport,
-    DiffSummary, PbixPackage, ProgressCallback, WorkbookPackage,
+    DiffSink, DiffSummary, PbixPackage, ProgressCallback, WorkbookPackage,
 };
 use lru::LruCache;
 use serde::Serialize;
@@ -223,7 +223,7 @@ impl EngineState {
             return Err(DiffErrorPayload::new("canceled", "Diff canceled.", false));
         }
 
-        let mut store = OpStore::open(&self.store_path).map_err(map_store_error)?;
+        let store = OpStore::open(&self.store_path).map_err(map_store_error)?;
         let options = request.options.clone();
         let trusted = options.trusted.unwrap_or(false);
         let config = options
@@ -666,5 +666,56 @@ fn status_for_error(err: &DiffErrorPayload) -> RunStatus {
         RunStatus::Canceled
     } else {
         RunStatus::Failed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::estimate_diff_cell_volume;
+    use crate::store::DiffMode;
+    use excel_diff::{
+        CellValue, DiffConfig, Grid, Sheet, SheetKind, Workbook, AUTO_STREAM_CELL_THRESHOLD,
+        should_use_large_mode, with_default_session,
+    };
+
+    fn create_dense_grid(nrows: u32, ncols: u32) -> Grid {
+        let mut grid = Grid::new(nrows, ncols);
+        for row in 0..nrows {
+            for col in 0..ncols {
+                let value = row as f64 * 1000.0 + col as f64;
+                grid.insert_cell(row, col, Some(CellValue::Number(value)), None);
+            }
+        }
+        grid
+    }
+
+    fn build_workbook(grid: Grid) -> Workbook {
+        let name_id = with_default_session(|session| session.strings.intern("Sheet1"));
+        Workbook {
+            sheets: vec![Sheet {
+                name: name_id,
+                kind: SheetKind::Worksheet,
+                grid,
+            }],
+            named_ranges: Vec::new(),
+            charts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn large_mode_threshold_triggers_in_desktop() {
+        let grid = create_dense_grid(1000, 1001);
+        let old = build_workbook(grid.clone());
+        let new = build_workbook(grid);
+        let estimated = estimate_diff_cell_volume(&old, &new);
+        assert!(estimated >= AUTO_STREAM_CELL_THRESHOLD);
+
+        let config = DiffConfig::balanced();
+        let mode = if should_use_large_mode(estimated, &config) {
+            DiffMode::Large
+        } else {
+            DiffMode::Payload
+        };
+        assert_eq!(mode, DiffMode::Large);
     }
 }

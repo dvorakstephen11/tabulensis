@@ -10,7 +10,7 @@ build = "build.rs"
 tauri = { version = "2.5.3" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-excel_diff = { path = "../../core", default-features = false, features = ["excel-open-xml", "model-diff", "vba"] }
+excel_diff = { path = "../../core", default-features = false, features = ["excel-open-xml", "vba"] }
 ui_payload = { path = "../../ui_payload" }
 rfd = "0.14"
 rusqlite = { version = "0.31", features = ["bundled"] }
@@ -21,6 +21,11 @@ rust_xlsxwriter = "0.71"
 lru = "0.12"
 walkdir = "2.5"
 globset = "0.4"
+
+[features]
+default = ["model-diff"]
+model-diff = ["excel_diff/model-diff"]
+perf-metrics = ["excel_diff/perf-metrics"]
 
 [build-dependencies]
 tauri-build = { version = "2.5.3" }

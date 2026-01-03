@@ -69,7 +69,7 @@ pub enum Commands {
     },
 }
 
-#[derive(Clone, Copy, ValueEnum, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
 pub enum OutputFormat {
     Text,
     Json,

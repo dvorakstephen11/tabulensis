@@ -10,12 +10,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Python deps
+        run: python -m pip install openpyxl==3.1.5
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build CLI for fixtures
+        run: cargo build -p excel_diff_cli
+      - name: Generate CLI payload/outcome fixtures
+        run: python scripts/generate_web_cli_fixtures.py --output-dir target/web-testdata --bin target/debug/excel-diff
       - name: Render test
         run: node web/test_render.js
       - name: View model test
         run: node web/test_view_model.js
       - name: Payload/outcome compatibility test
         run: node web/test_outcome_payload.js
+        env:
+          WEB_PAYLOAD_PATH: target/web-testdata/payload.json
+          WEB_OUTCOME_PATH: target/web-testdata/outcome.json

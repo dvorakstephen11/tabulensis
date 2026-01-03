@@ -2,7 +2,9 @@
 use crate::config::DiffConfig;
 #[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 use crate::datamashup::build_data_mashup;
-use crate::diff::{DiffReport, DiffSummary};
+use crate::diff::DiffReport;
+#[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
+use crate::diff::DiffSummary;
 #[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 use crate::excel_open_xml::{PackageError, open_data_mashup, open_vba_modules, open_workbook};
 #[allow(unused_imports)]

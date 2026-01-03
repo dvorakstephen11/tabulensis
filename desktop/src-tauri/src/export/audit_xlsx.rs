@@ -12,8 +12,6 @@ pub enum ExportError {
     Store(#[from] StoreError),
     #[error("XLSX error: {0}")]
     Xlsx(#[from] XlsxError),
-    #[error("Export error: {0}")]
-    Other(String),
 }
 
 pub fn export_audit_xlsx_from_store(

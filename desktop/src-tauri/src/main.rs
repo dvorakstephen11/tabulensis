@@ -242,7 +242,7 @@ async fn load_sheet_payload(
 
 #[tauri::command]
 fn export_audit_xlsx(
-    app: AppHandle,
+    _app: AppHandle,
     desktop: State<'_, DesktopState>,
     diff_id: String,
 ) -> Result<String, DiffErrorPayload> {

@@ -2,7 +2,7 @@ use std::io::{self, Cursor, Write};
 
 use excel_diff::advanced::{CallbackSink, diff_workbooks_streaming};
 use excel_diff::{
-    CellValue, DiffConfig, Grid, JsonLinesSink, Sheet, SheetKind, StringPool, Workbook,
+    CellValue, DiffConfig, DiffSink, Grid, JsonLinesSink, Sheet, SheetKind, StringPool, Workbook,
 };
 use js_sys::Function;
 use ui_payload::{
@@ -456,5 +456,42 @@ pub fn wasm_memory_bytes() -> u32 {
     #[cfg(not(target_arch = "wasm32"))]
     {
         0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{create_dense_grid, estimate_diff_cell_volume, wasm_default_config};
+    use excel_diff::{Sheet, SheetKind, Workbook, AUTO_STREAM_CELL_THRESHOLD, should_use_large_mode, with_default_session};
+    use ui_payload::DiffOutcomeMode;
+
+    fn build_workbook(grid: excel_diff::Grid) -> Workbook {
+        let name_id = with_default_session(|session| session.strings.intern("Sheet1"));
+        Workbook {
+            sheets: vec![Sheet {
+                name: name_id,
+                kind: SheetKind::Worksheet,
+                grid,
+            }],
+            named_ranges: Vec::new(),
+            charts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn large_mode_threshold_triggers_in_wasm() {
+        let grid = create_dense_grid(1000, 1001, 0);
+        let old = build_workbook(grid.clone());
+        let new = build_workbook(grid);
+        let estimated = estimate_diff_cell_volume(&old, &new);
+        assert!(estimated >= AUTO_STREAM_CELL_THRESHOLD);
+
+        let cfg = wasm_default_config();
+        let mode = if should_use_large_mode(estimated, &cfg) {
+            DiffOutcomeMode::Large
+        } else {
+            DiffOutcomeMode::Payload
+        };
+        assert_eq!(mode, DiffOutcomeMode::Large);
     }
 }

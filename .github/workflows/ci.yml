@@ -70,6 +70,18 @@ jobs:
       - name: Check core (engine-wasm)
         run: cargo check -p excel_diff --no-default-features --features "excel-open-xml,model-diff"
 
+      - name: Feature audit (default)
+        run: cargo tree -p excel_diff -e features
+
+      - name: Feature audit (engine-wasm)
+        run: cargo tree -p excel_diff -e features --no-default-features --features "excel-open-xml,model-diff"
+
+      - name: Feature audit (excel-open-xml only)
+        run: cargo tree -p excel_diff -e features --no-default-features --features "excel-open-xml"
+
+      - name: Feature audit (model-diff only)
+        run: cargo tree -p excel_diff -e features --no-default-features --features "model-diff"
+
       - name: Check ui_payload
         run: cargo check -p ui_payload
 

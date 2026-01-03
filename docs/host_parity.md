@@ -41,5 +41,10 @@ This document defines the host parity contract for excel_diff and the invariants
   - `cargo check -p ui_payload`
   - `cargo check -p excel_diff_wasm --target wasm32-unknown-unknown`
   - `cargo check -p excel_diff_desktop`
+- Feature audit (`cargo tree -p excel_diff -e features`):
+  - default features
+  - `--no-default-features --features "excel-open-xml,model-diff"`
+  - `--no-default-features --features "excel-open-xml"`
+  - `--no-default-features --features "model-diff"`
 - Schema compatibility: web tests load CLI payload/outcome fixtures with `buildWorkbookViewModel` and `renderReportHtml`.
 - Large-mode regression: tests assert `mode=large`/JSONL when the threshold is exceeded.

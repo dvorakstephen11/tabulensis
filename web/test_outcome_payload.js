@@ -8,8 +8,10 @@ import { renderReportHtml } from "./render.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const payloadPath = path.join(__dirname, "testdata", "sample_payload.json");
-const outcomePath = path.join(__dirname, "testdata", "sample_outcome.json");
+const payloadPath =
+  process.env.WEB_PAYLOAD_PATH || path.join(__dirname, "testdata", "sample_payload.json");
+const outcomePath =
+  process.env.WEB_OUTCOME_PATH || path.join(__dirname, "testdata", "sample_outcome.json");
 
 const payload = JSON.parse(fs.readFileSync(payloadPath, "utf8"));
 const outcome = JSON.parse(fs.readFileSync(outcomePath, "utf8"));

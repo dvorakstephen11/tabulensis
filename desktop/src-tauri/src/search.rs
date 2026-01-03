@@ -45,7 +45,7 @@ pub fn search_diff_ops(
 ) -> Result<Vec<SearchResult>, DiffErrorPayload> {
     let store = OpStore::open(store_path).map_err(store_error)?;
     let strings = store.load_strings(diff_id).map_err(store_error)?;
-    let mut conn = store.into_connection();
+    let conn = store.into_connection();
 
     let pattern = format!("%{}%", query.to_lowercase());
     let mut stmt = conn
@@ -130,11 +130,13 @@ pub fn search_workbook_index(
     let conn = store.connection();
 
     let mut stmt = conn
-        .prepare("SELECT sheet, addr, kind, text FROM cell_docs WHERE cell_docs MATCH ?1 LIMIT ?2")
+        .prepare(
+            "SELECT sheet, addr, kind, text FROM cell_docs WHERE index_id = ?1 AND cell_docs MATCH ?2 LIMIT ?3",
+        )
         .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
     let query_text = format!("{}*", query);
     let rows = stmt
-        .query_map(params![query_text, limit as i64], |row| {
+        .query_map(params![index_id, query_text, limit as i64], |row| {
             Ok(SearchIndexResult {
                 sheet: row.get(0)?,
                 address: row.get(1)?,
