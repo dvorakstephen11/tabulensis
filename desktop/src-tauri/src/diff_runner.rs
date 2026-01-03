@@ -8,17 +8,20 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread;
 
-use excel_diff::{ContainerError, ContainerLimits, DiffConfig, DiffError, DiffReport, DiffSink, DiffSummary, PbixPackage, ProgressCallback, WorkbookPackage};
+use excel_diff::{
+    should_use_large_mode, ContainerError, ContainerLimits, DiffConfig, DiffError, DiffReport,
+    DiffSummary, PbixPackage, ProgressCallback, WorkbookPackage,
+};
 use lru::LruCache;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use crate::export::export_audit_xlsx_from_store;
 use crate::store::{
-    DiffMode, DiffRunSummary, OpStore, OpStoreSink, RunStatus, SheetStats, StoreError, resolve_sheet_stats,
+    resolve_sheet_stats, DiffMode, DiffRunSummary, OpStore, OpStoreSink, RunStatus, SheetStats,
+    StoreError,
 };
-
-const AUTO_STREAM_CELL_THRESHOLD: u64 = 1_000_000;
+use ui_payload::{build_payload_from_pbix_report, limits_from_config, DiffOptions, DiffOutcomeConfig, DiffPreset};
 const WORKBOOK_CACHE_CAPACITY: usize = 4;
 const PBIX_CACHE_CAPACITY: usize = 2;
 
@@ -27,7 +30,7 @@ pub struct DiffRequest {
     pub old_path: String,
     pub new_path: String,
     pub run_id: u64,
-    pub trusted: bool,
+    pub options: DiffOptions,
     pub cancel: Arc<AtomicBool>,
     pub app: AppHandle,
 }
@@ -49,6 +52,8 @@ pub struct DiffOutcome {
     pub payload: Option<ui_payload::DiffWithSheets>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<DiffRunSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<DiffOutcomeConfig>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -219,16 +224,21 @@ impl EngineState {
         }
 
         let mut store = OpStore::open(&self.store_path).map_err(map_store_error)?;
-        let config = DiffConfig::default();
+        let options = request.options.clone();
+        let trusted = options.trusted.unwrap_or(false);
+        let config = options
+            .effective_config(DiffConfig::balanced())
+            .map_err(|e| DiffErrorPayload::new("config", e, false))?;
         let config_json = serde_json::to_string(&config).unwrap_or_else(|_| "{}".to_string());
+        let outcome_config = outcome_config_from_options(&options, &config);
 
         match old_kind {
             ui_payload::HostKind::Workbook => {
-                let old_pkg = self.open_workbook_cached(&old_path, request.trusted)?;
-                let new_pkg = self.open_workbook_cached(&new_path, request.trusted)?;
+                let old_pkg = self.open_workbook_cached(&old_path, trusted)?;
+                let new_pkg = self.open_workbook_cached(&new_path, trusted)?;
 
                 let estimated_cells = estimate_diff_cell_volume(&old_pkg.workbook, &new_pkg.workbook);
-                let mode = if estimated_cells >= AUTO_STREAM_CELL_THRESHOLD {
+                let mode = if should_use_large_mode(estimated_cells, &config) {
                     DiffMode::Large
                 } else {
                     DiffMode::Payload
@@ -242,7 +252,7 @@ impl EngineState {
                         &self.engine_version,
                         &self.app_version,
                         mode,
-                        request.trusted,
+                        trusted,
                     )
                     .map_err(map_store_error)?;
 
@@ -278,6 +288,7 @@ impl EngineState {
                             mode,
                             payload: Some(payload),
                             summary: Some(summary_record),
+                            config: Some(outcome_config.clone()),
                         })
                     }
                     DiffMode::Large => {
@@ -321,13 +332,14 @@ impl EngineState {
                             mode,
                             payload: None,
                             summary: Some(summary_record),
+                            config: Some(outcome_config.clone()),
                         })
                     }
                 }
             }
             ui_payload::HostKind::Pbix => {
-                let old_pkg = self.open_pbix_cached(&old_path, request.trusted)?;
-                let new_pkg = self.open_pbix_cached(&new_path, request.trusted)?;
+                let old_pkg = self.open_pbix_cached(&old_path, trusted)?;
+                let new_pkg = self.open_pbix_cached(&new_path, trusted)?;
 
                 let diff_id = store
                     .start_run(
@@ -337,29 +349,68 @@ impl EngineState {
                         &self.engine_version,
                         &self.app_version,
                         DiffMode::Payload,
-                        request.trusted,
+                        trusted,
                     )
                     .map_err(map_store_error)?;
 
-                emit_progress(&request.app, request.run_id, "diff", "Diffing PBIX metadata...");
-                let report = old_pkg.diff(&new_pkg, &config);
-                let (counts, sheet_stats) = store
-                    .insert_ops_from_report(&diff_id, &report)
-                    .map_err(map_store_error)?;
-                let resolved = resolve_sheet_stats(&report.strings, &sheet_stats).map_err(map_store_error)?;
-                let summary = report_to_summary(&report);
+                emit_progress(&request.app, request.run_id, "diff", "Streaming PBIX diff to disk...");
+                let progress = EngineProgress::new(request.app.clone(), request.run_id, request.cancel.clone());
+                let sink_store = OpStore::open(&self.store_path).map_err(map_store_error)?;
+                let conn = sink_store.into_connection();
+                let mut sink = OpStoreSink::new(conn, diff_id.clone())
+                    .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
+
+                let summary = match run_diff_with_progress(
+                    || old_pkg.diff_streaming_with_progress(&new_pkg, &config, &mut sink, &progress),
+                    &request.cancel,
+                ) {
+                    Ok(result) => result.map_err(diff_error_from_diff),
+                    Err(err) => Err(err),
+                };
+
+                let summary = match summary {
+                    Ok(summary) => summary,
+                    Err(err) => {
+                        let _ = sink.finish();
+                        let _ = store.fail_run(&diff_id, status_for_error(&err), &err.message);
+                        return Err(err);
+                    }
+                };
+
+                sink.finish().map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
+                let (_, counts, stats, _) = sink.into_parts();
+                let strings = current_strings();
+                let mut stats: Vec<SheetStats> = stats.into_values().collect();
+                stats.sort_by_key(|entry| entry.sheet_id);
+                let resolved = resolve_sheet_stats(&strings, &stats).map_err(map_store_error)?;
+                let use_large_mode = should_use_large_mode(summary.op_count as u64, &config);
+                if use_large_mode {
+                    store.set_mode(&diff_id, DiffMode::Large).map_err(map_store_error)?;
+                }
                 store
-                    .finish_run(&diff_id, &summary, &report.strings, &counts, &resolved, RunStatus::Complete)
+                    .finish_run(&diff_id, &summary, &strings, &counts, &resolved, RunStatus::Complete)
                     .map_err(map_store_error)?;
 
-                let payload = ui_payload::build_payload_from_pbix(&old_pkg, &new_pkg, &config);
                 let summary_record = store.load_summary(&diff_id).map_err(map_store_error)?;
-                Ok(DiffOutcome {
-                    diff_id,
-                    mode: DiffMode::Payload,
-                    payload: Some(payload),
-                    summary: Some(summary_record),
-                })
+                if use_large_mode {
+                    Ok(DiffOutcome {
+                        diff_id,
+                        mode: DiffMode::Large,
+                        payload: None,
+                        summary: Some(summary_record),
+                        config: Some(outcome_config.clone()),
+                    })
+                } else {
+                    let report = store.load_report(&diff_id).map_err(map_store_error)?;
+                    let payload = build_payload_from_pbix_report(report);
+                    Ok(DiffOutcome {
+                        diff_id,
+                        mode: DiffMode::Payload,
+                        payload: Some(payload),
+                        summary: Some(summary_record),
+                        config: Some(outcome_config.clone()),
+                    })
+                }
             }
         }
     }
@@ -434,6 +485,18 @@ fn report_to_summary(report: &DiffReport) -> DiffSummary {
         op_count: report.ops.len(),
         #[cfg(feature = "perf-metrics")]
         metrics: report.metrics.clone(),
+    }
+}
+
+fn outcome_config_from_options(options: &DiffOptions, cfg: &DiffConfig) -> DiffOutcomeConfig {
+    let preset = if options.config_json.as_ref().map(|v| v.trim()).unwrap_or("").is_empty() {
+        Some(options.preset.unwrap_or(DiffPreset::Balanced))
+    } else {
+        None
+    };
+    DiffOutcomeConfig {
+        preset,
+        limits: Some(limits_from_config(cfg)),
     }
 }
 

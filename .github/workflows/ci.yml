@@ -52,3 +52,30 @@ jobs:
       - name: Run clippy (deny unwrap/expect)
         run: cargo clippy --workspace -- -D clippy::unwrap_used -D clippy::expect_used
 
+  build-matrix:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Check core (default features)
+        run: cargo check -p excel_diff
+
+      - name: Check core (engine-wasm)
+        run: cargo check -p excel_diff --no-default-features --features "excel-open-xml,model-diff"
+
+      - name: Check ui_payload
+        run: cargo check -p ui_payload
+
+      - name: Check wasm bindings
+        run: cargo check -p excel_diff_wasm --target wasm32-unknown-unknown
+
+      - name: Check desktop crate
+        run: cargo check -p excel_diff_desktop
+

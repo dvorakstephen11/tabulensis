@@ -97,6 +97,7 @@
       2026-01-02_132622.json
       2026-01-02_145448.json
       2026-01-02_160100.json
+      2026-01-02_175352.json
     wasm_memory_budgets.json
   Cargo.lock
   Cargo.toml
@@ -132,6 +133,15 @@
       corpus/
         fuzz_datamashup_parse/
           base_query.bin
+          duplicate_datamashup_parts_a09562b6.bin
+          mashup_base64_whitespace_a09562b6.bin
+          mashup_utf16_le_a09562b6.bin
+          multi_query_with_embedded_84afdf77.bin
+          one_query_a09562b6.bin
+          pbix_embedded_queries_81c5ac5b.bin
+          pbix_legacy_multi_query_a_e527a09a.bin
+          pbix_legacy_one_query_a_e527a09a.bin
+          permissions_defaults_7dd163ff.bin
         fuzz_diff_grids/
           seed.bin
         fuzz_m_section_and_ast/
@@ -141,11 +151,32 @@
           literal.txt
           record_list.txt
           try_otherwise.txt
+        fuzz_open_pbix/
+          pbit_model_a.pbit
+          pbix_embedded_queries.pbix
+          pbix_legacy_multi_query_a.pbix
+          pbix_legacy_one_query_a.pbix
+          pbix_no_datamashup_no_schema.pbix
+        fuzz_open_workbook/
+          corrupt_base64.xlsx
+          duplicate_datamashup_parts.xlsx
+          mashup_base64_whitespace.xlsx
+          mashup_utf16_le.xlsx
+          minimal.xlsx
+          multi_query_with_embedded.xlsx
+          no_content_types.xlsx
+          not_a_zip.txt
+          one_query.xlsx
+          permissions_defaults.xlsx
+          random_zip.zip
+          vba_base.xlsm
       fuzz_targets/
         fuzz_datamashup_parse.rs
         fuzz_diff_grids.rs
         fuzz_m_section_and_ast.rs
+        fuzz_open_pbix.rs
         fuzz_open_workbook.rs
+      seed_fixtures.yaml
     src/
       addressing.rs
       alignment/
@@ -282,6 +313,8 @@
       pg4_diffop_tests.rs
       pg5_grid_diff_tests.rs
       pg6_object_vs_grid_tests.rs
+      robustness_regressions.yaml
+      robustness_regressions_tests.rs
       signature_tests.rs
       sparse_grid_tests.rs
       streaming_contract_tests.rs
@@ -350,6 +383,7 @@
   README.md
   related_files.txt.md
   scripts/
+    add_regression_fixture.py
     arch_guard.py
     check_fixture_references.py
     check_perf_thresholds.py
@@ -357,6 +391,10 @@
     compare_perf_results.py
     export_e2e_metrics.py
     export_perf_metrics.py
+    fuzz_corpus_maint.py
+    fuzz_triage.py
+    ingest_private_corpus.py
+    seed_fuzz_corpus.py
     verify_release_versions.py
     visualize_benchmarks.py
     wasm_memory_harness.cjs
@@ -482,7 +520,7 @@ jobs:
         working-directory: core/fuzz
         run: |
           set -e
-          for target in fuzz_datamashup_parse fuzz_diff_grids fuzz_m_section_and_ast; do
+          for target in fuzz_datamashup_parse fuzz_diff_grids fuzz_m_section_and_ast fuzz_open_workbook fuzz_open_pbix; do
             echo "Running $target"
             cargo fuzz run "$target" -max_total_time=60
           done
@@ -1285,6 +1323,7 @@ __pycache__/
 
 # Local scratch
 tmp/
+corpus_private/
 
 # Shared Generated Data
 fixtures/generated/*.xlsx
@@ -5197,6 +5236,7 @@ ovba = { version = "0.7.1", optional = true }
 pretty_assertions = "1.4"
 tempfile = "3.10"
 criterion = { version = "0.5", features = ["html_reports"] }
+serde_yaml = "0.9"
 
 [[bench]]
 name = "diff_benchmarks"
@@ -5447,6 +5487,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "fuzz_open_pbix"
+path = "fuzz_targets/fuzz_open_pbix.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "fuzz_datamashup_parse"
 path = "fuzz_targets/fuzz_datamashup_parse.rs"
 test = false
@@ -5617,6 +5664,31 @@ fuzz_target!(|data: &[u8]| {
 
 ---
 
+### File: `core\fuzz\fuzz_targets\fuzz_open_pbix.rs`
+
+```rust
+#![no_main]
+
+use libfuzzer_sys::fuzz_target;
+use std::io::Cursor;
+
+use excel_diff::{ContainerLimits, PbixPackage};
+
+fuzz_target!(|data: &[u8]| {
+    let limits = ContainerLimits {
+        max_entries: 2000,
+        max_part_uncompressed_bytes: 5 * 1024 * 1024,
+        max_total_uncompressed_bytes: 50 * 1024 * 1024,
+    };
+
+    let cursor = Cursor::new(data);
+    let _ = PbixPackage::open_with_limits(cursor, limits);
+});
+
+```
+
+---
+
 ### File: `core\fuzz\fuzz_targets\fuzz_open_workbook.rs`
 
 ```rust
@@ -5625,9 +5697,10 @@ fuzz_target!(|data: &[u8]| {
 use libfuzzer_sys::fuzz_target;
 use std::io::Cursor;
 
-use excel_diff::{ContainerLimits, OpcContainer, WorkbookPackage};
+use excel_diff::{ContainerLimits, DiffSession, OpcContainer, WorkbookPackage, with_default_session};
 
 fuzz_target!(|data: &[u8]| {
+    with_default_session(|session| *session = DiffSession::new());
     let limits = ContainerLimits {
         max_entries: 100,
         max_part_uncompressed_bytes: 1024 * 1024,
@@ -5638,9 +5711,85 @@ fuzz_target!(|data: &[u8]| {
     let _ = OpcContainer::open_from_reader_with_limits(cursor, limits);
 
     let cursor = Cursor::new(data);
-    let _ = WorkbookPackage::open(cursor);
+    let _ = WorkbookPackage::open_with_limits(cursor, limits);
 });
 
+
+```
+
+---
+
+### File: `core\fuzz\seed_fixtures.yaml`
+
+```yaml
+fixtures:
+  - file: "minimal.xlsx"
+    targets: ["fuzz_open_workbook"]
+    smoke: true
+
+  - file: "one_query.xlsx"
+    targets: ["fuzz_open_workbook", "fuzz_datamashup_parse"]
+    smoke: true
+
+  - file: "multi_query_with_embedded.xlsx"
+    targets: ["fuzz_open_workbook", "fuzz_datamashup_parse"]
+    smoke: true
+
+  - file: "duplicate_datamashup_parts.xlsx"
+    targets: ["fuzz_open_workbook", "fuzz_datamashup_parse"]
+    smoke: false
+
+  - file: "mashup_utf16_le.xlsx"
+    targets: ["fuzz_open_workbook", "fuzz_datamashup_parse"]
+    smoke: true
+
+  - file: "mashup_base64_whitespace.xlsx"
+    targets: ["fuzz_open_workbook", "fuzz_datamashup_parse"]
+    smoke: true
+
+  - file: "corrupt_base64.xlsx"
+    targets: ["fuzz_open_workbook", "fuzz_datamashup_parse"]
+    smoke: false
+
+  - file: "permissions_defaults.xlsx"
+    targets: ["fuzz_open_workbook", "fuzz_datamashup_parse"]
+    smoke: false
+
+  - file: "vba_base.xlsm"
+    targets: ["fuzz_open_workbook"]
+    smoke: true
+
+  - file: "random_zip.zip"
+    targets: ["fuzz_open_workbook"]
+    smoke: true
+
+  - file: "no_content_types.xlsx"
+    targets: ["fuzz_open_workbook"]
+    smoke: true
+
+  - file: "not_a_zip.txt"
+    targets: ["fuzz_open_workbook"]
+    smoke: true
+
+  - file: "pbix_legacy_one_query_a.pbix"
+    targets: ["fuzz_open_pbix", "fuzz_datamashup_parse"]
+    smoke: true
+
+  - file: "pbix_legacy_multi_query_a.pbix"
+    targets: ["fuzz_open_pbix", "fuzz_datamashup_parse"]
+    smoke: true
+
+  - file: "pbix_embedded_queries.pbix"
+    targets: ["fuzz_open_pbix", "fuzz_datamashup_parse"]
+    smoke: false
+
+  - file: "pbix_no_datamashup_no_schema.pbix"
+    targets: ["fuzz_open_pbix"]
+    smoke: true
+
+  - file: "pbit_model_a.pbit"
+    targets: ["fuzz_open_pbix"]
+    smoke: false
 
 ```
 
@@ -46297,6 +46446,377 @@ fn pg6_4_sheet_and_grid_change_composed_cleanly() {
 
 ---
 
+### File: `core\tests\robustness_regressions.yaml`
+
+```yaml
+fixtures:
+  - file: "minimal.xlsx"
+    type: "xlsx"
+    expectation:
+      result: "ok"
+    invariants:
+      self_diff_empty: true
+      deterministic_open: true
+
+  - file: "one_query.xlsx"
+    type: "xlsx"
+    expectation:
+      result: "ok"
+    invariants:
+      self_diff_empty: true
+      deterministic_open: true
+
+  - file: "mashup_utf16_le.xlsx"
+    type: "xlsx"
+    expectation:
+      result: "ok"
+    invariants:
+      self_diff_empty: true
+      deterministic_open: true
+
+  - file: "mashup_base64_whitespace.xlsx"
+    type: "xlsx"
+    expectation:
+      result: "ok"
+    invariants:
+      self_diff_empty: true
+      deterministic_open: true
+
+  - file: "pbix_legacy_one_query_a.pbix"
+    type: "pbix"
+    expectation:
+      result: "ok"
+    invariants:
+      self_diff_empty: true
+      deterministic_open: true
+
+  - file: "pbix_legacy_multi_query_a.pbix"
+    type: "pbix"
+    expectation:
+      result: "ok"
+    invariants:
+      self_diff_empty: true
+      deterministic_open: true
+
+  - file: "random_zip.zip"
+    type: "xlsx"
+    expectation:
+      result: "error"
+      error_code: "EXDIFF_CTR_004"
+
+  - file: "no_content_types.xlsx"
+    type: "xlsx"
+    expectation:
+      result: "error"
+      error_code: "EXDIFF_CTR_004"
+
+  - file: "not_a_zip.txt"
+    type: "xlsx"
+    expectation:
+      result: "error"
+      error_code: "EXDIFF_CTR_003"
+
+  - file: "corrupt_base64.xlsx"
+    type: "xlsx"
+    expectation:
+      result: "error"
+      error_code: "EXDIFF_DM_001"
+
+  - file: "duplicate_datamashup_parts.xlsx"
+    type: "xlsx"
+    expectation:
+      result: "error"
+      error_code: "EXDIFF_DM_003"
+
+  - file: "pbix_no_datamashup_no_schema.pbix"
+    type: "pbix"
+    expectation:
+      result: "error"
+      error_code: "EXDIFF_PKG_010"
+
+```
+
+---
+
+### File: `core\tests\robustness_regressions_tests.rs`
+
+```rust
+mod common;
+
+use common::fixture_path;
+use excel_diff::{
+    ContainerLimits, DiffConfig, DiffSession, LimitBehavior, PbixPackage, WorkbookPackage,
+    build_data_mashup, parse_data_mashup, with_default_session,
+};
+use serde::Deserialize;
+use std::fs;
+use std::path::Path;
+
+#[derive(Debug, Deserialize)]
+struct Suite {
+    fixtures: Vec<FixtureSpec>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct FixtureSpec {
+    file: String,
+    #[serde(rename = "type")]
+    kind: FixtureKind,
+    expectation: Expectation,
+    #[serde(default)]
+    invariants: Invariants,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum FixtureKind {
+    Xlsx,
+    Xlsm,
+    Pbix,
+    Pbit,
+    DmBytes,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct Expectation {
+    result: ExpectationResult,
+    error_code: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ExpectationResult {
+    Ok,
+    Error,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct Invariants {
+    no_panic: Option<bool>,
+    self_diff_empty: Option<bool>,
+    deterministic_open: Option<bool>,
+}
+
+#[test]
+fn robustness_regressions() {
+    let suite = load_suite();
+    for fixture in suite.fixtures {
+        run_fixture(&fixture);
+    }
+}
+
+fn load_suite() -> Suite {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("robustness_regressions.yaml");
+    let contents = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+    serde_yaml::from_str(&contents)
+        .unwrap_or_else(|e| panic!("failed to parse {}: {e}", path.display()))
+}
+
+fn run_fixture(fixture: &FixtureSpec) {
+    let expected_ok = fixture.expectation.result == ExpectationResult::Ok;
+    let invariants = normalized_invariants(&fixture.invariants, expected_ok);
+    let path = fixture_path(&fixture.file);
+
+    match fixture.kind {
+        FixtureKind::Xlsx | FixtureKind::Xlsm => {
+            let limits = container_limits();
+            let result = open_workbook(&path, limits);
+            assert_expectation(result, fixture);
+            if expected_ok {
+                run_workbook_invariants(&path, limits, &invariants);
+            }
+        }
+        FixtureKind::Pbix | FixtureKind::Pbit => {
+            let limits = container_limits();
+            let result = open_pbix(&path, limits);
+            assert_expectation(result, fixture);
+            if expected_ok {
+                run_pbix_invariants(&path, limits, &invariants);
+            }
+        }
+        FixtureKind::DmBytes => {
+            let bytes = fs::read(&path)
+                .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+            let result = parse_dm_bytes(&bytes);
+            assert_expectation(result, fixture);
+            if expected_ok {
+                run_dm_invariants(&bytes, &invariants);
+            }
+        }
+    }
+}
+
+fn normalized_invariants(invariants: &Invariants, expected_ok: bool) -> Invariants {
+    let mut out = invariants.clone();
+    if out.no_panic.is_none() {
+        out.no_panic = Some(true);
+    }
+    if expected_ok {
+        if out.self_diff_empty.is_none() {
+            out.self_diff_empty = Some(true);
+        }
+        if out.deterministic_open.is_none() {
+            out.deterministic_open = Some(true);
+        }
+    }
+    out
+}
+
+fn container_limits() -> ContainerLimits {
+    ContainerLimits {
+        max_entries: 2000,
+        max_part_uncompressed_bytes: 10 * 1024 * 1024,
+        max_total_uncompressed_bytes: 50 * 1024 * 1024,
+    }
+}
+
+fn robust_config() -> DiffConfig {
+    let mut config = DiffConfig::default();
+    config.hardening.on_limit_exceeded = LimitBehavior::ReturnError;
+    config.hardening.max_memory_mb = Some(256);
+    config.hardening.timeout_seconds = Some(10);
+    config.hardening.max_ops = Some(200_000);
+    config
+}
+
+fn reset_session() {
+    with_default_session(|session| *session = DiffSession::new());
+}
+
+fn open_workbook(
+    path: &Path,
+    limits: ContainerLimits,
+) -> Result<WorkbookPackage, excel_diff::PackageError> {
+    let file = std::fs::File::open(path)
+        .unwrap_or_else(|e| panic!("failed to open {}: {e}", path.display()));
+    WorkbookPackage::open_with_limits(file, limits)
+}
+
+fn open_pbix(
+    path: &Path,
+    limits: ContainerLimits,
+) -> Result<PbixPackage, excel_diff::PackageError> {
+    let file = std::fs::File::open(path)
+        .unwrap_or_else(|e| panic!("failed to open {}: {e}", path.display()));
+    PbixPackage::open_with_limits(file, limits)
+}
+
+fn parse_dm_bytes(bytes: &[u8]) -> Result<excel_diff::DataMashup, excel_diff::DataMashupError> {
+    let raw = parse_data_mashup(bytes)?;
+    build_data_mashup(&raw)
+}
+
+fn assert_expectation<T, E>(result: Result<T, E>, fixture: &FixtureSpec)
+where
+    E: std::fmt::Debug + ErrorCode,
+{
+    match (fixture.expectation.result.clone(), result) {
+        (ExpectationResult::Ok, Ok(_)) => {}
+        (ExpectationResult::Ok, Err(err)) => {
+            panic!("{} expected ok, got error {err:?}", fixture.file)
+        }
+        (ExpectationResult::Error, Ok(_)) => {
+            panic!("{} expected error, got ok", fixture.file)
+        }
+        (ExpectationResult::Error, Err(err)) => {
+            let expected = fixture
+                .expectation
+                .error_code
+                .as_ref()
+                .unwrap_or_else(|| {
+                    panic!("{} missing error_code for error expectation", fixture.file)
+                });
+            assert_eq!(
+                expected,
+                err.code(),
+                "{} error code mismatch",
+                fixture.file
+            );
+        }
+    }
+}
+
+fn run_workbook_invariants(path: &Path, limits: ContainerLimits, invariants: &Invariants) {
+    let config = robust_config();
+    if invariants.self_diff_empty == Some(true) {
+        assert_workbook_self_diff_empty(path, limits, &config);
+    }
+    if invariants.deterministic_open == Some(true) {
+        assert_workbook_self_diff_empty(path, limits, &config);
+    }
+}
+
+fn run_pbix_invariants(path: &Path, limits: ContainerLimits, invariants: &Invariants) {
+    let config = robust_config();
+    if invariants.self_diff_empty == Some(true) {
+        assert_pbix_self_diff_empty(path, limits, &config);
+    }
+    if invariants.deterministic_open == Some(true) {
+        assert_pbix_self_diff_empty(path, limits, &config);
+    }
+}
+
+fn run_dm_invariants(bytes: &[u8], invariants: &Invariants) {
+    if invariants.self_diff_empty == Some(true) || invariants.deterministic_open == Some(true) {
+        let dm_a = parse_dm_bytes(bytes).expect("DataMashup bytes should parse");
+        let dm_b = parse_dm_bytes(bytes).expect("DataMashup bytes should parse again");
+        assert_eq!(dm_a, dm_b, "DataMashup parsing should be deterministic");
+    }
+}
+
+fn assert_workbook_self_diff_empty(
+    path: &Path,
+    limits: ContainerLimits,
+    config: &DiffConfig,
+) {
+    reset_session();
+    let pkg_a = open_workbook(path, limits).expect("fixture should parse");
+    let pkg_b = open_workbook(path, limits).expect("fixture should parse again");
+    let report = pkg_a.diff(&pkg_b, config);
+    assert!(
+        report.ops.is_empty(),
+        "self-diff should be empty for {}",
+        path.display()
+    );
+    reset_session();
+}
+
+fn assert_pbix_self_diff_empty(path: &Path, limits: ContainerLimits, config: &DiffConfig) {
+    reset_session();
+    let pkg_a = open_pbix(path, limits).expect("fixture should parse");
+    let pkg_b = open_pbix(path, limits).expect("fixture should parse again");
+    let report = pkg_a.diff(&pkg_b, config);
+    assert!(
+        report.ops.is_empty(),
+        "self-diff should be empty for {}",
+        path.display()
+    );
+    reset_session();
+}
+
+trait ErrorCode {
+    fn code(&self) -> &'static str;
+}
+
+impl ErrorCode for excel_diff::PackageError {
+    fn code(&self) -> &'static str {
+        excel_diff::PackageError::code(self)
+    }
+}
+
+impl ErrorCode for excel_diff::DataMashupError {
+    fn code(&self) -> &'static str {
+        excel_diff::DataMashupError::code(self)
+    }
+}
+
+```
+
+---
+
 ### File: `core\tests\signature_tests.rs`
 
 ```rust
@@ -56548,6 +57068,128 @@ class LargeGridGenerator(BaseGenerator):
 
 ---
 
+### File: `scripts\add_regression_fixture.py`
+
+```python
+import argparse
+import hashlib
+import re
+import shutil
+from pathlib import Path
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def slugify(text: str) -> str:
+    text = text.strip().lower()
+    text = re.sub(r"[^a-z0-9]+", "_", text)
+    return text.strip("_") or "regression"
+
+
+def sha256_file(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def append_block(path: Path, block: str) -> None:
+    content = ""
+    if path.exists():
+        content = path.read_text(encoding="utf-8")
+    if content and not content.endswith("\n"):
+        content += "\n"
+    content += block
+    if not content.endswith("\n"):
+        content += "\n"
+    path.write_text(content, encoding="utf-8")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Add a regression fixture from a fuzz artifact.")
+    parser.add_argument("--artifact", required=True, help="Path to minimized artifact")
+    parser.add_argument(
+        "--type",
+        required=True,
+        choices=["xlsx", "xlsm", "pbix", "pbit", "dm_bytes"],
+        help="Fixture classification",
+    )
+    parser.add_argument("--area", required=True, help="Area name (e.g. workbook, pbix, datamashup)")
+    parser.add_argument("--description", required=True, help="Short description")
+    parser.add_argument(
+        "--expectation",
+        choices=["ok", "error"],
+        help="Optional expectation to append to robustness_regressions.yaml",
+    )
+    parser.add_argument(
+        "--error-code",
+        help="Required when --expectation=error (e.g. EXDIFF_DM_003)",
+    )
+    args = parser.parse_args()
+
+    root = repo_root()
+    artifact = Path(args.artifact).resolve()
+    if not artifact.exists():
+        raise FileNotFoundError(f"Artifact not found: {artifact}")
+
+    digest = sha256_file(artifact)[:8]
+    slug = slugify(args.description)
+    ext = args.type if args.type != "dm_bytes" else "bin"
+
+    filename = f"reg_{args.area}_{slug}_{digest}.{ext}"
+    template_dir = root / "fixtures" / "templates" / "regressions" / args.area
+    template_dir.mkdir(parents=True, exist_ok=True)
+    template_path = template_dir / filename
+    shutil.copy2(artifact, template_path)
+
+    manifest_path = root / "fixtures" / "manifest_cli_tests.yaml"
+    scenario_id = f"regression_{args.area}_{slug}_{digest}"
+    manifest_block = (
+        f'  - id: "{scenario_id}"\n'
+        f'    generator: "copy_template"\n'
+        f'    args:\n'
+        f'      template: "templates/regressions/{args.area}/{filename}"\n'
+        f'    output: "{filename}"\n'
+    )
+    append_block(manifest_path, manifest_block)
+
+    if args.expectation:
+        if args.expectation == "error" and not args.error_code:
+            raise ValueError("--error-code is required when --expectation=error")
+        expectations_path = root / "core" / "tests" / "robustness_regressions.yaml"
+        if not expectations_path.exists():
+            expectations_path.write_text("fixtures:\n", encoding="utf-8")
+        error_line = ""
+        if args.expectation == "error":
+            error_line = f'      error_code: "{args.error_code}"\n'
+        expectations_block = (
+            f'  - file: "{filename}"\n'
+            f'    type: "{args.type}"\n'
+            f'    expectation:\n'
+            f'      result: "{args.expectation}"\n'
+            f"{error_line}"
+            f'    invariants:\n'
+            f'      self_diff_empty: {str(args.expectation == "ok").lower()}\n'
+            f'      deterministic_open: {str(args.expectation == "ok").lower()}\n'
+        )
+        append_block(expectations_path, expectations_block)
+
+    print(f"Added template: {template_path}")
+    print(f"Appended manifest scenario: {scenario_id}")
+    print("Remember to regenerate fixtures and update the lock file.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+```
+
+---
+
 ### File: `scripts\arch_guard.py`
 
 ```python
@@ -56643,8 +57285,8 @@ from pathlib import Path
 
 import yaml
 
-RE_FIXTURE_NAME = re.compile(r'"([A-Za-z0-9._-]+\.(?:xlsx|xlsm|pbix|pbit|zip|txt))"')
-RE_WORKFLOW_REF = re.compile(r"fixtures/generated/([A-Za-z0-9._-]+\.(?:xlsx|xlsm|pbix|pbit|zip|txt))")
+RE_FIXTURE_NAME = re.compile(r'"([A-Za-z0-9._-]+\.(?:xlsx|xlsm|pbix|pbit|zip|txt|bin))"')
+RE_WORKFLOW_REF = re.compile(r"fixtures/generated/([A-Za-z0-9._-]+\.(?:xlsx|xlsm|pbix|pbit|zip|txt|bin))")
 
 IGNORED_FIXTURE_NAMES = {
     "definitely_missing.xlsx",
@@ -58469,6 +59111,565 @@ def main():
 if __name__ == "__main__":
     sys.exit(main())
 
+
+```
+
+---
+
+### File: `scripts\fuzz_corpus_maint.py`
+
+```python
+import argparse
+import subprocess
+from pathlib import Path
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def run_cmin(target: str, fuzz_dir: Path) -> None:
+    subprocess.run(
+        ["cargo", "fuzz", "cmin", target],
+        cwd=fuzz_dir,
+        check=True,
+    )
+
+
+def enforce_limits(
+    target_dir: Path,
+    max_file_bytes: int | None,
+    max_files: int | None,
+    max_total_bytes: int | None,
+    dry_run: bool,
+) -> dict:
+    files = [p for p in target_dir.iterdir() if p.is_file()]
+    files.sort(key=lambda p: (p.stat().st_size, p.name))
+
+    removed = []
+    total_bytes = sum(p.stat().st_size for p in files)
+
+    if max_file_bytes is not None:
+        for path in list(files):
+            if path.stat().st_size > max_file_bytes:
+                removed.append(path)
+                files.remove(path)
+                total_bytes -= path.stat().st_size
+                if not dry_run:
+                    path.unlink()
+
+    if max_files is not None and len(files) > max_files:
+        overflow = files[max_files:]
+        for path in overflow:
+            removed.append(path)
+            total_bytes -= path.stat().st_size
+            if not dry_run:
+                path.unlink()
+        files = files[:max_files]
+
+    if max_total_bytes is not None and total_bytes > max_total_bytes:
+        for path in reversed(files):
+            if total_bytes <= max_total_bytes:
+                break
+            removed.append(path)
+            total_bytes -= path.stat().st_size
+            if not dry_run:
+                path.unlink()
+
+    return {
+        "kept": len(files),
+        "removed": len(removed),
+        "total_bytes": total_bytes,
+        "removed_files": [str(p) for p in removed],
+    }
+
+
+def main() -> int:
+    root = repo_root()
+    parser = argparse.ArgumentParser(description="Maintain fuzz corpora.")
+    parser.add_argument(
+        "--corpus-root",
+        type=Path,
+        default=root / "core" / "fuzz" / "corpus",
+        help="Corpus root directory",
+    )
+    parser.add_argument(
+        "--targets",
+        type=str,
+        default="",
+        help="Comma-separated list of targets to process (default: all)",
+    )
+    parser.add_argument(
+        "--skip-cmin",
+        action="store_true",
+        help="Skip cargo fuzz cmin",
+    )
+    parser.add_argument(
+        "--max-file-bytes",
+        type=int,
+        default=2 * 1024 * 1024,
+        help="Max size per seed file (default: 2MB)",
+    )
+    parser.add_argument(
+        "--max-files",
+        type=int,
+        default=200,
+        help="Max number of files per corpus (default: 200)",
+    )
+    parser.add_argument(
+        "--max-total-bytes",
+        type=int,
+        default=100 * 1024 * 1024,
+        help="Max total bytes per corpus (default: 100MB)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report actions without deleting files",
+    )
+    args = parser.parse_args()
+
+    corpus_root = args.corpus_root
+    if not corpus_root.exists():
+        raise FileNotFoundError(f"Corpus root not found: {corpus_root}")
+
+    if args.targets:
+        targets = [t.strip() for t in args.targets.split(",") if t.strip()]
+    else:
+        targets = [p.name for p in corpus_root.iterdir() if p.is_dir()]
+
+    fuzz_dir = root / "core" / "fuzz"
+    report = []
+
+    for target in targets:
+        target_dir = corpus_root / target
+        if not target_dir.exists():
+            print(f"Skipping missing corpus target: {target}")
+            continue
+
+        if not args.skip_cmin:
+            run_cmin(target, fuzz_dir)
+
+        stats = enforce_limits(
+            target_dir,
+            args.max_file_bytes,
+            args.max_files,
+            args.max_total_bytes,
+            args.dry_run,
+        )
+        stats["target"] = target
+        report.append(stats)
+
+    print("Fuzz corpus maintenance report:")
+    for entry in report:
+        print(
+            f"- {entry['target']}: kept={entry['kept']} removed={entry['removed']} "
+            f"total_bytes={entry['total_bytes']}"
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+```
+
+---
+
+### File: `scripts\fuzz_triage.py`
+
+```python
+import argparse
+import subprocess
+from pathlib import Path
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def run(cmd: list[str], cwd: Path) -> None:
+    print(" ".join(cmd))
+    subprocess.run(cmd, cwd=cwd, check=True)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Reproduce and minimize fuzz artifacts.")
+    parser.add_argument("--target", required=True, help="Fuzz target name")
+    parser.add_argument("--artifact", required=True, help="Path to artifact file")
+    parser.add_argument(
+        "--cmin",
+        action="store_true",
+        help="Run corpus minimization after tmin",
+    )
+    args = parser.parse_args()
+
+    fuzz_dir = repo_root() / "core" / "fuzz"
+    artifact = Path(args.artifact).resolve()
+    if not artifact.exists():
+        raise FileNotFoundError(f"Artifact not found: {artifact}")
+
+    run(["cargo", "fuzz", "run", args.target, str(artifact), "-runs=1"], fuzz_dir)
+    run(["cargo", "fuzz", "tmin", args.target, str(artifact)], fuzz_dir)
+
+    if args.cmin:
+        run(["cargo", "fuzz", "cmin", args.target], fuzz_dir)
+
+    print("Triage complete. See minimized artifact in core/fuzz/artifacts.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+```
+
+---
+
+### File: `scripts\ingest_private_corpus.py`
+
+```python
+import argparse
+import hashlib
+import json
+import shutil
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+DEFAULT_EXTS = {".xlsx", ".xlsm", ".pbix", ".pbit"}
+
+
+def iter_inputs(root: Path, recursive: bool, exts: set[str]) -> list[Path]:
+    pattern = "**/*" if recursive else "*"
+    files = []
+    for path in root.glob(pattern):
+        if path.is_file() and path.suffix.lower() in exts:
+            files.append(path)
+    return files
+
+
+def sha256_bytes(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def load_index(path: Path) -> dict:
+    if not path.exists():
+        return {"version": 1, "files": []}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def save_index(path: Path, index: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(index, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Ingest private corpus files into hashed storage.")
+    parser.add_argument("--input-dir", type=Path, required=True, help="Directory to scan")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("corpus_private"),
+        help="Destination directory for hashed files",
+    )
+    parser.add_argument(
+        "--index",
+        type=Path,
+        default=None,
+        help="Optional metadata index path (defaults to <output-dir>/index.json)",
+    )
+    parser.add_argument(
+        "--source-tag",
+        type=str,
+        default="",
+        help="Optional source label (avoid customer identifiers)",
+    )
+    parser.add_argument(
+        "--no-recursive",
+        action="store_true",
+        help="Disable recursive scanning",
+    )
+    parser.add_argument(
+        "--extensions",
+        type=str,
+        default="",
+        help="Comma-separated extension list to include (e.g. .xlsx,.pbix)",
+    )
+    args = parser.parse_args()
+
+    input_dir = args.input_dir
+    if not input_dir.exists():
+        raise FileNotFoundError(f"Input dir not found: {input_dir}")
+
+    exts = DEFAULT_EXTS
+    if args.extensions:
+        exts = {ext.strip().lower() for ext in args.extensions.split(",") if ext.strip()}
+
+    output_dir = args.output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    index_path = args.index or (output_dir / "index.json")
+    index = load_index(index_path)
+    existing = {entry["sha256"] for entry in index.get("files", [])}
+
+    ingested = 0
+    skipped = 0
+    now = datetime.now(timezone.utc).isoformat()
+
+    for path in iter_inputs(input_dir, not args.no_recursive, exts):
+        digest = sha256_bytes(path)
+        ext = path.suffix.lower()
+        dest_name = f"sha256_{digest}.{ext.lstrip('.')}"
+        dest_path = output_dir / dest_name
+
+        if digest in existing:
+            skipped += 1
+            continue
+
+        shutil.copy2(path, dest_path)
+        entry = {
+            "sha256": digest,
+            "size_bytes": path.stat().st_size,
+            "extension": ext,
+            "ingested_at": now,
+        }
+        if args.source_tag:
+            entry["source_tag"] = args.source_tag
+        index.setdefault("files", []).append(entry)
+        existing.add(digest)
+        ingested += 1
+
+    save_index(index_path, index)
+
+    print(f"Ingested {ingested} file(s), skipped {skipped}.")
+    print(f"Output: {output_dir}")
+    print(f"Index: {index_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+```
+
+---
+
+### File: `scripts\seed_fuzz_corpus.py`
+
+```python
+import argparse
+import base64
+import hashlib
+import json
+import shutil
+import zipfile
+from pathlib import Path
+from typing import Iterable, Optional
+from xml.etree import ElementTree as ET
+
+import yaml
+
+DATA_MASHUP_NS = {"dm": "http://schemas.microsoft.com/DataMashup"}
+DM_MARKERS = (
+    b"DataMashup",
+    b"D\x00a\x00t\x00a\x00M\x00a\x00s\x00h\x00u\x00p",
+)
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def load_config(path: Path) -> list[dict]:
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    fixtures = data.get("fixtures", [])
+    if not isinstance(fixtures, list):
+        raise ValueError("seed_fixtures.yaml must contain a top-level 'fixtures' list")
+    return fixtures
+
+
+def find_datamashup_element(root: ET.Element) -> Optional[ET.Element]:
+    if root.tag.endswith("DataMashup"):
+        return root
+    return root.find(".//dm:DataMashup", namespaces=DATA_MASHUP_NS)
+
+
+def extract_datamashup_from_xlsx(path: Path) -> bytes:
+    with zipfile.ZipFile(path, "r") as zin:
+        for name in zin.namelist():
+            if not (name.startswith("customXml/item") and name.endswith(".xml")):
+                continue
+            buf = zin.read(name)
+            if not any(marker in buf for marker in DM_MARKERS):
+                continue
+            try:
+                root = ET.fromstring(buf)
+            except ET.ParseError:
+                continue
+            node = find_datamashup_element(root)
+            if node is None or node.text is None:
+                continue
+            text = "".join(node.text.split())
+            if not text:
+                continue
+            return base64.b64decode(text)
+    raise ValueError(f"DataMashup not found in {path}")
+
+
+def extract_datamashup_from_pbix(path: Path) -> bytes:
+    with zipfile.ZipFile(path, "r") as zin:
+        try:
+            return zin.read("DataMashup")
+        except KeyError as exc:
+            raise ValueError(f"DataMashup not found in {path}") from exc
+
+
+def extract_datamashup(path: Path) -> bytes:
+    suffix = path.suffix.lower()
+    if suffix in {".xlsx", ".xlsm"}:
+        return extract_datamashup_from_xlsx(path)
+    if suffix in {".pbix", ".pbit"}:
+        return extract_datamashup_from_pbix(path)
+    raise ValueError(f"Unsupported DataMashup source extension: {path}")
+
+
+def copy_fixture(src: Path, dest_dir: Path, overwrite: bool) -> Path:
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / src.name
+    if dest.exists() and not overwrite:
+        return dest
+    shutil.copy2(src, dest)
+    return dest
+
+
+def write_datamashup_seed(
+    dm_bytes: bytes, dest_dir: Path, stem: str, overwrite: bool
+) -> Path:
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(dm_bytes).hexdigest()
+    dest = dest_dir / f"{stem}_{digest[:8]}.bin"
+    if dest.exists() and not overwrite:
+        return dest
+    dest.write_bytes(dm_bytes)
+    return dest
+
+
+def iter_targets(targets: Iterable[str]) -> list[str]:
+    out = []
+    for target in targets:
+        target = str(target).strip()
+        if target and target not in out:
+            out.append(target)
+    return out
+
+
+def seed_from_fixtures(
+    fixtures: list[dict],
+    fixtures_dir: Path,
+    corpus_dir: Path,
+    overwrite: bool,
+    clean: bool,
+) -> list[dict]:
+    if clean:
+        for entry in fixtures:
+            for target in iter_targets(entry.get("targets", [])):
+                target_dir = corpus_dir / target
+                if target_dir.exists():
+                    for child in target_dir.iterdir():
+                        if child.is_file():
+                            child.unlink()
+
+    report = []
+    for entry in fixtures:
+        filename = entry.get("file")
+        if not filename:
+            raise ValueError("Each fixture entry must include a 'file'")
+        targets = iter_targets(entry.get("targets", []))
+        if not targets:
+            continue
+
+        src = Path(filename)
+        if not src.is_absolute():
+            src = fixtures_dir / filename
+        if not src.exists():
+            raise FileNotFoundError(f"Fixture not found: {src}")
+
+        record = {"file": filename, "targets": targets, "outputs": []}
+        for target in targets:
+            if target == "fuzz_datamashup_parse":
+                try:
+                    dm_bytes = extract_datamashup(src)
+                except ValueError as exc:
+                    record["outputs"].append({"target": target, "skipped": str(exc)})
+                    continue
+                dest = write_datamashup_seed(
+                    dm_bytes, corpus_dir / target, src.stem, overwrite
+                )
+                record["outputs"].append({"target": target, "path": str(dest)})
+            else:
+                dest = copy_fixture(src, corpus_dir / target, overwrite)
+                record["outputs"].append({"target": target, "path": str(dest)})
+        report.append(record)
+    return report
+
+
+def main() -> int:
+    root = repo_root()
+    parser = argparse.ArgumentParser(description="Seed fuzz corpora from fixtures.")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=root / "core" / "fuzz" / "seed_fixtures.yaml",
+        help="Path to seed_fixtures.yaml",
+    )
+    parser.add_argument(
+        "--fixtures-dir",
+        type=Path,
+        default=root / "fixtures" / "generated",
+        help="Directory containing generated fixtures",
+    )
+    parser.add_argument(
+        "--corpus-dir",
+        type=Path,
+        default=root / "core" / "fuzz" / "corpus",
+        help="Destination corpus root",
+    )
+    parser.add_argument(
+        "--clean",
+        action="store_true",
+        help="Remove existing files in targeted corpus directories before seeding",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing seeds with the same name",
+    )
+    parser.add_argument(
+        "--report",
+        type=Path,
+        help="Optional path to write a JSON report of seeded files",
+    )
+    args = parser.parse_args()
+
+    fixtures = load_config(args.config)
+    report = seed_from_fixtures(
+        fixtures, args.fixtures_dir, args.corpus_dir, args.overwrite, args.clean
+    )
+
+    if args.report:
+        args.report.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    print(f"Seeded {len(report)} fixture entries into {args.corpus_dir}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
 
 ```
 

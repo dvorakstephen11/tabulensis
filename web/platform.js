@@ -11,6 +11,7 @@ import {
   exportNativeAuditXlsx,
   runNativeBatchCompare,
   loadNativeBatchSummary,
+  loadNativeCapabilities,
   searchNativeDiffOps,
   buildNativeSearchIndex,
   searchNativeWorkbookIndex
@@ -70,6 +71,11 @@ export async function runBatchCompare(request) {
 export async function loadBatchSummary(batchId) {
   if (!isDesktop()) return null;
   return loadNativeBatchSummary(batchId);
+}
+
+export async function getCapabilities() {
+  if (!isDesktop()) return null;
+  return loadNativeCapabilities();
 }
 
 export async function searchDiffOps(diffId, query, limit) {

@@ -17,3 +17,5 @@ jobs:
         run: node web/test_render.js
       - name: View model test
         run: node web/test_view_model.js
+      - name: Payload/outcome compatibility test
+        run: node web/test_outcome_payload.js

@@ -165,6 +165,56 @@ fn json_output_is_valid_json() {
 }
 
 #[test]
+fn payload_output_contains_report_and_sheets() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--format",
+            "payload",
+            &fixture_path("single_cell_value_a.xlsx"),
+            &fixture_path("single_cell_value_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("payload output should be valid JSON");
+
+    assert!(parsed.get("report").is_some(), "payload should include report");
+    assert!(parsed.get("sheets").is_some(), "payload should include sheets");
+    assert!(
+        parsed.get("alignments").is_some(),
+        "payload should include alignments"
+    );
+}
+
+#[test]
+fn outcome_output_contains_mode_and_payload() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--format",
+            "outcome",
+            &fixture_path("single_cell_value_a.xlsx"),
+            &fixture_path("single_cell_value_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("outcome output should be valid JSON");
+
+    assert_eq!(
+        parsed.get("mode").and_then(|v| v.as_str()),
+        Some("payload")
+    );
+    let payload = parsed.get("payload").expect("payload should exist");
+    assert!(payload.get("report").is_some(), "payload should include report");
+}
+
+#[test]
 fn jsonl_first_line_is_header() {
     let output = excel_diff_cmd()
         .args([
@@ -268,6 +318,29 @@ fn fast_and_precise_are_mutually_exclusive() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("Cannot use both"));
+}
+
+#[test]
+fn preset_conflicts_with_fast() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--preset",
+            "balanced",
+            "--fast",
+            &fixture_path("equal_sheet_a.xlsx"),
+            &fixture_path("equal_sheet_b.xlsx"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "conflicting flags should exit 2"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--preset"));
 }
 
 #[test]

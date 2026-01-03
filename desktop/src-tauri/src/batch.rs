@@ -11,6 +11,7 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 use crate::diff_runner::{DiffErrorPayload, DiffRequest, DiffRunner};
+use ui_payload::DiffOptions;
 use crate::store::{OpStore, StoreError};
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,7 +106,10 @@ pub fn run_batch_compare(
             old_path: pair.old.as_ref().unwrap().display().to_string(),
             new_path: pair.new.as_ref().unwrap().display().to_string(),
             run_id: 0,
-            trusted: request.trusted,
+            options: DiffOptions {
+                trusted: Some(request.trusted),
+                ..DiffOptions::default()
+            },
             cancel,
             app: app.clone(),
         };

@@ -1,7 +1,7 @@
 import { renderWorkbookVm } from "./render.js";
 import { buildWorkbookViewModel } from "./view_model.js";
 import { mountSheetGridViewer } from "./grid_viewer.js";
-import { downloadReportJson, downloadHtmlReport } from "./export.js";
+import { downloadReportJson, downloadHtmlReport, downloadJsonl } from "./export.js";
 import {
   createAppDiffClient,
   isDesktop,
@@ -67,6 +67,7 @@ let lastMeta = null;
 let lastDiffId = null;
 let lastSummary = null;
 let lastMode = "payload";
+let lastEngineOptions = null;
 let isDesktopApp = false;
 let selectedOld = null;
 let selectedNew = null;
@@ -477,14 +478,16 @@ function normalizeDiffOutcome(result) {
       mode: result.mode || "payload",
       diffId: result.diffId || null,
       payload: result.payload || null,
-      summary: result.summary || null
+      summary: result.summary || null,
+      config: result.config || null
     };
   }
   return {
     mode: "payload",
     diffId: null,
     payload: result,
-    summary: null
+    summary: null,
+    config: null
   };
 }
 
@@ -500,10 +503,12 @@ function buildMeta(oldFile, newFile) {
 function buildMetaFromSummary(summary) {
   const oldPath = summary?.oldPath || "";
   const newPath = summary?.newPath || "";
+  const oldName = summary?.oldName || (oldPath ? baseName(oldPath) : "");
+  const newName = summary?.newName || (newPath ? baseName(newPath) : "");
   return {
     version: engineVersion,
-    oldName: baseName(oldPath),
-    newName: baseName(newPath),
+    oldName,
+    newName,
     createdAtIso: summary?.finishedAt || summary?.startedAt || new Date().toISOString()
   };
 }
@@ -763,7 +768,9 @@ async function runDiff() {
   showStage("read");
 
   try {
-    const options = { ignoreBlankToBlank: true };
+    const viewOptions = { ignoreBlankToBlank: true };
+    const engineOptions = { preset: "balanced" };
+    lastEngineOptions = { ...engineOptions };
     let payload;
 
     if (isDesktopApp) {
@@ -774,7 +781,7 @@ async function runDiff() {
           oldPath: oldFile.path,
           newPath: newFile.path
         },
-        options
+        engineOptions
       );
     } else {
       const oldBuffer = await oldFile.arrayBuffer();
@@ -790,7 +797,7 @@ async function runDiff() {
           oldBuffer,
           newBuffer
         },
-        options
+        engineOptions
       );
     }
     if (runId !== activeRunId) return;
@@ -802,10 +809,16 @@ async function runDiff() {
     lastDiffId = outcome.diffId || null;
     lastSummary = outcome.summary || null;
     lastMode = outcome.mode || "payload";
+    if (outcome.config) {
+      lastEngineOptions = {
+        ...(outcome.config.preset ? { preset: outcome.config.preset } : {}),
+        ...(outcome.config.limits ? { limits: outcome.config.limits } : {})
+      };
+    }
 
     if (outcome.mode === "payload" && outcome.payload) {
       const report = outcome.payload.report || outcome.payload;
-      renderResults(outcome.payload, options);
+      renderResults(outcome.payload, viewOptions);
       byId("raw").textContent = JSON.stringify(report, null, 2);
 
       const opCount = report.ops ? report.ops.length : 0;
@@ -920,6 +933,10 @@ function renderLargeSummary(summary) {
     `
     : "";
 
+  const downloadButton = !isDesktopApp
+    ? `<button class="secondary-btn" id="downloadJsonl">Download JSONL</button>`
+    : "";
+
   const sheets = Array.isArray(summary?.sheets) ? summary.sheets : [];
   const sheetHtml = sheets
     .map(sheet => {
@@ -949,9 +966,12 @@ function renderLargeSummary(summary) {
           <h2>Large Mode Summary</h2>
           <p>Sheet details load on demand to keep huge diffs responsive.</p>
         </div>
-        <div class="large-summary-meta">
-          <span>${summary?.opCount || 0} ops</span>
-          <span>${summary?.sheets?.length || 0} sheets</span>
+        <div class="large-summary-side">
+          <div class="large-summary-meta">
+            <span>${summary?.opCount || 0} ops</span>
+            <span>${summary?.sheets?.length || 0} sheets</span>
+          </div>
+          ${downloadButton}
         </div>
       </div>
       ${warningsHtml}
@@ -964,6 +984,11 @@ function renderLargeSummary(summary) {
   resultsEl.classList.add("visible");
 
   const onClick = event => {
+    const download = event.target.closest("#downloadJsonl");
+    if (download) {
+      downloadLargeModeJsonl();
+      return;
+    }
     const button = event.target.closest(".large-sheet-load");
     if (!button) return;
     const sheetName = button.dataset.sheet;
@@ -974,6 +999,43 @@ function renderLargeSummary(summary) {
 
   resultsEl.addEventListener("click", onClick);
   largeSummaryCleanup = () => resultsEl.removeEventListener("click", onClick);
+}
+
+async function downloadLargeModeJsonl() {
+  if (isDesktopApp) return;
+  if (isBusy) {
+    setStatus("Wait for the current diff to finish before downloading JSONL.", "error");
+    return;
+  }
+  if (!diffClient || typeof diffClient.downloadJsonl !== "function") {
+    setStatus("JSONL download is unavailable.", "error");
+    return;
+  }
+  const oldFile = selectedOld;
+  const newFile = selectedNew;
+  if (!oldFile || !newFile) {
+    setStatus("Select files before downloading JSONL.", "error");
+    return;
+  }
+  try {
+    setStatus("Preparing JSONL download...", "loading");
+    const oldBuffer = await oldFile.arrayBuffer();
+    const newBuffer = await newFile.arrayBuffer();
+    const blob = await diffClient.downloadJsonl(
+      {
+        oldName: fileDisplayName(oldFile),
+        newName: fileDisplayName(newFile),
+        oldBuffer,
+        newBuffer
+      },
+      lastEngineOptions || { preset: "balanced" }
+    );
+    const meta = lastSummary ? buildMetaFromSummary(lastSummary) : buildMeta(oldFile, newFile);
+    downloadJsonl({ blob, meta });
+    setStatus("JSONL download ready.", "");
+  } catch (err) {
+    handleError(err);
+  }
 }
 
 function showLargeModeNav(sheetName) {

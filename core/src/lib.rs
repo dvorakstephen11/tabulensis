@@ -77,6 +77,7 @@ use std::cell::RefCell;
 mod addressing;
 pub(crate) mod alignment;
 mod alignment_types;
+mod capabilities;
 pub(crate) mod column_alignment;
 mod config;
 mod container;
@@ -118,6 +119,7 @@ mod progress;
 #[cfg(feature = "perf-metrics")]
 #[doc(hidden)]
 pub mod perf;
+mod policy;
 pub(crate) mod rect_block_move;
 pub(crate) mod region_mask;
 pub(crate) mod row_alignment;
@@ -249,6 +251,7 @@ pub mod advanced {
 }
 
 pub use addressing::{AddressParseError, address_to_index, index_to_address};
+pub use capabilities::{EngineFeatures, engine_features};
 pub use config::{DiffConfig, DiffConfigBuilder, LimitBehavior, SemanticNoisePolicy};
 pub use container::{ContainerError, ContainerLimits, OpcContainer, ZipContainer};
 #[doc(hidden)]
@@ -319,6 +322,7 @@ pub use output::json::{CellDiff, serialize_cell_diffs, serialize_diff_report};
 pub use output::json_lines::JsonLinesSink;
 pub use package::{PbixPackage, WorkbookPackage};
 pub use progress::{NoProgress, ProgressCallback};
+pub use policy::{AUTO_STREAM_CELL_THRESHOLD, should_use_large_mode};
 pub use session::DiffSession;
 pub use sink::{CallbackSink, DiffSink, VecSink};
 pub use string_pool::{StringId, StringPool};

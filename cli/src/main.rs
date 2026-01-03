@@ -1,19 +1,22 @@
 mod commands;
 mod output;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use excel_diff::{
     ContainerError, DataMashupError, DiffError, GridParseError, PackageError, SectionParseError,
 };
 use std::process::ExitCode;
 
 #[derive(Parser)]
-#[command(name = "excel-diff")]
+#[command(name = "excel-diff", disable_version_flag = true, arg_required_else_help = true)]
 #[command(about = "Compare Excel workbooks and show differences")]
-#[command(version)]
 pub struct Cli {
+    #[arg(long, action = clap::ArgAction::SetTrue, help = "Show version and exit")]
+    pub version: bool,
+    #[arg(long, short, global = true, help = "Verbose output")]
+    pub verbose: bool,
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -34,10 +37,10 @@ pub enum Commands {
         fast: bool,
         #[arg(long, help = "Use most precise diff preset (slower, more accurate)")]
         precise: bool,
+        #[arg(long, value_enum, help = "Diff preset")]
+        preset: Option<DiffPresetArg>,
         #[arg(long, short, help = "Quiet mode: only show summary")]
         quiet: bool,
-        #[arg(long, short, help = "Verbose mode: show additional details")]
-        verbose: bool,
         #[arg(long, help = "Use database mode: align rows by key columns")]
         database: bool,
         #[arg(long, help = "Sheet name to diff in database mode")]
@@ -71,13 +74,27 @@ pub enum OutputFormat {
     Text,
     Json,
     Jsonl,
+    Payload,
+    Outcome,
+}
+
+#[derive(Clone, Copy, ValueEnum, PartialEq, Eq)]
+pub enum DiffPresetArg {
+    Fastest,
+    Balanced,
+    MostPrecise,
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
+    if cli.version {
+        print_version(cli.verbose);
+        return ExitCode::from(0);
+    }
+
     let result = match cli.command {
-        Commands::Diff {
+        Some(Commands::Diff {
             old,
             new,
             format,
@@ -85,8 +102,8 @@ fn main() -> ExitCode {
             git_diff,
             fast,
             precise,
+            preset,
             quiet,
-            verbose,
             database,
             sheet,
             keys,
@@ -96,7 +113,7 @@ fn main() -> ExitCode {
             timeout,
             max_ops,
             metrics_json,
-        } => commands::diff::run(
+        }) => commands::diff::run(
             &old,
             &new,
             format,
@@ -104,8 +121,9 @@ fn main() -> ExitCode {
             git_diff,
             fast,
             precise,
+            preset,
             quiet,
-            verbose,
+            cli.verbose,
             database,
             sheet,
             keys,
@@ -116,7 +134,12 @@ fn main() -> ExitCode {
             max_ops,
             metrics_json,
         ),
-        Commands::Info { path, queries } => commands::info::run(&path, queries),
+        Some(Commands::Info { path, queries }) => commands::info::run(&path, queries),
+        None => {
+            let mut cmd = Cli::command();
+            let _ = cmd.print_help();
+            return ExitCode::from(2);
+        }
     };
 
     match result {
@@ -126,6 +149,24 @@ fn main() -> ExitCode {
             exit_code_for_error(&e)
         }
     }
+}
+
+fn print_version(verbose: bool) {
+    println!("excel-diff {}", env!("CARGO_PKG_VERSION"));
+    if !verbose {
+        return;
+    }
+
+    let features = excel_diff::engine_features();
+    println!(
+        "features: vba={}, model-diff={}, parallel={}, std-fs={}",
+        features.vba, features.model_diff, features.parallel, features.std_fs
+    );
+    println!("presets: fastest, balanced, most_precise");
+    println!(
+        "large_mode_threshold: {}",
+        excel_diff::AUTO_STREAM_CELL_THRESHOLD
+    );
 }
 
 fn exit_code_for_error(err: &anyhow::Error) -> ExitCode {

@@ -1,6 +1,6 @@
 use crate::commands::host::{host_kind_from_path, open_host, Host, HostKind};
 use crate::output::{git_diff, json, text};
-use crate::OutputFormat;
+use crate::{DiffPresetArg, OutputFormat};
 use anyhow::{Context, Result, bail};
 use excel_diff::{
     DiffConfig, DiffReport, DiffSummary, Grid, JsonLinesSink, ProgressCallback, SheetKind,
@@ -11,6 +11,10 @@ use std::io::{self, BufWriter, IsTerminal, Write};
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Mutex;
+use ui_payload::{
+    DiffOutcome, DiffOutcomeConfig, DiffOutcomeMode, DiffPreset, SummaryMeta, SummarySink,
+    limits_from_config, summarize_report,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Verbosity {
@@ -18,8 +22,6 @@ pub enum Verbosity {
     Normal,
     Verbose,
 }
-
-const AUTO_STREAM_CELL_THRESHOLD: u64 = 1_000_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SheetKey {
@@ -38,6 +40,7 @@ pub fn run(
     git_diff_mode: bool,
     fast: bool,
     precise: bool,
+    preset: Option<DiffPresetArg>,
     quiet: bool,
     verbose: bool,
     database: bool,
@@ -53,9 +56,17 @@ pub fn run(
     if fast && precise {
         bail!("Cannot use both --fast and --precise flags together");
     }
+    if preset.is_some() && (fast || precise) {
+        bail!("Cannot combine --preset with --fast or --precise");
+    }
 
-    if git_diff_mode && (format == OutputFormat::Json || format == OutputFormat::Jsonl) {
-        bail!("Cannot use --git-diff with --format=json or --format=jsonl");
+    if git_diff_mode
+        && matches!(
+            format,
+            OutputFormat::Json | OutputFormat::Jsonl | OutputFormat::Payload | OutputFormat::Outcome
+        )
+    {
+        bail!("Cannot use --git-diff with --format json/jsonl/payload/outcome");
     }
 
     let mut format = format;
@@ -100,7 +111,8 @@ pub fn run(
         Verbosity::Normal
     };
 
-    let mut config = build_config(fast, precise);
+    let preset = resolve_preset(preset, fast, precise)?;
+    let mut config = build_config(preset);
     config.hardening.max_memory_mb = max_memory;
     config.hardening.timeout_seconds = timeout;
     config.hardening.max_ops = max_ops;
@@ -108,15 +120,16 @@ pub fn run(
     let old_host = open_host(old_path, old_kind, "old")?;
     let new_host = open_host(new_path, new_kind, "new")?;
 
+    let mut estimated_cells: Option<u64> = None;
     if !database {
-        let estimated_cells = match (&old_host, &new_host) {
+        estimated_cells = match (&old_host, &new_host) {
             (Host::Workbook(old_pkg), Host::Workbook(new_pkg)) => {
                 Some(estimate_diff_cell_volume(&old_pkg.workbook, &new_pkg.workbook))
             }
             _ => None,
         };
         let (new_format, switched_cells) =
-            maybe_auto_switch_jsonl(format, force_json, git_diff_mode, estimated_cells);
+            maybe_auto_switch_jsonl(format, force_json, git_diff_mode, estimated_cells, &config);
         if let Some(cells) = switched_cells {
             eprintln!(
                 "Warning: estimated {} cells; switching to JSONL output. Use --force-json to keep JSON.",
@@ -139,6 +152,7 @@ pub fn run(
             git_diff_mode,
             force_json,
             &config,
+            preset,
             verbosity,
             sheet,
             keys,
@@ -148,6 +162,138 @@ pub fn run(
     }
 
     let progress = progress.then(CliProgress::new);
+
+    if format == OutputFormat::Payload {
+        let payload = match (&old_host, &new_host) {
+            (Host::Workbook(old_pkg), Host::Workbook(new_pkg)) => match progress.as_ref() {
+                Some(p) => ui_payload::build_payload_from_workbooks_with_progress(
+                    old_pkg, new_pkg, &config, p,
+                ),
+                None => ui_payload::build_payload_from_workbooks(old_pkg, new_pkg, &config),
+            },
+            (Host::Pbix(old_pkg), Host::Pbix(new_pkg)) => {
+                ui_payload::build_payload_from_pbix(old_pkg, new_pkg, &config)
+            }
+            _ => unreachable!(),
+        };
+
+        if let Some(p) = progress.as_ref() {
+            p.finish();
+        }
+
+        print_warnings_to_stderr(&payload.report);
+
+        if let Some(path) = metrics_json.as_deref() {
+            write_metrics_json_report(Path::new(path), &payload.report)?;
+        }
+
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        json::write_json_value(&mut handle, &payload)?;
+        return Ok(exit_code_from_report(&payload.report));
+    }
+
+    if format == OutputFormat::Outcome {
+        let meta = summary_meta_from_paths(old_path_str, new_path_str);
+        let outcome_config = DiffOutcomeConfig {
+            preset: Some(preset),
+            limits: Some(limits_from_config(&config)),
+        };
+
+        let outcome = match (&old_host, &new_host) {
+            (Host::Workbook(old_pkg), Host::Workbook(new_pkg)) => {
+                let use_large_mode = estimated_cells
+                    .map(|cells| excel_diff::should_use_large_mode(cells, &config))
+                    .unwrap_or(false);
+
+                if use_large_mode {
+                    let mut sink = SummarySink::new();
+                    let summary = match progress.as_ref() {
+                        Some(p) => old_pkg
+                            .diff_streaming_with_progress(new_pkg, &config, &mut sink, p)
+                            .context("Streaming diff failed")?,
+                        None => old_pkg
+                            .diff_streaming(new_pkg, &config, &mut sink)
+                            .context("Streaming diff failed")?,
+                    };
+
+                    if let Some(p) = progress.as_ref() {
+                        p.finish();
+                    }
+
+                    let summary = sink.into_summary(summary, meta.clone());
+                    for warning in &summary.warnings {
+                        eprintln!("Warning: {}", warning);
+                    }
+
+                    DiffOutcome {
+                        diff_id: None,
+                        mode: DiffOutcomeMode::Large,
+                        payload: None,
+                        summary: Some(summary),
+                        config: Some(outcome_config),
+                    }
+                } else {
+                    let payload = match progress.as_ref() {
+                        Some(p) => ui_payload::build_payload_from_workbooks_with_progress(
+                            old_pkg, new_pkg, &config, p,
+                        ),
+                        None => ui_payload::build_payload_from_workbooks(old_pkg, new_pkg, &config),
+                    };
+
+                    if let Some(p) = progress.as_ref() {
+                        p.finish();
+                    }
+
+                    let summary = summarize_report(&payload.report, meta.clone());
+                    print_warnings_to_stderr(&payload.report);
+
+                    DiffOutcome {
+                        diff_id: None,
+                        mode: DiffOutcomeMode::Payload,
+                        payload: Some(payload),
+                        summary: Some(summary),
+                        config: Some(outcome_config),
+                    }
+                }
+            }
+            (Host::Pbix(old_pkg), Host::Pbix(new_pkg)) => {
+                let payload = ui_payload::build_payload_from_pbix(old_pkg, new_pkg, &config);
+                let summary = summarize_report(&payload.report, meta);
+                print_warnings_to_stderr(&payload.report);
+                DiffOutcome {
+                    diff_id: None,
+                    mode: DiffOutcomeMode::Payload,
+                    payload: Some(payload),
+                    summary: Some(summary),
+                    config: Some(outcome_config),
+                }
+            }
+            _ => unreachable!(),
+        };
+
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        json::write_json_value(&mut handle, &outcome)?;
+
+        return Ok(match outcome.mode {
+            DiffOutcomeMode::Payload => exit_code_from_report(
+                outcome
+                    .payload
+                    .as_ref()
+                    .map(|p| &p.report)
+                    .expect("payload report exists"),
+            ),
+            DiffOutcomeMode::Large => {
+                let summary = outcome.summary.as_ref().expect("summary exists");
+                if summary.op_count == 0 && summary.complete {
+                    ExitCode::from(0)
+                } else {
+                    ExitCode::from(1)
+                }
+            }
+        });
+    }
 
     if format == OutputFormat::Jsonl && !git_diff_mode {
         return run_streaming_host(&old_host, &new_host, &config, progress.as_ref(), metrics_json.as_deref());
@@ -193,6 +339,9 @@ pub fn run(
             }
             OutputFormat::Jsonl => {
                 bail!("Internal error: JSONL format should be handled by the streaming path");
+            }
+            OutputFormat::Payload | OutputFormat::Outcome => {
+                bail!("Internal error: payload/outcome format should be handled earlier");
             }
         }
     }
@@ -333,6 +482,7 @@ fn run_database_mode(
     git_diff_mode: bool,
     force_json: bool,
     config: &DiffConfig,
+    preset: DiffPreset,
     verbosity: Verbosity,
     sheet: Option<String>,
     keys: Option<String>,
@@ -344,7 +494,7 @@ fn run_database_mode(
     let mut format = format;
     let estimated_cells = estimate_sheet_cell_volume(old_pkg, new_pkg, &sheet_name)?;
     let (new_format, switched_cells) =
-        maybe_auto_switch_jsonl(format, force_json, git_diff_mode, Some(estimated_cells));
+        maybe_auto_switch_jsonl(format, force_json, git_diff_mode, Some(estimated_cells), config);
     if let Some(cells) = switched_cells {
         eprintln!(
             "Warning: estimated {} cells in sheet '{}'; switching to JSONL output. Use --force-json to keep JSON.",
@@ -370,6 +520,101 @@ fn run_database_mode(
     } else {
         bail!("Database mode requires either --keys or --auto-keys");
     };
+
+    if format == OutputFormat::Outcome {
+        let meta = summary_meta_from_paths(old_path, new_path);
+        let outcome_config = DiffOutcomeConfig {
+            preset: Some(preset),
+            limits: Some(limits_from_config(config)),
+        };
+        let use_large_mode = excel_diff::should_use_large_mode(estimated_cells, config);
+
+        let outcome = if use_large_mode {
+            let mut sink = SummarySink::new();
+            let summary = old_pkg
+                .diff_database_mode_streaming(new_pkg, &sheet_name, &key_columns, config, &mut sink)
+                .context("Database mode streaming diff failed")?;
+
+            if let Some(path) = metrics_json.as_deref() {
+                write_metrics_json_summary(Path::new(path), &summary)?;
+            }
+
+            let summary = sink.into_summary(summary, meta);
+            for warning in &summary.warnings {
+                eprintln!("Warning: {}", warning);
+            }
+
+            DiffOutcome {
+                diff_id: None,
+                mode: DiffOutcomeMode::Large,
+                payload: None,
+                summary: Some(summary),
+                config: Some(outcome_config),
+            }
+        } else {
+            let report = old_pkg
+                .diff_database_mode(new_pkg, &sheet_name, &key_columns, config)
+                .context("Database mode diff failed")?;
+
+            print_warnings_to_stderr(&report);
+            print_fallback_suggestions(&report, auto_keys, &sheet_name, old_pkg);
+
+            if let Some(path) = metrics_json.as_deref() {
+                write_metrics_json_report(Path::new(path), &report)?;
+            }
+
+            let payload = ui_payload::build_payload_from_workbook_report(report, old_pkg, new_pkg);
+            let summary = summarize_report(&payload.report, meta);
+            DiffOutcome {
+                diff_id: None,
+                mode: DiffOutcomeMode::Payload,
+                payload: Some(payload),
+                summary: Some(summary),
+                config: Some(outcome_config),
+            }
+        };
+
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        json::write_json_value(&mut handle, &outcome)?;
+
+        return Ok(match outcome.mode {
+            DiffOutcomeMode::Payload => exit_code_from_report(
+                outcome
+                    .payload
+                    .as_ref()
+                    .map(|p| &p.report)
+                    .expect("payload report exists"),
+            ),
+            DiffOutcomeMode::Large => {
+                let summary = outcome.summary.as_ref().expect("summary exists");
+                if summary.op_count == 0 && summary.complete {
+                    ExitCode::from(0)
+                } else {
+                    ExitCode::from(1)
+                }
+            }
+        });
+    }
+
+    if format == OutputFormat::Payload {
+        let report = old_pkg
+            .diff_database_mode(new_pkg, &sheet_name, &key_columns, config)
+            .context("Database mode diff failed")?;
+
+        print_warnings_to_stderr(&report);
+        print_fallback_suggestions(&report, auto_keys, &sheet_name, old_pkg);
+
+        if let Some(path) = metrics_json.as_deref() {
+            write_metrics_json_report(Path::new(path), &report)?;
+        }
+
+        let payload = ui_payload::build_payload_from_workbook_report(report, old_pkg, new_pkg);
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        json::write_json_value(&mut handle, &payload)?;
+        return Ok(exit_code_from_report(&payload.report));
+    }
 
     if format == OutputFormat::Jsonl && !git_diff_mode {
         return run_database_streaming(
@@ -408,6 +653,9 @@ fn run_database_mode(
             }
             OutputFormat::Jsonl => {
                 bail!("Internal error: JSONL format should be handled by the streaming path");
+            }
+            OutputFormat::Payload | OutputFormat::Outcome => {
+                bail!("Internal error: payload/outcome format should be handled earlier");
             }
         }
     }
@@ -574,14 +822,29 @@ fn print_fallback_suggestions(
     }
 }
 
-fn build_config(fast: bool, precise: bool) -> DiffConfig {
+fn resolve_preset(
+    preset: Option<DiffPresetArg>,
+    fast: bool,
+    precise: bool,
+) -> Result<DiffPreset> {
     if fast {
-        DiffConfig::fastest()
-    } else if precise {
-        DiffConfig::most_precise()
-    } else {
-        DiffConfig::default()
+        return Ok(DiffPreset::Fastest);
     }
+    if precise {
+        return Ok(DiffPreset::MostPrecise);
+    }
+    if let Some(preset) = preset {
+        return Ok(match preset {
+            DiffPresetArg::Fastest => DiffPreset::Fastest,
+            DiffPresetArg::Balanced => DiffPreset::Balanced,
+            DiffPresetArg::MostPrecise => DiffPreset::MostPrecise,
+        });
+    }
+    Ok(DiffPreset::Balanced)
+}
+
+fn build_config(preset: DiffPreset) -> DiffConfig {
+    preset.to_config()
 }
 
 fn estimate_diff_cell_volume(old: &Workbook, new: &Workbook) -> u64 {
@@ -623,15 +886,34 @@ fn maybe_auto_switch_jsonl(
     force_json: bool,
     git_diff_mode: bool,
     estimated_cells: Option<u64>,
+    config: &DiffConfig,
 ) -> (OutputFormat, Option<u64>) {
     if format == OutputFormat::Json && !force_json && !git_diff_mode {
         if let Some(cells) = estimated_cells {
-            if cells >= AUTO_STREAM_CELL_THRESHOLD {
+            if excel_diff::should_use_large_mode(cells, config) {
                 return (OutputFormat::Jsonl, Some(cells));
             }
         }
     }
     (format, None)
+}
+
+fn summary_meta_from_paths(old_path: &str, new_path: &str) -> SummaryMeta {
+    let old_name = Path::new(old_path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string());
+    let new_name = Path::new(new_path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string());
+
+    SummaryMeta {
+        old_path: Some(old_path.to_string()),
+        new_path: Some(new_path.to_string()),
+        old_name,
+        new_name,
+    }
 }
 
 fn print_warnings_to_stderr(report: &DiffReport) {
@@ -689,6 +971,21 @@ fn exit_code_from_report(report: &DiffReport) -> ExitCode {
         ExitCode::from(0)
     } else {
         ExitCode::from(1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_switches_to_jsonl_for_large_estimate() {
+        let config = DiffConfig::balanced();
+        let cells = excel_diff::AUTO_STREAM_CELL_THRESHOLD + 1;
+        let (format, switched) =
+            maybe_auto_switch_jsonl(OutputFormat::Json, false, false, Some(cells), &config);
+        assert_eq!(format, OutputFormat::Jsonl);
+        assert_eq!(switched, Some(cells));
     }
 }
 

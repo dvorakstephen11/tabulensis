@@ -93,6 +93,12 @@ export async function loadNativeBatchSummary(batchId) {
   return bridge.invoke("load_batch_summary", { batch_id: batchId });
 }
 
+export async function loadNativeCapabilities() {
+  const bridge = getNativeBridge();
+  if (!bridge) throw new Error("Native bridge unavailable.");
+  return bridge.invoke("get_capabilities");
+}
+
 export async function searchNativeDiffOps(diffId, query, limit) {
   const bridge = getNativeBridge();
   if (!bridge) throw new Error("Native bridge unavailable.");
@@ -185,6 +191,10 @@ export function createNativeDiffClient({ onStatus } = {}) {
     });
   }
 
+  async function downloadJsonl() {
+    throw new Error("JSONL download is only available in the web worker.");
+  }
+
   function cancel() {
     if (!current) return false;
     const id = current.id;
@@ -208,11 +218,13 @@ export function createNativeDiffClient({ onStatus } = {}) {
     diff,
     cancel,
     dispose,
+    downloadJsonl,
     loadSummary: loadNativeDiffSummary,
     loadSheetPayload: loadNativeSheetPayload,
     exportAuditXlsx: exportNativeAuditXlsx,
     runBatchCompare: runNativeBatchCompare,
     loadBatchSummary: loadNativeBatchSummary,
+    getCapabilities: loadNativeCapabilities,
     searchDiffOps: searchNativeDiffOps,
     buildSearchIndex: buildNativeSearchIndex,
     searchWorkbookIndex: searchNativeWorkbookIndex

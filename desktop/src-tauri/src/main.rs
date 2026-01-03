@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
+use ui_payload::{DiffOptions, HostCapabilities, HostDefaults};
 
 use crate::diff_runner::{
     DiffErrorPayload, DiffOutcome, DiffRequest, DiffRunner, SheetPayloadRequest,
@@ -33,13 +34,6 @@ struct DiffState {
 struct DesktopState {
     runner: DiffRunner,
     store_path: PathBuf,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DiffOptions {
-    ignore_blank_to_blank: Option<bool>,
-    trusted: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -103,6 +97,14 @@ fn get_version() -> String {
 }
 
 #[tauri::command]
+fn get_capabilities() -> HostCapabilities {
+    HostCapabilities::new(env!("CARGO_PKG_VERSION").to_string()).with_defaults(HostDefaults {
+        max_memory_mb: None,
+        large_mode_threshold: excel_diff::AUTO_STREAM_CELL_THRESHOLD,
+    })
+}
+
+#[tauri::command]
 fn load_recents(app: AppHandle) -> Result<Vec<RecentComparison>, String> {
     let path = recents_path(&app)?;
     Ok(load_recents_from_disk(&path))
@@ -156,11 +158,7 @@ async fn diff_paths_with_sheets(
     run_id: u64,
     options: Option<DiffOptions>,
 ) -> Result<DiffOutcome, DiffErrorPayload> {
-    if let Some(opts) = options.as_ref() {
-        let _ = opts.ignore_blank_to_blank;
-    }
-
-    let trusted = options.and_then(|o| o.trusted).unwrap_or(false);
+    let options = options.unwrap_or_default();
     let cancel_flag = {
         let mut current = match state.current.lock() {
             Ok(lock) => lock,
@@ -184,7 +182,7 @@ async fn diff_paths_with_sheets(
             old_path,
             new_path,
             run_id,
-            trusted,
+            options,
             cancel: cancel_flag,
             app: app_handle,
         };
@@ -354,6 +352,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             get_version,
+            get_capabilities,
             load_recents,
             save_recent,
             pick_file,

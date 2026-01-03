@@ -1,0 +1,485 @@
+{
+  "mode": "payload",
+  "payload": {
+    "report": {
+      "version": "1",
+      "strings": [
+        "",
+        "Sheet1",
+        "R1C1",
+        "R1C2",
+        "R1C3",
+        "R1C4",
+        "R1C5",
+        "R2C1",
+        "R2C2",
+        "R2C3",
+        "R2C4",
+        "R2C5",
+        "R3C1",
+        "R3C2",
+        "R3C4",
+        "R3C5",
+        "R4C1",
+        "R4C2",
+        "R4C3",
+        "R4C4",
+        "R4C5",
+        "R5C1",
+        "R5C2",
+        "R5C3",
+        "R5C4",
+        "R5C5"
+      ],
+      "ops": [
+        {
+          "kind": "CellEdited",
+          "sheet": 1,
+          "addr": "C3",
+          "from": {
+            "addr": "C3",
+            "value": {
+              "Number": 1.0
+            },
+            "formula": null
+          },
+          "to": {
+            "addr": "C3",
+            "value": {
+              "Number": 2.0
+            },
+            "formula": null
+          },
+          "formula_diff": "unchanged"
+        }
+      ],
+      "complete": true
+    },
+    "sheets": {
+      "old": {
+        "sheets": [
+          {
+            "name": "Sheet1",
+            "nrows": 5,
+            "ncols": 5,
+            "cells": [
+              {
+                "row": 0,
+                "col": 0,
+                "value": "R1C1",
+                "formula": null
+              },
+              {
+                "row": 3,
+                "col": 3,
+                "value": "R4C4",
+                "formula": null
+              },
+              {
+                "row": 3,
+                "col": 4,
+                "value": "R4C5",
+                "formula": null
+              },
+              {
+                "row": 2,
+                "col": 3,
+                "value": "R3C4",
+                "formula": null
+              },
+              {
+                "row": 2,
+                "col": 0,
+                "value": "R3C1",
+                "formula": null
+              },
+              {
+                "row": 1,
+                "col": 4,
+                "value": "R2C5",
+                "formula": null
+              },
+              {
+                "row": 1,
+                "col": 1,
+                "value": "R2C2",
+                "formula": null
+              },
+              {
+                "row": 1,
+                "col": 2,
+                "value": "R2C3",
+                "formula": null
+              },
+              {
+                "row": 4,
+                "col": 0,
+                "value": "R5C1",
+                "formula": null
+              },
+              {
+                "row": 0,
+                "col": 2,
+                "value": "R1C3",
+                "formula": null
+              },
+              {
+                "row": 3,
+                "col": 1,
+                "value": "R4C2",
+                "formula": null
+              },
+              {
+                "row": 3,
+                "col": 2,
+                "value": "R4C3",
+                "formula": null
+              },
+              {
+                "row": 4,
+                "col": 3,
+                "value": "R5C4",
+                "formula": null
+              },
+              {
+                "row": 2,
+                "col": 2,
+                "value": "1",
+                "formula": null
+              },
+              {
+                "row": 2,
+                "col": 4,
+                "value": "R3C5",
+                "formula": null
+              },
+              {
+                "row": 1,
+                "col": 0,
+                "value": "R2C1",
+                "formula": null
+              },
+              {
+                "row": 4,
+                "col": 2,
+                "value": "R5C3",
+                "formula": null
+              },
+              {
+                "row": 0,
+                "col": 4,
+                "value": "R1C5",
+                "formula": null
+              },
+              {
+                "row": 0,
+                "col": 1,
+                "value": "R1C2",
+                "formula": null
+              },
+              {
+                "row": 3,
+                "col": 0,
+                "value": "R4C1",
+                "formula": null
+              },
+              {
+                "row": 2,
+                "col": 1,
+                "value": "R3C2",
+                "formula": null
+              },
+              {
+                "row": 4,
+                "col": 4,
+                "value": "R5C5",
+                "formula": null
+              },
+              {
+                "row": 1,
+                "col": 3,
+                "value": "R2C4",
+                "formula": null
+              },
+              {
+                "row": 4,
+                "col": 1,
+                "value": "R5C2",
+                "formula": null
+              },
+              {
+                "row": 0,
+                "col": 3,
+                "value": "R1C4",
+                "formula": null
+              }
+            ],
+            "truncated": false,
+            "included_cells": 25,
+            "total_non_empty_cells": 25
+          }
+        ]
+      },
+      "new": {
+        "sheets": [
+          {
+            "name": "Sheet1",
+            "nrows": 5,
+            "ncols": 5,
+            "cells": [
+              {
+                "row": 0,
+                "col": 0,
+                "value": "R1C1",
+                "formula": null
+              },
+              {
+                "row": 3,
+                "col": 3,
+                "value": "R4C4",
+                "formula": null
+              },
+              {
+                "row": 3,
+                "col": 4,
+                "value": "R4C5",
+                "formula": null
+              },
+              {
+                "row": 2,
+                "col": 3,
+                "value": "R3C4",
+                "formula": null
+              },
+              {
+                "row": 2,
+                "col": 0,
+                "value": "R3C1",
+                "formula": null
+              },
+              {
+                "row": 1,
+                "col": 4,
+                "value": "R2C5",
+                "formula": null
+              },
+              {
+                "row": 1,
+                "col": 1,
+                "value": "R2C2",
+                "formula": null
+              },
+              {
+                "row": 1,
+                "col": 2,
+                "value": "R2C3",
+                "formula": null
+              },
+              {
+                "row": 4,
+                "col": 0,
+                "value": "R5C1",
+                "formula": null
+              },
+              {
+                "row": 0,
+                "col": 2,
+                "value": "R1C3",
+                "formula": null
+              },
+              {
+                "row": 3,
+                "col": 1,
+                "value": "R4C2",
+                "formula": null
+              },
+              {
+                "row": 3,
+                "col": 2,
+                "value": "R4C3",
+                "formula": null
+              },
+              {
+                "row": 4,
+                "col": 3,
+                "value": "R5C4",
+                "formula": null
+              },
+              {
+                "row": 2,
+                "col": 2,
+                "value": "2",
+                "formula": null
+              },
+              {
+                "row": 2,
+                "col": 4,
+                "value": "R3C5",
+                "formula": null
+              },
+              {
+                "row": 1,
+                "col": 0,
+                "value": "R2C1",
+                "formula": null
+              },
+              {
+                "row": 4,
+                "col": 2,
+                "value": "R5C3",
+                "formula": null
+              },
+              {
+                "row": 0,
+                "col": 4,
+                "value": "R1C5",
+                "formula": null
+              },
+              {
+                "row": 0,
+                "col": 1,
+                "value": "R1C2",
+                "formula": null
+              },
+              {
+                "row": 3,
+                "col": 0,
+                "value": "R4C1",
+                "formula": null
+              },
+              {
+                "row": 2,
+                "col": 1,
+                "value": "R3C2",
+                "formula": null
+              },
+              {
+                "row": 4,
+                "col": 4,
+                "value": "R5C5",
+                "formula": null
+              },
+              {
+                "row": 1,
+                "col": 3,
+                "value": "R2C4",
+                "formula": null
+              },
+              {
+                "row": 4,
+                "col": 1,
+                "value": "R5C2",
+                "formula": null
+              },
+              {
+                "row": 0,
+                "col": 3,
+                "value": "R1C4",
+                "formula": null
+              }
+            ],
+            "truncated": false,
+            "included_cells": 25,
+            "total_non_empty_cells": 25
+          }
+        ]
+      }
+    },
+    "alignments": [
+      {
+        "sheet": "Sheet1",
+        "rows": [
+          {
+            "old": 0,
+            "new": 0,
+            "kind": "match"
+          },
+          {
+            "old": 1,
+            "new": 1,
+            "kind": "match"
+          },
+          {
+            "old": 2,
+            "new": 2,
+            "kind": "match"
+          },
+          {
+            "old": 3,
+            "new": 3,
+            "kind": "match"
+          },
+          {
+            "old": 4,
+            "new": 4,
+            "kind": "match"
+          }
+        ],
+        "cols": [
+          {
+            "old": 0,
+            "new": 0,
+            "kind": "match"
+          },
+          {
+            "old": 1,
+            "new": 1,
+            "kind": "match"
+          },
+          {
+            "old": 2,
+            "new": 2,
+            "kind": "match"
+          },
+          {
+            "old": 3,
+            "new": 3,
+            "kind": "match"
+          },
+          {
+            "old": 4,
+            "new": 4,
+            "kind": "match"
+          }
+        ],
+        "moves": [],
+        "skipped": false
+      }
+    ]
+  },
+  "summary": {
+    "oldPath": "fixtures\\generated\\single_cell_value_a.xlsx",
+    "newPath": "fixtures\\generated\\single_cell_value_b.xlsx",
+    "oldName": "single_cell_value_a.xlsx",
+    "newName": "single_cell_value_b.xlsx",
+    "complete": true,
+    "opCount": 1,
+    "counts": {
+      "added": 0,
+      "removed": 0,
+      "modified": 1,
+      "moved": 0
+    },
+    "sheets": [
+      {
+        "sheetName": "Sheet1",
+        "opCount": 1,
+        "counts": {
+          "added": 0,
+          "removed": 0,
+          "modified": 1,
+          "moved": 0
+        }
+      }
+    ]
+  },
+  "config": {
+    "preset": "balanced",
+    "limits": {
+      "maxMemoryMb": null,
+      "timeoutMs": null,
+      "maxOps": null,
+      "onLimitExceeded": "fallback_to_positional"
+    }
+  }
+}

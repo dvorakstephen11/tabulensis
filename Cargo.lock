@@ -1240,8 +1240,10 @@ dependencies = [
  "anyhow",
  "clap",
  "excel_diff",
+ "serde",
  "serde_json",
  "tempfile",
+ "ui_payload",
 ]
 
 [[package]]
@@ -1271,6 +1273,7 @@ version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
  "excel_diff",
+ "js-sys",
  "serde_json",
  "ui_payload",
  "wasm-bindgen",
@@ -4777,6 +4780,7 @@ version = "0.1.0"
 dependencies = [
  "excel_diff",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

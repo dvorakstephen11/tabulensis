@@ -1,4 +1,4 @@
-import init, { diff_files_with_sheets_json, get_version } from "./wasm/excel_diff_wasm.js";
+import init, { diff_files_jsonl_stream, diff_files_outcome_json, get_version } from "./wasm/excel_diff_wasm.js";
 
 let initPromise = null;
 let cachedVersion = null;
@@ -36,11 +36,13 @@ self.addEventListener("message", async (event) => {
       postProgress(requestId, "diff", "Diffing workbooks");
       let oldBytes = new Uint8Array(msg.oldBuffer);
       let newBytes = new Uint8Array(msg.newBuffer);
-      let json = diff_files_with_sheets_json(
+      const optionsJson = JSON.stringify(msg.options || {});
+      let json = diff_files_outcome_json(
         oldBytes,
         newBytes,
         msg.oldName || "old",
-        msg.newName || "new"
+        msg.newName || "new",
+        optionsJson
       );
       postProgress(requestId, "parse", "Parsing results");
       let payload = JSON.parse(json);
@@ -49,6 +51,31 @@ self.addEventListener("message", async (event) => {
       newBytes = null;
       json = null;
       payload = null;
+      return;
+    }
+
+    if (msg.type === "jsonl") {
+      await ensureInitialized();
+      postProgress(requestId, "diff", "Streaming JSONL output");
+      let oldBytes = new Uint8Array(msg.oldBuffer);
+      let newBytes = new Uint8Array(msg.newBuffer);
+      const optionsJson = JSON.stringify(msg.options || {});
+      const onChunk = chunk => {
+        if (chunk) {
+          self.postMessage({ type: "jsonl-chunk", requestId, chunk });
+        }
+      };
+      diff_files_jsonl_stream(
+        oldBytes,
+        newBytes,
+        msg.oldName || "old",
+        msg.newName || "new",
+        optionsJson,
+        onChunk
+      );
+      self.postMessage({ type: "jsonl-done", requestId });
+      oldBytes = null;
+      newBytes = null;
       return;
     }
   } catch (err) {

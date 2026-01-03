@@ -109,3 +109,11 @@ ${cssText || ""}
   const filename = `excel-diff-report__${oldSafe}__${newSafe}__${date}.html`;
   downloadBlob(filename, "text/html", html);
 }
+
+export function downloadJsonl({ blob, meta }) {
+  const oldName = safeName(meta?.oldName, "old");
+  const newName = safeName(meta?.newName, "new");
+  const date = (meta?.createdAtIso || new Date().toISOString()).slice(0, 10);
+  const filename = `excel-diff-stream__${oldName}__${newName}__${date}.jsonl`;
+  downloadBlob(filename, "application/x-ndjson", blob || "");
+}

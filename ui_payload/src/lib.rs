@@ -4,8 +4,17 @@ use std::path::Path;
 use serde::Serialize;
 
 mod alignment;
+mod capabilities;
+mod options;
+mod outcome;
 
 pub use alignment::SheetAlignment;
+pub use capabilities::{HostCapabilities, HostDefaults};
+pub use options::{DiffLimits, DiffOptions, DiffPreset, limits_from_config};
+pub use outcome::{
+    ChangeCounts, DiffOutcome, DiffOutcomeConfig, DiffOutcomeMode, DiffOutcomeSummary, SheetSummary,
+    SummaryMeta, SummarySink, summarize_report,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostKind {
@@ -119,6 +128,10 @@ pub fn build_payload_from_pbix(
     cfg: &excel_diff::DiffConfig,
 ) -> DiffWithSheets {
     let report = old_pkg.diff(new_pkg, cfg);
+    build_payload_from_pbix_report(report)
+}
+
+pub fn build_payload_from_pbix_report(report: excel_diff::DiffReport) -> DiffWithSheets {
     let empty = WorkbookSnapshot { sheets: Vec::new() };
     DiffWithSheets {
         report,

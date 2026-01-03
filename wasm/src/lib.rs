@@ -1,15 +1,123 @@
-use std::io::Cursor;
+use std::io::{self, Cursor, Write};
 
 use excel_diff::advanced::{CallbackSink, diff_workbooks_streaming};
-use excel_diff::{CellValue, DiffConfig, Grid, Sheet, SheetKind, StringPool, Workbook};
+use excel_diff::{
+    CellValue, DiffConfig, Grid, JsonLinesSink, Sheet, SheetKind, StringPool, Workbook,
+};
+use js_sys::Function;
+use ui_payload::{
+    DiffOptions, DiffOutcome, DiffOutcomeConfig, DiffOutcomeMode, DiffPreset, HostCapabilities,
+    HostDefaults, SummaryMeta, SummarySink, limits_from_config, summarize_report,
+};
 use wasm_bindgen::prelude::*;
 
 const WASM_DEFAULT_MAX_MEMORY_MB: u32 = 256;
+const JSONL_CHUNK_BYTES: usize = 256 * 1024;
+
+struct JsonlChunkWriter {
+    buffer: Vec<u8>,
+    on_chunk: Function,
+}
+
+impl JsonlChunkWriter {
+    fn new(on_chunk: Function) -> Self {
+        Self {
+            buffer: Vec::with_capacity(JSONL_CHUNK_BYTES),
+            on_chunk,
+        }
+    }
+
+    fn flush_buffer(&mut self) -> io::Result<()> {
+        if self.buffer.is_empty() {
+            return Ok(());
+        }
+        let text = String::from_utf8_lossy(&self.buffer);
+        self.on_chunk
+            .call1(&JsValue::NULL, &JsValue::from_str(text.as_ref()))
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("chunk callback failed: {e:?}")))?;
+        self.buffer.clear();
+        Ok(())
+    }
+}
+
+impl Write for JsonlChunkWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.buffer.extend_from_slice(buf);
+        if self.buffer.len() >= JSONL_CHUNK_BYTES {
+            self.flush_buffer()?;
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.flush_buffer()
+    }
+}
 
 fn wasm_default_config() -> DiffConfig {
     let mut cfg = DiffConfig::default();
     cfg.hardening.max_memory_mb = Some(WASM_DEFAULT_MAX_MEMORY_MB);
     cfg
+}
+
+fn parse_options(options_json: &str) -> Result<DiffOptions, JsValue> {
+    if options_json.trim().is_empty() {
+        return Ok(DiffOptions::default());
+    }
+    serde_json::from_str::<DiffOptions>(options_json)
+        .map_err(|e| JsValue::from_str(&format!("Invalid options JSON: {e}")))
+}
+
+fn outcome_config_from_options(options: &DiffOptions, cfg: &DiffConfig) -> DiffOutcomeConfig {
+    let preset = if options.config_json.as_ref().map(|v| v.trim()).unwrap_or("").is_empty() {
+        Some(options.preset.unwrap_or(DiffPreset::Balanced))
+    } else {
+        None
+    };
+    DiffOutcomeConfig {
+        preset,
+        limits: Some(limits_from_config(cfg)),
+    }
+}
+
+fn summary_meta_from_names(old_name: &str, new_name: &str) -> SummaryMeta {
+    SummaryMeta {
+        old_path: None,
+        new_path: None,
+        old_name: Some(old_name.to_string()),
+        new_name: Some(new_name.to_string()),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SheetKey {
+    name_lower: String,
+    kind: SheetKind,
+}
+
+fn estimate_diff_cell_volume(old: &Workbook, new: &Workbook) -> u64 {
+    excel_diff::with_default_session(|session| {
+        let mut max_counts: std::collections::HashMap<SheetKey, u64> =
+            std::collections::HashMap::new();
+        for sheet in old.sheets.iter().chain(new.sheets.iter()) {
+            let name_lower = session.strings.resolve(sheet.name).to_lowercase();
+            let key = SheetKey {
+                name_lower,
+                kind: sheet.kind.clone(),
+            };
+            let cell_count = sheet.grid.cell_count() as u64;
+            max_counts
+                .entry(key)
+                .and_modify(|v| {
+                    if cell_count > *v {
+                        *v = cell_count;
+                    }
+                })
+                .or_insert(cell_count);
+        }
+
+        max_counts.values().copied().sum()
+    })
 }
 
 #[wasm_bindgen(start)]
@@ -101,6 +209,144 @@ pub fn diff_files_with_sheets_json(
 }
 
 #[wasm_bindgen]
+pub fn diff_files_outcome_json(
+    old_bytes: Vec<u8>,
+    new_bytes: Vec<u8>,
+    old_name: &str,
+    new_name: &str,
+    options_json: String,
+) -> Result<String, JsValue> {
+    let kind_old = ui_payload::host_kind_from_name(old_name)
+        .ok_or_else(|| JsValue::from_str("Unsupported old file extension"))?;
+    let kind_new = ui_payload::host_kind_from_name(new_name)
+        .ok_or_else(|| JsValue::from_str("Unsupported new file extension"))?;
+
+    if kind_old != kind_new {
+        return Err(JsValue::from_str("Old/new files must be the same type"));
+    }
+
+    let options = parse_options(&options_json)?;
+    let cfg = options
+        .effective_config(wasm_default_config())
+        .map_err(|e| JsValue::from_str(&e))?;
+    let outcome_config = outcome_config_from_options(&options, &cfg);
+    let meta = summary_meta_from_names(old_name, new_name);
+
+    let old_cursor = Cursor::new(old_bytes);
+    let new_cursor = Cursor::new(new_bytes);
+
+    let outcome = match kind_old {
+        ui_payload::HostKind::Workbook => {
+            let pkg_old = excel_diff::WorkbookPackage::open(old_cursor)
+                .map_err(|e| JsValue::from_str(&format!("Failed to open old workbook: {}", e)))?;
+            let pkg_new = excel_diff::WorkbookPackage::open(new_cursor)
+                .map_err(|e| JsValue::from_str(&format!("Failed to open new workbook: {}", e)))?;
+
+            let estimated_cells = estimate_diff_cell_volume(&pkg_old.workbook, &pkg_new.workbook);
+            let use_large_mode = excel_diff::should_use_large_mode(estimated_cells, &cfg);
+
+            if use_large_mode {
+                let mut sink = SummarySink::new();
+                let summary = pkg_old
+                    .diff_streaming(&pkg_new, &cfg, &mut sink)
+                    .map_err(|e| JsValue::from_str(&format!("Streaming diff failed: {}", e)))?;
+                let summary = sink.into_summary(summary, meta.clone());
+                DiffOutcome {
+                    diff_id: None,
+                    mode: DiffOutcomeMode::Large,
+                    payload: None,
+                    summary: Some(summary),
+                    config: Some(outcome_config),
+                }
+            } else {
+                let payload = ui_payload::build_payload_from_workbooks(&pkg_old, &pkg_new, &cfg);
+                let summary = summarize_report(&payload.report, meta.clone());
+                DiffOutcome {
+                    diff_id: None,
+                    mode: DiffOutcomeMode::Payload,
+                    payload: Some(payload),
+                    summary: Some(summary),
+                    config: Some(outcome_config),
+                }
+            }
+        }
+        ui_payload::HostKind::Pbix => {
+            let pkg_old = excel_diff::PbixPackage::open(old_cursor)
+                .map_err(|e| JsValue::from_str(&format!("Failed to open old PBIX/PBIT: {}", e)))?;
+            let pkg_new = excel_diff::PbixPackage::open(new_cursor)
+                .map_err(|e| JsValue::from_str(&format!("Failed to open new PBIX/PBIT: {}", e)))?;
+            let payload = ui_payload::build_payload_from_pbix(&pkg_old, &pkg_new, &cfg);
+            let summary = summarize_report(&payload.report, meta);
+            DiffOutcome {
+                diff_id: None,
+                mode: DiffOutcomeMode::Payload,
+                payload: Some(payload),
+                summary: Some(summary),
+                config: Some(outcome_config),
+            }
+        }
+    };
+
+    serde_json::to_string(&outcome)
+        .map_err(|e| JsValue::from_str(&format!("Failed to serialize outcome: {}", e)))
+}
+
+#[wasm_bindgen]
+pub fn diff_files_jsonl_stream(
+    old_bytes: Vec<u8>,
+    new_bytes: Vec<u8>,
+    old_name: &str,
+    new_name: &str,
+    options_json: String,
+    on_chunk: Function,
+) -> Result<(), JsValue> {
+    let kind_old = ui_payload::host_kind_from_name(old_name)
+        .ok_or_else(|| JsValue::from_str("Unsupported old file extension"))?;
+    let kind_new = ui_payload::host_kind_from_name(new_name)
+        .ok_or_else(|| JsValue::from_str("Unsupported new file extension"))?;
+
+    if kind_old != kind_new {
+        return Err(JsValue::from_str("Old/new files must be the same type"));
+    }
+
+    let options = parse_options(&options_json)?;
+    let cfg = options
+        .effective_config(wasm_default_config())
+        .map_err(|e| JsValue::from_str(&e))?;
+
+    let old_cursor = Cursor::new(old_bytes);
+    let new_cursor = Cursor::new(new_bytes);
+    let writer = JsonlChunkWriter::new(on_chunk);
+    let mut sink = JsonLinesSink::new(writer);
+
+    match kind_old {
+        ui_payload::HostKind::Workbook => {
+            let pkg_old = excel_diff::WorkbookPackage::open(old_cursor)
+                .map_err(|e| JsValue::from_str(&format!("Failed to open old workbook: {}", e)))?;
+            let pkg_new = excel_diff::WorkbookPackage::open(new_cursor)
+                .map_err(|e| JsValue::from_str(&format!("Failed to open new workbook: {}", e)))?;
+            pkg_old
+                .diff_streaming(&pkg_new, &cfg, &mut sink)
+                .map_err(|e| JsValue::from_str(&format!("Streaming diff failed: {}", e)))?;
+        }
+        ui_payload::HostKind::Pbix => {
+            let pkg_old = excel_diff::PbixPackage::open(old_cursor)
+                .map_err(|e| JsValue::from_str(&format!("Failed to open old PBIX/PBIT: {}", e)))?;
+            let pkg_new = excel_diff::PbixPackage::open(new_cursor)
+                .map_err(|e| JsValue::from_str(&format!("Failed to open new PBIX/PBIT: {}", e)))?;
+            pkg_old
+                .diff_streaming(&pkg_new, &cfg, &mut sink)
+                .map_err(|e| JsValue::from_str(&format!("Streaming diff failed: {}", e)))?;
+        }
+    };
+
+    sink.finish()
+        .map_err(|e| JsValue::from_str(&format!("Failed to finalize JSONL: {}", e)))?;
+
+    Ok(())
+}
+
+#[wasm_bindgen]
 pub fn diff_workbooks_json(old_bytes: Vec<u8>, new_bytes: Vec<u8>) -> Result<String, JsValue> {
     diff_files_json(old_bytes, new_bytes, "old.xlsx", "new.xlsx")
 }
@@ -108,6 +354,16 @@ pub fn diff_workbooks_json(old_bytes: Vec<u8>, new_bytes: Vec<u8>) -> Result<Str
 #[wasm_bindgen]
 pub fn get_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[wasm_bindgen]
+pub fn get_capabilities() -> Result<String, JsValue> {
+    let caps = HostCapabilities::new(get_version()).with_defaults(HostDefaults {
+        max_memory_mb: Some(WASM_DEFAULT_MAX_MEMORY_MB),
+        large_mode_threshold: excel_diff::AUTO_STREAM_CELL_THRESHOLD,
+    });
+    serde_json::to_string(&caps)
+        .map_err(|e| JsValue::from_str(&format!("Failed to serialize capabilities: {}", e)))
 }
 
 #[wasm_bindgen]

@@ -18,18 +18,21 @@ Compare two workbooks and emit a diff.
 
 ### Output selection
 
-- `--format <text|json|jsonl>`: output format (default: `text`)
+- `--format <text|json|jsonl|payload|outcome>`: output format (default: `text`)
   - `text`: human-readable summary (good for terminals)
   - `json`: full `DiffReport` serialized as JSON
   - `jsonl`: streaming JSON lines (header line, then one op per line)
+  - `payload`: UI-loadable `DiffWithSheets` JSON (report + snapshots + alignments)
+  - `outcome`: shared outcome envelope (`mode`, optional `payload`, optional `summary`)
 - `--git-diff`: unified-diff style output for Git tools
-  - Constraint: cannot be combined with `--format json` or `--format jsonl`
+  - Constraint: cannot be combined with `--format json`, `--format jsonl`, `--format payload`, or `--format outcome`
 
 ### Presets / verbosity
 
+- `--preset <fastest|balanced|most-precise>`: select a named preset (default: `balanced`)
 - `--fast`: fastest preset (less precise move detection)
 - `--precise`: most-precise preset (slower, more accurate)
-  - Constraint: `--fast` and `--precise` are mutually exclusive
+  - Constraint: `--fast`, `--precise`, and `--preset` are mutually exclusive
 - `--quiet`: summary-only text output
 - `--verbose`: include more detail in text output
 

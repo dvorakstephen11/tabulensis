@@ -60,6 +60,23 @@ export function createDiffWorkerClient({ onStatus } = {}) {
       return;
     }
 
+    if (msg.type === "jsonl-chunk") {
+      if (current && current.kind === "jsonl") {
+        current.chunks.push(msg.chunk || "");
+      }
+      return;
+    }
+
+    if (msg.type === "jsonl-done") {
+      if (current && current.kind === "jsonl") {
+        const resolve = current.resolve;
+        const chunks = current.chunks || [];
+        current = null;
+        resolve(new Blob(chunks, { type: "application/x-ndjson" }));
+      }
+      return;
+    }
+
     if (msg.type === "error") {
       const reject = current.reject;
       current = null;
@@ -116,6 +133,30 @@ export function createDiffWorkerClient({ onStatus } = {}) {
     });
   }
 
+  async function downloadJsonl(files, options = {}) {
+    if (current) {
+      throw new Error("Diff already in progress.");
+    }
+    await ready();
+    const w = ensureWorker();
+    const id = nextRequestId();
+    return new Promise((resolve, reject) => {
+      current = { id, resolve, reject, kind: "jsonl", chunks: [] };
+      w.postMessage(
+        {
+          type: "jsonl",
+          requestId: id,
+          oldName: files.oldName,
+          newName: files.newName,
+          oldBuffer: files.oldBuffer,
+          newBuffer: files.newBuffer,
+          options
+        },
+        [files.oldBuffer, files.newBuffer]
+      );
+    });
+  }
+
   function cancel() {
     if (!worker) return false;
     if (current && current.reject) {
@@ -134,6 +175,7 @@ export function createDiffWorkerClient({ onStatus } = {}) {
   return {
     ready,
     diff,
+    downloadJsonl,
     cancel,
     dispose
   };

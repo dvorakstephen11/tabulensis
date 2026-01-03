@@ -135,6 +135,14 @@ impl OpStore {
         Ok(diff_id)
     }
 
+    pub fn set_mode(&self, diff_id: &str, mode: DiffMode) -> Result<(), StoreError> {
+        self.conn.execute(
+            "UPDATE diff_runs SET mode = ?1 WHERE diff_id = ?2",
+            params![mode.as_str(), diff_id],
+        )?;
+        Ok(())
+    }
+
     pub fn finish_run(
         &self,
         diff_id: &str,
