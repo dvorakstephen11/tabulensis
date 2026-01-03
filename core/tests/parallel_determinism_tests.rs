@@ -18,6 +18,14 @@ where
     pool.install(f)
 }
 
+fn normalize_summary(mut summary: excel_diff::DiffSummary) -> excel_diff::DiffSummary {
+    #[cfg(feature = "perf-metrics")]
+    {
+        summary.metrics = None;
+    }
+    summary
+}
+
 fn make_workbook(pool: &mut StringPool, value: f64) -> Workbook {
     let mut grid = Grid::new(1, 1);
     grid.insert_cell(0, 0, Some(CellValue::Number(value)), None);
@@ -167,7 +175,8 @@ fn streaming_workbook_ops_are_identical_across_thread_counts() {
         (sink.into_ops(), summary)
     });
 
-    assert_eq!(output_1, output_4);
+    assert_eq!(output_1.0, output_4.0);
+    assert_eq!(normalize_summary(output_1.1), normalize_summary(output_4.1));
 }
 
 #[test]
@@ -216,5 +225,6 @@ fn streaming_database_mode_ops_are_identical_across_thread_counts() {
         (sink.into_ops(), summary)
     });
 
-    assert_eq!(output_1, output_4);
+    assert_eq!(output_1.0, output_4.0);
+    assert_eq!(normalize_summary(output_1.1), normalize_summary(output_4.1));
 }

@@ -5,6 +5,7 @@ use crate::string_pool::StringId;
 pub struct Model {
     pub measures: Vec<Measure>,
     pub tables: Vec<ModelTable>,
+    pub relationships: Vec<ModelRelationship>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,4 +24,21 @@ pub struct ModelTable {
 pub struct ModelColumn {
     pub name: StringId,
     pub data_type: Option<StringId>,
+    pub is_hidden: Option<bool>,
+    pub format_string: Option<StringId>,
+    pub sort_by: Option<StringId>,
+    pub summarize_by: Option<StringId>,
+    pub expression: Option<StringId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelRelationship {
+    pub from_table: StringId,
+    pub from_column: StringId,
+    pub to_table: StringId,
+    pub to_column: StringId,
+    pub cross_filtering_behavior: Option<StringId>,
+    pub cardinality: Option<StringId>,
+    pub is_active: Option<bool>,
+    pub name: Option<StringId>,
 }

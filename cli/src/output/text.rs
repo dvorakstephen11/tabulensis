@@ -1,8 +1,8 @@
 use crate::commands::diff::Verbosity;
 use anyhow::Result;
 use excel_diff::{
-    CellValue, DiffOp, DiffReport, QueryChangeKind, QueryMetadataField, StepChange, StepDiff,
-    StepType, StringId, index_to_address,
+    CellValue, DiffOp, DiffReport, ExpressionChangeKind, QueryChangeKind, QueryMetadataField,
+    StepChange, StepDiff, StepType, StringId, index_to_address,
 };
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -38,7 +38,7 @@ pub fn write_text_report<W: Write>(
         return Ok(());
     }
 
-    let (workbook_ops, sheet_ops, query_ops, measure_ops) = partition_ops(report);
+    let (workbook_ops, sheet_ops, query_ops, model_ops) = partition_ops(report);
 
     if !workbook_ops.is_empty() {
         writeln!(w, "Workbook:")?;
@@ -73,9 +73,9 @@ pub fn write_text_report<W: Write>(
         writeln!(w)?;
     }
 
-    if !measure_ops.is_empty() {
-        writeln!(w, "Measures:")?;
-        for op in &measure_ops {
+    if !model_ops.is_empty() {
+        writeln!(w, "Model:")?;
+        for op in &model_ops {
             let lines = render_op(report, op, verbosity);
             for line in lines {
                 writeln!(w, "  {}", line)?;
@@ -99,13 +99,13 @@ fn partition_ops(
     let mut workbook_ops: Vec<&DiffOp> = Vec::new();
     let mut sheet_ops: BTreeMap<String, Vec<&DiffOp>> = BTreeMap::new();
     let mut query_ops: Vec<&DiffOp> = Vec::new();
-    let mut measure_ops: Vec<&DiffOp> = Vec::new();
+    let mut model_ops: Vec<&DiffOp> = Vec::new();
 
     for op in &report.ops {
         if op.is_m_op() {
             query_ops.push(op);
-        } else if is_measure_op(op) {
-            measure_ops.push(op);
+        } else if op.is_model_op() {
+            model_ops.push(op);
         } else if let Some(sheet_id) = get_sheet_id(op) {
             let sheet_name = report
                 .resolve(sheet_id)
@@ -117,16 +117,7 @@ fn partition_ops(
         }
     }
 
-    (workbook_ops, sheet_ops, query_ops, measure_ops)
-}
-
-fn is_measure_op(op: &DiffOp) -> bool {
-    matches!(
-        op,
-        DiffOp::MeasureAdded { .. }
-            | DiffOp::MeasureRemoved { .. }
-            | DiffOp::MeasureDefinitionChanged { .. }
-    )
+    (workbook_ops, sheet_ops, query_ops, model_ops)
 }
 
 fn get_sheet_id(op: &DiffOp) -> Option<StringId> {
@@ -477,10 +468,128 @@ fn render_op(report: &DiffReport, op: &DiffOp, verbosity: Verbosity) -> Vec<Stri
             "Measure \"{}\": REMOVED",
             report.resolve(*name).unwrap_or("<unknown>")
         )],
-        DiffOp::MeasureDefinitionChanged { name, .. } => vec![format!(
-            "Measure \"{}\": definition changed",
+        DiffOp::MeasureDefinitionChanged { name, change_kind, .. } => vec![format!(
+            "Measure \"{}\": definition changed ({})",
+            report.resolve(*name).unwrap_or("<unknown>"),
+            expression_change_label(*change_kind)
+        )],
+        DiffOp::TableAdded { name } => vec![format!(
+            "Table \"{}\": ADDED",
             report.resolve(*name).unwrap_or("<unknown>")
         )],
+        DiffOp::TableRemoved { name } => vec![format!(
+            "Table \"{}\": REMOVED",
+            report.resolve(*name).unwrap_or("<unknown>")
+        )],
+        DiffOp::ModelColumnAdded {
+            table,
+            name,
+            data_type,
+        } => {
+            let label = format_column_ref(report, *table, *name);
+            let mut lines = vec![format!("Column \"{}\": ADDED", label)];
+            if verbosity == Verbosity::Verbose {
+                if let Some(ty) = data_type.and_then(|id| report.resolve(id)) {
+                    lines.push(format!("  type: {}", ty));
+                }
+            }
+            lines
+        }
+        DiffOp::ModelColumnRemoved { table, name } => vec![format!(
+            "Column \"{}\": REMOVED",
+            format_column_ref(report, *table, *name)
+        )],
+        DiffOp::ModelColumnTypeChanged {
+            table,
+            name,
+            old_type,
+            new_type,
+        } => {
+            let old_str = old_type
+                .and_then(|id| report.resolve(id))
+                .unwrap_or("<none>");
+            let new_str = new_type
+                .and_then(|id| report.resolve(id))
+                .unwrap_or("<none>");
+            vec![format!(
+                "Column \"{}\": type changed: {} -> {}",
+                format_column_ref(report, *table, *name),
+                old_str,
+                new_str
+            )]
+        }
+        DiffOp::ModelColumnPropertyChanged {
+            table,
+            name,
+            field,
+            old,
+            new,
+        } => {
+            let old_str = old
+                .and_then(|id| report.resolve(id))
+                .unwrap_or("<none>");
+            let new_str = new
+                .and_then(|id| report.resolve(id))
+                .unwrap_or("<none>");
+            vec![format!(
+                "Column \"{}\": {} changed: {} -> {}",
+                format_column_ref(report, *table, *name),
+                column_field_name(*field),
+                old_str,
+                new_str
+            )]
+        }
+        DiffOp::CalculatedColumnDefinitionChanged {
+            table,
+            name,
+            change_kind,
+            ..
+        } => vec![format!(
+            "Calculated column \"{}\": definition changed ({})",
+            format_column_ref(report, *table, *name),
+            expression_change_label(*change_kind)
+        )],
+        DiffOp::RelationshipAdded {
+            from_table,
+            from_column,
+            to_table,
+            to_column,
+        } => vec![format!(
+            "Relationship {}: ADDED",
+            format_relationship_ref(report, *from_table, *from_column, *to_table, *to_column)
+        )],
+        DiffOp::RelationshipRemoved {
+            from_table,
+            from_column,
+            to_table,
+            to_column,
+        } => vec![format!(
+            "Relationship {}: REMOVED",
+            format_relationship_ref(report, *from_table, *from_column, *to_table, *to_column)
+        )],
+        DiffOp::RelationshipPropertyChanged {
+            from_table,
+            from_column,
+            to_table,
+            to_column,
+            field,
+            old,
+            new,
+        } => {
+            let old_str = old
+                .and_then(|id| report.resolve(id))
+                .unwrap_or("<none>");
+            let new_str = new
+                .and_then(|id| report.resolve(id))
+                .unwrap_or("<none>");
+            vec![format!(
+                "Relationship {}: {} changed: {} -> {}",
+                format_relationship_ref(report, *from_table, *from_column, *to_table, *to_column),
+                relationship_field_name(*field),
+                old_str,
+                new_str
+            )]
+        }
         _ => vec![format!("{:?}", op)],
     }
 }
@@ -627,8 +736,8 @@ fn write_summary<W: Write>(w: &mut W, report: &DiffReport) -> Result<()> {
     if counts.queries > 0 {
         writeln!(w, "  Query changes: {}", counts.queries)?;
     }
-    if counts.measures > 0 {
-        writeln!(w, "  Measure changes: {}", counts.measures)?;
+    if counts.model > 0 {
+        writeln!(w, "  Model changes: {}", counts.model)?;
     }
 
     if !report.complete {
@@ -647,7 +756,7 @@ struct OpCounts {
     blocks: usize,
     cells: usize,
     queries: usize,
-    measures: usize,
+    model: usize,
 }
 
 fn count_ops(report: &DiffReport) -> OpCounts {
@@ -658,7 +767,7 @@ fn count_ops(report: &DiffReport) -> OpCounts {
         blocks: 0,
         cells: 0,
         queries: 0,
-        measures: 0,
+        model: 0,
     };
 
     for op in &report.ops {
@@ -680,13 +789,56 @@ fn count_ops(report: &DiffReport) -> OpCounts {
             | DiffOp::QueryRenamed { .. }
             | DiffOp::QueryDefinitionChanged { .. }
             | DiffOp::QueryMetadataChanged { .. } => counts.queries += 1,
-            DiffOp::MeasureAdded { .. }
-            | DiffOp::MeasureRemoved { .. }
-            | DiffOp::MeasureDefinitionChanged { .. } => counts.measures += 1,
+            _ if op.is_model_op() => counts.model += 1,
             _ => {}
         }
     }
 
     counts
+}
+
+fn format_column_ref(report: &DiffReport, table: StringId, column: StringId) -> String {
+    let table_name = report.resolve(table).unwrap_or("<unknown>");
+    let column_name = report.resolve(column).unwrap_or("<unknown>");
+    format!("{}.{}", table_name, column_name)
+}
+
+fn format_relationship_ref(
+    report: &DiffReport,
+    from_table: StringId,
+    from_column: StringId,
+    to_table: StringId,
+    to_column: StringId,
+) -> String {
+    let from_table = report.resolve(from_table).unwrap_or("<unknown>");
+    let from_column = report.resolve(from_column).unwrap_or("<unknown>");
+    let to_table = report.resolve(to_table).unwrap_or("<unknown>");
+    let to_column = report.resolve(to_column).unwrap_or("<unknown>");
+    format!("{}[{}] -> {}[{}]", from_table, from_column, to_table, to_column)
+}
+
+fn column_field_name(field: excel_diff::ModelColumnProperty) -> &'static str {
+    match field {
+        excel_diff::ModelColumnProperty::Hidden => "hidden",
+        excel_diff::ModelColumnProperty::FormatString => "format_string",
+        excel_diff::ModelColumnProperty::SortBy => "sort_by",
+        excel_diff::ModelColumnProperty::SummarizeBy => "summarize_by",
+    }
+}
+
+fn relationship_field_name(field: excel_diff::RelationshipProperty) -> &'static str {
+    match field {
+        excel_diff::RelationshipProperty::CrossFilteringBehavior => "cross_filtering_behavior",
+        excel_diff::RelationshipProperty::Cardinality => "cardinality",
+        excel_diff::RelationshipProperty::IsActive => "is_active",
+    }
+}
+
+fn expression_change_label(kind: ExpressionChangeKind) -> &'static str {
+    match kind {
+        ExpressionChangeKind::Semantic => "semantic change",
+        ExpressionChangeKind::FormattingOnly => "formatting only",
+        ExpressionChangeKind::Unknown => "unknown",
+    }
 }
 

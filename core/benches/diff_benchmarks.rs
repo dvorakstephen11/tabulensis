@@ -259,6 +259,38 @@ fn bench_row_insertion(c: &mut Criterion) {
     group.finish();
 }
 
+#[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+fn bench_pbit_model_diff(c: &mut Criterion) {
+    let mut group = c.benchmark_group("pbit_model_diff");
+    group.warm_up_time(Duration::from_secs(WARMUP_SECS));
+    group.sample_size(SAMPLE_SIZE);
+
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../fixtures/generated");
+    let path_a = base.join("pbit_model_a.pbit");
+    let path_b = base.join("pbit_model_b.pbit");
+
+    let bytes_a = std::fs::read(&path_a).expect("read pbit_model_a.pbit");
+    let bytes_b = std::fs::read(&path_b).expect("read pbit_model_b.pbit");
+    let config = DiffConfig::default();
+
+    group.bench_function("open_parse_diff", |b| {
+        b.iter(|| {
+            let cursor_a = std::io::Cursor::new(bytes_a.clone());
+            let cursor_b = std::io::Cursor::new(bytes_b.clone());
+            let pkg_a = excel_diff::PbixPackage::open(cursor_a).expect("open pbit a");
+            let pkg_b = excel_diff::PbixPackage::open(cursor_b).expect("open pbit b");
+            let report = pkg_a.diff(&pkg_b, &config);
+            criterion::black_box(report);
+        });
+    });
+
+    group.finish();
+}
+
+#[cfg(not(all(feature = "model-diff", feature = "excel-open-xml")))]
+fn bench_pbit_model_diff(_c: &mut Criterion) {}
+
 fn create_grid_with_block_move(nrows: u32, ncols: u32, move_start: u32, move_size: u32) -> (Grid, Grid) {
     let mut grid_a = Grid::new(nrows, ncols);
     let mut grid_b = Grid::new(nrows, ncols);
@@ -337,6 +369,7 @@ criterion_group!(
     bench_adversarial_repetitive,
     bench_sparse_grid,
     bench_row_insertion,
+    bench_pbit_model_diff,
 );
 
 criterion_group!(

@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use excel_diff::{CellAddress, CellValue, DiffOp, QueryChangeKind};
+use excel_diff::{CellAddress, CellValue, DiffOp, ExpressionChangeKind, QueryChangeKind};
+#[cfg(feature = "model-diff")]
+use excel_diff::{ModelColumnProperty, RelationshipProperty};
 use rust_xlsxwriter::{Format, Workbook, XlsxError};
 use thiserror::Error;
 
@@ -317,19 +319,197 @@ fn write_op(
             write_query(query_sheet, rows, "QueryMetadataChanged", resolve_string(strings, *name), &format!("{field:?}"));
         }
         #[cfg(feature = "model-diff")]
+        DiffOp::TableAdded { name } => {
+            let model_sheet = sheet_mut(workbook, "Model")?;
+            write_model(model_sheet, rows, "TableAdded", resolve_string(strings, *name), "");
+        }
+        #[cfg(feature = "model-diff")]
+        DiffOp::TableRemoved { name } => {
+            let model_sheet = sheet_mut(workbook, "Model")?;
+            write_model(model_sheet, rows, "TableRemoved", resolve_string(strings, *name), "");
+        }
+        #[cfg(feature = "model-diff")]
+        DiffOp::ModelColumnAdded {
+            table,
+            name,
+            data_type,
+        } => {
+            let detail = data_type
+                .map(|id| format!("type={}", resolve_string(strings, id)))
+                .unwrap_or_default();
+            let model_sheet = sheet_mut(workbook, "Model")?;
+            write_model(
+                model_sheet,
+                rows,
+                "ModelColumnAdded",
+                &format_column_ref(strings, *table, *name),
+                &detail,
+            );
+        }
+        #[cfg(feature = "model-diff")]
+        DiffOp::ModelColumnRemoved { table, name } => {
+            let model_sheet = sheet_mut(workbook, "Model")?;
+            write_model(
+                model_sheet,
+                rows,
+                "ModelColumnRemoved",
+                &format_column_ref(strings, *table, *name),
+                "",
+            );
+        }
+        #[cfg(feature = "model-diff")]
+        DiffOp::ModelColumnTypeChanged {
+            table,
+            name,
+            old_type,
+            new_type,
+        } => {
+            let old_str = old_type
+                .map(|id| resolve_string(strings, id))
+                .unwrap_or("<none>");
+            let new_str = new_type
+                .map(|id| resolve_string(strings, id))
+                .unwrap_or("<none>");
+            let detail = format!("type: {} -> {}", old_str, new_str);
+            let model_sheet = sheet_mut(workbook, "Model")?;
+            write_model(
+                model_sheet,
+                rows,
+                "ModelColumnTypeChanged",
+                &format_column_ref(strings, *table, *name),
+                &detail,
+            );
+        }
+        #[cfg(feature = "model-diff")]
+        DiffOp::ModelColumnPropertyChanged {
+            table,
+            name,
+            field,
+            old,
+            new,
+        } => {
+            let old_str = old
+                .map(|id| resolve_string(strings, id))
+                .unwrap_or("<none>");
+            let new_str = new
+                .map(|id| resolve_string(strings, id))
+                .unwrap_or("<none>");
+            let detail = format!(
+                "{}: {} -> {}",
+                column_field_name(*field),
+                old_str,
+                new_str
+            );
+            let model_sheet = sheet_mut(workbook, "Model")?;
+            write_model(
+                model_sheet,
+                rows,
+                "ModelColumnPropertyChanged",
+                &format_column_ref(strings, *table, *name),
+                &detail,
+            );
+        }
+        #[cfg(feature = "model-diff")]
+        DiffOp::CalculatedColumnDefinitionChanged {
+            table,
+            name,
+            change_kind,
+            ..
+        } => {
+            let detail = format!("definition changed ({})", expression_change_label(*change_kind));
+            let model_sheet = sheet_mut(workbook, "Model")?;
+            write_model(
+                model_sheet,
+                rows,
+                "CalculatedColumnDefinitionChanged",
+                &format_column_ref(strings, *table, *name),
+                &detail,
+            );
+        }
+        #[cfg(feature = "model-diff")]
+        DiffOp::RelationshipAdded {
+            from_table,
+            from_column,
+            to_table,
+            to_column,
+        } => {
+            let model_sheet = sheet_mut(workbook, "Model")?;
+            write_model(
+                model_sheet,
+                rows,
+                "RelationshipAdded",
+                &format_relationship_ref(strings, *from_table, *from_column, *to_table, *to_column),
+                "",
+            );
+        }
+        #[cfg(feature = "model-diff")]
+        DiffOp::RelationshipRemoved {
+            from_table,
+            from_column,
+            to_table,
+            to_column,
+        } => {
+            let model_sheet = sheet_mut(workbook, "Model")?;
+            write_model(
+                model_sheet,
+                rows,
+                "RelationshipRemoved",
+                &format_relationship_ref(strings, *from_table, *from_column, *to_table, *to_column),
+                "",
+            );
+        }
+        #[cfg(feature = "model-diff")]
+        DiffOp::RelationshipPropertyChanged {
+            from_table,
+            from_column,
+            to_table,
+            to_column,
+            field,
+            old,
+            new,
+        } => {
+            let old_str = old
+                .map(|id| resolve_string(strings, id))
+                .unwrap_or("<none>");
+            let new_str = new
+                .map(|id| resolve_string(strings, id))
+                .unwrap_or("<none>");
+            let detail = format!(
+                "{}: {} -> {}",
+                relationship_field_name(*field),
+                old_str,
+                new_str
+            );
+            let model_sheet = sheet_mut(workbook, "Model")?;
+            write_model(
+                model_sheet,
+                rows,
+                "RelationshipPropertyChanged",
+                &format_relationship_ref(strings, *from_table, *from_column, *to_table, *to_column),
+                &detail,
+            );
+        }
+        #[cfg(feature = "model-diff")]
         DiffOp::MeasureAdded { name } => {
             let model_sheet = sheet_mut(workbook, "Model")?;
-            write_model(model_sheet, rows, "MeasureAdded", resolve_string(strings, *name));
+            write_model(model_sheet, rows, "MeasureAdded", resolve_string(strings, *name), "");
         }
         #[cfg(feature = "model-diff")]
         DiffOp::MeasureRemoved { name } => {
             let model_sheet = sheet_mut(workbook, "Model")?;
-            write_model(model_sheet, rows, "MeasureRemoved", resolve_string(strings, *name));
+            write_model(model_sheet, rows, "MeasureRemoved", resolve_string(strings, *name), "");
         }
         #[cfg(feature = "model-diff")]
-        DiffOp::MeasureDefinitionChanged { name, .. } => {
+        DiffOp::MeasureDefinitionChanged { name, change_kind, .. } => {
+            let detail = format!("definition changed ({})", expression_change_label(*change_kind));
             let model_sheet = sheet_mut(workbook, "Model")?;
-            write_model(model_sheet, rows, "MeasureDefinitionChanged", resolve_string(strings, *name));
+            write_model(
+                model_sheet,
+                rows,
+                "MeasureDefinitionChanged",
+                resolve_string(strings, *name),
+                &detail,
+            );
         }
         _ => {
             let row = rows.other + 1;
@@ -380,15 +560,72 @@ fn write_model(
     rows: &mut ExportRows,
     kind: &str,
     name: &str,
+    detail: &str,
 ) {
     let row = rows.model + 1;
     rows.model += 1;
     sheet.write_string(row, 0, kind).ok();
     sheet.write_string(row, 1, name).ok();
+    if !detail.is_empty() {
+        sheet.write_string(row, 2, detail).ok();
+    }
 }
 
 fn resolve_string(strings: &[String], id: excel_diff::StringId) -> &str {
     strings.get(id.0 as usize).map(String::as_str).unwrap_or("<unknown>")
+}
+
+#[cfg(feature = "model-diff")]
+fn format_column_ref(
+    strings: &[String],
+    table: excel_diff::StringId,
+    column: excel_diff::StringId,
+) -> String {
+    format!("{}.{}", resolve_string(strings, table), resolve_string(strings, column))
+}
+
+#[cfg(feature = "model-diff")]
+fn format_relationship_ref(
+    strings: &[String],
+    from_table: excel_diff::StringId,
+    from_column: excel_diff::StringId,
+    to_table: excel_diff::StringId,
+    to_column: excel_diff::StringId,
+) -> String {
+    format!(
+        "{}[{}] -> {}[{}]",
+        resolve_string(strings, from_table),
+        resolve_string(strings, from_column),
+        resolve_string(strings, to_table),
+        resolve_string(strings, to_column)
+    )
+}
+
+#[cfg(feature = "model-diff")]
+fn column_field_name(field: ModelColumnProperty) -> &'static str {
+    match field {
+        ModelColumnProperty::Hidden => "hidden",
+        ModelColumnProperty::FormatString => "format_string",
+        ModelColumnProperty::SortBy => "sort_by",
+        ModelColumnProperty::SummarizeBy => "summarize_by",
+    }
+}
+
+#[cfg(feature = "model-diff")]
+fn relationship_field_name(field: RelationshipProperty) -> &'static str {
+    match field {
+        RelationshipProperty::CrossFilteringBehavior => "cross_filtering_behavior",
+        RelationshipProperty::Cardinality => "cardinality",
+        RelationshipProperty::IsActive => "is_active",
+    }
+}
+
+fn expression_change_label(kind: ExpressionChangeKind) -> &'static str {
+    match kind {
+        ExpressionChangeKind::Semantic => "semantic change",
+        ExpressionChangeKind::FormattingOnly => "formatting only",
+        ExpressionChangeKind::Unknown => "unknown",
+    }
 }
 
 fn render_cell_value(strings: &[String], value: &Option<CellValue>) -> String {

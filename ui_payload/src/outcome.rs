@@ -273,11 +273,21 @@ fn classify_op(op: &DiffOp) -> Option<ChangeKind> {
         | DiffOp::QueryDefinitionChanged { .. }
         | DiffOp::QueryMetadataChanged { .. } => Some(ChangeKind::Modified),
         #[cfg(feature = "model-diff")]
-        DiffOp::MeasureAdded { .. } => Some(ChangeKind::Added),
+        DiffOp::TableAdded { .. }
+        | DiffOp::ModelColumnAdded { .. }
+        | DiffOp::RelationshipAdded { .. }
+        | DiffOp::MeasureAdded { .. } => Some(ChangeKind::Added),
         #[cfg(feature = "model-diff")]
-        DiffOp::MeasureRemoved { .. } => Some(ChangeKind::Removed),
+        DiffOp::TableRemoved { .. }
+        | DiffOp::ModelColumnRemoved { .. }
+        | DiffOp::RelationshipRemoved { .. }
+        | DiffOp::MeasureRemoved { .. } => Some(ChangeKind::Removed),
         #[cfg(feature = "model-diff")]
-        DiffOp::MeasureDefinitionChanged { .. } => Some(ChangeKind::Modified),
+        DiffOp::ModelColumnTypeChanged { .. }
+        | DiffOp::ModelColumnPropertyChanged { .. }
+        | DiffOp::CalculatedColumnDefinitionChanged { .. }
+        | DiffOp::RelationshipPropertyChanged { .. }
+        | DiffOp::MeasureDefinitionChanged { .. } => Some(ChangeKind::Modified),
         _ => None,
     }
 }

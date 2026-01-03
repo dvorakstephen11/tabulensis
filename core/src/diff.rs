@@ -21,6 +21,20 @@ pub enum QueryChangeKind {
     Renamed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExpressionChangeKind {
+    Semantic,
+    FormattingOnly,
+    Unknown,
+}
+
+impl Default for ExpressionChangeKind {
+    fn default() -> Self {
+        ExpressionChangeKind::Unknown
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct QuerySemanticDetail {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -215,6 +229,25 @@ pub enum QueryMetadataField {
     GroupPath,
     /// Whether the query is connection-only.
     ConnectionOnly,
+}
+
+#[cfg(feature = "model-diff")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelColumnProperty {
+    Hidden,
+    FormatString,
+    SortBy,
+    SummarizeBy,
+}
+
+#[cfg(feature = "model-diff")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RelationshipProperty {
+    CrossFilteringBehavior,
+    Cardinality,
+    IsActive,
 }
 
 /// Errors produced by diffing APIs.
@@ -431,6 +464,80 @@ pub enum DiffOp {
         new: Option<StringId>,
     },
     #[cfg(feature = "model-diff")]
+    TableAdded {
+        name: StringId,
+    },
+    #[cfg(feature = "model-diff")]
+    TableRemoved {
+        name: StringId,
+    },
+    #[cfg(feature = "model-diff")]
+    ModelColumnAdded {
+        table: StringId,
+        name: StringId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        data_type: Option<StringId>,
+    },
+    #[cfg(feature = "model-diff")]
+    ModelColumnRemoved {
+        table: StringId,
+        name: StringId,
+    },
+    #[cfg(feature = "model-diff")]
+    ModelColumnTypeChanged {
+        table: StringId,
+        name: StringId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        old_type: Option<StringId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        new_type: Option<StringId>,
+    },
+    #[cfg(feature = "model-diff")]
+    ModelColumnPropertyChanged {
+        table: StringId,
+        name: StringId,
+        field: ModelColumnProperty,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        old: Option<StringId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        new: Option<StringId>,
+    },
+    #[cfg(feature = "model-diff")]
+    CalculatedColumnDefinitionChanged {
+        table: StringId,
+        name: StringId,
+        #[serde(default)]
+        change_kind: ExpressionChangeKind,
+        old_hash: u64,
+        new_hash: u64,
+    },
+    #[cfg(feature = "model-diff")]
+    RelationshipAdded {
+        from_table: StringId,
+        from_column: StringId,
+        to_table: StringId,
+        to_column: StringId,
+    },
+    #[cfg(feature = "model-diff")]
+    RelationshipRemoved {
+        from_table: StringId,
+        from_column: StringId,
+        to_table: StringId,
+        to_column: StringId,
+    },
+    #[cfg(feature = "model-diff")]
+    RelationshipPropertyChanged {
+        from_table: StringId,
+        from_column: StringId,
+        to_table: StringId,
+        to_column: StringId,
+        field: RelationshipProperty,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        old: Option<StringId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        new: Option<StringId>,
+    },
+    #[cfg(feature = "model-diff")]
     MeasureAdded {
         name: StringId,
     },
@@ -441,6 +548,8 @@ pub enum DiffOp {
     #[cfg(feature = "model-diff")]
     MeasureDefinitionChanged {
         name: StringId,
+        #[serde(default)]
+        change_kind: ExpressionChangeKind,
         old_hash: u64,
         new_hash: u64,
     },
@@ -549,7 +658,9 @@ impl DiffReport {
     }
 
     pub fn grid_ops(&self) -> impl Iterator<Item = &DiffOp> {
-        self.ops.iter().filter(|op| !op.is_m_op())
+        self.ops
+            .iter()
+            .filter(|op| !op.is_m_op() && !op.is_model_op())
     }
 
     pub fn m_ops(&self) -> impl Iterator<Item = &DiffOp> {
@@ -567,6 +678,32 @@ impl DiffOp {
                 | DiffOp::QueryDefinitionChanged { .. }
                 | DiffOp::QueryMetadataChanged { .. }
         )
+    }
+
+    pub fn is_model_op(&self) -> bool {
+        #[cfg(feature = "model-diff")]
+        {
+            matches!(
+                self,
+                DiffOp::TableAdded { .. }
+                    | DiffOp::TableRemoved { .. }
+                    | DiffOp::ModelColumnAdded { .. }
+                    | DiffOp::ModelColumnRemoved { .. }
+                    | DiffOp::ModelColumnTypeChanged { .. }
+                    | DiffOp::ModelColumnPropertyChanged { .. }
+                    | DiffOp::CalculatedColumnDefinitionChanged { .. }
+                    | DiffOp::RelationshipAdded { .. }
+                    | DiffOp::RelationshipRemoved { .. }
+                    | DiffOp::RelationshipPropertyChanged { .. }
+                    | DiffOp::MeasureAdded { .. }
+                    | DiffOp::MeasureRemoved { .. }
+                    | DiffOp::MeasureDefinitionChanged { .. }
+            )
+        }
+        #[cfg(not(feature = "model-diff"))]
+        {
+            false
+        }
     }
 
     pub fn cell_edited(

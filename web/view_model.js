@@ -15,6 +15,40 @@ function resolveString(report, id) {
   return report.strings[id] != null ? report.strings[id] : "<unknown>";
 }
 
+function formatChangeKind(kind) {
+  if (!kind) return "";
+  return String(kind).replace(/_/g, " ");
+}
+
+function formatFieldLabel(field) {
+  if (!field) return "";
+  return String(field).replace(/_/g, " ");
+}
+
+function formatColumnRef(report, tableId, columnId) {
+  const table = resolveString(report, tableId);
+  const column = resolveString(report, columnId);
+  return `${table}.${column}`;
+}
+
+function formatRelationshipRef(report, op) {
+  const fromTable = resolveString(report, op.from_table);
+  const fromColumn = resolveString(report, op.from_column);
+  const toTable = resolveString(report, op.to_table);
+  const toColumn = resolveString(report, op.to_column);
+  return `${fromTable}[${fromColumn}] -> ${toTable}[${toColumn}]`;
+}
+
+function isModelKind(kind) {
+  return (
+    kind === "CalculatedColumnDefinitionChanged" ||
+    kind.startsWith("Table") ||
+    kind.startsWith("ModelColumn") ||
+    kind.startsWith("Relationship") ||
+    kind.startsWith("Measure")
+  );
+}
+
 function colToLetter(col) {
   let result = "";
   let c = col;
@@ -114,7 +148,7 @@ function categorizeOps(report) {
   const namedRangeOps = [];
   const chartOps = [];
   const queryOps = [];
-  const measureOps = [];
+  const modelOps = [];
 
   let addedCount = 0;
   let removedCount = 0;
@@ -164,8 +198,8 @@ function categorizeOps(report) {
       if (kind.includes("Added")) addedCount++;
       else if (kind.includes("Removed")) removedCount++;
       else modifiedCount++;
-    } else if (kind.startsWith("Measure")) {
-      measureOps.push(op);
+    } else if (isModelKind(kind)) {
+      modelOps.push(op);
       if (kind.includes("Added")) addedCount++;
       else if (kind.includes("Removed")) removedCount++;
       else modifiedCount++;
@@ -179,7 +213,7 @@ function categorizeOps(report) {
     namedRangeOps,
     chartOps,
     queryOps,
-    measureOps,
+    modelOps,
     counts: { added: addedCount, removed: removedCount, modified: modifiedCount, moved: movedCount }
   };
 }
@@ -1221,8 +1255,41 @@ function buildOtherItems(report, ops, prefix) {
       if (op.semantic_detail?.step_diffs?.length) {
         detail = "Step diffs";
       }
+    } else if (kind.startsWith("Table")) {
+      label = `Table: ${name}`;
+    } else if (kind.startsWith("ModelColumn") || kind === "CalculatedColumnDefinitionChanged") {
+      const columnLabel = formatColumnRef(report, op.table, op.name);
+      label =
+        kind === "CalculatedColumnDefinitionChanged"
+          ? `Calculated Column: ${columnLabel}`
+          : `Column: ${columnLabel}`;
+      if (kind === "ModelColumnTypeChanged") {
+        const oldType = op.old_type != null ? resolveString(report, op.old_type) : "<none>";
+        const newType = op.new_type != null ? resolveString(report, op.new_type) : "<none>";
+        detail = `Type: ${oldType} -> ${newType}`;
+      } else if (kind === "ModelColumnPropertyChanged") {
+        const oldVal = op.old != null ? resolveString(report, op.old) : "<none>";
+        const newVal = op.new != null ? resolveString(report, op.new) : "<none>";
+        detail = `${formatFieldLabel(op.field)}: ${oldVal} -> ${newVal}`;
+      } else if (kind === "ModelColumnAdded" && op.data_type != null) {
+        detail = `Type: ${resolveString(report, op.data_type)}`;
+      } else if (kind === "CalculatedColumnDefinitionChanged") {
+        const kindLabel = formatChangeKind(op.change_kind);
+        detail = kindLabel ? `Definition changed (${kindLabel})` : "Definition changed";
+      }
+    } else if (kind.startsWith("Relationship")) {
+      label = `Relationship: ${formatRelationshipRef(report, op)}`;
+      if (kind === "RelationshipPropertyChanged") {
+        const oldVal = op.old != null ? resolveString(report, op.old) : "<none>";
+        const newVal = op.new != null ? resolveString(report, op.new) : "<none>";
+        detail = `${formatFieldLabel(op.field)}: ${oldVal} -> ${newVal}`;
+      }
     } else if (kind.startsWith("Measure")) {
       label = `Measure: ${name}`;
+      if (kind === "MeasureDefinitionChanged") {
+        const kindLabel = formatChangeKind(op.change_kind);
+        detail = kindLabel ? `Definition changed (${kindLabel})` : "Definition changed";
+      }
     } else if (kind.startsWith("NamedRange")) {
       label = `Named Range: ${name}`;
     } else if (kind.startsWith("Chart")) {
@@ -1246,7 +1313,7 @@ function buildOtherItems(report, ops, prefix) {
 export function buildWorkbookViewModel(payloadOrReport, opts = {}) {
   const { report, sheets, alignments } = normalizePayload(payloadOrReport);
   const options = { ...DEFAULT_OPTS, ...opts };
-  const { sheetOps, renameMap, vbaOps, namedRangeOps, chartOps, queryOps, measureOps, counts } = categorizeOps(report);
+  const { sheetOps, renameMap, vbaOps, namedRangeOps, chartOps, queryOps, modelOps, counts } = categorizeOps(report);
 
   const oldLookup = buildSheetLookup(sheets.oldSheets);
   const newLookup = buildSheetLookup(sheets.newSheets);
@@ -1278,7 +1345,7 @@ export function buildWorkbookViewModel(payloadOrReport, opts = {}) {
       namedRanges: buildOtherItems(report, namedRangeOps, "NamedRange"),
       charts: buildOtherItems(report, chartOps, "Chart"),
       queries: buildOtherItems(report, queryOps, "Query"),
-      measures: buildOtherItems(report, measureOps, "Measure")
+      model: buildOtherItems(report, modelOps, "Model")
     }
   };
 }

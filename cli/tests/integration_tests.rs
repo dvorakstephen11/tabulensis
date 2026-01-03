@@ -759,6 +759,96 @@ fn collect_string_ids(op: &excel_diff::DiffOp) -> Vec<excel_diff::StringId> {
                 ids.push(*new);
             }
         }
+        excel_diff::DiffOp::TableAdded { name } | excel_diff::DiffOp::TableRemoved { name } => {
+            ids.push(*name);
+        }
+        excel_diff::DiffOp::ModelColumnAdded {
+            table,
+            name,
+            data_type,
+        } => {
+            ids.push(*table);
+            ids.push(*name);
+            if let Some(data_type) = data_type {
+                ids.push(*data_type);
+            }
+        }
+        excel_diff::DiffOp::ModelColumnRemoved { table, name } => {
+            ids.push(*table);
+            ids.push(*name);
+        }
+        excel_diff::DiffOp::ModelColumnTypeChanged {
+            table,
+            name,
+            old_type,
+            new_type,
+        } => {
+            ids.push(*table);
+            ids.push(*name);
+            if let Some(old_type) = old_type {
+                ids.push(*old_type);
+            }
+            if let Some(new_type) = new_type {
+                ids.push(*new_type);
+            }
+        }
+        excel_diff::DiffOp::ModelColumnPropertyChanged {
+            table,
+            name,
+            old,
+            new,
+            ..
+        } => {
+            ids.push(*table);
+            ids.push(*name);
+            if let Some(old) = old {
+                ids.push(*old);
+            }
+            if let Some(new) = new {
+                ids.push(*new);
+            }
+        }
+        excel_diff::DiffOp::CalculatedColumnDefinitionChanged { table, name, .. } => {
+            ids.push(*table);
+            ids.push(*name);
+        }
+        excel_diff::DiffOp::RelationshipAdded {
+            from_table,
+            from_column,
+            to_table,
+            to_column,
+        }
+        | excel_diff::DiffOp::RelationshipRemoved {
+            from_table,
+            from_column,
+            to_table,
+            to_column,
+        } => {
+            ids.push(*from_table);
+            ids.push(*from_column);
+            ids.push(*to_table);
+            ids.push(*to_column);
+        }
+        excel_diff::DiffOp::RelationshipPropertyChanged {
+            from_table,
+            from_column,
+            to_table,
+            to_column,
+            old,
+            new,
+            ..
+        } => {
+            ids.push(*from_table);
+            ids.push(*from_column);
+            ids.push(*to_table);
+            ids.push(*to_column);
+            if let Some(old) = old {
+                ids.push(*old);
+            }
+            if let Some(new) = new {
+                ids.push(*new);
+            }
+        }
         excel_diff::DiffOp::MeasureAdded { name }
         | excel_diff::DiffOp::MeasureRemoved { name }
         | excel_diff::DiffOp::MeasureDefinitionChanged { name, .. } => ids.push(*name),
@@ -775,7 +865,7 @@ fn collect_string_ids(op: &excel_diff::DiffOp) -> Vec<excel_diff::StringId> {
 }
 
 #[test]
-fn diff_pbit_measure_changes_detected() {
+fn diff_pbit_model_changes_detected() {
     let output = excel_diff_cmd()
         .args([
             "diff",
@@ -798,12 +888,33 @@ fn diff_pbit_measure_changes_detected() {
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("output should be valid JSON");
     let ops = parsed.get("ops").and_then(|v| v.as_array()).unwrap();
-    let has_measure_op = ops.iter().any(|op| {
-        op.get("kind")
-            .and_then(|k| k.as_str())
-            .map(|k| k.starts_with("Measure"))
-            .unwrap_or(false)
-    });
+    let mut has_table_op = false;
+    let mut has_column_op = false;
+    let mut has_relationship_op = false;
+    let mut has_calc_column_op = false;
+    let mut has_measure_op = false;
+
+    for op in ops {
+        let Some(kind) = op.get("kind").and_then(|k| k.as_str()) else {
+            continue;
+        };
+        if kind.starts_with("Table") {
+            has_table_op = true;
+        } else if kind.starts_with("ModelColumn") {
+            has_column_op = true;
+        } else if kind.starts_with("Relationship") {
+            has_relationship_op = true;
+        } else if kind == "CalculatedColumnDefinitionChanged" {
+            has_calc_column_op = true;
+        } else if kind.starts_with("Measure") {
+            has_measure_op = true;
+        }
+    }
+
+    assert!(has_table_op, "expected at least one Table op in pbit diff");
+    assert!(has_column_op, "expected at least one ModelColumn op in pbit diff");
+    assert!(has_relationship_op, "expected at least one Relationship op in pbit diff");
+    assert!(has_calc_column_op, "expected at least one CalculatedColumn op in pbit diff");
     assert!(has_measure_op, "expected at least one Measure op in pbit diff");
 }
 

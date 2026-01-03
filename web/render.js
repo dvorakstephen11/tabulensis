@@ -586,7 +586,7 @@ function categorizeOps(report) {
   const namedRangeOps = [];
   const chartOps = [];
   const queryOps = [];
-  const measureOps = [];
+  const modelOps = [];
   
   let addedCount = 0;
   let removedCount = 0;
@@ -636,8 +636,14 @@ function categorizeOps(report) {
       if (kind.includes("Added")) addedCount++;
       else if (kind.includes("Removed")) removedCount++;
       else modifiedCount++;
-    } else if (kind.startsWith("Measure")) {
-      measureOps.push(op);
+    } else if (
+      kind === "CalculatedColumnDefinitionChanged" ||
+      kind.startsWith("Table") ||
+      kind.startsWith("ModelColumn") ||
+      kind.startsWith("Relationship") ||
+      kind.startsWith("Measure")
+    ) {
+      modelOps.push(op);
       if (kind.includes("Added")) addedCount++;
       else if (kind.includes("Removed")) removedCount++;
       else modifiedCount++;
@@ -650,7 +656,7 @@ function categorizeOps(report) {
     namedRangeOps,
     chartOps,
     queryOps,
-    measureOps,
+    modelOps,
     counts: { added: addedCount, removed: removedCount, modified: modifiedCount, moved: movedCount }
   };
 }
@@ -1456,7 +1462,7 @@ export function renderWorkbookVm(vm) {
   html += renderOtherChangesVm("Named Ranges", "N", vm.other.namedRanges);
   html += renderOtherChangesVm("Charts", "C", vm.other.charts);
   html += renderOtherChangesVm("Power Query", "Q", vm.other.queries);
-  html += renderOtherChangesVm("Measures", "M", vm.other.measures);
+  html += renderOtherChangesVm("Model", "M", vm.other.model);
 
   return html;
 }

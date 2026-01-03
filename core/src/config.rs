@@ -130,6 +130,7 @@ impl Default for MoveConfig {
 pub struct SemanticConfig {
     pub enable_m_semantic_diff: bool,
     pub enable_formula_semantic_diff: bool,
+    pub enable_dax_semantic_diff: bool,
     /// Policy for handling formatting-only M changes when semantic diff is enabled.
     pub semantic_noise_policy: SemanticNoisePolicy,
     /// When true, emits CellEdited ops even when values are unchanged (diagnostic);
@@ -149,6 +150,7 @@ impl Default for SemanticConfig {
         Self {
             enable_m_semantic_diff: true,
             enable_formula_semantic_diff: false,
+            enable_dax_semantic_diff: false,
             semantic_noise_policy: SemanticNoisePolicy::ReportFormattingOnly,
             include_unchanged_cells: false,
             dense_row_replace_ratio: 0.90,
@@ -243,6 +245,7 @@ impl DiffConfig {
         cfg.alignment.small_gap_threshold = 80;
         cfg.alignment.recursive_align_threshold = 400;
         cfg.semantic.enable_formula_semantic_diff = true;
+        cfg.semantic.enable_dax_semantic_diff = true;
         cfg.alignment.max_lcs_gap_size = 1_500;
         cfg.alignment.lcs_dp_work_limit = 20_000;
         cfg.moves.move_extraction_max_slice_len = 10_000;
@@ -444,6 +447,11 @@ impl DiffConfigBuilder {
         self
     }
 
+    pub fn enable_dax_semantic_diff(mut self, value: bool) -> Self {
+        self.inner.semantic.enable_dax_semantic_diff = value;
+        self
+    }
+
     pub fn semantic_noise_policy(mut self, value: SemanticNoisePolicy) -> Self {
         self.inner.semantic.semantic_noise_policy = value;
         self
@@ -606,6 +614,7 @@ mod tests {
         assert!(cfg.moves.enable_fuzzy_moves);
         assert!(cfg.semantic.enable_m_semantic_diff);
         assert!(!cfg.semantic.enable_formula_semantic_diff);
+        assert!(!cfg.semantic.enable_dax_semantic_diff);
         assert!(matches!(
             cfg.semantic.semantic_noise_policy,
             SemanticNoisePolicy::ReportFormattingOnly
@@ -680,6 +689,7 @@ mod tests {
         let cfg = DiffConfig::most_precise();
         assert_eq!(cfg.moves.fuzzy_similarity_threshold, 0.95);
         assert!(cfg.semantic.enable_formula_semantic_diff);
+        assert!(cfg.semantic.enable_dax_semantic_diff);
     }
 
     #[test]

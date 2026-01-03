@@ -5,6 +5,8 @@ use excel_diff::{
     CellAddress, CellSnapshot, CellValue, ColSignature, DiffOp, DiffReport, FormulaDiffResult,
     QueryChangeKind, QueryMetadataField, RowSignature,
 };
+#[cfg(feature = "model-diff")]
+use excel_diff::{ExpressionChangeKind, ModelColumnProperty, RelationshipProperty};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
@@ -934,7 +936,7 @@ fn pg4_block_rect_json_shape_and_roundtrip() {
 
 #[test]
 fn pg4_diffop_roundtrip_each_variant() {
-    let ops = vec![
+    let mut ops = vec![
         DiffOp::SheetAdded {
             sheet: sid("SheetA"),
         },
@@ -1096,6 +1098,80 @@ fn pg4_diffop_roundtrip_each_variant() {
             name: sid("Module1"),
         },
     ];
+
+    #[cfg(feature = "model-diff")]
+    {
+        ops.extend([
+            DiffOp::TableAdded {
+                name: sid("Sales"),
+            },
+            DiffOp::TableRemoved {
+                name: sid("Legacy"),
+            },
+            DiffOp::ModelColumnAdded {
+                table: sid("Sales"),
+                name: sid("Amount"),
+                data_type: Some(sid("decimal")),
+            },
+            DiffOp::ModelColumnRemoved {
+                table: sid("Sales"),
+                name: sid("Obsolete"),
+            },
+            DiffOp::ModelColumnTypeChanged {
+                table: sid("Sales"),
+                name: sid("Amount"),
+                old_type: Some(sid("int")),
+                new_type: Some(sid("decimal")),
+            },
+            DiffOp::ModelColumnPropertyChanged {
+                table: sid("Sales"),
+                name: sid("Amount"),
+                field: ModelColumnProperty::FormatString,
+                old: None,
+                new: Some(sid("0.00")),
+            },
+            DiffOp::CalculatedColumnDefinitionChanged {
+                table: sid("Sales"),
+                name: sid("Calc"),
+                change_kind: ExpressionChangeKind::Semantic,
+                old_hash: 1,
+                new_hash: 2,
+            },
+            DiffOp::RelationshipAdded {
+                from_table: sid("Sales"),
+                from_column: sid("CustomerId"),
+                to_table: sid("Customers"),
+                to_column: sid("Id"),
+            },
+            DiffOp::RelationshipRemoved {
+                from_table: sid("Sales"),
+                from_column: sid("ProductId"),
+                to_table: sid("Products"),
+                to_column: sid("Id"),
+            },
+            DiffOp::RelationshipPropertyChanged {
+                from_table: sid("Sales"),
+                from_column: sid("CustomerId"),
+                to_table: sid("Customers"),
+                to_column: sid("Id"),
+                field: RelationshipProperty::IsActive,
+                old: Some(sid("false")),
+                new: Some(sid("true")),
+            },
+            DiffOp::MeasureAdded {
+                name: sid("Sales/Total"),
+            },
+            DiffOp::MeasureDefinitionChanged {
+                name: sid("Sales/Total"),
+                change_kind: ExpressionChangeKind::Semantic,
+                old_hash: 3,
+                new_hash: 4,
+            },
+            DiffOp::MeasureRemoved {
+                name: sid("Sales/LegacyTotal"),
+            },
+        ]);
+    }
 
     for original in ops {
         let serialized = serde_json::to_string(&original).expect("serialize");

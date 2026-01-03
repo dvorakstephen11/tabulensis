@@ -20,6 +20,10 @@ function mustInclude(s) {
 mustInclude("Power Query");
 mustInclude("Query: Query1");
 mustInclude("Step diffs");
+mustInclude("Model");
+mustInclude("Column: Sales.Amount");
+mustInclude("Relationship: Sales[CustomerId] -&gt; Customers[Id]");
+mustInclude("Calculated Column: Sales.Calc");
 mustInclude("Measure: Measure1");
 
 console.log("ok");

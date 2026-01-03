@@ -85,6 +85,19 @@ pub struct JsonlOutput {
     pub ops: Vec<DiffOp>,
 }
 
+fn normalize_summary(mut summary: DiffSummary) -> DiffSummary {
+    #[cfg(feature = "perf-metrics")]
+    {
+        summary.metrics = None;
+    }
+    summary
+}
+
+fn normalize_structured_output(mut output: StructuredOutput) -> StructuredOutput {
+    output.summary = normalize_summary(output.summary);
+    output
+}
+
 pub fn assert_structured_determinism_with_fresh_sessions<F>(runs: usize, mut f: F)
 where
     F: FnMut(&mut DiffSession) -> StructuredOutput,
@@ -92,7 +105,7 @@ where
     let mut baseline: Option<StructuredOutput> = None;
     for _ in 0..runs {
         let mut session = DiffSession::new();
-        let output = f(&mut session);
+        let output = normalize_structured_output(f(&mut session));
         match &baseline {
             None => baseline = Some(output),
             Some(expected) => assert_eq!(
@@ -314,6 +327,102 @@ pub fn collect_string_ids(op: &DiffOp) -> Vec<StringId> {
         }
         DiffOp::QueryMetadataChanged { name, old, new, .. } => {
             ids.push(*name);
+            if let Some(old) = old {
+                ids.push(*old);
+            }
+            if let Some(new) = new {
+                ids.push(*new);
+            }
+        }
+        #[cfg(feature = "model-diff")]
+        DiffOp::TableAdded { name } | DiffOp::TableRemoved { name } => ids.push(*name),
+        #[cfg(feature = "model-diff")]
+        DiffOp::ModelColumnAdded {
+            table,
+            name,
+            data_type,
+        } => {
+            ids.push(*table);
+            ids.push(*name);
+            if let Some(data_type) = data_type {
+                ids.push(*data_type);
+            }
+        }
+        #[cfg(feature = "model-diff")]
+        DiffOp::ModelColumnRemoved { table, name } => {
+            ids.push(*table);
+            ids.push(*name);
+        }
+        #[cfg(feature = "model-diff")]
+        DiffOp::ModelColumnTypeChanged {
+            table,
+            name,
+            old_type,
+            new_type,
+        } => {
+            ids.push(*table);
+            ids.push(*name);
+            if let Some(old_type) = old_type {
+                ids.push(*old_type);
+            }
+            if let Some(new_type) = new_type {
+                ids.push(*new_type);
+            }
+        }
+        #[cfg(feature = "model-diff")]
+        DiffOp::ModelColumnPropertyChanged {
+            table,
+            name,
+            old,
+            new,
+            ..
+        } => {
+            ids.push(*table);
+            ids.push(*name);
+            if let Some(old) = old {
+                ids.push(*old);
+            }
+            if let Some(new) = new {
+                ids.push(*new);
+            }
+        }
+        #[cfg(feature = "model-diff")]
+        DiffOp::CalculatedColumnDefinitionChanged { table, name, .. } => {
+            ids.push(*table);
+            ids.push(*name);
+        }
+        #[cfg(feature = "model-diff")]
+        DiffOp::RelationshipAdded {
+            from_table,
+            from_column,
+            to_table,
+            to_column,
+        }
+        | DiffOp::RelationshipRemoved {
+            from_table,
+            from_column,
+            to_table,
+            to_column,
+        } => {
+            ids.push(*from_table);
+            ids.push(*from_column);
+            ids.push(*to_table);
+            ids.push(*to_column);
+        }
+        #[cfg(feature = "model-diff")]
+        DiffOp::RelationshipPropertyChanged {
+            from_table,
+            from_column,
+            to_table,
+            to_column,
+            old,
+            new,
+            ..
+        } => {
+            ids.push(*from_table);
+            ids.push(*from_column);
+            ids.push(*to_table);
+            ids.push(*to_column);
             if let Some(old) = old {
                 ids.push(*old);
             }

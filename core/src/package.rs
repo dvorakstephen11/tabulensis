@@ -758,9 +758,17 @@ impl PbixPackage {
                         .map(|r| crate::tabular_schema::build_model(r, &mut session.strings))
                         .unwrap_or_default();
 
-                    let mut model_ops =
-                        crate::model_diff::diff_models(&old_model, &new_model, &mut session.strings);
-                    report.ops.append(&mut model_ops);
+                    let model_result = crate::model_diff::diff_models(
+                        &old_model,
+                        &new_model,
+                        &mut session.strings,
+                        config,
+                    );
+                    report.ops.extend(model_result.ops);
+                    if !model_result.complete {
+                        report.complete = false;
+                        report.warnings.extend(model_result.warnings);
+                    }
                 }
             }
 
@@ -798,7 +806,7 @@ impl PbixPackage {
         );
 
         #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
-        let model_ops = {
+        let model_result = {
             let old_raw = self.model_schema.as_ref();
             let new_raw = other.model_schema.as_ref();
 
@@ -811,7 +819,7 @@ impl PbixPackage {
                     .map(|r| crate::tabular_schema::build_model(r, pool))
                     .unwrap_or_default();
 
-                Some(crate::model_diff::diff_models(&old_model, &new_model, pool))
+                Some(crate::model_diff::diff_models(&old_model, &new_model, pool, config))
             } else {
                 None
             }
@@ -821,24 +829,31 @@ impl PbixPackage {
         let mut finish_guard = SinkFinishGuard::new(sink);
 
         let mut op_count = 0usize;
+        let mut complete = true;
+        let mut warnings = Vec::new();
         for op in m_ops {
             sink.emit(op)?;
             op_count = op_count.saturating_add(1);
         }
 
         #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
-        if let Some(model_ops) = model_ops {
-            for op in model_ops {
+        if let Some(model_result) = model_result {
+            for op in model_result.ops {
                 sink.emit(op)?;
                 op_count = op_count.saturating_add(1);
+            }
+
+            if !model_result.complete {
+                complete = false;
+                warnings.extend(model_result.warnings);
             }
         }
 
         finish_guard.finish_and_disarm()?;
 
         Ok(DiffSummary {
-            complete: true,
-            warnings: Vec::new(),
+            complete,
+            warnings,
             op_count,
             #[cfg(feature = "perf-metrics")]
             metrics: None,
@@ -963,17 +978,21 @@ mod tests {
 
     #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
     #[test]
-    fn pbix_streaming_orders_query_ops_before_measure_ops() {
+    fn pbix_streaming_orders_query_ops_before_model_ops() {
         let dm_a = make_dm("section Section1;\nshared Foo = 1;");
         let dm_b = make_dm("section Section1;\nshared Bar = 1;");
 
         let raw_a = RawTabularModel {
+            tables: Vec::new(),
+            relationships: Vec::new(),
             measures: vec![RawMeasure {
                 full_name: "Table/Measure1".to_string(),
                 expression: "1".to_string(),
             }],
         };
         let raw_b = RawTabularModel {
+            tables: Vec::new(),
+            relationships: Vec::new(),
             measures: vec![RawMeasure {
                 full_name: "Table/Measure1".to_string(),
                 expression: "2".to_string(),
@@ -998,28 +1017,18 @@ mod tests {
 
         assert!(ops.iter().any(DiffOp::is_m_op), "expected query ops");
         assert!(
-            ops.iter().any(|op| matches!(
-                op,
-                DiffOp::MeasureAdded { .. }
-                    | DiffOp::MeasureRemoved { .. }
-                    | DiffOp::MeasureDefinitionChanged { .. }
-            )),
-            "expected measure ops"
+            ops.iter().any(DiffOp::is_model_op),
+            "expected model ops"
         );
 
-        let mut seen_measure = false;
+        let mut seen_model = false;
         for op in ops {
-            if matches!(
-                op,
-                DiffOp::MeasureAdded { .. }
-                    | DiffOp::MeasureRemoved { .. }
-                    | DiffOp::MeasureDefinitionChanged { .. }
-            ) {
-                seen_measure = true;
+            if op.is_model_op() {
+                seen_model = true;
                 continue;
             }
-            if op.is_m_op() && seen_measure {
-                panic!("query op appeared after measure ops");
+            if op.is_m_op() && seen_model {
+                panic!("query op appeared after model ops");
             }
         }
     }

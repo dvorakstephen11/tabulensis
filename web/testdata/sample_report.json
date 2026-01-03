@@ -1,6 +1,18 @@
 {
   "version": "1",
-  "strings": ["Query1", "StepA", "StepB", "Measure1"],
+  "strings": [
+    "Query1",
+    "StepA",
+    "StepB",
+    "Sales",
+    "Amount",
+    "decimal",
+    "Customers",
+    "Id",
+    "CustomerId",
+    "Calc",
+    "Measure1"
+  ],
   "ops": [
     {
       "kind": "QueryDefinitionChanged",
@@ -19,7 +31,24 @@
         "ast_summary": { "mode": "unknown", "node_count_old": 10, "node_count_new": 11, "inserted": 1, "deleted": 0, "updated": 0, "moved": 0, "move_hints": [] }
       }
     },
-    { "kind": "MeasureDefinitionChanged", "name": 3 }
+    { "kind": "TableAdded", "name": 3 },
+    { "kind": "ModelColumnAdded", "table": 3, "name": 4, "data_type": 5 },
+    { "kind": "RelationshipAdded", "from_table": 3, "from_column": 8, "to_table": 6, "to_column": 7 },
+    {
+      "kind": "CalculatedColumnDefinitionChanged",
+      "table": 3,
+      "name": 9,
+      "change_kind": "formatting_only",
+      "old_hash": 1,
+      "new_hash": 2
+    },
+    {
+      "kind": "MeasureDefinitionChanged",
+      "name": 10,
+      "change_kind": "semantic",
+      "old_hash": 1,
+      "new_hash": 2
+    }
   ],
   "complete": true,
   "warnings": []

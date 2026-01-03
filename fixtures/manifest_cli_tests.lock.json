@@ -150,103 +150,103 @@
       "mode": "zip-entries-v1"
     },
     "m_add_query_a.xlsx": {
-      "hash": "sha256:720ae830d63000f8f45c9fb5344f10a8e21dc83c16bf6a150b3a0fcc79169dd6",
+      "hash": "sha256:e0be215bb038fdc9b55fc8c2866715ab2ac4f321055e3aad6c8a23de64b7accc",
       "mode": "zip-entries-v1"
     },
     "m_add_query_b.xlsx": {
-      "hash": "sha256:410a575a9346cdb2869def7e6f072a9e6f5edc48dec99fd2a791bba21d279522",
+      "hash": "sha256:96b72181157eec8d2c53a6a9db0f50941843ba61b8b07cad1cb4ee57c250c6e0",
       "mode": "zip-entries-v1"
     },
     "m_call_formatting_a.xlsx": {
-      "hash": "sha256:f96e1cc6642802823e45acdaf85780e67782b551f60d6f137c58f9d7036abd24",
+      "hash": "sha256:18307109855773a2844a638f83888c9fa3b9e415629373fa60ab3f2b79c83117",
       "mode": "zip-entries-v1"
     },
     "m_call_formatting_b.xlsx": {
-      "hash": "sha256:504090defe1f22c4b386604aacf9a3ae420f302ffac395e1b4ed92b1915e8d98",
+      "hash": "sha256:7447a54abce4df8095521c989d9a9920d0db9f8422b70deca50e34d7bcc60e01",
       "mode": "zip-entries-v1"
     },
     "m_change_literal_a.xlsx": {
-      "hash": "sha256:720ae830d63000f8f45c9fb5344f10a8e21dc83c16bf6a150b3a0fcc79169dd6",
+      "hash": "sha256:e0be215bb038fdc9b55fc8c2866715ab2ac4f321055e3aad6c8a23de64b7accc",
       "mode": "zip-entries-v1"
     },
     "m_change_literal_b.xlsx": {
-      "hash": "sha256:87146bee729b7594d94c9b89bafd649614e4b04411ed75c7213e1dd6ca3cef82",
+      "hash": "sha256:f188361b3f7592f71d164417921032584e6ea7d13cbed940f24871c41c4bf3b4",
       "mode": "zip-entries-v1"
     },
     "m_def_and_metadata_change_a.xlsx": {
-      "hash": "sha256:720ae830d63000f8f45c9fb5344f10a8e21dc83c16bf6a150b3a0fcc79169dd6",
+      "hash": "sha256:e0be215bb038fdc9b55fc8c2866715ab2ac4f321055e3aad6c8a23de64b7accc",
       "mode": "zip-entries-v1"
     },
     "m_def_and_metadata_change_b.xlsx": {
-      "hash": "sha256:2ec771d58dbe3488409329797a5f0604e755e59040a2dd27627f6d17545f1e10",
+      "hash": "sha256:11c92185a71a35ffe673ee8693581e16d3a3ad28b18477bcf655b0a149b65ef6",
       "mode": "zip-entries-v1"
     },
     "m_embedded_change_a.xlsx": {
-      "hash": "sha256:ad2a3c4fa6c6256b01c69bf508e83c0a30d130d1cfd025299e24f00fa92c011f",
+      "hash": "sha256:1ed0d12cba1828408d0687a71c5cf99bae4fb4a82c5c0ec615e0b51cb2c7e0b0",
       "mode": "zip-entries-v1"
     },
     "m_embedded_change_b.xlsx": {
-      "hash": "sha256:830711bdd69552cbd905bdf3725f7b9d51b1522832aaa3240d833f615fd36bd5",
+      "hash": "sha256:5b02fba369a1a526a1ef13201e9863e05b92f5eb6381baca1675df607b6ff674",
       "mode": "zip-entries-v1"
     },
     "m_formatting_only_a.xlsx": {
-      "hash": "sha256:6dcea1290a40c4b942dd071ac88803b6c9277be4ae945aaafb95f6b6accba783",
+      "hash": "sha256:dfd74f8a14f6ca07732a45265d995fc05cf2385cb3e0afd2e7bb6e52a9677d7e",
       "mode": "zip-entries-v1"
     },
     "m_formatting_only_b.xlsx": {
-      "hash": "sha256:0294a34202ec342d005b8fabb04718f000baad25a6738c40ed7eaa8d1186a0ee",
+      "hash": "sha256:d9393ab614e54e9516c0972027eebc55175773ed69fbcde65947debbfa33a291",
       "mode": "zip-entries-v1"
     },
     "m_formatting_only_b_variant.xlsx": {
-      "hash": "sha256:f5478a84ed46815cd56fef61d4181e40ef12889e17a57e0b5011073ac1ee5d76",
+      "hash": "sha256:8b9403b8d29cfcdce0569f5d6e96515718247ad9ffd33bd9f489bad1e74ef79f",
       "mode": "zip-entries-v1"
     },
     "m_list_formatting_a.xlsx": {
-      "hash": "sha256:33f4e24d4d634bb3bbada2b5a2fd8684036d055b0f5e2173f146814a7ca8aec7",
+      "hash": "sha256:804dc01d401f317b8727796a1cc73b9269d46a760d24f22f842e975a7d101741",
       "mode": "zip-entries-v1"
     },
     "m_list_formatting_b.xlsx": {
-      "hash": "sha256:1da16c16a4a55add41873af79b6dad76fa334bc6802587aec0ed4bc47880040d",
+      "hash": "sha256:ee73255a99059d643878486021d3d35d41bda5bc2c98720cebb94233b886de5f",
       "mode": "zip-entries-v1"
     },
     "m_metadata_only_change_a.xlsx": {
-      "hash": "sha256:720ae830d63000f8f45c9fb5344f10a8e21dc83c16bf6a150b3a0fcc79169dd6",
+      "hash": "sha256:e0be215bb038fdc9b55fc8c2866715ab2ac4f321055e3aad6c8a23de64b7accc",
       "mode": "zip-entries-v1"
     },
     "m_metadata_only_change_b.xlsx": {
-      "hash": "sha256:a1dab57e493377de9dd1d792b32d5052e3add7d917c2420cbd1e60a3e9d71a10",
+      "hash": "sha256:e80131e38555eaf2e10704fc5e6587c209af6906d9451e0469e47b68f0956221",
       "mode": "zip-entries-v1"
     },
     "m_primitive_formatting_a.xlsx": {
-      "hash": "sha256:bd2f304caad4ae517852fdb90d8318e203dbcdcafa5847b38078dada28f93006",
+      "hash": "sha256:86353fdbd3a777bf0709063db3350b954682cfe6875a04dbf77a5b76f63a0587",
       "mode": "zip-entries-v1"
     },
     "m_primitive_formatting_b.xlsx": {
-      "hash": "sha256:d7eae2bb47ee711deb23ee0ceb41e33db9324666099e1b5c6b2b53bab788f4cb",
+      "hash": "sha256:867b992100a8f65fc92648f791575634d7d59b404d4323b218a736ddb1b3a78b",
       "mode": "zip-entries-v1"
     },
     "m_record_equiv_a.xlsx": {
-      "hash": "sha256:5a025a6f08c82a1612b8fa310622e5561f8263421557c9ae6af057c3b5df4371",
+      "hash": "sha256:81be8845c967f2f342943e76d865ef8f9d3dba874715fca610763472de1ac05b",
       "mode": "zip-entries-v1"
     },
     "m_record_equiv_b.xlsx": {
-      "hash": "sha256:2b27e4dae9075a24198175d8ce87b0ac40621de5a19170afd0ed2a9d607e3ddf",
+      "hash": "sha256:8cf7a0afedd450abfa960610fc90b0095220c6a8de4321d5ee9a95d71c92608c",
       "mode": "zip-entries-v1"
     },
     "m_remove_query_a.xlsx": {
-      "hash": "sha256:410a575a9346cdb2869def7e6f072a9e6f5edc48dec99fd2a791bba21d279522",
+      "hash": "sha256:96b72181157eec8d2c53a6a9db0f50941843ba61b8b07cad1cb4ee57c250c6e0",
       "mode": "zip-entries-v1"
     },
     "m_remove_query_b.xlsx": {
-      "hash": "sha256:720ae830d63000f8f45c9fb5344f10a8e21dc83c16bf6a150b3a0fcc79169dd6",
+      "hash": "sha256:e0be215bb038fdc9b55fc8c2866715ab2ac4f321055e3aad6c8a23de64b7accc",
       "mode": "zip-entries-v1"
     },
     "m_rename_query_a.xlsx": {
-      "hash": "sha256:720ae830d63000f8f45c9fb5344f10a8e21dc83c16bf6a150b3a0fcc79169dd6",
+      "hash": "sha256:e0be215bb038fdc9b55fc8c2866715ab2ac4f321055e3aad6c8a23de64b7accc",
       "mode": "zip-entries-v1"
     },
     "m_rename_query_b.xlsx": {
-      "hash": "sha256:af7f586dcdea2b8505149c036d910cf2b85af4b902a4f03cca98db44d87ce708",
+      "hash": "sha256:158f95ec2f77e33ed8650ed43e6a917038a89fad815871d41431f869a49c506a",
       "mode": "zip-entries-v1"
     },
     "mashup_base64_whitespace.xlsx": {
@@ -262,27 +262,27 @@
       "mode": "zip-entries-v1"
     },
     "metadata_hidden_queries.xlsx": {
-      "hash": "sha256:62db950954f2ac5d61e9e903500010830cc187e40a39d597e47d5bd2acdbbb54",
+      "hash": "sha256:5a44f67df6feca9445dd9d62e990453cbdcca3acc3f7786156066a4a45f813ae",
       "mode": "zip-entries-v1"
     },
     "metadata_missing_entry.xlsx": {
-      "hash": "sha256:4172fc588a4bdcbe852277967823cf498cff3ae041ee39af92868999c31d352c",
+      "hash": "sha256:a5895e60700928ef3c6cad6064637543024898cbeb568a45fe18a0f049752662",
       "mode": "zip-entries-v1"
     },
     "metadata_orphan_entries.xlsx": {
-      "hash": "sha256:33e16e6c7c4a539ce0330e26faa7dffea05d76309863ef668ff591e23475cafc",
+      "hash": "sha256:32a604cd7ca45c85c52d0ece2b60421ce3df266a5fa8f54edf6502b235adf927",
       "mode": "zip-entries-v1"
     },
     "metadata_query_groups.xlsx": {
-      "hash": "sha256:07928ebf55b31ddde9f42be6299edf8454435e16d69b43520d28baa9226349a2",
+      "hash": "sha256:826fa32a9666982c65d33f0d4df2add79e5fe02f54779c348fea649449449465",
       "mode": "zip-entries-v1"
     },
     "metadata_simple.xlsx": {
-      "hash": "sha256:702caed5e790c353aff8974be09ab9ad012dffb2e486dadc029aa809dcab75d1",
+      "hash": "sha256:6ca68895fd35240e106b1108f781f475fec604ce2770cafdc997370f4355b8fa",
       "mode": "zip-entries-v1"
     },
     "metadata_url_encoding.xlsx": {
-      "hash": "sha256:4c97896fcd2391fae7e4833eae09ef48d1dc5b013957757b04186c1213d50e9a",
+      "hash": "sha256:f459c0da700ec45bc16cbc56b026aa5f493cfb693b607a0c16a0c8981afaefc9",
       "mode": "zip-entries-v1"
     },
     "minimal.xlsx": {
@@ -298,7 +298,7 @@
       "mode": "zip-entries-v1"
     },
     "multi_query_with_embedded.xlsx": {
-      "hash": "sha256:82251be75ca4b675986896522e1f9f88c87b0ead52305329f1ff5b1a91c2347a",
+      "hash": "sha256:43a9b8541b152c5ad2d1e58d5ebe7456febd6d0b68b1ac1ea0435aee30f3a0c8",
       "mode": "zip-entries-v1"
     },
     "named_ranges_a.xlsx": {
@@ -322,31 +322,31 @@
       "mode": "zip-entries-v1"
     },
     "pbit_model_a.pbit": {
-      "hash": "sha256:4c0a2756d9244111cd339314505efb333325972054e89fd3d68e0fa40df13a37",
+      "hash": "sha256:17534891a61add5719e475168f267fbf20f1850eef1eb883303ac4847e36cdb6",
       "mode": "zip-entries-v1"
     },
     "pbit_model_b.pbit": {
-      "hash": "sha256:70f66947c95cac7ab6103b1f278976f27c92920ac6e2912f2b2a9c77a1b3277c",
+      "hash": "sha256:6428f5152a523d8a8fdc0be784335921fe4fad6605e1af2e1d8725508ebecf4b",
       "mode": "zip-entries-v1"
     },
     "pbix_embedded_queries.pbix": {
-      "hash": "sha256:88071b94d68faccdbbf361d936d2ff7f20af6970381d59b6607bcb59c96d691e",
+      "hash": "sha256:d7ae2ae32e4ce67d784549fbfbf81202b3062e1fd0777c92c16205cea7bd3134",
       "mode": "zip-entries-v1"
     },
     "pbix_legacy_multi_query_a.pbix": {
-      "hash": "sha256:a2caebe1f3b1ede91514f44a9a9353a8527fb09bc8970a23ea695e774ee6de0a",
+      "hash": "sha256:043763b7909f2280052fd11adad7d7c6c53a680506e115bd619d7b6b521df09c",
       "mode": "zip-entries-v1"
     },
     "pbix_legacy_multi_query_b.pbix": {
-      "hash": "sha256:0ba8b74b345a6e846eaaaf379b36d68886eac974c24bcac22b09972740f36e87",
+      "hash": "sha256:4fd1bfaf7cbbbd6252bf854049db1eb0e0f129f5d68e96c1303e985fa3214334",
       "mode": "zip-entries-v1"
     },
     "pbix_legacy_one_query_a.pbix": {
-      "hash": "sha256:a2caebe1f3b1ede91514f44a9a9353a8527fb09bc8970a23ea695e774ee6de0a",
+      "hash": "sha256:043763b7909f2280052fd11adad7d7c6c53a680506e115bd619d7b6b521df09c",
       "mode": "zip-entries-v1"
     },
     "pbix_legacy_one_query_b.pbix": {
-      "hash": "sha256:07f8e9a201960f0266ef1ae9052089ddce5d3c18dbb382f560c2d7055e6cb730",
+      "hash": "sha256:a78f1ea270a17cac3aedbf362b38b5a27443a7a86bf914493b0605f7adc166a9",
       "mode": "zip-entries-v1"
     },
     "pbix_no_datamashup.pbix": {
@@ -358,11 +358,11 @@
       "mode": "zip-entries-v1"
     },
     "permissions_defaults.xlsx": {
-      "hash": "sha256:702caed5e790c353aff8974be09ab9ad012dffb2e486dadc029aa809dcab75d1",
+      "hash": "sha256:6ca68895fd35240e106b1108f781f475fec604ce2770cafdc997370f4355b8fa",
       "mode": "zip-entries-v1"
     },
     "permissions_firewall_off.xlsx": {
-      "hash": "sha256:d2299ae5edfe6ff860f2de04b9f0db98b6c08fc637c90bc825383afd8041b888",
+      "hash": "sha256:d25dfc85fcd60cf92eab02be2d0e9e4cfd190fc1dca4d39f5d200decf72a299b",
       "mode": "zip-entries-v1"
     },
     "pg1_basic_two_sheets.xlsx": {
@@ -531,6 +531,6 @@
     }
   },
   "manifest": "fixtures/manifest_cli_tests.yaml",
-  "output_dir": "C:/Users/dvora/repo/excel_diff/fixtures/generated",
+  "output_dir": "fixtures/generated",
   "version": 1
 }

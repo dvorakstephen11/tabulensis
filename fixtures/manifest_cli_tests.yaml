@@ -871,9 +871,40 @@ scenarios:
             "tables": [
               {
                 "name": "Sales",
+                "columns": [
+                  { "name": "Amount", "dataType": "int64", "summarizeBy": "sum" },
+                  { "name": "Net", "dataType": "decimal", "formatString": "0.00", "sortByColumn": "Amount" },
+                  { "name": "CustomerId", "dataType": "int64", "isHidden": true },
+                  { "name": "Obsolete", "dataType": "string" },
+                  { "name": "CalcFmt", "dataType": "int64", "expression": "1 + 2" },
+                  { "name": "CalcSemantic", "dataType": "int64", "expression": "Sales[Amount] + 1" }
+                ],
                 "measures": [
                   { "name": "Total Sales", "expression": "SUM(Sales[Amount])" }
                 ]
+              },
+              {
+                "name": "Customers",
+                "columns": [
+                  { "name": "Id", "dataType": "int64" }
+                ]
+              },
+              {
+                "name": "Legacy",
+                "columns": [
+                  { "name": "OldCol", "dataType": "string" }
+                ]
+              }
+            ],
+            "relationships": [
+              {
+                "fromTable": "Sales",
+                "fromColumn": "CustomerId",
+                "toTable": "Customers",
+                "toColumn": "Id",
+                "crossFilteringBehavior": "oneDirection",
+                "cardinality": "ManyToOne",
+                "isActive": false
               }
             ]
           }
@@ -890,10 +921,51 @@ scenarios:
             "tables": [
               {
                 "name": "Sales",
+                "columns": [
+                  { "name": "Amount", "dataType": "decimal", "summarizeBy": "average" },
+                  { "name": "Net", "dataType": "decimal", "formatString": "$0.00", "sortByColumn": "Discount" },
+                  { "name": "CustomerId", "dataType": "int64", "isHidden": false },
+                  { "name": "Discount", "dataType": "decimal" },
+                  { "name": "RegionId", "dataType": "int64" },
+                  { "name": "CalcFmt", "dataType": "int64", "expression": "1+2" },
+                  { "name": "CalcSemantic", "dataType": "int64", "expression": "Sales[Amount] + 2" }
+                ],
                 "measures": [
                   { "name": "Total Sales", "expression": "SUMX(Sales, Sales[Amount])" },
                   { "name": "Net Sales", "expression": "SUM(Sales[Net])" }
                 ]
+              },
+              {
+                "name": "Customers",
+                "columns": [
+                  { "name": "Id", "dataType": "int64" }
+                ]
+              },
+              {
+                "name": "Regions",
+                "columns": [
+                  { "name": "Id", "dataType": "int64" }
+                ]
+              }
+            ],
+            "relationships": [
+              {
+                "fromTable": "Sales",
+                "fromColumn": "CustomerId",
+                "toTable": "Customers",
+                "toColumn": "Id",
+                "crossFilteringBehavior": "bothDirections",
+                "cardinality": "ManyToOne",
+                "isActive": true
+              },
+              {
+                "fromTable": "Sales",
+                "fromColumn": "RegionId",
+                "toTable": "Regions",
+                "toColumn": "Id",
+                "crossFilteringBehavior": "oneDirection",
+                "cardinality": "ManyToOne",
+                "isActive": true
               }
             ]
           }

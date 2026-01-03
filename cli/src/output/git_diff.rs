@@ -1,7 +1,8 @@
 use anyhow::Result;
 use excel_diff::{
-    CellValue, DiffOp, DiffReport, QueryChangeKind, QueryMetadataField, StepChange, StepDiff,
-    StepType, index_to_address,
+    CellValue, DiffOp, DiffReport, ExpressionChangeKind, ModelColumnProperty, QueryChangeKind,
+    QueryMetadataField, RelationshipProperty, StepChange, StepDiff, StepType, StringId,
+    index_to_address,
 };
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -21,7 +22,7 @@ pub fn write_git_diff<W: Write>(
         return Ok(());
     }
 
-    let (workbook_ops, sheet_ops, query_ops, measure_ops) = partition_ops(report);
+    let (workbook_ops, sheet_ops, query_ops, model_ops) = partition_ops(report);
 
     if !workbook_ops.is_empty() {
         writeln!(w, "@@ Workbook @@")?;
@@ -44,9 +45,9 @@ pub fn write_git_diff<W: Write>(
         }
     }
 
-    if !measure_ops.is_empty() {
-        writeln!(w, "@@ Measures @@")?;
-        for op in &measure_ops {
+    if !model_ops.is_empty() {
+        writeln!(w, "@@ Model @@")?;
+        for op in &model_ops {
             write_op_diff_lines(w, report, op)?;
         }
     }
@@ -65,13 +66,13 @@ fn partition_ops(
     let mut workbook_ops: Vec<&DiffOp> = Vec::new();
     let mut sheet_ops: BTreeMap<String, Vec<&DiffOp>> = BTreeMap::new();
     let mut query_ops: Vec<&DiffOp> = Vec::new();
-    let mut measure_ops: Vec<&DiffOp> = Vec::new();
+    let mut model_ops: Vec<&DiffOp> = Vec::new();
 
     for op in &report.ops {
         if op.is_m_op() {
             query_ops.push(op);
-        } else if is_measure_op(op) {
-            measure_ops.push(op);
+        } else if op.is_model_op() {
+            model_ops.push(op);
         } else if let Some(sheet_id) = get_sheet_id(op) {
             let sheet_name = report
                 .resolve(sheet_id)
@@ -83,16 +84,7 @@ fn partition_ops(
         }
     }
 
-    (workbook_ops, sheet_ops, query_ops, measure_ops)
-}
-
-fn is_measure_op(op: &DiffOp) -> bool {
-    matches!(
-        op,
-        DiffOp::MeasureAdded { .. }
-            | DiffOp::MeasureRemoved { .. }
-            | DiffOp::MeasureDefinitionChanged { .. }
-    )
+    (workbook_ops, sheet_ops, query_ops, model_ops)
 }
 
 fn get_sheet_id(op: &DiffOp) -> Option<excel_diff::StringId> {
@@ -429,6 +421,131 @@ fn write_op_diff_lines<W: Write>(w: &mut W, report: &DiffReport, op: &DiffOp) ->
                 report.resolve(*name).unwrap_or("<unknown>")
             )?;
         }
+        DiffOp::TableAdded { name } => {
+            writeln!(
+                w,
+                "+ Table \"{}\": ADDED",
+                report.resolve(*name).unwrap_or("<unknown>")
+            )?;
+        }
+        DiffOp::TableRemoved { name } => {
+            writeln!(
+                w,
+                "- Table \"{}\": REMOVED",
+                report.resolve(*name).unwrap_or("<unknown>")
+            )?;
+        }
+        DiffOp::ModelColumnAdded {
+            table,
+            name,
+            data_type,
+        } => {
+            let label = format_column_ref(report, *table, *name);
+            if let Some(ty) = data_type.and_then(|id| report.resolve(id)) {
+                writeln!(w, "+ Column \"{}\": ADDED (type={})", label, ty)?;
+            } else {
+                writeln!(w, "+ Column \"{}\": ADDED", label)?;
+            }
+        }
+        DiffOp::ModelColumnRemoved { table, name } => {
+            writeln!(
+                w,
+                "- Column \"{}\": REMOVED",
+                format_column_ref(report, *table, *name)
+            )?;
+        }
+        DiffOp::ModelColumnTypeChanged {
+            table,
+            name,
+            old_type,
+            new_type,
+        } => {
+            let label = format_column_ref(report, *table, *name);
+            let old_str = old_type
+                .and_then(|id| report.resolve(id))
+                .unwrap_or("<none>");
+            let new_str = new_type
+                .and_then(|id| report.resolve(id))
+                .unwrap_or("<none>");
+            writeln!(w, "- Column \"{}\": type: {}", label, old_str)?;
+            writeln!(w, "+ Column \"{}\": type: {}", label, new_str)?;
+        }
+        DiffOp::ModelColumnPropertyChanged {
+            table,
+            name,
+            field,
+            old,
+            new,
+        } => {
+            let label = format_column_ref(report, *table, *name);
+            let old_str = old
+                .and_then(|id| report.resolve(id))
+                .unwrap_or("<none>");
+            let new_str = new
+                .and_then(|id| report.resolve(id))
+                .unwrap_or("<none>");
+            let field_name = column_field_name(*field);
+            writeln!(w, "- Column \"{}\": {}: {}", label, field_name, old_str)?;
+            writeln!(w, "+ Column \"{}\": {}: {}", label, field_name, new_str)?;
+        }
+        DiffOp::CalculatedColumnDefinitionChanged {
+            table,
+            name,
+            change_kind,
+            ..
+        } => {
+            writeln!(
+                w,
+                "~ Calculated column \"{}\": definition changed ({})",
+                format_column_ref(report, *table, *name),
+                expression_change_label(*change_kind)
+            )?;
+        }
+        DiffOp::RelationshipAdded {
+            from_table,
+            from_column,
+            to_table,
+            to_column,
+        } => {
+            writeln!(
+                w,
+                "+ Relationship {}: ADDED",
+                format_relationship_ref(report, *from_table, *from_column, *to_table, *to_column)
+            )?;
+        }
+        DiffOp::RelationshipRemoved {
+            from_table,
+            from_column,
+            to_table,
+            to_column,
+        } => {
+            writeln!(
+                w,
+                "- Relationship {}: REMOVED",
+                format_relationship_ref(report, *from_table, *from_column, *to_table, *to_column)
+            )?;
+        }
+        DiffOp::RelationshipPropertyChanged {
+            from_table,
+            from_column,
+            to_table,
+            to_column,
+            field,
+            old,
+            new,
+        } => {
+            let label =
+                format_relationship_ref(report, *from_table, *from_column, *to_table, *to_column);
+            let old_str = old
+                .and_then(|id| report.resolve(id))
+                .unwrap_or("<none>");
+            let new_str = new
+                .and_then(|id| report.resolve(id))
+                .unwrap_or("<none>");
+            let field_name = relationship_field_name(*field);
+            writeln!(w, "- Relationship {}: {}: {}", label, field_name, old_str)?;
+            writeln!(w, "+ Relationship {}: {}: {}", label, field_name, new_str)?;
+        }
         DiffOp::MeasureAdded { name } => {
             writeln!(
                 w,
@@ -443,11 +560,12 @@ fn write_op_diff_lines<W: Write>(w: &mut W, report: &DiffReport, op: &DiffOp) ->
                 report.resolve(*name).unwrap_or("<unknown>")
             )?;
         }
-        DiffOp::MeasureDefinitionChanged { name, .. } => {
+        DiffOp::MeasureDefinitionChanged { name, change_kind, .. } => {
             writeln!(
                 w,
-                "~ Measure \"{}\": definition changed",
-                report.resolve(*name).unwrap_or("<unknown>")
+                "~ Measure \"{}\": definition changed ({})",
+                report.resolve(*name).unwrap_or("<unknown>"),
+                expression_change_label(*change_kind)
             )?;
         }
         _ => {
@@ -572,6 +690,51 @@ fn format_step_type(t: StepType) -> &'static str {
         StepType::TableNestedJoin => "Table.NestedJoin",
         StepType::TableJoin => "Table.Join",
         StepType::Other => "Other",
+    }
+}
+
+fn format_column_ref(report: &DiffReport, table: StringId, column: StringId) -> String {
+    let table_name = report.resolve(table).unwrap_or("<unknown>");
+    let column_name = report.resolve(column).unwrap_or("<unknown>");
+    format!("{}.{}", table_name, column_name)
+}
+
+fn format_relationship_ref(
+    report: &DiffReport,
+    from_table: StringId,
+    from_column: StringId,
+    to_table: StringId,
+    to_column: StringId,
+) -> String {
+    let from_table = report.resolve(from_table).unwrap_or("<unknown>");
+    let from_column = report.resolve(from_column).unwrap_or("<unknown>");
+    let to_table = report.resolve(to_table).unwrap_or("<unknown>");
+    let to_column = report.resolve(to_column).unwrap_or("<unknown>");
+    format!("{}[{}] -> {}[{}]", from_table, from_column, to_table, to_column)
+}
+
+fn column_field_name(field: ModelColumnProperty) -> &'static str {
+    match field {
+        ModelColumnProperty::Hidden => "hidden",
+        ModelColumnProperty::FormatString => "format_string",
+        ModelColumnProperty::SortBy => "sort_by",
+        ModelColumnProperty::SummarizeBy => "summarize_by",
+    }
+}
+
+fn relationship_field_name(field: RelationshipProperty) -> &'static str {
+    match field {
+        RelationshipProperty::CrossFilteringBehavior => "cross_filtering_behavior",
+        RelationshipProperty::Cardinality => "cardinality",
+        RelationshipProperty::IsActive => "is_active",
+    }
+}
+
+fn expression_change_label(kind: ExpressionChangeKind) -> &'static str {
+    match kind {
+        ExpressionChangeKind::Semantic => "semantic change",
+        ExpressionChangeKind::FormattingOnly => "formatting only",
+        ExpressionChangeKind::Unknown => "unknown",
     }
 }
 

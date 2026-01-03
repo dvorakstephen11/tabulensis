@@ -105,6 +105,8 @@ mod m_diff;
 mod m_section;
 mod m_semantic_detail;
 #[cfg(feature = "model-diff")]
+mod dax;
+#[cfg(feature = "model-diff")]
 mod model;
 #[cfg(feature = "model-diff")]
 mod model_diff;
@@ -272,8 +274,10 @@ pub use diff::{
     DiffSummary, ExtractedColumnTypeChanges, ExtractedRenamePairs, ExtractedString,
     ExtractedStringList, FormulaDiffResult, QueryChangeKind, QueryMetadataField,
     QuerySemanticDetail, RenamePair, SheetId, StepChange, StepDiff, StepParams, StepSnapshot,
-    StepType,
+    StepType, ExpressionChangeKind,
 };
+#[cfg(feature = "model-diff")]
+pub use diff::{ModelColumnProperty, RelationshipProperty};
 pub use diffable::{DiffContext, Diffable};
 #[doc(hidden)]
 pub use engine::{
@@ -312,9 +316,9 @@ pub use m_ast::{
 };
 pub use m_section::{SectionMember, SectionParseError, parse_section_members};
 #[cfg(feature = "model-diff")]
-pub use model::{Measure, Model, ModelColumn, ModelTable};
+pub use model::{Measure, Model, ModelColumn, ModelRelationship, ModelTable};
 #[cfg(feature = "model-diff")]
-pub use model_diff::diff_models;
+pub use model_diff::{diff_models, ModelDiffResult};
 #[doc(hidden)]
 pub use output::json::diff_report_to_cell_diffs;
 #[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
