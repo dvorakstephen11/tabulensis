@@ -41,19 +41,35 @@ python src/generate.py
 
 ## Usage
 
-The generator reads scenarios from `manifest.yaml` and produces files in the `fixtures/generated/` directory.
+The generator reads scenarios from a manifest file and produces files in
+`fixtures/generated/`.
 
-To generate all fixtures:
+To generate all fixtures from the default manifest:
 
 ```bash
 python src/generate.py
 ```
+
+To mirror CI fixtures (recommended for tests):
+
+```bash
+generate-fixtures --manifest fixtures/manifest_cli_tests.yaml --force --clean
+generate-fixtures --manifest fixtures/manifest_cli_tests.yaml --verify-lock fixtures/manifest_cli_tests.lock.json
+```
+
+### Manifests
+
+- `fixtures/manifest.yaml`: broad fixture catalog
+- `fixtures/manifest_cli_tests.yaml`: CI + local test fixtures
+- `fixtures/manifest_release_smoke.yaml`: release smoke fixtures
 
 ### Command Line Arguments
 
 - `--manifest`: Path to the manifest file (default: `manifest.yaml`)
 - `--output-dir`: Directory to output generated files (default: `fixtures/generated`)
 - `--force`: Force regeneration even if files exist (default: false - *Note: implementation currently always overwrites*)
+- `--write-lock`: Write a checksum lock file after generation
+- `--verify-lock`: Verify fixtures against a checksum lock file
 
 ## Configuration (Manifest)
 

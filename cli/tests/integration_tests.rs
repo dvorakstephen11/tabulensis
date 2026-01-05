@@ -558,6 +558,52 @@ fn diff_pbix_jsonl_writes_header_and_ops() {
 }
 
 #[test]
+fn diff_pbix_composed_reports_query_and_metadata_changes() {
+    let output = excel_diff_cmd()
+        .args([
+            "diff",
+            "--format",
+            "json",
+            &fixture_path("pbix_composed_a.pbix"),
+            &fixture_path("pbix_composed_b.pbix"),
+        ])
+        .output()
+        .expect("failed to run excel-diff");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "pbix composed diff should detect changes: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+    let ops = parsed
+        .get("ops")
+        .and_then(|v| v.as_array())
+        .expect("ops array should exist");
+
+    let has_def_change = ops.iter().any(|op| {
+        op.get("kind")
+            .and_then(|k| k.as_str())
+            .is_some_and(|k| k == "QueryDefinitionChanged")
+    });
+    let has_metadata_change = ops.iter().any(|op| {
+        op.get("kind")
+            .and_then(|k| k.as_str())
+            .is_some_and(|k| k == "QueryMetadataChanged")
+    });
+
+    assert!(has_def_change, "expected QueryDefinitionChanged in pbix composed diff");
+    assert!(
+        has_metadata_change,
+        "expected QueryMetadataChanged in pbix composed diff"
+    );
+}
+
+#[test]
 fn jsonl_output_is_deterministic_for_xlsx() {
     let first = run_jsonl_diff(
         &fixture_path("single_cell_value_a.xlsx"),

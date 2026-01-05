@@ -34,6 +34,7 @@ try:
         ValueFormulaGenerator,
     )
     from .generators.mashup import (
+        MashupAttachGenerator,
         MashupCorruptGenerator,
         MashupDuplicateGenerator,
         MashupEncodeGenerator,
@@ -69,6 +70,7 @@ except ImportError:
         ValueFormulaGenerator,
     )
     from generators.mashup import (
+        MashupAttachGenerator,
         MashupCorruptGenerator,
         MashupDuplicateGenerator,
         MashupEncodeGenerator,
@@ -103,6 +105,7 @@ GENERATORS: Dict[str, Any] = {
     "pg6_sheet_scenario": Pg6SheetScenarioGenerator,
     "corrupt_container": ContainerCorruptGenerator,
     "mashup_corrupt": MashupCorruptGenerator,
+    "mashup_attach": MashupAttachGenerator,
     "mashup_duplicate": MashupDuplicateGenerator,
     "mashup_inject": MashupInjectGenerator,
     "mashup_encode": MashupEncodeGenerator,
@@ -118,7 +121,7 @@ GENERATORS: Dict[str, Any] = {
     "xlsb_stub": XlsbStubGenerator,
 }
 
-FILE_ARG_KEYS = ("template", "base_file", "model_schema_file")
+FILE_ARG_KEYS = ("template", "base_file", "model_schema_file", "mashup_file")
 ZIP_EXTENSIONS = {".xlsx", ".xlsm", ".xlsb", ".pbix", ".pbit", ".zip"}
 
 
@@ -228,7 +231,7 @@ def preflight_manifest(
                 errors.append(f"Scenario {label} arg '{key}' must be a string.")
                 continue
 
-            if key == "base_file":
+            if key in ("base_file", "mashup_file"):
                 dep = generated_dependency(value)
                 if dep is not None:
                     dep_name = dep.as_posix()

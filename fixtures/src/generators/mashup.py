@@ -13,6 +13,18 @@ from .base import BaseGenerator
 
 # XML Namespaces
 NS = {'dm': 'http://schemas.microsoft.com/DataMashup'}
+FIXED_ZIP_DATE = (1980, 1, 1, 0, 0, 0)
+
+
+def _zipinfo_fixed(name: str) -> zipfile.ZipInfo:
+    info = zipfile.ZipInfo(name)
+    info.date_time = FIXED_ZIP_DATE
+    info.compress_type = zipfile.ZIP_DEFLATED
+    return info
+
+
+def _writestr_fixed(zout: zipfile.ZipFile, name: str, data):
+    zout.writestr(_zipinfo_fixed(name), data)
 
 class MashupBaseGenerator(BaseGenerator):
     """Base class for handling the outer Excel container and finding DataMashup."""
@@ -203,7 +215,7 @@ class MashupInjectGenerator(MashupBaseGenerator):
                     for item in zin.infolist():
                         if item.filename == filename:
                             # Write the new M code
-                            zout.writestr(filename, new_content.encode('utf-8'))
+                            zout.writestr(item, new_content.encode('utf-8'))
                         else:
                             # Copy others
                             zout.writestr(item, zin.read(item.filename))
@@ -361,8 +373,8 @@ class MashupPackagePartsGenerator(MashupBaseGenerator):
         content_types = self._augment_content_types(content_types_template)
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as z:
-            z.writestr("[Content_Types].xml", content_types)
-            z.writestr("Formulas/Section1.m", section_text)
+            _writestr_fixed(z, "[Content_Types].xml", content_types)
+            _writestr_fixed(z, "Formulas/Section1.m", section_text)
         return buffer.getvalue()
 
     def _build_package_parts(
@@ -376,10 +388,10 @@ class MashupPackagePartsGenerator(MashupBaseGenerator):
         content_types = self._augment_content_types(content_types_template)
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as z:
-            z.writestr("[Content_Types].xml", content_types)
-            z.writestr("Config/Package.xml", package_xml)
-            z.writestr("Formulas/Section1.m", main_section)
-            z.writestr(f"Content/{embedded_guid}.package", embedded_package)
+            _writestr_fixed(z, "[Content_Types].xml", content_types)
+            _writestr_fixed(z, "Config/Package.xml", package_xml)
+            _writestr_fixed(z, "Formulas/Section1.m", main_section)
+            _writestr_fixed(z, f"Content/{embedded_guid}.package", embedded_package)
         return buffer.getvalue()
 
     def _augment_content_types(self, content_types_bytes: bytes) -> str:
@@ -876,6 +888,104 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
                 ]
             )
 
+        if self.mode in ("composed_mashup_a", "composed_mashup_b"):
+            embedded_guid = self.args.get("embedded_guid", "efgh")
+            sales_body = "\n".join(
+                [
+                    "let",
+                    '    Source = #table({"Id","Name","RegionId","Amount"}, {{1, "Alice", 1, 10}, {2, "Bob", 2, 20}}),',
+                    "    KeptRows = Table.SelectRows(Source, each [Amount] > 0),",
+                    '    Renamed = Table.RenameColumns(KeptRows, {{"Name", "Customer"}})',
+                    "in",
+                    "    Renamed",
+                ]
+            )
+            regions_body = "\n".join(
+                [
+                    "let",
+                    '    Source = #table({"Id","RegionName"}, {{1, "North"}, {2, "South"}})',
+                    "in",
+                    "    Source",
+                ]
+            )
+            join_step = "Joined" if self.mode == "composed_mashup_a" else "Merged"
+            left_key = "RegionId" if self.mode == "composed_mashup_a" else "Id"
+            sales_with_regions_body = "\n".join(
+                [
+                    "let",
+                    "    Source = Sales,",
+                    f'    {join_step} = Table.NestedJoin(Source, {{"{left_key}"}}, Regions, {{"Id"}}, "Region", JoinKind.LeftOuter),',
+                    f'    Expanded = Table.ExpandTableColumn({join_step}, "Region", {{"RegionName"}}, {{"RegionName"}})',
+                    "in",
+                    "    Expanded",
+                ]
+            )
+            query_specs = [
+                {
+                    "name": "Sales",
+                    "body": sales_body,
+                    "load_to_sheet": True,
+                    "load_to_model": False,
+                },
+                {
+                    "name": "Regions",
+                    "body": regions_body,
+                    "load_to_sheet": False,
+                    "load_to_model": True,
+                },
+                {
+                    "name": "SalesWithRegions",
+                    "body": sales_with_regions_body,
+                    "load_to_sheet": True,
+                    "load_to_model": self.mode == "composed_mashup_b",
+                },
+                {
+                    "name": "EmbeddedQuery",
+                    "body": f'Embedded.Value("Content/{embedded_guid}.package")',
+                    "load_to_sheet": False,
+                    "load_to_model": False,
+                },
+            ]
+            return m_diff_scenario(query_specs)
+
+        if self.mode in ("m_adversarial_steps_a", "m_adversarial_steps_b"):
+            join_key_step2 = "Id" if self.mode == "m_adversarial_steps_a" else "Group"
+            lookup_body = "\n".join(
+                [
+                    "let",
+                    '    Source = #table({"Id","Group","Value"}, {{1, "A", "X"}, {2, "B", "Y"}})',
+                    "in",
+                    "    Source",
+                ]
+            )
+            adversarial_body = "\n".join(
+                [
+                    "let",
+                    '    Source = #table({"Id","Group"}, {{1, "A"}, {2, "B"}}),',
+                    '    Step1 = Table.NestedJoin(Source, {"Id"}, Lookup, {"Id"}, "Join1", JoinKind.LeftOuter),',
+                    f'    Step2 = Table.NestedJoin(Step1, {{"{join_key_step2}"}}, Lookup, {{"{join_key_step2}"}}, "Join2", JoinKind.LeftOuter),',
+                    '    Step3 = Table.NestedJoin(Step2, {"Id"}, Lookup, {"Id"}, "Join3", JoinKind.LeftOuter)',
+                    "in",
+                    "    Step3",
+                ]
+            )
+            return m_diff_scenario(
+                [
+                    {
+                        "name": "Lookup",
+                        "body": lookup_body,
+                        "load_to_sheet": False,
+                        "load_to_model": False,
+                    },
+                    {
+                        "name": "Adversarial",
+                        "body": adversarial_body,
+                        "load_to_sheet": True,
+                        "load_to_model": False,
+                    },
+                ]
+            )
+
         if self.mode == "m_formatting_only_a":
             body = "let Source = 1, Foo = 2 in Source"
             return m_diff_scenario(
@@ -1245,7 +1355,7 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
             with zipfile.ZipFile(out_buffer, "w", compression=zipfile.ZIP_DEFLATED) as zout:
                 for item in zin.infolist():
                     if item.filename == filename:
-                        zout.writestr(filename, new_content.encode("utf-8"))
+                        zout.writestr(item, new_content.encode("utf-8"))
                     else:
                         zout.writestr(item, zin.read(item.filename))
         return out_buffer.getvalue()
@@ -1297,3 +1407,145 @@ class MashupPermissionsMetadataGenerator(MashupBaseGenerator):
         if isinstance(value, bool):
             return f"l{'1' if value else '0'}"
         return f"s{value}"
+
+
+class MashupAttachGenerator(BaseGenerator):
+    """
+    Attach a DataMashup customXml payload from one workbook to another.
+    """
+
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        base_file_arg = self.args.get("base_file")
+        mashup_file_arg = self.args.get("mashup_file")
+        if not base_file_arg or not mashup_file_arg:
+            raise ValueError("MashupAttachGenerator requires base_file and mashup_file")
+
+        base = self._resolve_fixture_path(base_file_arg)
+        mashup = self._resolve_fixture_path(mashup_file_arg)
+        parts = self._read_mashup_parts(mashup)
+
+        for name in output_names:
+            target_path = (output_dir / name).resolve()
+            self._attach_parts(base, target_path, parts)
+
+    def _resolve_fixture_path(self, value: str) -> Path:
+        candidate = Path(value)
+        if candidate.exists():
+            return candidate
+        fallback = Path("fixtures") / value
+        if fallback.exists():
+            return fallback
+        raise FileNotFoundError(f"Fixture file not found: {value}")
+
+    def _read_mashup_parts(self, path: Path) -> dict:
+        with zipfile.ZipFile(path, "r") as zin:
+            item_name = None
+            item_data = None
+            for info in zin.infolist():
+                name = info.filename
+                if not (name.startswith("customXml/item") and name.endswith(".xml")):
+                    continue
+                if "itemProps" in name:
+                    continue
+                data = zin.read(name)
+                if (
+                    b"DataMashup" in data
+                    or b"D\x00a\x00t\x00a\x00M\x00a\x00s\x00h\x00u\x00p" in data
+                ):
+                    item_name = name
+                    item_data = data
+                    break
+
+            if item_name is None or item_data is None:
+                raise ValueError("DataMashup customXml part not found")
+
+            item_stem = Path(item_name).stem  # item1
+            suffix = item_stem.replace("item", "", 1)
+            item_props_name = f"customXml/itemProps{suffix}.xml"
+            item_rels_name = f"customXml/_rels/{Path(item_name).name}.rels"
+
+            item_props_data = zin.read(item_props_name)
+            item_rels_data = zin.read(item_rels_name)
+
+        return {
+            "item_name": item_name,
+            "item_data": item_data,
+            "item_props_name": item_props_name,
+            "item_props_data": item_props_data,
+            "item_rels_name": item_rels_name,
+            "item_rels_data": item_rels_data,
+        }
+
+    def _attach_parts(self, base_path: Path, output_path: Path, parts: dict):
+        ct_name = "[Content_Types].xml"
+        rels_name = "xl/_rels/workbook.xml.rels"
+        item_name = parts["item_name"]
+        item_props_name = parts["item_props_name"]
+        item_rels_name = parts["item_rels_name"]
+
+        with zipfile.ZipFile(base_path, "r") as zin:
+            with zipfile.ZipFile(output_path, "w") as zout:
+                for info in zin.infolist():
+                    name = info.filename
+                    if name in (item_name, item_props_name, item_rels_name):
+                        continue
+                    data = zin.read(name)
+                    if name == ct_name:
+                        data = self._ensure_itemprops_override(data, item_props_name)
+                    elif name == rels_name:
+                        data = self._ensure_customxml_rel(data, Path(item_name).name)
+                    zout.writestr(info, data)
+
+                zout.writestr(item_name, parts["item_data"])
+                zout.writestr(item_props_name, parts["item_props_data"])
+                zout.writestr(item_rels_name, parts["item_rels_data"])
+
+    def _ensure_itemprops_override(self, content_types_bytes: bytes, item_props_name: str) -> bytes:
+        ns = "http://schemas.openxmlformats.org/package/2006/content-types"
+        ET.register_namespace("", ns)
+        root = ET.fromstring(content_types_bytes)
+        override_tag = f"{{{ns}}}Override"
+        item_props_path = "/" + item_props_name.replace("\\", "/")
+        if not any(
+            elem.get("PartName") == item_props_path for elem in root.findall(override_tag)
+        ):
+            new_override = ET.SubElement(root, override_tag)
+            new_override.set("PartName", item_props_path)
+            new_override.set(
+                "ContentType",
+                "application/vnd.openxmlformats-officedocument.customXmlProperties+xml",
+            )
+        return ET.tostring(root, xml_declaration=True, encoding="utf-8")
+
+    def _ensure_customxml_rel(self, rels_bytes: bytes, item_filename: str) -> bytes:
+        ns = "http://schemas.openxmlformats.org/package/2006/relationships"
+        ET.register_namespace("", ns)
+        root = ET.fromstring(rels_bytes)
+        rel_tag = f"{{{ns}}}Relationship"
+        target = f"../customXml/{item_filename}"
+
+        for rel in root.findall(rel_tag):
+            if (
+                rel.get("Type")
+                == "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml"
+                and rel.get("Target") == target
+            ):
+                return ET.tostring(root, xml_declaration=True, encoding="utf-8")
+
+        max_id = 0
+        for rel in root.findall(rel_tag):
+            rid = rel.get("Id", "")
+            if rid.startswith("rId") and rid[3:].isdigit():
+                max_id = max(max_id, int(rid[3:]))
+
+        new_rel = ET.SubElement(root, rel_tag)
+        new_rel.set("Id", f"rId{max_id + 1}")
+        new_rel.set(
+            "Type",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml",
+        )
+        new_rel.set("Target", target)
+        return ET.tostring(root, xml_declaration=True, encoding="utf-8")

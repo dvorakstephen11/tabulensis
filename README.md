@@ -94,6 +94,7 @@ Copy/paste starters:
 ```bash
 excel-diff diff old.xlsx new.xlsx                       # Human-readable (default)
 excel-diff diff old.xlsx new.xlsx --format json > out.json  # Full JSON report
+excel-diff diff old.xlsx new.xlsx --format jsonl > out.jsonl  # Streaming JSONL (better for large diffs)
 excel-diff diff old.xlsx new.xlsx --git-diff            # Unified diff style (for Git tools)
 ```
 

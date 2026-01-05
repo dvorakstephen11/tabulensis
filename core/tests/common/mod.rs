@@ -10,6 +10,7 @@ use excel_diff::{
 };
 use serde::Deserialize;
 use std::fs::File;
+use std::io::ErrorKind;
 use std::path::PathBuf;
 
 pub fn fixture_path(filename: &str) -> PathBuf {
@@ -22,6 +23,12 @@ pub fn fixture_path(filename: &str) -> PathBuf {
 pub fn open_fixture_pkg(name: &str) -> WorkbookPackage {
     let path = fixture_path(name);
     let file = File::open(&path).unwrap_or_else(|e| {
+        if e.kind() == ErrorKind::NotFound {
+            panic!(
+                "missing fixture {}. Run `generate-fixtures --manifest fixtures/manifest_cli_tests.yaml --force --clean` (see fixtures/README.md).",
+                path.display()
+            );
+        }
         panic!("failed to open fixture {}: {e}", path.display());
     });
     WorkbookPackage::open(file).unwrap_or_else(|e| {

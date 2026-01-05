@@ -990,3 +990,62 @@ scenarios:
       mode: "from_xlsx"
       base_file: "generated/m_embedded_change_a.xlsx"
     output: "pbix_embedded_queries.pbix"
+
+  # --- Composed fixtures: grid + mashup + embedded queries ---
+  - id: "m_composed_mashup_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "composed_mashup_a"
+      base_file: "generated/m_embedded_change_a.xlsx"
+      embedded_guid: "efgh"
+    output: "composed_mashup_a.xlsx"
+
+  - id: "m_composed_mashup_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "composed_mashup_b"
+      base_file: "generated/m_embedded_change_a.xlsx"
+      embedded_guid: "efgh"
+    output: "composed_mashup_b.xlsx"
+
+  - id: "m_adversarial_steps_a"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_adversarial_steps_a"
+      base_file: "templates/base_query.xlsx"
+    output: "m_adversarial_steps_a.xlsx"
+
+  - id: "m_adversarial_steps_b"
+    generator: "mashup:permissions_metadata"
+    args:
+      mode: "m_adversarial_steps_b"
+      base_file: "templates/base_query.xlsx"
+    output: "m_adversarial_steps_b.xlsx"
+
+  - id: "composed_grid_mashup_a"
+    generator: "mashup_attach"
+    args:
+      base_file: "generated/row_insert_with_edit_a.xlsx"
+      mashup_file: "generated/composed_mashup_a.xlsx"
+    output: "composed_grid_mashup_a.xlsx"
+
+  - id: "composed_grid_mashup_b"
+    generator: "mashup_attach"
+    args:
+      base_file: "generated/row_insert_with_edit_b.xlsx"
+      mashup_file: "generated/composed_mashup_b.xlsx"
+    output: "composed_grid_mashup_b.xlsx"
+
+  - id: "pbix_composed_a"
+    generator: "pbix"
+    args:
+      mode: "from_xlsx"
+      base_file: "generated/composed_mashup_a.xlsx"
+    output: "pbix_composed_a.pbix"
+
+  - id: "pbix_composed_b"
+    generator: "pbix"
+    args:
+      mode: "from_xlsx"
+      base_file: "generated/composed_mashup_b.xlsx"
+    output: "pbix_composed_b.pbix"

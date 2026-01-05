@@ -838,8 +838,10 @@ impl PbixPackage {
         let mut finish_guard = SinkFinishGuard::new(sink);
 
         let mut op_count = 0usize;
-        let mut complete = true;
-        let mut warnings = Vec::new();
+        #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+        let (mut complete, mut warnings) = (true, Vec::new());
+        #[cfg(not(all(feature = "model-diff", feature = "excel-open-xml")))]
+        let (complete, warnings) = (true, Vec::new());
         for op in m_ops {
             sink.emit(op)?;
             op_count = op_count.saturating_add(1);
@@ -1017,6 +1019,7 @@ fn collect_permission_bindings_warnings(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
     use super::*;
     #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
     use crate::{

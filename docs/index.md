@@ -16,6 +16,7 @@
 - [Database mode](database_mode.md)
 - [FAQ](faq.md)
 - [Architecture overview](architecture.md)
+- [Perf playbook](perf_playbook.md)
 - [Migration guide (from legacy APIs)](migration.md)
 
 ## Other references
