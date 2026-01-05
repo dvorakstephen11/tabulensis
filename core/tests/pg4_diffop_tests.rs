@@ -65,6 +65,7 @@ fn op_kind(op: &DiffOp) -> &'static str {
         DiffOp::RowAdded { .. } => "RowAdded",
         DiffOp::RowRemoved { .. } => "RowRemoved",
         DiffOp::RowReplaced { .. } => "RowReplaced",
+        DiffOp::DuplicateKeyCluster { .. } => "DuplicateKeyCluster",
         DiffOp::ColumnAdded { .. } => "ColumnAdded",
         DiffOp::ColumnRemoved { .. } => "ColumnRemoved",
         DiffOp::BlockMovedRows { .. } => "BlockMovedRows",
@@ -957,6 +958,15 @@ fn pg4_diffop_roundtrip_each_variant() {
             sheet: sid("Sheet1"),
             row_idx: 0,
             row_signature: None,
+        },
+        DiffOp::DuplicateKeyCluster {
+            sheet: sid("Sheet1"),
+            key: vec![
+                Some(CellValue::Number(5.0)),
+                Some(CellValue::Text(sid("SKU-5"))),
+            ],
+            left_rows: vec![1, 2],
+            right_rows: vec![3],
         },
         DiffOp::ColumnAdded {
             sheet: sid("Sheet1"),

@@ -7,7 +7,7 @@
 
 use crate::error_codes;
 use crate::string_pool::StringId;
-use crate::workbook::{CellAddress, CellSnapshot, ColSignature, RowSignature};
+use crate::workbook::{CellAddress, CellSnapshot, CellValue, ColSignature, RowSignature};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -335,6 +335,12 @@ pub enum DiffOp {
         row_idx: u32,
         #[serde(skip_serializing_if = "Option::is_none")]
         row_signature: Option<RowSignature>,
+    },
+    DuplicateKeyCluster {
+        sheet: SheetId,
+        key: Vec<Option<CellValue>>,
+        left_rows: Vec<u32>,
+        right_rows: Vec<u32>,
     },
     RowReplaced {
         sheet: SheetId,

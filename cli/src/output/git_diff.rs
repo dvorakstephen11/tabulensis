@@ -95,6 +95,7 @@ fn get_sheet_id(op: &DiffOp) -> Option<excel_diff::StringId> {
         DiffOp::RowAdded { sheet, .. } => Some(*sheet),
         DiffOp::RowRemoved { sheet, .. } => Some(*sheet),
         DiffOp::RowReplaced { sheet, .. } => Some(*sheet),
+        DiffOp::DuplicateKeyCluster { sheet, .. } => Some(*sheet),
         DiffOp::ColumnAdded { sheet, .. } => Some(*sheet),
         DiffOp::ColumnRemoved { sheet, .. } => Some(*sheet),
         DiffOp::BlockMovedRows { sheet, .. } => Some(*sheet),
@@ -141,6 +142,20 @@ fn write_op_diff_lines<W: Write>(w: &mut W, report: &DiffReport, op: &DiffOp) ->
         }
         DiffOp::RowReplaced { row_idx, .. } => {
             writeln!(w, "~ Row {}: REPLACED", row_idx + 1)?;
+        }
+        DiffOp::DuplicateKeyCluster {
+            key,
+            left_rows,
+            right_rows,
+            ..
+        } => {
+            writeln!(
+                w,
+                "~ Duplicate key cluster: key=[{}] left_rows={} right_rows={}",
+                format_key_values(key, report),
+                left_rows.len(),
+                right_rows.len()
+            )?;
         }
         DiffOp::ColumnAdded { col_idx, .. } => {
             writeln!(w, "+ Column {}: ADDED", col_letter(*col_idx))?;
@@ -606,6 +621,14 @@ fn format_cell_value(value: &Option<CellValue>, report: &DiffReport) -> String {
         }
         Some(CellValue::Error(id)) => report.resolve(*id).unwrap_or("#ERROR").to_string(),
     }
+}
+
+fn format_key_values(values: &[Option<CellValue>], report: &DiffReport) -> String {
+    let parts: Vec<String> = values
+        .iter()
+        .map(|value| format_cell_value(value, report))
+        .collect();
+    parts.join(", ")
 }
 
 fn format_number(n: f64) -> String {

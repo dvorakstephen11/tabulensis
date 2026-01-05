@@ -228,6 +228,7 @@ fn op_sheet_id(op: &DiffOp) -> Option<StringId> {
         | DiffOp::RowAdded { sheet, .. }
         | DiffOp::RowRemoved { sheet, .. }
         | DiffOp::RowReplaced { sheet, .. }
+        | DiffOp::DuplicateKeyCluster { sheet, .. }
         | DiffOp::ColumnAdded { sheet, .. }
         | DiffOp::ColumnRemoved { sheet, .. }
         | DiffOp::BlockMovedRows { sheet, .. }
@@ -263,6 +264,7 @@ fn classify_op(op: &DiffOp) -> Option<ChangeKind> {
         | DiffOp::BlockMovedColumns { .. }
         | DiffOp::BlockMovedRect { .. } => Some(ChangeKind::Moved),
         DiffOp::RowReplaced { .. }
+        | DiffOp::DuplicateKeyCluster { .. }
         | DiffOp::RectReplaced { .. }
         | DiffOp::CellEdited { .. }
         | DiffOp::SheetRenamed { .. }

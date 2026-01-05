@@ -246,6 +246,16 @@ fn write_op(
             let structure_sheet = sheet_mut(workbook, "Structure")?;
             write_structure(structure_sheet, rows, "RowReplaced", strings, *sheet, format!("Row {} replaced", row_idx + 1));
         }
+        DiffOp::DuplicateKeyCluster { sheet, key, left_rows, right_rows } => {
+            let structure_sheet = sheet_mut(workbook, "Structure")?;
+            let detail = format!(
+                "Duplicate key [{}]: left rows [{}], right rows [{}]",
+                format_key_values(strings, key),
+                format_row_list(left_rows),
+                format_row_list(right_rows)
+            );
+            write_structure(structure_sheet, rows, "DuplicateKeyCluster", strings, *sheet, detail);
+        }
         DiffOp::ColumnAdded { sheet, col_idx, .. } => {
             let structure_sheet = sheet_mut(workbook, "Structure")?;
             write_structure(structure_sheet, rows, "ColumnAdded", strings, *sheet, format!("Column {} added", col_idx + 1));
@@ -698,6 +708,20 @@ fn op_kind_label(op: &DiffOp) -> &str {
         DiffOp::ChartAdded { .. } => "ChartAdded",
         DiffOp::ChartRemoved { .. } => "ChartRemoved",
         DiffOp::ChartChanged { .. } => "ChartChanged",
+        DiffOp::DuplicateKeyCluster { .. } => "DuplicateKeyCluster",
         _ => "Other",
     }
+}
+
+fn format_key_values(strings: &[String], key: &[Option<CellValue>]) -> String {
+    let parts: Vec<String> = key
+        .iter()
+        .map(|value| render_cell_value(strings, value))
+        .collect();
+    parts.join(", ")
+}
+
+fn format_row_list(rows: &[u32]) -> String {
+    let parts: Vec<String> = rows.iter().map(|row| (row + 1).to_string()).collect();
+    parts.join(", ")
 }

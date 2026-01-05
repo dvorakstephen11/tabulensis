@@ -983,8 +983,7 @@ For each `{a,b}` pair:
 
 **Test**
 
-* Initially, your engine may report `Removed(Foo)` and `Added(Bar)`. Codify that behaviour in tests.
-* Later, when you add rename detection (e.g., based on identical expression + metadata), update the test to assert a single `Renamed { from: "Foo", to: "Bar" }`.
+* Assert a single `Renamed { from: "Foo", to: "Bar" }` (rename detection is implemented).
 
 ### 6.3 Embedded contents
 
@@ -1204,7 +1203,7 @@ Goal: tackle the hardest algorithms. Add semantic M AST diffing (M7), advanced s
 
 This is where your differentiator shows up: semantic AST diffing rather than raw text diff, using a hybrid **GumTree + APTED** strategy.
 
-**Status:** M7.1 formatting-only semantic gate is implemented at the query level using canonical AST equality to suppress `DefinitionChanged` for whitespace/comment-only edits. Step-aware diffing and move/rename detection remain pending.
+**Status:** M7.1 formatting-only semantic gate is implemented at the query level using canonical AST equality to suppress `DefinitionChanged` for whitespace/comment-only edits. Step-aware diffing and move/rename detection are implemented and covered by tests.
 
 **Rust capability**
 

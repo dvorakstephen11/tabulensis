@@ -298,6 +298,12 @@ pub fn collect_string_ids(op: &DiffOp) -> Vec<StringId> {
         DiffOp::RowAdded { sheet, .. }
         | DiffOp::RowRemoved { sheet, .. }
         | DiffOp::RowReplaced { sheet, .. } => ids.push(*sheet),
+        DiffOp::DuplicateKeyCluster { sheet, key, .. } => {
+            ids.push(*sheet);
+            for value in key.iter().flatten() {
+                collect_cell_value(&mut ids, value);
+            }
+        }
         DiffOp::ColumnAdded { sheet, .. } | DiffOp::ColumnRemoved { sheet, .. } => ids.push(*sheet),
         DiffOp::BlockMovedRows { sheet, .. }
         | DiffOp::BlockMovedColumns { sheet, .. }

@@ -202,6 +202,7 @@ fn collect_sheet_ids(ops: &[excel_diff::DiffOp]) -> HashSet<excel_diff::StringId
             | excel_diff::DiffOp::RowAdded { sheet, .. }
             | excel_diff::DiffOp::RowRemoved { sheet, .. }
             | excel_diff::DiffOp::RowReplaced { sheet, .. }
+            | excel_diff::DiffOp::DuplicateKeyCluster { sheet, .. }
             | excel_diff::DiffOp::ColumnAdded { sheet, .. }
             | excel_diff::DiffOp::ColumnRemoved { sheet, .. }
             | excel_diff::DiffOp::BlockMovedRows { sheet, .. }
@@ -230,6 +231,7 @@ fn group_ops_by_sheet(
             | excel_diff::DiffOp::RowAdded { sheet, .. }
             | excel_diff::DiffOp::RowRemoved { sheet, .. }
             | excel_diff::DiffOp::RowReplaced { sheet, .. }
+            | excel_diff::DiffOp::DuplicateKeyCluster { sheet, .. }
             | excel_diff::DiffOp::ColumnAdded { sheet, .. }
             | excel_diff::DiffOp::ColumnRemoved { sheet, .. }
             | excel_diff::DiffOp::BlockMovedRows { sheet, .. }
@@ -405,6 +407,16 @@ fn collect_interest_rects(
                 }
                 if let Some(rect) = rect_from_range(*row_idx, 1, 0, preview_cols, nrows, ncols) {
                     rects.push(rect);
+                }
+            }
+            excel_diff::DiffOp::DuplicateKeyCluster { left_rows, right_rows, .. } => {
+                if preview_cols == 0 {
+                    continue;
+                }
+                for row_idx in left_rows.iter().chain(right_rows.iter()) {
+                    if let Some(rect) = rect_from_range(*row_idx, 1, 0, preview_cols, nrows, ncols) {
+                        rects.push(rect);
+                    }
                 }
             }
             excel_diff::DiffOp::BlockMovedRows {

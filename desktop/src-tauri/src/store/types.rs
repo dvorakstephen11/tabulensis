@@ -78,6 +78,7 @@ pub fn op_sheet_id(op: &DiffOp) -> Option<StringId> {
         | DiffOp::RowAdded { sheet, .. }
         | DiffOp::RowRemoved { sheet, .. }
         | DiffOp::RowReplaced { sheet, .. }
+        | DiffOp::DuplicateKeyCluster { sheet, .. }
         | DiffOp::ColumnAdded { sheet, .. }
         | DiffOp::ColumnRemoved { sheet, .. }
         | DiffOp::BlockMovedRows { sheet, .. }
@@ -97,6 +98,7 @@ pub fn diff_op_kind(op: &DiffOp) -> &'static str {
         DiffOp::RowAdded { .. } => "RowAdded",
         DiffOp::RowRemoved { .. } => "RowRemoved",
         DiffOp::RowReplaced { .. } => "RowReplaced",
+        DiffOp::DuplicateKeyCluster { .. } => "DuplicateKeyCluster",
         DiffOp::ColumnAdded { .. } => "ColumnAdded",
         DiffOp::ColumnRemoved { .. } => "ColumnRemoved",
         DiffOp::BlockMovedRows { .. } => "BlockMovedRows",
@@ -172,6 +174,7 @@ pub fn classify_op(op: &DiffOp) -> Option<ChangeKind> {
         | DiffOp::BlockMovedColumns { .. }
         | DiffOp::BlockMovedRect { .. } => Some(ChangeKind::Moved),
         DiffOp::RowReplaced { .. }
+        | DiffOp::DuplicateKeyCluster { .. }
         | DiffOp::RectReplaced { .. }
         | DiffOp::CellEdited { .. }
         | DiffOp::SheetRenamed { .. }
@@ -217,6 +220,14 @@ pub fn op_index_fields(op: &DiffOp) -> OpIndexFields {
         | DiffOp::RowReplaced { row_idx, .. } => {
             fields.row = Some(*row_idx);
             fields.row_end = Some(*row_idx);
+        }
+        DiffOp::DuplicateKeyCluster { left_rows, right_rows, .. } => {
+            let mut rows: Vec<u32> = left_rows.iter().chain(right_rows.iter()).copied().collect();
+            rows.sort_unstable();
+            if let Some(first) = rows.first() {
+                fields.row = Some(*first);
+                fields.row_end = Some(*rows.last().unwrap_or(first));
+            }
         }
         DiffOp::ColumnAdded { col_idx, .. } | DiffOp::ColumnRemoved { col_idx, .. } => {
             fields.col = Some(*col_idx);

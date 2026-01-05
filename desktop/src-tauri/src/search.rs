@@ -189,6 +189,25 @@ fn match_op(op: &excel_diff::DiffOp, strings: &[String], query: &str) -> Option<
                 });
             }
         }
+        excel_diff::DiffOp::DuplicateKeyCluster { sheet, key, left_rows, right_rows } => {
+            let sheet_name = resolve_string(strings, *sheet).to_string();
+            let key_text = key
+                .iter()
+                .map(|value| render_cell_value(strings, value))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let row_text = format!("left {} right {}", left_rows.len(), right_rows.len());
+            let text = format!("{key_text} {row_text}").to_lowercase();
+            if text.contains(&query_lower) {
+                return Some(SearchResult {
+                    kind: "duplicate_key_cluster".to_string(),
+                    sheet: Some(sheet_name),
+                    address: None,
+                    label: "Duplicate key cluster".to_string(),
+                    detail: Some(row_text),
+                });
+            }
+        }
         _ => {}
     }
 
@@ -203,6 +222,7 @@ fn op_kind(op: &excel_diff::DiffOp) -> &'static str {
         excel_diff::DiffOp::QueryRenamed { .. } => "QueryRenamed",
         excel_diff::DiffOp::QueryDefinitionChanged { .. } => "QueryDefinitionChanged",
         excel_diff::DiffOp::QueryMetadataChanged { .. } => "QueryMetadataChanged",
+        excel_diff::DiffOp::DuplicateKeyCluster { .. } => "DuplicateKeyCluster",
         _ => "Other",
     }
 }

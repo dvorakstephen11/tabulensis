@@ -47,7 +47,7 @@ Compare two workbooks and emit a diff.
 - `--database`: enable key-based row alignment (table diff)
 - `--sheet <NAME>`: sheet name (required if multiple sheets and no sheet named "Data" exists)
 - `--keys <COLS>`: comma-separated column letters (e.g., `A,C,AA`)
-- `--auto-keys`: auto-detect key columns
+- `--auto-keys`: auto-detect key columns (may infer composite keys; if no reliable key exists, the CLI warns and falls back to spreadsheet mode)
 
 Validation rules:
 

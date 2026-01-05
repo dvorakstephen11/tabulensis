@@ -659,12 +659,12 @@ fn streaming_timeout_sets_complete_false_and_warns() {
 }
 
 #[test]
-fn database_streaming_duplicate_key_fallback_warns_and_finishes() {
+fn database_streaming_no_key_columns_warns_and_finishes() {
     let mut pool = StringPool::new();
     let sheet_id = pool.intern("Data");
 
-    let grid_a = make_keyed_grid(&[1, 1, 2], &[10, 20, 30]);
-    let grid_b = make_keyed_grid(&[1, 2, 3], &[10, 25, 35]);
+    let grid_a = make_keyed_grid(&[1, 2], &[10, 20]);
+    let grid_b = make_keyed_grid(&[1, 2], &[10, 25]);
 
     let mut sink = StrictLifecycleSink::default();
     let mut op_count = 0usize;
@@ -672,7 +672,7 @@ fn database_streaming_duplicate_key_fallback_warns_and_finishes() {
         sheet_id,
         &grid_a,
         &grid_b,
-        &[0],
+        &[],
         &mut pool,
         &DiffConfig::default(),
         &mut sink,
@@ -684,7 +684,7 @@ fn database_streaming_duplicate_key_fallback_warns_and_finishes() {
     assert_eq!(
         summary.warnings,
         vec![
-            "database-mode: duplicate keys for requested columns; falling back to spreadsheet mode"
+            "database-mode: no key columns provided; falling back to spreadsheet mode"
                 .to_string()
         ],
         "warning should be deterministic"

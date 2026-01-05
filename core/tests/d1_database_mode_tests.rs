@@ -93,25 +93,55 @@ fn d1_spreadsheet_mode_sees_reorder_as_changes() {
 }
 
 #[test]
-fn d1_duplicate_keys_fallback_to_spreadsheet_mode() {
-    let grid_a = grid_from_numbers(&[&[1, 10], &[1, 99]]);
-    let grid_b = grid_from_numbers(&[&[1, 10]]);
+fn d6_duplicate_keys_emit_cluster_and_match() {
+    let grid_a = grid_from_numbers(&[&[1, 10, 100], &[1, 20, 200]]);
+    let grid_b = grid_from_numbers(&[&[1, 10, 100], &[1, 20, 250]]);
 
     let report = diff_db(&grid_a, &grid_b, &[0]);
 
-    assert!(
-        !report.ops.is_empty(),
-        "duplicate keys cause fallback to spreadsheet mode which should detect differences"
-    );
-
-    let has_row_removed = report
+    let clusters: Vec<_> = report
         .ops
         .iter()
-        .any(|op| matches!(op, DiffOp::RowRemoved { .. }));
-    assert!(
-        has_row_removed,
-        "spreadsheet mode fallback should emit RowRemoved for the missing row"
+        .filter_map(|op| {
+            if let DiffOp::DuplicateKeyCluster {
+                key,
+                left_rows,
+                right_rows,
+                ..
+            } = op
+            {
+                Some((key.clone(), left_rows.clone(), right_rows.clone()))
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(clusters.len(), 1, "expected one duplicate key cluster");
+    assert_eq!(clusters[0].1.len(), 2, "expected two left rows in cluster");
+    assert_eq!(clusters[0].2.len(), 2, "expected two right rows in cluster");
+
+    let cell_edited_count = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::CellEdited { .. }))
+        .count();
+    assert_eq!(
+        cell_edited_count, 1,
+        "duplicate cluster matching should emit the non-key cell edit"
     );
+
+    let row_added_count = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::RowAdded { .. }))
+        .count();
+    let row_removed_count = report
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DiffOp::RowRemoved { .. }))
+        .count();
+    assert_eq!(row_added_count, 0, "no row adds expected within cluster");
+    assert_eq!(row_removed_count, 0, "no row removals expected within cluster");
 }
 
 #[test]
@@ -326,24 +356,60 @@ fn d5_composite_key_partial_key_mismatch_yields_add_and_remove() {
 }
 
 #[test]
-fn d5_composite_key_duplicate_keys_fallback_to_spreadsheet_mode() {
+fn d6_composite_key_duplicate_keys_emit_cluster() {
     let grid_a = grid_from_numbers(&[&[1, 10, 100], &[1, 10, 200]]);
     let grid_b = grid_from_numbers(&[&[1, 10, 100]]);
 
     let report = diff_db(&grid_a, &grid_b, &[0, 1]);
 
+    let has_cluster = report.ops.iter().any(|op| {
+        matches!(op, DiffOp::DuplicateKeyCluster { .. })
+    });
     assert!(
-        !report.ops.is_empty(),
-        "duplicate composite keys should trigger spreadsheet-mode fallback"
+        has_cluster,
+        "duplicate composite keys should emit a DuplicateKeyCluster op"
+    );
+}
+
+#[test]
+fn d10_mixed_region_table_and_freeform_cells() {
+    let mut grid_a = Grid::new(6, 5);
+    grid_a.insert_cell(2, 1, Some(CellValue::Number(1.0)), None);
+    grid_a.insert_cell(2, 2, Some(CellValue::Number(100.0)), None);
+    grid_a.insert_cell(3, 1, Some(CellValue::Number(2.0)), None);
+    grid_a.insert_cell(3, 2, Some(CellValue::Number(200.0)), None);
+    grid_a.insert_cell(0, 4, Some(CellValue::Number(10.0)), None);
+
+    let mut grid_b = Grid::new(6, 5);
+    grid_b.insert_cell(2, 1, Some(CellValue::Number(2.0)), None);
+    grid_b.insert_cell(2, 2, Some(CellValue::Number(200.0)), None);
+    grid_b.insert_cell(3, 1, Some(CellValue::Number(1.0)), None);
+    grid_b.insert_cell(3, 2, Some(CellValue::Number(150.0)), None);
+    grid_b.insert_cell(0, 4, Some(CellValue::Number(20.0)), None);
+
+    let report = diff_db(&grid_a, &grid_b, &[1]);
+
+    let mut edited_addrs = report.ops.iter().filter_map(|op| {
+        if let DiffOp::CellEdited { addr, .. } = op {
+            Some((addr.row, addr.col))
+        } else {
+            None
+        }
+    }).collect::<Vec<_>>();
+    edited_addrs.sort_unstable();
+
+    assert_eq!(
+        edited_addrs,
+        vec![(0, 4), (3, 2)],
+        "expected a freeform edit and a keyed table edit"
     );
 
-    let has_row_removed = report
-        .ops
-        .iter()
-        .any(|op| matches!(op, DiffOp::RowRemoved { .. }));
     assert!(
-        has_row_removed,
-        "fallback should emit a RowRemoved reflecting duplicate handling"
+        !report
+            .ops
+            .iter()
+            .any(|op| matches!(op, DiffOp::RowAdded { .. } | DiffOp::RowRemoved { .. })),
+        "table reorder should not emit row add/remove ops"
     );
 }
 

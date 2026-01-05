@@ -128,6 +128,7 @@ fn get_sheet_id(op: &DiffOp) -> Option<StringId> {
         DiffOp::RowAdded { sheet, .. } => Some(*sheet),
         DiffOp::RowRemoved { sheet, .. } => Some(*sheet),
         DiffOp::RowReplaced { sheet, .. } => Some(*sheet),
+        DiffOp::DuplicateKeyCluster { sheet, .. } => Some(*sheet),
         DiffOp::ColumnAdded { sheet, .. } => Some(*sheet),
         DiffOp::ColumnRemoved { sheet, .. } => Some(*sheet),
         DiffOp::BlockMovedRows { sheet, .. } => Some(*sheet),
@@ -171,6 +172,29 @@ fn render_op(report: &DiffReport, op: &DiffOp, verbosity: Verbosity) -> Vec<Stri
         }
         DiffOp::RowReplaced { row_idx, .. } => {
             vec![format!("Row {}: REPLACED", row_idx + 1)]
+        }
+        DiffOp::DuplicateKeyCluster {
+            key,
+            left_rows,
+            right_rows,
+            ..
+        } => {
+            let key_str = format_key_values(key, report);
+            if verbosity == Verbosity::Verbose {
+                vec![format!(
+                    "Duplicate key cluster: key=[{}] left_rows={} right_rows={}",
+                    key_str,
+                    format_row_list(left_rows),
+                    format_row_list(right_rows)
+                )]
+            } else {
+                vec![format!(
+                    "Duplicate key cluster: key=[{}] left_rows={} right_rows={}",
+                    key_str,
+                    left_rows.len(),
+                    right_rows.len()
+                )]
+            }
         }
         DiffOp::ColumnAdded { col_idx, .. } => {
             vec![format!("Column {}: ADDED", col_letter(*col_idx))]
@@ -695,6 +719,19 @@ fn format_cell_value(value: &Option<CellValue>, report: &DiffReport) -> String {
     }
 }
 
+fn format_key_values(values: &[Option<CellValue>], report: &DiffReport) -> String {
+    let parts: Vec<String> = values
+        .iter()
+        .map(|value| format_cell_value(value, report))
+        .collect();
+    parts.join(", ")
+}
+
+fn format_row_list(rows: &[u32]) -> String {
+    let parts: Vec<String> = rows.iter().map(|row| (row + 1).to_string()).collect();
+    parts.join(", ")
+}
+
 fn format_number(n: f64) -> String {
     if n.fract() == 0.0 && n.abs() < 1e15 {
         format!("{:.0}", n)
@@ -775,7 +812,10 @@ fn count_ops(report: &DiffReport) -> OpCounts {
             DiffOp::SheetAdded { .. }
             | DiffOp::SheetRemoved { .. }
             | DiffOp::SheetRenamed { .. } => counts.sheets += 1,
-            DiffOp::RowAdded { .. } | DiffOp::RowRemoved { .. } | DiffOp::RowReplaced { .. } => {
+            DiffOp::RowAdded { .. }
+            | DiffOp::RowRemoved { .. }
+            | DiffOp::RowReplaced { .. }
+            | DiffOp::DuplicateKeyCluster { .. } => {
                 counts.rows += 1
             }
             DiffOp::ColumnAdded { .. } | DiffOp::ColumnRemoved { .. } => counts.cols += 1,

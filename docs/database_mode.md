@@ -33,6 +33,8 @@ excel-diff diff --database --sheet Data --keys A,C old.xlsx new.xlsx
 ### Auto-detect keys (`--auto-keys`)
 
 Auto-detect tries to pick columns that uniquely identify rows (powered by `suggest_key_columns`).
+It can infer composite keys when a single column is not unique. If no reliable key exists,
+database mode falls back to spreadsheet diffing with a warning.
 
 ```bash
 excel-diff diff --database --sheet Data --auto-keys old.xlsx new.xlsx
@@ -76,7 +78,9 @@ For very large diffs, use `diff_database_mode_streaming` with a `DiffSink` (e.g.
 
 ### Duplicate keys
 
-If key columns aren't unique, the engine may warn and fall back to positional behavior. In the CLI, you may also see a hint suggesting alternate keys.
+If key columns aren't unique, the engine emits `DuplicateKeyCluster` ops and performs a
+best-effort match within each cluster. No automatic fallback occurs; pick different key
+columns if you want strict uniqueness.
 
 ### Missing sheet
 

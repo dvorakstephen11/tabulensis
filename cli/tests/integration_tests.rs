@@ -764,6 +764,12 @@ fn collect_string_ids(op: &excel_diff::DiffOp) -> Vec<excel_diff::StringId> {
         excel_diff::DiffOp::RowAdded { sheet, .. }
         | excel_diff::DiffOp::RowRemoved { sheet, .. }
         | excel_diff::DiffOp::RowReplaced { sheet, .. } => ids.push(*sheet),
+        excel_diff::DiffOp::DuplicateKeyCluster { sheet, key, .. } => {
+            ids.push(*sheet);
+            for value in key.iter().flatten() {
+                collect_cell_value(&mut ids, value);
+            }
+        }
         excel_diff::DiffOp::ColumnAdded { sheet, .. } | excel_diff::DiffOp::ColumnRemoved { sheet, .. } => ids.push(*sheet),
         excel_diff::DiffOp::BlockMovedRows { sheet, .. }
         | excel_diff::DiffOp::BlockMovedColumns { sheet, .. }

@@ -1,27 +1,30 @@
 use crate::config::{DiffConfig, LimitBehavior};
 use crate::diff::{DiffError, DiffOp, DiffReport, DiffSummary};
-use crate::formula_diff::FormulaParseCache;
 use crate::grid_view::GridView;
 #[cfg(feature = "perf-metrics")]
 use crate::perf::{DiffMetrics, Phase};
 use crate::progress::ProgressCallback;
 use crate::sink::{DiffSink, SinkFinishGuard, VecSink};
 use crate::string_pool::StringPool;
-use crate::workbook::{Grid, RowSignature};
+use crate::workbook::{CellAddress, CellValue, Grid, RowSignature};
 use std::collections::{HashMap, HashSet};
 
 use crate::diff::SheetId;
-use super::context::{DiffContext, EmitCtx, emit_op};
+use super::context::{DiffContext, EmitCtx};
 use super::grid_primitives::{
-    cells_content_equal, compute_formula_diff, positional_diff_for_rows,
-    run_positional_diff_with_metrics, snapshot_with_addr,
+    cells_content_equal, emit_cell_edit, positional_diff_for_rows,
+    run_positional_diff_with_metrics,
 };
 use super::move_mask::SheetGridDiffer;
 
-use crate::database_alignment::{KeyColumnSpec, diff_table_by_key};
+use crate::database_alignment::diff_table_by_key;
+use crate::matching::hungarian;
 
 const GRID_MODE_SHEET_ID: &str = "<grid>";
 const DATABASE_MODE_SHEET_ID: &str = "<database>";
+const DUPLICATE_CLUSTER_EXACT_MAX: usize = 16;
+const DUPLICATE_MATCH_THRESHOLD: f64 = 0.5;
+const TABLE_COLUMN_FILL_RATIO: f64 = 0.5;
 
 pub fn diff_grids(
     old: &Grid,
@@ -561,124 +564,739 @@ pub fn try_diff_grids_database_mode_streaming<S: DiffSink>(
     sink: &mut S,
     op_count: &mut usize,
 ) -> Result<DiffSummary, DiffError> {
-    let mut warnings: Vec<String> = Vec::new();
+    let mut ctx = DiffContext::default();
     let mut hardening = super::hardening::HardeningController::new(config, None);
-    let mut formula_cache = FormulaParseCache::default();
-    let spec = KeyColumnSpec::new(key_columns.to_vec());
 
     sink.begin(pool)?;
     let mut finish_guard = SinkFinishGuard::new(sink);
-    if hardening.check_timeout(&mut warnings) {
+    if hardening.check_timeout(&mut ctx.warnings) {
         finish_guard.finish_and_disarm()?;
         return Ok(DiffSummary {
             complete: false,
-            warnings,
+            warnings: ctx.warnings,
             op_count: *op_count,
             #[cfg(feature = "perf-metrics")]
             metrics: None,
         });
     }
 
-    let alignment = match diff_table_by_key(old, new, key_columns) {
-        Ok(alignment) => alignment,
-        Err(_) => {
-            let mut ctx = DiffContext::default();
-            warnings.push(
-                "database-mode: duplicate keys for requested columns; falling back to spreadsheet mode"
-                    .to_string(),
+    if key_columns.is_empty() {
+        ctx.warnings.push(
+            "database-mode: no key columns provided; falling back to spreadsheet mode"
+                .to_string(),
+        );
+        try_diff_grids_internal(
+            sheet_id,
+            old,
+            new,
+            config,
+            pool,
+            sink,
+            op_count,
+            &mut ctx,
+            &mut hardening,
+            #[cfg(feature = "perf-metrics")]
+            None,
+        )?;
+        finish_guard.finish_and_disarm()?;
+        let complete = ctx.warnings.is_empty();
+        return Ok(DiffSummary {
+            complete,
+            warnings: ctx.warnings,
+            op_count: *op_count,
+            #[cfg(feature = "perf-metrics")]
+            metrics: None,
+        });
+    }
+
+    if key_columns
+        .iter()
+        .any(|&col| col >= old.ncols || col >= new.ncols)
+    {
+        ctx.warnings.push(
+            "database-mode: invalid key columns; falling back to spreadsheet mode".to_string(),
+        );
+        try_diff_grids_internal(
+            sheet_id,
+            old,
+            new,
+            config,
+            pool,
+            sink,
+            op_count,
+            &mut ctx,
+            &mut hardening,
+            #[cfg(feature = "perf-metrics")]
+            None,
+        )?;
+        finish_guard.finish_and_disarm()?;
+        let complete = ctx.warnings.is_empty();
+        return Ok(DiffSummary {
+            complete,
+            warnings: ctx.warnings,
+            op_count: *op_count,
+            #[cfg(feature = "perf-metrics")]
+            metrics: None,
+        });
+    }
+
+    let Some(table_scope) = build_table_scope(old, new, key_columns) else {
+        ctx.warnings.push(
+            "database-mode: no non-empty keys found; falling back to spreadsheet mode"
+                .to_string(),
+        );
+        try_diff_grids_internal(
+            sheet_id,
+            old,
+            new,
+            config,
+            pool,
+            sink,
+            op_count,
+            &mut ctx,
+            &mut hardening,
+            #[cfg(feature = "perf-metrics")]
+            None,
+        )?;
+        finish_guard.finish_and_disarm()?;
+        let complete = ctx.warnings.is_empty();
+        return Ok(DiffSummary {
+            complete,
+            warnings: ctx.warnings,
+            op_count: *op_count,
+            #[cfg(feature = "perf-metrics")]
+            metrics: None,
+        });
+    };
+
+    let table_rows =
+        table_scope.rows_old.len().max(table_scope.rows_new.len()) as u32;
+    let table_cols = table_scope.cols_union.len() as u32;
+    let exceeds_limits = table_rows > config.alignment.max_align_rows
+        || table_cols > config.alignment.max_align_cols;
+
+    if exceeds_limits {
+        let warning = format!(
+            "Sheet '{}': alignment limits exceeded (rows={}, cols={}; limits: rows={}, cols={})",
+            pool.resolve(sheet_id),
+            table_rows,
+            table_cols,
+            config.alignment.max_align_rows,
+            config.alignment.max_align_cols
+        );
+
+        match config.hardening.on_limit_exceeded {
+            LimitBehavior::ReturnError => {
+                return Err(DiffError::LimitsExceeded {
+                    sheet: sheet_id,
+                    rows: table_rows,
+                    cols: table_cols,
+                    max_rows: config.alignment.max_align_rows,
+                    max_cols: config.alignment.max_align_cols,
+                });
+            }
+            behavior => {
+                if matches!(behavior, LimitBehavior::ReturnPartialResult) {
+                    ctx.warnings.push(warning);
+                }
+
+                let mut emit_ctx = EmitCtx::new(
+                    sheet_id,
+                    pool,
+                    config,
+                    &mut ctx.formula_cache,
+                    sink,
+                    op_count,
+                    &mut ctx.warnings,
+                    &mut hardening,
+                    #[cfg(feature = "perf-metrics")]
+                    None,
+                );
+                run_positional_diff_with_metrics(&mut emit_ctx, old, new)?;
+                finish_guard.finish_and_disarm()?;
+                let complete = ctx.warnings.is_empty();
+                return Ok(DiffSummary {
+                    complete,
+                    warnings: ctx.warnings,
+                    op_count: *op_count,
+                    #[cfg(feature = "perf-metrics")]
+                    metrics: None,
+                });
+            }
+        }
+    }
+
+    let (table_old, row_map_old) =
+        build_table_grid(old, &table_scope.rows_old, &table_scope.cols_union);
+    let (table_new, row_map_new) =
+        build_table_grid(new, &table_scope.rows_new, &table_scope.cols_union);
+
+    let Some(table_key_cols) = map_key_columns(key_columns, &table_scope.cols_union) else {
+        ctx.warnings.push(
+            "database-mode: invalid key columns; falling back to spreadsheet mode".to_string(),
+        );
+        try_diff_grids_internal(
+            sheet_id,
+            old,
+            new,
+            config,
+            pool,
+            sink,
+            op_count,
+            &mut ctx,
+            &mut hardening,
+            #[cfg(feature = "perf-metrics")]
+            None,
+        )?;
+        finish_guard.finish_and_disarm()?;
+        let complete = ctx.warnings.is_empty();
+        return Ok(DiffSummary {
+            complete,
+            warnings: ctx.warnings,
+            op_count: *op_count,
+            #[cfg(feature = "perf-metrics")]
+            metrics: None,
+        });
+    };
+
+    let key_col_set: HashSet<u32> = table_key_cols.iter().copied().collect();
+    let max_cols = table_old.ncols.max(table_new.ncols);
+    let compare_cols: Vec<u32> = (0..max_cols)
+        .filter(|col| !key_col_set.contains(col))
+        .collect();
+
+    let alignment = diff_table_by_key(&table_old, &table_new, &table_key_cols);
+
+    {
+        let mut emit_ctx = EmitCtx::new(
+            sheet_id,
+            pool,
+            config,
+            &mut ctx.formula_cache,
+            sink,
+            op_count,
+            &mut ctx.warnings,
+            &mut hardening,
+            #[cfg(feature = "perf-metrics")]
+            None,
+        );
+        let should_abort = |emit_ctx: &mut EmitCtx<'_, '_, S>| {
+            let hardening = &mut *emit_ctx.hardening;
+            let warnings = &mut *emit_ctx.warnings;
+            hardening.check_timeout(warnings) || hardening.should_abort()
+        };
+
+        for row_idx in &alignment.left_only_rows {
+            if should_abort(&mut emit_ctx) {
+                break;
+            }
+            if let Some(row) = row_map_old.get(*row_idx as usize).copied() {
+                emit_ctx.emit(DiffOp::row_removed(sheet_id, row, None))?;
+            }
+        }
+
+        for row_idx in &alignment.right_only_rows {
+            if should_abort(&mut emit_ctx) {
+                break;
+            }
+            if let Some(row) = row_map_new.get(*row_idx as usize).copied() {
+                emit_ctx.emit(DiffOp::row_added(sheet_id, row, None))?;
+            }
+        }
+
+        for (row_a, row_b) in &alignment.matched_rows {
+            if should_abort(&mut emit_ctx) {
+                break;
+            }
+            let Some(row_a_orig) = row_map_old.get(*row_a as usize).copied() else {
+                continue;
+            };
+            let Some(row_b_orig) = row_map_new.get(*row_b as usize).copied() else {
+                continue;
+            };
+            let row_shift = row_b_orig as i32 - row_a_orig as i32;
+
+            for col in 0..max_cols {
+                if key_col_set.contains(&col) {
+                    continue;
+                }
+
+                let old_cell = table_old.get(*row_a, col);
+                let new_cell = table_new.get(*row_b, col);
+
+                if cells_content_equal(old_cell, new_cell) {
+                    continue;
+                }
+
+                let Some(col_orig) = table_scope.cols_union.get(col as usize).copied() else {
+                    continue;
+                };
+                let addr = CellAddress::from_indices(row_b_orig, col_orig);
+                emit_cell_edit(&mut emit_ctx, addr, old_cell, new_cell, row_shift, 0)?;
+            }
+        }
+
+        for cluster in &alignment.duplicate_clusters {
+            if should_abort(&mut emit_ctx) {
+                break;
+            }
+
+            let left_rows: Vec<u32> = cluster
+                .left_rows
+                .iter()
+                .filter_map(|idx| row_map_old.get(*idx as usize).copied())
+                .collect();
+            let right_rows: Vec<u32> = cluster
+                .right_rows
+                .iter()
+                .filter_map(|idx| row_map_new.get(*idx as usize).copied())
+                .collect();
+
+            emit_ctx.emit(DiffOp::DuplicateKeyCluster {
+                sheet: sheet_id,
+                key: cluster.key.as_cell_values(),
+                left_rows: left_rows.clone(),
+                right_rows: right_rows.clone(),
+            })?;
+
+            let cluster_match = match_duplicate_cluster(
+                &table_old,
+                &table_new,
+                &cluster.left_rows,
+                &cluster.right_rows,
+                &compare_cols,
             );
-            ctx.warnings = warnings;
-            try_diff_grids_internal(
+
+            for (row_a, row_b) in cluster_match.matched {
+                if should_abort(&mut emit_ctx) {
+                    break;
+                }
+                let Some(row_a_orig) = row_map_old.get(row_a as usize).copied() else {
+                    continue;
+                };
+                let Some(row_b_orig) = row_map_new.get(row_b as usize).copied() else {
+                    continue;
+                };
+                let row_shift = row_b_orig as i32 - row_a_orig as i32;
+
+                for col in 0..max_cols {
+                    if key_col_set.contains(&col) {
+                        continue;
+                    }
+
+                    let old_cell = table_old.get(row_a, col);
+                    let new_cell = table_new.get(row_b, col);
+                    if cells_content_equal(old_cell, new_cell) {
+                        continue;
+                    }
+                    let Some(col_orig) = table_scope.cols_union.get(col as usize).copied() else {
+                        continue;
+                    };
+                    let addr = CellAddress::from_indices(row_b_orig, col_orig);
+                    emit_cell_edit(&mut emit_ctx, addr, old_cell, new_cell, row_shift, 0)?;
+                }
+            }
+
+            for row_idx in cluster_match.left_unmatched {
+                if should_abort(&mut emit_ctx) {
+                    break;
+                }
+                if let Some(row) = row_map_old.get(row_idx as usize).copied() {
+                    emit_ctx.emit(DiffOp::row_removed(sheet_id, row, None))?;
+                }
+            }
+
+            for row_idx in cluster_match.right_unmatched {
+                if should_abort(&mut emit_ctx) {
+                    break;
+                }
+                if let Some(row) = row_map_new.get(row_idx as usize).copied() {
+                    emit_ctx.emit(DiffOp::row_added(sheet_id, row, None))?;
+                }
+            }
+        }
+    }
+
+    if !hardening.should_abort()
+        && (has_cells_outside_rect(
+            old,
+            table_scope.row_start,
+            table_scope.row_end,
+            table_scope.col_start,
+            table_scope.col_end,
+        ) || has_cells_outside_rect(
+            new,
+            table_scope.row_start,
+            table_scope.row_end,
+            table_scope.col_start,
+            table_scope.col_end,
+        ))
+    {
+        let old_free = mask_grid_excluding_rect(
+            old,
+            table_scope.row_start,
+            table_scope.row_end,
+            table_scope.col_start,
+            table_scope.col_end,
+        );
+        let new_free = mask_grid_excluding_rect(
+            new,
+            table_scope.row_start,
+            table_scope.row_end,
+            table_scope.col_start,
+            table_scope.col_end,
+        );
+
+        if !hardening.check_timeout(&mut ctx.warnings) {
+            let mut emit_ctx = EmitCtx::new(
                 sheet_id,
-                old,
-                new,
-                config,
                 pool,
+                config,
+                &mut ctx.formula_cache,
                 sink,
                 op_count,
-                &mut ctx,
+                &mut ctx.warnings,
                 &mut hardening,
                 #[cfg(feature = "perf-metrics")]
                 None,
-            )?;
-            finish_guard.finish_and_disarm()?;
-            let complete = ctx.warnings.is_empty();
-            return Ok(DiffSummary {
-                complete,
-                warnings: ctx.warnings,
-                op_count: *op_count,
-                #[cfg(feature = "perf-metrics")]
-                metrics: None,
-            });
-        }
-    };
-
-    let max_cols = old.ncols.max(new.ncols);
-
-    for row_idx in &alignment.left_only_rows {
-        if hardening.check_timeout(&mut warnings) {
-            break;
-        }
-        emit_op(
-            sink,
-            op_count,
-            DiffOp::row_removed(sheet_id, *row_idx, None),
-        )?;
-    }
-
-    for row_idx in &alignment.right_only_rows {
-        if hardening.check_timeout(&mut warnings) {
-            break;
-        }
-        emit_op(sink, op_count, DiffOp::row_added(sheet_id, *row_idx, None))?;
-    }
-
-    for (row_a, row_b) in &alignment.matched_rows {
-        if hardening.check_timeout(&mut warnings) {
-            break;
-        }
-        for col in 0..max_cols {
-            if spec.is_key_column(col) {
-                continue;
-            }
-
-            let old_cell = old.get(*row_a, col);
-            let new_cell = new.get(*row_b, col);
-
-            if cells_content_equal(old_cell, new_cell) {
-                continue;
-            }
-
-            let addr = crate::workbook::CellAddress::from_indices(*row_b, col);
-            let from = snapshot_with_addr(old_cell, addr);
-            let to = snapshot_with_addr(new_cell, addr);
-
-            let formula_diff = compute_formula_diff(
-                pool,
-                &mut formula_cache,
-                old_cell,
-                new_cell,
-                *row_b as i32 - *row_a as i32,
-                0,
-                config,
             );
-
-            emit_op(
-                sink,
-                op_count,
-                DiffOp::cell_edited(sheet_id, addr, from, to, formula_diff),
-            )?;
+            run_positional_diff_with_metrics(&mut emit_ctx, &old_free, &new_free)?;
         }
     }
 
     finish_guard.finish_and_disarm()?;
     Ok(DiffSummary {
-        complete: warnings.is_empty(),
-        warnings,
+        complete: ctx.warnings.is_empty(),
+        warnings: ctx.warnings,
         op_count: *op_count,
         #[cfg(feature = "perf-metrics")]
         metrics: None,
     })
+}
+
+#[derive(Debug, Clone)]
+struct TableScope {
+    rows_old: Vec<u32>,
+    rows_new: Vec<u32>,
+    cols_union: Vec<u32>,
+    row_start: u32,
+    row_end: u32,
+    col_start: u32,
+    col_end: u32,
+}
+
+fn build_table_scope(old: &Grid, new: &Grid, key_columns: &[u32]) -> Option<TableScope> {
+    let rows_old = table_rows_for_grid(old, key_columns);
+    let rows_new = table_rows_for_grid(new, key_columns);
+    let rows_union = union_sorted(&rows_old, &rows_new);
+    if rows_union.is_empty() {
+        return None;
+    }
+
+    let cols_old = table_cols_for_grid(old, &rows_old, key_columns);
+    let cols_new = table_cols_for_grid(new, &rows_new, key_columns);
+    let cols_union = union_sorted(&cols_old, &cols_new);
+    if cols_union.is_empty() {
+        return None;
+    }
+
+    let row_start = *rows_union.first()?;
+    let row_end = *rows_union.last()?;
+    let col_start = *cols_union.first()?;
+    let col_end = *cols_union.last()?;
+
+    Some(TableScope {
+        rows_old,
+        rows_new,
+        cols_union,
+        row_start,
+        row_end,
+        col_start,
+        col_end,
+    })
+}
+
+fn table_rows_for_grid(grid: &Grid, key_columns: &[u32]) -> Vec<u32> {
+    if grid.nrows == 0 || grid.ncols == 0 || key_columns.is_empty() {
+        return Vec::new();
+    }
+    if key_columns.iter().any(|&col| col >= grid.ncols) {
+        return Vec::new();
+    }
+
+    let mut rows = Vec::new();
+    'row: for row in 0..grid.nrows {
+        for &col in key_columns {
+            if !cell_value_is_non_empty(grid.get(row, col)) {
+                continue 'row;
+            }
+        }
+        rows.push(row);
+    }
+    rows
+}
+
+fn table_cols_for_grid(grid: &Grid, table_rows: &[u32], key_columns: &[u32]) -> Vec<u32> {
+    if grid.ncols == 0 {
+        return Vec::new();
+    }
+
+    let mut cols: HashSet<u32> = HashSet::new();
+    for &col in key_columns {
+        if col < grid.ncols {
+            cols.insert(col);
+        }
+    }
+
+    let row_count = table_rows.len();
+    if row_count == 0 {
+        let mut out: Vec<u32> = cols.into_iter().collect();
+        out.sort_unstable();
+        return out;
+    }
+
+    for col in 0..grid.ncols {
+        let mut filled = 0usize;
+        for &row in table_rows {
+            if grid.get(row, col).is_some() {
+                filled += 1;
+            }
+        }
+        let ratio = filled as f64 / row_count as f64;
+        if ratio >= TABLE_COLUMN_FILL_RATIO {
+            cols.insert(col);
+        }
+    }
+
+    let mut out: Vec<u32> = cols.into_iter().collect();
+    out.sort_unstable();
+    out
+}
+
+fn union_sorted(left: &[u32], right: &[u32]) -> Vec<u32> {
+    let mut out: Vec<u32> = left.iter().copied().chain(right.iter().copied()).collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+fn cell_value_is_non_empty(cell: Option<&crate::workbook::Cell>) -> bool {
+    match cell.and_then(|cell| cell.value.as_ref()) {
+        Some(CellValue::Blank) | None => false,
+        Some(_) => true,
+    }
+}
+
+fn map_key_columns(key_columns: &[u32], cols_union: &[u32]) -> Option<Vec<u32>> {
+    let mut mapped = Vec::with_capacity(key_columns.len());
+    for &col in key_columns {
+        let idx = cols_union.iter().position(|&c| c == col)? as u32;
+        mapped.push(idx);
+    }
+    Some(mapped)
+}
+
+fn build_table_grid(grid: &Grid, rows: &[u32], cols: &[u32]) -> (Grid, Vec<u32>) {
+    let mut table = Grid::new(rows.len() as u32, cols.len() as u32);
+    for (row_idx, &row) in rows.iter().enumerate() {
+        for (col_idx, &col) in cols.iter().enumerate() {
+            if let Some(cell) = grid.get(row, col) {
+                table.insert_cell(
+                    row_idx as u32,
+                    col_idx as u32,
+                    cell.value.clone(),
+                    cell.formula,
+                );
+            }
+        }
+    }
+    (table, rows.to_vec())
+}
+
+fn has_cells_outside_rect(
+    grid: &Grid,
+    row_start: u32,
+    row_end: u32,
+    col_start: u32,
+    col_end: u32,
+) -> bool {
+    for ((row, col), _) in grid.iter_cells() {
+        if row < row_start || row > row_end || col < col_start || col > col_end {
+            return true;
+        }
+    }
+    false
+}
+
+fn mask_grid_excluding_rect(
+    grid: &Grid,
+    row_start: u32,
+    row_end: u32,
+    col_start: u32,
+    col_end: u32,
+) -> Grid {
+    let mut out = Grid::new(grid.nrows, grid.ncols);
+    for ((row, col), cell) in grid.iter_cells() {
+        if row < row_start || row > row_end || col < col_start || col > col_end {
+            out.insert_cell(row, col, cell.value.clone(), cell.formula);
+        }
+    }
+    out
+}
+
+#[derive(Debug, Default)]
+struct ClusterMatch {
+    matched: Vec<(u32, u32)>,
+    left_unmatched: Vec<u32>,
+    right_unmatched: Vec<u32>,
+}
+
+fn match_duplicate_cluster(
+    old: &Grid,
+    new: &Grid,
+    left_rows: &[u32],
+    right_rows: &[u32],
+    compare_cols: &[u32],
+) -> ClusterMatch {
+    if left_rows.is_empty() && right_rows.is_empty() {
+        return ClusterMatch::default();
+    }
+    if left_rows.is_empty() {
+        return ClusterMatch {
+            matched: Vec::new(),
+            left_unmatched: Vec::new(),
+            right_unmatched: right_rows.to_vec(),
+        };
+    }
+    if right_rows.is_empty() {
+        return ClusterMatch {
+            matched: Vec::new(),
+            left_unmatched: left_rows.to_vec(),
+            right_unmatched: Vec::new(),
+        };
+    }
+
+    let unmatched_cost = duplicate_unmatched_cost(compare_cols.len());
+
+    let mut costs: Vec<Vec<i64>> = Vec::with_capacity(left_rows.len());
+    for &left_row in left_rows {
+        let mut row_costs = Vec::with_capacity(right_rows.len());
+        for &right_row in right_rows {
+            row_costs.push(duplicate_pair_cost(old, new, left_row, right_row, compare_cols));
+        }
+        costs.push(row_costs);
+    }
+
+    if left_rows.len().max(right_rows.len()) <= DUPLICATE_CLUSTER_EXACT_MAX {
+        let assignment = hungarian::solve_rect(&costs, unmatched_cost);
+        let mut right_used = vec![false; right_rows.len()];
+        let mut matched = Vec::new();
+        let mut left_unmatched = Vec::new();
+
+        for (row_idx, &col_idx) in assignment.iter().take(left_rows.len()).enumerate() {
+            if col_idx >= right_rows.len() {
+                left_unmatched.push(left_rows[row_idx]);
+                continue;
+            }
+            let cost = costs
+                .get(row_idx)
+                .and_then(|row| row.get(col_idx))
+                .copied()
+                .unwrap_or(unmatched_cost);
+            if cost >= unmatched_cost {
+                left_unmatched.push(left_rows[row_idx]);
+                continue;
+            }
+            if !right_used[col_idx] {
+                matched.push((left_rows[row_idx], right_rows[col_idx]));
+                right_used[col_idx] = true;
+            }
+        }
+
+        let mut right_unmatched = Vec::new();
+        for (idx, &row) in right_rows.iter().enumerate() {
+            if !right_used[idx] {
+                right_unmatched.push(row);
+            }
+        }
+
+        return ClusterMatch {
+            matched,
+            left_unmatched,
+            right_unmatched,
+        };
+    }
+
+    let mut candidates = Vec::new();
+    for (left_idx, _) in left_rows.iter().enumerate() {
+        for (right_idx, _) in right_rows.iter().enumerate() {
+            let cost = costs[left_idx][right_idx];
+            if cost < unmatched_cost {
+                candidates.push((cost, left_idx, right_idx));
+            }
+        }
+    }
+    candidates.sort_by(|a, b| a.cmp(b));
+
+    let mut left_used = vec![false; left_rows.len()];
+    let mut right_used = vec![false; right_rows.len()];
+    let mut matched = Vec::new();
+
+    for (_, left_idx, right_idx) in candidates {
+        if left_used[left_idx] || right_used[right_idx] {
+            continue;
+        }
+        left_used[left_idx] = true;
+        right_used[right_idx] = true;
+        matched.push((left_rows[left_idx], right_rows[right_idx]));
+    }
+
+    let mut left_unmatched = Vec::new();
+    for (idx, &row) in left_rows.iter().enumerate() {
+        if !left_used[idx] {
+            left_unmatched.push(row);
+        }
+    }
+    let mut right_unmatched = Vec::new();
+    for (idx, &row) in right_rows.iter().enumerate() {
+        if !right_used[idx] {
+            right_unmatched.push(row);
+        }
+    }
+
+    ClusterMatch {
+        matched,
+        left_unmatched,
+        right_unmatched,
+    }
+}
+
+fn duplicate_unmatched_cost(compare_cols_len: usize) -> i64 {
+    if compare_cols_len == 0 {
+        return 1;
+    }
+    let threshold = DUPLICATE_MATCH_THRESHOLD.clamp(0.0, 1.0);
+    let max_mismatches =
+        ((compare_cols_len as f64) * (1.0 - threshold)).floor() as i64;
+    (max_mismatches + 1).max(1)
+}
+
+fn duplicate_pair_cost(
+    old: &Grid,
+    new: &Grid,
+    left_row: u32,
+    right_row: u32,
+    compare_cols: &[u32],
+) -> i64 {
+    let mut cost = 0i64;
+    for &col in compare_cols {
+        let old_cell = old.get(left_row, col);
+        let new_cell = new.get(right_row, col);
+        if !cells_content_equal(old_cell, new_cell) {
+            cost += 1;
+        }
+    }
+    cost
 }
 
 fn grids_non_blank_cells_equal(old: &Grid, new: &Grid) -> bool {

@@ -161,6 +161,9 @@ fn contains_non_finite_numbers(report: &DiffReport) -> bool {
             matches!(from.value, Some(CellValue::Number(n)) if !n.is_finite())
                 || matches!(to.value, Some(CellValue::Number(n)) if !n.is_finite())
         }
+        DiffOp::DuplicateKeyCluster { key, .. } => key
+            .iter()
+            .any(|value| matches!(value, Some(CellValue::Number(n)) if !n.is_finite())),
         _ => false,
     })
 }

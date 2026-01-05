@@ -514,11 +514,17 @@ fn run_database_mode(
             suggest_key_columns(grid, &session.strings)
         });
         if suggested.is_empty() {
-            bail!("Could not auto-detect key columns for sheet '{}'. Please specify --keys manually.", sheet_name);
+            eprintln!(
+                "Warning: Could not auto-detect key columns for sheet '{}'; falling back to spreadsheet mode.",
+                sheet_name
+            );
+            Vec::new()
         }
-        let col_letters: Vec<String> = suggested.iter().map(|&c| col_index_to_letters(c)).collect();
-        eprintln!("Auto-detected key columns: {}", col_letters.join(","));
-        suggested
+        else {
+            let col_letters: Vec<String> = suggested.iter().map(|&c| col_index_to_letters(c)).collect();
+            eprintln!("Auto-detected key columns: {}", col_letters.join(","));
+            suggested
+        }
     } else {
         bail!("Database mode requires either --keys or --auto-keys");
     };
@@ -807,9 +813,10 @@ fn print_fallback_suggestions(
     sheet_name: &str,
     old_pkg: &WorkbookPackage,
 ) {
-    let has_fallback_warning = report.warnings.iter().any(|w| {
-        w.contains("duplicate keys") && w.contains("falling back")
-    });
+    let has_fallback_warning = report
+        .warnings
+        .iter()
+        .any(|w| w.contains("database-mode:") && w.contains("falling back"));
 
     if has_fallback_warning && !auto_keys {
         if let Ok(grid) = find_sheet_grid(&old_pkg.workbook, sheet_name) {
@@ -821,6 +828,9 @@ fn print_fallback_suggestions(
                 eprintln!("Hint: try --keys={} for unique key columns", col_letters.join(","));
             }
         }
+    }
+    if has_fallback_warning && auto_keys {
+        eprintln!("Hint: specify --keys to force database mode when auto-detection is ambiguous.");
     }
 }
 

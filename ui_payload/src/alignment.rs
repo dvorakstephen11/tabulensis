@@ -109,6 +109,7 @@ fn group_ops_by_sheet<'a>(
             | excel_diff::DiffOp::RowAdded { sheet, .. }
             | excel_diff::DiffOp::RowRemoved { sheet, .. }
             | excel_diff::DiffOp::RowReplaced { sheet, .. }
+            | excel_diff::DiffOp::DuplicateKeyCluster { sheet, .. }
             | excel_diff::DiffOp::ColumnAdded { sheet, .. }
             | excel_diff::DiffOp::ColumnRemoved { sheet, .. }
             | excel_diff::DiffOp::BlockMovedRows { sheet, .. }

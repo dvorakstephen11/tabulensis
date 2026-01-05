@@ -95,7 +95,7 @@ by detection order.
 
 - try_diff_grids_database_mode_streaming(...)
   - begin once, emit ops, finish once.
-  - Must finish on timeout, duplicate-key fallback, and error paths.
+  - Must finish on timeout, fallback (e.g., missing/invalid keys), and error paths.
 
 ### Package-level streaming entry points
 
