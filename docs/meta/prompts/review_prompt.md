@@ -333,6 +333,7 @@
     src-tauri/
       build.rs
       Cargo.toml
+      FEATURES.md
       gen/
         schemas/
           acl-manifests.json
@@ -361,6 +362,7 @@
     manifest_cli_tests.lock.json
     manifest_cli_tests.yaml
     manifest_perf_e2e.yaml
+    manifest_release_smoke.lock.json
     manifest_release_smoke.yaml
     pyproject.toml
     README.md
@@ -481,17 +483,13 @@ jobs:
       - name: Install fixture generator
         run: python -m pip install -e fixtures --no-deps
 
-      - name: Fixture reference guard
-        run: python scripts/check_fixture_references.py
+      - name: Run test flow (fixtures + guard)
+        run: python scripts/dev_test.py
 
-      - name: Generate test fixtures
-        run: generate-fixtures --manifest fixtures/manifest_cli_tests.yaml --force --clean
-
-      - name: Verify fixture checksums
-        run: generate-fixtures --manifest fixtures/manifest_cli_tests.yaml --verify-lock fixtures/manifest_cli_tests.lock.json
-
-      - name: Run tests
-        run: cargo test --workspace
+      - name: Verify release smoke fixture lock
+        run: |
+          generate-fixtures --manifest fixtures/manifest_release_smoke.yaml --force --clean
+          generate-fixtures --manifest fixtures/manifest_release_smoke.yaml --verify-lock fixtures/manifest_release_smoke.lock.json
 
       - name: Architecture guard
         run: python scripts/arch_guard.py
@@ -576,8 +574,16 @@ jobs:
       - name: Check wasm bindings
         run: cargo check -p excel_diff_wasm --target wasm32-unknown-unknown
 
-      - name: Check desktop crate
+      - name: Check desktop crate (deny unexpected cfgs)
+        env:
+          RUSTFLAGS: "-Dunexpected_cfgs"
         run: cargo check -p excel_diff_desktop
+
+      - name: Check desktop crate (model-diff)
+        run: cargo check -p excel_diff_desktop --features model-diff
+
+      - name: Check desktop crate (perf-metrics)
+        run: cargo check -p excel_diff_desktop --features perf-metrics
 
 
 ```
@@ -803,6 +809,8 @@ jobs:
 name: Performance Full Scale
 
 on:
+  push:
+    branches: [main, master]
   schedule:
     - cron: "0 3 * * *"
   workflow_dispatch: {}
@@ -822,7 +830,10 @@ jobs:
           python-version: '3.11'
 
       - name: Run full-scale perf suite + gates
-        run: python scripts/check_perf_thresholds.py --suite full-scale --baseline benchmarks/baselines/full-scale.json --export-csv benchmarks/latest_fullscale.csv --export-json benchmarks/latest_fullscale.json
+        run: python scripts/check_perf_thresholds.py --suite full-scale --require-baseline --baseline benchmarks/baselines/full-scale.json --export-csv benchmarks/latest_fullscale.csv --export-json benchmarks/latest_fullscale.json
+
+      - name: Compare perf results
+        run: python scripts/compare_perf_results.py benchmarks/baselines/full-scale.json benchmarks/latest_fullscale.json
 
       - name: Upload perf artifacts
         uses: actions/upload-artifact@v4
@@ -865,8 +876,37 @@ jobs:
       - name: Verify tag matches crate versions
         run: python3 scripts/verify_release_versions.py
 
-  build-windows:
+  perf-fullscale-gate:
+    name: Full-Scale Perf Gate
     needs: validate-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run full-scale perf suite
+        run: python scripts/check_perf_thresholds.py --suite full-scale --require-baseline --baseline benchmarks/baselines/full-scale.json --export-csv benchmarks/latest_fullscale.csv --export-json benchmarks/latest_fullscale.json
+
+      - name: Compare perf results
+        run: python scripts/compare_perf_results.py benchmarks/baselines/full-scale.json benchmarks/latest_fullscale.json
+
+      - name: Upload perf artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-fullscale
+          path: |
+            benchmarks/latest_fullscale.csv
+            benchmarks/latest_fullscale.json
+
+  build-windows:
+    needs: [validate-release, perf-fullscale-gate]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -921,7 +961,7 @@ jobs:
             excel-diff-${{ steps.version.outputs.version }}-windows-x86_64.zip.sha256
 
   build-macos-x64:
-    needs: validate-release
+    needs: [validate-release, perf-fullscale-gate]
     runs-on: macos-13
     steps:
       - uses: actions/checkout@v4
@@ -967,7 +1007,7 @@ jobs:
           path: target/release/excel-diff
 
   build-macos-arm64:
-    needs: validate-release
+    needs: [validate-release, perf-fullscale-gate]
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -1219,6 +1259,7 @@ jobs:
       - build-macos-universal
       - smoke-macos-sequoia
       - generate-manifests
+      - perf-fullscale-gate
     if: startsWith(github.ref, 'refs/tags/v') && github.event.inputs.dry_run != 'true'
     permissions:
       contents: write
@@ -63618,7 +63659,14 @@ def main() -> int:
     cli_tests = repo_root / "cli" / "tests"
     workflows = repo_root / ".github" / "workflows"
 
-    test_files = list(core_tests.rglob("*.rs")) + list(cli_tests.rglob("*.rs"))
+    test_files = (
+        list(core_tests.rglob("*.rs"))
+        + list(cli_tests.rglob("*.rs"))
+        + list(core_tests.rglob("*.yaml"))
+        + list(core_tests.rglob("*.yml"))
+        + list(cli_tests.rglob("*.yaml"))
+        + list(cli_tests.rglob("*.yml"))
+    )
     workflow_files = list(workflows.rglob("*.yml")) + list(workflows.rglob("*.yaml"))
 
     manifest_tests = repo_root / "fixtures" / "manifest_cli_tests.yaml"
@@ -63682,8 +63730,8 @@ This script runs perf tests and enforces:
   - Baseline regression checks for total time and peak memory
 
 Usage:
-  python scripts/check_perf_thresholds.py [--suite quick|gate|full-scale] [--export-json PATH] [--export-csv PATH]
-  python scripts/check_perf_thresholds.py --full-scale [--export-json PATH] [--export-csv PATH]
+  python scripts/check_perf_thresholds.py [--suite quick|gate|full-scale] [--require-baseline] [--export-json PATH] [--export-csv PATH]
+  python scripts/check_perf_thresholds.py --full-scale [--require-baseline] [--export-json PATH] [--export-csv PATH]
 """
 
 import argparse
@@ -63712,11 +63760,20 @@ QUICK_THRESHOLDS = {
 }
 
 FULL_SCALE_THRESHOLDS = {
-    "perf_50k_dense_single_edit": {"max_time_s": 30},
-    "perf_50k_completely_different": {"max_time_s": 60},
-    "perf_50k_adversarial_repetitive": {"max_time_s": 120},
-    "perf_50k_99_percent_blank": {"max_time_s": 30},
-    "perf_50k_identical": {"max_time_s": 15},
+    "perf_50k_dense_single_edit": {"max_time_s": 30, "max_peak_memory_bytes": 872_571_424},
+    "perf_50k_completely_different": {
+        "max_time_s": 60,
+        "max_peak_memory_bytes": 2_037_432_768,
+    },
+    "perf_50k_adversarial_repetitive": {
+        "max_time_s": 120,
+        "max_peak_memory_bytes": 437_822_230,
+    },
+    "perf_50k_99_percent_blank": {
+        "max_time_s": 30,
+        "max_peak_memory_bytes": 32_503_203,
+    },
+    "perf_50k_identical": {"max_time_s": 15, "max_peak_memory_bytes": 600_019_608},
 }
 
 GATE_THRESHOLDS = {
@@ -63992,6 +64049,11 @@ def main():
         help="Directory containing baseline JSON results",
     )
     parser.add_argument(
+        "--require-baseline",
+        action="store_true",
+        help="Fail if the baseline file or expected tests are missing",
+    )
+    parser.add_argument(
         "--test-target",
         type=str,
         default=None,
@@ -64044,6 +64106,7 @@ def main():
     }
 
     config = suite_configs[suite_name]
+    require_baseline = args.require_baseline
     thresholds = config["thresholds"]
     patterns = config["patterns"]
     match_mode = config["match_mode"]
@@ -64193,6 +64256,18 @@ def main():
     if baseline and baseline_path:
         print(f"Baseline: {baseline_path}")
         baseline_tests = baseline.get("tests", {})
+        missing_baseline = sorted(expected_tests - set(baseline_tests.keys()))
+        if missing_baseline:
+            if require_baseline:
+                print(
+                    "ERROR: Baseline missing expected tests: "
+                    + ", ".join(missing_baseline)
+                )
+                return 1
+            print(
+                "WARNING: Baseline missing expected tests: "
+                + ", ".join(missing_baseline)
+            )
 
         for test_name in expected_tests:
             if test_name not in baseline_tests:
@@ -64237,6 +64312,12 @@ def main():
                 )
 
     else:
+        if require_baseline:
+            if args.baseline:
+                print(f"ERROR: Baseline file not found: {args.baseline}")
+            else:
+                print(f"ERROR: No baseline results found in {args.baseline_dir}")
+            return 1
         if args.baseline:
             print(f"WARNING: Baseline file not found: {args.baseline}")
         else:

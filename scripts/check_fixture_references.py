@@ -4,8 +4,12 @@ from pathlib import Path
 
 import yaml
 
-RE_FIXTURE_NAME = re.compile(r'"([A-Za-z0-9._-]+\.(?:xlsx|xlsm|pbix|pbit|zip|txt|bin))"')
-RE_WORKFLOW_REF = re.compile(r"fixtures/generated/([A-Za-z0-9._-]+\.(?:xlsx|xlsm|pbix|pbit|zip|txt|bin))")
+RE_FIXTURE_NAME = re.compile(
+    r"""['"]([A-Za-z0-9._-]+\.(?:xlsx|xlsm|xltx|xltm|xlsb|pbix|pbit|zip|txt|bin))['"]"""
+)
+RE_WORKFLOW_REF = re.compile(
+    r"fixtures/generated/([A-Za-z0-9._-]+\.(?:xlsx|xlsm|xltx|xltm|xlsb|pbix|pbit|zip|txt|bin))"
+)
 
 IGNORED_FIXTURE_NAMES = {
     "definitely_missing.xlsx",
