@@ -13,17 +13,25 @@ This repo treats fixtures as generated artifacts. Tests and workflows depend on 
 
 - Generate fixtures:
   - `generate-fixtures --manifest fixtures/manifest_cli_tests.yaml --force --clean`
+  - `generate-fixtures --manifest fixtures/manifest_release_smoke.yaml --force --clean`
 - Verify presence + structure:
   - `generate-fixtures --manifest fixtures/manifest_cli_tests.yaml --verify`
 - Lock + checksum validation:
   - `generate-fixtures --manifest fixtures/manifest_cli_tests.yaml --write-lock fixtures/manifest_cli_tests.lock.json`
   - `generate-fixtures --manifest fixtures/manifest_cli_tests.yaml --verify-lock fixtures/manifest_cli_tests.lock.json`
+  - `generate-fixtures --manifest fixtures/manifest_release_smoke.yaml --write-lock fixtures/manifest_release_smoke.lock.json`
+  - `generate-fixtures --manifest fixtures/manifest_release_smoke.yaml --verify-lock fixtures/manifest_release_smoke.lock.json`
 
 ## Rules
 
 - Tests and workflows must only reference fixtures produced by their manifest.
 - Update the manifest when adding a new fixture reference in tests or CI.
 - Use lock files to catch drift; regenerate locks only when fixture definitions change.
+- Fuzz corpora are seeded from generated fixtures (`python scripts/seed_fuzz_corpus.py`) and are not a source of truth for tests.
+
+## Local test entry point
+
+Use `python scripts/dev_test.py` to run the same fixture + test flow as CI.
 
 ## Reference guard
 

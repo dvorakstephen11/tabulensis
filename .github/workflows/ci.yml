@@ -28,17 +28,13 @@ jobs:
       - name: Install fixture generator
         run: python -m pip install -e fixtures --no-deps
 
-      - name: Fixture reference guard
-        run: python scripts/check_fixture_references.py
+      - name: Run test flow (fixtures + guard)
+        run: python scripts/dev_test.py
 
-      - name: Generate test fixtures
-        run: generate-fixtures --manifest fixtures/manifest_cli_tests.yaml --force --clean
-
-      - name: Verify fixture checksums
-        run: generate-fixtures --manifest fixtures/manifest_cli_tests.yaml --verify-lock fixtures/manifest_cli_tests.lock.json
-
-      - name: Run tests
-        run: cargo test --workspace
+      - name: Verify release smoke fixture lock
+        run: |
+          generate-fixtures --manifest fixtures/manifest_release_smoke.yaml --force --clean
+          generate-fixtures --manifest fixtures/manifest_release_smoke.yaml --verify-lock fixtures/manifest_release_smoke.lock.json
 
       - name: Architecture guard
         run: python scripts/arch_guard.py
@@ -123,6 +119,14 @@ jobs:
       - name: Check wasm bindings
         run: cargo check -p excel_diff_wasm --target wasm32-unknown-unknown
 
-      - name: Check desktop crate
+      - name: Check desktop crate (deny unexpected cfgs)
+        env:
+          RUSTFLAGS: "-Dunexpected_cfgs"
         run: cargo check -p excel_diff_desktop
+
+      - name: Check desktop crate (model-diff)
+        run: cargo check -p excel_diff_desktop --features model-diff
+
+      - name: Check desktop crate (perf-metrics)
+        run: cargo check -p excel_diff_desktop --features perf-metrics
 

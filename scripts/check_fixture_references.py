@@ -62,7 +62,14 @@ def main() -> int:
     cli_tests = repo_root / "cli" / "tests"
     workflows = repo_root / ".github" / "workflows"
 
-    test_files = list(core_tests.rglob("*.rs")) + list(cli_tests.rglob("*.rs"))
+    test_files = (
+        list(core_tests.rglob("*.rs"))
+        + list(cli_tests.rglob("*.rs"))
+        + list(core_tests.rglob("*.yaml"))
+        + list(core_tests.rglob("*.yml"))
+        + list(cli_tests.rglob("*.yaml"))
+        + list(cli_tests.rglob("*.yml"))
+    )
     workflow_files = list(workflows.rglob("*.yml")) + list(workflows.rglob("*.yaml"))
 
     manifest_tests = repo_root / "fixtures" / "manifest_cli_tests.yaml"

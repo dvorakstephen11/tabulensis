@@ -176,6 +176,12 @@ For large workbooks, prefer streaming output (`diff_streaming`) and consider set
 
 ## Testing
 
+### Recommended (mirrors CI)
+
+```bash
+python scripts/dev_test.py
+```
+
 ### Core Tests (Rust)
 
 ```bash

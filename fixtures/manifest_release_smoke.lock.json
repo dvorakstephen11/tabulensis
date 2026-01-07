@@ -1,0 +1,20 @@
+{
+  "algorithm": "sha256",
+  "files": {
+    "col_append_right_a.xlsx": {
+      "hash": "sha256:e945f076262e2ece6eea32eaaf6a614f728c849d856606cece1083788cd3eccb",
+      "mode": "zip-entries-v1"
+    },
+    "col_append_right_b.xlsx": {
+      "hash": "sha256:4e00ef54e543c655a95d2db85305a16874ac74891330840a0edde95cd72fecd0",
+      "mode": "zip-entries-v1"
+    },
+    "minimal.xlsx": {
+      "hash": "sha256:8d9b9546d0addbda7a1ed1b3a6468c38233786943784f9726ad34fba7aad09c1",
+      "mode": "zip-entries-v1"
+    }
+  },
+  "manifest": "fixtures/manifest_release_smoke.yaml",
+  "output_dir": "fixtures/generated",
+  "version": 1
+}

@@ -7,8 +7,8 @@ This script runs perf tests and enforces:
   - Baseline regression checks for total time and peak memory
 
 Usage:
-  python scripts/check_perf_thresholds.py [--suite quick|gate|full-scale] [--export-json PATH] [--export-csv PATH]
-  python scripts/check_perf_thresholds.py --full-scale [--export-json PATH] [--export-csv PATH]
+  python scripts/check_perf_thresholds.py [--suite quick|gate|full-scale] [--require-baseline] [--export-json PATH] [--export-csv PATH]
+  python scripts/check_perf_thresholds.py --full-scale [--require-baseline] [--export-json PATH] [--export-csv PATH]
 """
 
 import argparse
@@ -37,11 +37,20 @@ QUICK_THRESHOLDS = {
 }
 
 FULL_SCALE_THRESHOLDS = {
-    "perf_50k_dense_single_edit": {"max_time_s": 30},
-    "perf_50k_completely_different": {"max_time_s": 60},
-    "perf_50k_adversarial_repetitive": {"max_time_s": 120},
-    "perf_50k_99_percent_blank": {"max_time_s": 30},
-    "perf_50k_identical": {"max_time_s": 15},
+    "perf_50k_dense_single_edit": {"max_time_s": 30, "max_peak_memory_bytes": 872_571_424},
+    "perf_50k_completely_different": {
+        "max_time_s": 60,
+        "max_peak_memory_bytes": 2_037_432_768,
+    },
+    "perf_50k_adversarial_repetitive": {
+        "max_time_s": 120,
+        "max_peak_memory_bytes": 437_822_230,
+    },
+    "perf_50k_99_percent_blank": {
+        "max_time_s": 30,
+        "max_peak_memory_bytes": 32_503_203,
+    },
+    "perf_50k_identical": {"max_time_s": 15, "max_peak_memory_bytes": 600_019_608},
 }
 
 GATE_THRESHOLDS = {
@@ -317,6 +326,11 @@ def main():
         help="Directory containing baseline JSON results",
     )
     parser.add_argument(
+        "--require-baseline",
+        action="store_true",
+        help="Fail if the baseline file or expected tests are missing",
+    )
+    parser.add_argument(
         "--test-target",
         type=str,
         default=None,
@@ -369,6 +383,7 @@ def main():
     }
 
     config = suite_configs[suite_name]
+    require_baseline = args.require_baseline
     thresholds = config["thresholds"]
     patterns = config["patterns"]
     match_mode = config["match_mode"]
@@ -518,6 +533,18 @@ def main():
     if baseline and baseline_path:
         print(f"Baseline: {baseline_path}")
         baseline_tests = baseline.get("tests", {})
+        missing_baseline = sorted(expected_tests - set(baseline_tests.keys()))
+        if missing_baseline:
+            if require_baseline:
+                print(
+                    "ERROR: Baseline missing expected tests: "
+                    + ", ".join(missing_baseline)
+                )
+                return 1
+            print(
+                "WARNING: Baseline missing expected tests: "
+                + ", ".join(missing_baseline)
+            )
 
         for test_name in expected_tests:
             if test_name not in baseline_tests:
@@ -562,6 +589,12 @@ def main():
                 )
 
     else:
+        if require_baseline:
+            if args.baseline:
+                print(f"ERROR: Baseline file not found: {args.baseline}")
+            else:
+                print(f"ERROR: No baseline results found in {args.baseline_dir}")
+            return 1
         if args.baseline:
             print(f"WARNING: Baseline file not found: {args.baseline}")
         else:
