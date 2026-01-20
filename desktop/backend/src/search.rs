@@ -3,7 +3,6 @@ use std::path::Path;
 use excel_diff::{CellValue, WorkbookPackage};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-use tauri::AppHandle;
 use uuid::Uuid;
 
 use crate::diff_runner::DiffErrorPayload;
@@ -71,7 +70,6 @@ pub fn search_diff_ops(
 }
 
 pub fn build_search_index(
-    _app: AppHandle,
     store_path: &Path,
     path: &Path,
     side: &str,

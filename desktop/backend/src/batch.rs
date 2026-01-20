@@ -6,7 +6,7 @@ use std::sync::Arc;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use crate::events::{ProgressEvent, ProgressTx};
 use uuid::Uuid;
 use walkdir::WalkDir;
 
@@ -49,10 +49,10 @@ pub struct BatchRequest {
 }
 
 pub fn run_batch_compare(
-    app: AppHandle,
     runner: DiffRunner,
     store_path: &Path,
     request: BatchRequest,
+    progress: ProgressTx,
 ) -> Result<BatchOutcome, DiffErrorPayload> {
     let old_root = PathBuf::from(&request.old_root);
     let new_root = PathBuf::from(&request.new_root);
@@ -101,6 +101,7 @@ pub fn run_batch_compare(
             continue;
         }
 
+        emit_batch_progress(&progress, format!("Comparing {}", pair.key));
         let cancel = Arc::new(AtomicBool::new(false));
         let diff_request = DiffRequest {
             old_path: pair.old.as_ref().unwrap().display().to_string(),
@@ -111,7 +112,7 @@ pub fn run_batch_compare(
                 ..DiffOptions::default()
             },
             cancel,
-            app: app.clone(),
+            progress: progress.clone(),
         };
 
         match runner.diff(diff_request) {
@@ -138,6 +139,7 @@ pub fn run_batch_compare(
 
     let status = "complete".to_string();
     finish_batch_run(conn, &batch_id, &status, completed)?;
+    emit_batch_progress(&progress, format!("Batch complete: {completed}/{total}", total = pairs.len()));
 
     Ok(BatchOutcome {
         batch_id,
@@ -395,6 +397,14 @@ fn now_iso() -> String {
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_else(|_| "".to_string())
+}
+
+fn emit_batch_progress(progress: &ProgressTx, detail: impl Into<String>) {
+    let _ = progress.send(ProgressEvent {
+        run_id: 0,
+        stage: "batch".to_string(),
+        detail: detail.into(),
+    });
 }
 
 fn store_error(err: StoreError) -> DiffErrorPayload {

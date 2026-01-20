@@ -31,6 +31,7 @@ EXCLUDED_PATH_PREFIXES = {
     ("fixtures", "templates"),
     ("fixtures", "generated"),
 }
+DEFAULT_DOWNLOADS_DIR = Path("/mnt/c/users/dvora/Downloads")
 
 PRIORITY_DOCS = [
     "excel_diff_meta_programming.md",
@@ -44,8 +45,9 @@ DESIGN_EVAL_DOCS = PRIORITY_DOCS + EXTRA_PLANNER_DOCS
 POST_IMPL_EXCLUDED_DOCS = {"excel_diff_meta_programming.md", "2025-11-30-docs-vs-implementation.md"}
 PROJECTIONS_EXCLUDED_DOCS = {"2025-11-30-docs-vs-implementation.md"}
 
+CODEBASE_CONTEXT_FILENAME = "codebase_context.md"
+
 PROMPT_FILES = {
-    "review_context": "review_prompt.md",
     "planner": "planner_instruction.txt",
     "percent": "percent_completion.md",
     "projections": "revenue_projections.md",
@@ -191,7 +193,10 @@ class ProjectContext:
     def __init__(self, start_dir: Path | None = None, downloads_dir: Path | None = None) -> None:
         self.script_dir = Path(__file__).resolve().parent
         self.root = self._find_repo_root(start_dir or self.script_dir)
-        self.downloads = Path(downloads_dir) if downloads_dir else Path.home() / "Downloads"
+        if downloads_dir:
+            self.downloads = Path(downloads_dir).expanduser()
+        else:
+            self.downloads = DEFAULT_DOWNLOADS_DIR
         self.branch = self.current_branch()
         self._git_files = self._load_git_files()
 
@@ -453,9 +458,11 @@ def generate_timestamp_report(ctx: ProjectContext, output_file: str | None = Non
     return report
 
 
-def generate_review_context(ctx: ProjectContext, output_file: str = "review_prompt.md") -> Path:
+def generate_review_context(ctx: ProjectContext, output_file: str = CODEBASE_CONTEXT_FILENAME) -> Path:
     repo_files = list(ctx.iter_repo_files())
-    output_path = ctx.script_dir / output_file
+    output_dir = ctx.downloads
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / output_file
     lines = ["# Codebase Context for Review", ""]
     lines.append("## Directory Structure")
     lines.append("")
@@ -486,10 +493,25 @@ def generate_review_context(ctx: ProjectContext, output_file: str = "review_prom
         lines.append("---")
         lines.append("")
 
-    output_path.write_text("\n".join(lines), encoding="utf-8")
+    rendered = "\n".join(lines)
+    output_path.write_text(rendered, encoding="utf-8")
     print(f"Context generated at: {output_path}")
-    print(f"Estimated tokens: {estimate_tokens('\\n'.join(lines))}")
+    print(f"Estimated tokens: {estimate_tokens(rendered)}")
     return output_path
+
+
+def resolve_codebase_context(ctx: ProjectContext, source: Path | None = None) -> Path:
+    if source:
+        return Path(source)
+    return ctx.downloads / CODEBASE_CONTEXT_FILENAME
+
+
+def add_codebase_context(builder: ContextBuilder, ctx: ProjectContext, source: Path | None = None) -> Path | None:
+    context_path = resolve_codebase_context(ctx, source)
+    dest = builder.add_file(context_path, dest_name=CODEBASE_CONTEXT_FILENAME)
+    if dest is None:
+        print(f"Warning: codebase context not found at {context_path}")
+    return dest
 
 
 def collect_branch_logs(ctx: ProjectContext) -> list[tuple[str, str]]:
@@ -805,7 +827,10 @@ def run_cargo_tests_and_save(ctx: ProjectContext, branch_name: str | None = None
 
 
 def collate_post_implementation_review(
-    ctx: ProjectContext, branch_name: str | None = None, downloads_dir: Path | None = None
+    ctx: ProjectContext,
+    branch_name: str | None = None,
+    downloads_dir: Path | None = None,
+    codebase_context_path: Path | None = None,
 ) -> Path:
     branch = branch_name or ctx.branch
     if not branch:
@@ -821,10 +846,10 @@ def collate_post_implementation_review(
             if dest:
                 files_to_copy.append((doc.relative_to(ctx.root), dest))
 
-    review_prompt = ctx.script_dir / PROMPT_FILES["review_context"]
-    review_dest = builder.add_file(review_prompt, dest_name="codebase_context.md")
+    review_prompt = resolve_codebase_context(ctx, codebase_context_path)
+    review_dest = add_codebase_context(builder, ctx, review_prompt)
     if review_dest:
-        files_to_copy.append((review_prompt.relative_to(ctx.root), review_dest))
+        files_to_copy.append((review_prompt, review_dest))
 
     plans_branch_dir = ctx.root / "docs" / "meta" / "plans" / branch
     spec_file = plans_branch_dir / "spec.md" if plans_branch_dir.exists() else None
@@ -895,7 +920,7 @@ def collate_percent_completion(ctx: ProjectContext, downloads_dir: Path | None =
         doc_path = rust_docs_dir / doc_name
         builder.add_file(doc_path)
 
-    builder.add_file(ctx.script_dir / PROMPT_FILES["review_context"], dest_name="codebase_context.md")
+    add_codebase_context(builder, ctx)
     builder.add_file(ctx.root / "docs" / "meta" / "todo.md")
 
     branch_logs = collect_branch_logs(ctx)
@@ -922,7 +947,7 @@ def collate_planner(ctx: ProjectContext, downloads_dir: Path | None = None) -> P
     for doc_name in PRIORITY_DOCS + EXTRA_PLANNER_DOCS:
         builder.add_file(rust_docs_dir / doc_name)
 
-    builder.add_file(ctx.script_dir / PROMPT_FILES["review_context"], dest_name="codebase_context.md")
+    add_codebase_context(builder, ctx)
     builder.add_file(ctx.root / "docs" / "meta" / "todo.md")
 
     branch_logs = collect_branch_logs(ctx)
@@ -1116,14 +1141,22 @@ def collate_design_evaluation(ctx: ProjectContext, downloads_dir: Path | None = 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate review and planning contexts.")
-    parser.add_argument("--downloads", type=Path, help="Override downloads/output directory")
+    parser.add_argument(
+        "--downloads",
+        type=Path,
+        help="Override downloads/output directory (default: /mnt/c/users/dvora/Downloads)",
+    )
     parser.add_argument("--root", type=Path, help="Override repository root search start")
     subparsers = parser.add_subparsers(dest="command")
 
     review_parser = subparsers.add_parser("review", help="Collate post-implementation review bundle")
     review_parser.add_argument("--branch", help="Branch name (defaults to current)")
     review_parser.add_argument("--skip-tests", action="store_true", help="Skip running cargo test")
-    review_parser.add_argument("--context-output", default="review_prompt.md", help="Output filename for review context")
+    review_parser.add_argument(
+        "--context-output",
+        default=CODEBASE_CONTEXT_FILENAME,
+        help="Output filename for review context",
+    )
     review_parser.set_defaults(func=cmd_review)
 
     plan_parser = subparsers.add_parser("plan", help="Collate planner context for next cycle")
@@ -1145,7 +1178,7 @@ def build_parser() -> argparse.ArgumentParser:
     design_parser.set_defaults(func=cmd_design)
 
     context_parser = subparsers.add_parser("context", help="Generate review context markdown")
-    context_parser.add_argument("--output", default="review_prompt.md", help="Output filename for context")
+    context_parser.add_argument("--output", default=CODEBASE_CONTEXT_FILENAME, help="Output filename for context")
     context_parser.set_defaults(func=cmd_context)
 
     timestamps_parser = subparsers.add_parser("report", help="Generate documentation freshness report")
@@ -1158,8 +1191,13 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_review(ctx: ProjectContext, args: argparse.Namespace) -> None:
     if not args.skip_tests:
         run_cargo_tests_and_save(ctx, branch_name=args.branch)
-    generate_review_context(ctx, output_file=args.context_output)
-    collate_post_implementation_review(ctx, branch_name=args.branch, downloads_dir=args.downloads)
+    context_path = generate_review_context(ctx, output_file=args.context_output)
+    collate_post_implementation_review(
+        ctx,
+        branch_name=args.branch,
+        downloads_dir=args.downloads,
+        codebase_context_path=context_path,
+    )
 
 
 def cmd_plan(ctx: ProjectContext, args: argparse.Namespace) -> None:

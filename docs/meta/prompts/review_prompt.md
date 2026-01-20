@@ -19,7 +19,13 @@
       wasm.yml
       web_ui_tests.yml
   .gitignore
+  APP_INTENT.md
+  Cargo.lock
+  Cargo.toml
+  README.md
+  REPO_STATE.md
   benchmarks/
+    README.md
     baselines/
       e2e.json
       full-scale.json
@@ -33,7 +39,6 @@
     latest_gate.json
     latest_quick.csv
     latest_quick.json
-    README.md
     results/
       .gitkeep
       2025-12-12_163759.json
@@ -99,8 +104,6 @@
       2026-01-02_160100.json
       2026-01-02_175352.json
     wasm_memory_budgets.json
-  Cargo.lock
-  Cargo.toml
   cli/
     Cargo.toml
     src/
@@ -120,10 +123,10 @@
       git_textconv.rs
       integration_tests.rs
   core/
-    benches/
-      diff_benchmarks.rs
     Cargo.lock
     Cargo.toml
+    benches/
+      diff_benchmarks.rs
     examples/
       basic_diff.rs
       custom_config.rs
@@ -330,25 +333,18 @@
       streaming_sink_tests.rs
       string_pool_tests.rs
   desktop/
-    src-tauri/
-      build.rs
+    backend/
       Cargo.toml
-      FEATURES.md
-      gen/
-        schemas/
-          acl-manifests.json
-          capabilities.json
-          desktop-schema.json
-          windows-schema.json
-      icons/
-        icon.ico
       src/
         batch.rs
         diff_runner.rs
+        events.rs
         export/
           audit_xlsx.rs
           mod.rs
-        main.rs
+        lib.rs
+        paths.rs
+        recents.rs
         search.rs
         store/
           mod.rs
@@ -356,8 +352,36 @@
           op_store.rs
           schema.sql
           types.rs
+      tests/
+        integration_smoke.rs
+    src-tauri/
+      Cargo.toml
+      FEATURES.md
+      build.rs
+      gen/
+        schemas/
+          acl-manifests.json
+          capabilities.json
+          desktop-schema.json
+          linux-schema.json
+          windows-schema.json
+      icons/
+        icon.ico
+        icon.png
+      src/
+        main.rs
       tauri.conf.json
+    wx/
+      Cargo.toml
+      src/
+        logic.rs
+        main.rs
+        xrc_validation.rs
+      ui/
+        main.xrc
+  desktop_ui.png
   fixtures/
+    README.md
     manifest.yaml
     manifest_cli_tests.lock.json
     manifest_cli_tests.yaml
@@ -365,7 +389,6 @@
     manifest_release_smoke.lock.json
     manifest_release_smoke.yaml
     pyproject.toml
-    README.md
     requirements.txt
     src/
       __init__.py
@@ -391,7 +414,6 @@
     scoop/
       excel-diff.json.template
   plan_review.md
-  README.md
   related_files.txt.md
   scripts/
     add_regression_fixture.py
@@ -450,7 +472,7 @@
 
 ## File Contents
 
-### File: `.github\workflows\ci.yml`
+### File: `.github/workflows/ci.yml`
 
 ```yaml
 name: CI
@@ -590,7 +612,7 @@ jobs:
 
 ---
 
-### File: `.github\workflows\fuzz.yml`
+### File: `.github/workflows/fuzz.yml`
 
 ```yaml
 name: Fuzzing
@@ -636,7 +658,7 @@ jobs:
 
 ---
 
-### File: `.github\workflows\pages.yml`
+### File: `.github/workflows/pages.yml`
 
 ```yaml
 name: Deploy Web Demo
@@ -696,7 +718,7 @@ jobs:
 
 ---
 
-### File: `.github\workflows\perf.yml`
+### File: `.github/workflows/perf.yml`
 
 ```yaml
 name: Performance Regression
@@ -754,7 +776,7 @@ jobs:
 
 ---
 
-### File: `.github\workflows\perf_e2e.yml`
+### File: `.github/workflows/perf_e2e.yml`
 
 ```yaml
 name: Performance E2E
@@ -803,7 +825,7 @@ jobs:
 
 ---
 
-### File: `.github\workflows\perf_fullscale.yml`
+### File: `.github/workflows/perf_fullscale.yml`
 
 ```yaml
 name: Performance Full Scale
@@ -847,7 +869,7 @@ jobs:
 
 ---
 
-### File: `.github\workflows\release.yml`
+### File: `.github/workflows/release.yml`
 
 ```yaml
 name: Release
@@ -1349,7 +1371,7 @@ jobs:
 
 ---
 
-### File: `.github\workflows\wasm.yml`
+### File: `.github/workflows/wasm.yml`
 
 ```yaml
 name: WASM Smoke
@@ -1419,7 +1441,7 @@ jobs:
 
 ---
 
-### File: `.github\workflows\web_ui_tests.yml`
+### File: `.github/workflows/web_ui_tests.yml`
 
 ```yaml
 name: Web UI Tests
@@ -1504,14 +1526,14 @@ web/wasm/
 
 ```toml
 [workspace]
-members = ["core", "cli", "wasm", "ui_payload", "desktop/src-tauri"]
+members = ["core", "cli", "wasm", "ui_payload", "desktop/src-tauri", "desktop/backend", "desktop/wx"]
 resolver = "2"
 
 ```
 
 ---
 
-### File: `cli\Cargo.toml`
+### File: `cli/Cargo.toml`
 
 ```toml
 [package]
@@ -1549,7 +1571,7 @@ tempfile = "3"
 
 ---
 
-### File: `cli\src\commands\diff.rs`
+### File: `cli/src/commands/diff.rs`
 
 ```rust
 use crate::commands::host::{host_kind_from_path, open_host, Host, HostKind};
@@ -2560,7 +2582,7 @@ mod tests {
 
 ---
 
-### File: `cli\src\commands\host.rs`
+### File: `cli/src/commands/host.rs`
 
 ```rust
 use anyhow::{Context, Result};
@@ -2610,7 +2632,7 @@ pub(crate) fn open_host(path: &Path, kind: HostKind, label: &str) -> Result<Host
 
 ---
 
-### File: `cli\src\commands\info.rs`
+### File: `cli/src/commands/info.rs`
 
 ```rust
 use anyhow::{Context, Result};
@@ -2736,7 +2758,7 @@ fn format_load_flags(meta: &excel_diff::QueryMetadata) -> String {
 
 ---
 
-### File: `cli\src\commands\mod.rs`
+### File: `cli/src/commands/mod.rs`
 
 ```rust
 pub mod diff;
@@ -2748,7 +2770,7 @@ pub mod info;
 
 ---
 
-### File: `cli\src\main.rs`
+### File: `cli/src/main.rs`
 
 ```rust
 mod commands;
@@ -2948,7 +2970,7 @@ fn is_internal_error(err: &anyhow::Error) -> bool {
 
 ---
 
-### File: `cli\src\output\git_diff.rs`
+### File: `cli/src/output/git_diff.rs`
 
 ```rust
 use anyhow::Result;
@@ -3719,7 +3741,7 @@ fn expression_change_label(kind: ExpressionChangeKind) -> &'static str {
 
 ---
 
-### File: `cli\src\output\json.rs`
+### File: `cli/src/output/json.rs`
 
 ```rust
 use anyhow::Result;
@@ -3742,7 +3764,7 @@ pub fn write_json_value<W: Write, T: Serialize>(w: &mut W, value: &T) -> Result<
 
 ---
 
-### File: `cli\src\output\mod.rs`
+### File: `cli/src/output/mod.rs`
 
 ```rust
 pub mod git_diff;
@@ -3754,7 +3776,7 @@ pub mod text;
 
 ---
 
-### File: `cli\src\output\text.rs`
+### File: `cli/src/output/text.rs`
 
 ```rust
 use crate::commands::diff::Verbosity;
@@ -4646,7 +4668,7 @@ fn expression_change_label(kind: ExpressionChangeKind) -> &'static str {
 
 ---
 
-### File: `cli\tests\determinism_cli_json.rs`
+### File: `cli/tests/determinism_cli_json.rs`
 
 ```rust
 use std::process::Command;
@@ -4704,7 +4726,7 @@ fn json_output_is_deterministic_across_thread_counts() {
 
 ---
 
-### File: `cli\tests\git_textconv.rs`
+### File: `cli/tests/git_textconv.rs`
 
 ```rust
 use std::fs;
@@ -4769,7 +4791,7 @@ fn git_textconv_uses_excel_diff_info() {
 
 ---
 
-### File: `cli\tests\integration_tests.rs`
+### File: `cli/tests/integration_tests.rs`
 
 ```rust
 use std::process::Command;
@@ -6048,7 +6070,65 @@ fn info_pbix_includes_embedded_queries() {
 
 ---
 
-### File: `core\benches\diff_benchmarks.rs`
+### File: `core/Cargo.toml`
+
+```toml
+[package]
+name = "excel_diff"
+version = "0.1.0"
+edition = "2024"
+description = "A library for comparing Excel workbooks"
+license = "MIT"
+repository = "https://github.com/dvora/excel_diff"
+homepage = "https://github.com/dvora/excel_diff"
+
+[lib]
+name = "excel_diff"
+path = "src/lib.rs"
+
+[features]
+default = ["excel-open-xml", "std-fs", "vba", "dpapi"]
+excel-open-xml = []
+vba = ["dep:ovba"]
+std-fs = []
+perf-metrics = []
+dev-apis = []
+model-diff = []
+legacy-api = []
+parallel = ["dep:rayon"]
+dpapi = []
+
+[dependencies]
+quick-xml = "0.32"
+thiserror = "1.0"
+rayon = { version = "1.10.0", optional = true }
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+base64 = "0.22"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+xxhash-rust = { version = "0.8", features = ["xxh64", "xxh3"] }
+rustc-hash = "1.1"
+ovba = { version = "0.7.1", optional = true }
+sha2 = "0.10"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+
+[dev-dependencies]
+pretty_assertions = "1.4"
+tempfile = "3.10"
+criterion = { version = "0.5", features = ["html_reports"] }
+serde_yaml = "0.9"
+
+[[bench]]
+name = "diff_benchmarks"
+harness = false
+
+```
+
+---
+
+### File: `core/benches/diff_benchmarks.rs`
 
 ```rust
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -6437,65 +6517,7 @@ criterion_main!(benches, alignment_benches);
 
 ---
 
-### File: `core\Cargo.toml`
-
-```toml
-[package]
-name = "excel_diff"
-version = "0.1.0"
-edition = "2024"
-description = "A library for comparing Excel workbooks"
-license = "MIT"
-repository = "https://github.com/dvora/excel_diff"
-homepage = "https://github.com/dvora/excel_diff"
-
-[lib]
-name = "excel_diff"
-path = "src/lib.rs"
-
-[features]
-default = ["excel-open-xml", "std-fs", "vba", "dpapi"]
-excel-open-xml = []
-vba = ["dep:ovba"]
-std-fs = []
-perf-metrics = []
-dev-apis = []
-model-diff = []
-legacy-api = []
-parallel = ["dep:rayon"]
-dpapi = []
-
-[dependencies]
-quick-xml = "0.32"
-thiserror = "1.0"
-rayon = { version = "1.10.0", optional = true }
-zip = { version = "0.6", default-features = false, features = ["deflate"] }
-base64 = "0.22"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-xxhash-rust = { version = "0.8", features = ["xxh64", "xxh3"] }
-rustc-hash = "1.1"
-ovba = { version = "0.7.1", optional = true }
-sha2 = "0.10"
-
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
-
-[dev-dependencies]
-pretty_assertions = "1.4"
-tempfile = "3.10"
-criterion = { version = "0.5", features = ["html_reports"] }
-serde_yaml = "0.9"
-
-[[bench]]
-name = "diff_benchmarks"
-harness = false
-
-```
-
----
-
-### File: `core\examples\basic_diff.rs`
+### File: `core/examples/basic_diff.rs`
 
 ```rust
 use excel_diff::{DiffConfig, WorkbookPackage};
@@ -6536,7 +6558,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ---
 
-### File: `core\examples\custom_config.rs`
+### File: `core/examples/custom_config.rs`
 
 ```rust
 use excel_diff::{DiffConfig, WorkbookPackage};
@@ -6575,7 +6597,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ---
 
-### File: `core\examples\database_mode.rs`
+### File: `core/examples/database_mode.rs`
 
 ```rust
 use excel_diff::{DiffConfig, WorkbookPackage};
@@ -6664,7 +6686,7 @@ fn col_letters_to_index(letters: &str) -> io::Result<u32> {
 
 ---
 
-### File: `core\examples\streaming.rs`
+### File: `core/examples/streaming.rs`
 
 ```rust
 use excel_diff::{DiffConfig, JsonLinesSink, WorkbookPackage};
@@ -6707,7 +6729,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ---
 
-### File: `core\fuzz\Cargo.toml`
+### File: `core/fuzz/Cargo.toml`
 
 ```toml
 [package]
@@ -6771,7 +6793,7 @@ debug = 1
 
 ---
 
-### File: `core\fuzz\fuzz_targets\fuzz_datamashup_parse.rs`
+### File: `core/fuzz/fuzz_targets/fuzz_datamashup_parse.rs`
 
 ```rust
 #![no_main]
@@ -6791,7 +6813,7 @@ fuzz_target!(|data: &[u8]| {
 
 ---
 
-### File: `core\fuzz\fuzz_targets\fuzz_diff_grids.rs`
+### File: `core/fuzz/fuzz_targets/fuzz_diff_grids.rs`
 
 ```rust
 #![no_main]
@@ -6891,7 +6913,7 @@ fuzz_target!(|input: FuzzInput| {
 
 ---
 
-### File: `core\fuzz\fuzz_targets\fuzz_m_section_and_ast.rs`
+### File: `core/fuzz/fuzz_targets/fuzz_m_section_and_ast.rs`
 
 ```rust
 #![no_main]
@@ -6915,7 +6937,7 @@ fuzz_target!(|data: &[u8]| {
 
 ---
 
-### File: `core\fuzz\fuzz_targets\fuzz_open_pbix.rs`
+### File: `core/fuzz/fuzz_targets/fuzz_open_pbix.rs`
 
 ```rust
 #![no_main]
@@ -6940,7 +6962,7 @@ fuzz_target!(|data: &[u8]| {
 
 ---
 
-### File: `core\fuzz\fuzz_targets\fuzz_open_workbook.rs`
+### File: `core/fuzz/fuzz_targets/fuzz_open_workbook.rs`
 
 ```rust
 #![no_main]
@@ -6970,7 +6992,7 @@ fuzz_target!(|data: &[u8]| {
 
 ---
 
-### File: `core\fuzz\seed_fixtures.yaml`
+### File: `core/fuzz/seed_fixtures.yaml`
 
 ```yaml
 fixtures:
@@ -7046,7 +7068,7 @@ fixtures:
 
 ---
 
-### File: `core\src\addressing.rs`
+### File: `core/src/addressing.rs`
 
 ```rust
 //! Excel cell addressing utilities.
@@ -7166,7 +7188,7 @@ mod tests {
 
 ---
 
-### File: `core\src\alignment\anchor_chain.rs`
+### File: `core/src/alignment/anchor_chain.rs`
 
 ```rust
 //! Anchor chain construction using Longest Increasing Subsequence (LIS).
@@ -7273,7 +7295,7 @@ mod tests {
 
 ---
 
-### File: `core\src\alignment\anchor_discovery.rs`
+### File: `core/src/alignment/anchor_discovery.rs`
 
 ```rust
 //! Anchor discovery for AMR alignment.
@@ -7470,7 +7492,7 @@ mod tests {
 
 ---
 
-### File: `core\src\alignment\assembly.rs`
+### File: `core/src/alignment/assembly.rs`
 
 ```rust
 //! Final alignment assembly for AMR algorithm.
@@ -8790,7 +8812,7 @@ mod tests {
 
 ---
 
-### File: `core\src\alignment\gap_strategy.rs`
+### File: `core/src/alignment/gap_strategy.rs`
 
 ```rust
 //! Gap strategy selection for AMR alignment.
@@ -8929,7 +8951,7 @@ mod tests {
 
 ---
 
-### File: `core\src\alignment\lap.rs`
+### File: `core/src/alignment/lap.rs`
 
 ```rust
 //! Linear assignment solver (Hungarian algorithm).
@@ -9040,7 +9062,7 @@ mod tests {
 
 ---
 
-### File: `core\src\alignment\mod.rs`
+### File: `core/src/alignment/mod.rs`
 
 ```rust
 //! Anchor-Move-Refine (AMR) row alignment algorithm.
@@ -9097,7 +9119,7 @@ pub(crate) use assembly::align_rows_amr_with_signatures_from_views_with_metrics;
 
 ---
 
-### File: `core\src\alignment\move_extraction.rs`
+### File: `core/src/alignment/move_extraction.rs`
 
 ```rust
 //! Move extraction for AMR alignment.
@@ -9802,7 +9824,7 @@ mod tests {
 
 ---
 
-### File: `core\src\alignment\runs.rs`
+### File: `core/src/alignment/runs.rs`
 
 ```rust
 //! Run-length encoding for repetitive row patterns.
@@ -9998,7 +10020,7 @@ mod tests {
 
 ---
 
-### File: `core\src\alignment_types.rs`
+### File: `core/src/alignment_types.rs`
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -10020,7 +10042,7 @@ pub struct RowBlockMove {
 
 ---
 
-### File: `core\src\bin\wasm_smoke.rs`
+### File: `core/src/bin/wasm_smoke.rs`
 
 ```rust
 use excel_diff::{
@@ -10070,7 +10092,7 @@ fn main() {
 
 ---
 
-### File: `core\src\capabilities.rs`
+### File: `core/src/capabilities.rs`
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -10097,7 +10119,7 @@ pub fn engine_features() -> EngineFeatures {
 
 ---
 
-### File: `core\src\column_alignment.rs`
+### File: `core/src/column_alignment.rs`
 
 ```rust
 use crate::alignment::align_meta_with_amr;
@@ -10726,7 +10748,7 @@ mod tests {
 
 ---
 
-### File: `core\src\config.rs`
+### File: `core/src/config.rs`
 
 ```rust
 //! Configuration for the diff engine.
@@ -11513,7 +11535,7 @@ mod tests {
 
 ---
 
-### File: `core\src\container.rs`
+### File: `core/src/container.rs`
 
 ```rust
 //! ZIP container handling.
@@ -11879,7 +11901,7 @@ mod tests {
 
 ---
 
-### File: `core\src\database_alignment.rs`
+### File: `core/src/database_alignment.rs`
 
 ```rust
 use crate::hashing::normalize_float_for_hash;
@@ -12530,7 +12552,7 @@ mod tests {
 
 ---
 
-### File: `core\src\datamashup.rs`
+### File: `core/src/datamashup.rs`
 
 ```rust
 //! High-level DataMashup (Power Query) parsing and query extraction.
@@ -13152,7 +13174,7 @@ fn split_item_path(path: &str) -> Result<(String, String), DataMashupError> {
 
 ---
 
-### File: `core\src\datamashup_framing.rs`
+### File: `core/src/datamashup_framing.rs`
 
 ```rust
 use base64::Engine;
@@ -13581,7 +13603,7 @@ mod tests {
 
 ---
 
-### File: `core\src\datamashup_package.rs`
+### File: `core/src/datamashup_package.rs`
 
 ```rust
 use crate::datamashup_framing::DataMashupError;
@@ -13815,7 +13837,7 @@ fn strip_leading_bom(text: String) -> String {
 
 ---
 
-### File: `core\src\dax.rs`
+### File: `core/src/dax.rs`
 
 ```rust
 use std::hash::{Hash, Hasher};
@@ -14466,7 +14488,7 @@ mod tests {
 
 ---
 
-### File: `core\src\diff.rs`
+### File: `core/src/diff.rs`
 
 ```rust
 //! Diff operations and reports for workbook comparison.
@@ -15325,7 +15347,7 @@ impl DiffOp {
 
 ---
 
-### File: `core\src\diffable.rs`
+### File: `core/src/diffable.rs`
 
 ```rust
 //! Lightweight Diffable trait for component-level diffs.
@@ -15386,7 +15408,7 @@ impl Diffable for Grid {
 
 ---
 
-### File: `core\src\engine\amr.rs`
+### File: `core/src/engine/amr.rs`
 
 ```rust
 use crate::alignment::align_rows_amr_with_signatures_from_views;
@@ -15701,7 +15723,7 @@ pub(super) fn try_diff_with_amr<S: DiffSink>(
 
 ---
 
-### File: `core\src\engine\context.rs`
+### File: `core/src/engine/context.rs`
 
 ```rust
 use crate::config::DiffConfig;
@@ -15787,7 +15809,7 @@ impl<'a, 'p, S: DiffSink> EmitCtx<'a, 'p, S> {
 
 ---
 
-### File: `core\src\engine\grid_diff.rs`
+### File: `core/src/engine/grid_diff.rs`
 
 ```rust
 use crate::config::{DiffConfig, LimitBehavior};
@@ -17572,7 +17594,7 @@ mod tests {
 
 ---
 
-### File: `core\src\engine\grid_primitives.rs`
+### File: `core/src/engine/grid_primitives.rs`
 
 ```rust
 use crate::alignment_types::{RowAlignment, RowBlockMove};
@@ -18717,7 +18739,7 @@ pub(super) fn try_single_column_alignment_internal<S: DiffSink>(
 
 ---
 
-### File: `core\src\engine\hardening.rs`
+### File: `core/src/engine/hardening.rs`
 
 ```rust
 use crate::config::DiffConfig;
@@ -18910,7 +18932,7 @@ fn bytes_to_mb_ceil(bytes: u64) -> u64 {
 
 ---
 
-### File: `core\src\engine\mod.rs`
+### File: `core/src/engine/mod.rs`
 
 ```rust
 //! Core diffing engine for workbook comparison.
@@ -18955,7 +18977,7 @@ pub use workbook_diff::{
 
 ---
 
-### File: `core\src\engine\move_mask.rs`
+### File: `core/src/engine/move_mask.rs`
 
 ```rust
 use crate::alignment_types::RowBlockMove;
@@ -20162,7 +20184,7 @@ mod tests {
 
 ---
 
-### File: `core\src\engine\sheet_diff.rs`
+### File: `core/src/engine/sheet_diff.rs`
 
 ```rust
 use crate::config::DiffConfig;
@@ -20352,7 +20374,7 @@ fn try_diff_sheets_streaming_with_op_count<'p, S: DiffSink>(
 
 ---
 
-### File: `core\src\engine\workbook_diff.rs`
+### File: `core/src/engine/workbook_diff.rs`
 
 ```rust
 use crate::config::DiffConfig;
@@ -20996,7 +21018,7 @@ mod tests {
 
 ---
 
-### File: `core\src\error_codes.rs`
+### File: `core/src/error_codes.rs`
 
 ```rust
 pub const PKG_NOT_ZIP: &str = "EXDIFF_PKG_001";
@@ -21042,7 +21064,7 @@ pub const DIFF_INTERNAL_ERROR: &str = "EXDIFF_DIFF_004";
 
 ---
 
-### File: `core\src\excel_open_xml.rs`
+### File: `core/src/excel_open_xml.rs`
 
 ```rust
 //! Excel Open XML file parsing.
@@ -21700,7 +21722,7 @@ pub fn open_data_mashup(path: impl AsRef<Path>) -> Result<Option<RawDataMashup>,
 
 ---
 
-### File: `core\src\formula.rs`
+### File: `core/src/formula.rs`
 
 ```rust
 use std::fmt;
@@ -22842,7 +22864,7 @@ fn col_letters_to_u32(s: &str) -> Option<u32> {
 
 ---
 
-### File: `core\src\formula_diff.rs`
+### File: `core/src/formula_diff.rs`
 
 ```rust
 use rustc_hash::FxHashMap;
@@ -22936,7 +22958,7 @@ pub(crate) fn diff_cell_formulas_ids(
 
 ---
 
-### File: `core\src\grid_metadata.rs`
+### File: `core/src/grid_metadata.rs`
 
 ```rust
 //! Grid row metadata and frequency classification.
@@ -23042,7 +23064,7 @@ mod tests {
 
 ---
 
-### File: `core\src\grid_parser.rs`
+### File: `core/src/grid_parser.rs`
 
 ```rust
 //! XML parsing for Excel worksheet grids.
@@ -23881,7 +23903,7 @@ mod tests {
 
 ---
 
-### File: `core\src\grid_view.rs`
+### File: `core/src/grid_view.rs`
 
 ```rust
 use std::collections::HashMap;
@@ -24408,7 +24430,7 @@ fn to_u16(value: u32) -> u16 {
 
 ---
 
-### File: `core\src\hashing.rs`
+### File: `core/src/hashing.rs`
 
 ```rust
 //! Hash utilities for row/column signature computation.
@@ -24658,7 +24680,7 @@ mod tests {
 
 ---
 
-### File: `core\src\lib.rs`
+### File: `core/src/lib.rs`
 
 ```rust
 //! Excel Diff: a library for comparing Excel workbooks.
@@ -25010,7 +25032,7 @@ pub use database_alignment::suggest_key_columns;
 
 ---
 
-### File: `core\src\m_ast\step_model.rs`
+### File: `core/src/m_ast/step_model.rs`
 
 ```rust
 use std::collections::{BTreeSet, HashMap};
@@ -25958,7 +25980,7 @@ mod tests {
 
 ---
 
-### File: `core\src\m_ast.rs`
+### File: `core/src/m_ast.rs`
 
 ```rust
 use std::hash::{Hash, Hasher};
@@ -27904,7 +27926,7 @@ fn delimiters_match(open: char, close: char) -> bool {
 
 ---
 
-### File: `core\src\m_ast_diff\apted.rs`
+### File: `core/src/m_ast_diff/apted.rs`
 
 ```rust
 use std::collections::HashMap;
@@ -28103,7 +28125,7 @@ pub(crate) fn approximate_counts(old: &SimpleTree, new: &SimpleTree) -> EditCoun
 
 ---
 
-### File: `core\src\m_ast_diff\gumtree.rs`
+### File: `core/src/m_ast_diff/gumtree.rs`
 
 ```rust
 use std::collections::HashMap;
@@ -28206,7 +28228,7 @@ fn mark_range(covered: &mut [bool], start: usize, size: u32) {
 
 ---
 
-### File: `core\src\m_ast_diff\mod.rs`
+### File: `core/src/m_ast_diff/mod.rs`
 
 ```rust
 use std::hash::{Hash, Hasher};
@@ -28464,7 +28486,7 @@ pub(crate) fn move_hints_for_matches(
 
 ---
 
-### File: `core\src\m_diff.rs`
+### File: `core/src/m_diff.rs`
 
 ```rust
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -28956,7 +28978,7 @@ impl Diffable for Vec<Query> {
 
 ---
 
-### File: `core\src\m_section.rs`
+### File: `core/src/m_section.rs`
 
 ```rust
 use std::str::Lines;
@@ -29193,7 +29215,7 @@ fn strip_leading_bom(text: &str) -> &str {
 
 ---
 
-### File: `core\src\m_semantic_detail.rs`
+### File: `core/src/m_semantic_detail.rs`
 
 ```rust
 use std::collections::{HashMap, HashSet};
@@ -30048,7 +30070,7 @@ mod tests {
 
 ---
 
-### File: `core\src\matching\hungarian.rs`
+### File: `core/src/matching/hungarian.rs`
 
 ```rust
 //! Hungarian assignment wrapper for rectangular cost matrices.
@@ -30078,7 +30100,7 @@ pub(crate) fn solve_rect(costs: &[Vec<i64>], pad_cost: i64) -> Vec<usize> {
 
 ---
 
-### File: `core\src\matching\mod.rs`
+### File: `core/src/matching/mod.rs`
 
 ```rust
 pub(crate) mod hungarian;
@@ -30087,7 +30109,7 @@ pub(crate) mod hungarian;
 
 ---
 
-### File: `core\src\memory_estimate.rs`
+### File: `core/src/memory_estimate.rs`
 
 ```rust
 use crate::grid_view::{ColMeta, RowMeta, RowView};
@@ -30140,7 +30162,7 @@ pub(crate) fn estimate_advanced_sheet_diff_peak(old: &Grid, new: &Grid) -> u64 {
 
 ---
 
-### File: `core\src\memory_metrics.rs`
+### File: `core/src/memory_metrics.rs`
 
 ```rust
 use std::alloc::{GlobalAlloc, Layout};
@@ -30242,7 +30264,7 @@ pub fn peak_bytes() -> u64 {
 
 ---
 
-### File: `core\src\model.rs`
+### File: `core/src/model.rs`
 
 ```rust
 use crate::string_pool::StringId;
@@ -30294,7 +30316,7 @@ pub struct ModelRelationship {
 
 ---
 
-### File: `core\src\model_diff.rs`
+### File: `core/src/model_diff.rs`
 
 ```rust
 use std::collections::{BTreeMap, BTreeSet};
@@ -30902,7 +30924,7 @@ mod tests {
 
 ---
 
-### File: `core\src\object_diff.rs`
+### File: `core/src/object_diff.rs`
 
 ```rust
 use crate::diff::DiffOp;
@@ -31184,7 +31206,7 @@ pub(crate) fn diff_vba_modules(
 
 ---
 
-### File: `core\src\output\json.rs`
+### File: `core/src/output/json.rs`
 
 ```rust
 #[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
@@ -31361,7 +31383,7 @@ fn contains_non_finite_numbers(report: &DiffReport) -> bool {
 
 ---
 
-### File: `core\src\output\json_lines.rs`
+### File: `core/src/output/json_lines.rs`
 
 ```rust
 use crate::diff::{DiffError, DiffOp};
@@ -31457,7 +31479,7 @@ impl<W: Write> DiffSink for JsonLinesSink<W> {
 
 ---
 
-### File: `core\src\output\mod.rs`
+### File: `core/src/output/mod.rs`
 
 ```rust
 pub mod json;
@@ -31467,7 +31489,7 @@ pub mod json_lines;
 
 ---
 
-### File: `core\src\package.rs`
+### File: `core/src/package.rs`
 
 ```rust
 use crate::config::DiffConfig;
@@ -32584,7 +32606,7 @@ mod tests {
 
 ---
 
-### File: `core\src\perf.rs`
+### File: `core/src/perf.rs`
 
 ```rust
 use std::collections::HashMap;
@@ -32703,7 +32725,7 @@ impl Drop for PhaseGuard<'_> {
 
 ---
 
-### File: `core\src\permission_bindings.rs`
+### File: `core/src/permission_bindings.rs`
 
 ```rust
 use crate::datamashup::Permissions;
@@ -32932,7 +32954,7 @@ fn sha256(bytes: &[u8]) -> [u8; SHA256_LEN] {
 
 ---
 
-### File: `core\src\policy.rs`
+### File: `core/src/policy.rs`
 
 ```rust
 use crate::config::DiffConfig;
@@ -32947,7 +32969,7 @@ pub fn should_use_large_mode(estimated_cell_volume: u64, _config: &DiffConfig) -
 
 ---
 
-### File: `core\src\progress.rs`
+### File: `core/src/progress.rs`
 
 ```rust
 /// Progress reporting for long-running diffs.
@@ -32972,7 +32994,7 @@ impl ProgressCallback for NoProgress {
 
 ---
 
-### File: `core\src\rect_block_move.rs`
+### File: `core/src/rect_block_move.rs`
 
 ```rust
 //! Rectangular block move detection.
@@ -33586,7 +33608,7 @@ mod tests {
 
 ---
 
-### File: `core\src\region_mask.rs`
+### File: `core/src/region_mask.rs`
 
 ```rust
 //! Region mask for tracking which cells have been accounted for during diff.
@@ -33924,7 +33946,7 @@ mod tests {
 
 ---
 
-### File: `core\src\row_alignment.rs`
+### File: `core/src/row_alignment.rs`
 
 ```rust
 //! Legacy row alignment algorithms (pre-AMR).
@@ -35217,7 +35239,7 @@ mod tests {
 
 ---
 
-### File: `core\src\session.rs`
+### File: `core/src/session.rs`
 
 ```rust
 use crate::string_pool::StringPool;
@@ -35247,7 +35269,7 @@ impl DiffSession {
 
 ---
 
-### File: `core\src\sink.rs`
+### File: `core/src/sink.rs`
 
 ```rust
 use crate::diff::{DiffError, DiffOp};
@@ -35394,7 +35416,7 @@ impl<F: FnMut(DiffOp)> DiffSink for CallbackSink<F> {
 
 ---
 
-### File: `core\src\string_pool.rs`
+### File: `core/src/string_pool.rs`
 
 ```rust
 use rustc_hash::FxHashMap;
@@ -35466,7 +35488,7 @@ impl StringPool {
 
 ---
 
-### File: `core\src\tabular_schema.rs`
+### File: `core/src/tabular_schema.rs`
 
 ```rust
 use serde_json::Value;
@@ -35903,7 +35925,7 @@ mod tests {
 
 ---
 
-### File: `core\src\vba.rs`
+### File: `core/src/vba.rs`
 
 ```rust
 use crate::string_pool::StringId;
@@ -35936,7 +35958,7 @@ pub struct VbaModule {
 
 ---
 
-### File: `core\src\workbook.rs`
+### File: `core/src/workbook.rs`
 
 ```rust
 //! Workbook, sheet, and grid data structures.
@@ -37055,7 +37077,7 @@ mod tests {
 
 ---
 
-### File: `core\tests\addressing_pg2_tests.rs`
+### File: `core/tests/addressing_pg2_tests.rs`
 
 ```rust
 mod common;
@@ -37096,7 +37118,7 @@ fn pg2_addressing_matrix_consistency() {
 
 ---
 
-### File: `core\tests\amr_multi_gap_tests.rs`
+### File: `core/tests/amr_multi_gap_tests.rs`
 
 ```rust
 mod common;
@@ -37393,7 +37415,7 @@ fn amr_recursive_gap_alignment() {
 
 ---
 
-### File: `core\tests\branch4_object_diff_tests.rs`
+### File: `core/tests/branch4_object_diff_tests.rs`
 
 ```rust
 mod common;
@@ -37566,7 +37588,7 @@ fn branch4_vba_modules_open_returns_modules() {
 
 ---
 
-### File: `core\tests\common\mod.rs`
+### File: `core/tests/common/mod.rs`
 
 ```rust
 //! Common test utilities shared across integration tests.
@@ -37663,7 +37685,7 @@ pub struct JsonlOutput {
     pub ops: Vec<DiffOp>,
 }
 
-fn normalize_summary(summary: DiffSummary) -> DiffSummary {
+fn normalize_summary(mut summary: DiffSummary) -> DiffSummary {
     #[cfg(feature = "perf-metrics")]
     {
         summary.metrics = None;
@@ -38034,7 +38056,7 @@ pub fn collect_string_ids(op: &DiffOp) -> Vec<StringId> {
 
 ---
 
-### File: `core\tests\d1_database_mode_tests.rs`
+### File: `core/tests/d1_database_mode_tests.rs`
 
 ```rust
 mod common;
@@ -38610,7 +38632,7 @@ fn d5_three_column_composite_key_partial_match_yields_add_and_remove() {
 
 ---
 
-### File: `core\tests\d2_d4_database_mode_workbook_tests.rs`
+### File: `core/tests/d2_d4_database_mode_workbook_tests.rs`
 
 ```rust
 mod common;
@@ -38874,7 +38896,7 @@ fn d4_reorder_and_change_emits_cell_edited_only() {
 
 ---
 
-### File: `core\tests\data_mashup_tests.rs`
+### File: `core/tests/data_mashup_tests.rs`
 
 ```rust
 use std::fs::File;
@@ -39163,7 +39185,7 @@ fn assemble_top_level_bytes(raw: &RawDataMashup) -> Vec<u8> {
 
 ---
 
-### File: `core\tests\database_mode_wrapper_tests.rs`
+### File: `core/tests/database_mode_wrapper_tests.rs`
 
 ```rust
 use excel_diff::{
@@ -39208,7 +39230,7 @@ fn database_mode_wrapper_limits_exceeded_returns_incomplete_report() {
 
 ---
 
-### File: `core\tests\e2e_perf_workbook_open.rs`
+### File: `core/tests/e2e_perf_workbook_open.rs`
 
 ```rust
 #![cfg(feature = "perf-metrics")]
@@ -39369,7 +39391,7 @@ fn e2e_p5_identical() {
 
 ---
 
-### File: `core\tests\engine_tests.rs`
+### File: `core/tests/engine_tests.rs`
 
 ```rust
 mod common;
@@ -40004,7 +40026,7 @@ fn duplicate_workbook_sheet_id_falls_back_to_name_matching() {
 
 ---
 
-### File: `core\tests\excel_open_xml_tests.rs`
+### File: `core/tests/excel_open_xml_tests.rs`
 
 ```rust
 mod common;
@@ -40488,7 +40510,7 @@ fn corrupt_inputs_never_panic() {
 
 ---
 
-### File: `core\tests\f7_formula_canonicalization_tests.rs`
+### File: `core/tests/f7_formula_canonicalization_tests.rs`
 
 ```rust
 use excel_diff::parse_formula;
@@ -40540,7 +40562,7 @@ fn structured_refs_parse_and_canonicalize() {
 
 ---
 
-### File: `core\tests\f7_formula_diff_integration_tests.rs`
+### File: `core/tests/f7_formula_diff_integration_tests.rs`
 
 ```rust
 use excel_diff::{
@@ -40651,7 +40673,7 @@ fn filled_down_formulas_detect_row_shift() {
 
 ---
 
-### File: `core\tests\f7_formula_parser_tests.rs`
+### File: `core/tests/f7_formula_parser_tests.rs`
 
 ```rust
 use excel_diff::{
@@ -40756,7 +40778,7 @@ fn parses_varied_syntaxes() {
 
 ---
 
-### File: `core\tests\f7_formula_shift_tests.rs`
+### File: `core/tests/f7_formula_shift_tests.rs`
 
 ```rust
 use excel_diff::{formulas_equivalent_modulo_shift, parse_formula};
@@ -40791,7 +40813,7 @@ fn mismatched_refs_do_not_match_under_zero_shift() {
 
 ---
 
-### File: `core\tests\g10_row_block_alignment_grid_workbook_tests.rs`
+### File: `core/tests/g10_row_block_alignment_grid_workbook_tests.rs`
 
 ```rust
 mod common;
@@ -40899,7 +40921,7 @@ fn g10_row_block_delete_middle_emits_four_rowremoved_and_no_noise() {
 
 ---
 
-### File: `core\tests\g11_row_block_move_grid_workbook_tests.rs`
+### File: `core/tests/g11_row_block_move_grid_workbook_tests.rs`
 
 ```rust
 mod common;
@@ -40997,7 +41019,7 @@ fn g11_repeated_rows_do_not_emit_blockmove() {
 
 ---
 
-### File: `core\tests\g12_column_block_move_grid_workbook_tests.rs`
+### File: `core/tests/g12_column_block_move_grid_workbook_tests.rs`
 
 ```rust
 mod common;
@@ -41202,7 +41224,7 @@ fn g12_column_swap_emits_blockmovedcolumns() {
 
 ---
 
-### File: `core\tests\g12_rect_block_move_grid_workbook_tests.rs`
+### File: `core/tests/g12_rect_block_move_grid_workbook_tests.rs`
 
 ```rust
 mod common;
@@ -41354,7 +41376,7 @@ fn grid_from_matrix(matrix: Vec<Vec<i32>>) -> excel_diff::Grid {
 
 ---
 
-### File: `core\tests\g13_fuzzy_row_move_grid_workbook_tests.rs`
+### File: `core/tests/g13_fuzzy_row_move_grid_workbook_tests.rs`
 
 ```rust
 mod common;
@@ -41566,7 +41588,7 @@ fn g13_ambiguous_repeated_blocks_do_not_emit_blockmovedrows() {
 
 ---
 
-### File: `core\tests\g14_move_combination_tests.rs`
+### File: `core/tests/g14_move_combination_tests.rs`
 
 ```rust
 mod common;
@@ -42431,7 +42453,7 @@ fn g14_max_move_iterations_limits_detected_moves() {
 
 ---
 
-### File: `core\tests\g15_column_structure_row_alignment_tests.rs`
+### File: `core/tests/g15_column_structure_row_alignment_tests.rs`
 
 ```rust
 //! Integration tests verifying column structural changes do not break row alignment when row content is preserved.
@@ -42831,7 +42853,7 @@ fn g15_large_grid_column_insert_row_alignment_preserved() {
 
 ---
 
-### File: `core\tests\g1_g2_grid_workbook_tests.rs`
+### File: `core/tests/g1_g2_grid_workbook_tests.rs`
 
 ```rust
 mod common;
@@ -42973,7 +42995,7 @@ fn g2_nan_values_are_treated_as_equal() {
 
 ---
 
-### File: `core\tests\g5_g7_grid_workbook_tests.rs`
+### File: `core/tests/g5_g7_grid_workbook_tests.rs`
 
 ```rust
 mod common;
@@ -43242,7 +43264,7 @@ fn g7_col_delete_right_emits_two_columnremoved_and_no_celledited() {
 
 ---
 
-### File: `core\tests\g8_row_alignment_grid_workbook_tests.rs`
+### File: `core/tests/g8_row_alignment_grid_workbook_tests.rs`
 
 ```rust
 mod common;
@@ -43401,7 +43423,7 @@ fn alignment_bails_out_when_additional_edits_present() {
 
 ---
 
-### File: `core\tests\g9_column_alignment_grid_workbook_tests.rs`
+### File: `core/tests/g9_column_alignment_grid_workbook_tests.rs`
 
 ```rust
 mod common;
@@ -43560,7 +43582,7 @@ fn find_header_col(workbook: &Workbook, header: &str) -> u32 {
 
 ---
 
-### File: `core\tests\grid_view_hashstats_tests.rs`
+### File: `core/tests/grid_view_hashstats_tests.rs`
 
 ```rust
 use excel_diff::{
@@ -43725,7 +43747,7 @@ fn hashstats_from_col_meta_tracks_positions() {
 
 ---
 
-### File: `core\tests\grid_view_tests.rs`
+### File: `core/tests/grid_view_tests.rs`
 
 ```rust
 use excel_diff::{CellValue, DiffConfig, Grid, GridView, with_default_session};
@@ -43932,7 +43954,7 @@ fn gridview_row_hashes_ignore_small_float_drift() {
 
 ---
 
-### File: `core\tests\hardening_tests.rs`
+### File: `core/tests/hardening_tests.rs`
 
 ```rust
 mod common;
@@ -44077,7 +44099,7 @@ fn progress_callback_fires_for_cell_diff() {
 
 ---
 
-### File: `core\tests\integration_test.rs`
+### File: `core/tests/integration_test.rs`
 
 ```rust
 use std::path::PathBuf;
@@ -44106,7 +44128,7 @@ fn test_locate_fixture() {
 
 ---
 
-### File: `core\tests\leaf_diff_equivalence_tests.rs`
+### File: `core/tests/leaf_diff_equivalence_tests.rs`
 
 ```rust
 use excel_diff::advanced::{diff_grids_with_pool, diff_sheets_with_pool, diff_workbooks_with_pool};
@@ -44199,7 +44221,7 @@ fn sheet_leaf_diff_matches_single_sheet_workbook() {
 
 ---
 
-### File: `core\tests\limit_behavior_tests.rs`
+### File: `core/tests/limit_behavior_tests.rs`
 
 ```rust
 mod common;
@@ -44546,7 +44568,7 @@ fn wide_grid_500_cols_completes_within_default_limits() {
 
 ---
 
-### File: `core\tests\m10_embedded_m_diff_tests.rs`
+### File: `core/tests/m10_embedded_m_diff_tests.rs`
 
 ```rust
 use excel_diff::{DiffConfig, DiffOp, DiffReport, QueryChangeKind, WorkbookPackage};
@@ -44611,7 +44633,7 @@ fn embedded_only_change_produces_embedded_definitionchanged() {
 
 ---
 
-### File: `core\tests\m10_m_parser_tier2_tests.rs`
+### File: `core/tests/m10_m_parser_tier2_tests.rs`
 
 ```rust
 use excel_diff::{MAstKind, ast_semantically_equal, canonicalize_m_ast, parse_m_expression};
@@ -44694,7 +44716,7 @@ fn parse_try_otherwise() {
 
 ---
 
-### File: `core\tests\m4_package_parts_tests.rs`
+### File: `core/tests/m4_package_parts_tests.rs`
 
 ```rust
 use std::io::{Cursor, Write};
@@ -45232,7 +45254,7 @@ fn random_bytes(seed: u64, len: usize) -> Vec<u8> {
 
 ---
 
-### File: `core\tests\m4_permissions_metadata_tests.rs`
+### File: `core/tests/m4_permissions_metadata_tests.rs`
 
 ```rust
 use excel_diff::{
@@ -45533,7 +45555,7 @@ fn build_queries_is_compatible_with_metadata_simple() {
 
 ---
 
-### File: `core\tests\m5_query_domain_tests.rs`
+### File: `core/tests/m5_query_domain_tests.rs`
 
 ```rust
 use std::collections::HashSet;
@@ -45674,7 +45696,7 @@ fn build_queries_excludes_embedded_prefix() {
 
 ---
 
-### File: `core\tests\m6_textual_m_diff_tests.rs`
+### File: `core/tests/m6_textual_m_diff_tests.rs`
 
 ```rust
 use excel_diff::{
@@ -45865,7 +45887,7 @@ fn rename_produces_query_renamed() {
 
 ---
 
-### File: `core\tests\m7_ast_canonicalization_tests.rs`
+### File: `core/tests/m7_ast_canonicalization_tests.rs`
 
 ```rust
 use excel_diff::{
@@ -46122,7 +46144,7 @@ fn hash_date_tokenization_is_atomic() {
 
 ---
 
-### File: `core\tests\m7_semantic_m_diff_tests.rs`
+### File: `core/tests/m7_semantic_m_diff_tests.rs`
 
 ```rust
 use excel_diff::{
@@ -46349,7 +46371,7 @@ fn semantic_gate_does_not_mask_definition_plus_metadata_change() {
 
 ---
 
-### File: `core\tests\m8_m_canonicalize_tokens_tests.rs`
+### File: `core/tests/m8_m_canonicalize_tokens_tests.rs`
 
 ```rust
 use excel_diff::{ast_semantically_equal, canonicalize_m_ast, parse_m_expression};
@@ -46386,7 +46408,7 @@ fn opaque_null_literal_case_is_canonicalized() {
 
 ---
 
-### File: `core\tests\m8_m_parser_coverage_audit_tests.rs`
+### File: `core/tests/m8_m_parser_coverage_audit_tests.rs`
 
 ```rust
 use excel_diff::{MAstAccessKind, MAstKind, canonicalize_m_ast, parse_m_expression};
@@ -46459,7 +46481,7 @@ fn coverage_audit_tier2_cases_are_structured() {
 
 ---
 
-### File: `core\tests\m8_m_parser_expansion_tests.rs`
+### File: `core/tests/m8_m_parser_expansion_tests.rs`
 
 ```rust
 use excel_diff::{MAstKind, ast_semantically_equal, canonicalize_m_ast, parse_m_expression};
@@ -46532,7 +46554,7 @@ fn list_order_is_not_semantically_equivalent() {
 
 ---
 
-### File: `core\tests\m8_semantic_m_diff_nonlet_tests.rs`
+### File: `core/tests/m8_semantic_m_diff_nonlet_tests.rs`
 
 ```rust
 use excel_diff::{DiffConfig, DiffOp, QueryChangeKind, WorkbookPackage};
@@ -46669,7 +46691,7 @@ fn primitive_formatting_only_is_masked() {
 
 ---
 
-### File: `core\tests\m9_composed_end_to_end_tests.rs`
+### File: `core/tests/m9_composed_end_to_end_tests.rs`
 
 ```rust
 use excel_diff::{DiffConfig, DiffOp, StepChange, StepDiff, WorkbookPackage};
@@ -46785,7 +46807,7 @@ fn adversarial_steps_report_param_changes() {
 
 ---
 
-### File: `core\tests\m9_m_parser_tier1_tests.rs`
+### File: `core/tests/m9_m_parser_tier1_tests.rs`
 
 ```rust
 use excel_diff::{MAstAccessKind, MAstKind, canonicalize_m_ast, parse_m_expression};
@@ -46866,7 +46888,7 @@ fn quoted_identifier_named_then_does_not_confuse_if_parser() {
 
 ---
 
-### File: `core\tests\m_section_splitting_tests.rs`
+### File: `core/tests/m_section_splitting_tests.rs`
 
 ```rust
 use excel_diff::{SectionParseError, parse_section_members};
@@ -47004,7 +47026,7 @@ fn error_on_invalid_shared_member_syntax() {
 
 ---
 
-### File: `core\tests\metrics_unit_tests.rs`
+### File: `core/tests/metrics_unit_tests.rs`
 
 ```rust
 #![cfg(feature = "perf-metrics")]
@@ -47200,7 +47222,7 @@ fn metrics_default_equality() {
 
 ---
 
-### File: `core\tests\output_tests.rs`
+### File: `core/tests/output_tests.rs`
 
 ```rust
 mod common;
@@ -47928,7 +47950,7 @@ fn serialize_diff_report_with_metrics_includes_metrics_object() {
 
 ---
 
-### File: `core\tests\package_streaming_tests.rs`
+### File: `core/tests/package_streaming_tests.rs`
 
 ```rust
 mod common;
@@ -48332,7 +48354,7 @@ fn package_streaming_json_lines_header_includes_m_strings() {
 
 ---
 
-### File: `core\tests\parallel_determinism_tests.rs`
+### File: `core/tests/parallel_determinism_tests.rs`
 
 ```rust
 #![cfg(feature = "parallel")]
@@ -48570,7 +48592,7 @@ fn streaming_database_mode_ops_are_identical_across_thread_counts() {
 
 ---
 
-### File: `core\tests\pbix_host_support_tests.rs`
+### File: `core/tests/pbix_host_support_tests.rs`
 
 ```rust
 mod common;
@@ -48622,7 +48644,7 @@ fn pbix_missing_datamashup_and_schema_returns_dedicated_error() {
 
 ---
 
-### File: `core\tests\perf_large_grid_tests.rs`
+### File: `core/tests/perf_large_grid_tests.rs`
 
 ```rust
 #![cfg(feature = "perf-metrics")]
@@ -49312,7 +49334,7 @@ fn preflight_cells_compared_skips_unchanged_rows() {
 
 ---
 
-### File: `core\tests\permission_bindings_tests.rs`
+### File: `core/tests/permission_bindings_tests.rs`
 
 ```rust
 use excel_diff::{
@@ -49467,7 +49489,7 @@ fn build_plaintext(package_hash: [u8; 32], permissions_hash: [u8; 32]) -> Vec<u8
 
 ---
 
-### File: `core\tests\pg1_ir_tests.rs`
+### File: `core/tests/pg1_ir_tests.rs`
 
 ```rust
 mod common;
@@ -49619,7 +49641,7 @@ fn assert_cell_text(sheet: &Sheet, row: u32, col: u32, expected: &str) {
 
 ---
 
-### File: `core\tests\pg3_snapshot_tests.rs`
+### File: `core/tests/pg3_snapshot_tests.rs`
 
 ```rust
 mod common;
@@ -49814,7 +49836,7 @@ fn snapshot_json_rejects_invalid_addr_a0() {
 
 ---
 
-### File: `core\tests\pg4_diffop_tests.rs`
+### File: `core/tests/pg4_diffop_tests.rs`
 
 ```rust
 mod common;
@@ -51229,7 +51251,7 @@ fn pg4_diff_report_json_shape_with_metrics() {
 
 ---
 
-### File: `core\tests\pg5_grid_diff_tests.rs`
+### File: `core/tests/pg5_grid_diff_tests.rs`
 
 ```rust
 mod common;
@@ -51573,7 +51595,7 @@ fn pg5_10_grid_diff_row_appended_with_overlap_cell_edits() {
 
 ---
 
-### File: `core\tests\pg6_object_vs_grid_tests.rs`
+### File: `core/tests/pg6_object_vs_grid_tests.rs`
 
 ```rust
 mod common;
@@ -51738,7 +51760,7 @@ fn pg6_4_sheet_and_grid_change_composed_cleanly() {
 
 ---
 
-### File: `core\tests\robustness_regressions.yaml`
+### File: `core/tests/robustness_regressions.yaml`
 
 ```yaml
 fixtures:
@@ -51836,7 +51858,7 @@ fixtures:
 
 ---
 
-### File: `core\tests\robustness_regressions_tests.rs`
+### File: `core/tests/robustness_regressions_tests.rs`
 
 ```rust
 mod common;
@@ -52116,7 +52138,7 @@ impl ErrorCode for excel_diff::DataMashupError {
 
 ---
 
-### File: `core\tests\schema_guard_tests.rs`
+### File: `core/tests/schema_guard_tests.rs`
 
 ```rust
 use excel_diff::{diff_workbooks_to_json, DiffConfig};
@@ -52174,7 +52196,7 @@ fn json_output_schema_hash_guard() {
 
 ---
 
-### File: `core\tests\signature_tests.rs`
+### File: `core/tests/signature_tests.rs`
 
 ```rust
 mod common;
@@ -52705,7 +52727,7 @@ fn row_signature_consistent_for_same_content_different_column_indices() {
 
 ---
 
-### File: `core\tests\sparse_grid_tests.rs`
+### File: `core/tests/sparse_grid_tests.rs`
 
 ```rust
 use excel_diff::{CellValue, Grid, with_default_session};
@@ -52853,7 +52875,7 @@ fn compute_all_signatures_matches_direct_computation() {
 
 ---
 
-### File: `core\tests\streaming_contract_tests.rs`
+### File: `core/tests/streaming_contract_tests.rs`
 
 ```rust
 mod common;
@@ -53554,7 +53576,7 @@ fn database_streaming_no_key_columns_warns_and_finishes() {
 
 ---
 
-### File: `core\tests\streaming_determinism_tests.rs`
+### File: `core/tests/streaming_determinism_tests.rs`
 
 ```rust
 mod common;
@@ -53741,7 +53763,7 @@ fn pbit_streaming_jsonl_is_deterministic_with_fresh_sessions() {
 
 ---
 
-### File: `core\tests\streaming_sink_tests.rs`
+### File: `core/tests/streaming_sink_tests.rs`
 
 ```rust
 mod common;
@@ -53873,7 +53895,7 @@ fn streaming_summary_matches_collected_ops() {
 
 ---
 
-### File: `core\tests\string_pool_tests.rs`
+### File: `core/tests/string_pool_tests.rs`
 
 ```rust
 use excel_diff::StringPool;
@@ -53965,35 +53987,21 @@ fn into_strings_returns_all_interned() {
 
 ---
 
-### File: `desktop\src-tauri\build.rs`
-
-```rust
-fn main() {
-    tauri_build::build();
-}
-
-```
-
----
-
-### File: `desktop\src-tauri\Cargo.toml`
+### File: `desktop/backend/Cargo.toml`
 
 ```toml
 [package]
-name = "excel_diff_desktop"
+name = "desktop_backend"
 version = "0.1.0"
 edition = "2021"
-description = "Desktop shell for Excel Diff"
+description = "Backend logic for Excel Diff desktop apps"
 license = "MIT"
-build = "build.rs"
 
 [dependencies]
-tauri = { version = "2.5.3" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 excel_diff = { path = "../../core", default-features = false, features = ["excel-open-xml", "vba"] }
 ui_payload = { path = "../../ui_payload" }
-rfd = "0.14"
 rusqlite = { version = "0.31", features = ["bundled"] }
 uuid = { version = "1.7", features = ["v4", "serde"] }
 time = { version = "0.3", features = ["formatting"] }
@@ -54002,20 +54010,19 @@ rust_xlsxwriter = "0.71"
 lru = "0.12"
 walkdir = "2.5"
 globset = "0.4"
+crossbeam-channel = "0.5"
+directories = "5.0"
 
 [features]
 default = ["model-diff"]
 model-diff = ["excel_diff/model-diff"]
 perf-metrics = ["excel_diff/perf-metrics"]
 
-[build-dependencies]
-tauri-build = { version = "2.5.3" }
-
 ```
 
 ---
 
-### File: `desktop\src-tauri\src\batch.rs`
+### File: `desktop/backend/src/batch.rs`
 
 ```rust
 use std::collections::{BTreeMap, HashMap};
@@ -54026,7 +54033,7 @@ use std::sync::Arc;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use crate::events::{ProgressEvent, ProgressTx};
 use uuid::Uuid;
 use walkdir::WalkDir;
 
@@ -54069,10 +54076,10 @@ pub struct BatchRequest {
 }
 
 pub fn run_batch_compare(
-    app: AppHandle,
     runner: DiffRunner,
     store_path: &Path,
     request: BatchRequest,
+    progress: ProgressTx,
 ) -> Result<BatchOutcome, DiffErrorPayload> {
     let old_root = PathBuf::from(&request.old_root);
     let new_root = PathBuf::from(&request.new_root);
@@ -54121,6 +54128,7 @@ pub fn run_batch_compare(
             continue;
         }
 
+        emit_batch_progress(&progress, format!("Comparing {}", pair.key));
         let cancel = Arc::new(AtomicBool::new(false));
         let diff_request = DiffRequest {
             old_path: pair.old.as_ref().unwrap().display().to_string(),
@@ -54131,7 +54139,7 @@ pub fn run_batch_compare(
                 ..DiffOptions::default()
             },
             cancel,
-            app: app.clone(),
+            progress: progress.clone(),
         };
 
         match runner.diff(diff_request) {
@@ -54158,6 +54166,7 @@ pub fn run_batch_compare(
 
     let status = "complete".to_string();
     finish_batch_run(conn, &batch_id, &status, completed)?;
+    emit_batch_progress(&progress, format!("Batch complete: {completed}/{total}", total = pairs.len()));
 
     Ok(BatchOutcome {
         batch_id,
@@ -54417,6 +54426,14 @@ fn now_iso() -> String {
         .unwrap_or_else(|_| "".to_string())
 }
 
+fn emit_batch_progress(progress: &ProgressTx, detail: impl Into<String>) {
+    let _ = progress.send(ProgressEvent {
+        run_id: 0,
+        stage: "batch".to_string(),
+        detail: detail.into(),
+    });
+}
+
 fn store_error(err: StoreError) -> DiffErrorPayload {
     DiffErrorPayload::new("store", err.to_string(), false)
 }
@@ -54425,7 +54442,7 @@ fn store_error(err: StoreError) -> DiffErrorPayload {
 
 ---
 
-### File: `desktop\src-tauri\src\diff_runner.rs`
+### File: `desktop/backend/src/diff_runner.rs`
 
 ```rust
 use std::collections::hash_map::Entry;
@@ -54444,7 +54461,7 @@ use excel_diff::{
 };
 use lru::LruCache;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use crate::events::{ProgressEvent, ProgressTx};
 
 use crate::export::export_audit_xlsx_from_store;
 use crate::store::{
@@ -54462,7 +54479,7 @@ pub struct DiffRequest {
     pub run_id: u64,
     pub options: DiffOptions,
     pub cancel: Arc<AtomicBool>,
-    pub app: AppHandle,
+    pub progress: ProgressTx,
 }
 
 #[derive(Debug, Clone)]
@@ -54470,7 +54487,7 @@ pub struct SheetPayloadRequest {
     pub diff_id: String,
     pub sheet_name: String,
     pub cancel: Arc<AtomicBool>,
-    pub app: AppHandle,
+    pub progress: ProgressTx,
 }
 
 #[derive(Serialize)]
@@ -54496,7 +54513,7 @@ pub struct DiffErrorPayload {
 }
 
 impl DiffErrorPayload {
-    pub(crate) fn new(code: impl Into<String>, message: impl Into<String>, trusted_retry: bool) -> Self {
+    pub fn new(code: impl Into<String>, message: impl Into<String>, trusted_retry: bool) -> Self {
         Self {
             code: code.into(),
             message: message.into(),
@@ -54631,7 +54648,7 @@ impl EngineState {
     }
 
     fn handle_diff(&mut self, request: DiffRequest) -> Result<DiffOutcome, DiffErrorPayload> {
-        emit_progress(&request.app, request.run_id, "read", "Reading files...");
+        emit_progress(&request.progress, request.run_id, "read", "Reading files...");
 
         let old_path = PathBuf::from(&request.old_path);
         let new_path = PathBuf::from(&request.new_path);
@@ -54688,8 +54705,8 @@ impl EngineState {
 
                 match mode {
                     DiffMode::Payload => {
-                        emit_progress(&request.app, request.run_id, "diff", "Diffing workbooks...");
-                        let progress = EngineProgress::new(request.app.clone(), request.run_id, request.cancel.clone());
+                        emit_progress(&request.progress, request.run_id, "diff", "Diffing workbooks...");
+                        let progress = EngineProgress::new(request.progress.clone(), request.run_id, request.cancel.clone());
                         let report = match run_diff_with_progress(
                             || old_pkg.diff_with_progress(&new_pkg, &config, &progress),
                             &request.cancel,
@@ -54701,7 +54718,7 @@ impl EngineState {
                             }
                         };
 
-                        emit_progress(&request.app, request.run_id, "snapshot", "Building previews...");
+                        emit_progress(&request.progress, request.run_id, "snapshot", "Building previews...");
                         let (counts, sheet_stats) = store
                             .insert_ops_from_report(&diff_id, &report)
                             .map_err(map_store_error)?;
@@ -54722,8 +54739,8 @@ impl EngineState {
                         })
                     }
                     DiffMode::Large => {
-                        emit_progress(&request.app, request.run_id, "diff", "Streaming diff to disk...");
-                        let progress = EngineProgress::new(request.app.clone(), request.run_id, request.cancel.clone());
+                        emit_progress(&request.progress, request.run_id, "diff", "Streaming diff to disk...");
+                        let progress = EngineProgress::new(request.progress.clone(), request.run_id, request.cancel.clone());
                         let sink_store = OpStore::open(&self.store_path).map_err(map_store_error)?;
                         let conn = sink_store.into_connection();
                         let mut sink = OpStoreSink::new(conn, diff_id.clone())
@@ -54783,8 +54800,8 @@ impl EngineState {
                     )
                     .map_err(map_store_error)?;
 
-                emit_progress(&request.app, request.run_id, "diff", "Streaming PBIX diff to disk...");
-                let progress = EngineProgress::new(request.app.clone(), request.run_id, request.cancel.clone());
+                emit_progress(&request.progress, request.run_id, "diff", "Streaming PBIX diff to disk...");
+                let progress = EngineProgress::new(request.progress.clone(), request.run_id, request.cancel.clone());
                 let sink_store = OpStore::open(&self.store_path).map_err(map_store_error)?;
                 let conn = sink_store.into_connection();
                 let mut sink = OpStoreSink::new(conn, diff_id.clone())
@@ -54869,7 +54886,7 @@ impl EngineState {
         report.complete = summary.complete;
         report.warnings = summary.warnings.clone();
 
-        emit_progress(&request.app, 0, "snapshot", "Building previews...");
+        emit_progress(&request.progress, 0, "snapshot", "Building previews...");
         Ok(ui_payload::build_payload_from_workbook_report(report, &old_pkg, &new_pkg))
     }
 
@@ -55013,16 +55030,16 @@ where
 }
 
 struct EngineProgress {
-    app: AppHandle,
+    progress: ProgressTx,
     run_id: u64,
     cancel: Arc<AtomicBool>,
     last_phase: std::sync::Mutex<Option<String>>,
 }
 
 impl EngineProgress {
-    fn new(app: AppHandle, run_id: u64, cancel: Arc<AtomicBool>) -> Self {
+    fn new(progress: ProgressTx, run_id: u64, cancel: Arc<AtomicBool>) -> Self {
         Self {
-            app,
+            progress,
             run_id,
             cancel,
             last_phase: std::sync::Mutex::new(None),
@@ -55056,30 +55073,20 @@ impl ProgressCallback for EngineProgress {
             panic!("diff canceled");
         }
         if self.should_emit(phase) {
-            emit_progress(&self.app, self.run_id, "diff", Self::map_detail(phase));
+            emit_progress(&self.progress, self.run_id, "diff", Self::map_detail(phase));
         }
     }
 }
 
-fn emit_progress(app: &AppHandle, run_id: u64, stage: &str, detail: &str) {
-    let _ = app.emit(
-        "diff-progress",
-        ProgressEvent {
-            run_id,
-            stage: stage.to_string(),
-            detail: detail.to_string(),
-        },
-    );
+fn emit_progress(progress: &ProgressTx, run_id: u64, stage: &str, detail: &str) {
+    let _ = progress.send(ProgressEvent {
+        run_id,
+        stage: stage.to_string(),
+        detail: detail.to_string(),
+    });
 }
 
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct ProgressEvent {
-    run_id: u64,
-    stage: String,
-    detail: String,
-}
-
+#[allow(dead_code)]
 pub fn export_audit_xlsx(diff_id: &str, store_path: &Path, output_path: &Path) -> Result<(), DiffErrorPayload> {
     let store = OpStore::open(store_path).map_err(map_store_error)?;
     export_audit_xlsx_from_store(&store, diff_id, output_path).map_err(|e| {
@@ -55155,7 +55162,28 @@ mod tests {
 
 ---
 
-### File: `desktop\src-tauri\src\export\audit_xlsx.rs`
+### File: `desktop/backend/src/events.rs`
+
+```rust
+use crossbeam_channel::{Receiver, Sender};
+use serde::Serialize;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgressEvent {
+    pub run_id: u64,
+    pub stage: String,
+    pub detail: String,
+}
+
+pub type ProgressTx = Sender<ProgressEvent>;
+pub type ProgressRx = Receiver<ProgressEvent>;
+
+```
+
+---
+
+### File: `desktop/backend/src/export/audit_xlsx.rs`
 
 ```rust
 use std::path::Path;
@@ -55890,7 +55918,7 @@ fn format_row_list(rows: &[u32]) -> String {
 
 ---
 
-### File: `desktop\src-tauri\src\export\mod.rs`
+### File: `desktop/backend/src/export/mod.rs`
 
 ```rust
 mod audit_xlsx;
@@ -55901,339 +55929,115 @@ pub use audit_xlsx::export_audit_xlsx_from_store;
 
 ---
 
-### File: `desktop\src-tauri\src\main.rs`
+### File: `desktop/backend/src/lib.rs`
 
 ```rust
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-
-mod diff_runner;
-mod export;
-mod store;
 mod batch;
+mod diff_runner;
+mod events;
+mod export;
+mod paths;
+mod recents;
 mod search;
+mod store;
 
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::path::Path;
 
-use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
-use ui_payload::{DiffOptions, HostCapabilities, HostDefaults};
+pub use batch::{BatchOutcome, BatchRequest};
+pub use diff_runner::{DiffErrorPayload, DiffOutcome, DiffRequest, DiffRunner, SheetPayloadRequest};
+pub use events::{ProgressEvent, ProgressRx, ProgressTx};
+pub use paths::BackendPaths;
+pub use recents::RecentComparison;
+pub use search::{SearchIndexResult, SearchIndexSummary, SearchResult};
+pub use store::{DiffMode, DiffRunSummary, OpStore, RunStatus, StoreError, resolve_sheet_stats};
 
-use crate::diff_runner::{
-    DiffErrorPayload, DiffOutcome, DiffRequest, DiffRunner, SheetPayloadRequest,
-};
-use crate::store::{DiffRunSummary, OpStore, StoreError};
-use crate::batch::{BatchOutcome, BatchRequest};
-use crate::search::{SearchIndexResult, SearchIndexSummary, SearchResult};
-
-struct ActiveDiff {
-    run_id: u64,
-    cancel: Arc<AtomicBool>,
+pub struct BackendConfig {
+    pub app_name: String,
+    pub app_version: String,
+    pub engine_version: String,
 }
 
-#[derive(Default)]
-struct DiffState {
-    current: Mutex<Option<ActiveDiff>>,
+#[derive(Clone)]
+pub struct DesktopBackend {
+    pub paths: BackendPaths,
+    pub runner: DiffRunner,
 }
 
-struct DesktopState {
-    runner: DiffRunner,
-    store_path: PathBuf,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct RecentComparison {
-    old_path: String,
-    new_path: String,
-    old_name: String,
-    new_name: String,
-    last_run_iso: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    diff_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    mode: Option<String>,
-}
-
-fn recents_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|e| format!("Unable to resolve app data directory: {e}"))?;
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("Failed to create app data directory: {e}"))?;
-    Ok(dir.join("recents.json"))
-}
-
-fn store_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|e| format!("Unable to resolve app data directory: {e}"))?;
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("Failed to create app data directory: {e}"))?;
-    Ok(dir.join("diff_store.sqlite"))
-}
-
-fn load_recents_from_disk(path: &Path) -> Vec<RecentComparison> {
-    let data = std::fs::read_to_string(path).unwrap_or_default();
-    if data.trim().is_empty() {
-        return Vec::new();
-    }
-    serde_json::from_str(&data).unwrap_or_default()
-}
-
-fn save_recents_to_disk(path: &Path, entries: &[RecentComparison]) -> Result<(), String> {
-    let data = serde_json::to_string_pretty(entries)
-        .map_err(|e| format!("Failed to serialize recents: {e}"))?;
-    std::fs::write(path, data).map_err(|e| format!("Failed to write recents: {e}"))
-}
-
-fn update_recents(mut entries: Vec<RecentComparison>, entry: RecentComparison) -> Vec<RecentComparison> {
-    entries.retain(|item| !(item.old_path == entry.old_path && item.new_path == entry.new_path));
-    entries.insert(0, entry);
-    entries.truncate(20);
-    entries
-}
-
-#[tauri::command]
-fn get_version() -> String {
-    env!("CARGO_PKG_VERSION").to_string()
-}
-
-#[tauri::command]
-fn get_capabilities() -> HostCapabilities {
-    HostCapabilities::new(env!("CARGO_PKG_VERSION").to_string()).with_defaults(HostDefaults {
-        max_memory_mb: None,
-        large_mode_threshold: excel_diff::AUTO_STREAM_CELL_THRESHOLD,
-    })
-}
-
-#[tauri::command]
-fn load_recents(app: AppHandle) -> Result<Vec<RecentComparison>, String> {
-    let path = recents_path(&app)?;
-    Ok(load_recents_from_disk(&path))
-}
-
-#[tauri::command]
-fn save_recent(app: AppHandle, entry: RecentComparison) -> Result<Vec<RecentComparison>, String> {
-    let path = recents_path(&app)?;
-    let current = load_recents_from_disk(&path);
-    let updated = update_recents(current, entry);
-    save_recents_to_disk(&path, &updated)?;
-    Ok(updated)
-}
-
-#[tauri::command]
-fn pick_file() -> Option<String> {
-    let path = rfd::FileDialog::new()
-        .add_filter("Excel / PBIX", &["xlsx", "xlsm", "xltx", "xltm", "xlsb", "pbix", "pbit"])
-        .pick_file()?;
-    Some(path.display().to_string())
-}
-
-#[tauri::command]
-fn pick_folder() -> Option<String> {
-    let path = rfd::FileDialog::new().pick_folder()?;
-    Some(path.display().to_string())
-}
-
-#[tauri::command]
-fn cancel_diff(state: State<'_, DiffState>, run_id: u64) -> bool {
-    let current = match state.current.lock() {
-        Ok(lock) => lock,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    if let Some(active) = current.as_ref() {
-        if active.run_id == run_id {
-            active.cancel.store(true, Ordering::Relaxed);
-            return true;
-        }
-    }
-    false
-}
-
-#[tauri::command]
-async fn diff_paths_with_sheets(
-    app: AppHandle,
-    state: State<'_, DiffState>,
-    desktop: State<'_, DesktopState>,
-    old_path: String,
-    new_path: String,
-    run_id: u64,
-    options: Option<DiffOptions>,
-) -> Result<DiffOutcome, DiffErrorPayload> {
-    let options = options.unwrap_or_default();
-    let cancel_flag = {
-        let mut current = match state.current.lock() {
-            Ok(lock) => lock,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        if current.is_some() {
-            return Err(DiffErrorPayload::new("busy", "Diff already in progress.", false));
-        }
-        let cancel = Arc::new(AtomicBool::new(false));
-        *current = Some(ActiveDiff {
-            run_id,
-            cancel: cancel.clone(),
-        });
-        cancel
-    };
-
-    let runner = desktop.runner.clone();
-    let app_handle = app.clone();
-    let task = tauri::async_runtime::spawn_blocking(move || {
-        let request = DiffRequest {
-            old_path,
-            new_path,
-            run_id,
-            options,
-            cancel: cancel_flag,
-            app: app_handle,
-        };
-        runner.diff(request)
-    });
-
-    let result = match task.await {
-        Ok(result) => result,
-        Err(e) => Err(DiffErrorPayload::new("task", format!("Diff task failed: {e}"), false)),
-    };
-
-    let mut current = match state.current.lock() {
-        Ok(lock) => lock,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    if let Some(active) = current.as_ref() {
-        if active.run_id == run_id {
-            *current = None;
-        }
+impl DesktopBackend {
+    pub fn init(cfg: BackendConfig) -> Result<Self, DiffErrorPayload> {
+        let paths = paths::resolve_paths(&cfg.app_name)?;
+        let runner = DiffRunner::new(paths.store_db_path.clone(), cfg.app_version, cfg.engine_version);
+        Ok(Self { paths, runner })
     }
 
-    result
-}
-
-#[tauri::command]
-fn load_diff_summary(
-    desktop: State<'_, DesktopState>,
-    diff_id: String,
-) -> Result<DiffRunSummary, DiffErrorPayload> {
-    let store = OpStore::open(&desktop.store_path).map_err(map_store_error)?;
-    store.load_summary(&diff_id).map_err(map_store_error)
-}
-
-#[tauri::command]
-async fn load_sheet_payload(
-    app: AppHandle,
-    desktop: State<'_, DesktopState>,
-    diff_id: String,
-    sheet_name: String,
-) -> Result<ui_payload::DiffWithSheets, DiffErrorPayload> {
-    let runner = desktop.runner.clone();
-    let cancel = Arc::new(AtomicBool::new(false));
-    let task = tauri::async_runtime::spawn_blocking(move || {
-        runner.load_sheet_payload(SheetPayloadRequest {
-            diff_id,
-            sheet_name,
-            cancel,
-            app,
-        })
-    });
-
-    match task.await {
-        Ok(result) => result,
-        Err(e) => Err(DiffErrorPayload::new("task", format!("Load task failed: {e}"), false)),
+    pub fn new_progress_channel() -> (ProgressTx, ProgressRx) {
+        crossbeam_channel::unbounded()
     }
-}
 
-#[tauri::command]
-fn export_audit_xlsx(
-    _app: AppHandle,
-    desktop: State<'_, DesktopState>,
-    diff_id: String,
-) -> Result<String, DiffErrorPayload> {
-    let store = OpStore::open(&desktop.store_path).map_err(map_store_error)?;
-    let summary = store.load_summary(&diff_id).map_err(map_store_error)?;
-    let filename = default_export_name(&summary, "audit", "xlsx");
-
-    let path = rfd::FileDialog::new()
-        .set_file_name(&filename)
-        .add_filter("Excel", &["xlsx"])
-        .save_file()
-        .ok_or_else(|| DiffErrorPayload::new("canceled", "Export canceled.", false))?;
-
-    diff_runner::export_audit_xlsx(&diff_id, &desktop.store_path, &path)?;
-    Ok(path.display().to_string())
-}
-
-#[tauri::command]
-async fn run_batch_compare(
-    app: AppHandle,
-    desktop: State<'_, DesktopState>,
-    request: BatchRequest,
-) -> Result<BatchOutcome, DiffErrorPayload> {
-    let runner = desktop.runner.clone();
-    let store_path = desktop.store_path.clone();
-    let task = tauri::async_runtime::spawn_blocking(move || {
-        batch::run_batch_compare(app, runner, &store_path, request)
-    });
-    match task.await {
-        Ok(result) => result,
-        Err(e) => Err(DiffErrorPayload::new("task", format!("Batch task failed: {e}"), false)),
+    pub fn load_recents(&self) -> Result<Vec<RecentComparison>, DiffErrorPayload> {
+        recents::load_recents(&self.paths.recents_json_path)
     }
-}
 
-#[tauri::command]
-fn load_batch_summary(
-    desktop: State<'_, DesktopState>,
-    batch_id: String,
-) -> Result<BatchOutcome, DiffErrorPayload> {
-    batch::load_batch_summary(&desktop.store_path, &batch_id)
-}
+    pub fn save_recent(&self, entry: RecentComparison) -> Result<Vec<RecentComparison>, DiffErrorPayload> {
+        recents::save_recent(&self.paths.recents_json_path, entry)
+    }
 
-#[tauri::command]
-fn search_diff_ops(
-    desktop: State<'_, DesktopState>,
-    diff_id: String,
-    query: String,
-    limit: Option<usize>,
-) -> Result<Vec<SearchResult>, DiffErrorPayload> {
-    let limit = limit.unwrap_or(100);
-    search::search_diff_ops(&desktop.store_path, &diff_id, &query, limit)
-}
+    pub fn load_diff_summary(&self, diff_id: &str) -> Result<DiffRunSummary, DiffErrorPayload> {
+        let store = OpStore::open(&self.paths.store_db_path).map_err(map_store_error)?;
+        store.load_summary(diff_id).map_err(map_store_error)
+    }
 
-#[tauri::command]
-fn build_search_index(
-    app: AppHandle,
-    desktop: State<'_, DesktopState>,
-    path: String,
-    side: String,
-) -> Result<SearchIndexSummary, DiffErrorPayload> {
-    let path = PathBuf::from(path);
-    search::build_search_index(app, &desktop.store_path, &path, &side)
-}
+    pub fn export_audit_xlsx_to_path(&self, diff_id: &str, path: &Path) -> Result<(), DiffErrorPayload> {
+        let store = OpStore::open(&self.paths.store_db_path).map_err(map_store_error)?;
+        export::export_audit_xlsx_from_store(&store, diff_id, path)
+            .map_err(|e| DiffErrorPayload::new("export", e.to_string(), false))
+    }
 
-#[tauri::command]
-fn search_workbook_index(
-    desktop: State<'_, DesktopState>,
-    index_id: String,
-    query: String,
-    limit: Option<usize>,
-) -> Result<Vec<SearchIndexResult>, DiffErrorPayload> {
-    let limit = limit.unwrap_or(100);
-    search::search_workbook_index(&desktop.store_path, &index_id, &query, limit)
-}
+    pub fn default_export_name(summary: &DiffRunSummary, prefix: &str, ext: &str) -> String {
+        let old = base_name(&summary.old_path);
+        let new = base_name(&summary.new_path);
+        let date = summary
+            .finished_at
+            .as_deref()
+            .unwrap_or(&summary.started_at)
+            .get(0..10)
+            .unwrap_or("report");
+        format!("excel-diff-{prefix}__{old}__{new}__{date}.{ext}")
+    }
 
-fn default_export_name(summary: &DiffRunSummary, prefix: &str, ext: &str) -> String {
-    let old = base_name(&summary.old_path);
-    let new = base_name(&summary.new_path);
-    let date = summary
-        .finished_at
-        .as_deref()
-        .unwrap_or(&summary.started_at)
-        .get(0..10)
-        .unwrap_or("report");
-    format!("excel-diff-{prefix}__{old}__{new}__{date}.{ext}")
+    pub fn search_diff_ops(
+        &self,
+        diff_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>, DiffErrorPayload> {
+        search::search_diff_ops(&self.paths.store_db_path, diff_id, query, limit)
+    }
+
+    pub fn build_search_index(&self, path: &Path, side: &str) -> Result<SearchIndexSummary, DiffErrorPayload> {
+        search::build_search_index(&self.paths.store_db_path, path, side)
+    }
+
+    pub fn search_workbook_index(
+        &self,
+        index_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchIndexResult>, DiffErrorPayload> {
+        search::search_workbook_index(&self.paths.store_db_path, index_id, query, limit)
+    }
+
+    pub fn run_batch_compare(
+        &self,
+        request: BatchRequest,
+        progress: ProgressTx,
+    ) -> Result<BatchOutcome, DiffErrorPayload> {
+        batch::run_batch_compare(self.runner.clone(), &self.paths.store_db_path, request, progress)
+    }
+
+    pub fn load_batch_summary(&self, batch_id: &str) -> Result<BatchOutcome, DiffErrorPayload> {
+        batch::load_batch_summary(&self.paths.store_db_path, batch_id)
+    }
 }
 
 fn base_name(path: &str) -> String {
@@ -56245,44 +56049,105 @@ fn map_store_error(err: StoreError) -> DiffErrorPayload {
     DiffErrorPayload::new("store", err.to_string(), false)
 }
 
-fn main() {
-    tauri::Builder::default()
-        .manage(DiffState::default())
-        .setup(|app| {
-            let store_path = store_path(&app.handle()).map_err(|e| e.to_string())?;
-            let app_version = env!("CARGO_PKG_VERSION").to_string();
-            let engine_version = app_version.clone();
-            let runner = DiffRunner::new(store_path.clone(), app_version, engine_version);
-            app.manage(DesktopState { runner, store_path });
-            Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
-            get_version,
-            get_capabilities,
-            load_recents,
-            save_recent,
-            pick_file,
-            pick_folder,
-            cancel_diff,
-            diff_paths_with_sheets,
-            load_diff_summary,
-            load_sheet_payload,
-            export_audit_xlsx,
-            run_batch_compare,
-            load_batch_summary,
-            search_diff_ops,
-            build_search_index,
-            search_workbook_index,
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+```
+
+---
+
+### File: `desktop/backend/src/paths.rs`
+
+```rust
+use std::path::PathBuf;
+
+use directories::ProjectDirs;
+
+use crate::DiffErrorPayload;
+
+#[derive(Debug, Clone)]
+pub struct BackendPaths {
+    pub app_data_dir: PathBuf,
+    pub store_db_path: PathBuf,
+    pub recents_json_path: PathBuf,
+}
+
+pub fn resolve_paths(app_name: &str) -> Result<BackendPaths, DiffErrorPayload> {
+    let project_dirs = ProjectDirs::from("com", "dvora", app_name)
+        .ok_or_else(|| DiffErrorPayload::new("paths", "Unable to resolve app data directory", false))?;
+    let dir = project_dirs.data_local_dir().to_path_buf();
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| DiffErrorPayload::new("paths", format!("Failed to create app data directory: {e}"), false))?;
+
+    Ok(BackendPaths {
+        app_data_dir: dir.clone(),
+        store_db_path: dir.join("diff_store.sqlite"),
+        recents_json_path: dir.join("recents.json"),
+    })
 }
 
 ```
 
 ---
 
-### File: `desktop\src-tauri\src\search.rs`
+### File: `desktop/backend/src/recents.rs`
+
+```rust
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+
+use crate::DiffErrorPayload;
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentComparison {
+    pub old_path: String,
+    pub new_path: String,
+    pub old_name: String,
+    pub new_name: String,
+    pub last_run_iso: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+}
+
+pub fn load_recents(path: &Path) -> Result<Vec<RecentComparison>, DiffErrorPayload> {
+    Ok(load_recents_from_disk(path))
+}
+
+pub fn save_recent(path: &Path, entry: RecentComparison) -> Result<Vec<RecentComparison>, DiffErrorPayload> {
+    let current = load_recents_from_disk(path);
+    let updated = update_recents(current, entry);
+    save_recents_to_disk(path, &updated)?;
+    Ok(updated)
+}
+
+fn load_recents_from_disk(path: &Path) -> Vec<RecentComparison> {
+    let data = std::fs::read_to_string(path).unwrap_or_default();
+    if data.trim().is_empty() {
+        return Vec::new();
+    }
+    serde_json::from_str(&data).unwrap_or_default()
+}
+
+fn save_recents_to_disk(path: &Path, entries: &[RecentComparison]) -> Result<(), DiffErrorPayload> {
+    let data = serde_json::to_string_pretty(entries)
+        .map_err(|e| DiffErrorPayload::new("recents", format!("Failed to serialize recents: {e}"), false))?;
+    std::fs::write(path, data)
+        .map_err(|e| DiffErrorPayload::new("recents", format!("Failed to write recents: {e}"), false))
+}
+
+fn update_recents(mut entries: Vec<RecentComparison>, entry: RecentComparison) -> Vec<RecentComparison> {
+    entries.retain(|item| !(item.old_path == entry.old_path && item.new_path == entry.new_path));
+    entries.insert(0, entry);
+    entries.truncate(20);
+    entries
+}
+
+```
+
+---
+
+### File: `desktop/backend/src/search.rs`
 
 ```rust
 use std::path::Path;
@@ -56290,7 +56155,6 @@ use std::path::Path;
 use excel_diff::{CellValue, WorkbookPackage};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-use tauri::AppHandle;
 use uuid::Uuid;
 
 use crate::diff_runner::DiffErrorPayload;
@@ -56358,7 +56222,6 @@ pub fn search_diff_ops(
 }
 
 pub fn build_search_index(
-    _app: AppHandle,
     store_path: &Path,
     path: &Path,
     side: &str,
@@ -56648,7 +56511,7 @@ fn store_error(err: StoreError) -> DiffErrorPayload {
 
 ---
 
-### File: `desktop\src-tauri\src\store\mod.rs`
+### File: `desktop/backend/src/store/mod.rs`
 
 ```rust
 mod op_sink;
@@ -56665,7 +56528,7 @@ pub use types::SheetStats;
 
 ---
 
-### File: `desktop\src-tauri\src\store\op_sink.rs`
+### File: `desktop/backend/src/store/op_sink.rs`
 
 ```rust
 use std::collections::HashMap;
@@ -56761,7 +56624,7 @@ impl DiffSink for OpStoreSink {
 
 ---
 
-### File: `desktop\src-tauri\src\store\op_store.rs`
+### File: `desktop/backend/src/store/op_store.rs`
 
 ```rust
 use std::path::Path;
@@ -57036,7 +56899,7 @@ impl OpStore {
     pub fn load_summary(&self, diff_id: &str) -> Result<DiffRunSummary, StoreError> {
         let row = self.conn.query_row(
             "SELECT old_path, new_path, started_at, finished_at, engine_version, app_version, mode, status, trusted, complete, op_count,\
-                    added_count, removed_count, modified_count, moved_count\
+                    added_count, removed_count, modified_count, moved_count \
              FROM diff_runs WHERE diff_id = ?1",
             params![diff_id],
             |row| {
@@ -57183,7 +57046,7 @@ impl OpStore {
 
     fn load_sheet_summaries(&self, diff_id: &str) -> Result<Vec<SheetSummary>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT sheet_id, sheet_name, op_count, added_count, removed_count, modified_count, moved_count\
+            "SELECT sheet_id, sheet_name, op_count, added_count, removed_count, modified_count, moved_count \
              FROM diff_sheets WHERE diff_id = ?1 ORDER BY sheet_name",
         )?;
         let rows = stmt.query_map(params![diff_id], |row| {
@@ -57289,7 +57152,7 @@ pub fn resolve_sheet_stats(
 
 ---
 
-### File: `desktop\src-tauri\src\store\types.rs`
+### File: `desktop/backend/src/store/types.rs`
 
 ```rust
 use std::collections::HashMap;
@@ -57608,7 +57471,2103 @@ pub fn accumulate_sheet_stats(
 
 ---
 
-### File: `fixtures\manifest.yaml`
+### File: `desktop/backend/tests/integration_smoke.rs`
+
+```rust
+use std::fs;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use desktop_backend::{BackendPaths, DesktopBackend, DiffRequest, DiffRunner};
+use ui_payload::{DiffOptions, DiffPreset};
+
+struct TempDir {
+    path: PathBuf,
+}
+
+impl TempDir {
+    fn new(prefix: &str) -> Self {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("excel-diff-{prefix}-{stamp}"));
+        fs::create_dir_all(&path).expect("failed to create temp dir");
+        Self { path }
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+fn fixtures_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/generated")
+}
+
+fn build_backend(temp: &TempDir) -> DesktopBackend {
+    let paths = BackendPaths {
+        app_data_dir: temp.path.clone(),
+        store_db_path: temp.path.join("diff_store.sqlite"),
+        recents_json_path: temp.path.join("recents.json"),
+    };
+    let runner = DiffRunner::new(paths.store_db_path.clone(), "test".to_string(), "test".to_string());
+    DesktopBackend { paths, runner }
+}
+
+#[test]
+fn diff_export_and_search_smoke() {
+    let temp = TempDir::new("backend");
+    let backend = build_backend(&temp);
+    let fixtures = fixtures_dir();
+    let old_path = fixtures.join("single_cell_value_a.xlsx");
+    let new_path = fixtures.join("single_cell_value_b.xlsx");
+
+    let (progress_tx, _progress_rx) = DesktopBackend::new_progress_channel();
+    let request = DiffRequest {
+        old_path: old_path.display().to_string(),
+        new_path: new_path.display().to_string(),
+        run_id: 1,
+        options: DiffOptions {
+            preset: Some(DiffPreset::Balanced),
+            trusted: Some(true),
+            ..DiffOptions::default()
+        },
+        cancel: Arc::new(AtomicBool::new(false)),
+        progress: progress_tx,
+    };
+
+    let outcome = backend
+        .runner
+        .diff(request)
+        .unwrap_or_else(|err| panic!("diff failed: {}", err.message));
+    let diff_id = outcome.diff_id.clone();
+    let summary = outcome
+        .summary
+        .unwrap_or_else(|| panic!("diff summary missing for {}", diff_id));
+    assert_eq!(summary.diff_id, diff_id);
+
+    let loaded = backend
+        .load_diff_summary(&diff_id)
+        .unwrap_or_else(|err| panic!("load summary failed: {}", err.message));
+    assert_eq!(loaded.diff_id, diff_id);
+
+    let export_path = temp.path.join("audit.xlsx");
+    backend
+        .export_audit_xlsx_to_path(&diff_id, &export_path)
+        .unwrap_or_else(|err| panic!("export failed: {}", err.message));
+    assert!(export_path.is_file());
+
+    let _ = backend
+        .search_diff_ops(&diff_id, "sheet", 5)
+        .unwrap_or_else(|err| panic!("search diff ops failed: {}", err.message));
+}
+
+#[test]
+fn build_and_search_index_smoke() {
+    let temp = TempDir::new("backend-index");
+    let backend = build_backend(&temp);
+    let fixtures = fixtures_dir();
+    let workbook = fixtures.join("single_cell_value_a.xlsx");
+
+    let index = backend
+        .build_search_index(&workbook, "old")
+        .unwrap_or_else(|err| panic!("build index failed: {}", err.message));
+    let results = backend
+        .search_workbook_index(&index.index_id, "A1", 5)
+        .unwrap_or_else(|err| panic!("search index failed: {}", err.message));
+    assert!(results.len() <= 5);
+}
+
+```
+
+---
+
+### File: `desktop/src-tauri/Cargo.toml`
+
+```toml
+[package]
+name = "excel_diff_desktop"
+version = "0.1.0"
+edition = "2021"
+description = "Desktop shell for Excel Diff"
+license = "MIT"
+build = "build.rs"
+
+[dependencies]
+tauri = { version = "2.5.3" }
+excel_diff = { path = "../../core", default-features = false, features = ["excel-open-xml", "vba"] }
+ui_payload = { path = "../../ui_payload" }
+desktop_backend = { path = "../backend" }
+rfd = "0.17.2"
+
+[features]
+default = ["model-diff"]
+model-diff = ["excel_diff/model-diff", "desktop_backend/model-diff"]
+perf-metrics = ["excel_diff/perf-metrics", "desktop_backend/perf-metrics"]
+
+[build-dependencies]
+tauri-build = { version = "2.5.3" }
+
+```
+
+---
+
+### File: `desktop/src-tauri/build.rs`
+
+```rust
+fn main() {
+    tauri_build::build();
+}
+
+```
+
+---
+
+### File: `desktop/src-tauri/src/main.rs`
+
+```rust
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+use desktop_backend::{
+    BatchOutcome, BatchRequest, BackendConfig, DesktopBackend, DiffErrorPayload, DiffOutcome, DiffRequest,
+    DiffRunSummary, ProgressRx, RecentComparison, SearchIndexResult, SearchIndexSummary, SearchResult,
+    SheetPayloadRequest,
+};
+use tauri::{AppHandle, Emitter, Manager, State};
+use ui_payload::{DiffOptions, HostCapabilities, HostDefaults};
+
+struct ActiveDiff {
+    run_id: u64,
+    cancel: Arc<AtomicBool>,
+}
+
+#[derive(Default)]
+struct DiffState {
+    current: Mutex<Option<ActiveDiff>>,
+}
+
+struct DesktopState {
+    backend: DesktopBackend,
+}
+
+#[tauri::command]
+fn get_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[tauri::command]
+fn get_capabilities() -> HostCapabilities {
+    HostCapabilities::new(env!("CARGO_PKG_VERSION").to_string()).with_defaults(HostDefaults {
+        max_memory_mb: None,
+        large_mode_threshold: excel_diff::AUTO_STREAM_CELL_THRESHOLD,
+    })
+}
+
+#[tauri::command]
+fn load_recents(desktop: State<'_, DesktopState>) -> Result<Vec<RecentComparison>, DiffErrorPayload> {
+    desktop.backend.load_recents()
+}
+
+#[tauri::command]
+fn save_recent(
+    desktop: State<'_, DesktopState>,
+    entry: RecentComparison,
+) -> Result<Vec<RecentComparison>, DiffErrorPayload> {
+    desktop.backend.save_recent(entry)
+}
+
+#[tauri::command]
+fn pick_file() -> Option<String> {
+    let path = rfd::FileDialog::new()
+        .add_filter("Excel / PBIX", &["xlsx", "xlsm", "xltx", "xltm", "xlsb", "pbix", "pbit"])
+        .pick_file()?;
+    Some(path.display().to_string())
+}
+
+#[tauri::command]
+fn pick_folder() -> Option<String> {
+    let path = rfd::FileDialog::new().pick_folder()?;
+    Some(path.display().to_string())
+}
+
+#[tauri::command]
+fn cancel_diff(state: State<'_, DiffState>, run_id: u64) -> bool {
+    let current = match state.current.lock() {
+        Ok(lock) => lock,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some(active) = current.as_ref() {
+        if active.run_id == run_id {
+            active.cancel.store(true, Ordering::Relaxed);
+            return true;
+        }
+    }
+    false
+}
+
+#[tauri::command]
+async fn diff_paths_with_sheets(
+    app: AppHandle,
+    state: State<'_, DiffState>,
+    desktop: State<'_, DesktopState>,
+    old_path: String,
+    new_path: String,
+    run_id: u64,
+    options: Option<DiffOptions>,
+) -> Result<DiffOutcome, DiffErrorPayload> {
+    let options = options.unwrap_or_default();
+    let cancel_flag = {
+        let mut current = match state.current.lock() {
+            Ok(lock) => lock,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if current.is_some() {
+            return Err(DiffErrorPayload::new("busy", "Diff already in progress.", false));
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        *current = Some(ActiveDiff {
+            run_id,
+            cancel: cancel.clone(),
+        });
+        cancel
+    };
+
+    let runner = desktop.backend.runner.clone();
+    let (progress_tx, progress_rx) = DesktopBackend::new_progress_channel();
+    spawn_progress_forwarder(app.clone(), progress_rx);
+
+    let task = tauri::async_runtime::spawn_blocking(move || {
+        let request = DiffRequest {
+            old_path,
+            new_path,
+            run_id,
+            options,
+            cancel: cancel_flag,
+            progress: progress_tx,
+        };
+        runner.diff(request)
+    });
+
+    let result = match task.await {
+        Ok(result) => result,
+        Err(e) => Err(DiffErrorPayload::new("task", format!("Diff task failed: {e}"), false)),
+    };
+
+    let mut current = match state.current.lock() {
+        Ok(lock) => lock,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some(active) = current.as_ref() {
+        if active.run_id == run_id {
+            *current = None;
+        }
+    }
+
+    result
+}
+
+#[tauri::command]
+fn load_diff_summary(
+    desktop: State<'_, DesktopState>,
+    diff_id: String,
+) -> Result<DiffRunSummary, DiffErrorPayload> {
+    desktop.backend.load_diff_summary(&diff_id)
+}
+
+#[tauri::command]
+async fn load_sheet_payload(
+    app: AppHandle,
+    desktop: State<'_, DesktopState>,
+    diff_id: String,
+    sheet_name: String,
+) -> Result<ui_payload::DiffWithSheets, DiffErrorPayload> {
+    let runner = desktop.backend.runner.clone();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (progress_tx, progress_rx) = DesktopBackend::new_progress_channel();
+    spawn_progress_forwarder(app, progress_rx);
+
+    let task = tauri::async_runtime::spawn_blocking(move || {
+        runner.load_sheet_payload(SheetPayloadRequest {
+            diff_id,
+            sheet_name,
+            cancel,
+            progress: progress_tx,
+        })
+    });
+
+    match task.await {
+        Ok(result) => result,
+        Err(e) => Err(DiffErrorPayload::new("task", format!("Load task failed: {e}"), false)),
+    }
+}
+
+#[tauri::command]
+fn export_audit_xlsx(
+    _app: AppHandle,
+    desktop: State<'_, DesktopState>,
+    diff_id: String,
+) -> Result<String, DiffErrorPayload> {
+    let summary = desktop.backend.load_diff_summary(&diff_id)?;
+    let filename = DesktopBackend::default_export_name(&summary, "audit", "xlsx");
+
+    let path = rfd::FileDialog::new()
+        .set_file_name(&filename)
+        .add_filter("Excel", &["xlsx"])
+        .save_file()
+        .ok_or_else(|| DiffErrorPayload::new("canceled", "Export canceled.", false))?;
+
+    desktop
+        .backend
+        .export_audit_xlsx_to_path(&diff_id, &path)?;
+    Ok(path.display().to_string())
+}
+
+#[tauri::command]
+async fn run_batch_compare(
+    app: AppHandle,
+    desktop: State<'_, DesktopState>,
+    request: BatchRequest,
+) -> Result<BatchOutcome, DiffErrorPayload> {
+    let backend = desktop.backend.clone();
+    let (progress_tx, progress_rx) = DesktopBackend::new_progress_channel();
+    spawn_progress_forwarder(app, progress_rx);
+    let task = tauri::async_runtime::spawn_blocking(move || backend.run_batch_compare(request, progress_tx));
+    match task.await {
+        Ok(result) => result,
+        Err(e) => Err(DiffErrorPayload::new("task", format!("Batch task failed: {e}"), false)),
+    }
+}
+
+#[tauri::command]
+fn load_batch_summary(
+    desktop: State<'_, DesktopState>,
+    batch_id: String,
+) -> Result<BatchOutcome, DiffErrorPayload> {
+    desktop.backend.load_batch_summary(&batch_id)
+}
+
+#[tauri::command]
+fn search_diff_ops(
+    desktop: State<'_, DesktopState>,
+    diff_id: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<SearchResult>, DiffErrorPayload> {
+    let limit = limit.unwrap_or(100);
+    desktop.backend.search_diff_ops(&diff_id, &query, limit)
+}
+
+#[tauri::command]
+fn build_search_index(
+    desktop: State<'_, DesktopState>,
+    path: String,
+    side: String,
+) -> Result<SearchIndexSummary, DiffErrorPayload> {
+    let path = PathBuf::from(path);
+    desktop.backend.build_search_index(&path, &side)
+}
+
+#[tauri::command]
+fn search_workbook_index(
+    desktop: State<'_, DesktopState>,
+    index_id: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<SearchIndexResult>, DiffErrorPayload> {
+    let limit = limit.unwrap_or(100);
+    desktop.backend.search_workbook_index(&index_id, &query, limit)
+}
+
+fn spawn_progress_forwarder(app: AppHandle, rx: ProgressRx) {
+    thread::spawn(move || {
+        for event in rx.iter() {
+            let _ = app.emit("diff-progress", event);
+        }
+    });
+}
+
+fn main() {
+    tauri::Builder::default()
+        .manage(DiffState::default())
+        .setup(|app| {
+            let app_version = env!("CARGO_PKG_VERSION").to_string();
+            let backend = DesktopBackend::init(BackendConfig {
+                app_name: "excel_diff".to_string(),
+                app_version: app_version.clone(),
+                engine_version: app_version,
+            })
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.message))?;
+            app.manage(DesktopState { backend });
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            get_version,
+            get_capabilities,
+            load_recents,
+            save_recent,
+            pick_file,
+            pick_folder,
+            cancel_diff,
+            diff_paths_with_sheets,
+            load_diff_summary,
+            load_sheet_payload,
+            export_audit_xlsx,
+            run_batch_compare,
+            load_batch_summary,
+            search_diff_ops,
+            build_search_index,
+            search_workbook_index,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+
+```
+
+---
+
+### File: `desktop/wx/Cargo.toml`
+
+```toml
+[package]
+name = "desktop_wx"
+version = "0.1.0"
+edition = "2021"
+description = "wxDragon desktop GUI for Excel Diff"
+license = "MIT"
+
+[dependencies]
+wxdragon = { version = "0.9.7", features = ["xrc"] }
+wxdragon-sys = "0.9.7"
+desktop_backend = { path = "../backend" }
+ui_payload = { path = "../../ui_payload" }
+serde_json = "1.0"
+log = "0.4"
+quick-xml = "0.32"
+
+```
+
+---
+
+### File: `desktop/wx/src/logic.rs`
+
+```rust
+use ui_payload::DiffPreset;
+
+pub fn preset_from_selection(selection: i32) -> DiffPreset {
+    match selection {
+        1 => DiffPreset::Fastest,
+        2 => DiffPreset::MostPrecise,
+        _ => DiffPreset::Balanced,
+    }
+}
+
+pub fn parse_globs(text: &str) -> Option<Vec<String>> {
+    let items: Vec<String> = text
+        .split([',', '\n'])
+        .map(|entry| entry.trim())
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| entry.to_string())
+        .collect();
+    if items.is_empty() {
+        None
+    } else {
+        Some(items)
+    }
+}
+
+pub fn base_name(path: &str) -> String {
+    let parts: Vec<&str> = path.split(['\\', '/']).collect();
+    parts.last().unwrap_or(&path).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{base_name, parse_globs, preset_from_selection};
+    use ui_payload::DiffPreset;
+
+    #[test]
+    fn preset_from_selection_maps_choices() {
+        assert_eq!(preset_from_selection(0), DiffPreset::Balanced);
+        assert_eq!(preset_from_selection(1), DiffPreset::Fastest);
+        assert_eq!(preset_from_selection(2), DiffPreset::MostPrecise);
+        assert_eq!(preset_from_selection(9), DiffPreset::Balanced);
+    }
+
+    #[test]
+    fn parse_globs_splits_and_trims() {
+        let result = parse_globs(" foo,bar \n baz ");
+        assert_eq!(
+            result,
+            Some(vec!["foo".to_string(), "bar".to_string(), "baz".to_string()])
+        );
+        assert!(parse_globs(" \n , ").is_none());
+    }
+
+    #[test]
+    fn base_name_handles_paths() {
+        assert_eq!(base_name("report.xlsx"), "report.xlsx");
+        assert_eq!(base_name("/tmp/report.xlsx"), "report.xlsx");
+        assert_eq!(base_name("C:\\tmp\\report.xlsx"), "report.xlsx");
+    }
+}
+
+```
+
+---
+
+### File: `desktop/wx/src/main.rs`
+
+```rust
+use std::cell::RefCell;
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
+
+mod logic;
+mod xrc_validation;
+
+use desktop_backend::{
+    BatchOutcome, BatchRequest, BackendConfig, DesktopBackend, DiffErrorPayload, DiffMode, DiffOutcome, DiffRequest,
+    DiffRunSummary, ProgressRx, RecentComparison, SearchIndexResult, SearchIndexSummary, SearchResult, SheetPayloadRequest,
+};
+use logic::{base_name, parse_globs, preset_from_selection};
+use log::{debug, info, LevelFilter, Metadata, Record};
+use ui_payload::{DiffOptions, DiffPreset};
+use wxdragon::prelude::*;
+use wxdragon::xrc::{FromXrcPtr, XmlResource};
+use wxdragon_sys as ffi;
+use xrc_validation::validate_xrc;
+
+const SHEETS_COLUMNS: [(&str, i32); 6] = [
+    ("Sheet", 200),
+    ("Ops", 70),
+    ("Added", 70),
+    ("Removed", 80),
+    ("Modified", 80),
+    ("Moved", 70),
+];
+
+const RECENTS_COLUMNS: [(&str, i32); 4] = [
+    ("Old", 220),
+    ("New", 220),
+    ("Last Run", 160),
+    ("Mode", 80),
+];
+
+const BATCH_COLUMNS: [(&str, i32); 6] = [
+    ("Old", 200),
+    ("New", 200),
+    ("Status", 90),
+    ("Ops", 70),
+    ("Warnings", 90),
+    ("Error", 260),
+];
+
+const SEARCH_COLUMNS: [(&str, i32); 5] = [
+    ("Kind", 120),
+    ("Sheet", 180),
+    ("Address", 100),
+    ("Label", 200),
+    ("Detail", 260),
+];
+
+struct MainUi {
+    main_frame: Frame,
+    open_old_menu: MenuItem,
+    open_new_menu: MenuItem,
+    exit_menu: MenuItem,
+    compare_menu: MenuItem,
+    cancel_menu: MenuItem,
+    export_audit_menu: MenuItem,
+    about_menu: MenuItem,
+    status_bar: StatusBar,
+    root_tabs: Notebook,
+    sheets_list: Panel,
+    old_picker: FilePickerCtrl,
+    new_picker: FilePickerCtrl,
+    compare_btn: Button,
+    cancel_btn: Button,
+    preset_choice: Choice,
+    trusted_checkbox: CheckBox,
+    progress_gauge: Gauge,
+    progress_text: StaticText,
+    summary_text: TextCtrl,
+    detail_text: TextCtrl,
+    recents_list: Panel,
+    open_recent_btn: Button,
+    batch_old_dir: DirPickerCtrl,
+    batch_new_dir: DirPickerCtrl,
+    run_batch_btn: Button,
+    include_glob_text: TextCtrl,
+    exclude_glob_text: TextCtrl,
+    batch_results_list: Panel,
+    search_ctrl: SearchCtrl,
+    search_scope_choice: Choice,
+    search_btn: Button,
+    build_old_index_btn: Button,
+    build_new_index_btn: Button,
+    search_results_list: Panel,
+    auto_destroy_root: bool,
+    _resource: XmlResource,
+}
+
+impl MainUi {
+    const XRC_DATA: &'static str = include_str!("../ui/main.xrc");
+
+    pub fn new(parent: Option<&dyn WxWidget>, auto_destroy_root: bool) -> Self {
+        maybe_validate_xrc();
+        let resource = XmlResource::get();
+        resource.init_platform_aware_staticbitmap_handler();
+        resource.init_all_handlers();
+        info!("Loading XRC data.");
+        resource
+            .load_from_string(Self::XRC_DATA)
+            .unwrap_or_else(|err| {
+                panic!(
+                    "Failed to load XRC data: {err}\nEnable EXCEL_DIFF_VALIDATE_XRC=1 for structural checks."
+                )
+            });
+
+        info!("Loading main frame.");
+        let main_frame = resource
+            .load_frame(parent, "main_frame")
+            .unwrap_or_else(|| panic!("Failed to load XRC root object: main_frame"));
+        let _menu_bar = main_frame
+            .get_menu_bar()
+            .unwrap_or_else(|| panic!("Failed to get MenuBar from Frame"));
+
+        let open_old_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "open_old_menu")
+            .unwrap_or_else(|| panic!("Failed to find menu item: open_old_menu"));
+        let open_new_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "open_new_menu")
+            .unwrap_or_else(|| panic!("Failed to find menu item: open_new_menu"));
+        let exit_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "exit_menu")
+            .unwrap_or_else(|| panic!("Failed to find menu item: exit_menu"));
+        let compare_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "compare_menu")
+            .unwrap_or_else(|| panic!("Failed to find menu item: compare_menu"));
+        let cancel_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "cancel_menu")
+            .unwrap_or_else(|| panic!("Failed to find menu item: cancel_menu"));
+        let export_audit_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "export_audit_menu")
+            .unwrap_or_else(|| panic!("Failed to find menu item: export_audit_menu"));
+        let about_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "about_menu")
+            .unwrap_or_else(|| panic!("Failed to find menu item: about_menu"));
+
+        let status_bar = find_xrc_child::<StatusBar>(&main_frame, "status_bar");
+        let main_panel = find_xrc_child::<Panel>(&main_frame, "main_panel");
+        let frame_sizer = BoxSizer::builder(Orientation::Vertical).build();
+        frame_sizer.add(&main_panel, 1, SizerFlag::Expand, 0);
+        main_frame.set_sizer(frame_sizer, true);
+        let root_tabs = find_xrc_child::<Notebook>(&main_frame, "root_tabs");
+        root_tabs.set_min_size(Size::new(640, 360));
+        let compare_page = root_tabs
+            .get_page(0)
+            .unwrap_or_else(|| panic!("Missing compare page in root_tabs"));
+        let recents_page = root_tabs
+            .get_page(1)
+            .unwrap_or_else(|| panic!("Missing recents page in root_tabs"));
+        let batch_page = root_tabs
+            .get_page(2)
+            .unwrap_or_else(|| panic!("Missing batch page in root_tabs"));
+        let search_page = root_tabs
+            .get_page(3)
+            .unwrap_or_else(|| panic!("Missing search page in root_tabs"));
+
+        let sheets_list = find_xrc_child::<Panel>(&compare_page, "sheets_list");
+        let result_tabs = find_xrc_child::<Notebook>(&compare_page, "result_tabs");
+        result_tabs.set_min_size(Size::new(420, 240));
+        let old_picker = find_xrc_child::<FilePickerCtrl>(&compare_page, "old_picker");
+        let new_picker = find_xrc_child::<FilePickerCtrl>(&compare_page, "new_picker");
+        let compare_btn = find_xrc_child::<Button>(&compare_page, "compare_btn");
+        let cancel_btn = find_xrc_child::<Button>(&compare_page, "cancel_btn");
+        let preset_choice = find_xrc_child::<Choice>(&compare_page, "preset_choice");
+        let trusted_checkbox = find_xrc_child::<CheckBox>(&compare_page, "trusted_checkbox");
+        let progress_gauge = find_xrc_child::<Gauge>(&compare_page, "progress_gauge");
+        let progress_text = find_xrc_child::<StaticText>(&compare_page, "progress_text");
+        let summary_text = find_xrc_child::<TextCtrl>(&compare_page, "summary_text");
+        let detail_text = find_xrc_child::<TextCtrl>(&compare_page, "detail_text");
+
+        let recents_list = find_xrc_child::<Panel>(&recents_page, "recents_list");
+        let open_recent_btn = find_xrc_child::<Button>(&recents_page, "open_recent_btn");
+
+        let batch_old_dir = find_xrc_child::<DirPickerCtrl>(&batch_page, "batch_old_dir");
+        let batch_new_dir = find_xrc_child::<DirPickerCtrl>(&batch_page, "batch_new_dir");
+        let run_batch_btn = find_xrc_child::<Button>(&batch_page, "run_batch_btn");
+        let include_glob_text = find_xrc_child::<TextCtrl>(&batch_page, "include_glob_text");
+        let exclude_glob_text = find_xrc_child::<TextCtrl>(&batch_page, "exclude_glob_text");
+        let batch_results_list = find_xrc_child::<Panel>(&batch_page, "batch_results_list");
+
+        let search_ctrl = find_xrc_child::<SearchCtrl>(&search_page, "search_ctrl");
+        let search_scope_choice = find_xrc_child::<Choice>(&search_page, "search_scope_choice");
+        let search_btn = find_xrc_child::<Button>(&search_page, "search_btn");
+        let build_old_index_btn = find_xrc_child::<Button>(&search_page, "build_old_index_btn");
+        let build_new_index_btn = find_xrc_child::<Button>(&search_page, "build_new_index_btn");
+        let search_results_list = find_xrc_child::<Panel>(&search_page, "search_results_list");
+        debug!("XRC widgets loaded successfully.");
+
+        Self {
+            main_frame,
+            open_old_menu,
+            open_new_menu,
+            exit_menu,
+            compare_menu,
+            cancel_menu,
+            export_audit_menu,
+            about_menu,
+            status_bar,
+            root_tabs,
+            sheets_list,
+            old_picker,
+            new_picker,
+            compare_btn,
+            cancel_btn,
+            preset_choice,
+            trusted_checkbox,
+            progress_gauge,
+            progress_text,
+            summary_text,
+            detail_text,
+            recents_list,
+            open_recent_btn,
+            batch_old_dir,
+            batch_new_dir,
+            run_batch_btn,
+            include_glob_text,
+            exclude_glob_text,
+            batch_results_list,
+            search_ctrl,
+            search_scope_choice,
+            search_btn,
+            build_old_index_btn,
+            build_new_index_btn,
+            search_results_list,
+            auto_destroy_root,
+            _resource: resource,
+        }
+    }
+}
+
+impl Drop for MainUi {
+    fn drop(&mut self) {
+        if self.auto_destroy_root {
+            self.main_frame.destroy();
+        }
+    }
+}
+
+fn find_xrc_child<T>(parent: &impl WxWidget, name: &str) -> T
+where
+    T: FromXrcPtr<RawFfiType = *mut ffi::wxd_Window_t> + WxWidget,
+{
+    let id = XmlResource::get_xrc_id(name);
+    if id == 0 || id == -1 {
+        panic!(
+            "Failed to find XRC id: {name}. Enable EXCEL_DIFF_VALIDATE_XRC=1 for details."
+        );
+    }
+
+    let child_ptr = unsafe { ffi::wxd_Window_FindWindowById(parent.handle_ptr(), id) };
+    if child_ptr.is_null() {
+        panic!(
+            "Failed to find XRC child: {name}. Check widget names in the XRC and run with EXCEL_DIFF_VALIDATE_XRC=1."
+        );
+    }
+
+    unsafe { T::from_xrc_ptr(child_ptr) }
+}
+
+fn maybe_validate_xrc() {
+    let should_validate = cfg!(debug_assertions)
+        || std::env::var("EXCEL_DIFF_VALIDATE_XRC")
+            .map(|value| value == "1")
+            .unwrap_or(false);
+    if should_validate {
+        if let Err(err) = validate_xrc(MainUi::XRC_DATA) {
+            panic!("XRC validation failed:\n{err}");
+        }
+    }
+}
+
+struct UiHandles {
+    frame: Frame,
+    open_old_menu: MenuItem,
+    open_new_menu: MenuItem,
+    exit_menu: MenuItem,
+    compare_menu: MenuItem,
+    cancel_menu: MenuItem,
+    export_audit_menu: MenuItem,
+    about_menu: MenuItem,
+    status_bar: StatusBar,
+    progress_text: StaticText,
+    progress_gauge: Gauge,
+    compare_btn: Button,
+    cancel_btn: Button,
+    old_picker: FilePickerCtrl,
+    new_picker: FilePickerCtrl,
+    preset_choice: Choice,
+    trusted_checkbox: CheckBox,
+    summary_text: TextCtrl,
+    detail_text: TextCtrl,
+    root_tabs: Notebook,
+    open_recent_btn: Button,
+    run_batch_btn: Button,
+    search_btn: Button,
+    build_old_index_btn: Button,
+    build_new_index_btn: Button,
+    search_ctrl: SearchCtrl,
+    search_scope_choice: Choice,
+    batch_old_dir: DirPickerCtrl,
+    batch_new_dir: DirPickerCtrl,
+    include_glob_text: TextCtrl,
+    exclude_glob_text: TextCtrl,
+    sheets_view: DataViewCtrl,
+    recents_view: DataViewCtrl,
+    batch_view: DataViewCtrl,
+    search_view: DataViewCtrl,
+}
+
+struct ActiveRun {
+    cancel: Arc<AtomicBool>,
+}
+
+struct AppState {
+    backend: DesktopBackend,
+    run_counter: u64,
+    active_run: Option<ActiveRun>,
+    current_diff_id: Option<String>,
+    current_mode: Option<DiffMode>,
+    current_summary: Option<DiffRunSummary>,
+    current_payload: Option<ui_payload::DiffWithSheets>,
+    sheet_names: Vec<String>,
+    recents: Vec<RecentComparison>,
+    search_old_index: Option<SearchIndexSummary>,
+    search_new_index: Option<SearchIndexSummary>,
+    batch_outcome: Option<BatchOutcome>,
+    sheets_model: DataViewListModel,
+    recents_model: DataViewListModel,
+    batch_model: DataViewListModel,
+    search_model: DataViewListModel,
+}
+
+struct UiContext {
+    ui: UiHandles,
+    state: AppState,
+}
+
+thread_local! {
+    static UI_CONTEXT: RefCell<Option<UiContext>> = RefCell::new(None);
+}
+
+fn with_ui_context<F, R>(f: F) -> Option<R>
+where
+    F: FnOnce(&mut UiContext) -> R,
+{
+    UI_CONTEXT.with(|ctx| {
+        let mut ctx_ref = ctx.borrow_mut();
+        let ctx = ctx_ref.as_mut()?;
+        Some(f(ctx))
+    })
+}
+
+fn update_status_in_ctx(ctx: &mut UiContext, message: &str) {
+    ctx.ui.progress_text.set_label(message);
+    ctx.ui.status_bar.set_status_text(message, 0);
+}
+
+fn update_status(message: &str) {
+    let message = message.to_string();
+    let _ = with_ui_context(|ctx| update_status_in_ctx(ctx, &message));
+}
+
+fn create_dataview(parent: &Panel, columns: &[(&str, i32)]) -> DataViewCtrl {
+    let ctrl = DataViewCtrl::builder(parent)
+        .with_style(DataViewStyle::RowLines | DataViewStyle::VerticalRules)
+        .build();
+
+    for (idx, (label, width)) in columns.iter().enumerate() {
+        let _ = ctrl.append_text_column(
+            label,
+            idx,
+            *width,
+            DataViewAlign::Left,
+            DataViewColumnFlags::Resizable,
+        );
+    }
+
+    let sizer = BoxSizer::builder(Orientation::Vertical).build();
+    sizer.add(&ctrl, 1, SizerFlag::Expand | SizerFlag::All, 0);
+    parent.set_sizer(sizer, true);
+    ctrl
+}
+
+fn rebuild_model(ctrl: &DataViewCtrl, columns: &[(&str, i32)], rows: Vec<Vec<String>>) -> DataViewListModel {
+    let model = DataViewListModel::new();
+    for (label, _) in columns {
+        let _ = model.append_column(label);
+    }
+
+    for (row_idx, row) in rows.into_iter().enumerate() {
+        let _ = model.append_row();
+        for (col_idx, value) in row.into_iter().enumerate() {
+            let _ = model.set_value(row_idx, col_idx, value);
+        }
+    }
+
+    let _ = ctrl.associate_model(&model);
+    model
+}
+
+fn spawn_progress_forwarder(rx: ProgressRx) {
+    thread::spawn(move || {
+        for event in rx.iter() {
+            let detail = event.detail;
+            wxdragon::call_after(Box::new(move || update_status(&detail)));
+        }
+    });
+}
+
+fn preset_from_choice(choice: &Choice) -> DiffPreset {
+    let selection = choice.get_selection().unwrap_or(0);
+    let selection = i32::try_from(selection).unwrap_or(0);
+    preset_from_selection(selection)
+}
+
+fn populate_sheet_list(ctx: &mut UiContext, summary: &DiffRunSummary) {
+    ctx.state.sheet_names = summary
+        .sheets
+        .iter()
+        .map(|sheet| sheet.sheet_name.clone())
+        .collect();
+
+    let rows = summary
+        .sheets
+        .iter()
+        .map(|sheet| {
+            vec![
+                sheet.sheet_name.clone(),
+                sheet.op_count.to_string(),
+                sheet.counts.added.to_string(),
+                sheet.counts.removed.to_string(),
+                sheet.counts.modified.to_string(),
+                sheet.counts.moved.to_string(),
+            ]
+        })
+        .collect::<Vec<_>>();
+
+    ctx.state.sheets_model = rebuild_model(&ctx.ui.sheets_view, &SHEETS_COLUMNS, rows);
+}
+
+fn populate_recents(ctx: &mut UiContext, recents: Vec<RecentComparison>) {
+    let rows = recents
+        .iter()
+        .map(|entry| {
+            vec![
+                entry.old_name.clone(),
+                entry.new_name.clone(),
+                entry.last_run_iso.clone(),
+                entry.mode.clone().unwrap_or_else(|| "".to_string()),
+            ]
+        })
+        .collect::<Vec<_>>();
+
+    ctx.state.recents = recents;
+    ctx.state.recents_model = rebuild_model(&ctx.ui.recents_view, &RECENTS_COLUMNS, rows);
+}
+
+fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
+    let _ = with_ui_context(|ctx| {
+        ctx.ui.compare_btn.enable(true);
+        ctx.ui.cancel_btn.enable(false);
+        ctx.ui.progress_gauge.set_value(100);
+        ctx.state.active_run = None;
+
+        match result {
+            Ok(outcome) => {
+                ctx.state.current_diff_id = Some(outcome.diff_id.clone());
+                ctx.state.current_mode = Some(outcome.mode);
+                ctx.state.current_payload = outcome.payload;
+                ctx.state.current_summary = outcome.summary.clone();
+
+                if let Some(summary) = outcome.summary {
+                    ctx.ui.summary_text
+                        .set_value(&serde_json::to_string_pretty(&summary).unwrap_or_else(|_| "{}".to_string()));
+                    ctx.ui.detail_text.set_value("");
+                    populate_sheet_list(ctx, &summary);
+
+                    let recent = RecentComparison {
+                        old_path: summary.old_path.clone(),
+                        new_path: summary.new_path.clone(),
+                        old_name: base_name(&summary.old_path),
+                        new_name: base_name(&summary.new_path),
+                        last_run_iso: summary
+                            .finished_at
+                            .clone()
+                            .unwrap_or_else(|| summary.started_at.clone()),
+                        diff_id: Some(outcome.diff_id.clone()),
+                        mode: Some(summary.mode.as_str().to_string()),
+                    };
+
+                    if let Ok(recents) = ctx.state.backend.save_recent(recent) {
+                        populate_recents(ctx, recents);
+                    }
+                }
+
+                update_status_in_ctx(ctx, "Diff complete.");
+            }
+            Err(err) => {
+                ctx.ui
+                    .detail_text
+                    .set_value(&format!("{}: {}", err.code, err.message));
+                update_status_in_ctx(ctx, &format!("Diff failed: {}", err.message));
+            }
+        }
+    });
+}
+
+fn start_compare() {
+    let mut args = None;
+    let _ = with_ui_context(|ctx| {
+        let old_path = ctx.ui.old_picker.get_path();
+        let new_path = ctx.ui.new_picker.get_path();
+
+        if old_path.trim().is_empty() || new_path.trim().is_empty() {
+            update_status_in_ctx(ctx, "Select both old and new files.");
+            return;
+        }
+
+        if ctx.state.active_run.is_some() {
+            update_status_in_ctx(ctx, "A diff is already running.");
+            return;
+        }
+
+        ctx.state.run_counter = ctx.state.run_counter.saturating_add(1);
+        let run_id = ctx.state.run_counter;
+        let cancel = Arc::new(AtomicBool::new(false));
+        ctx.state.active_run = Some(ActiveRun { cancel: cancel.clone() });
+        ctx.state.current_payload = None;
+        ctx.state.current_summary = None;
+        ctx.state.sheet_names.clear();
+
+        ctx.ui.compare_btn.enable(false);
+        ctx.ui.cancel_btn.enable(true);
+        ctx.ui.progress_gauge.set_value(0);
+        update_status_in_ctx(ctx, "Starting diff...");
+
+        let options = DiffOptions {
+            preset: Some(preset_from_choice(&ctx.ui.preset_choice)),
+            trusted: Some(ctx.ui.trusted_checkbox.is_checked()),
+            ..DiffOptions::default()
+        };
+
+        let backend = ctx.state.backend.clone();
+        args = Some((backend, run_id, cancel, old_path, new_path, options));
+    });
+
+    let Some((backend, run_id, cancel, old_path, new_path, options)) = args else {
+        return;
+    };
+
+    let (progress_tx, progress_rx) = DesktopBackend::new_progress_channel();
+    spawn_progress_forwarder(progress_rx);
+
+    thread::spawn(move || {
+        let result = backend.runner.diff(DiffRequest {
+            old_path,
+            new_path,
+            run_id,
+            options,
+            cancel,
+            progress: progress_tx,
+        });
+        wxdragon::call_after(Box::new(move || handle_diff_result(result)));
+    });
+}
+
+fn handle_sheet_selection(row: usize) {
+    let mut request = None;
+    let _ = with_ui_context(|ctx| {
+        let sheet_name = ctx.state.sheet_names.get(row).cloned();
+        let mode = ctx.state.current_mode;
+
+        match mode {
+            Some(DiffMode::Payload) => {
+                if let (Some(summary), Some(sheet_name)) = (&ctx.state.current_summary, sheet_name) {
+                    if let Some(sheet) = summary.sheets.iter().find(|sheet| sheet.sheet_name == sheet_name) {
+                        let text = format!(
+                            "Sheet: {}\nOps: {}\nAdded: {}\nRemoved: {}\nModified: {}\nMoved: {}",
+                            sheet.sheet_name,
+                            sheet.op_count,
+                            sheet.counts.added,
+                            sheet.counts.removed,
+                            sheet.counts.modified,
+                            sheet.counts.moved,
+                        );
+                        ctx.ui.detail_text.set_value(&text);
+                    }
+                }
+            }
+            Some(DiffMode::Large) => {
+                let Some(diff_id) = ctx.state.current_diff_id.clone() else {
+                    return;
+                };
+                let Some(sheet_name) = sheet_name else {
+                    return;
+                };
+
+                let backend = ctx.state.backend.clone();
+                request = Some((backend, diff_id, sheet_name));
+                update_status_in_ctx(ctx, "Loading sheet payload...");
+            }
+            _ => {}
+        }
+    });
+
+    let Some((backend, diff_id, sheet_name)) = request else {
+        return;
+    };
+
+    let (progress_tx, progress_rx) = DesktopBackend::new_progress_channel();
+    spawn_progress_forwarder(progress_rx);
+
+    thread::spawn(move || {
+        let payload = backend.runner.load_sheet_payload(SheetPayloadRequest {
+            diff_id,
+            sheet_name,
+            cancel: Arc::new(AtomicBool::new(false)),
+            progress: progress_tx,
+        });
+
+        wxdragon::call_after(Box::new(move || match payload {
+            Ok(payload) => {
+                let text = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string());
+                let _ = with_ui_context(|ctx| {
+                    ctx.ui.detail_text.set_value(&text);
+                    update_status_in_ctx(ctx, "Sheet payload loaded.");
+                });
+            }
+            Err(err) => {
+                update_status(&format!("Load failed: {}", err.message));
+            }
+        }));
+    });
+}
+
+fn load_diff_summary_into_ui(diff_id: String) {
+    let backend = with_ui_context(|ctx| ctx.state.backend.clone());
+    let Some(backend) = backend else {
+        return;
+    };
+
+    thread::spawn(move || {
+        let summary = backend.load_diff_summary(&diff_id);
+        wxdragon::call_after(Box::new(move || match summary {
+            Ok(summary) => {
+                let _ = with_ui_context(|ctx| {
+                    ctx.state.current_diff_id = Some(diff_id.clone());
+                    ctx.state.current_mode = Some(summary.mode);
+                    ctx.state.current_summary = Some(summary.clone());
+                    ctx.state.current_payload = None;
+
+                    ctx.ui.summary_text
+                        .set_value(&serde_json::to_string_pretty(&summary).unwrap_or_else(|_| "{}".to_string()));
+                    ctx.ui.detail_text.set_value("");
+                    populate_sheet_list(ctx, &summary);
+                    ctx.ui.root_tabs.set_selection(0);
+                    update_status_in_ctx(ctx, "Summary loaded.");
+                });
+            }
+            Err(err) => update_status(&format!("Load summary failed: {}", err.message)),
+        }));
+    });
+}
+
+fn run_batch() {
+    let mut request = None;
+    let _ = with_ui_context(|ctx| {
+        let old_root = ctx.ui.batch_old_dir.get_path();
+        let new_root = ctx.ui.batch_new_dir.get_path();
+
+        if old_root.trim().is_empty() || new_root.trim().is_empty() {
+            update_status_in_ctx(ctx, "Select both batch folders.");
+            return;
+        }
+
+        let batch_request = BatchRequest {
+            old_root,
+            new_root,
+            strategy: "path".to_string(),
+            include_globs: parse_globs(&ctx.ui.include_glob_text.get_value()),
+            exclude_globs: parse_globs(&ctx.ui.exclude_glob_text.get_value()),
+            trusted: ctx.ui.trusted_checkbox.is_checked(),
+        };
+
+        let backend = ctx.state.backend.clone();
+        request = Some((backend, batch_request));
+        ctx.ui.run_batch_btn.enable(false);
+        update_status_in_ctx(ctx, "Running batch compare...");
+    });
+
+    let Some((backend, request)) = request else {
+        return;
+    };
+
+    let (progress_tx, progress_rx) = DesktopBackend::new_progress_channel();
+    spawn_progress_forwarder(progress_rx);
+
+    thread::spawn(move || {
+        let outcome = backend.run_batch_compare(request, progress_tx);
+        wxdragon::call_after(Box::new(move || handle_batch_result(outcome)));
+    });
+}
+
+fn handle_batch_result(result: Result<BatchOutcome, DiffErrorPayload>) {
+    let _ = with_ui_context(|ctx| {
+        ctx.ui.run_batch_btn.enable(true);
+
+        match result {
+            Ok(outcome) => {
+                ctx.state.batch_outcome = Some(outcome.clone());
+
+                let rows = outcome
+                    .items
+                    .iter()
+                    .map(|item| {
+                        vec![
+                            item.old_path.clone().unwrap_or_else(|| "".to_string()),
+                            item.new_path.clone().unwrap_or_else(|| "".to_string()),
+                            item.status.clone(),
+                            item.op_count.map(|v| v.to_string()).unwrap_or_else(|| "".to_string()),
+                            item.warnings_count
+                                .map(|v| v.to_string())
+                                .unwrap_or_else(|| "".to_string()),
+                            item.error.clone().unwrap_or_else(|| "".to_string()),
+                        ]
+                    })
+                    .collect::<Vec<_>>();
+
+                ctx.state.batch_model = rebuild_model(&ctx.ui.batch_view, &BATCH_COLUMNS, rows);
+                update_status_in_ctx(ctx, "Batch compare complete.");
+            }
+            Err(err) => update_status_in_ctx(ctx, &format!("Batch failed: {}", err.message)),
+        }
+    });
+}
+
+fn handle_search() {
+    let mut request = None;
+    let _ = with_ui_context(|ctx| {
+        let query = ctx.ui.search_ctrl.get_value();
+        if query.trim().is_empty() {
+            update_status_in_ctx(ctx, "Enter a search query.");
+            return;
+        }
+
+        let scope = ctx.ui.search_scope_choice.get_selection().unwrap_or(0);
+        let backend = ctx.state.backend.clone();
+
+        match scope {
+            0 => {
+                let Some(diff_id) = ctx.state.current_diff_id.clone() else {
+                    update_status_in_ctx(ctx, "Run a diff before searching changes.");
+                    return;
+                };
+                request = Some(SearchRequest::DiffOps { backend, diff_id, query });
+            }
+            1 => {
+                let Some(index) = ctx.state.search_old_index.clone() else {
+                    update_status_in_ctx(ctx, "Build the workbook index first.");
+                    return;
+                };
+                request = Some(SearchRequest::WorkbookIndex {
+                    backend,
+                    index_id: index.index_id.clone(),
+                    query,
+                });
+            }
+            2 => {
+                let Some(index) = ctx.state.search_new_index.clone() else {
+                    update_status_in_ctx(ctx, "Build the workbook index first.");
+                    return;
+                };
+                request = Some(SearchRequest::WorkbookIndex {
+                    backend,
+                    index_id: index.index_id.clone(),
+                    query,
+                });
+            }
+            _ => {}
+        }
+    });
+
+    let Some(request) = request else {
+        return;
+    };
+
+    thread::spawn(move || match request {
+        SearchRequest::DiffOps { backend, diff_id, query } => {
+            let result = backend.search_diff_ops(&diff_id, &query, 100);
+            wxdragon::call_after(Box::new(move || match result {
+                Ok(results) => apply_search_results(results),
+                Err(err) => update_status(&format!("Search failed: {}", err.message)),
+            }));
+        }
+        SearchRequest::WorkbookIndex {
+            backend,
+            index_id,
+            query,
+        } => {
+            let result = backend.search_workbook_index(&index_id, &query, 100);
+            wxdragon::call_after(Box::new(move || match result {
+                Ok(results) => apply_index_results(results),
+                Err(err) => update_status(&format!("Search failed: {}", err.message)),
+            }));
+        }
+    });
+}
+
+enum SearchRequest {
+    DiffOps {
+        backend: DesktopBackend,
+        diff_id: String,
+        query: String,
+    },
+    WorkbookIndex {
+        backend: DesktopBackend,
+        index_id: String,
+        query: String,
+    },
+}
+
+fn apply_search_results(results: Vec<SearchResult>) {
+    let _ = with_ui_context(|ctx| {
+        let rows = results
+            .iter()
+            .map(|result| {
+                vec![
+                    result.kind.clone(),
+                    result.sheet.clone().unwrap_or_else(|| "".to_string()),
+                    result.address.clone().unwrap_or_else(|| "".to_string()),
+                    result.label.clone(),
+                    result.detail.clone().unwrap_or_else(|| "".to_string()),
+                ]
+            })
+            .collect::<Vec<_>>();
+
+        ctx.state.search_model = rebuild_model(&ctx.ui.search_view, &SEARCH_COLUMNS, rows);
+        update_status_in_ctx(ctx, &format!("Search returned {} results.", results.len()));
+    });
+}
+
+fn apply_index_results(results: Vec<SearchIndexResult>) {
+    let _ = with_ui_context(|ctx| {
+        let rows = results
+            .iter()
+            .map(|result| {
+                vec![
+                    result.kind.clone(),
+                    result.sheet.clone(),
+                    result.address.clone(),
+                    "Workbook".to_string(),
+                    result.text.clone(),
+                ]
+            })
+            .collect::<Vec<_>>();
+
+        ctx.state.search_model = rebuild_model(&ctx.ui.search_view, &SEARCH_COLUMNS, rows);
+        update_status_in_ctx(ctx, &format!("Search returned {} results.", results.len()));
+    });
+}
+
+fn build_index(side: &str) {
+    let mut request = None;
+    let _ = with_ui_context(|ctx| {
+        let Some(summary) = ctx.state.current_summary.clone() else {
+            update_status_in_ctx(ctx, "Run a diff before building indexes.");
+            return;
+        };
+
+        let path = if side == "old" {
+            summary.old_path
+        } else {
+            summary.new_path
+        };
+
+        let backend = ctx.state.backend.clone();
+        request = Some((backend, path, side.to_string()));
+        update_status_in_ctx(ctx, "Building search index...");
+    });
+
+    let Some((backend, path, side)) = request else {
+        return;
+    };
+
+    thread::spawn(move || {
+        let result = backend.build_search_index(Path::new(&path), &side);
+        wxdragon::call_after(Box::new(move || match result {
+            Ok(summary) => {
+                let _ = with_ui_context(|ctx| {
+                    if side == "old" {
+                        ctx.state.search_old_index = Some(summary);
+                    } else {
+                        ctx.state.search_new_index = Some(summary);
+                    }
+                    update_status_in_ctx(ctx, "Search index ready.");
+                });
+            }
+            Err(err) => update_status(&format!("Index failed: {}", err.message)),
+        }));
+    });
+}
+
+fn cancel_current() {
+    let _ = with_ui_context(|ctx| {
+        if let Some(active) = ctx.state.active_run.as_ref() {
+            active.cancel.store(true, Ordering::Relaxed);
+            update_status_in_ctx(ctx, "Canceling...");
+        }
+    });
+}
+
+fn open_recent() {
+    let mut request = None;
+    let _ = with_ui_context(|ctx| {
+        let Some(selected) = ctx.ui.recents_view.get_selected_row() else {
+            update_status_in_ctx(ctx, "Select a recent comparison.");
+            return;
+        };
+
+        let entry = ctx.state.recents.get(selected).cloned();
+        let Some(entry) = entry else {
+            return;
+        };
+
+        ctx.ui.old_picker.set_path(&entry.old_path);
+        ctx.ui.new_picker.set_path(&entry.new_path);
+        request = entry.diff_id.clone();
+
+        if request.is_none() {
+            ctx.ui.root_tabs.set_selection(0);
+        }
+    });
+
+    let Some(diff_id) = request else {
+        return;
+    };
+
+    load_diff_summary_into_ui(diff_id);
+}
+
+fn setup_menu_handlers(ids: MenuIds) {
+    let MenuIds {
+        open_old_id,
+        open_new_id,
+        exit_id,
+        compare_id,
+        cancel_id,
+        export_id,
+        about_id,
+    } = ids;
+
+    let _ = with_ui_context(|ctx| {
+        ctx.ui.frame.on_menu_selected(move |event| match event.get_id() {
+            id if id == open_old_id => {
+                let _ = with_ui_context(|ctx| {
+                    let dialog = FileDialog::builder(&ctx.ui.frame)
+                        .with_message("Open old file")
+                        .with_wildcard("Excel/PBIX files (*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit)|*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit|All files (*.*)|*.*")
+                        .with_style(FileDialogStyle::Open | FileDialogStyle::FileMustExist)
+                        .build();
+                    if dialog.show_modal() == ID_OK {
+                        if let Some(path) = dialog.get_path() {
+                            ctx.ui.old_picker.set_path(&path);
+                        }
+                    }
+                });
+            }
+            id if id == open_new_id => {
+                let _ = with_ui_context(|ctx| {
+                    let dialog = FileDialog::builder(&ctx.ui.frame)
+                        .with_message("Open new file")
+                        .with_wildcard("Excel/PBIX files (*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit)|*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit|All files (*.*)|*.*")
+                        .with_style(FileDialogStyle::Open | FileDialogStyle::FileMustExist)
+                        .build();
+                    if dialog.show_modal() == ID_OK {
+                        if let Some(path) = dialog.get_path() {
+                            ctx.ui.new_picker.set_path(&path);
+                        }
+                    }
+                });
+            }
+            id if id == exit_id => {
+                let _ = with_ui_context(|ctx| {
+                    ctx.ui.frame.close(true);
+                });
+            }
+            id if id == compare_id => start_compare(),
+            id if id == cancel_id => cancel_current(),
+            id if id == export_id => export_audit(),
+            id if id == about_id => {
+                let _ = with_ui_context(|ctx| {
+                    let dialog = MessageDialog::builder(
+                        &ctx.ui.frame,
+                        &format!("Excel Diff {}", env!("CARGO_PKG_VERSION")),
+                        "About",
+                    )
+                    .build();
+                    let _ = dialog.show_modal();
+                });
+            }
+            _ => {}
+        });
+    });
+}
+
+fn export_audit() {
+    let mut request = None;
+    let _ = with_ui_context(|ctx| {
+        let Some(diff_id) = ctx.state.current_diff_id.clone() else {
+            update_status_in_ctx(ctx, "Run a diff before exporting.");
+            return;
+        };
+
+        let Some(summary) = ctx.state.current_summary.clone() else {
+            update_status_in_ctx(ctx, "Summary missing.");
+            return;
+        };
+
+        let filename = DesktopBackend::default_export_name(&summary, "audit", "xlsx");
+        let dialog = FileDialog::builder(&ctx.ui.frame)
+            .with_message("Export audit XLSX")
+            .with_default_file(&filename)
+            .with_wildcard("Excel (*.xlsx)|*.xlsx|All files (*.*)|*.*")
+            .with_style(FileDialogStyle::Save | FileDialogStyle::OverwritePrompt)
+            .build();
+
+        if dialog.show_modal() == ID_OK {
+            if let Some(path) = dialog.get_path() {
+                let backend = ctx.state.backend.clone();
+                request = Some((backend, diff_id, path));
+                update_status_in_ctx(ctx, "Exporting audit...");
+            }
+        }
+    });
+
+    let Some((backend, diff_id, path)) = request else {
+        return;
+    };
+
+    thread::spawn(move || {
+        let result = backend.export_audit_xlsx_to_path(&diff_id, Path::new(&path));
+        wxdragon::call_after(Box::new(move || match result {
+            Ok(()) => update_status("Export complete."),
+            Err(err) => update_status(&format!("Export failed: {}", err.message)),
+        }));
+    });
+}
+
+#[derive(Clone, Copy)]
+struct MenuIds {
+    open_old_id: i32,
+    open_new_id: i32,
+    exit_id: i32,
+    compare_id: i32,
+    cancel_id: i32,
+    export_id: i32,
+    about_id: i32,
+}
+
+fn main() {
+    init_logging();
+    wxdragon::main(|_| {
+        let backend = DesktopBackend::init(BackendConfig {
+            app_name: "excel_diff".to_string(),
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            engine_version: env!("CARGO_PKG_VERSION").to_string(),
+        })
+        .unwrap_or_else(|err| panic!("Backend init failed: {}", err.message));
+
+        let ui = MainUi::new(None, false);
+
+        let sheets_view = create_dataview(&ui.sheets_list, &SHEETS_COLUMNS);
+        let recents_view = create_dataview(&ui.recents_list, &RECENTS_COLUMNS);
+        let batch_view = create_dataview(&ui.batch_results_list, &BATCH_COLUMNS);
+        let search_view = create_dataview(&ui.search_results_list, &SEARCH_COLUMNS);
+
+        let sheets_model = rebuild_model(&sheets_view, &SHEETS_COLUMNS, Vec::new());
+        let recents_model = rebuild_model(&recents_view, &RECENTS_COLUMNS, Vec::new());
+        let batch_model = rebuild_model(&batch_view, &BATCH_COLUMNS, Vec::new());
+        let search_model = rebuild_model(&search_view, &SEARCH_COLUMNS, Vec::new());
+
+        let ui_handles = UiHandles {
+            frame: ui.main_frame,
+            open_old_menu: ui.open_old_menu,
+            open_new_menu: ui.open_new_menu,
+            exit_menu: ui.exit_menu,
+            compare_menu: ui.compare_menu,
+            cancel_menu: ui.cancel_menu,
+            export_audit_menu: ui.export_audit_menu,
+            about_menu: ui.about_menu,
+            status_bar: ui.status_bar,
+            progress_text: ui.progress_text,
+            progress_gauge: ui.progress_gauge,
+            compare_btn: ui.compare_btn,
+            cancel_btn: ui.cancel_btn,
+            old_picker: ui.old_picker,
+            new_picker: ui.new_picker,
+            preset_choice: ui.preset_choice,
+            trusted_checkbox: ui.trusted_checkbox,
+            summary_text: ui.summary_text,
+            detail_text: ui.detail_text,
+            root_tabs: ui.root_tabs,
+            open_recent_btn: ui.open_recent_btn,
+            run_batch_btn: ui.run_batch_btn,
+            search_btn: ui.search_btn,
+            build_old_index_btn: ui.build_old_index_btn,
+            build_new_index_btn: ui.build_new_index_btn,
+            search_ctrl: ui.search_ctrl,
+            search_scope_choice: ui.search_scope_choice,
+            batch_old_dir: ui.batch_old_dir,
+            batch_new_dir: ui.batch_new_dir,
+            include_glob_text: ui.include_glob_text,
+            exclude_glob_text: ui.exclude_glob_text,
+            sheets_view,
+            recents_view,
+            batch_view,
+            search_view,
+        };
+
+        let state = AppState {
+            backend,
+            run_counter: 0,
+            active_run: None,
+            current_diff_id: None,
+            current_mode: None,
+            current_summary: None,
+            current_payload: None,
+            sheet_names: Vec::new(),
+            recents: Vec::new(),
+            search_old_index: None,
+            search_new_index: None,
+            batch_outcome: None,
+            sheets_model,
+            recents_model,
+            batch_model,
+            search_model,
+        };
+
+        UI_CONTEXT.with(|ctx| {
+            *ctx.borrow_mut() = Some(UiContext {
+                ui: ui_handles,
+                state,
+            });
+        });
+
+        let menu_ids = with_ui_context(|ctx| MenuIds {
+            open_old_id: ctx.ui.open_old_menu.get_id(),
+            open_new_id: ctx.ui.open_new_menu.get_id(),
+            exit_id: ctx.ui.exit_menu.get_id(),
+            compare_id: ctx.ui.compare_menu.get_id(),
+            cancel_id: ctx.ui.cancel_menu.get_id(),
+            export_id: ctx.ui.export_audit_menu.get_id(),
+            about_id: ctx.ui.about_menu.get_id(),
+        })
+        .unwrap();
+
+        setup_menu_handlers(menu_ids);
+
+        let _ = with_ui_context(|ctx| {
+            ctx.ui.root_tabs.set_selection(0);
+            ctx.ui.cancel_btn.enable(false);
+            update_status_in_ctx(ctx, "Ready");
+
+            ctx.ui.preset_choice.append("Balanced");
+            ctx.ui.preset_choice.append("Fastest");
+            ctx.ui.preset_choice.append("Most precise");
+            ctx.ui.preset_choice.set_selection(0);
+
+            ctx.ui.search_scope_choice.append("Changes");
+            ctx.ui.search_scope_choice.append("Old workbook");
+            ctx.ui.search_scope_choice.append("New workbook");
+            ctx.ui.search_scope_choice.set_selection(0);
+
+            if let Ok(recents) = ctx.state.backend.load_recents() {
+                populate_recents(ctx, recents);
+            }
+
+            ctx.ui.compare_btn.on_click(|_| start_compare());
+            ctx.ui.cancel_btn.on_click(|_| cancel_current());
+            ctx.ui.open_recent_btn.on_click(|_| open_recent());
+            ctx.ui.run_batch_btn.on_click(|_| run_batch());
+            ctx.ui.search_btn.on_click(|_| handle_search());
+            ctx.ui.build_old_index_btn.on_click(|_| build_index("old"));
+            ctx.ui.build_new_index_btn.on_click(|_| build_index("new"));
+
+            ctx.ui.sheets_view.bind_dataview_event(DataViewEventType::SelectionChanged, |event| {
+                if let Some(row) = event.get_row() {
+                    handle_sheet_selection(row as usize);
+                }
+            });
+
+            ctx.ui.batch_view.bind_dataview_event(DataViewEventType::ItemActivated, |event| {
+                if let Some(row) = event.get_row() {
+                    let diff_id = with_ui_context(|ctx| {
+                        ctx.state
+                            .batch_outcome
+                            .as_ref()
+                            .and_then(|outcome| outcome.items.get(row as usize))
+                            .and_then(|item| item.diff_id.clone())
+                    })
+                    .flatten();
+                    if let Some(diff_id) = diff_id {
+                        load_diff_summary_into_ui(diff_id);
+                    }
+                }
+            });
+
+            ctx.ui.frame.set_min_size(Size::new(960, 640));
+            ctx.ui.frame.set_size(Size::new(1280, 900));
+            ctx.ui.frame.show(true);
+            ctx.ui.frame.centre();
+            wxdragon::set_top_window(&ctx.ui.frame);
+            wxdragon::call_after(Box::new(|| {
+                let _ = with_ui_context(|ctx| ctx.ui.frame.layout());
+            }));
+        });
+    })
+    .expect("wxDragon app failed");
+}
+
+fn init_logging() {
+    static LOGGER: SimpleLogger = SimpleLogger;
+    let _ = log::set_logger(&LOGGER);
+    log::set_max_level(log_level_from_env());
+}
+
+struct SimpleLogger;
+
+impl log::Log for SimpleLogger {
+    fn enabled(&self, metadata: &Metadata) -> bool {
+        metadata.level() <= log::max_level()
+    }
+
+    fn log(&self, record: &Record) {
+        if self.enabled(record.metadata()) {
+            eprintln!("[{}] {}", record.level(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+fn log_level_from_env() -> LevelFilter {
+    match std::env::var("EXCEL_DIFF_LOG").as_deref() {
+        Ok("error") => LevelFilter::Error,
+        Ok("warn") => LevelFilter::Warn,
+        Ok("debug") => LevelFilter::Debug,
+        Ok("trace") => LevelFilter::Trace,
+        Ok("off") => LevelFilter::Off,
+        _ => LevelFilter::Info,
+    }
+}
+
+```
+
+---
+
+### File: `desktop/wx/src/xrc_validation.rs`
+
+```rust
+use quick_xml::events::Event;
+use quick_xml::Reader;
+use std::collections::HashSet;
+
+const REQUIRED_WIDGETS: &[&str] = &[
+    "main_frame",
+    "main_panel",
+    "root_tabs",
+    "old_picker",
+    "new_picker",
+    "compare_btn",
+    "cancel_btn",
+    "preset_choice",
+    "trusted_checkbox",
+    "progress_gauge",
+    "progress_text",
+    "compare_container",
+    "sheets_list",
+    "result_tabs",
+    "summary_text",
+    "detail_text",
+    "recents_list",
+    "open_recent_btn",
+    "batch_old_dir",
+    "batch_new_dir",
+    "run_batch_btn",
+    "include_glob_text",
+    "exclude_glob_text",
+    "batch_results_list",
+    "search_ctrl",
+    "search_scope_choice",
+    "search_btn",
+    "build_old_index_btn",
+    "build_new_index_btn",
+    "search_results_list",
+];
+
+const ROOT_TAB_LABELS: &[&str] = &["Compare", "Recents", "Batch", "Search"];
+const RESULT_TAB_LABELS: &[&str] = &["Summary", "Details"];
+
+pub fn validate_xrc(xrc: &str) -> Result<(), String> {
+    let mut reader = Reader::from_str(xrc);
+    reader.config_mut().trim_text(true);
+
+    let mut errors = Vec::new();
+    let mut names = HashSet::new();
+    let mut stack: Vec<ObjectFrame> = Vec::new();
+    let mut orient_target: Option<usize> = None;
+    let mut label_target: Option<usize> = None;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(event)) => {
+                let tag = String::from_utf8_lossy(event.name().as_ref()).to_string();
+                if tag == "object" {
+                    let mut class = None;
+                    let mut name = None;
+                    for attr in event.attributes().flatten() {
+                        match attr.key.as_ref() {
+                            b"class" => class = Some(String::from_utf8_lossy(&attr.value).to_string()),
+                            b"name" => name = Some(String::from_utf8_lossy(&attr.value).to_string()),
+                            _ => {}
+                        }
+                    }
+
+                    if let Some(name) = name.as_ref() {
+                        names.insert(name.clone());
+                    }
+
+                    let class_name = class.unwrap_or_else(|| "".to_string());
+                    let mut frame = ObjectFrame::new(class_name, name);
+
+                    if frame.class == "notebookpage" {
+                        if let Some(parent) = nearest_notebook_mut(&mut stack) {
+                            parent.page_count += 1;
+                        }
+                        frame.is_notebookpage = true;
+                    }
+
+                    stack.push(frame);
+                } else if tag == "orient" {
+                    orient_target = nearest_boxsizer_index(&stack);
+                } else if tag == "label" {
+                    if let Some(frame) = stack.last() {
+                        if frame.is_notebookpage && frame.notebookpage_label.is_none() {
+                            label_target = Some(stack.len() - 1);
+                        }
+                    }
+                }
+            }
+            Ok(Event::Text(event)) => {
+                if let Some(index) = orient_target {
+                    if let Ok(text) = event.unescape() {
+                        let text = text.trim();
+                        if text == "wxVERTICAL" || text == "wxHORIZONTAL" {
+                            if let Some(frame) = stack.get_mut(index) {
+                                frame.boxsizer_orient_ok = true;
+                            }
+                        }
+                    }
+                }
+
+                if let Some(index) = label_target {
+                    if let Ok(text) = event.unescape() {
+                        let text = text.trim();
+                        if !text.is_empty() {
+                            if let Some(frame) = stack.get_mut(index) {
+                                frame.notebookpage_label = Some(text.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(Event::End(event)) => {
+                let tag = String::from_utf8_lossy(event.name().as_ref()).to_string();
+                if tag == "orient" {
+                    orient_target = None;
+                } else if tag == "label" {
+                    label_target = None;
+                } else if tag == "object" {
+                    if let Some(frame) = stack.pop() {
+                        if frame.class == "wxPanel" {
+                            if let Some(parent) = nearest_notebookpage_mut(&mut stack) {
+                                parent.notebookpage_has_panel = true;
+                            }
+                        }
+
+                        if frame.class == "wxBoxSizer" && !frame.boxsizer_orient_ok {
+                            errors.push("wxBoxSizer missing valid <orient> value.".to_string());
+                        }
+
+                        if frame.is_notebookpage && !frame.notebookpage_has_panel {
+                            if let Some(parent) = nearest_notebook_mut(&mut stack) {
+                                parent.pages_missing_panel += 1;
+                            }
+                        }
+
+                        if frame.is_notebookpage && frame.notebookpage_label.is_none() {
+                            errors.push("notebookpage missing label.".to_string());
+                        }
+
+                        if frame.is_notebookpage {
+                            if let Some(label) = frame.notebookpage_label {
+                                if let Some(parent) = nearest_notebook_mut(&mut stack) {
+                                    parent.page_labels.push(label);
+                                }
+                            }
+                        }
+
+                        if frame.is_notebook && frame.page_count == 0 {
+                            if let Some(name) = frame.name.as_ref() {
+                                errors.push(format!(
+                                    "wxNotebook {name} has no notebookpage children."
+                                ));
+                            }
+                        }
+
+                        if frame.is_notebook && frame.pages_missing_panel > 0 {
+                            if let Some(name) = frame.name.as_ref() {
+                                errors.push(format!(
+                                    "wxNotebook {name} has notebookpage entries without wxPanel children."
+                                ));
+                            }
+                        }
+
+                        if frame.is_notebook {
+                            if let Some(name) = frame.name.as_deref() {
+                                if let Some(expected) = expected_labels_for(name) {
+                                    if frame.page_labels != expected {
+                                        errors.push(format!(
+                                            "wxNotebook {name} labels mismatch. Expected: [{}] Found: [{}].",
+                                            expected.join(", "),
+                                            frame.page_labels.join(", ")
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(err) => return Err(format!("XRC parse error: {err}")),
+            _ => {}
+        }
+    }
+
+    if !names.contains("main_frame") {
+        errors.push("Missing root wxFrame named main_frame.".to_string());
+    }
+
+    for name in REQUIRED_WIDGETS {
+        if !names.contains(*name) {
+            errors.push(format!("Missing widget name: {name}."));
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("\n"))
+    }
+}
+
+#[derive(Debug)]
+struct ObjectFrame {
+    class: String,
+    name: Option<String>,
+    boxsizer_orient_ok: bool,
+    is_notebook: bool,
+    page_count: usize,
+    pages_missing_panel: usize,
+    is_notebookpage: bool,
+    notebookpage_has_panel: bool,
+    notebookpage_label: Option<String>,
+    page_labels: Vec<String>,
+}
+
+impl ObjectFrame {
+    fn new(class: String, name: Option<String>) -> Self {
+        let is_notebook = class == "wxNotebook"
+            && matches!(name.as_deref(), Some("root_tabs") | Some("result_tabs"));
+        Self {
+            class,
+            name,
+            boxsizer_orient_ok: false,
+            is_notebook,
+            page_count: 0,
+            pages_missing_panel: 0,
+            is_notebookpage: false,
+            notebookpage_has_panel: false,
+            notebookpage_label: None,
+            page_labels: Vec::new(),
+        }
+    }
+}
+
+fn nearest_boxsizer_index(stack: &[ObjectFrame]) -> Option<usize> {
+    stack
+        .iter()
+        .rposition(|frame| frame.class == "wxBoxSizer")
+}
+
+fn nearest_notebook_mut(stack: &mut [ObjectFrame]) -> Option<&mut ObjectFrame> {
+    stack
+        .iter_mut()
+        .rev()
+        .find(|frame| frame.is_notebook)
+}
+
+fn nearest_notebookpage_mut(stack: &mut [ObjectFrame]) -> Option<&mut ObjectFrame> {
+    stack
+        .iter_mut()
+        .rev()
+        .find(|frame| frame.is_notebookpage)
+}
+
+fn expected_labels_for(name: &str) -> Option<Vec<String>> {
+    match name {
+        "root_tabs" => Some(ROOT_TAB_LABELS.iter().map(|label| label.to_string()).collect()),
+        "result_tabs" => Some(RESULT_TAB_LABELS.iter().map(|label| label.to_string()).collect()),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_xrc;
+
+    #[test]
+    fn xrc_is_structurally_valid() {
+        let xrc = include_str!("../ui/main.xrc");
+        validate_xrc(xrc).expect("XRC validation failed");
+    }
+}
+
+```
+
+---
+
+### File: `fixtures/manifest.yaml`
 
 ```yaml
 scenarios:
@@ -58423,7 +60382,7 @@ scenarios:
 
 ---
 
-### File: `fixtures\manifest_cli_tests.yaml`
+### File: `fixtures/manifest_cli_tests.yaml`
 
 ```yaml
 scenarios:
@@ -59482,7 +61441,7 @@ scenarios:
 
 ---
 
-### File: `fixtures\manifest_perf_e2e.yaml`
+### File: `fixtures/manifest_perf_e2e.yaml`
 
 ```yaml
 scenarios:
@@ -59590,7 +61549,7 @@ scenarios:
 
 ---
 
-### File: `fixtures\manifest_release_smoke.yaml`
+### File: `fixtures/manifest_release_smoke.yaml`
 
 ```yaml
 scenarios:
@@ -59614,7 +61573,7 @@ scenarios:
 
 ---
 
-### File: `fixtures\pyproject.toml`
+### File: `fixtures/pyproject.toml`
 
 ```toml
 [project]
@@ -59645,7 +61604,7 @@ packages = ["src"]
 
 ---
 
-### File: `fixtures\src\__init__.py`
+### File: `fixtures/src/__init__.py`
 
 ```python
 
@@ -59654,7 +61613,7 @@ packages = ["src"]
 
 ---
 
-### File: `fixtures\src\generate.py`
+### File: `fixtures/src/generate.py`
 
 ```python
 import argparse
@@ -60283,7 +62242,7 @@ if __name__ == "__main__":
 
 ---
 
-### File: `fixtures\src\generators\__init__.py`
+### File: `fixtures/src/generators/__init__.py`
 
 ```python
 # Generators package
@@ -60293,7 +62252,7 @@ if __name__ == "__main__":
 
 ---
 
-### File: `fixtures\src\generators\base.py`
+### File: `fixtures/src/generators/base.py`
 
 ```python
 """Base classes for fixture generators."""
@@ -60323,7 +62282,7 @@ class BaseGenerator(ABC):
 
 ---
 
-### File: `fixtures\src\generators\corrupt.py`
+### File: `fixtures/src/generators/corrupt.py`
 
 ```python
 import zipfile
@@ -60374,7 +62333,7 @@ class ContainerCorruptGenerator(BaseGenerator):
 
 ---
 
-### File: `fixtures\src\generators\database.py`
+### File: `fixtures/src/generators/database.py`
 
 ```python
 import openpyxl
@@ -60451,7 +62410,7 @@ class KeyedTableGenerator(BaseGenerator):
 
 ---
 
-### File: `fixtures\src\generators\grid.py`
+### File: `fixtures/src/generators/grid.py`
 
 ```python
 import openpyxl
@@ -61469,7 +63428,7 @@ class Pg6SheetScenarioGenerator(BaseGenerator):
 
 ---
 
-### File: `fixtures\src\generators\mashup.py`
+### File: `fixtures/src/generators/mashup.py`
 
 ```python
 import base64
@@ -63028,7 +64987,7 @@ class MashupAttachGenerator(BaseGenerator):
 
 ---
 
-### File: `fixtures\src\generators\objects.py`
+### File: `fixtures/src/generators/objects.py`
 
 ```python
 import shutil
@@ -63159,7 +65118,7 @@ class CopyTemplateGenerator(BaseGenerator):
 
 ---
 
-### File: `fixtures\src\generators\pbix.py`
+### File: `fixtures/src/generators/pbix.py`
 
 ```python
 import base64
@@ -63263,7 +65222,7 @@ class PbixGenerator(BaseGenerator):
 
 ---
 
-### File: `fixtures\src\generators\perf.py`
+### File: `fixtures/src/generators/perf.py`
 
 ```python
 import openpyxl
@@ -63338,7 +65297,7 @@ class LargeGridGenerator(BaseGenerator):
 
 ---
 
-### File: `fixtures\src\generators\xlsb.py`
+### File: `fixtures/src/generators/xlsb.py`
 
 ```python
 import zipfile
@@ -63384,7 +65343,7 @@ class XlsbStubGenerator(BaseGenerator):
 
 ---
 
-### File: `scripts\add_regression_fixture.py`
+### File: `scripts/add_regression_fixture.py`
 
 ```python
 import argparse
@@ -63506,7 +65465,7 @@ if __name__ == "__main__":
 
 ---
 
-### File: `scripts\arch_guard.py`
+### File: `scripts/arch_guard.py`
 
 ```python
 from __future__ import annotations
@@ -63592,7 +65551,7 @@ if __name__ == "__main__":
 
 ---
 
-### File: `scripts\check_fixture_references.py`
+### File: `scripts/check_fixture_references.py`
 
 ```python
 import re
@@ -63601,8 +65560,12 @@ from pathlib import Path
 
 import yaml
 
-RE_FIXTURE_NAME = re.compile(r'"([A-Za-z0-9._-]+\.(?:xlsx|xlsm|pbix|pbit|zip|txt|bin))"')
-RE_WORKFLOW_REF = re.compile(r"fixtures/generated/([A-Za-z0-9._-]+\.(?:xlsx|xlsm|pbix|pbit|zip|txt|bin))")
+RE_FIXTURE_NAME = re.compile(
+    r"""['"]([A-Za-z0-9._-]+\.(?:xlsx|xlsm|xltx|xltm|xlsb|pbix|pbit|zip|txt|bin))['"]"""
+)
+RE_WORKFLOW_REF = re.compile(
+    r"fixtures/generated/([A-Za-z0-9._-]+\.(?:xlsx|xlsm|xltx|xltm|xlsb|pbix|pbit|zip|txt|bin))"
+)
 
 IGNORED_FIXTURE_NAMES = {
     "definitely_missing.xlsx",
@@ -63718,7 +65681,7 @@ if __name__ == "__main__":
 
 ---
 
-### File: `scripts\check_perf_thresholds.py`
+### File: `scripts/check_perf_thresholds.py`
 
 ```python
 #!/usr/bin/env python3
@@ -64217,9 +66180,6 @@ def main():
         max_time_s = threshold["max_time_s"]
         actual_time_ms = suite_metrics[test_name]["total_time_ms"]
         actual_time_s = actual_time_ms / 1000.0
-        max_peak = threshold.get("max_peak_memory_bytes")
-        actual_peak = suite_metrics[test_name].get("peak_memory_bytes", 0)
-
         if actual_time_s > max_time_s:
             status = "FAIL"
             failures.append((test_name, actual_time_s, max_time_s))
@@ -64227,13 +66187,20 @@ def main():
             status = "PASS"
 
         line = f"  {test_name}: {actual_time_s:.3f}s / {max_time_s:.1f}s [{status}]"
+        max_peak = threshold.get("max_peak_memory_bytes")
         if max_peak is not None:
-            if actual_peak > max_peak:
-                failures.append((test_name, actual_peak, max_peak))
+            if "peak_memory_bytes" not in suite_metrics[test_name]:
+                failures.append((test_name, "MISSING_PEAK_MEMORY_BYTES", max_peak))
                 mem_status = "FAIL"
+                line += f", peak=missing / {max_peak} bytes [{mem_status}]"
             else:
-                mem_status = "PASS"
-            line += f", peak={actual_peak} / {max_peak} bytes [{mem_status}]"
+                actual_peak = suite_metrics[test_name]["peak_memory_bytes"]
+                if actual_peak > max_peak:
+                    failures.append((test_name, actual_peak, max_peak))
+                    mem_status = "FAIL"
+                else:
+                    mem_status = "PASS"
+                line += f", peak={actual_peak} / {max_peak} bytes [{mem_status}]"
         print(line)
 
     print()
@@ -64329,6 +66296,10 @@ def main():
         for test_name, actual, max_cap in failures:
             if isinstance(actual, float):
                 print(f"  {test_name}: {actual:.3f}s exceeded max of {max_cap:.1f}s")
+            elif actual == "MISSING_PEAK_MEMORY_BYTES":
+                print(
+                    f"  {test_name}: missing peak_memory_bytes metric (max configured {max_cap} bytes)"
+                )
             else:
                 print(f"  {test_name}: peak_memory_bytes {actual} exceeded max of {max_cap}")
         if baseline_failures:
@@ -64353,7 +66324,7 @@ if __name__ == "__main__":
 
 ---
 
-### File: `scripts\combine_results_to_csv.py`
+### File: `scripts/combine_results_to_csv.py`
 
 ```python
 #!/usr/bin/env python3
@@ -64521,7 +66492,7 @@ if __name__ == "__main__":
 
 ---
 
-### File: `scripts\compare_perf_results.py`
+### File: `scripts/compare_perf_results.py`
 
 ```python
 #!/usr/bin/env python3
@@ -64685,7 +66656,7 @@ if __name__ == "__main__":
 
 ---
 
-### File: `scripts\dev_test.py`
+### File: `scripts/dev_test.py`
 
 ```python
 import shlex
@@ -64733,7 +66704,7 @@ if __name__ == "__main__":
 
 ---
 
-### File: `scripts\export_e2e_metrics.py`
+### File: `scripts/export_e2e_metrics.py`
 
 ```python
 #!/usr/bin/env python3
@@ -65262,7 +67233,7 @@ if __name__ == "__main__":
 
 ---
 
-### File: `scripts\export_perf_metrics.py`
+### File: `scripts/export_perf_metrics.py`
 
 ```python
 #!/usr/bin/env python3
@@ -65520,7 +67491,7 @@ if __name__ == "__main__":
 
 ---
 
-### File: `scripts\fuzz_corpus_maint.py`
+### File: `scripts/fuzz_corpus_maint.py`
 
 ```python
 import argparse
@@ -65680,7 +67651,7 @@ if __name__ == "__main__":
 
 ---
 
-### File: `scripts\fuzz_triage.py`
+### File: `scripts/fuzz_triage.py`
 
 ```python
 import argparse
@@ -65730,7 +67701,7 @@ if __name__ == "__main__":
 
 ---
 
-### File: `scripts\generate_web_cli_fixtures.py`
+### File: `scripts/generate_web_cli_fixtures.py`
 
 ```python
 #!/usr/bin/env python3
@@ -65801,7 +67772,7 @@ if __name__ == "__main__":
 
 ---
 
-### File: `scripts\ingest_private_corpus.py`
+### File: `scripts/ingest_private_corpus.py`
 
 ```python
 import argparse
@@ -65934,7 +67905,7 @@ if __name__ == "__main__":
 
 ---
 
-### File: `scripts\seed_fuzz_corpus.py`
+### File: `scripts/seed_fuzz_corpus.py`
 
 ```python
 import argparse
@@ -66150,7 +68121,7 @@ if __name__ == "__main__":
 
 ---
 
-### File: `scripts\update_baselines.py`
+### File: `scripts/update_baselines.py`
 
 ```python
 import argparse
@@ -66249,7 +68220,7 @@ if __name__ == "__main__":
 
 ---
 
-### File: `scripts\verify_release_versions.py`
+### File: `scripts/verify_release_versions.py`
 
 ```python
 #!/usr/bin/env python3
@@ -66368,7 +68339,7 @@ if __name__ == "__main__":
 
 ---
 
-### File: `scripts\visualize_benchmarks.py`
+### File: `scripts/visualize_benchmarks.py`
 
 ```python
 #!/usr/bin/env python3
@@ -66811,7 +68782,7 @@ if __name__ == "__main__":
 
 ---
 
-### File: `ui_payload\Cargo.toml`
+### File: `ui_payload/Cargo.toml`
 
 ```toml
 [package]
@@ -66836,7 +68807,7 @@ model-diff = ["excel_diff/model-diff"]
 
 ---
 
-### File: `ui_payload\src\alignment.rs`
+### File: `ui_payload/src/alignment.rs`
 
 ```rust
 use std::collections::{HashMap, HashSet};
@@ -67308,7 +69279,7 @@ fn limit_reason(rows: u32, cols: u32) -> Option<String> {
 
 ---
 
-### File: `ui_payload\src\capabilities.rs`
+### File: `ui_payload/src/capabilities.rs`
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -67355,7 +69326,7 @@ impl HostCapabilities {
 
 ---
 
-### File: `ui_payload\src\lib.rs`
+### File: `ui_payload/src/lib.rs`
 
 ```rust
 use std::collections::{HashMap, HashSet};
@@ -68001,7 +69972,7 @@ fn snapshot_workbook(
 
 ---
 
-### File: `ui_payload\src\options.rs`
+### File: `ui_payload/src/options.rs`
 
 ```rust
 use excel_diff::{DiffConfig, LimitBehavior};
@@ -68119,7 +70090,7 @@ fn timeout_seconds_from_ms(value: u64) -> u32 {
 
 ---
 
-### File: `ui_payload\src\outcome.rs`
+### File: `ui_payload/src/outcome.rs`
 
 ```rust
 use std::collections::HashMap;
@@ -68422,7 +70393,7 @@ fn classify_op(op: &DiffOp) -> Option<ChangeKind> {
 
 ---
 
-### File: `wasm\Cargo.toml`
+### File: `wasm/Cargo.toml`
 
 ```toml
 [package]
@@ -68450,7 +70421,7 @@ ui_payload = { path = "../ui_payload" }
 
 ---
 
-### File: `wasm\src\lib.rs`
+### File: `wasm/src/lib.rs`
 
 ```rust
 use std::io::{self, Cursor, Write};
@@ -68957,7 +70928,7 @@ mod tests {
 
 ---
 
-### File: `web\diff_worker.js`
+### File: `web/diff_worker.js`
 
 ```javascript
 import init, { diff_files_jsonl_stream, diff_files_outcome_json, get_version } from "./wasm/excel_diff_wasm.js";
@@ -69050,7 +71021,7 @@ self.addEventListener("message", async (event) => {
 
 ---
 
-### File: `web\diff_worker_client.js`
+### File: `web/diff_worker_client.js`
 
 ```javascript
 export function createDiffWorkerClient({ onStatus } = {}) {
@@ -69240,7 +71211,7 @@ export function createDiffWorkerClient({ onStatus } = {}) {
 
 ---
 
-### File: `web\export.js`
+### File: `web/export.js`
 
 ```javascript
 function escapeHtml(text) {
@@ -69367,7 +71338,7 @@ export function downloadJsonl({ blob, meta }) {
 
 ---
 
-### File: `web\grid_metrics.js`
+### File: `web/grid_metrics.js`
 
 ```javascript
 export const GRID_METRICS = {
@@ -69382,7 +71353,7 @@ export const GRID_METRICS = {
 
 ---
 
-### File: `web\grid_painter.js`
+### File: `web/grid_painter.js`
 
 ```javascript
 function colToLetter(col) {
@@ -69850,7 +71821,7 @@ export function paintGrid(ctx, model) {
 
 ---
 
-### File: `web\grid_theme.js`
+### File: `web/grid_theme.js`
 
 ```javascript
 function resolveCssVar(style, name, fallback) {
@@ -69887,7 +71858,7 @@ export function readGridTheme(rootEl = document.documentElement) {
 
 ---
 
-### File: `web\grid_viewer.js`
+### File: `web/grid_viewer.js`
 
 ```javascript
 import { GRID_METRICS } from "./grid_metrics.js";
@@ -70784,7 +72755,7 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
 
 ---
 
-### File: `web\index.html`
+### File: `web/index.html`
 
 ```html
 <!doctype html>
@@ -72874,7 +74845,7 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
 
 ---
 
-### File: `web\main.js`
+### File: `web/main.js`
 
 ```javascript
 import { renderWorkbookVm } from "./render.js";
@@ -74441,7 +76412,7 @@ main();
 
 ---
 
-### File: `web\native_diff_client.js`
+### File: `web/native_diff_client.js`
 
 ```javascript
 function resolveTauri() {
@@ -74681,7 +76652,7 @@ export function createNativeDiffClient({ onStatus } = {}) {
 
 ---
 
-### File: `web\platform.js`
+### File: `web/platform.js`
 
 ```javascript
 import { createDiffWorkerClient } from "./diff_worker_client.js";
@@ -74783,7 +76754,7 @@ export async function searchWorkbookIndex(indexId, query, limit) {
 
 ---
 
-### File: `web\render.js`
+### File: `web/render.js`
 
 ```javascript
 import { buildWorkbookViewModel } from "./view_model.js";
@@ -76264,7 +78235,7 @@ export function renderReportHtml(payloadOrReport) {
 
 ---
 
-### File: `web\test_outcome_payload.js`
+### File: `web/test_outcome_payload.js`
 
 ```javascript
 import assert from "node:assert/strict";
@@ -76303,7 +78274,7 @@ console.log("ok");
 
 ---
 
-### File: `web\test_render.js`
+### File: `web/test_render.js`
 
 ```javascript
 import fs from "node:fs";
@@ -76340,7 +78311,7 @@ console.log("ok");
 
 ---
 
-### File: `web\test_view_model.js`
+### File: `web/test_view_model.js`
 
 ```javascript
 import assert from "node:assert/strict";
@@ -76705,7 +78676,7 @@ console.log("ok");
 
 ---
 
-### File: `web\view_model.js`
+### File: `web/view_model.js`
 
 ```javascript
 const CELL_KEY_STRIDE = 16384;

@@ -1,0 +1,108 @@
+use std::fs;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use desktop_backend::{BackendPaths, DesktopBackend, DiffRequest, DiffRunner};
+use ui_payload::{DiffOptions, DiffPreset};
+
+struct TempDir {
+    path: PathBuf,
+}
+
+impl TempDir {
+    fn new(prefix: &str) -> Self {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("excel-diff-{prefix}-{stamp}"));
+        fs::create_dir_all(&path).expect("failed to create temp dir");
+        Self { path }
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+fn fixtures_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/generated")
+}
+
+fn build_backend(temp: &TempDir) -> DesktopBackend {
+    let paths = BackendPaths {
+        app_data_dir: temp.path.clone(),
+        store_db_path: temp.path.join("diff_store.sqlite"),
+        recents_json_path: temp.path.join("recents.json"),
+    };
+    let runner = DiffRunner::new(paths.store_db_path.clone(), "test".to_string(), "test".to_string());
+    DesktopBackend { paths, runner }
+}
+
+#[test]
+fn diff_export_and_search_smoke() {
+    let temp = TempDir::new("backend");
+    let backend = build_backend(&temp);
+    let fixtures = fixtures_dir();
+    let old_path = fixtures.join("single_cell_value_a.xlsx");
+    let new_path = fixtures.join("single_cell_value_b.xlsx");
+
+    let (progress_tx, _progress_rx) = DesktopBackend::new_progress_channel();
+    let request = DiffRequest {
+        old_path: old_path.display().to_string(),
+        new_path: new_path.display().to_string(),
+        run_id: 1,
+        options: DiffOptions {
+            preset: Some(DiffPreset::Balanced),
+            trusted: Some(true),
+            ..DiffOptions::default()
+        },
+        cancel: Arc::new(AtomicBool::new(false)),
+        progress: progress_tx,
+    };
+
+    let outcome = backend
+        .runner
+        .diff(request)
+        .unwrap_or_else(|err| panic!("diff failed: {}", err.message));
+    let diff_id = outcome.diff_id.clone();
+    let summary = outcome
+        .summary
+        .unwrap_or_else(|| panic!("diff summary missing for {}", diff_id));
+    assert_eq!(summary.diff_id, diff_id);
+
+    let loaded = backend
+        .load_diff_summary(&diff_id)
+        .unwrap_or_else(|err| panic!("load summary failed: {}", err.message));
+    assert_eq!(loaded.diff_id, diff_id);
+
+    let export_path = temp.path.join("audit.xlsx");
+    backend
+        .export_audit_xlsx_to_path(&diff_id, &export_path)
+        .unwrap_or_else(|err| panic!("export failed: {}", err.message));
+    assert!(export_path.is_file());
+
+    let _ = backend
+        .search_diff_ops(&diff_id, "sheet", 5)
+        .unwrap_or_else(|err| panic!("search diff ops failed: {}", err.message));
+}
+
+#[test]
+fn build_and_search_index_smoke() {
+    let temp = TempDir::new("backend-index");
+    let backend = build_backend(&temp);
+    let fixtures = fixtures_dir();
+    let workbook = fixtures.join("single_cell_value_a.xlsx");
+
+    let index = backend
+        .build_search_index(&workbook, "old")
+        .unwrap_or_else(|err| panic!("build index failed: {}", err.message));
+    let results = backend
+        .search_workbook_index(&index.index_id, "A1", 5)
+        .unwrap_or_else(|err| panic!("search index failed: {}", err.message));
+    assert!(results.len() <= 5);
+}

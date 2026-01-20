@@ -1,25 +1,17 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod diff_runner;
-mod export;
-mod store;
-mod batch;
-mod search;
-
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread;
 
-use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
-use ui_payload::{DiffOptions, HostCapabilities, HostDefaults};
-
-use crate::diff_runner::{
-    DiffErrorPayload, DiffOutcome, DiffRequest, DiffRunner, SheetPayloadRequest,
+use desktop_backend::{
+    BatchOutcome, BatchRequest, BackendConfig, DesktopBackend, DiffErrorPayload, DiffOutcome, DiffRequest,
+    DiffRunSummary, ProgressRx, RecentComparison, SearchIndexResult, SearchIndexSummary, SearchResult,
+    SheetPayloadRequest,
 };
-use crate::store::{DiffRunSummary, OpStore, StoreError};
-use crate::batch::{BatchOutcome, BatchRequest};
-use crate::search::{SearchIndexResult, SearchIndexSummary, SearchResult};
+use tauri::{AppHandle, Emitter, Manager, State};
+use ui_payload::{DiffOptions, HostCapabilities, HostDefaults};
 
 struct ActiveDiff {
     run_id: u64,
@@ -32,63 +24,7 @@ struct DiffState {
 }
 
 struct DesktopState {
-    runner: DiffRunner,
-    store_path: PathBuf,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct RecentComparison {
-    old_path: String,
-    new_path: String,
-    old_name: String,
-    new_name: String,
-    last_run_iso: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    diff_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    mode: Option<String>,
-}
-
-fn recents_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|e| format!("Unable to resolve app data directory: {e}"))?;
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("Failed to create app data directory: {e}"))?;
-    Ok(dir.join("recents.json"))
-}
-
-fn store_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|e| format!("Unable to resolve app data directory: {e}"))?;
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("Failed to create app data directory: {e}"))?;
-    Ok(dir.join("diff_store.sqlite"))
-}
-
-fn load_recents_from_disk(path: &Path) -> Vec<RecentComparison> {
-    let data = std::fs::read_to_string(path).unwrap_or_default();
-    if data.trim().is_empty() {
-        return Vec::new();
-    }
-    serde_json::from_str(&data).unwrap_or_default()
-}
-
-fn save_recents_to_disk(path: &Path, entries: &[RecentComparison]) -> Result<(), String> {
-    let data = serde_json::to_string_pretty(entries)
-        .map_err(|e| format!("Failed to serialize recents: {e}"))?;
-    std::fs::write(path, data).map_err(|e| format!("Failed to write recents: {e}"))
-}
-
-fn update_recents(mut entries: Vec<RecentComparison>, entry: RecentComparison) -> Vec<RecentComparison> {
-    entries.retain(|item| !(item.old_path == entry.old_path && item.new_path == entry.new_path));
-    entries.insert(0, entry);
-    entries.truncate(20);
-    entries
+    backend: DesktopBackend,
 }
 
 #[tauri::command]
@@ -105,18 +41,16 @@ fn get_capabilities() -> HostCapabilities {
 }
 
 #[tauri::command]
-fn load_recents(app: AppHandle) -> Result<Vec<RecentComparison>, String> {
-    let path = recents_path(&app)?;
-    Ok(load_recents_from_disk(&path))
+fn load_recents(desktop: State<'_, DesktopState>) -> Result<Vec<RecentComparison>, DiffErrorPayload> {
+    desktop.backend.load_recents()
 }
 
 #[tauri::command]
-fn save_recent(app: AppHandle, entry: RecentComparison) -> Result<Vec<RecentComparison>, String> {
-    let path = recents_path(&app)?;
-    let current = load_recents_from_disk(&path);
-    let updated = update_recents(current, entry);
-    save_recents_to_disk(&path, &updated)?;
-    Ok(updated)
+fn save_recent(
+    desktop: State<'_, DesktopState>,
+    entry: RecentComparison,
+) -> Result<Vec<RecentComparison>, DiffErrorPayload> {
+    desktop.backend.save_recent(entry)
 }
 
 #[tauri::command]
@@ -175,8 +109,10 @@ async fn diff_paths_with_sheets(
         cancel
     };
 
-    let runner = desktop.runner.clone();
-    let app_handle = app.clone();
+    let runner = desktop.backend.runner.clone();
+    let (progress_tx, progress_rx) = DesktopBackend::new_progress_channel();
+    spawn_progress_forwarder(app.clone(), progress_rx);
+
     let task = tauri::async_runtime::spawn_blocking(move || {
         let request = DiffRequest {
             old_path,
@@ -184,7 +120,7 @@ async fn diff_paths_with_sheets(
             run_id,
             options,
             cancel: cancel_flag,
-            app: app_handle,
+            progress: progress_tx,
         };
         runner.diff(request)
     });
@@ -212,8 +148,7 @@ fn load_diff_summary(
     desktop: State<'_, DesktopState>,
     diff_id: String,
 ) -> Result<DiffRunSummary, DiffErrorPayload> {
-    let store = OpStore::open(&desktop.store_path).map_err(map_store_error)?;
-    store.load_summary(&diff_id).map_err(map_store_error)
+    desktop.backend.load_diff_summary(&diff_id)
 }
 
 #[tauri::command]
@@ -223,14 +158,17 @@ async fn load_sheet_payload(
     diff_id: String,
     sheet_name: String,
 ) -> Result<ui_payload::DiffWithSheets, DiffErrorPayload> {
-    let runner = desktop.runner.clone();
+    let runner = desktop.backend.runner.clone();
     let cancel = Arc::new(AtomicBool::new(false));
+    let (progress_tx, progress_rx) = DesktopBackend::new_progress_channel();
+    spawn_progress_forwarder(app, progress_rx);
+
     let task = tauri::async_runtime::spawn_blocking(move || {
         runner.load_sheet_payload(SheetPayloadRequest {
             diff_id,
             sheet_name,
             cancel,
-            app,
+            progress: progress_tx,
         })
     });
 
@@ -246,9 +184,8 @@ fn export_audit_xlsx(
     desktop: State<'_, DesktopState>,
     diff_id: String,
 ) -> Result<String, DiffErrorPayload> {
-    let store = OpStore::open(&desktop.store_path).map_err(map_store_error)?;
-    let summary = store.load_summary(&diff_id).map_err(map_store_error)?;
-    let filename = default_export_name(&summary, "audit", "xlsx");
+    let summary = desktop.backend.load_diff_summary(&diff_id)?;
+    let filename = DesktopBackend::default_export_name(&summary, "audit", "xlsx");
 
     let path = rfd::FileDialog::new()
         .set_file_name(&filename)
@@ -256,7 +193,9 @@ fn export_audit_xlsx(
         .save_file()
         .ok_or_else(|| DiffErrorPayload::new("canceled", "Export canceled.", false))?;
 
-    diff_runner::export_audit_xlsx(&diff_id, &desktop.store_path, &path)?;
+    desktop
+        .backend
+        .export_audit_xlsx_to_path(&diff_id, &path)?;
     Ok(path.display().to_string())
 }
 
@@ -266,11 +205,10 @@ async fn run_batch_compare(
     desktop: State<'_, DesktopState>,
     request: BatchRequest,
 ) -> Result<BatchOutcome, DiffErrorPayload> {
-    let runner = desktop.runner.clone();
-    let store_path = desktop.store_path.clone();
-    let task = tauri::async_runtime::spawn_blocking(move || {
-        batch::run_batch_compare(app, runner, &store_path, request)
-    });
+    let backend = desktop.backend.clone();
+    let (progress_tx, progress_rx) = DesktopBackend::new_progress_channel();
+    spawn_progress_forwarder(app, progress_rx);
+    let task = tauri::async_runtime::spawn_blocking(move || backend.run_batch_compare(request, progress_tx));
     match task.await {
         Ok(result) => result,
         Err(e) => Err(DiffErrorPayload::new("task", format!("Batch task failed: {e}"), false)),
@@ -282,7 +220,7 @@ fn load_batch_summary(
     desktop: State<'_, DesktopState>,
     batch_id: String,
 ) -> Result<BatchOutcome, DiffErrorPayload> {
-    batch::load_batch_summary(&desktop.store_path, &batch_id)
+    desktop.backend.load_batch_summary(&batch_id)
 }
 
 #[tauri::command]
@@ -293,18 +231,17 @@ fn search_diff_ops(
     limit: Option<usize>,
 ) -> Result<Vec<SearchResult>, DiffErrorPayload> {
     let limit = limit.unwrap_or(100);
-    search::search_diff_ops(&desktop.store_path, &diff_id, &query, limit)
+    desktop.backend.search_diff_ops(&diff_id, &query, limit)
 }
 
 #[tauri::command]
 fn build_search_index(
-    app: AppHandle,
     desktop: State<'_, DesktopState>,
     path: String,
     side: String,
 ) -> Result<SearchIndexSummary, DiffErrorPayload> {
     let path = PathBuf::from(path);
-    search::build_search_index(app, &desktop.store_path, &path, &side)
+    desktop.backend.build_search_index(&path, &side)
 }
 
 #[tauri::command]
@@ -315,39 +252,29 @@ fn search_workbook_index(
     limit: Option<usize>,
 ) -> Result<Vec<SearchIndexResult>, DiffErrorPayload> {
     let limit = limit.unwrap_or(100);
-    search::search_workbook_index(&desktop.store_path, &index_id, &query, limit)
+    desktop.backend.search_workbook_index(&index_id, &query, limit)
 }
 
-fn default_export_name(summary: &DiffRunSummary, prefix: &str, ext: &str) -> String {
-    let old = base_name(&summary.old_path);
-    let new = base_name(&summary.new_path);
-    let date = summary
-        .finished_at
-        .as_deref()
-        .unwrap_or(&summary.started_at)
-        .get(0..10)
-        .unwrap_or("report");
-    format!("excel-diff-{prefix}__{old}__{new}__{date}.{ext}")
-}
-
-fn base_name(path: &str) -> String {
-    let parts: Vec<&str> = path.split(['\\', '/']).collect();
-    parts.last().unwrap_or(&path).to_string()
-}
-
-fn map_store_error(err: StoreError) -> DiffErrorPayload {
-    DiffErrorPayload::new("store", err.to_string(), false)
+fn spawn_progress_forwarder(app: AppHandle, rx: ProgressRx) {
+    thread::spawn(move || {
+        for event in rx.iter() {
+            let _ = app.emit("diff-progress", event);
+        }
+    });
 }
 
 fn main() {
     tauri::Builder::default()
         .manage(DiffState::default())
         .setup(|app| {
-            let store_path = store_path(&app.handle()).map_err(|e| e.to_string())?;
             let app_version = env!("CARGO_PKG_VERSION").to_string();
-            let engine_version = app_version.clone();
-            let runner = DiffRunner::new(store_path.clone(), app_version, engine_version);
-            app.manage(DesktopState { runner, store_path });
+            let backend = DesktopBackend::init(BackendConfig {
+                app_name: "excel_diff".to_string(),
+                app_version: app_version.clone(),
+                engine_version: app_version,
+            })
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.message))?;
+            app.manage(DesktopState { backend });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -270,7 +270,7 @@ impl OpStore {
     pub fn load_summary(&self, diff_id: &str) -> Result<DiffRunSummary, StoreError> {
         let row = self.conn.query_row(
             "SELECT old_path, new_path, started_at, finished_at, engine_version, app_version, mode, status, trusted, complete, op_count,\
-                    added_count, removed_count, modified_count, moved_count\
+                    added_count, removed_count, modified_count, moved_count \
              FROM diff_runs WHERE diff_id = ?1",
             params![diff_id],
             |row| {
@@ -417,7 +417,7 @@ impl OpStore {
 
     fn load_sheet_summaries(&self, diff_id: &str) -> Result<Vec<SheetSummary>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT sheet_id, sheet_name, op_count, added_count, removed_count, modified_count, moved_count\
+            "SELECT sheet_id, sheet_name, op_count, added_count, removed_count, modified_count, moved_count \
              FROM diff_sheets WHERE diff_id = ?1 ORDER BY sheet_name",
         )?;
         let rows = stmt.query_map(params![diff_id], |row| {

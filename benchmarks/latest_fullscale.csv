@@ -1,7 +1,7 @@
 test_name,total_time_ms,parse_time_ms,diff_time_ms,move_detection_time_ms,alignment_time_ms,cell_diff_time_ms,peak_memory_bytes,rows_processed,cells_compared,anchors_found,moves_detected
-perf_50k_99_percent_blank,105,0,105,0,0,0,15728620,100000,700,0,0
-perf_50k_adversarial_repetitive,722,0,722,0,0,0,243850402,100000,350,0,0
-perf_50k_alignment_block_move,12524,0,12524,11412,0,57,564945120,100000,0,0,1
-perf_50k_completely_different,1163,0,1163,0,0,373,483844032,100000,5000000,0,0
-perf_50k_dense_single_edit,1145,0,1145,0,0,0,487088093,100000,700,0,0
-perf_50k_identical,460,0,460,0,0,0,480016352,100000,5000000,0,0
+perf_50k_99_percent_blank,137,0,137,0,0,0,15728748,100000,700,0,0
+perf_50k_adversarial_repetitive,529,0,529,0,0,0,243850530,100000,350,0,0
+perf_50k_alignment_block_move,13138,0,13138,12022,0,80,564945248,100000,0,0,1
+perf_50k_completely_different,1322,0,1322,0,0,578,483844160,100000,5000000,0,0
+perf_50k_dense_single_edit,1090,0,1090,0,0,0,487088221,100000,700,0,0
+perf_50k_identical,394,0,394,0,0,0,480016608,100000,5000000,0,0

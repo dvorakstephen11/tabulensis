@@ -1,21 +1,21 @@
 {
-  "timestamp": "2026-01-02T17:42:43.933201+00:00",
-  "git_commit": "409c5636d19a",
-  "git_branch": "2026-01-02-phase-9",
+  "timestamp": "2026-01-08T12:43:03.795465+00:00",
+  "git_commit": "ae1d58194370",
+  "git_branch": "development",
   "suite": "gate",
   "full_scale": true,
   "tests": {
     "perf_50k_dense_single_edit": {
-      "total_time_ms": 1162,
+      "total_time_ms": 1136,
       "parse_time_ms": 0,
-      "diff_time_ms": 1162,
-      "signature_build_time_ms": 911,
+      "diff_time_ms": 1136,
+      "signature_build_time_ms": 930,
       "move_detection_time_ms": 0,
       "alignment_time_ms": 0,
       "cell_diff_time_ms": 0,
       "op_emit_time_ms": 0,
       "report_serialize_time_ms": 0,
-      "peak_memory_bytes": 487077207,
+      "peak_memory_bytes": 487077335,
       "grid_storage_bytes": 240000000,
       "string_pool_bytes": 203,
       "op_buffer_bytes": 448,
@@ -30,7 +30,7 @@
   },
   "summary": {
     "total_tests": 1,
-    "total_time_ms": 1162,
+    "total_time_ms": 1136,
     "total_rows_processed": 100000,
     "total_cells_compared": 700
   }

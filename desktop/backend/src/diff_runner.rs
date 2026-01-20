@@ -14,7 +14,7 @@ use excel_diff::{
 };
 use lru::LruCache;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use crate::events::{ProgressEvent, ProgressTx};
 
 use crate::export::export_audit_xlsx_from_store;
 use crate::store::{
@@ -32,7 +32,7 @@ pub struct DiffRequest {
     pub run_id: u64,
     pub options: DiffOptions,
     pub cancel: Arc<AtomicBool>,
-    pub app: AppHandle,
+    pub progress: ProgressTx,
 }
 
 #[derive(Debug, Clone)]
@@ -40,7 +40,7 @@ pub struct SheetPayloadRequest {
     pub diff_id: String,
     pub sheet_name: String,
     pub cancel: Arc<AtomicBool>,
-    pub app: AppHandle,
+    pub progress: ProgressTx,
 }
 
 #[derive(Serialize)]
@@ -66,7 +66,7 @@ pub struct DiffErrorPayload {
 }
 
 impl DiffErrorPayload {
-    pub(crate) fn new(code: impl Into<String>, message: impl Into<String>, trusted_retry: bool) -> Self {
+    pub fn new(code: impl Into<String>, message: impl Into<String>, trusted_retry: bool) -> Self {
         Self {
             code: code.into(),
             message: message.into(),
@@ -201,7 +201,7 @@ impl EngineState {
     }
 
     fn handle_diff(&mut self, request: DiffRequest) -> Result<DiffOutcome, DiffErrorPayload> {
-        emit_progress(&request.app, request.run_id, "read", "Reading files...");
+        emit_progress(&request.progress, request.run_id, "read", "Reading files...");
 
         let old_path = PathBuf::from(&request.old_path);
         let new_path = PathBuf::from(&request.new_path);
@@ -258,8 +258,8 @@ impl EngineState {
 
                 match mode {
                     DiffMode::Payload => {
-                        emit_progress(&request.app, request.run_id, "diff", "Diffing workbooks...");
-                        let progress = EngineProgress::new(request.app.clone(), request.run_id, request.cancel.clone());
+                        emit_progress(&request.progress, request.run_id, "diff", "Diffing workbooks...");
+                        let progress = EngineProgress::new(request.progress.clone(), request.run_id, request.cancel.clone());
                         let report = match run_diff_with_progress(
                             || old_pkg.diff_with_progress(&new_pkg, &config, &progress),
                             &request.cancel,
@@ -271,7 +271,7 @@ impl EngineState {
                             }
                         };
 
-                        emit_progress(&request.app, request.run_id, "snapshot", "Building previews...");
+                        emit_progress(&request.progress, request.run_id, "snapshot", "Building previews...");
                         let (counts, sheet_stats) = store
                             .insert_ops_from_report(&diff_id, &report)
                             .map_err(map_store_error)?;
@@ -292,8 +292,8 @@ impl EngineState {
                         })
                     }
                     DiffMode::Large => {
-                        emit_progress(&request.app, request.run_id, "diff", "Streaming diff to disk...");
-                        let progress = EngineProgress::new(request.app.clone(), request.run_id, request.cancel.clone());
+                        emit_progress(&request.progress, request.run_id, "diff", "Streaming diff to disk...");
+                        let progress = EngineProgress::new(request.progress.clone(), request.run_id, request.cancel.clone());
                         let sink_store = OpStore::open(&self.store_path).map_err(map_store_error)?;
                         let conn = sink_store.into_connection();
                         let mut sink = OpStoreSink::new(conn, diff_id.clone())
@@ -353,8 +353,8 @@ impl EngineState {
                     )
                     .map_err(map_store_error)?;
 
-                emit_progress(&request.app, request.run_id, "diff", "Streaming PBIX diff to disk...");
-                let progress = EngineProgress::new(request.app.clone(), request.run_id, request.cancel.clone());
+                emit_progress(&request.progress, request.run_id, "diff", "Streaming PBIX diff to disk...");
+                let progress = EngineProgress::new(request.progress.clone(), request.run_id, request.cancel.clone());
                 let sink_store = OpStore::open(&self.store_path).map_err(map_store_error)?;
                 let conn = sink_store.into_connection();
                 let mut sink = OpStoreSink::new(conn, diff_id.clone())
@@ -439,7 +439,7 @@ impl EngineState {
         report.complete = summary.complete;
         report.warnings = summary.warnings.clone();
 
-        emit_progress(&request.app, 0, "snapshot", "Building previews...");
+        emit_progress(&request.progress, 0, "snapshot", "Building previews...");
         Ok(ui_payload::build_payload_from_workbook_report(report, &old_pkg, &new_pkg))
     }
 
@@ -583,16 +583,16 @@ where
 }
 
 struct EngineProgress {
-    app: AppHandle,
+    progress: ProgressTx,
     run_id: u64,
     cancel: Arc<AtomicBool>,
     last_phase: std::sync::Mutex<Option<String>>,
 }
 
 impl EngineProgress {
-    fn new(app: AppHandle, run_id: u64, cancel: Arc<AtomicBool>) -> Self {
+    fn new(progress: ProgressTx, run_id: u64, cancel: Arc<AtomicBool>) -> Self {
         Self {
-            app,
+            progress,
             run_id,
             cancel,
             last_phase: std::sync::Mutex::new(None),
@@ -626,30 +626,20 @@ impl ProgressCallback for EngineProgress {
             panic!("diff canceled");
         }
         if self.should_emit(phase) {
-            emit_progress(&self.app, self.run_id, "diff", Self::map_detail(phase));
+            emit_progress(&self.progress, self.run_id, "diff", Self::map_detail(phase));
         }
     }
 }
 
-fn emit_progress(app: &AppHandle, run_id: u64, stage: &str, detail: &str) {
-    let _ = app.emit(
-        "diff-progress",
-        ProgressEvent {
-            run_id,
-            stage: stage.to_string(),
-            detail: detail.to_string(),
-        },
-    );
+fn emit_progress(progress: &ProgressTx, run_id: u64, stage: &str, detail: &str) {
+    let _ = progress.send(ProgressEvent {
+        run_id,
+        stage: stage.to_string(),
+        detail: detail.to_string(),
+    });
 }
 
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct ProgressEvent {
-    run_id: u64,
-    stage: String,
-    detail: String,
-}
-
+#[allow(dead_code)]
 pub fn export_audit_xlsx(diff_id: &str, store_path: &Path, output_path: &Path) -> Result<(), DiffErrorPayload> {
     let store = OpStore::open(store_path).map_err(map_store_error)?;
     export_audit_xlsx_from_store(&store, diff_id, output_path).map_err(|e| {
