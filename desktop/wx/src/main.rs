@@ -152,7 +152,7 @@ impl MainUi {
             .unwrap_or_else(|| panic!("Missing search page in root_tabs"));
 
         let sheets_list = find_xrc_child::<Panel>(&compare_page, "sheets_list");
-        let result_tabs = find_xrc_child::<Notebook>(&compare_page, "result_tabs");
+        let _result_tabs = find_xrc_child::<Notebook>(&compare_page, "result_tabs");
         let old_picker = find_xrc_child::<FilePickerCtrl>(&compare_page, "old_picker");
         let new_picker = find_xrc_child::<FilePickerCtrl>(&compare_page, "new_picker");
         let compare_btn = find_xrc_child::<Button>(&compare_page, "compare_btn");

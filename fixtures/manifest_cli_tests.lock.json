@@ -58,19 +58,19 @@
       "mode": "zip-entries-v1"
     },
     "composed_grid_mashup_a.xlsx": {
-      "hash": "sha256:5eb829e7965f87fc7120452b785f40891d46a30210cd2b5ad0144665bc448771",
+      "hash": "sha256:e692a4f125b3047add0e335996f5892e4706570cf1212d95d349c6955de45199",
       "mode": "zip-entries-v1"
     },
     "composed_grid_mashup_b.xlsx": {
-      "hash": "sha256:7c853c2f8d5cdb8e1eb22b97fa746e8aec667d34f81632040b2b2f5e8ed152ba",
+      "hash": "sha256:79f0a16de8c1583ebede526241b0a64425be9451bae6f5ce29d901611a87c3fe",
       "mode": "zip-entries-v1"
     },
     "composed_mashup_a.xlsx": {
-      "hash": "sha256:3897648bd59f2a25ea0f65a7ffde76817b36b635e6c50ae1baf4a58f097be89a",
+      "hash": "sha256:c3aa5b75e0ab66e0cbb85036a7f500fbdbcb02ccd81deaf011c674c3707961a5",
       "mode": "zip-entries-v1"
     },
     "composed_mashup_b.xlsx": {
-      "hash": "sha256:15ba716a42ce44dea26c57e6433d3f74931d45ed8325ce07fd2637039daf0733",
+      "hash": "sha256:1fc9dddaf826cb8836671f2bada3280373f897ab759b10724b1c74e357dc3186",
       "mode": "zip-entries-v1"
     },
     "corrupt_base64.xlsx": {
@@ -210,11 +210,11 @@
       "mode": "zip-entries-v1"
     },
     "m_embedded_change_a.xlsx": {
-      "hash": "sha256:b06029a5ada753a578d2fc197cd72bc1bdd040994204b17fba7b404771b138d4",
+      "hash": "sha256:b557a017bc9899d3f7cdce66ae324dd7b316530ca5ba5e33cca9370610340f57",
       "mode": "zip-entries-v1"
     },
     "m_embedded_change_b.xlsx": {
-      "hash": "sha256:0e90f234f943e4e0bac25889e7b55f3d21fec63e8efc44ff3efb1d45c541cdfc",
+      "hash": "sha256:3537ce7bc2a42fa21462614fff0d1734010321d55735474e3e08405882642a20",
       "mode": "zip-entries-v1"
     },
     "m_formatting_only_a.xlsx": {
@@ -326,7 +326,7 @@
       "mode": "zip-entries-v1"
     },
     "multi_query_with_embedded.xlsx": {
-      "hash": "sha256:aed8ce47f8e85d89be2b600dea3fd61575b8b9bfd79e9c08520f512fb2b172fa",
+      "hash": "sha256:b7539160bd00f4bd10dc52e12f65baef3319180d53e63ee8d28fd79e57956675",
       "mode": "zip-entries-v1"
     },
     "named_ranges_a.xlsx": {
@@ -358,15 +358,15 @@
       "mode": "zip-entries-v1"
     },
     "pbix_composed_a.pbix": {
-      "hash": "sha256:5ce84fdda739068b3da629049fad7a7c7cda24e97567cf4ab79aa306ed2c9a1a",
+      "hash": "sha256:1f0fda6d1c68d8c6dbe4668579b2916c1f05339af78124d2d9d95cb153d34354",
       "mode": "zip-entries-v1"
     },
     "pbix_composed_b.pbix": {
-      "hash": "sha256:0ba32c0e21e1123d359bdfd0a27754ec7c8fac21b86056ac7d403a1ad837f78e",
+      "hash": "sha256:5b1b0ce22c2f71d3af2f22775fafd804790489973e7a931a600fd4e09cfd6587",
       "mode": "zip-entries-v1"
     },
     "pbix_embedded_queries.pbix": {
-      "hash": "sha256:6001ddc75a6a2324830f74ed467326e34ddcd4e9368930e209c28fec4c5777fa",
+      "hash": "sha256:4700380a66e75afd4ce7346dfa773015f8c7002d6d39fd53896f36d4ad124783",
       "mode": "zip-entries-v1"
     },
     "pbix_legacy_multi_query_a.pbix": {
@@ -571,6 +571,6 @@
     }
   },
   "manifest": "fixtures/manifest_cli_tests.yaml",
-  "output_dir": "fixtures/generated",
+  "output_dir": "/home/dvorak/repo/agent_hub_repos/excel_diff/fixtures/generated",
   "version": 1
 }

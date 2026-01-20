@@ -92,11 +92,14 @@ pub struct JsonlOutput {
     pub ops: Vec<DiffOp>,
 }
 
+#[cfg(feature = "perf-metrics")]
 fn normalize_summary(mut summary: DiffSummary) -> DiffSummary {
-    #[cfg(feature = "perf-metrics")]
-    {
-        summary.metrics = None;
-    }
+    summary.metrics = None;
+    summary
+}
+
+#[cfg(not(feature = "perf-metrics"))]
+fn normalize_summary(summary: DiffSummary) -> DiffSummary {
     summary
 }
 
