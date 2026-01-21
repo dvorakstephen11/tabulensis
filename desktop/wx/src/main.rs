@@ -52,6 +52,18 @@ const SEARCH_COLUMNS: [(&str, i32); 5] = [
     ("Detail", 260),
 ];
 
+fn default_window_size() -> Size {
+    Size::new(1280, 900)
+}
+
+fn min_window_size() -> Size {
+    Size::new(960, 640)
+}
+
+fn min_root_tabs_size() -> Size {
+    Size::new(640, 360)
+}
+
 struct MainUi {
     main_frame: Frame,
     open_old_menu: MenuItem,
@@ -63,7 +75,10 @@ struct MainUi {
     about_menu: MenuItem,
     status_bar: StatusBar,
     root_tabs: Notebook,
+    compare_container: Panel,
     sheets_list: Panel,
+    compare_splitter: SplitterWindow,
+    compare_right_panel: Panel,
     old_picker: FilePickerCtrl,
     new_picker: FilePickerCtrl,
     compare_btn: Button,
@@ -72,6 +87,7 @@ struct MainUi {
     trusted_checkbox: CheckBox,
     progress_gauge: Gauge,
     progress_text: StaticText,
+    result_tabs: Notebook,
     summary_text: TextCtrl,
     detail_text: TextCtrl,
     recents_list: Panel,
@@ -113,6 +129,10 @@ impl MainUi {
         let main_frame = resource
             .load_frame(parent, "main_frame")
             .unwrap_or_else(|| panic!("Failed to load XRC root object: main_frame"));
+        if parent.is_none() {
+            main_frame.set_min_size(min_window_size());
+            main_frame.set_size(default_window_size());
+        }
         let _menu_bar = main_frame
             .get_menu_bar()
             .unwrap_or_else(|| panic!("Failed to get MenuBar from Frame"));
@@ -138,6 +158,7 @@ impl MainUi {
         frame_sizer.add(&main_panel, 1, SizerFlag::Expand, 0);
         main_frame.set_sizer(frame_sizer, true);
         let root_tabs = find_xrc_child::<Notebook>(&main_frame, "root_tabs");
+        root_tabs.set_min_size(min_root_tabs_size());
         let compare_page = root_tabs
             .get_page(0)
             .unwrap_or_else(|| panic!("Missing compare page in root_tabs"));
@@ -151,18 +172,21 @@ impl MainUi {
             .get_page(3)
             .unwrap_or_else(|| panic!("Missing search page in root_tabs"));
 
-        let sheets_list = find_xrc_child::<Panel>(&compare_page, "sheets_list");
-        let _result_tabs = find_xrc_child::<Notebook>(&compare_page, "result_tabs");
-        let old_picker = find_xrc_child::<FilePickerCtrl>(&compare_page, "old_picker");
-        let new_picker = find_xrc_child::<FilePickerCtrl>(&compare_page, "new_picker");
-        let compare_btn = find_xrc_child::<Button>(&compare_page, "compare_btn");
-        let cancel_btn = find_xrc_child::<Button>(&compare_page, "cancel_btn");
-        let preset_choice = find_xrc_child::<Choice>(&compare_page, "preset_choice");
-        let trusted_checkbox = find_xrc_child::<CheckBox>(&compare_page, "trusted_checkbox");
-        let progress_gauge = find_xrc_child::<Gauge>(&compare_page, "progress_gauge");
-        let progress_text = find_xrc_child::<StaticText>(&compare_page, "progress_text");
-        let summary_text = find_xrc_child::<TextCtrl>(&compare_page, "summary_text");
-        let detail_text = find_xrc_child::<TextCtrl>(&compare_page, "detail_text");
+        let compare_container = find_xrc_child::<Panel>(&compare_page, "compare_container");
+        let sheets_list = find_xrc_child::<Panel>(&compare_container, "sheets_list");
+        let result_tabs = find_xrc_child::<Notebook>(&compare_container, "result_tabs");
+        let compare_splitter = find_xrc_child::<SplitterWindow>(&compare_container, "compare_splitter");
+        let compare_right_panel = find_xrc_child::<Panel>(&compare_container, "compare_right_panel");
+        let old_picker = find_xrc_child::<FilePickerCtrl>(&compare_container, "old_picker");
+        let new_picker = find_xrc_child::<FilePickerCtrl>(&compare_container, "new_picker");
+        let compare_btn = find_xrc_child::<Button>(&compare_container, "compare_btn");
+        let cancel_btn = find_xrc_child::<Button>(&compare_container, "cancel_btn");
+        let preset_choice = find_xrc_child::<Choice>(&compare_container, "preset_choice");
+        let trusted_checkbox = find_xrc_child::<CheckBox>(&compare_container, "trusted_checkbox");
+        let progress_gauge = find_xrc_child::<Gauge>(&compare_container, "progress_gauge");
+        let progress_text = find_xrc_child::<StaticText>(&compare_container, "progress_text");
+        let summary_text = find_xrc_child::<TextCtrl>(&compare_container, "summary_text");
+        let detail_text = find_xrc_child::<TextCtrl>(&compare_container, "detail_text");
 
         let recents_list = find_xrc_child::<Panel>(&recents_page, "recents_list");
         let open_recent_btn = find_xrc_child::<Button>(&recents_page, "open_recent_btn");
@@ -193,7 +217,10 @@ impl MainUi {
             about_menu,
             status_bar,
             root_tabs,
+            compare_container,
             sheets_list,
+            compare_splitter,
+            compare_right_panel,
             old_picker,
             new_picker,
             compare_btn,
@@ -202,6 +229,7 @@ impl MainUi {
             trusted_checkbox,
             progress_gauge,
             progress_text,
+            result_tabs,
             summary_text,
             detail_text,
             recents_list,
@@ -286,6 +314,14 @@ struct UiHandles {
     summary_text: TextCtrl,
     detail_text: TextCtrl,
     root_tabs: Notebook,
+    compare_container: Panel,
+    result_tabs: Notebook,
+    sheets_list_panel: Panel,
+    recents_list_panel: Panel,
+    batch_results_list_panel: Panel,
+    search_results_list_panel: Panel,
+    compare_splitter: SplitterWindow,
+    compare_right_panel: Panel,
     open_recent_btn: Button,
     run_batch_btn: Button,
     search_btn: Button,
@@ -297,10 +333,10 @@ struct UiHandles {
     batch_new_dir: DirPickerCtrl,
     include_glob_text: TextCtrl,
     exclude_glob_text: TextCtrl,
-    sheets_view: DataViewCtrl,
-    recents_view: DataViewCtrl,
-    batch_view: DataViewCtrl,
-    search_view: DataViewCtrl,
+    sheets_view: Option<DataViewCtrl>,
+    recents_view: Option<DataViewCtrl>,
+    batch_view: Option<DataViewCtrl>,
+    search_view: Option<DataViewCtrl>,
 }
 
 struct ActiveRun {
@@ -320,10 +356,10 @@ struct AppState {
     search_old_index: Option<SearchIndexSummary>,
     search_new_index: Option<SearchIndexSummary>,
     batch_outcome: Option<BatchOutcome>,
-    sheets_model: DataViewListModel,
-    recents_model: DataViewListModel,
-    batch_model: DataViewListModel,
-    search_model: DataViewListModel,
+    sheets_model: Option<DataViewListModel>,
+    recents_model: Option<DataViewListModel>,
+    batch_model: Option<DataViewListModel>,
+    search_model: Option<DataViewListModel>,
 }
 
 struct UiContext {
@@ -354,6 +390,34 @@ fn update_status_in_ctx(ctx: &mut UiContext, message: &str) {
 fn update_status(message: &str) {
     let message = message.to_string();
     let _ = with_ui_context(|ctx| update_status_in_ctx(ctx, &message));
+}
+
+fn layout_debug_enabled() -> bool {
+    std::env::var("EXCEL_DIFF_DEBUG_LAYOUT")
+        .map(|value| value == "1")
+        .unwrap_or(false)
+}
+
+fn log_layout_sizes(ctx: &UiContext) {
+    let frame_size = ctx.ui.frame.get_size();
+    let root_tabs_size = ctx.ui.root_tabs.get_size();
+    let compare_size = ctx.ui.compare_container.get_size();
+    let result_tabs_size = ctx.ui.result_tabs.get_size();
+    let sheets_size = ctx.ui.sheets_list_panel.get_size();
+
+    info!(
+        "Layout sizes: frame={}x{}, root_tabs={}x{}, compare_container={}x{}, result_tabs={}x{}, sheets_list={}x{}",
+        frame_size.width,
+        frame_size.height,
+        root_tabs_size.width,
+        root_tabs_size.height,
+        compare_size.width,
+        compare_size.height,
+        result_tabs_size.width,
+        result_tabs_size.height,
+        sheets_size.width,
+        sheets_size.height
+    );
 }
 
 fn create_dataview(parent: &Panel, columns: &[(&str, i32)]) -> DataViewCtrl {
@@ -410,6 +474,10 @@ fn preset_from_choice(choice: &Choice) -> DiffPreset {
 }
 
 fn populate_sheet_list(ctx: &mut UiContext, summary: &DiffRunSummary) {
+    let Some(view) = ctx.ui.sheets_view else {
+        debug!("Sheets view not initialized yet.");
+        return;
+    };
     ctx.state.sheet_names = summary
         .sheets
         .iter()
@@ -431,10 +499,14 @@ fn populate_sheet_list(ctx: &mut UiContext, summary: &DiffRunSummary) {
         })
         .collect::<Vec<_>>();
 
-    ctx.state.sheets_model = rebuild_model(&ctx.ui.sheets_view, &SHEETS_COLUMNS, rows);
+    ctx.state.sheets_model = Some(rebuild_model(&view, &SHEETS_COLUMNS, rows));
 }
 
 fn populate_recents(ctx: &mut UiContext, recents: Vec<RecentComparison>) {
+    let Some(view) = ctx.ui.recents_view else {
+        debug!("Recents view not initialized yet.");
+        return;
+    };
     let rows = recents
         .iter()
         .map(|entry| {
@@ -444,11 +516,11 @@ fn populate_recents(ctx: &mut UiContext, recents: Vec<RecentComparison>) {
                 entry.last_run_iso.clone(),
                 entry.mode.clone().unwrap_or_else(|| "".to_string()),
             ]
-        })
-        .collect::<Vec<_>>();
+    })
+    .collect::<Vec<_>>();
 
     ctx.state.recents = recents;
-    ctx.state.recents_model = rebuild_model(&ctx.ui.recents_view, &RECENTS_COLUMNS, rows);
+    ctx.state.recents_model = Some(rebuild_model(&view, &RECENTS_COLUMNS, rows));
 }
 
 fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
@@ -700,6 +772,10 @@ fn run_batch() {
 fn handle_batch_result(result: Result<BatchOutcome, DiffErrorPayload>) {
     let _ = with_ui_context(|ctx| {
         ctx.ui.run_batch_btn.enable(true);
+        let Some(view) = ctx.ui.batch_view else {
+            debug!("Batch view not initialized yet.");
+            return;
+        };
 
         match result {
             Ok(outcome) => {
@@ -722,7 +798,7 @@ fn handle_batch_result(result: Result<BatchOutcome, DiffErrorPayload>) {
                     })
                     .collect::<Vec<_>>();
 
-                ctx.state.batch_model = rebuild_model(&ctx.ui.batch_view, &BATCH_COLUMNS, rows);
+                ctx.state.batch_model = Some(rebuild_model(&view, &BATCH_COLUMNS, rows));
                 update_status_in_ctx(ctx, "Batch compare complete.");
             }
             Err(err) => update_status_in_ctx(ctx, &format!("Batch failed: {}", err.message)),
@@ -817,6 +893,10 @@ enum SearchRequest {
 
 fn apply_search_results(results: Vec<SearchResult>) {
     let _ = with_ui_context(|ctx| {
+        let Some(view) = ctx.ui.search_view else {
+            debug!("Search view not initialized yet.");
+            return;
+        };
         let rows = results
             .iter()
             .map(|result| {
@@ -830,13 +910,17 @@ fn apply_search_results(results: Vec<SearchResult>) {
             })
             .collect::<Vec<_>>();
 
-        ctx.state.search_model = rebuild_model(&ctx.ui.search_view, &SEARCH_COLUMNS, rows);
+        ctx.state.search_model = Some(rebuild_model(&view, &SEARCH_COLUMNS, rows));
         update_status_in_ctx(ctx, &format!("Search returned {} results.", results.len()));
     });
 }
 
 fn apply_index_results(results: Vec<SearchIndexResult>) {
     let _ = with_ui_context(|ctx| {
+        let Some(view) = ctx.ui.search_view else {
+            debug!("Search view not initialized yet.");
+            return;
+        };
         let rows = results
             .iter()
             .map(|result| {
@@ -850,7 +934,7 @@ fn apply_index_results(results: Vec<SearchIndexResult>) {
             })
             .collect::<Vec<_>>();
 
-        ctx.state.search_model = rebuild_model(&ctx.ui.search_view, &SEARCH_COLUMNS, rows);
+        ctx.state.search_model = Some(rebuild_model(&view, &SEARCH_COLUMNS, rows));
         update_status_in_ctx(ctx, &format!("Search returned {} results.", results.len()));
     });
 }
@@ -908,7 +992,11 @@ fn cancel_current() {
 fn open_recent() {
     let mut request = None;
     let _ = with_ui_context(|ctx| {
-        let Some(selected) = ctx.ui.recents_view.get_selected_row() else {
+        let Some(view) = ctx.ui.recents_view else {
+            update_status_in_ctx(ctx, "Recents list not ready.");
+            return;
+        };
+        let Some(selected) = view.get_selected_row() else {
             update_status_in_ctx(ctx, "Select a recent comparison.");
             return;
         };
@@ -1064,16 +1152,7 @@ fn main() {
         .unwrap_or_else(|err| panic!("Backend init failed: {}", err.message));
 
         let ui = MainUi::new(None, false);
-
-        let sheets_view = create_dataview(&ui.sheets_list, &SHEETS_COLUMNS);
-        let recents_view = create_dataview(&ui.recents_list, &RECENTS_COLUMNS);
-        let batch_view = create_dataview(&ui.batch_results_list, &BATCH_COLUMNS);
-        let search_view = create_dataview(&ui.search_results_list, &SEARCH_COLUMNS);
-
-        let sheets_model = rebuild_model(&sheets_view, &SHEETS_COLUMNS, Vec::new());
-        let recents_model = rebuild_model(&recents_view, &RECENTS_COLUMNS, Vec::new());
-        let batch_model = rebuild_model(&batch_view, &BATCH_COLUMNS, Vec::new());
-        let search_model = rebuild_model(&search_view, &SEARCH_COLUMNS, Vec::new());
+        let layout_debug = layout_debug_enabled();
 
         let ui_handles = UiHandles {
             frame: ui.main_frame,
@@ -1096,6 +1175,14 @@ fn main() {
             summary_text: ui.summary_text,
             detail_text: ui.detail_text,
             root_tabs: ui.root_tabs,
+            compare_container: ui.compare_container,
+            result_tabs: ui.result_tabs,
+            sheets_list_panel: ui.sheets_list,
+            recents_list_panel: ui.recents_list,
+            batch_results_list_panel: ui.batch_results_list,
+            search_results_list_panel: ui.search_results_list,
+            compare_splitter: ui.compare_splitter,
+            compare_right_panel: ui.compare_right_panel,
             open_recent_btn: ui.open_recent_btn,
             run_batch_btn: ui.run_batch_btn,
             search_btn: ui.search_btn,
@@ -1107,10 +1194,10 @@ fn main() {
             batch_new_dir: ui.batch_new_dir,
             include_glob_text: ui.include_glob_text,
             exclude_glob_text: ui.exclude_glob_text,
-            sheets_view,
-            recents_view,
-            batch_view,
-            search_view,
+            sheets_view: None,
+            recents_view: None,
+            batch_view: None,
+            search_view: None,
         };
 
         let state = AppState {
@@ -1126,10 +1213,10 @@ fn main() {
             search_old_index: None,
             search_new_index: None,
             batch_outcome: None,
-            sheets_model,
-            recents_model,
-            batch_model,
-            search_model,
+            sheets_model: None,
+            recents_model: None,
+            batch_model: None,
+            search_model: None,
         };
 
         UI_CONTEXT.with(|ctx| {
@@ -1167,10 +1254,6 @@ fn main() {
             ctx.ui.search_scope_choice.append("New workbook");
             ctx.ui.search_scope_choice.set_selection(0);
 
-            if let Ok(recents) = ctx.state.backend.load_recents() {
-                populate_recents(ctx, recents);
-            }
-
             ctx.ui.compare_btn.on_click(|_| start_compare());
             ctx.ui.cancel_btn.on_click(|_| cancel_current());
             ctx.ui.open_recent_btn.on_click(|_| open_recent());
@@ -1179,35 +1262,81 @@ fn main() {
             ctx.ui.build_old_index_btn.on_click(|_| build_index("old"));
             ctx.ui.build_new_index_btn.on_click(|_| build_index("new"));
 
-            ctx.ui.sheets_view.bind_dataview_event(DataViewEventType::SelectionChanged, |event| {
-                if let Some(row) = event.get_row() {
-                    handle_sheet_selection(row as usize);
-                }
-            });
-
-            ctx.ui.batch_view.bind_dataview_event(DataViewEventType::ItemActivated, |event| {
-                if let Some(row) = event.get_row() {
-                    let diff_id = with_ui_context(|ctx| {
-                        ctx.state
-                            .batch_outcome
-                            .as_ref()
-                            .and_then(|outcome| outcome.items.get(row as usize))
-                            .and_then(|item| item.diff_id.clone())
-                    })
-                    .flatten();
-                    if let Some(diff_id) = diff_id {
-                        load_diff_summary_into_ui(diff_id);
-                    }
-                }
-            });
-
+            ctx.ui.compare_splitter.set_minimum_pane_size(200);
+            if !ctx.ui
+                .compare_splitter
+                .split_vertically(&ctx.ui.sheets_list_panel, &ctx.ui.compare_right_panel, 320)
+            {
+                ctx.ui.compare_splitter.set_sash_position(320, false);
+            }
+            ctx.ui.compare_container.layout();
+            ctx.ui.root_tabs.layout();
+            ctx.ui.frame.layout();
             ctx.ui.frame.show(true);
+            let size = ctx.ui.frame.get_size();
+            ctx.ui.frame.set_size(size);
+            ctx.ui.frame.layout();
             ctx.ui.frame.centre();
             wxdragon::set_top_window(&ctx.ui.frame);
-            wxdragon::call_after(Box::new(|| {
-                let _ = with_ui_context(|ctx| ctx.ui.frame.layout());
-            }));
         });
+
+        wxdragon::call_after(Box::new(move || {
+            let _ = with_ui_context(|ctx| {
+                let sheets_view = create_dataview(&ctx.ui.sheets_list_panel, &SHEETS_COLUMNS);
+                let recents_view = create_dataview(&ctx.ui.recents_list_panel, &RECENTS_COLUMNS);
+                let batch_view = create_dataview(&ctx.ui.batch_results_list_panel, &BATCH_COLUMNS);
+                let search_view = create_dataview(&ctx.ui.search_results_list_panel, &SEARCH_COLUMNS);
+
+                ctx.state.sheets_model = Some(rebuild_model(&sheets_view, &SHEETS_COLUMNS, Vec::new()));
+                ctx.state.recents_model = Some(rebuild_model(&recents_view, &RECENTS_COLUMNS, Vec::new()));
+                ctx.state.batch_model = Some(rebuild_model(&batch_view, &BATCH_COLUMNS, Vec::new()));
+                ctx.state.search_model = Some(rebuild_model(&search_view, &SEARCH_COLUMNS, Vec::new()));
+
+                ctx.ui.sheets_view = Some(sheets_view);
+                ctx.ui.recents_view = Some(recents_view);
+                ctx.ui.batch_view = Some(batch_view);
+                ctx.ui.search_view = Some(search_view);
+
+                if let Ok(recents) = ctx.state.backend.load_recents() {
+                    populate_recents(ctx, recents);
+                }
+
+                if let Some(view) = ctx.ui.sheets_view {
+                    view.bind_dataview_event(DataViewEventType::SelectionChanged, |event| {
+                        if let Some(row) = event.get_row() {
+                            handle_sheet_selection(row as usize);
+                        }
+                    });
+                }
+
+                if let Some(view) = ctx.ui.batch_view {
+                    view.bind_dataview_event(DataViewEventType::ItemActivated, |event| {
+                        if let Some(row) = event.get_row() {
+                            let diff_id = with_ui_context(|ctx| {
+                                ctx.state
+                                    .batch_outcome
+                                    .as_ref()
+                                    .and_then(|outcome| outcome.items.get(row as usize))
+                                    .and_then(|item| item.diff_id.clone())
+                            })
+                            .flatten();
+                            if let Some(diff_id) = diff_id {
+                                load_diff_summary_into_ui(diff_id);
+                            }
+                        }
+                    });
+                }
+
+                ctx.ui.compare_splitter.set_minimum_pane_size(200);
+                ctx.ui.compare_splitter.set_sash_position(320, true);
+                ctx.ui.frame.layout();
+                let size = ctx.ui.frame.get_size();
+                ctx.ui.frame.set_size(size);
+                if layout_debug {
+                    log_layout_sizes(ctx);
+                }
+            });
+        }));
     })
     .expect("wxDragon app failed");
 }

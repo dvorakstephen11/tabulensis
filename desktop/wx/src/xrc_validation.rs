@@ -1,6 +1,6 @@
 use quick_xml::events::Event;
 use quick_xml::Reader;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 const REQUIRED_WIDGETS: &[&str] = &[
     "main_frame",
@@ -15,6 +15,8 @@ const REQUIRED_WIDGETS: &[&str] = &[
     "progress_gauge",
     "progress_text",
     "compare_container",
+    "compare_splitter",
+    "compare_right_panel",
     "sheets_list",
     "result_tabs",
     "summary_text",
@@ -45,8 +47,12 @@ pub fn validate_xrc(xrc: &str) -> Result<(), String> {
     let mut errors = Vec::new();
     let mut names = HashSet::new();
     let mut stack: Vec<ObjectFrame> = Vec::new();
+    let mut sizer_stack: Vec<SizerItemFrame> = Vec::new();
+    let mut sizer_items: HashMap<String, Vec<SizerItemInfo>> = HashMap::new();
     let mut orient_target: Option<usize> = None;
     let mut label_target: Option<usize> = None;
+    let mut flag_target: Option<usize> = None;
+    let mut proportion_target: Option<usize> = None;
 
     loop {
         match reader.read_event() {
@@ -69,6 +75,11 @@ pub fn validate_xrc(xrc: &str) -> Result<(), String> {
 
                     let class_name = class.unwrap_or_else(|| "".to_string());
                     let mut frame = ObjectFrame::new(class_name, name);
+                    let frame_name = frame.name.clone();
+
+                    if frame.class == "sizeritem" {
+                        sizer_stack.push(SizerItemFrame::default());
+                    }
 
                     if frame.class == "notebookpage" {
                         if let Some(parent) = nearest_notebook_mut(&mut stack) {
@@ -78,6 +89,16 @@ pub fn validate_xrc(xrc: &str) -> Result<(), String> {
                     }
 
                     stack.push(frame);
+                    if let Some(sizer_frame) = sizer_stack.last_mut() {
+                        if !sizer_frame.saw_object && !matches!(stack.last().map(|f| f.class.as_str()), Some("sizeritem")) {
+                            sizer_frame.saw_object = true;
+                            if frame_name.is_some() {
+                                sizer_frame.child_name = frame_name;
+                            }
+                        }
+                    }
+                } else if tag == "sizeritem" {
+                    sizer_stack.push(SizerItemFrame::default());
                 } else if tag == "orient" {
                     orient_target = nearest_boxsizer_index(&stack);
                 } else if tag == "label" {
@@ -85,6 +106,14 @@ pub fn validate_xrc(xrc: &str) -> Result<(), String> {
                         if frame.is_notebookpage && frame.notebookpage_label.is_none() {
                             label_target = Some(stack.len() - 1);
                         }
+                    }
+                } else if tag == "flag" {
+                    if !sizer_stack.is_empty() {
+                        flag_target = Some(sizer_stack.len() - 1);
+                    }
+                } else if tag == "proportion" || tag == "option" {
+                    if !sizer_stack.is_empty() {
+                        proportion_target = Some(sizer_stack.len() - 1);
                     }
                 }
             }
@@ -110,6 +139,28 @@ pub fn validate_xrc(xrc: &str) -> Result<(), String> {
                         }
                     }
                 }
+
+                if let Some(index) = flag_target {
+                    if let Ok(text) = event.unescape() {
+                        let text = text.trim();
+                        if let Some(frame) = sizer_stack.get_mut(index) {
+                            if !text.is_empty() {
+                                frame.flags = Some(text.to_string());
+                            }
+                        }
+                    }
+                }
+
+                if let Some(index) = proportion_target {
+                    if let Ok(text) = event.unescape() {
+                        let text = text.trim();
+                        if let Ok(value) = text.parse::<i32>() {
+                            if let Some(frame) = sizer_stack.get_mut(index) {
+                                frame.proportion = Some(value);
+                            }
+                        }
+                    }
+                }
             }
             Ok(Event::End(event)) => {
                 let tag = String::from_utf8_lossy(event.name().as_ref()).to_string();
@@ -117,8 +168,33 @@ pub fn validate_xrc(xrc: &str) -> Result<(), String> {
                     orient_target = None;
                 } else if tag == "label" {
                     label_target = None;
+                } else if tag == "flag" {
+                    flag_target = None;
+                } else if tag == "proportion" || tag == "option" {
+                    proportion_target = None;
+                } else if tag == "sizeritem" {
+                    if let Some(frame) = sizer_stack.pop() {
+                        if let Some(name) = frame.child_name {
+                            let info = SizerItemInfo {
+                                flags: frame.flags.unwrap_or_default(),
+                                proportion: frame.proportion.unwrap_or(0),
+                            };
+                            sizer_items.entry(name).or_default().push(info);
+                        }
+                    }
                 } else if tag == "object" {
                     if let Some(frame) = stack.pop() {
+                        if frame.class == "sizeritem" {
+                            if let Some(frame) = sizer_stack.pop() {
+                                if let Some(name) = frame.child_name {
+                                    let info = SizerItemInfo {
+                                        flags: frame.flags.unwrap_or_default(),
+                                        proportion: frame.proportion.unwrap_or(0),
+                                    };
+                                    sizer_items.entry(name).or_default().push(info);
+                                }
+                            }
+                        }
                         if frame.class == "wxPanel" {
                             if let Some(parent) = nearest_notebookpage_mut(&mut stack) {
                                 parent.notebookpage_has_panel = true;
@@ -195,6 +271,15 @@ pub fn validate_xrc(xrc: &str) -> Result<(), String> {
         }
     }
 
+    for (name, min_prop, needs_expand) in expand_requirements() {
+        if !sizer_item_ok(&sizer_items, name, min_prop, needs_expand) {
+            let expand_note = if needs_expand { " and wxEXPAND" } else { "" };
+            errors.push(format!(
+                "Widget {name} must be in sizeritem with proportion >= {min_prop}{expand_note}."
+            ));
+        }
+    }
+
     if errors.is_empty() {
         Ok(())
     } else {
@@ -235,6 +320,20 @@ impl ObjectFrame {
     }
 }
 
+#[derive(Debug, Default)]
+struct SizerItemFrame {
+    child_name: Option<String>,
+    flags: Option<String>,
+    proportion: Option<i32>,
+    saw_object: bool,
+}
+
+#[derive(Debug)]
+struct SizerItemInfo {
+    flags: String,
+    proportion: i32,
+}
+
 fn nearest_boxsizer_index(stack: &[ObjectFrame]) -> Option<usize> {
     stack
         .iter()
@@ -261,6 +360,28 @@ fn expected_labels_for(name: &str) -> Option<Vec<String>> {
         "result_tabs" => Some(RESULT_TAB_LABELS.iter().map(|label| label.to_string()).collect()),
         _ => None,
     }
+}
+
+fn expand_requirements() -> Vec<(&'static str, i32, bool)> {
+    vec![
+        ("root_tabs", 1, true),
+        ("compare_splitter", 1, true),
+        ("result_tabs", 1, true),
+        ("old_picker", 1, true),
+        ("new_picker", 1, true),
+    ]
+}
+
+fn sizer_item_ok(items: &HashMap<String, Vec<SizerItemInfo>>, name: &str, min_prop: i32, needs_expand: bool) -> bool {
+    items
+        .get(name)
+        .into_iter()
+        .flatten()
+        .any(|info| {
+            let prop_ok = info.proportion >= min_prop;
+            let expand_ok = !needs_expand || info.flags.contains("wxEXPAND");
+            prop_ok && expand_ok
+        })
 }
 
 #[cfg(test)]

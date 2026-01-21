@@ -2,6 +2,7 @@
 <resource>
   <object class="wxFrame" name="main_frame">
     <title>Excel Diff</title>
+    <style>wxDEFAULT_FRAME_STYLE</style>
     <size>1280,900</size>
     <minsize>960,640</minsize>
     <object class="wxMenuBar" name="menu_bar">
@@ -47,167 +48,182 @@
           <object class="wxNotebook" name="root_tabs">
             <object class="notebookpage">
               <label>Compare</label>
-              <object class="wxPanel">
+              <object class="wxPanel" name="compare_container">
                 <object class="wxBoxSizer">
-                <orient>wxVERTICAL</orient>
-                <object class="sizeritem">
-                  <object class="wxBoxSizer">
-                    <orient>wxHORIZONTAL</orient>
-                    <object class="sizeritem">
-                      <object class="wxFilePickerCtrl" name="old_picker">
-                        <style>wxFLP_OPEN|wxFLP_FILE_MUST_EXIST|wxFLP_USE_TEXTCTRL</style>
-                        <wildcard>Excel/PBIX files (*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit)|*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit|All files (*.*)|*.*</wildcard>
-                      </object>
-                      <flag>wxEXPAND|wxALL</flag>
-                      <proportion>1</proportion>
-                      <border>4</border>
-                    </object>
-                    <object class="sizeritem">
-                      <object class="wxFilePickerCtrl" name="new_picker">
-                        <style>wxFLP_OPEN|wxFLP_FILE_MUST_EXIST|wxFLP_USE_TEXTCTRL</style>
-                        <wildcard>Excel/PBIX files (*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit)|*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit|All files (*.*)|*.*</wildcard>
-                      </object>
-                      <flag>wxEXPAND|wxALL</flag>
-                      <proportion>1</proportion>
-                      <border>4</border>
-                    </object>
-                    <object class="sizeritem">
-                      <object class="wxButton" name="compare_btn">
-                        <label>Compare</label>
-                      </object>
-                      <flag>wxALL</flag>
-                      <border>4</border>
-                    </object>
-                    <object class="sizeritem">
-                      <object class="wxButton" name="cancel_btn">
-                        <label>Cancel</label>
-                      </object>
-                      <flag>wxALL</flag>
-                      <border>4</border>
-                    </object>
-                  </object>
-                  <flag>wxEXPAND</flag>
-                  <proportion>0</proportion>
-                </object>
-                <object class="sizeritem">
-                  <object class="wxBoxSizer">
-                    <orient>wxHORIZONTAL</orient>
-                    <object class="sizeritem">
-                      <object class="wxChoice" name="preset_choice"></object>
-                      <flag>wxALL</flag>
-                      <border>4</border>
-                    </object>
-                    <object class="sizeritem">
-                      <object class="wxCheckBox" name="trusted_checkbox">
-                        <label>Trusted files</label>
-                      </object>
-                      <flag>wxALL</flag>
-                      <border>4</border>
-                    </object>
-                  </object>
-                  <flag>wxEXPAND</flag>
-                  <proportion>0</proportion>
-                </object>
-                <object class="sizeritem">
-                  <object class="wxBoxSizer">
-                    <orient>wxHORIZONTAL</orient>
-                    <object class="sizeritem">
-                      <object class="wxGauge" name="progress_gauge">
-                        <range>100</range>
-                      </object>
-                      <flag>wxEXPAND|wxALL</flag>
-                      <proportion>0</proportion>
-                      <border>4</border>
-                    </object>
-                    <object class="sizeritem">
-                      <object class="wxStaticText" name="progress_text">
-                        <label>Ready</label>
-                      </object>
-                      <flag>wxALIGN_CENTER_VERTICAL|wxALL</flag>
-                      <border>4</border>
-                    </object>
-                  </object>
-                  <flag>wxEXPAND</flag>
-                  <proportion>0</proportion>
-                </object>
-                <object class="sizeritem">
-                  <object class="wxPanel" name="compare_container">
+                  <orient>wxVERTICAL</orient>
+                  <object class="sizeritem">
                     <object class="wxBoxSizer">
                       <orient>wxHORIZONTAL</orient>
                       <object class="sizeritem">
-                        <object class="wxPanel" name="sheets_list">
-                          <minsize>260,-1</minsize>
+                        <object class="wxFilePickerCtrl" name="old_picker">
+                          <style>wxFLP_OPEN|wxFLP_FILE_MUST_EXIST|wxFLP_USE_TEXTCTRL</style>
+                          <wildcard>Excel/PBIX files (*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit)|*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit|All files (*.*)|*.*</wildcard>
                         </object>
                         <flag>wxEXPAND|wxALL</flag>
-                        <proportion>0</proportion>
+                        <option>1</option>
                         <border>4</border>
                       </object>
                       <object class="sizeritem">
-                        <object class="wxNotebook" name="result_tabs">
-                          <object class="notebookpage">
-                            <label>Summary</label>
-                            <object class="wxPanel">
-                              <object class="wxBoxSizer">
-                                <orient>wxVERTICAL</orient>
-                                <object class="sizeritem">
-                                  <object class="wxTextCtrl" name="summary_text">
-                                    <style>wxTE_MULTILINE|wxTE_READONLY</style>
-                                  </object>
-                                  <flag>wxEXPAND|wxALL</flag>
-                                  <proportion>1</proportion>
-                                  <border>4</border>
-                                </object>
-                              </object>
-                            </object>
-                          </object>
-                          <object class="notebookpage">
-                            <label>Details</label>
-                            <object class="wxPanel">
-                              <object class="wxBoxSizer">
-                                <orient>wxVERTICAL</orient>
-                                <object class="sizeritem">
-                                  <object class="wxTextCtrl" name="detail_text">
-                                    <style>wxTE_MULTILINE|wxTE_READONLY</style>
-                                  </object>
-                                  <flag>wxEXPAND|wxALL</flag>
-                                  <proportion>1</proportion>
-                                  <border>4</border>
-                                </object>
-                              </object>
-                            </object>
-                          </object>
+                        <object class="wxFilePickerCtrl" name="new_picker">
+                          <style>wxFLP_OPEN|wxFLP_FILE_MUST_EXIST|wxFLP_USE_TEXTCTRL</style>
+                          <wildcard>Excel/PBIX files (*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit)|*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit|All files (*.*)|*.*</wildcard>
                         </object>
                         <flag>wxEXPAND|wxALL</flag>
-                        <proportion>1</proportion>
+                        <option>1</option>
+                        <border>4</border>
+                      </object>
+                      <object class="sizeritem">
+                        <object class="wxButton" name="compare_btn">
+                          <label>Compare</label>
+                        </object>
+                        <flag>wxALL|wxALIGN_CENTER_VERTICAL</flag>
+                        <border>4</border>
+                      </object>
+                      <object class="sizeritem">
+                        <object class="wxButton" name="cancel_btn">
+                          <label>Cancel</label>
+                        </object>
+                        <flag>wxALL|wxALIGN_CENTER_VERTICAL</flag>
                         <border>4</border>
                       </object>
                     </object>
+                    <flag>wxEXPAND</flag>
+                    <option>0</option>
                   </object>
-                  <flag>wxEXPAND|wxALL</flag>
-                  <proportion>1</proportion>
-                  <border>4</border>
+                  <object class="sizeritem">
+                    <object class="wxBoxSizer">
+                      <orient>wxHORIZONTAL</orient>
+                      <object class="sizeritem">
+                        <object class="wxChoice" name="preset_choice"></object>
+                        <flag>wxALL|wxALIGN_CENTER_VERTICAL</flag>
+                        <border>4</border>
+                      </object>
+                      <object class="sizeritem">
+                        <object class="wxCheckBox" name="trusted_checkbox">
+                          <label>Trusted files</label>
+                        </object>
+                        <flag>wxALL|wxALIGN_CENTER_VERTICAL</flag>
+                        <border>4</border>
+                      </object>
+                      <object class="sizeritem">
+                        <object class="spacer">
+                          <size>0,0</size>
+                        </object>
+                        <flag>wxEXPAND</flag>
+                        <option>1</option>
+                      </object>
+                    </object>
+                    <flag>wxEXPAND</flag>
+                    <option>0</option>
+                  </object>
+                  <object class="sizeritem">
+                    <object class="wxBoxSizer">
+                      <orient>wxHORIZONTAL</orient>
+                      <object class="sizeritem">
+                        <object class="wxGauge" name="progress_gauge">
+                          <range>100</range>
+                        </object>
+                        <flag>wxEXPAND|wxALL</flag>
+                        <option>1</option>
+                        <border>4</border>
+                      </object>
+                      <object class="sizeritem">
+                        <object class="wxStaticText" name="progress_text">
+                          <label>Ready</label>
+                        </object>
+                        <flag>wxALIGN_CENTER_VERTICAL|wxALL</flag>
+                        <border>4</border>
+                      </object>
+                    </object>
+                    <flag>wxEXPAND</flag>
+                    <option>0</option>
+                  </object>
+                  <object class="sizeritem">
+                    <object class="wxSplitterWindow" name="compare_splitter">
+                      <object class="wxPanel" name="sheets_list"></object>
+                      <object class="wxPanel" name="compare_right_panel">
+                        <object class="wxBoxSizer">
+                          <orient>wxVERTICAL</orient>
+                          <object class="sizeritem">
+                            <object class="wxNotebook" name="result_tabs">
+                              <object class="notebookpage">
+                                <label>Summary</label>
+                                <object class="wxPanel">
+                                  <object class="wxBoxSizer">
+                                    <orient>wxVERTICAL</orient>
+                                    <object class="sizeritem">
+                                      <object class="wxTextCtrl" name="summary_text">
+                                        <style>wxTE_MULTILINE|wxTE_READONLY</style>
+                                      </object>
+                                      <flag>wxEXPAND|wxALL</flag>
+                                      <option>1</option>
+                                      <border>4</border>
+                                    </object>
+                                  </object>
+                                </object>
+                              </object>
+                              <object class="notebookpage">
+                                <label>Details</label>
+                                <object class="wxPanel">
+                                  <object class="wxBoxSizer">
+                                    <orient>wxVERTICAL</orient>
+                                    <object class="sizeritem">
+                                      <object class="wxTextCtrl" name="detail_text">
+                                        <style>wxTE_MULTILINE|wxTE_READONLY</style>
+                                      </object>
+                                      <flag>wxEXPAND|wxALL</flag>
+                                      <option>1</option>
+                                      <border>4</border>
+                                    </object>
+                                  </object>
+                                </object>
+                              </object>
+                            </object>
+                            <flag>wxEXPAND</flag>
+                            <option>1</option>
+                          </object>
+                        </object>
+                      </object>
+                    </object>
+                    <flag>wxEXPAND|wxALL</flag>
+                    <option>1</option>
+                    <border>6</border>
+                  </object>
                 </object>
               </object>
             </object>
-          </object>
             <object class="notebookpage">
               <label>Recents</label>
               <object class="wxPanel">
                 <object class="wxBoxSizer">
-                <orient>wxVERTICAL</orient>
-                <object class="sizeritem">
-                  <object class="wxPanel" name="recents_list"></object>
-                  <flag>wxEXPAND|wxALL</flag>
-                  <proportion>1</proportion>
-                  <border>4</border>
-                </object>
-                <object class="sizeritem">
-                  <object class="wxButton" name="open_recent_btn">
-                    <label>Open Selected</label>
+                  <orient>wxVERTICAL</orient>
+                  <object class="sizeritem">
+                    <object class="wxBoxSizer">
+                      <orient>wxHORIZONTAL</orient>
+                      <object class="sizeritem">
+                        <object class="wxButton" name="open_recent_btn">
+                          <label>Open Selected</label>
+                        </object>
+                        <flag>wxALL|wxALIGN_CENTER_VERTICAL</flag>
+                        <border>4</border>
+                      </object>
+                      <object class="sizeritem">
+                        <object class="spacer">
+                          <size>0,0</size>
+                        </object>
+                        <flag>wxEXPAND</flag>
+                        <option>1</option>
+                      </object>
+                    </object>
+                    <flag>wxEXPAND</flag>
+                    <option>0</option>
                   </object>
-                  <flag>wxALIGN_RIGHT|wxALL</flag>
-                  <border>4</border>
-                </object>
+                  <object class="sizeritem">
+                    <object class="wxPanel" name="recents_list"></object>
+                    <flag>wxEXPAND|wxALL</flag>
+                    <option>1</option>
+                    <border>6</border>
+                  </object>
                 </object>
               </object>
             </object>
@@ -215,76 +231,76 @@
               <label>Batch</label>
               <object class="wxPanel">
                 <object class="wxBoxSizer">
-                <orient>wxVERTICAL</orient>
-                <object class="sizeritem">
-                  <object class="wxBoxSizer">
-                    <orient>wxHORIZONTAL</orient>
-                    <object class="sizeritem">
-                      <object class="wxDirPickerCtrl" name="batch_old_dir">
-                        <style>wxDIRP_USE_TEXTCTRL</style>
+                  <orient>wxVERTICAL</orient>
+                  <object class="sizeritem">
+                    <object class="wxBoxSizer">
+                      <orient>wxHORIZONTAL</orient>
+                      <object class="sizeritem">
+                        <object class="wxDirPickerCtrl" name="batch_old_dir">
+                          <style>wxDIRP_USE_TEXTCTRL</style>
+                        </object>
+                        <flag>wxEXPAND|wxALL</flag>
+                        <option>1</option>
+                        <border>4</border>
                       </object>
-                      <flag>wxEXPAND|wxALL</flag>
-                      <proportion>1</proportion>
-                      <border>4</border>
-                    </object>
-                    <object class="sizeritem">
-                      <object class="wxDirPickerCtrl" name="batch_new_dir">
-                        <style>wxDIRP_USE_TEXTCTRL</style>
+                      <object class="sizeritem">
+                        <object class="wxDirPickerCtrl" name="batch_new_dir">
+                          <style>wxDIRP_USE_TEXTCTRL</style>
+                        </object>
+                        <flag>wxEXPAND|wxALL</flag>
+                        <option>1</option>
+                        <border>4</border>
                       </object>
-                      <flag>wxEXPAND|wxALL</flag>
-                      <proportion>1</proportion>
-                      <border>4</border>
-                    </object>
-                    <object class="sizeritem">
-                      <object class="wxButton" name="run_batch_btn">
-                        <label>Run Batch</label>
+                      <object class="sizeritem">
+                        <object class="wxButton" name="run_batch_btn">
+                          <label>Run Batch</label>
+                        </object>
+                        <flag>wxALL|wxALIGN_CENTER_VERTICAL</flag>
+                        <border>4</border>
                       </object>
-                      <flag>wxALL</flag>
-                      <border>4</border>
                     </object>
+                    <flag>wxEXPAND</flag>
+                    <option>0</option>
                   </object>
-                  <flag>wxEXPAND</flag>
-                  <proportion>0</proportion>
-                </object>
-                <object class="sizeritem">
-                  <object class="wxBoxSizer">
-                    <orient>wxHORIZONTAL</orient>
-                    <object class="sizeritem">
-                      <object class="wxStaticText" name="include_glob_label">
-                        <label>Include globs</label>
+                  <object class="sizeritem">
+                    <object class="wxBoxSizer">
+                      <orient>wxHORIZONTAL</orient>
+                      <object class="sizeritem">
+                        <object class="wxStaticText" name="include_glob_label">
+                          <label>Include globs</label>
+                        </object>
+                        <flag>wxALIGN_CENTER_VERTICAL|wxALL</flag>
+                        <border>4</border>
                       </object>
-                      <flag>wxALIGN_CENTER_VERTICAL|wxALL</flag>
-                      <border>4</border>
-                    </object>
-                    <object class="sizeritem">
-                      <object class="wxTextCtrl" name="include_glob_text"></object>
-                      <flag>wxEXPAND|wxALL</flag>
-                      <proportion>1</proportion>
-                      <border>4</border>
-                    </object>
-                    <object class="sizeritem">
-                      <object class="wxStaticText" name="exclude_glob_label">
-                        <label>Exclude globs</label>
+                      <object class="sizeritem">
+                        <object class="wxTextCtrl" name="include_glob_text"></object>
+                        <flag>wxEXPAND|wxALL</flag>
+                        <option>1</option>
+                        <border>4</border>
                       </object>
-                      <flag>wxALIGN_CENTER_VERTICAL|wxALL</flag>
-                      <border>4</border>
+                      <object class="sizeritem">
+                        <object class="wxStaticText" name="exclude_glob_label">
+                          <label>Exclude globs</label>
+                        </object>
+                        <flag>wxALIGN_CENTER_VERTICAL|wxALL</flag>
+                        <border>4</border>
+                      </object>
+                      <object class="sizeritem">
+                        <object class="wxTextCtrl" name="exclude_glob_text"></object>
+                        <flag>wxEXPAND|wxALL</flag>
+                        <option>1</option>
+                        <border>4</border>
+                      </object>
                     </object>
-                    <object class="sizeritem">
-                      <object class="wxTextCtrl" name="exclude_glob_text"></object>
-                      <flag>wxEXPAND|wxALL</flag>
-                      <proportion>1</proportion>
-                      <border>4</border>
-                    </object>
+                    <flag>wxEXPAND</flag>
+                    <option>0</option>
                   </object>
-                  <flag>wxEXPAND</flag>
-                  <proportion>0</proportion>
-                </object>
-                <object class="sizeritem">
-                  <object class="wxPanel" name="batch_results_list"></object>
-                  <flag>wxEXPAND|wxALL</flag>
-                  <proportion>1</proportion>
-                  <border>4</border>
-                </object>
+                  <object class="sizeritem">
+                    <object class="wxPanel" name="batch_results_list"></object>
+                    <flag>wxEXPAND|wxALL</flag>
+                    <option>1</option>
+                    <border>6</border>
+                  </object>
                 </object>
               </object>
             </object>
@@ -292,59 +308,59 @@
               <label>Search</label>
               <object class="wxPanel">
                 <object class="wxBoxSizer">
-                <orient>wxVERTICAL</orient>
-                <object class="sizeritem">
-                  <object class="wxBoxSizer">
-                    <orient>wxHORIZONTAL</orient>
-                    <object class="sizeritem">
-                      <object class="wxSearchCtrl" name="search_ctrl"></object>
-                      <flag>wxEXPAND|wxALL</flag>
-                      <proportion>1</proportion>
-                      <border>4</border>
-                    </object>
-                    <object class="sizeritem">
-                      <object class="wxChoice" name="search_scope_choice"></object>
-                      <flag>wxALL</flag>
-                      <border>4</border>
-                    </object>
-                    <object class="sizeritem">
-                      <object class="wxButton" name="search_btn">
-                        <label>Search</label>
+                  <orient>wxVERTICAL</orient>
+                  <object class="sizeritem">
+                    <object class="wxBoxSizer">
+                      <orient>wxHORIZONTAL</orient>
+                      <object class="sizeritem">
+                        <object class="wxSearchCtrl" name="search_ctrl"></object>
+                        <flag>wxEXPAND|wxALL</flag>
+                        <option>1</option>
+                        <border>4</border>
                       </object>
-                      <flag>wxALL</flag>
-                      <border>4</border>
-                    </object>
-                    <object class="sizeritem">
-                      <object class="wxButton" name="build_old_index_btn">
-                        <label>Build Old Index</label>
+                      <object class="sizeritem">
+                        <object class="wxChoice" name="search_scope_choice"></object>
+                        <flag>wxALL|wxALIGN_CENTER_VERTICAL</flag>
+                        <border>4</border>
                       </object>
-                      <flag>wxALL</flag>
-                      <border>4</border>
-                    </object>
-                    <object class="sizeritem">
-                      <object class="wxButton" name="build_new_index_btn">
-                        <label>Build New Index</label>
+                      <object class="sizeritem">
+                        <object class="wxButton" name="search_btn">
+                          <label>Search</label>
+                        </object>
+                        <flag>wxALL|wxALIGN_CENTER_VERTICAL</flag>
+                        <border>4</border>
                       </object>
-                      <flag>wxALL</flag>
-                      <border>4</border>
+                      <object class="sizeritem">
+                        <object class="wxButton" name="build_old_index_btn">
+                          <label>Build Old Index</label>
+                        </object>
+                        <flag>wxALL|wxALIGN_CENTER_VERTICAL</flag>
+                        <border>4</border>
+                      </object>
+                      <object class="sizeritem">
+                        <object class="wxButton" name="build_new_index_btn">
+                          <label>Build New Index</label>
+                        </object>
+                        <flag>wxALL|wxALIGN_CENTER_VERTICAL</flag>
+                        <border>4</border>
+                      </object>
                     </object>
+                    <flag>wxEXPAND</flag>
+                    <option>0</option>
                   </object>
-                  <flag>wxEXPAND</flag>
-                  <proportion>0</proportion>
-                </object>
-                <object class="sizeritem">
-                  <object class="wxPanel" name="search_results_list"></object>
-                  <flag>wxEXPAND|wxALL</flag>
-                  <proportion>1</proportion>
-                  <border>4</border>
-                </object>
+                  <object class="sizeritem">
+                    <object class="wxPanel" name="search_results_list"></object>
+                    <flag>wxEXPAND|wxALL</flag>
+                    <option>1</option>
+                    <border>6</border>
+                  </object>
                 </object>
               </object>
             </object>
           </object>
           <flag>wxEXPAND|wxALL</flag>
-          <proportion>1</proportion>
-          <border>4</border>
+          <option>1</option>
+          <border>6</border>
         </object>
       </object>
     </object>

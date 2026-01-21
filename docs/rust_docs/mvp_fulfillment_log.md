@@ -51,3 +51,94 @@ This file tracks decisions and progress against [mvp_checklist.md](mvp_checklist
 
 - [x] Define "launch success" for the first 30 days
   - Answer: 200 website views; 1+ web demo usage events; 1+ free trial activations; 1+ successful diffs.
+
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
+- []
+  - Answer:
+  
