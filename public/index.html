@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Tabulensis</title>
+    <meta name="description" content="Tabulensis is a fast, local-first diff engine for Excel and Power BI workbooks.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="shell">
+      <header>
+        <div class="brand">Tabulensis</div>
+        <nav>
+          <a href="/download">Download</a>
+          <a href="/docs">Docs</a>
+          <a href="/support">Support</a>
+          <a href="/privacy">Privacy</a>
+          <a href="/terms">Terms</a>
+        </nav>
+      </header>
+
+      <section class="hero">
+        <div>
+          <h1>Diff spreadsheets like you diff code.</h1>
+          <p>
+            Tabulensis compares Excel and Power BI files locally, then reports structural, formula, and
+            query changes in a clean, structured format.
+          </p>
+          <div class="cta-row">
+            <a class="cta primary" href="/download">Get the CLI</a>
+            <a class="cta" href="/docs">Read the docs</a>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Today-ready install</h3>
+          <p>Use the prebuilt binaries or install from source with Rust 1.85+.</p>
+          <div class="note">cargo install --locked --path cli</div>
+        </div>
+      </section>
+
+      <section class="card-grid">
+        <div class="card">
+          <h3>Workbook aware</h3>
+          <p>Captures sheet structure, named ranges, charts, and VBA modules.</p>
+        </div>
+        <div class="card">
+          <h3>Power Query diff</h3>
+          <p>Highlights M-query edits so you can review semantic changes fast.</p>
+        </div>
+        <div class="card">
+          <h3>Streaming output</h3>
+          <p>Use JSONL output for large workbooks and pipeline-friendly diffing.</p>
+        </div>
+      </section>
+
+      <section class="section">
+        <div>
+          <h2>Designed for teams moving fast</h2>
+          <p>
+            Use Tabulensis in CI, in a pre-commit hook, or in your release checklist. Reports stay
+            deterministic and leave the original files untouched.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Quick links</h3>
+          <ul>
+            <li><a href="/docs">CLI commands</a></li>
+            <li><a href="/docs">Diff presets</a></li>
+            <li><a href="/support">Support contact</a></li>
+          </ul>
+        </div>
+      </section>
+
+      <footer>
+        <div>Built for spreadsheet teams who want audit-ready diffs.</div>
+        <div>&copy; 2025 Tabulensis</div>
+      </footer>
+    </div>
+  </body>
+</html>

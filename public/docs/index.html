@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Docs | Tabulensis</title>
+    <meta name="description" content="Tabulensis CLI quickstart and usage examples.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../styles.css">
+  </head>
+  <body>
+    <div class="shell">
+      <header>
+        <div class="brand">Tabulensis</div>
+        <nav>
+          <a href="/download">Download</a>
+          <a href="/docs">Docs</a>
+          <a href="/support">Support</a>
+          <a href="/privacy">Privacy</a>
+          <a href="/terms">Terms</a>
+        </nav>
+      </header>
+
+      <h1 class="page-title">Docs</h1>
+      <p class="page-body">
+        Start with the CLI. Everything runs locally, and reports can be rendered as human-readable
+        text, JSON, or JSONL for streaming workflows.
+      </p>
+
+      <section class="section">
+        <div>
+          <h2>Quickstart</h2>
+          <div class="note">excel-diff diff old.xlsx new.xlsx</div>
+          <p>Use <code>--format json</code> or <code>--format jsonl</code> to integrate with tooling.</p>
+        </div>
+        <div class="card">
+          <h3>Popular commands</h3>
+          <ul>
+            <li><code>excel-diff diff a.xlsx b.xlsx --format json</code></li>
+            <li><code>excel-diff diff a.xlsx b.xlsx --git-diff</code></li>
+            <li><code>excel-diff info workbook.xlsx --queries</code></li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="section">
+        <div>
+          <h2>Diff presets</h2>
+          <p>Choose <code>--fast</code> for speed or <code>--precise</code> for deeper matching.</p>
+        </div>
+        <div class="card">
+          <h3>Exit codes</h3>
+          <ul>
+            <li><strong>0</strong> - files are identical</li>
+            <li><strong>1</strong> - files differ or report is partial</li>
+            <li><strong>2</strong> - error</li>
+          </ul>
+        </div>
+      </section>
+
+      <div class="page-links">
+        <a href="/download">Get the CLI</a>
+        <a href="/support">Support</a>
+      </div>
+
+      <footer>
+        <div>Need deeper docs? Keep them in the repo for now.</div>
+        <div>&copy; 2025 Tabulensis</div>
+      </footer>
+    </div>
+  </body>
+</html>
