@@ -208,6 +208,7 @@ footer {
   line-height: 1.7;
   color: var(--ink-soft);
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .page-links {
