@@ -1,7 +1,7 @@
 [project]
 name = "excel-fixtures"
 version = "0.1.0"
-description = "Deterministic artifact generator for Excel Diff testing"
+description = "Deterministic artifact generator for Tabulensis testing"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [

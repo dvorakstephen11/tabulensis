@@ -220,7 +220,7 @@ def main():
     args = parser.parse_args()
 
     print("=" * 70)
-    print("Excel Diff Performance Metrics Export")
+    print("Tabulensis Performance Metrics Export")
     print("=" * 70)
     print(f"Mode: {'Full-scale (50K rows)' if args.full_scale else 'Quick (1K rows)'}")
     print(f"Parallel: {'Enabled (Rayon)' if args.parallel else 'Disabled'}")

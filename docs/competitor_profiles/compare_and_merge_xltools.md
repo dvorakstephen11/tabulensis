@@ -265,7 +265,7 @@ The new multi-platform diff engine has a clear opening. By leveraging **Office.j
 ---
 
 Citations:  
-Comparison of Excel Diff Tools, Market Analysis 2024\.  
+Comparison of Spreadsheet Diff Tools, Market Analysis 2024\.  
 XLTools Product Documentation, "Compare and Merge" Features.  
 WavePoint Co. Ltd. Vendor Profile & VSTO Architecture Review.  
 Microsoft Support, "Discontinued features in Excel" (Shared Workbooks).  

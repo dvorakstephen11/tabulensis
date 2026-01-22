@@ -2,7 +2,7 @@
 
 [Docs index](index.md)
 
-Git can't diff binary `.xlsx` / `.xlsm` directly. Excel Diff supports two practical integrations:
+Git can't diff binary `.xlsx` / `.xlsm` directly. Tabulensis supports two practical integrations:
 
 1. **Textconv** (best for `git diff`): converts a single workbook into stable text.
 2. **Difftool** (best for workbook-vs-workbook): compares two versions and emits a unified diff.
@@ -20,26 +20,26 @@ Add a diff driver to `~/.gitconfig` (or `.git/config`):
 
 ```gitconfig
 [diff "xlsx"]
-    textconv = excel-diff info
+    textconv = tabulensis info
     cachetextconv = true
     binary = true
 ```
 
-Now `git diff` will show a stable text view (workbook name, sheets, dimensions, and optionally queries if you run `excel-diff info --queries` manually).
+Now `git diff` will show a stable text view (workbook name, sheets, dimensions, and optionally queries if you run `tabulensis info --queries` manually).
 
 ## 2) True diff via difftool (recommended for workbook-vs-workbook)
 
 Add this to `~/.gitconfig`:
 
 ```gitconfig
-[difftool "excel-diff"]
-    cmd = excel-diff diff --git-diff "$LOCAL" "$REMOTE"
+[difftool "tabulensis"]
+    cmd = tabulensis diff --git-diff "$LOCAL" "$REMOTE"
 ```
 
 Then run:
 
 ```bash
-git difftool --tool=excel-diff -- path/to/file.xlsx
+git difftool --tool=tabulensis -- path/to/file.xlsx
 ```
 
 ## Notes / edge cases

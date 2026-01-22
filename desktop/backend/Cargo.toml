@@ -2,7 +2,7 @@
 name = "desktop_backend"
 version = "0.1.0"
 edition = "2021"
-description = "Backend logic for Excel Diff desktop apps"
+description = "Backend logic for Tabulensis desktop apps"
 license = "MIT"
 
 [dependencies]

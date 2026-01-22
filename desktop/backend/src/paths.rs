@@ -12,7 +12,7 @@ pub struct BackendPaths {
 }
 
 pub fn resolve_paths(app_name: &str) -> Result<BackendPaths, DiffErrorPayload> {
-    let project_dirs = ProjectDirs::from("com", "dvora", app_name)
+    let project_dirs = ProjectDirs::from("com", "tabulensis", app_name)
         .ok_or_else(|| DiffErrorPayload::new("paths", "Unable to resolve app data directory", false))?;
     let dir = project_dirs.data_local_dir().to_path_buf();
     std::fs::create_dir_all(&dir)

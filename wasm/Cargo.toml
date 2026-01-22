@@ -2,10 +2,10 @@
 name = "excel_diff_wasm"
 version = "0.1.0"
 edition = "2024"
-description = "WebAssembly bindings for excel_diff"
+description = "WebAssembly bindings for Tabulensis"
 license = "MIT"
 repository = "https://github.com/dvora/excel_diff"
-homepage = "https://github.com/dvora/excel_diff"
+homepage = "https://tabulensis.com"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

@@ -1,4 +1,4 @@
-# Excel Diff Error Codes
+# Tabulensis Error Codes
 
 This document lists all error codes returned by excel_diff, their meanings, likely causes, and suggested next steps.
 
@@ -63,7 +63,7 @@ Note: `EXDIFF_DM_009` is surfaced as a warning and marks the diff `complete=fals
 
 ## ZIP Bomb Protection
 
-Excel Diff includes protection against ZIP bombs (malicious archives that expand to very large sizes). The default limits are:
+Tabulensis includes protection against ZIP bombs (malicious archives that expand to very large sizes). The default limits are:
 
 - **Max entries:** 10,000
 - **Max part size:** 100 MB (uncompressed)

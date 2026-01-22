@@ -2,7 +2,7 @@
 
 [Docs index](index.md)
 
-This document gives a high-level tour of how Excel Diff is structured and where to look in the codebase.
+This document gives a high-level tour of how Tabulensis is structured and where to look in the codebase.
 
 ## Big picture
 
@@ -37,7 +37,7 @@ This document gives a high-level tour of how Excel Diff is structured and where 
 
 ## Inputs
 
-Excel workbooks are ZIP/OPC containers. Excel Diff opens them through `OpcContainer` and applies safety limits (`ContainerLimits`) to protect against oversized or malicious archives.
+Excel workbooks are ZIP/OPC containers. Tabulensis opens them through `OpcContainer` and applies safety limits (`ContainerLimits`) to protect against oversized or malicious archives.
 
 ## Parsing pipeline
 

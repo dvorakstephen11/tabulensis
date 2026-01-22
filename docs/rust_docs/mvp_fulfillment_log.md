@@ -52,11 +52,16 @@ This file tracks decisions and progress against [mvp_checklist.md](mvp_checklist
 - [x] Define "launch success" for the first 30 days
   - Answer: 200 website views; 1+ web demo usage events; 1+ free trial activations; 1+ successful diffs.
 
-- []
-  - Answer:
+- [] Map the funnel on one page:
+  - Answer: Landing page → download/install → first successful diff → (optional) upgrade → renewal/update
   
-- []
-  - Answer:
+- [x] stand up a basic website you control
+  - * [x] Decide the canonical domain + URL structure (e.g., `positivesumtechnologies.com`, `www`, product subdomain)
+  - * [x] Choose hosting + deployment approach (a static site is fine for MVP)
+  - * [x] Point DNS to the host and verify HTTPS/TLS works
+  - * [ ] Set up `www` and apex redirects + a basic 404 page
+  - * [ x Create placeholder pages/URLs you can link to from the product: `/download`, `/docs`, `/support`, `/privacy`, `/terms`
+  - * [ ] Set up a support email on the domain (alias/forwarding is fine)
   
 - []
   - Answer:

@@ -1,7 +1,7 @@
 use std::process::Command;
 
-fn excel_diff_cmd() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_excel-diff"))
+fn tabulensis_cmd() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_tabulensis"))
 }
 
 fn fixture_path(name: &str) -> String {
@@ -16,7 +16,7 @@ fn fixture_path(name: &str) -> String {
 }
 
 fn run_json_diff_with_threads(threads: &str) -> serde_json::Value {
-    let output = excel_diff_cmd()
+    let output = tabulensis_cmd()
         .args([
             "diff",
             "--format",
@@ -26,7 +26,7 @@ fn run_json_diff_with_threads(threads: &str) -> serde_json::Value {
         ])
         .env("RAYON_NUM_THREADS", threads)
         .output()
-        .expect("failed to run excel-diff");
+        .expect("failed to run tabulensis");
 
     assert_eq!(
         output.status.code(),

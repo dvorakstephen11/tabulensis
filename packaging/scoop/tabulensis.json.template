@@ -1,0 +1,22 @@
+{
+  "version": "{{VERSION}}",
+  "description": "Tabulensis CLI for comparing Excel workbooks",
+  "homepage": "https://tabulensis.com",
+  "license": "MIT",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/dvora/excel_diff/releases/download/v{{VERSION}}/tabulensis-v{{VERSION}}-windows-x86_64.zip",
+      "hash": "{{SHA256}}"
+    }
+  },
+  "bin": "tabulensis-v{{VERSION}}-windows-x86_64/tabulensis.exe",
+  "checkver": "github",
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/dvora/excel_diff/releases/download/v$version/tabulensis-v$version-windows-x86_64.zip"
+      }
+    }
+  }
+}
+

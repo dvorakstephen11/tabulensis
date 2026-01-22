@@ -56,7 +56,7 @@ See [Database mode](database_mode.md) for usage and examples.
 CLI (streaming JSONL + safety rails):
 
 ```bash
-excel-diff diff old.xlsx new.xlsx --format jsonl --max-memory 512 --timeout 10 > out.jsonl
+tabulensis diff old.xlsx new.xlsx --format jsonl --max-memory 512 --timeout 10 > out.jsonl
 ```
 
 Rust (streaming + budget):

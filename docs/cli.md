@@ -2,23 +2,23 @@
 
 [Docs index](index.md)
 
-The CLI binary is `excel-diff`.
+The CLI binary is `tabulensis`.
 
 For the canonical, always-up-to-date option list, run:
 
 ```bash
-excel-diff --help
-excel-diff diff --help
-excel-diff info --help
+tabulensis --help
+tabulensis diff --help
+tabulensis info --help
 ```
 
 ## Supported formats
 
 - Workbooks: `.xlsx`, `.xlsm`, `.xltx`, `.xltm`
 - Power BI: `.pbix`, `.pbit`
-- `.xlsb` is detected but not supported yet; Excel Diff returns `EXDIFF_PKG_009` with a convert hint.
+- `.xlsb` is detected but not supported yet; Tabulensis returns `EXDIFF_PKG_009` with a convert hint.
 
-## `excel-diff diff <OLD> <NEW>`
+## `tabulensis diff <OLD> <NEW>`
 
 Compare two workbooks and emit a diff.
 
@@ -72,7 +72,7 @@ Validation rules:
 - `1`: differences found, or the result is incomplete (warnings emitted)
 - `2`: error (invalid arguments, parse failure, or I/O/output failure)
 
-## `excel-diff info <FILE>`
+## `tabulensis info <FILE>`
 
 Print a stable text representation of a single workbook:
 

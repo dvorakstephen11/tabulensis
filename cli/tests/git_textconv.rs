@@ -13,7 +13,7 @@ fn run_git(repo: &PathBuf, args: &[&str]) -> String {
 }
 
 #[test]
-fn git_textconv_uses_excel_diff_info() {
+fn git_textconv_uses_tabulensis_info() {
     if Command::new("git").arg("--version").output().is_err() {
         return;
     }
@@ -27,7 +27,7 @@ fn git_textconv_uses_excel_diff_info() {
 
     fs::write(repo.join(".gitattributes"), "*.xlsx diff=xlsx\n").expect("write gitattributes");
 
-    let exe = PathBuf::from(env!("CARGO_BIN_EXE_excel-diff"));
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_tabulensis"));
     let exe_str = exe.to_string_lossy().replace('\\', "/");
     let textconv = format!("\"{}\" info", exe_str);
     run_git(&repo, &["config", "diff.xlsx.binary", "true"]);

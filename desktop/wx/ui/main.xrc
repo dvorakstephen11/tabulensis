@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <resource>
   <object class="wxFrame" name="main_frame">
-    <title>Excel Diff</title>
+    <title>Tabulensis</title>
     <style>wxDEFAULT_FRAME_STYLE</style>
     <size>1280,900</size>
     <minsize>960,640</minsize>

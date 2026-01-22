@@ -2,7 +2,7 @@
 name = "excel_diff_desktop"
 version = "0.1.0"
 edition = "2021"
-description = "Desktop shell for Excel Diff"
+description = "Desktop shell for Tabulensis"
 license = "MIT"
 build = "build.rs"
 

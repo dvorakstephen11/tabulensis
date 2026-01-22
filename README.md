@@ -1,9 +1,9 @@
-# Excel Diff
+# Tabulensis
 
-Excel Diff compares Excel workbooks (`.xlsx` / `.xlsm` / `.xltx` / `.xltm`) and Power BI packages (`.pbix` / `.pbit`) and emits a structured diff: cell edits, sheet structure, named ranges, charts/VBA modules (shallow), and Power Query (M) changes.
+Tabulensis compares Excel workbooks (`.xlsx` / `.xlsm` / `.xltx` / `.xltm`) and Power BI packages (`.pbix` / `.pbit`) and emits a structured diff: cell edits, sheet structure, named ranges, charts/VBA modules (shallow), and Power Query (M) changes.
 
 Use it via:
-- CLI: `excel-diff`
+- CLI: `tabulensis`
 - Rust library: `excel_diff` crate (`WorkbookPackage`)
 
 ## Installation
@@ -22,7 +22,7 @@ cargo install --locked --path cli
 
 ### Web Demo
 
-Try it in your browser at https://dvora.github.io/excel_diff (files are processed locally in your browser via WebAssembly).
+Try it in your browser at https://tabulensis.com (files are processed locally in your browser via WebAssembly).
 
 ---
 
@@ -31,19 +31,19 @@ Try it in your browser at https://dvora.github.io/excel_diff (files are processe
 **Option 1: Download from GitHub Releases**
 
 1. Download the latest Windows asset from [Releases](https://github.com/dvora/excel_diff/releases):
-   - `excel-diff-vX.Y.Z-windows-x86_64.exe` (standalone), or
-   - `excel-diff-vX.Y.Z-windows-x86_64.zip` (portable folder)
+   - `tabulensis-vX.Y.Z-windows-x86_64.exe` (standalone), or
+   - `tabulensis-vX.Y.Z-windows-x86_64.zip` (portable folder)
 2. Add it (or the extracted folder) to your PATH
 
 **Option 2: Scoop**
 
 ```powershell
-# Download `excel-diff.json` from the GitHub Release assets, then:
-scoop install .\excel-diff.json
+# Download `tabulensis.json` from the GitHub Release assets, then:
+scoop install .\tabulensis.json
 
 # Or, if you publish a Scoop bucket:
-# scoop bucket add excel-diff https://github.com/dvora/scoop-excel-diff
-# scoop install excel-diff
+# scoop bucket add tabulensis https://github.com/dvora/scoop-tabulensis
+# scoop install tabulensis
 ```
 
 ### macOS
@@ -51,12 +51,12 @@ scoop install .\excel-diff.json
 **Option 1: Homebrew (formula from Release assets)**
 
 ```bash
-# Download `excel-diff.rb` from the GitHub Release assets, then:
-brew install --formula ./excel-diff.rb
+# Download `tabulensis.rb` from the GitHub Release assets, then:
+brew install --formula ./tabulensis.rb
 
 # Or, if you publish a Homebrew tap:
-# brew tap dvora/excel-diff
-# brew install excel-diff
+# brew tap tabulensis/tabulensis
+# brew install tabulensis
 ```
 
 **Option 2: Download from GitHub Releases**
@@ -64,17 +64,17 @@ brew install --formula ./excel-diff.rb
 ```bash
 # Download the universal binary (works on both Intel and Apple Silicon)
 VERSION=vX.Y.Z
-curl -LO https://github.com/dvora/excel_diff/releases/download/$VERSION/excel-diff-$VERSION-macos-universal.tar.gz
-tar -xzf excel-diff-$VERSION-macos-universal.tar.gz
-sudo mv excel-diff /usr/local/bin/
+curl -LO https://github.com/dvora/excel_diff/releases/download/$VERSION/tabulensis-$VERSION-macos-universal.tar.gz
+tar -xzf tabulensis-$VERSION-macos-universal.tar.gz
+sudo mv tabulensis /usr/local/bin/
 
 # Or for user-only install:
-mv excel-diff ~/.local/bin/
+mv tabulensis ~/.local/bin/
 ```
 
 > **Note:** On first run, macOS may block the binary. Right-click and select "Open" or run:
 > ```bash
-> xattr -d com.apple.quarantine /usr/local/bin/excel-diff
+> xattr -d com.apple.quarantine /usr/local/bin/tabulensis
 > ```
 
 ---
@@ -86,23 +86,23 @@ mv excel-diff ~/.local/bin/
 Compare two workbooks:
 
 ```bash
-excel-diff diff old.xlsx new.xlsx
+tabulensis diff old.xlsx new.xlsx
 ```
 
 Copy/paste starters:
 
 ```bash
-excel-diff diff old.xlsx new.xlsx                       # Human-readable (default)
-excel-diff diff old.xlsx new.xlsx --format json > out.json  # Full JSON report
-excel-diff diff old.xlsx new.xlsx --format jsonl > out.jsonl  # Streaming JSONL (better for large diffs)
-excel-diff diff old.xlsx new.xlsx --git-diff            # Unified diff style (for Git tools)
+tabulensis diff old.xlsx new.xlsx                       # Human-readable (default)
+tabulensis diff old.xlsx new.xlsx --format json > out.json  # Full JSON report
+tabulensis diff old.xlsx new.xlsx --format jsonl > out.jsonl  # Streaming JSONL (better for large diffs)
+tabulensis diff old.xlsx new.xlsx --git-diff            # Unified diff style (for Git tools)
 ```
 
 Diff presets:
 
 ```bash
-excel-diff diff old.xlsx new.xlsx --fast     # Faster, less precise move detection
-excel-diff diff old.xlsx new.xlsx --precise  # More accurate, slower
+tabulensis diff old.xlsx new.xlsx --fast     # Faster, less precise move detection
+tabulensis diff old.xlsx new.xlsx --precise  # More accurate, slower
 ```
 
 Notes:
@@ -112,8 +112,8 @@ Notes:
 Show workbook information:
 
 ```bash
-excel-diff info workbook.xlsx            # Show sheets
-excel-diff info workbook.xlsx --queries  # Include Power Query info
+tabulensis info workbook.xlsx            # Show sheets
+tabulensis info workbook.xlsx --queries  # Include Power Query info
 ```
 
 ### Exit Codes
@@ -126,7 +126,7 @@ excel-diff info workbook.xlsx --queries  # Include Power Query info
 
 - Workbooks: `.xlsx`, `.xlsm`, `.xltx`, `.xltm`
 - Power BI: `.pbix`, `.pbit`
-- `.xlsb` is detected but not supported; Excel Diff returns `EXDIFF_PKG_009` with a "convert to .xlsx/.xlsm" hint.
+- `.xlsb` is detected but not supported; Tabulensis returns `EXDIFF_PKG_009` with a "convert to .xlsx/.xlsm" hint.
 
 ## Library Usage (Rust)
 
@@ -154,7 +154,7 @@ For large workbooks, prefer streaming output (`diff_streaming`) and consider set
 - PBIX/PBIT support is limited to legacy DataMashup extraction. Tabular-only PBIX files return
   `NoDataMashupUseTabularModel` (`EXDIFF_PKG_010`).
 - DataMashup permissions are guarded by permission bindings. If DPAPI bindings cannot be validated,
-  Excel Diff defaults permissions and emits warning `EXDIFF_DM_009` (the diff may be marked incomplete).
+  Tabulensis defaults permissions and emits warning `EXDIFF_DM_009` (the diff may be marked incomplete).
 - Semantic M diff is enabled by default. The CLI `--fast` preset disables it; use default or
   `--precise` to keep semantic detail.
 - Resource ceilings:

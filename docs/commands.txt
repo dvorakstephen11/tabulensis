@@ -1,4 +1,4 @@
-Excel Diff - Frequently Used Commands
+Tabulensis - Frequently Used Commands
 =====================================
 
 CYCLE SETUP

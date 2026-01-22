@@ -970,12 +970,12 @@ fn write_metrics_json(
 
 #[cfg(not(feature = "perf-metrics"))]
 fn write_metrics_json_report(_path: &Path, _report: &DiffReport) -> Result<()> {
-    bail!("--metrics-json requires excel-diff to be built with --features perf-metrics")
+    bail!("--metrics-json requires tabulensis to be built with --features perf-metrics")
 }
 
 #[cfg(not(feature = "perf-metrics"))]
 fn write_metrics_json_summary(_path: &Path, _summary: &DiffSummary) -> Result<()> {
-    bail!("--metrics-json requires excel-diff to be built with --features perf-metrics")
+    bail!("--metrics-json requires tabulensis to be built with --features perf-metrics")
 }
 
 fn exit_code_from_report(report: &DiffReport) -> ExitCode {

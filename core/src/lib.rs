@@ -1,4 +1,4 @@
-//! Excel Diff: a library for comparing Excel workbooks.
+//! Tabulensis: a library for comparing Excel workbooks.
 //!
 //! The main entry point is [`WorkbookPackage`], which can parse a workbook (when the
 //! `excel-open-xml` feature is enabled) and then diff it against another workbook.

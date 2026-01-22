@@ -17,7 +17,7 @@ impl TempDir {
             .duration_since(UNIX_EPOCH)
             .expect("system time before epoch")
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("excel-diff-{prefix}-{stamp}"));
+        let path = std::env::temp_dir().join(format!("tabulensis-{prefix}-{stamp}"));
         fs::create_dir_all(&path).expect("failed to create temp dir");
         Self { path }
     }

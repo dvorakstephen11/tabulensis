@@ -1,6 +1,6 @@
-# Excel Diff Fixtures Generator
+# Tabulensis Fixtures Generator
 
-This repository contains the deterministic artifact generator for the **Excel Diff** project. It produces a wide variety of `.xlsx` (and related) files used to validate and stress-test the Rust diff engine.
+This repository contains the deterministic artifact generator for the **Tabulensis** project. It produces a wide variety of `.xlsx` (and related) files used to validate and stress-test the Rust diff engine.
 
 The goal is to have a reproducible, version-controlled source of truth for test cases, ranging from simple grids to corrupted containers and large performance benchmarks.
 

@@ -2,10 +2,10 @@
 name = "ui_payload"
 version = "0.1.0"
 edition = "2024"
-description = "UI payload builder for excel_diff (snapshots + alignment)"
+description = "UI payload builder for Tabulensis (snapshots + alignment)"
 license = "MIT"
 repository = "https://github.com/dvora/excel_diff"
-homepage = "https://github.com/dvora/excel_diff"
+homepage = "https://tabulensis.com"
 
 [dependencies]
 excel_diff = { path = "../core", default-features = false, features = ["excel-open-xml"] }

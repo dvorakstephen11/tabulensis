@@ -2,10 +2,10 @@
 name = "excel_diff"
 version = "0.1.0"
 edition = "2024"
-description = "A library for comparing Excel workbooks"
+description = "Tabulensis core library for comparing Excel workbooks"
 license = "MIT"
 repository = "https://github.com/dvora/excel_diff"
-homepage = "https://github.com/dvora/excel_diff"
+homepage = "https://tabulensis.com"
 
 [lib]
 name = "excel_diff"

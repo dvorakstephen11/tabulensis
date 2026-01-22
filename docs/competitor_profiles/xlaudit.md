@@ -237,7 +237,7 @@ CIMCON is shackled to Windows.
 
 CIMCON is a monolithic application.
 
-* **Recommendation:** Offer the diff engine as an **API**. Allow enterprise developers to embed "Excel Diffing" into their own internal apps, CI/CD pipelines, or SharePoint workflows. CIMCON cannot do this easily; their engine is locked inside their proprietary server/desktop executable.
+* **Recommendation:** Offer the diff engine as an **API**. Allow enterprise developers to embed Tabulensis diffing into their own internal apps, CI/CD pipelines, or SharePoint workflows. CIMCON cannot do this easily; their engine is locked inside their proprietary server/desktop executable.
 
 ### **9.5 The "Frictionless" Audit**
 

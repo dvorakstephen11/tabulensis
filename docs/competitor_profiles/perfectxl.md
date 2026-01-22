@@ -236,7 +236,7 @@ PerfectXL is shackled to Windows. The new engine should be **OS-agnostic**, like
 
 PerfectXL is a "Post-Mortem" tool—you check the file *after* you finish. The new engine should be a "Continuous" tool.
 
-* **Strategy:** Build a CLI and API first. Allow users to run excel-diff check budget.xlsx as part of a git commit hook or a GitHub Action.  
+* **Strategy:** Build a CLI and API first. Allow users to run tabulensis check budget.xlsx as part of a git commit hook or a GitHub Action.  
 * **Pitch:** "Don't just audit. Prevent errors from ever entering the repository." This moves the value prop from "Compliance" (a boring cost center) to "Quality Assurance" (an engineering discipline).
 
 ### **8.3 Unify the Stack (One Semantic Engine)**

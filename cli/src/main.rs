@@ -8,7 +8,7 @@ use excel_diff::{
 use std::process::ExitCode;
 
 #[derive(Parser)]
-#[command(name = "excel-diff", disable_version_flag = true, arg_required_else_help = true)]
+#[command(name = "tabulensis", disable_version_flag = true, arg_required_else_help = true)]
 #[command(about = "Compare Excel workbooks and show differences")]
 pub struct Cli {
     #[arg(long, action = clap::ArgAction::SetTrue, help = "Show version and exit")]
@@ -152,7 +152,7 @@ fn main() -> ExitCode {
 }
 
 fn print_version(verbose: bool) {
-    println!("excel-diff {}", env!("CARGO_PKG_VERSION"));
+    println!("tabulensis {}", env!("CARGO_PKG_VERSION"));
     if !verbose {
         return;
     }

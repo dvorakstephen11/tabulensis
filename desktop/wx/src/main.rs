@@ -1075,7 +1075,7 @@ fn setup_menu_handlers(ids: MenuIds) {
                 let _ = with_ui_context(|ctx| {
                     let dialog = MessageDialog::builder(
                         &ctx.ui.frame,
-                        &format!("Excel Diff {}", env!("CARGO_PKG_VERSION")),
+                        &format!("Tabulensis {}", env!("CARGO_PKG_VERSION")),
                         "About",
                     )
                     .build();

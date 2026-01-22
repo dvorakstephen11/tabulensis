@@ -30,7 +30,7 @@ This document defines the host parity contract for excel_diff and the invariants
 
 ## Capability reporting
 
-- CLI: `excel-diff --version --verbose` prints feature flags + thresholds.
+- CLI: `tabulensis --version --verbose` prints feature flags + thresholds.
 - WASM: `get_capabilities()` returns `HostCapabilities`.
 - Desktop: `get_capabilities` Tauri command returns `HostCapabilities`.
 

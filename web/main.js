@@ -1523,7 +1523,7 @@ async function main() {
         const reportJsonText = JSON.stringify(lastReport || lastSummary || {}, null, 2);
         const gridPreviews = collectGridPreviews();
         downloadHtmlReport({
-          title: "Excel Diff Report",
+          title: "Tabulensis Report",
           meta: lastMeta,
           renderedResultsHtml: resultsHtml,
           cssText,

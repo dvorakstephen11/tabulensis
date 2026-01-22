@@ -1,11 +1,11 @@
-# Excel Diff Documentation
+# Tabulensis Documentation
 
 [Project README](../README.md)
 
 ## Where to start
 
 - If you want to diff two files from the command line, start with [CLI reference](cli.md).
-- If you want to embed Excel Diff in Rust code, start with [Configuration](config.md) and [Migration guide](migration.md).
+- If you want to embed Tabulensis in Rust code, start with [Configuration](config.md) and [Migration guide](migration.md).
 - If you want Git integration, start with [Git integration](git.md).
 
 ## Guides

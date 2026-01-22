@@ -27,7 +27,7 @@ Keys are comma-separated Excel column letters:
 Example:
 
 ```bash
-excel-diff diff --database --sheet Data --keys A,C old.xlsx new.xlsx
+tabulensis diff --database --sheet Data --keys A,C old.xlsx new.xlsx
 ```
 
 ### Auto-detect keys (`--auto-keys`)
@@ -37,7 +37,7 @@ It can infer composite keys when a single column is not unique. If no reliable k
 database mode falls back to spreadsheet diffing with a warning.
 
 ```bash
-excel-diff diff --database --sheet Data --auto-keys old.xlsx new.xlsx
+tabulensis diff --database --sheet Data --auto-keys old.xlsx new.xlsx
 ```
 
 ### Sheet selection rules (if `--sheet` is omitted)
@@ -49,7 +49,7 @@ excel-diff diff --database --sheet Data --auto-keys old.xlsx new.xlsx
 ### Streaming output for huge tables
 
 ```bash
-excel-diff diff --database --sheet Data --keys A,C --format jsonl old.xlsx new.xlsx > out.jsonl
+tabulensis diff --database --sheet Data --keys A,C --format jsonl old.xlsx new.xlsx > out.jsonl
 ```
 
 ## Library usage

@@ -433,7 +433,7 @@ def main() -> int:
     args = parser.parse_args()
 
     print("=" * 70)
-    print("Excel Diff E2E Metrics Export")
+    print("Tabulensis E2E Metrics Export")
     print("=" * 70)
     print(f"Output: {args.output_dir}")
     print(f"Latest JSON: {args.latest_json}")

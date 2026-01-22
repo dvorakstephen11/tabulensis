@@ -2,7 +2,7 @@ updated_at: 2026-01-15
 last_task_id: 2026-01-15__011228__excel_diff__plan_next
 
 # Repo summary
-Excel Diff is a Rust workspace that compares Excel workbooks and Power BI packages and emits structured diffs via CLI, library APIs, and a WebAssembly-powered web demo.
+Tabulensis is a Rust workspace that compares Excel workbooks and Power BI packages and emits structured diffs via CLI, library APIs, and a WebAssembly-powered web demo.
 
 # How to run
 ## Setup

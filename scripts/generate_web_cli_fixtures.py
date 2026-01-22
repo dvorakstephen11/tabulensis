@@ -24,7 +24,7 @@ def run_cli(bin_path: str, old_path: Path, new_path: Path, fmt: str, output_path
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode not in (0, 1):
         sys.stderr.write(result.stderr)
-        raise RuntimeError(f"excel-diff failed with exit code {result.returncode}")
+        raise RuntimeError(f"tabulensis failed with exit code {result.returncode}")
     output_path.write_text(result.stdout, encoding="utf-8")
 
 
@@ -34,13 +34,13 @@ def main() -> int:
     parser.add_argument(
         "--bin",
         dest="bin_path",
-        default=os.environ.get("EXCEL_DIFF_BIN"),
-        help="Path to excel-diff binary (or set EXCEL_DIFF_BIN).",
+        default=os.environ.get("TABULENSIS_BIN") or os.environ.get("EXCEL_DIFF_BIN"),
+        help="Path to tabulensis binary (or set TABULENSIS_BIN; EXCEL_DIFF_BIN also works).",
     )
     args = parser.parse_args()
 
     if not args.bin_path:
-        raise SystemExit("Missing --bin (or EXCEL_DIFF_BIN) for excel-diff.")
+        raise SystemExit("Missing --bin (or TABULENSIS_BIN/EXCEL_DIFF_BIN) for tabulensis.")
 
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)

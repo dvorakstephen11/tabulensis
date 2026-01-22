@@ -223,7 +223,7 @@ To successfully displace xlCompare, the new multi-platform engine must execute a
 ### **9.3 Extinguish: Pricing and Performance**
 
 * **SaaS \+ CLI Bundle:** Offer the CLI tool for free or low-cost to capture the developer mindshare, monetizing the advanced GUI or team collaboration features. This undercuts xlCompare’s $399 gatekeeper model for Git integration.  
-* **Streaming Performance:** rigorous benchmarking against large files to demonstrate stability where xlCompare crashes. Position the tool not just as an "Excel Diff" but as a "Data Reliability Engineering" platform for spreadsheets.
+* **Streaming Performance:** rigorous benchmarking against large files to demonstrate stability where xlCompare crashes. Position Tabulensis not just as an Excel diff but as a "Data Reliability Engineering" platform for spreadsheets.
 
 ## **10\. Conclusion**
 

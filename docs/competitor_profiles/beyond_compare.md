@@ -6,7 +6,7 @@
 
 ### **1.1 Report Scope and Objective**
 
-This dossier constitutes an exhaustive competitive intelligence analysis of **Beyond Compare** (specifically Version 5), the flagship file comparison utility developed by **Scooter Software**. The primary objective is to evaluate Beyond Compare’s entrenched market position, technical capabilities, and architectural limitations to inform the strategic development of a new **Multi-Platform Excel Diff / Semantic Analysis Engine**.
+This dossier constitutes an exhaustive competitive intelligence analysis of **Beyond Compare** (specifically Version 5), the flagship file comparison utility developed by **Scooter Software**. The primary objective is to evaluate Beyond Compare’s entrenched market position, technical capabilities, and architectural limitations to inform the strategic development of Tabulensis, a new **Multi-Platform Spreadsheet Diff / Semantic Analysis Engine**.
 
 The analysis proceeds from the premise that while Beyond Compare is the industry standard for general-purpose file differentiation—dominating the developer and system administrator workflows—it possesses structural weaknesses in the domain of **semantic spreadsheet analysis**. As financial modeling, data engineering, and enterprise reporting increasingly demand "logic-aware" comparison tools rather than simple text differentiation, a significant market gap has emerged. This report identifies the precise vectors where a new entrant can displace the incumbent by leveraging superior semantic understanding of the Excel object model, specifically in areas where Scooter Software’s legacy architecture renders it blind to computational logic, formula dependency, and visualization layers.
 
@@ -196,7 +196,7 @@ To position the new entrant, we must map the landscape. Beyond Compare is the "G
 
 | Feature | Beyond Compare 5 | xlCompare | Synkronizer | Spreadsheet Compare (MS) | New Semantic Engine (Target) |
 | :---- | :---- | :---- | :---- | :---- | :---- |
-| **Primary Focus** | General File Diff | Deep Excel Diff | Excel Add-in Diff | Audit/Compliance | Semantic Intelligence |
+| **Primary Focus** | General File Diff | Deep Spreadsheet Diff | Excel Add-in Diff | Audit/Compliance | Semantic Intelligence |
 | **Platform** | **Win, Mac, Linux** | Windows Only | Windows Only | Windows Only | **Multi-Platform** |
 | **Formula Diff** | No (Text/Value only) | **Yes** (Logic diff) | **Yes** | Yes | **Yes** |
 | **VBA/Macro Diff** | Text Only | **Yes** (Forms/Controls) | **Yes** | Yes | **Yes** |

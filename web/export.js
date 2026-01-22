@@ -31,7 +31,7 @@ export function downloadReportJson({ report, meta }) {
   const oldName = safeName(meta?.oldName, "old");
   const newName = safeName(meta?.newName, "new");
   const date = (meta?.createdAtIso || new Date().toISOString()).slice(0, 10);
-  const filename = `excel-diff-report__${oldName}__${newName}__${date}.json`;
+  const filename = `tabulensis-report__${oldName}__${newName}__${date}.json`;
   downloadBlob(filename, "application/json", json);
 }
 
@@ -43,7 +43,7 @@ export function downloadHtmlReport({
   reportJsonText,
   gridPreviews
 }) {
-  const safeTitle = escapeHtml(title || "Excel Diff Report");
+  const safeTitle = escapeHtml(title || "Tabulensis Report");
   const createdAt = escapeHtml(meta?.createdAtIso || new Date().toISOString());
   const oldName = escapeHtml(meta?.oldName || "Old file");
   const newName = escapeHtml(meta?.newName || "New file");
@@ -106,7 +106,7 @@ ${cssText || ""}
   const oldSafe = safeName(meta?.oldName, "old");
   const newSafe = safeName(meta?.newName, "new");
   const date = (meta?.createdAtIso || new Date().toISOString()).slice(0, 10);
-  const filename = `excel-diff-report__${oldSafe}__${newSafe}__${date}.html`;
+  const filename = `tabulensis-report__${oldSafe}__${newSafe}__${date}.html`;
   downloadBlob(filename, "text/html", html);
 }
 
@@ -114,6 +114,6 @@ export function downloadJsonl({ blob, meta }) {
   const oldName = safeName(meta?.oldName, "old");
   const newName = safeName(meta?.newName, "new");
   const date = (meta?.createdAtIso || new Date().toISOString()).slice(0, 10);
-  const filename = `excel-diff-stream__${oldName}__${newName}__${date}.jsonl`;
+  const filename = `tabulensis-stream__${oldName}__${newName}__${date}.jsonl`;
   downloadBlob(filename, "application/x-ndjson", blob || "");
 }

@@ -269,7 +269,7 @@ fn main() {
         .setup(|app| {
             let app_version = env!("CARGO_PKG_VERSION").to_string();
             let backend = DesktopBackend::init(BackendConfig {
-                app_name: "excel_diff".to_string(),
+                app_name: "tabulensis".to_string(),
                 app_version: app_version.clone(),
                 engine_version: app_version,
             })

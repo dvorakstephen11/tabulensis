@@ -68,7 +68,7 @@ impl DesktopBackend {
             .unwrap_or(&summary.started_at)
             .get(0..10)
             .unwrap_or("report");
-        format!("excel-diff-{prefix}__{old}__{new}__{date}.{ext}")
+        format!("tabulensis-{prefix}__{old}__{new}__{date}.{ext}")
     }
 
     pub fn search_diff_ops(
