@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Tabulensis command-line interface for comparing Excel workbooks"
 license = "MIT"
-repository = "https://github.com/dvora/excel_diff"
+repository = "https://tabulensis.com"
 homepage = "https://tabulensis.com"
 
 [[bin]]

@@ -196,6 +196,20 @@ footer {
   line-height: 1.6;
 }
 
+.legal-card {
+  margin-top: 32px;
+}
+
+.legal-text {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+
 .page-links {
   margin-top: 24px;
   display: flex;

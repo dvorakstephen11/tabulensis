@@ -8,9 +8,9 @@ Use it via:
 
 ## Installation
 
-### From GitHub Releases
+### From tabulensis.com
 
-Download a prebuilt binary from https://github.com/dvora/excel_diff/releases (Windows `.exe` / `.zip`, macOS universal `.tar.gz`).
+Download a prebuilt binary from https://tabulensis.com/download (Windows `.exe` / `.zip`, macOS universal `.tar.gz`).
 
 ### From Source (Rust)
 
@@ -28,9 +28,9 @@ Try it in your browser at https://tabulensis.com (files are processed locally in
 
 ### Windows (details)
 
-**Option 1: Download from GitHub Releases**
+**Option 1: Download from tabulensis.com**
 
-1. Download the latest Windows asset from [Releases](https://github.com/dvora/excel_diff/releases):
+1. Download the latest Windows asset from https://tabulensis.com/download:
    - `tabulensis-vX.Y.Z-windows-x86_64.exe` (standalone), or
    - `tabulensis-vX.Y.Z-windows-x86_64.zip` (portable folder)
 2. Add it (or the extracted folder) to your PATH
@@ -38,33 +38,31 @@ Try it in your browser at https://tabulensis.com (files are processed locally in
 **Option 2: Scoop**
 
 ```powershell
-# Download `tabulensis.json` from the GitHub Release assets, then:
+# Download `tabulensis.json` from https://tabulensis.com/download/tabulensis.json, then:
 scoop install .\tabulensis.json
 
-# Or, if you publish a Scoop bucket:
-# scoop bucket add tabulensis https://github.com/dvora/scoop-tabulensis
-# scoop install tabulensis
+# Or install directly:
+scoop install https://tabulensis.com/download/tabulensis.json
 ```
 
 ### macOS
 
-**Option 1: Homebrew (formula from Release assets)**
+**Option 1: Homebrew (formula from download assets)**
 
 ```bash
-# Download `tabulensis.rb` from the GitHub Release assets, then:
+# Download `tabulensis.rb` from https://tabulensis.com/download/tabulensis.rb, then:
 brew install --formula ./tabulensis.rb
 
-# Or, if you publish a Homebrew tap:
-# brew tap tabulensis/tabulensis
-# brew install tabulensis
+# Or install directly:
+brew install --formula https://tabulensis.com/download/tabulensis.rb
 ```
 
-**Option 2: Download from GitHub Releases**
+**Option 2: Download from tabulensis.com**
 
 ```bash
 # Download the universal binary (works on both Intel and Apple Silicon)
 VERSION=vX.Y.Z
-curl -LO https://github.com/dvora/excel_diff/releases/download/$VERSION/tabulensis-$VERSION-macos-universal.tar.gz
+curl -LO https://tabulensis.com/download/tabulensis-$VERSION-macos-universal.tar.gz
 tar -xzf tabulensis-$VERSION-macos-universal.tar.gz
 sudo mv tabulensis /usr/local/bin/
 

@@ -2,6 +2,19 @@
 
 This file tracks decisions and progress against [mvp_checklist.md](mvp_checklist.md). Each checklist item is followed by the current decision plus context/suggestions.
 
+## 2026-01-22 — Branding and deployment decisions
+
+- [x] Product name finalized
+  - Answer: Tabulensis.
+- [x] Canonical domain + download URL
+  - Answer: `tabulensis.com` with downloads at `https://tabulensis.com/download`.
+- [x] Hosting + deployment approach
+  - Answer: static pages deployed via Cloudflare (marketing/docs + web demo).
+- [x] Support email provider
+  - Answer: Fastmail manages `support@tabulensis.com`.
+- [x] CLI binary name
+  - Answer: `tabulensis`.
+
 ## 2026-01-12 — MVP definition decisions (Section 1)
 
 - [x] Write a 1–2 sentence promise
@@ -56,12 +69,12 @@ This file tracks decisions and progress against [mvp_checklist.md](mvp_checklist
   - Answer: Landing page → download/install → first successful diff → (optional) upgrade → renewal/update
   
 - [x] stand up a basic website you control
-  - * [x] Decide the canonical domain + URL structure (e.g., `positivesumtechnologies.com`, `www`, product subdomain)
-  - * [x] Choose hosting + deployment approach (a static site is fine for MVP)
+  - * [x] Decide the canonical domain + URL structure (`tabulensis.com`)
+  - * [x] Choose hosting + deployment approach (Cloudflare static site)
   - * [x] Point DNS to the host and verify HTTPS/TLS works
   - * [ ] Set up `www` and apex redirects + a basic 404 page
-  - * [ x Create placeholder pages/URLs you can link to from the product: `/download`, `/docs`, `/support`, `/privacy`, `/terms`
-  - * [ ] Set up a support email on the domain (alias/forwarding is fine)
+  - * [x] Create placeholder pages/URLs you can link to from the product: `/download`, `/docs`, `/support`, `/privacy`, `/terms`
+  - * [x] Set up a support email on the domain (Fastmail; `support@tabulensis.com`)
   
 - []
   - Answer:

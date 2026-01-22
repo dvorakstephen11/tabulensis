@@ -1,4 +1,4 @@
-updated_at: 2026-01-15
+updated_at: 2026-01-22
 last_task_id: 2026-01-15__011228__excel_diff__plan_next
 
 # Repo summary
@@ -21,6 +21,11 @@ Tabulensis is a Rust workspace that compares Excel workbooks and Power BI packag
 ## Build
 - CLI binary: `cargo build -p excel_diff_cli`
 - Install locally: `cargo install --locked --path cli`
+
+# Deployment
+- Marketing/docs site: static pages deployed on Cloudflare (source: `public/`).
+- Web demo: static site deployed on Cloudflare (source: `web/`).
+- Support email: Fastmail manages `support@tabulensis.com`.
 
 # Current state
 - Core diff engine, CLI, and WASM/web demo are present and documented in `README.md`.
