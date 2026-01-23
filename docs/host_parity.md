@@ -18,7 +18,7 @@ This document defines the host parity contract for excel_diff and the invariants
 
 ## Parity matrix
 
-| Surface | CLI | Desktop (Tauri) | Web/WASM |
+| Surface | CLI | Desktop (wxDragon) | Web/WASM |
 | --- | --- | --- | --- |
 | Input kinds | XLSX/XLSM/Xltx/Xltm + PBIX/PBIT (XLSB detected -> unsupported) | XLSX/XLSM/Xltx/Xltm + PBIX/PBIT (XLSB detected -> unsupported) | XLSX/XLSM/Xltx/Xltm + PBIX/PBIT (XLSB detected -> unsupported) |
 | Config surface | Presets + limits + hardening flags | Presets + limits + trusted | Presets + limits (host defaults: max memory 256MB) |
@@ -32,7 +32,7 @@ This document defines the host parity contract for excel_diff and the invariants
 
 - CLI: `tabulensis --version --verbose` prints feature flags + thresholds.
 - WASM: `get_capabilities()` returns `HostCapabilities`.
-- Desktop: `get_capabilities` Tauri command returns `HostCapabilities`.
+- Desktop: expose `HostCapabilities` via the desktop backend when surfaced in UI.
 
 ## CI parity gates
 
@@ -41,7 +41,7 @@ This document defines the host parity contract for excel_diff and the invariants
   - `cargo check -p excel_diff --no-default-features --features "excel-open-xml,model-diff"`
   - `cargo check -p ui_payload`
   - `cargo check -p excel_diff_wasm --target wasm32-unknown-unknown`
-  - `cargo check -p excel_diff_desktop`
+  - `cargo check -p desktop_backend`
 - Feature audit (`cargo tree -p excel_diff -e features`):
   - default features
   - `--no-default-features --features "excel-open-xml,model-diff"`

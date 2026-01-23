@@ -1,94 +1,76 @@
 import { createDiffWorkerClient } from "./diff_worker_client.js";
-import {
-  createNativeDiffClient,
-  getNativeBridge,
-  loadNativeRecents,
-  openNativeFileDialog,
-  openNativeFolderDialog,
-  saveNativeRecent,
-  loadNativeDiffSummary,
-  loadNativeSheetPayload,
-  exportNativeAuditXlsx,
-  runNativeBatchCompare,
-  loadNativeBatchSummary,
-  loadNativeCapabilities,
-  searchNativeDiffOps,
-  buildNativeSearchIndex,
-  searchNativeWorkbookIndex
-} from "./native_diff_client.js";
 
 export function isDesktop() {
-  return Boolean(getNativeBridge());
+  return false;
 }
 
 export function createAppDiffClient({ onStatus } = {}) {
-  if (isDesktop()) {
-    return createNativeDiffClient({ onStatus });
-  }
   return createDiffWorkerClient({ onStatus });
 }
 
 export async function openFileDialog() {
-  if (!isDesktop()) return null;
-  return openNativeFileDialog();
+  return null;
 }
 
 export async function openFolderDialog() {
-  if (!isDesktop()) return null;
-  return openNativeFolderDialog();
+  return null;
 }
 
 export async function loadRecents() {
-  if (!isDesktop()) return [];
-  return loadNativeRecents();
+  return [];
 }
 
 export async function saveRecent(entry) {
-  if (!isDesktop()) return [];
-  return saveNativeRecent(entry);
+  void entry;
+  return [];
 }
 
 export async function loadDiffSummary(diffId) {
-  if (!isDesktop()) return null;
-  return loadNativeDiffSummary(diffId);
+  void diffId;
+  return null;
 }
 
 export async function loadSheetPayload(diffId, sheetName) {
-  if (!isDesktop()) return null;
-  return loadNativeSheetPayload(diffId, sheetName);
+  void diffId;
+  void sheetName;
+  return null;
 }
 
 export async function exportAuditXlsx(diffId) {
-  if (!isDesktop()) return null;
-  return exportNativeAuditXlsx(diffId);
+  void diffId;
+  return null;
 }
 
 export async function runBatchCompare(request) {
-  if (!isDesktop()) return null;
-  return runNativeBatchCompare(request);
+  void request;
+  return null;
 }
 
 export async function loadBatchSummary(batchId) {
-  if (!isDesktop()) return null;
-  return loadNativeBatchSummary(batchId);
+  void batchId;
+  return null;
 }
 
 export async function getCapabilities() {
-  if (!isDesktop()) return null;
-  return loadNativeCapabilities();
+  return null;
 }
 
 export async function searchDiffOps(diffId, query, limit) {
-  if (!isDesktop()) return [];
-  return searchNativeDiffOps(diffId, query, limit);
+  void diffId;
+  void query;
+  void limit;
+  return [];
 }
 
 export async function buildSearchIndex(path, side) {
-  if (!isDesktop()) return null;
-  return buildNativeSearchIndex(path, side);
+  void path;
+  void side;
+  return null;
 }
 
 export async function searchWorkbookIndex(indexId, query, limit) {
-  if (!isDesktop()) return [];
-  return searchNativeWorkbookIndex(indexId, query, limit);
+  void indexId;
+  void query;
+  void limit;
+  return [];
 }

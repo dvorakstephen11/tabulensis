@@ -1,3 +1,4 @@
+#![feature(let_chains)]
 //! Tabulensis: a library for comparing Excel workbooks.
 //!
 //! The main entry point is [`WorkbookPackage`], which can parse a workbook (when the

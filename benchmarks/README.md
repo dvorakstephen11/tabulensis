@@ -90,6 +90,40 @@ This runs the performance tests and saves timestamped results to `benchmarks/res
 3. Re-run the suite with `--baseline` to confirm no regressions.
 4. Use `python scripts/compare_perf_results.py` to summarize deltas in the PR.
 
+## Size Tracking
+
+Release artifact sizes (CLI binaries, desktop installers) are tracked separately from perf.
+
+Generate a size report (CLI example):
+
+```bash
+cargo build -p tabulensis-cli --profile release-cli --locked
+python scripts/size_report.py --label cli --path target/release-cli/tabulensis --zip --out target/size_reports/cli.json
+```
+
+Update baselines:
+
+```bash
+python scripts/update_size_baselines.py target/size_reports/cli.json
+```
+
+Check budgets (hard caps + baseline slack):
+
+```bash
+python scripts/check_size_budgets.py target/size_reports/cli.json
+```
+
+Budget config lives in `benchmarks/size_budgets.json` and can look like:
+
+```json
+{
+  "cli": {
+    "raw_bytes": { "hard_cap_bytes": 15000000, "slack_ratio": 0.02 },
+    "zip_bytes": { "hard_cap_bytes": 6000000, "slack_ratio": 0.02 }
+  }
+}
+```
+
 ### Triage When a Gate Fails
 
 1. Re-run the failing suite locally with the same command.

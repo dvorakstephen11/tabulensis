@@ -20,17 +20,17 @@ This document maps the main entry points across the codebase so new changes can 
 - `wasm/src/lib.rs`: exported diff functions; host selection via `ui_payload::host_kind_from_name`; memory cap in `wasm_default_config`.
 - `ui_payload/src/lib.rs`: host-kind helpers + UI payload builders used by web/desktop.
 
-## Desktop (Tauri)
+## Desktop (wxDragon)
 
-- `desktop/src-tauri/src/main.rs`: Tauri command registration + app wiring.
-- `desktop/src-tauri/src/diff_runner.rs`: diff orchestration, store integration, and progress events.
-- `desktop/src-tauri/src/store`: persisted op storage + diff summaries.
+- `desktop/wx/src/main.rs`: wxDragon UI wiring + interaction flow.
+- `desktop/backend/src/diff_runner.rs`: diff orchestration, store integration, and progress events.
+- `desktop/backend/src/store`: persisted op storage + diff summaries.
 
 ## Web
 
 - `web/diff_worker.js`: web worker that initializes WASM and runs diffs.
 - `web/main.js`: UI orchestration + client selection.
-- `web/native_diff_client.js` + `web/platform.js`: desktop bridge vs browser worker selection.
+- `web/platform.js`: browser worker selection for the web demo.
 
 ## If you're changing X, start here
 

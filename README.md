@@ -14,7 +14,7 @@ Download a prebuilt binary from https://tabulensis.com/download (Windows `.exe` 
 
 ### From Source (Rust)
 
-Requires [Rust](https://rustup.rs/) 1.85+:
+Requires [Rust](https://rustup.rs/) nightly (2025-02-20):
 
 ```bash
 cargo install --locked --path cli

@@ -170,7 +170,7 @@ The analysis indicates that CS-ExcelDiff is primarily a *Diff* tool, not a *Merg
 
 ### **9.2 Phase 2: The Visualization Layer**
 
-* **Tech Stack:** Electron or Tauri (allows using web technologies for UI while keeping a small binary size). This ensures the UI looks identical on Mac, Linux, and Windows.  
+* **Tech Stack:** Native desktop UI (e.g., wxWidgets/wxDragon) to keep the interface consistent across Mac, Linux, and Windows.  
 * **Features:** Virtual scrolling (to handle millions of rows without DOM lag), "Minimap" (heatmap of changes), Dark Mode.
 
 ### **9.3 Phase 3: The Ecosystem**

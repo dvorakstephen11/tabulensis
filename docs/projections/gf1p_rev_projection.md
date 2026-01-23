@@ -250,7 +250,7 @@ This leans hardest into the “blue ocean” angle from your competitive report:
 
 **Product & marketing moves**
 
-* **Mac‑first launch** with a polished desktop app (or Tauri/Electron shell) on top of the Rust engine.
+* **Mac‑first launch** with a polished desktop app (wxDragon UI) on top of the Rust engine.
 
 * **Zero‑install web viewer** as the funnel:
 

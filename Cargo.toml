@@ -1,3 +1,20 @@
 [workspace]
-members = ["core", "cli", "wasm", "ui_payload", "desktop/src-tauri", "desktop/backend", "desktop/wx"]
+members = ["core", "cli", "wasm", "ui_payload", "desktop/backend", "desktop/wx"]
 resolver = "2"
+
+[profile.release-cli]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
+[profile.release-desktop]
+inherits = "release"
+strip = "symbols"
+lto = "thin"
+codegen-units = 1
+
+[patch.crates-io]
+wxdragon = { path = "vendor/wxdragon-0.9.8" }
+wxdragon-sys = { path = "vendor/wxdragon-sys-0.9.8" }

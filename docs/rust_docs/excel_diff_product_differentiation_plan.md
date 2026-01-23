@@ -154,7 +154,7 @@ To disrupt this duopoly, a new entrant must not just be "better"; it must be dif
 Both incumbents are Windows-only. This is a massive strategic vulnerability.
 
 * **The Demographic:** Startups, VCs, and tech companies run on Macs. They currently have *zero* native options for professional Excel comparison. They are forced to use virtualization (Parallels) just to run Synkronizer.  
-* **The Play:** Build a **native macOS application** (using Swift or a cross-platform framework like Electron/Tauri). This instantly grants 100% market share of the Mac demographic.
+* **The Play:** Build a **native macOS application** (using Swift or a cross-platform framework like wxWidgets). This instantly grants 100% market share of the Mac demographic.
 
 ### **6.2 Web-Based "Zero Install"**
 

@@ -1,5 +1,5 @@
 [package]
-name = "excel_diff_cli"
+name = "tabulensis-cli"
 version = "0.1.0"
 edition = "2024"
 description = "Tabulensis command-line interface for comparing Excel workbooks"

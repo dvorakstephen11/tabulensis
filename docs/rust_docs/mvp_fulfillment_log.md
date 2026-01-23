@@ -15,6 +15,17 @@ This file tracks decisions and progress against [mvp_checklist.md](mvp_checklist
 - [x] CLI binary name
   - Answer: `tabulensis`.
 
+## 2026-01-22 — Terms + EULA rollout
+
+- [x] Publish Terms of Service page
+  - Answer: Terms are live at `https://tabulensis.com/terms` and sourced from `terms_agreements_etc.md`.
+- [x] Publish End User License Agreement page
+  - Answer: EULA is live at `https://tabulensis.com/eula` and sourced from `terms_agreements_etc.md`.
+- [x] Surface legal links across the website
+  - Answer: EULA link added to global navigation; download page references Terms + EULA.
+- [x] Ensure legal pages render cleanly
+  - Answer: Legal text formatting updated to wrap long lines within the cards (no overflow).
+
 ## 2026-01-12 — MVP definition decisions (Section 1)
 
 - [x] Write a 1–2 sentence promise

@@ -106,7 +106,7 @@ You currently have warnings like:
 
 #### Implementation steps
 
-1. In `desktop/src-tauri/Cargo.toml`, add:
+1. In `desktop/wx/Cargo.toml` (and/or `desktop/backend/Cargo.toml` if the flags live there), add:
 
    * `[features] perf-metrics = [...]`
    * `[features] model-diff = [...]`
@@ -123,7 +123,7 @@ You currently have warnings like:
 
 #### Acceptance criteria
 
-* `cargo test --workspace` (or at least `cargo build -p excel_diff_desktop`) has **no `unexpected_cfgs` warnings**.
+* `cargo test --workspace` (or at least `cargo build -p desktop_wx` on a system with wxWidgets installed) has **no `unexpected_cfgs` warnings**.
 
 ---
 

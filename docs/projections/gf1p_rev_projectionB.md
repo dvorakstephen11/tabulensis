@@ -535,7 +535,7 @@ Given that, it is rational to invest in a lean but serious product team.
 **Engineering / product (annual, steady‑state):**
 
 * 2–3 senior Rust/compilers/data‑structures engineers (grid diff, streaming parsing, semantics).
-* 1–2 full‑stack / front‑end engineers (desktop + Electron/Tauri wrapper, web viewer).
+* 1–2 full‑stack / front‑end engineers (desktop + wxDragon UI, web viewer).
 * 0.5–1 FTE dedicated to QA / test harness and fixtures (plus AI agents).
 
 Assuming $175–200k fully loaded per FTE, an **engineering budget of ~$800k–1.2M/year** is justified, especially given the AI‑assisted development process should amplify output per human.
