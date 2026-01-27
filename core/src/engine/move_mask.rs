@@ -1,11 +1,18 @@
 use crate::alignment_types::RowBlockMove;
-use crate::column_alignment::{ColumnBlockMove, detect_exact_column_block_move};
+use crate::column_alignment::{
+    ColumnBlockMove, detect_exact_column_block_move, detect_exact_column_block_move_from_views,
+};
 use crate::config::DiffConfig;
 use crate::diff::DiffError;
 use crate::grid_view::GridView;
-use crate::rect_block_move::{RectBlockMove, detect_exact_rect_block_move};
+use crate::rect_block_move::{
+    RectBlockMove, detect_exact_rect_block_move, detect_exact_rect_block_move_from_views,
+};
 use crate::region_mask::RegionMask;
-use crate::row_alignment::{detect_exact_row_block_move, detect_fuzzy_row_block_move};
+use crate::row_alignment::{
+    detect_exact_row_block_move, detect_exact_row_block_move_from_views,
+    detect_fuzzy_row_block_move, detect_fuzzy_row_block_move_from_views,
+};
 use crate::sink::DiffSink;
 use crate::workbook::{CellAddress, ColSignature, Grid, RowSignature};
 
@@ -75,13 +82,19 @@ impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
 
             let mut found_move = false;
 
-            if let Some(mv) = detect_exact_rect_block_move_masked(
-                self.old,
-                self.new,
-                &self.old_mask,
-                &self.new_mask,
-                config,
-            ) {
+            let rect_move = if !self.old_mask.has_exclusions() && !self.new_mask.has_exclusions() {
+                detect_exact_rect_block_move_from_views(&self.old_view, &self.new_view, config)
+            } else {
+                detect_exact_rect_block_move_masked(
+                    self.old,
+                    self.new,
+                    &self.old_mask,
+                    &self.new_mask,
+                    config,
+                )
+            };
+
+            if let Some(mv) = rect_move {
                 emit_rect_block_move(&mut self.emit_ctx, mv)?;
                 #[cfg(feature = "perf-metrics")]
                 if let Some(m) = self.emit_ctx.metrics.as_deref_mut() {
@@ -115,66 +128,95 @@ impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
                 found_move = true;
             }
 
-            if !found_move
-                && let Some(mv) = detect_exact_row_block_move_masked(
-                    self.old,
-                    self.new,
-                    &self.old_mask,
-                    &self.new_mask,
-                    config,
-                )
-            {
-                emit_row_block_move(&mut self.emit_ctx, mv)?;
-                #[cfg(feature = "perf-metrics")]
-                if let Some(m) = self.emit_ctx.metrics.as_deref_mut() {
-                    m.moves_detected = m.moves_detected.saturating_add(1);
+            if !found_move {
+                let row_move = if !self.old_mask.has_exclusions() && !self.new_mask.has_exclusions()
+                {
+                    detect_exact_row_block_move_from_views(&self.old_view, &self.new_view, config)
+                } else {
+                    detect_exact_row_block_move_masked(
+                        self.old,
+                        self.new,
+                        &self.old_mask,
+                        &self.new_mask,
+                        config,
+                    )
+                };
+
+                if let Some(mv) = row_move {
+                    emit_row_block_move(&mut self.emit_ctx, mv)?;
+                    #[cfg(feature = "perf-metrics")]
+                    if let Some(m) = self.emit_ctx.metrics.as_deref_mut() {
+                        m.moves_detected = m.moves_detected.saturating_add(1);
+                    }
+                    self.old_mask.exclude_rows(mv.src_start_row, mv.row_count);
+                    self.new_mask.exclude_rows(mv.dst_start_row, mv.row_count);
+                    iteration += 1;
+                    found_move = true;
                 }
-                self.old_mask.exclude_rows(mv.src_start_row, mv.row_count);
-                self.new_mask.exclude_rows(mv.dst_start_row, mv.row_count);
-                iteration += 1;
-                found_move = true;
             }
 
-            if !found_move
-                && let Some(mv) = detect_exact_column_block_move_masked(
-                    self.old,
-                    self.new,
-                    &self.old_mask,
-                    &self.new_mask,
-                    config,
-                )
-            {
-                emit_column_block_move(&mut self.emit_ctx, mv)?;
-                #[cfg(feature = "perf-metrics")]
-                if let Some(m) = self.emit_ctx.metrics.as_deref_mut() {
-                    m.moves_detected = m.moves_detected.saturating_add(1);
+            if !found_move {
+                let col_move = if !self.old_mask.has_exclusions() && !self.new_mask.has_exclusions()
+                {
+                    detect_exact_column_block_move_from_views(&self.old_view, &self.new_view, config)
+                } else {
+                    detect_exact_column_block_move_masked(
+                        self.old,
+                        self.new,
+                        &self.old_mask,
+                        &self.new_mask,
+                        config,
+                    )
+                };
+
+                if let Some(mv) = col_move {
+                    emit_column_block_move(&mut self.emit_ctx, mv)?;
+                    #[cfg(feature = "perf-metrics")]
+                    if let Some(m) = self.emit_ctx.metrics.as_deref_mut() {
+                        m.moves_detected = m.moves_detected.saturating_add(1);
+                    }
+                    self.old_mask.exclude_cols(mv.src_start_col, mv.col_count);
+                    self.new_mask.exclude_cols(mv.dst_start_col, mv.col_count);
+                    iteration += 1;
+                    found_move = true;
                 }
-                self.old_mask.exclude_cols(mv.src_start_col, mv.col_count);
-                self.new_mask.exclude_cols(mv.dst_start_col, mv.col_count);
-                iteration += 1;
-                found_move = true;
             }
 
-            if !found_move
-                && config.moves.enable_fuzzy_moves
-                && let Some(mv) = detect_fuzzy_row_block_move_masked(
-                    self.old,
-                    self.new,
-                    &self.old_mask,
-                    &self.new_mask,
-                    config,
-                )
-            {
-                emit_row_block_move(&mut self.emit_ctx, mv)?;
-                emit_moved_row_block_edits(&mut self.emit_ctx, &self.old_view, &self.new_view, mv)?;
-                #[cfg(feature = "perf-metrics")]
-                if let Some(m) = self.emit_ctx.metrics.as_deref_mut() {
-                    m.moves_detected = m.moves_detected.saturating_add(1);
+            if !found_move && config.moves.enable_fuzzy_moves {
+                let fuzzy_move =
+                    if !self.old_mask.has_exclusions() && !self.new_mask.has_exclusions() {
+                        detect_fuzzy_row_block_move_from_views(
+                            &self.old_view,
+                            &self.new_view,
+                            config,
+                        )
+                    } else {
+                        detect_fuzzy_row_block_move_masked(
+                            self.old,
+                            self.new,
+                            &self.old_mask,
+                            &self.new_mask,
+                            config,
+                        )
+                    };
+
+                if let Some(mv) = fuzzy_move {
+                    emit_row_block_move(&mut self.emit_ctx, mv)?;
+                    emit_moved_row_block_edits(
+                        &mut self.emit_ctx,
+                        &self.old_view,
+                        &self.new_view,
+                        mv,
+                    )?;
+                    #[cfg(feature = "perf-metrics")]
+                    if let Some(m) = self.emit_ctx.metrics.as_deref_mut() {
+                        m.moves_detected = m.moves_detected.saturating_add(1);
+                    }
+                    self.old_mask.exclude_rows(mv.src_start_row, mv.row_count);
+                    self.new_mask.exclude_rows(mv.dst_start_row, mv.row_count);
+                    iteration += 1;
+                    found_move = true;
                 }
-                self.old_mask.exclude_rows(mv.src_start_row, mv.row_count);
-                self.new_mask.exclude_rows(mv.dst_start_row, mv.row_count);
-                iteration += 1;
-                found_move = true;
             }
 
             if !found_move {

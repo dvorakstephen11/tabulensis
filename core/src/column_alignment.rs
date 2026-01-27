@@ -41,6 +41,20 @@ pub(crate) fn detect_exact_column_block_move(
     new: &Grid,
     config: &DiffConfig,
 ) -> Option<ColumnBlockMove> {
+    let view_a = GridView::from_grid_with_config(old, config);
+    let view_b = GridView::from_grid_with_config(new, config);
+
+    detect_exact_column_block_move_from_views(&view_a, &view_b, config)
+}
+
+pub(crate) fn detect_exact_column_block_move_from_views(
+    old_view: &GridView<'_>,
+    new_view: &GridView<'_>,
+    config: &DiffConfig,
+) -> Option<ColumnBlockMove> {
+    let old = old_view.source;
+    let new = new_view.source;
+
     if old.ncols != new.ncols || old.nrows != new.nrows {
         return None;
     }
@@ -53,13 +67,10 @@ pub(crate) fn detect_exact_column_block_move(
         return None;
     }
 
-    let view_a = GridView::from_grid_with_config(old, config);
-    let view_b = GridView::from_grid_with_config(new, config);
-
     let unordered_a = unordered_col_hashes(old);
     let unordered_b = unordered_col_hashes(new);
 
-    let col_meta_a: Vec<ColMeta> = view_a
+    let col_meta_a: Vec<ColMeta> = old_view
         .col_meta
         .iter()
         .enumerate()
@@ -68,7 +79,7 @@ pub(crate) fn detect_exact_column_block_move(
             ..*meta
         })
         .collect();
-    let col_meta_b: Vec<ColMeta> = view_b
+    let col_meta_b: Vec<ColMeta> = new_view
         .col_meta
         .iter()
         .enumerate()
@@ -78,7 +89,7 @@ pub(crate) fn detect_exact_column_block_move(
         })
         .collect();
 
-    if view_a.is_blank_dominated() || view_b.is_blank_dominated() {
+    if old_view.is_blank_dominated() || new_view.is_blank_dominated() {
         return None;
     }
 

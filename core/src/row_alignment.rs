@@ -39,6 +39,20 @@ pub(crate) fn detect_exact_row_block_move(
     new: &Grid,
     config: &DiffConfig,
 ) -> Option<RowBlockMove> {
+    let view_a = GridView::from_grid_with_config(old, config);
+    let view_b = GridView::from_grid_with_config(new, config);
+
+    detect_exact_row_block_move_from_views(&view_a, &view_b, config)
+}
+
+pub(crate) fn detect_exact_row_block_move_from_views(
+    old_view: &GridView<'_>,
+    new_view: &GridView<'_>,
+    config: &DiffConfig,
+) -> Option<RowBlockMove> {
+    let old = old_view.source;
+    let new = new_view.source;
+
     if old.nrows != new.nrows || old.ncols != new.ncols {
         return None;
     }
@@ -51,20 +65,17 @@ pub(crate) fn detect_exact_row_block_move(
         return None;
     }
 
-    let view_a = GridView::from_grid_with_config(old, config);
-    let view_b = GridView::from_grid_with_config(new, config);
-
-    if view_a.is_low_info_dominated() || view_b.is_low_info_dominated() {
+    if old_view.is_low_info_dominated() || new_view.is_low_info_dominated() {
         return None;
     }
 
-    let stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
+    let stats = HashStats::from_row_meta(&old_view.row_meta, &new_view.row_meta);
     if stats.has_heavy_repetition(config.alignment.max_hash_repeat) {
         return None;
     }
 
-    let meta_a = &view_a.row_meta;
-    let meta_b = &view_b.row_meta;
+    let meta_a = &old_view.row_meta;
+    let meta_b = &new_view.row_meta;
     let n = meta_a.len();
 
     if meta_a
@@ -177,6 +188,20 @@ pub(crate) fn detect_fuzzy_row_block_move(
     new: &Grid,
     config: &DiffConfig,
 ) -> Option<RowBlockMove> {
+    let view_a = GridView::from_grid_with_config(old, config);
+    let view_b = GridView::from_grid_with_config(new, config);
+
+    detect_fuzzy_row_block_move_from_views(&view_a, &view_b, config)
+}
+
+pub(crate) fn detect_fuzzy_row_block_move_from_views(
+    old_view: &GridView<'_>,
+    new_view: &GridView<'_>,
+    config: &DiffConfig,
+) -> Option<RowBlockMove> {
+    let old = old_view.source;
+    let new = new_view.source;
+
     if old.nrows != new.nrows || old.ncols != new.ncols {
         return None;
     }
@@ -189,20 +214,17 @@ pub(crate) fn detect_fuzzy_row_block_move(
         return None;
     }
 
-    let view_a = GridView::from_grid_with_config(old, config);
-    let view_b = GridView::from_grid_with_config(new, config);
-
-    if view_a.is_low_info_dominated() || view_b.is_low_info_dominated() {
+    if old_view.is_low_info_dominated() || new_view.is_low_info_dominated() {
         return None;
     }
 
-    let stats = HashStats::from_row_meta(&view_a.row_meta, &view_b.row_meta);
+    let stats = HashStats::from_row_meta(&old_view.row_meta, &new_view.row_meta);
     if stats.has_heavy_repetition(config.alignment.max_hash_repeat) {
         return None;
     }
 
-    let meta_a = &view_a.row_meta;
-    let meta_b = &view_b.row_meta;
+    let meta_a = &old_view.row_meta;
+    let meta_b = &new_view.row_meta;
 
     if meta_a
         .iter()

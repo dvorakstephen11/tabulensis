@@ -27,6 +27,20 @@ pub(crate) fn detect_exact_rect_block_move(
     new: &Grid,
     config: &DiffConfig,
 ) -> Option<RectBlockMove> {
+    let view_a = GridView::from_grid_with_config(old, config);
+    let view_b = GridView::from_grid_with_config(new, config);
+
+    detect_exact_rect_block_move_from_views(&view_a, &view_b, config)
+}
+
+pub(crate) fn detect_exact_rect_block_move_from_views(
+    view_a: &GridView<'_>,
+    view_b: &GridView<'_>,
+    config: &DiffConfig,
+) -> Option<RectBlockMove> {
+    let old = view_a.source;
+    let new = view_b.source;
+
     if old.nrows != new.nrows || old.ncols != new.ncols {
         return None;
     }
@@ -38,9 +52,6 @@ pub(crate) fn detect_exact_rect_block_move(
     if !is_within_size_bounds(old, new, config) {
         return None;
     }
-
-    let view_a = GridView::from_grid_with_config(old, config);
-    let view_b = GridView::from_grid_with_config(new, config);
 
     if view_a.is_low_info_dominated() || view_b.is_low_info_dominated() {
         return None;
@@ -73,25 +84,55 @@ pub(crate) fn detect_exact_rect_block_move(
         return None;
     }
 
-    let diff_positions = collect_differences(old, new);
-    if diff_positions.is_empty() {
+    let mut diff_rows: Vec<u32> = Vec::new();
+    for (idx, (a, b)) in view_a.row_meta.iter().zip(view_b.row_meta.iter()).enumerate() {
+        if a.signature != b.signature {
+            diff_rows.push(idx as u32);
+        }
+    }
+
+    let mut diff_cols: Vec<u32> = Vec::new();
+    for (idx, (a, b)) in view_a.col_meta.iter().zip(view_b.col_meta.iter()).enumerate() {
+        if a.hash != b.hash {
+            diff_cols.push(idx as u32);
+        }
+    }
+
+    if diff_rows.is_empty() || diff_cols.is_empty() {
         return None;
     }
 
-    let row_ranges = find_two_equal_ranges(diff_positions.iter().map(|(r, _)| *r))?;
-    let col_ranges = find_two_equal_ranges(diff_positions.iter().map(|(_, c)| *c))?;
+    let row_ranges = find_two_equal_ranges(diff_rows)?;
+    let col_ranges = find_two_equal_ranges(diff_cols)?;
+
+    if row_ranges.0 == row_ranges.1 && col_ranges.0 == col_ranges.1 {
+        return None;
+    }
 
     let row_count = range_len(row_ranges.0);
     let col_count = range_len(col_ranges.0);
 
     let expected_mismatches = row_count.checked_mul(col_count)?.checked_mul(2)?;
-    if diff_positions.len() as u32 != expected_mismatches {
+
+    let m00 = count_rect_mismatches(old, new, row_ranges.0, col_ranges.0);
+    let m11 = count_rect_mismatches(old, new, row_ranges.1, col_ranges.1);
+    let diag_mismatches = m00.saturating_add(m11);
+
+    if diag_mismatches != expected_mismatches {
         return None;
     }
 
-    let mismatches = count_rect_mismatches(old, new, row_ranges.0, col_ranges.0)
-        + count_rect_mismatches(old, new, row_ranges.1, col_ranges.1);
-    if mismatches != diff_positions.len() as u32 {
+    let union_mismatches = if row_ranges.0 == row_ranges.1 || col_ranges.0 == col_ranges.1 {
+        diag_mismatches
+    } else {
+        let m01 = count_rect_mismatches(old, new, row_ranges.0, col_ranges.1);
+        let m10 = count_rect_mismatches(old, new, row_ranges.1, col_ranges.0);
+        diag_mismatches
+            .saturating_add(m01)
+            .saturating_add(m10)
+    };
+
+    if union_mismatches != expected_mismatches {
         return None;
     }
 
