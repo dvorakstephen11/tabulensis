@@ -219,20 +219,6 @@ fn rectangles_correspond(
     true
 }
 
-fn collect_differences(old: &Grid, new: &Grid) -> Vec<(u32, u32)> {
-    let mut diffs = Vec::new();
-
-    for row in 0..old.nrows {
-        for col in 0..old.ncols {
-            if !cell_content_equal(old.get(row, col), new.get(row, col)) {
-                diffs.push((row, col));
-            }
-        }
-    }
-
-    diffs
-}
-
 fn cell_content_equal(a: Option<&Cell>, b: Option<&Cell>) -> bool {
     match (a, b) {
         (None, None) => true,

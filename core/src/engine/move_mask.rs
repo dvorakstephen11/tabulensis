@@ -82,52 +82,6 @@ impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
 
             let mut found_move = false;
 
-            let rect_move = if !self.old_mask.has_exclusions() && !self.new_mask.has_exclusions() {
-                detect_exact_rect_block_move_from_views(&self.old_view, &self.new_view, config)
-            } else {
-                detect_exact_rect_block_move_masked(
-                    self.old,
-                    self.new,
-                    &self.old_mask,
-                    &self.new_mask,
-                    config,
-                )
-            };
-
-            if let Some(mv) = rect_move {
-                emit_rect_block_move(&mut self.emit_ctx, mv)?;
-                #[cfg(feature = "perf-metrics")]
-                if let Some(m) = self.emit_ctx.metrics.as_deref_mut() {
-                    m.moves_detected = m.moves_detected.saturating_add(1);
-                }
-                self.old_mask.exclude_rect_cells(
-                    mv.src_start_row,
-                    mv.src_row_count,
-                    mv.src_start_col,
-                    mv.src_col_count,
-                );
-                self.new_mask.exclude_rect_cells(
-                    mv.dst_start_row,
-                    mv.src_row_count,
-                    mv.dst_start_col,
-                    mv.src_col_count,
-                );
-                self.old_mask.exclude_rect_cells(
-                    mv.dst_start_row,
-                    mv.src_row_count,
-                    mv.dst_start_col,
-                    mv.src_col_count,
-                );
-                self.new_mask.exclude_rect_cells(
-                    mv.src_start_row,
-                    mv.src_row_count,
-                    mv.src_start_col,
-                    mv.src_col_count,
-                );
-                iteration += 1;
-                found_move = true;
-            }
-
             if !found_move {
                 let row_move = if !self.old_mask.has_exclusions() && !self.new_mask.has_exclusions()
                 {
@@ -177,6 +131,50 @@ impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
                     }
                     self.old_mask.exclude_cols(mv.src_start_col, mv.col_count);
                     self.new_mask.exclude_cols(mv.dst_start_col, mv.col_count);
+                    iteration += 1;
+                    found_move = true;
+                }
+            }
+
+            if !found_move {
+                if let Some(mv) = detect_exact_rect_block_move_masked_from_views(
+                    self.old,
+                    self.new,
+                    &self.old_mask,
+                    &self.new_mask,
+                    &self.old_view,
+                    &self.new_view,
+                    config,
+                ) {
+                    emit_rect_block_move(&mut self.emit_ctx, mv)?;
+                    #[cfg(feature = "perf-metrics")]
+                    if let Some(m) = self.emit_ctx.metrics.as_deref_mut() {
+                        m.moves_detected = m.moves_detected.saturating_add(1);
+                    }
+                    self.old_mask.exclude_rect_cells(
+                        mv.src_start_row,
+                        mv.src_row_count,
+                        mv.src_start_col,
+                        mv.src_col_count,
+                    );
+                    self.new_mask.exclude_rect_cells(
+                        mv.dst_start_row,
+                        mv.src_row_count,
+                        mv.dst_start_col,
+                        mv.src_col_count,
+                    );
+                    self.old_mask.exclude_rect_cells(
+                        mv.dst_start_row,
+                        mv.src_row_count,
+                        mv.dst_start_col,
+                        mv.src_col_count,
+                    );
+                    self.new_mask.exclude_rect_cells(
+                        mv.src_start_row,
+                        mv.src_row_count,
+                        mv.src_start_col,
+                        mv.src_col_count,
+                    );
                     iteration += 1;
                     found_move = true;
                 }
@@ -602,24 +600,47 @@ fn detect_exact_column_block_move_masked(
     })
 }
 
-fn detect_exact_rect_block_move_masked(
+fn detect_exact_rect_block_move_masked_from_views(
     old: &Grid,
     new: &Grid,
     old_mask: &RegionMask,
     new_mask: &RegionMask,
+    old_view: &GridView<'_>,
+    new_view: &GridView<'_>,
+    config: &DiffConfig,
+) -> Option<RectBlockMove> {
+    detect_exact_rect_block_move_masked_impl(
+        old,
+        new,
+        old_mask,
+        new_mask,
+        Some((old_view, new_view)),
+        config,
+    )
+}
+
+fn detect_exact_rect_block_move_masked_impl(
+    old: &Grid,
+    new: &Grid,
+    old_mask: &RegionMask,
+    new_mask: &RegionMask,
+    views: Option<(&GridView<'_>, &GridView<'_>)>,
     config: &DiffConfig,
 ) -> Option<RectBlockMove> {
     if !old_mask.has_active_cells() || !new_mask.has_active_cells() {
         return None;
     }
 
-    if !old_mask.has_exclusions()
-        && !new_mask.has_exclusions()
-        && old.nrows == new.nrows
-        && old.ncols == new.ncols
-        && let Some(mv) = detect_exact_rect_block_move(old, new, config)
-    {
-        return Some(mv);
+    if !old_mask.has_exclusions() && !new_mask.has_exclusions() {
+        if old.nrows == new.nrows && old.ncols == new.ncols {
+            if let Some((old_view, new_view)) = views {
+                if let Some(mv) = detect_exact_rect_block_move_from_views(old_view, new_view, config) {
+                    return Some(mv);
+                }
+            } else if let Some(mv) = detect_exact_rect_block_move(old, new, config) {
+                return Some(mv);
+            }
+        }
     }
 
     let aligned_rows = align_indices_by_signature(
@@ -1222,11 +1243,12 @@ mod tests {
         let old_mask = RegionMask::all_active(old.nrows, old.ncols);
         let new_mask = RegionMask::all_active(new.nrows, new.ncols);
 
-        let mv = detect_exact_rect_block_move_masked(
+        let mv = detect_exact_rect_block_move_masked_impl(
             &old,
             &new,
             &old_mask,
             &new_mask,
+            None,
             &DiffConfig::default(),
         )
         .expect("masked detector should fall back and still detect the move");
