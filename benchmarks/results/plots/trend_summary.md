@@ -1,45 +1,48 @@
 # Benchmark Trend Summary
 
-Generated: 2025-12-13 11:43:32
+Generated: 2026-01-27 15:32:19
 
 ## Overview
 
-- Total benchmark runs: 9
-- Quick-scale runs: 7
-- Full-scale runs: 2
-- Unique tests: 10
-- Date range: 2025-12-12 to 2025-12-13
+- Total benchmark runs: 40
+- Quick-scale runs: 12
+- Full-scale runs: 28
+- Unique tests: 13
+- Date range: 2025-12-12 to 2026-01-27
 
 ## Quick Tests Performance
 
 - First run total: 6,309ms (2025-12-12_163759.json)
-- Latest run total: 430ms (2025-12-13_000410.json)
-- Overall change: -93.2% (faster)
+- Latest run total: 451ms (2025-12-23_215619.json)
+- Overall change: -92.9% (faster)
 
 ### Per-Test Trends
 
 | Test | First (ms) | Latest (ms) | Change |
 |:-----|----------:|------------:|-------:|
-| perf_p4_99_percent_blank | 24 | 20 | -16.7% |
-| perf_p1_large_dense | 359 | 51 | -85.8% |
-| perf_p2_large_noise | 372 | 124 | -66.7% |
-| perf_p3_adversarial_repetitive | 1,236 | 195 | -84.2% |
-| perf_p5_identical | 4,318 | 40 | -99.1% |
+| perf_p4_99_percent_blank | 24 | 2 | -91.7% |
+| perf_p1_large_dense | 359 | 12 | -96.7% |
+| perf_p2_large_noise | 372 | 74 | -80.1% |
+| perf_p3_adversarial_repetitive | 1,236 | 36 | -97.1% |
+| perf_p5_identical | 4,318 | 14 | -99.7% |
+| preflight_low_similarity | 196 | - | N/A |
+| preflight_single_cell_edit | 117 | - | N/A |
 
 
 ## Full-Scale Tests Performance
 
 - First run total: 25,357ms (2025-12-13_155200_fullscale.json)
-- Latest run total: 38,541ms (2025-12-13_165236_fullscale.json)
-- Overall change: +52.0% (slower)
+- Latest run total: 3,578ms (2026-01-27_212351_fullscale.json)
+- Overall change: -85.9% (faster)
 
 ### Per-Test Trends
 
 | Test | First (ms) | Latest (ms) | Change |
 |:-----|----------:|------------:|-------:|
-| perf_50k_99_percent_blank | 451 | 546 | +21.1% |
-| perf_50k_identical | 2,076 | 2,870 | +38.2% |
-| perf_50k_adversarial_repetitive | 7,016 | 10,846 | +54.6% |
-| perf_50k_completely_different | 7,744 | 12,022 | +55.2% |
-| perf_50k_dense_single_edit | 8,070 | 12,257 | +51.9% |
+| perf_50k_completely_different | 7,744 | 1,189 | -84.6% |
+| perf_50k_adversarial_repetitive | 7,016 | 301 | -95.7% |
+| perf_50k_dense_single_edit | 8,070 | 807 | -90.0% |
+| perf_50k_99_percent_blank | 451 | 137 | -69.6% |
+| perf_50k_identical | 2,076 | 215 | -89.6% |
+| perf_50k_alignment_block_move | 12,230 | 929 | -92.4% |
 

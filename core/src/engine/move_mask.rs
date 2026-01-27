@@ -221,6 +221,72 @@ impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
                 break;
             }
 
+            if !self.old_mask.has_excluded_rects()
+                && !self.new_mask.has_excluded_rects()
+                && self.old_mask.has_excluded_rows()
+                && self.new_mask.has_excluded_rows()
+                && !self.old_mask.has_excluded_cols()
+                && !self.new_mask.has_excluded_cols()
+            {
+                let mut it_old = self.old_mask.active_rows();
+                let mut it_new = self.new_mask.active_rows();
+                let mut identical = true;
+
+                loop {
+                    match (it_old.next(), it_new.next()) {
+                        (None, None) => break,
+                        (Some(ro), Some(rn)) => {
+                            if self.old_view.row_meta[ro as usize].signature
+                                != self.new_view.row_meta[rn as usize].signature
+                            {
+                                identical = false;
+                                break;
+                            }
+                        }
+                        _ => {
+                            identical = false;
+                            break;
+                        }
+                    }
+                }
+
+                if identical {
+                    break;
+                }
+            } else if !self.old_mask.has_excluded_rects()
+                && !self.new_mask.has_excluded_rects()
+                && self.old_mask.has_excluded_cols()
+                && self.new_mask.has_excluded_cols()
+                && !self.old_mask.has_excluded_rows()
+                && !self.new_mask.has_excluded_rows()
+            {
+                let mut it_old = self.old_mask.active_cols();
+                let mut it_new = self.new_mask.active_cols();
+                let mut identical = true;
+
+                loop {
+                    match (it_old.next(), it_new.next()) {
+                        (None, None) => break,
+                        (Some(co), Some(cn)) => {
+                            if self.old_view.col_meta[co as usize].hash
+                                != self.new_view.col_meta[cn as usize].hash
+                            {
+                                identical = false;
+                                break;
+                            }
+                        }
+                        _ => {
+                            identical = false;
+                            break;
+                        }
+                    }
+                }
+
+                if identical {
+                    break;
+                }
+            }
+
             if self.old.nrows != self.new.nrows || self.old.ncols != self.new.ncols {
                 break;
             }
