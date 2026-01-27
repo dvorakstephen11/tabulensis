@@ -49,12 +49,14 @@ set(wxUSE_RICHTEXT ${wxdUSE_RICHTEXT} CACHE BOOL "Use Rich Text Control widget")
 set(wxUSE_GUI ON CACHE BOOL "Use wxWidgets GUI features")
 set(wxUSE_BASE ON CACHE BOOL "Use wxWidgets base features")
 set(wxUSE_ADV ON CACHE BOOL "Use wxWidgets advanced features")
-set(wxUSE_HTML ON CACHE BOOL "Use wxWidgets HTML features")
-set(wxUSE_OPENGL ON CACHE BOOL "Use wxWidgets OpenGL features")
+set(wxUSE_HTML OFF CACHE BOOL "Use wxWidgets HTML features" FORCE)
+set(wxUSE_OPENGL OFF CACHE BOOL "Use wxWidgets OpenGL features" FORCE)
 set(wxUSE_SOCKETS ON CACHE BOOL "Use wxWidgets sockets")
-set(wxUSE_PROPGRID ON CACHE BOOL "Use wxWidgets property grid")
-set(wxUSE_DEBUGREPORT ON CACHE BOOL "Use wxWidgets debug report features")
-set(wxUSE_RIBBON ON CACHE BOOL "Use wxWidgets ribbon control")
+set(wxUSE_HELP OFF CACHE BOOL "Use wxWidgets help controller" FORCE)
+set(wxUSE_WXHTML_HELP OFF CACHE BOOL "Use wxWidgets HTML help controller" FORCE)
+set(wxUSE_PROPGRID OFF CACHE BOOL "Use wxWidgets property grid" FORCE)
+set(wxUSE_DEBUGREPORT OFF CACHE BOOL "Use wxWidgets debug report features" FORCE)
+set(wxUSE_RIBBON OFF CACHE BOOL "Use wxWidgets ribbon control" FORCE)
 set(wxUSE_XML ON CACHE BOOL "Use XML support for XRC. Since wxUSE_XRC is always ON, wxUSE_XML must also be ON.")
 set(wxUSE_LIBWEBP OFF CACHE BOOL "Disable WebP support to avoid extra dependencies")
 
@@ -117,100 +119,33 @@ endif()
 
 # --- wxDragon Library Sources ---
 set(WXDRAGON_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/timer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/activity_indicator.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/animation_ctrl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/appprogress.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/array_string.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/art_provider.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/bitmap.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/bitmap_button.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/bitmapbundle.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/bitmapbutton.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/bitmapcombobox.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/button.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/calendar_ctrl.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/checkbox.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/checklistbox.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/choice.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/clipboard.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/collapsiblepane.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/cursor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/colourdialog.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/colourpickerctrl.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/combobox.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/commandlinkbutton.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/dataobject.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/dataview.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/dataviewtreectrl.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/dataviewtreemodel.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/dataviewvirtuallistmodel.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/dataviewvirtuallistmodel_custom.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/datepickerctrl.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/datetime.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/dc.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/dialog.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/dir_dialog.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/dirpickerctrl.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/dnd.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/droptarget.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/editablelistbox.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/event.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/file_ctrl.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/file_dialog.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/filepickerctrl.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/font_dialog.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/fontpickerctrl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/frame.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/gauge.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/hyperlink_ctrl.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/imagelist.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/item.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/list_ctrl.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/listbox.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/menu.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/message_dialog.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/multi_choice_dialog.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/notebook.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/simplebook.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/notificationmessage.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/panel.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/progressdialog.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/radio_button.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/radiobox.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/rearrangelist.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/scrollbar.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/scrolled_window.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/search_ctrl.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/single_choice_dialog.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/sizer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/slider.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/spinbutton.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/spinctrl.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/spinctrldouble.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/splitterwindow.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/static_bitmap.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/generic_static_bitmap.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/platform_aware_staticbitmap_handler.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/static_line.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/static_text.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/staticbox.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/statusbar.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/taskbar.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/text_entry_dialog.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/textctrl.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/timepickerctrl.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/togglebutton.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/toolbar.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/translations.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/treebook.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/treectrl.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/treelistctrl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/window.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/sizer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/menu.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/statusbar.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/notebook.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/splitterwindow.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/button.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/checkbox.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/choice.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/gauge.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/static_text.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/textctrl.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/dialog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/font_dialog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/file_dialog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/message_dialog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/filepickerctrl.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/dirpickerctrl.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/search_ctrl.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/dataview.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/platform_aware_staticbitmap_handler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/wxd_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/wxd_utils.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/wxd_sysopt.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/wxd_logging.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/wxd_variant.cpp
 )

@@ -727,8 +727,6 @@ fn build_wxdragon_wrapper(
         println!("cargo:rustc-link-lib=jpeg");
         println!("cargo:rustc-link-lib=expat");
         println!("cargo:rustc-link-lib=tiff");
-        println!("cargo:rustc-link-lib=static=wx_gtk3u_propgrid-3.3");
-        println!("cargo:rustc-link-lib=static=wx_gtk3u_gl-3.3");
         println!("cargo:rustc-link-lib=static=wx_gtk3u_adv-3.3");
         println!("cargo:rustc-link-lib=static=wx_gtk3u_core-3.3");
         println!("cargo:rustc-link-lib=static=wx_baseu-3.3");
@@ -763,7 +761,7 @@ fn build_wxdragon_wrapper(
                 println!("cargo:warning=  or: sudo pacman -S webkit2gtk");
             }
         }
-        if cfg!(feature = "xrc") || cfg!(feature = "webview") {
+        if cfg!(feature = "webview") {
             println!("cargo:rustc-link-lib=static=wx_gtk3u_html-3.3");
         }
         if cfg!(feature = "media-ctrl") {

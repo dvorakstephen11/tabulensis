@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import platform
 import shutil
@@ -62,6 +63,71 @@ DESIGN_PROMPT_MARKER = (
 
 DESIGN_TREE_EXCLUDED_DIRS = {"scripts", "logs", "docs", "target"}
 DESIGN_TREE_EXCLUDED_FILES = {"README.md"}
+
+DIFF_ALGO_PERF_PATTERNS = [
+    "core/src/diff.rs",
+    "core/src/diffable.rs",
+    "core/src/config.rs",
+    "core/src/alignment_types.rs",
+    "core/src/alignment/*.rs",
+    "core/src/matching/*.rs",
+    "core/src/engine/*.rs",
+    "core/src/row_alignment.rs",
+    "core/src/column_alignment.rs",
+    "core/src/database_alignment.rs",
+    "core/src/rect_block_move.rs",
+    "core/src/region_mask.rs",
+    "core/src/grid_view.rs",
+    "core/src/grid_metadata.rs",
+    "core/src/grid_parser.rs",
+    "core/tests/amr_multi_gap_tests.rs",
+    "core/tests/limit_behavior_tests.rs",
+    "core/tests/hardening_tests.rs",
+    "core/tests/engine_tests.rs",
+    "core/tests/g*.rs",
+    "core/tests/grid_*_tests.rs",
+    "core/tests/pg5_grid_diff_tests.rs",
+    "core/tests/pg6_object_vs_grid_tests.rs",
+    "core/tests/d1_database_mode_tests.rs",
+    "core/tests/d2_d4_database_mode_workbook_tests.rs",
+    "core/tests/database_mode_wrapper_tests.rs",
+    "core/tests/signature_tests.rs",
+    "core/tests/sparse_grid_tests.rs",
+    "core/tests/leaf_diff_equivalence_tests.rs",
+    "core/src/perf.rs",
+    "core/src/memory_metrics.rs",
+    "core/src/memory_estimate.rs",
+    "core/src/progress.rs",
+    "core/benches/diff_benchmarks.rs",
+    "core/tests/metrics_unit_tests.rs",
+    "core/tests/perf_large_grid_tests.rs",
+    "core/tests/e2e_perf_workbook_open.rs",
+    "core/tests/package_streaming_tests.rs",
+    "core/tests/output_tests.rs",
+    "cli/src/commands/diff.rs",
+    "cli/src/main.rs",
+    "benchmarks/README.md",
+    "benchmarks/baselines/*.json",
+    "benchmarks/latest_*.json",
+    "benchmarks/latest_*.csv",
+    "benchmarks/results/*.json",
+    "benchmarks/results_e2e/*.json",
+    "benchmarks/wasm_memory_budgets.json",
+    "scripts/check_perf_thresholds.py",
+    "scripts/export_perf_metrics.py",
+    "scripts/export_e2e_metrics.py",
+    "scripts/compare_perf_results.py",
+    "scripts/combine_results_to_csv.py",
+    "scripts/visualize_benchmarks.py",
+    "scripts/wasm_memory_harness.cjs",
+    "docs/rust_docs/unified_grid_diff_algorithm_specification.md",
+    "docs/rust_docs/algorithm_efficiency.md",
+    "docs/rust_docs/algorithm_related_files.md",
+    "docs/meta/prompts/grid_diff_algorithm_design.md",
+]
+
+DIFF_CODE_EXTENSIONS = set(INCLUDED_EXTENSIONS) | {".cjs"}
+PERF_METRIC_EXTENSIONS = {".json", ".csv"}
 
 DESIGN_CODE_BUNDLES = {
     "codebase_1_core_ir_engine.md": {
@@ -348,7 +414,19 @@ class ContextBuilder:
 
 
 def lang_for_path(path: Path) -> str:
-    mapping = {".rs": "rust", ".py": "python", ".toml": "toml", ".yaml": "yaml", ".yml": "yaml", ".md": "markdown", ".js": "javascript", ".html": "html"}
+    mapping = {
+        ".rs": "rust",
+        ".py": "python",
+        ".toml": "toml",
+        ".yaml": "yaml",
+        ".yml": "yaml",
+        ".md": "markdown",
+        ".js": "javascript",
+        ".cjs": "javascript",
+        ".html": "html",
+        ".json": "json",
+        ".csv": "csv",
+    }
     return mapping.get(path.suffix, "")
 
 
@@ -498,6 +576,136 @@ def generate_review_context(ctx: ProjectContext, output_file: str = CODEBASE_CON
     print(f"Context generated at: {output_path}")
     print(f"Estimated tokens: {estimate_tokens(rendered)}")
     return output_path
+
+
+def is_code_file(path: Path, extensions: set[str]) -> bool:
+    return path.suffix in extensions or path.name in {".gitignore", "Dockerfile"}
+
+
+def resolve_diff_code_files(ctx: ProjectContext) -> list[Path]:
+    files = resolve_patterns(ctx.root, DIFF_ALGO_PERF_PATTERNS)
+    return [path for path in files if is_code_file(path, DIFF_CODE_EXTENSIONS)]
+
+
+def resolve_performance_metric_files(ctx: ProjectContext) -> list[Path]:
+    metrics_root = ctx.root / "benchmarks"
+    if not metrics_root.exists():
+        return []
+    return sorted(
+        [
+            path
+            for path in metrics_root.rglob("*")
+            if path.is_file() and path.suffix in PERF_METRIC_EXTENSIONS
+        ]
+    )
+
+
+def dedupe_paths_by_content(paths: Sequence[Path]) -> list[Path]:
+    seen_hashes: set[str] = set()
+    unique_paths: list[Path] = []
+    for path in sorted(paths):
+        try:
+            content = path.read_bytes()
+        except OSError:
+            continue
+        digest = hashlib.sha256(content).hexdigest()
+        if digest in seen_hashes:
+            continue
+        seen_hashes.add(digest)
+        unique_paths.append(path)
+    return unique_paths
+
+
+def render_codebase_context(ctx: ProjectContext, files: Sequence[Path], title: str = "# Codebase Context for Review") -> str:
+    lines = [title, ""]
+    lines.append("## Directory Structure")
+    lines.append("")
+    lines.append("```text")
+    lines.append(build_directory_tree(files, ctx.root))
+    lines.append("```")
+    lines.append("")
+    lines.append("## File Contents")
+    lines.append("")
+
+    if not files:
+        lines.append("(No code files matched)")
+        lines.append("")
+        return "\n".join(lines)
+
+    for path in sorted(files):
+        rel = path.relative_to(ctx.root)
+        if should_exclude_path(rel):
+            continue
+        content = read_text(path)
+        lines.append(f"### File: `{rel}`")
+        lines.append("")
+        lines.append(f"```{lang_for_path(path)}")
+        lines.append(content)
+        if not content.endswith("\n"):
+            lines.append("")
+        lines.append("```")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def render_performance_metrics_markdown(ctx: ProjectContext, metrics: Sequence[Path]) -> str:
+    lines = [
+        "# Performance Metrics",
+        "",
+        f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+        "## Files",
+        "",
+    ]
+    if not metrics:
+        lines.append("(No performance metrics found)")
+        lines.append("")
+        return "\n".join(lines)
+
+    for path in sorted(metrics):
+        rel = path.relative_to(ctx.root)
+        content = read_text(path)
+        lines.append(f"### File: `{rel}`")
+        lines.append("")
+        lines.append(f"```{lang_for_path(path)}")
+        lines.append(content)
+        if not content.endswith("\n"):
+            lines.append("")
+        lines.append("```")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def render_performance_metrics_json(ctx: ProjectContext, metrics: Sequence[Path]) -> str:
+    payload: dict[str, object] = {
+        "generated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "files": [],
+    }
+    files_payload: list[dict[str, object]] = []
+    for path in sorted(metrics):
+        rel = str(path.relative_to(ctx.root))
+        raw = read_text(path)
+        entry: dict[str, object] = {"path": rel}
+        try:
+            entry["data"] = json.loads(raw)
+        except json.JSONDecodeError:
+            entry["raw"] = raw
+        files_payload.append(entry)
+    payload["files"] = files_payload
+    return json.dumps(payload, indent=2)
+
+
+def render_performance_metrics(ctx: ProjectContext, metrics: Sequence[Path]) -> tuple[str, str]:
+    if not metrics:
+        return "performance_metrics.md", render_performance_metrics_markdown(ctx, metrics)
+    if all(path.suffix == ".json" for path in metrics):
+        return "performance_metrics.json", render_performance_metrics_json(ctx, metrics)
+    return "performance_metrics.md", render_performance_metrics_markdown(ctx, metrics)
 
 
 def resolve_codebase_context(ctx: ProjectContext, source: Path | None = None) -> Path:
@@ -1139,6 +1347,21 @@ def collate_design_evaluation(ctx: ProjectContext, downloads_dir: Path | None = 
     print(f"Collation complete: {builder.out_dir}")
     return builder.out_dir
 
+
+def collate_diff_context(ctx: ProjectContext, downloads_dir: Path | None = None) -> Path:
+    builder = ContextBuilder("diff_context", ctx, downloads_dir)
+
+    code_files = resolve_diff_code_files(ctx)
+    code_context = render_codebase_context(ctx, code_files)
+    builder.add_content(CODEBASE_CONTEXT_FILENAME, code_context)
+
+    metric_files = dedupe_paths_by_content(resolve_performance_metric_files(ctx))
+    metrics_name, metrics_content = render_performance_metrics(ctx, metric_files)
+    builder.add_content(metrics_name, metrics_content)
+
+    print(f"Collation complete: {builder.out_dir}")
+    return builder.out_dir
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate review and planning contexts.")
     parser.add_argument(
@@ -1176,6 +1399,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     design_parser = subparsers.add_parser("design", help="Collate design evaluation bundle")
     design_parser.set_defaults(func=cmd_design)
+
+    diff_parser = subparsers.add_parser("diff", help="Collate diff algorithm + performance bundle")
+    diff_parser.set_defaults(func=cmd_diff)
 
     context_parser = subparsers.add_parser("context", help="Generate review context markdown")
     context_parser.add_argument("--output", default=CODEBASE_CONTEXT_FILENAME, help="Output filename for context")
@@ -1222,6 +1448,10 @@ def cmd_remediate(ctx: ProjectContext, args: argparse.Namespace) -> None:
 
 def cmd_design(ctx: ProjectContext, args: argparse.Namespace) -> None:
     collate_design_evaluation(ctx, downloads_dir=args.downloads)
+
+
+def cmd_diff(ctx: ProjectContext, args: argparse.Namespace) -> None:
+    collate_diff_context(ctx, downloads_dir=args.downloads)
 
 
 def cmd_context(ctx: ProjectContext, args: argparse.Namespace) -> None:

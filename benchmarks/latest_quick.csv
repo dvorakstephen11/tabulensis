@@ -1,7 +1,7 @@
 test_name,total_time_ms,parse_time_ms,diff_time_ms,move_detection_time_ms,alignment_time_ms,cell_diff_time_ms,peak_memory_bytes,rows_processed,cells_compared,anchors_found,moves_detected
-perf_p1_large_dense,10,0,10,0,0,0,2857973,2000,20,1000,0
-perf_p2_large_noise,59,0,59,0,53,1,66935493,2000,19000,0,0
-perf_p3_adversarial_repetitive,30,0,30,0,14,0,6751808,2000,0,999,0
-perf_p4_99_percent_blank,2,0,2,0,2,0,529034,2000,0,999,0
-perf_p5_identical,12,0,12,0,0,0,9618462,2000,100000,0,0
-perf_preflight_low_similarity,179,0,179,0,0,131,87540757,12000,300000,0,0
+perf_p1_large_dense,5,0,5,0,0,0,2874798,2000,20,1000,0
+perf_p2_large_noise,55,0,55,0,51,0,66952318,2000,19000,0,0
+perf_p3_adversarial_repetitive,13,0,13,0,6,0,6768633,2000,0,999,0
+perf_p4_99_percent_blank,1,0,1,0,1,0,545859,2000,0,999,0
+perf_p5_identical,2,0,2,0,0,0,9635287,2000,100000,0,0
+perf_preflight_low_similarity,86,0,86,0,0,63,87557582,12000,300000,0,0

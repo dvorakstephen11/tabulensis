@@ -1,3 +1,6 @@
+
+#![feature(let_chains)]
+
 mod common;
 
 use common::{grid_from_numbers, single_sheet_workbook};

@@ -1,3 +1,5 @@
+#![feature(let_chains)]
+
 mod common;
 
 use common::{diff_fixture_pkgs, grid_from_numbers, sid, single_sheet_workbook};

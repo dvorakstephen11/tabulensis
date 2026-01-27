@@ -1,17 +1,17 @@
-updated_at: 2026-01-22
-last_task_id: 2026-01-15__011228__excel_diff__plan_next
+updated_at: 2026-01-24
+last_task_id: 2026-01-24__152144__excel_diff__plan_next
 
 # Repo summary
-Tabulensis is a Rust workspace that compares Excel workbooks and Power BI packages and emits structured diffs via CLI, library APIs, and a WebAssembly-powered web demo.
+Tabulensis is a Rust workspace for diffing Excel workbooks and Power BI packages, shipping a CLI, library API, and a WebAssembly-powered web demo intended as a top-of-funnel preview.
 
 # How to run
 ## Setup
-- Install Rust 1.85+ (see `README.md`).
+- Install Rust nightly `nightly-2025-02-20` (see `rust-toolchain.toml`).
 - Optional for scripts: Python 3.
 
 ## Dev
 - CLI (dev run): `cargo run -p tabulensis-cli -- diff old.xlsx new.xlsx`
-- Web demo (static): `python -m http.server 5179 --directory web`
+- Web demo (static): serve `web/` with any static server (no build step noted).
   - Dev port: 5179
 
 ## Test
@@ -21,6 +21,7 @@ Tabulensis is a Rust workspace that compares Excel workbooks and Power BI packag
 ## Build
 - CLI binary: `cargo build -p tabulensis-cli --profile release-cli`
 - Install locally: `cargo install --locked --path cli`
+- WASM build (for web demo): `wasm-pack build wasm --release --target web --out-dir ./web/wasm`
 
 # Deployment
 - Marketing/docs site: static pages deployed on Cloudflare (source: `public/`).
@@ -28,21 +29,22 @@ Tabulensis is a Rust workspace that compares Excel workbooks and Power BI packag
 - Support email: Fastmail manages `support@tabulensis.com`.
 
 # Current state
-- Core diff engine, CLI, and WASM/web demo are present and documented in `README.md`.
-- Desktop (wxDragon) app exists under `desktop/wx` but lacks a quick-start in repo-level docs.
-- No `APP_INTENT.md` found; repo intent inferred from `README.md`.
+- Core diff engine, CLI, and WASM/web demo are present; README covers CLI usage and testing.
+- Web demo assets live in `web/` with a worker-based WASM client, but no explicit dev server guidance.
+- Desktop app exists under `desktop/` (wxDragon) with limited top-level onboarding.
+- `APP_INTENT.md` now defines MVP and end-state product intent.
 
 # Risks / debt
-- Missing `APP_INTENT.md` makes product scope and MVP goals implicit rather than explicit.
-- Web demo/dev workflow lacks a documented dev server and build steps (static only).
-- Large test surface may be slow; no lightweight smoke test documented.
+- Web demo workflow lacks a documented build+serve loop (WASM build + static server).
+- Desktop app onboarding/docs are fragmented, raising ramp-up cost for contributors.
+- Test surface is large; no fast smoke test command is documented for quick verification.
 
 # Next best tasks
-1. [P0] Add `APP_INTENT.md` describing the MVP scope, primary user flows (CLI, web demo), and non-goals.
-2. [P1] Document web demo workflow (serve/build/wasm steps) and confirm dev port 5179 in `README.md` or `docs/index.md`.
-3. [P1] Add a lightweight smoke test script (e.g., diff two fixtures) and document it alongside `scripts/dev_test.py`.
-4. [P2] Add quick-start notes for the desktop (wxDragon) app in `desktop/wx/README.md` or top-level docs.
-5. [P2] Capture known limitations (PBIX tabular-only, XLSB unsupported) in a concise “Support boundaries” doc section for user clarity.
+1. [P0] Document the web demo workflow (WASM build + static server) and keep dev port 5179 consistent in top-level docs.
+2. [P1] Add a lightweight smoke test command (fixture diff) and document it alongside `scripts/dev_test.py`.
+3. [P1] Add a concise desktop quick-start for `desktop/` (build/run, status, known gaps).
+4. [P2] Capture support boundaries (XLSB unsupported, PBIX limits) in a short “Support boundaries” section.
+5. [P2] Create a short contributor note describing how to refresh `web/wasm` artifacts for local UI changes.
 
 # Tradeoffs
-- Planning-only pass used repo docs and structure; no `APP_INTENT.md` available to ground intent.
+- Planning-only pass; no changes to source or docs beyond this state file.

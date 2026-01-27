@@ -1,79 +1,37 @@
 {
-  "timestamp": "2025-12-22T19:15:31.959567+00:00",
-  "git_commit": "ff46f641851b",
-  "git_branch": "2025-12-24a-design-improvements",
+  "timestamp": "2026-01-23T22:45:41.514759+00:00",
+  "git_commit": "dbafe3440ab6",
+  "git_branch": "desktop-size-trim",
+  "suite": "gate",
   "full_scale": true,
   "tests": {
-    "perf_50k_99_percent_blank": {
-      "total_time_ms": 155,
-      "parse_time_ms": 0,
-      "diff_time_ms": 155,
-      "move_detection_time_ms": 0,
-      "alignment_time_ms": 0,
-      "cell_diff_time_ms": 0,
-      "peak_memory_bytes": 26002562,
-      "rows_processed": 100000,
-      "cells_compared": 10,
-      "anchors_found": 0,
-      "moves_detected": 0
-    },
-    "perf_50k_adversarial_repetitive": {
-      "total_time_ms": 2101,
-      "parse_time_ms": 0,
-      "diff_time_ms": 2101,
-      "move_detection_time_ms": 0,
-      "alignment_time_ms": 0,
-      "cell_diff_time_ms": 0,
-      "peak_memory_bytes": 350257784,
-      "rows_processed": 100000,
-      "cells_compared": 350,
-      "anchors_found": 0,
-      "moves_detected": 0
-    },
-    "perf_50k_completely_different": {
-      "total_time_ms": 6092,
-      "parse_time_ms": 0,
-      "diff_time_ms": 6092,
-      "move_detection_time_ms": 0,
-      "alignment_time_ms": 0,
-      "cell_diff_time_ms": 3009,
-      "peak_memory_bytes": 1629946214,
-      "rows_processed": 100000,
-      "cells_compared": 5000000,
-      "anchors_found": 0,
-      "moves_detected": 0
-    },
     "perf_50k_dense_single_edit": {
-      "total_time_ms": 3486,
+      "total_time_ms": 402,
       "parse_time_ms": 0,
-      "diff_time_ms": 3486,
+      "diff_time_ms": 402,
+      "signature_build_time_ms": 329,
       "move_detection_time_ms": 0,
       "alignment_time_ms": 0,
       "cell_diff_time_ms": 0,
-      "peak_memory_bytes": 698057139,
+      "op_emit_time_ms": 0,
+      "report_serialize_time_ms": 0,
+      "peak_memory_bytes": 487094160,
+      "grid_storage_bytes": 240000000,
+      "string_pool_bytes": 203,
+      "op_buffer_bytes": 448,
+      "alignment_buffer_bytes": 168527200,
       "rows_processed": 100000,
       "cells_compared": 700,
       "anchors_found": 0,
-      "moves_detected": 0
-    },
-    "perf_50k_identical": {
-      "total_time_ms": 714,
-      "parse_time_ms": 0,
-      "diff_time_ms": 714,
-      "move_detection_time_ms": 0,
-      "alignment_time_ms": 0,
-      "cell_diff_time_ms": 0,
-      "peak_memory_bytes": 480015686,
-      "rows_processed": 100000,
-      "cells_compared": 5000000,
-      "anchors_found": 0,
-      "moves_detected": 0
+      "moves_detected": 0,
+      "hash_lookups_est": 0,
+      "allocations_est": 0
     }
   },
   "summary": {
-    "total_tests": 5,
-    "total_time_ms": 12548,
-    "total_rows_processed": 500000,
-    "total_cells_compared": 10001060
+    "total_tests": 1,
+    "total_time_ms": 402,
+    "total_rows_processed": 100000,
+    "total_cells_compared": 700
   }
 }

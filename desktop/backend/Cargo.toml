@@ -11,7 +11,7 @@ serde_json = "1.0"
 excel_diff = { path = "../../core", default-features = false, features = ["excel-open-xml", "vba"] }
 ui_payload = { path = "../../ui_payload" }
 rusqlite = { version = "0.31", features = ["bundled"] }
-uuid = { version = "1.7", features = ["v4", "serde"] }
+uuid = { version = "1.7", features = ["v4"] }
 time = { version = "0.3", features = ["formatting"] }
 thiserror = "1.0"
 rust_xlsxwriter = "0.71"

@@ -1,2 +1,2 @@
 test_name,total_time_ms,parse_time_ms,diff_time_ms,move_detection_time_ms,alignment_time_ms,cell_diff_time_ms,peak_memory_bytes,rows_processed,cells_compared,anchors_found,moves_detected
-perf_50k_dense_single_edit,1136,0,1136,0,0,0,487077335,100000,700,0,0
+perf_50k_dense_single_edit,404,0,404,0,0,0,487094160,100000,700,0,0
