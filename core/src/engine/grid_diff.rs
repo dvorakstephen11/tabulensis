@@ -1362,26 +1362,39 @@ fn preflight_decision_from_grids(
         };
     }
 
-    let old_signatures = row_signatures_for_grid(old);
-    let new_signatures = row_signatures_for_grid(new);
+    let dense_scan = should_use_dense_row_scan(old, new);
+    if dense_scan {
+        let max_mismatches = config.preflight.preflight_in_order_mismatch_max as usize;
+        let mismatched_rows =
+            mismatched_rows_by_content_limit(old, new, max_mismatches.saturating_add(1));
+        let in_order_mismatches = mismatched_rows.len();
+        let in_order_matches = nrows.saturating_sub(in_order_mismatches);
+        let in_order_match_ratio = if nrows > 0 {
+            in_order_matches as f64 / nrows as f64
+        } else {
+            1.0
+        };
 
-    let (in_order_matches, old_sig_set, new_sig_set) =
-        compute_row_signature_stats(&old_signatures, &new_signatures);
+        if in_order_mismatches <= max_mismatches
+            && in_order_match_ratio >= config.preflight.preflight_in_order_match_ratio_min
+        {
+            let (multiset_equal, multiset_edit_distance_rows) =
+                multiset_equal_and_edit_distance_for_mismatched_rows(old, new, &mismatched_rows);
 
-    let in_order_mismatches = nrows.saturating_sub(in_order_matches);
-    let in_order_match_ratio = if nrows > 0 {
-        in_order_matches as f64 / nrows as f64
-    } else {
-        1.0
-    };
+            let reorder_suspected = (in_order_mismatches as u64) > multiset_edit_distance_rows;
+            let near_identical = !multiset_equal && !reorder_suspected;
 
-    let intersection_size = old_sig_set.intersection(&new_sig_set).count();
-    let union_size = old_sig_set.union(&new_sig_set).count();
-    let jaccard = if union_size > 0 {
-        intersection_size as f64 / union_size as f64
-    } else {
-        1.0
-    };
+            if near_identical {
+                return PreflightLite {
+                    decision: PreflightDecision::ShortCircuitNearIdentical,
+                    mismatched_rows,
+                };
+            }
+        }
+    }
+
+    let sample_rows = sample_row_indices(old.nrows, 4096);
+    let jaccard = sample_row_signature_jaccard(old, new, &sample_rows);
 
     if jaccard < config.preflight.bailout_similarity_threshold {
         return PreflightLite {
@@ -1390,27 +1403,156 @@ fn preflight_decision_from_grids(
         };
     }
 
-    let (multiset_equal, multiset_edit_distance_rows) =
-        multiset_equal_and_edit_distance(&old_signatures, &new_signatures);
+    if !dense_scan {
+        let old_signatures = row_signatures_for_grid(old);
+        let new_signatures = row_signatures_for_grid(new);
 
-    let reorder_suspected = (in_order_mismatches as u64) > multiset_edit_distance_rows;
+        let (in_order_matches, old_sig_set, new_sig_set) =
+            compute_row_signature_stats(&old_signatures, &new_signatures);
 
-    let near_identical = in_order_mismatches
-        <= config.preflight.preflight_in_order_mismatch_max as usize
-        && in_order_match_ratio >= config.preflight.preflight_in_order_match_ratio_min
-        && !multiset_equal
-        && !reorder_suspected;
-
-    if near_identical {
-        return PreflightLite {
-            decision: PreflightDecision::ShortCircuitNearIdentical,
-            mismatched_rows: mismatched_rows_from_signatures(&old_signatures, &new_signatures),
+        let in_order_mismatches = nrows.saturating_sub(in_order_matches);
+        let in_order_match_ratio = if nrows > 0 {
+            in_order_matches as f64 / nrows as f64
+        } else {
+            1.0
         };
+
+        let intersection_size = old_sig_set.intersection(&new_sig_set).count();
+        let union_size = old_sig_set.union(&new_sig_set).count();
+        let jaccard = if union_size > 0 {
+            intersection_size as f64 / union_size as f64
+        } else {
+            1.0
+        };
+
+        if jaccard < config.preflight.bailout_similarity_threshold {
+            return PreflightLite {
+                decision: PreflightDecision::ShortCircuitDissimilar,
+                mismatched_rows: Vec::new(),
+            };
+        }
+
+        let (multiset_equal, multiset_edit_distance_rows) =
+            multiset_equal_and_edit_distance(&old_signatures, &new_signatures);
+
+        let reorder_suspected = (in_order_mismatches as u64) > multiset_edit_distance_rows;
+
+        let near_identical = in_order_mismatches
+            <= config.preflight.preflight_in_order_mismatch_max as usize
+            && in_order_match_ratio >= config.preflight.preflight_in_order_match_ratio_min
+            && !multiset_equal
+            && !reorder_suspected;
+
+        if near_identical {
+            return PreflightLite {
+                decision: PreflightDecision::ShortCircuitNearIdentical,
+                mismatched_rows: mismatched_rows_from_signatures(&old_signatures, &new_signatures),
+            };
+        }
     }
 
     PreflightLite {
         decision: PreflightDecision::RunFullPipeline,
         mismatched_rows: Vec::new(),
+    }
+}
+
+fn should_use_dense_row_scan(old: &Grid, new: &Grid) -> bool {
+    let max_cells = (old.nrows as u64).saturating_mul(old.ncols as u64);
+    if max_cells == 0 {
+        return false;
+    }
+    let old_dense = (old.cell_count() as u64) > (max_cells / 2);
+    let new_dense = (new.cell_count() as u64) > (max_cells / 2);
+    old_dense && new_dense
+}
+
+fn mismatched_rows_by_content_limit(old: &Grid, new: &Grid, max_out: usize) -> Vec<u32> {
+    let mut out = Vec::new();
+    for row in 0..old.nrows {
+        if !rows_content_equal(old, new, row) {
+            out.push(row);
+            if out.len() >= max_out {
+                break;
+            }
+        }
+    }
+    out
+}
+
+fn rows_content_equal(old: &Grid, new: &Grid, row: u32) -> bool {
+    for col in 0..old.ncols {
+        if !cells_content_equal(old.get(row, col), new.get(row, col)) {
+            return false;
+        }
+    }
+    true
+}
+
+fn multiset_equal_and_edit_distance_for_mismatched_rows(
+    old: &Grid,
+    new: &Grid,
+    mismatched_rows: &[u32],
+) -> (bool, u64) {
+    let mut delta: HashMap<RowSignature, i32> = HashMap::new();
+    for &row in mismatched_rows {
+        let a = old.compute_row_signature(row);
+        let b = new.compute_row_signature(row);
+        *delta.entry(a).or_insert(0) += 1;
+        *delta.entry(b).or_insert(0) -= 1;
+    }
+
+    let mut equal = true;
+    let mut sum_abs: u64 = 0;
+    for (_sig, d) in delta {
+        if d != 0 {
+            equal = false;
+            sum_abs = sum_abs.saturating_add(d.unsigned_abs() as u64);
+        }
+    }
+
+    (equal, sum_abs / 2)
+}
+
+fn sample_row_indices(nrows: u32, max_samples: usize) -> Vec<u32> {
+    let n = nrows as usize;
+    if n == 0 {
+        return Vec::new();
+    }
+    let target = max_samples.min(n);
+    let step = (n / target).max(1);
+
+    let mut out = Vec::with_capacity(target + 1);
+    let mut idx = 0usize;
+    while idx < n && out.len() < target {
+        out.push(idx as u32);
+        idx = idx.saturating_add(step);
+    }
+
+    if *out.last().unwrap_or(&0) != nrows.saturating_sub(1) {
+        out.push(nrows.saturating_sub(1));
+    }
+
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+fn sample_row_signature_jaccard(old: &Grid, new: &Grid, sample_rows: &[u32]) -> f64 {
+    let mut a = HashSet::with_capacity(sample_rows.len());
+    let mut b = HashSet::with_capacity(sample_rows.len());
+
+    for &row in sample_rows {
+        a.insert(old.compute_row_signature(row));
+        b.insert(new.compute_row_signature(row));
+    }
+
+    let intersection = a.intersection(&b).count();
+    let union = a.len() + b.len() - intersection;
+    if union == 0 {
+        1.0
+    } else {
+        intersection as f64 / union as f64
     }
 }
 
