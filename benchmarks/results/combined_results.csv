@@ -255,3 +255,10 @@ source_file,timestamp,git_commit,git_branch,full_scale,test_name,total_time_ms,p
 2026-01-27_212351_fullscale.json,2026-01-27T21:23:51.276434+00:00,abdfe1896398,algo_improvement,True,perf_50k_dense_single_edit,807,0,807,0,0,0,487104988,100000,700,0,0
 2026-01-27_212351_fullscale.json,2026-01-27T21:23:51.276434+00:00,abdfe1896398,algo_improvement,True,perf_50k_identical,215,0,215,0,0,0,480033375,100000,5000000,0,0
 2026-01-27_212351_fullscale.json,2026-01-27T21:23:51.276434+00:00,abdfe1896398,algo_improvement,True,_SUMMARY_,3578,,,,,,,600000,10001750,,
+2026-01-27_222859_fullscale.json,2026-01-27T22:28:59.775223+00:00,a6e0acbad05f,HEAD,True,perf_50k_99_percent_blank,251,0,251,0,0,0,15745515,100000,700,0,0
+2026-01-27_222859_fullscale.json,2026-01-27T22:28:59.775223+00:00,a6e0acbad05f,HEAD,True,perf_50k_adversarial_repetitive,479,0,479,0,0,0,243867297,100000,350,0,0
+2026-01-27_222859_fullscale.json,2026-01-27T22:28:59.775223+00:00,a6e0acbad05f,HEAD,True,perf_50k_alignment_block_move,1202,0,1202,50,0,74,335236959,100000,0,0,1
+2026-01-27_222859_fullscale.json,2026-01-27T22:28:59.775223+00:00,a6e0acbad05f,HEAD,True,perf_50k_completely_different,1202,0,1202,0,0,386,483860927,100000,5000000,0,0
+2026-01-27_222859_fullscale.json,2026-01-27T22:28:59.775223+00:00,a6e0acbad05f,HEAD,True,perf_50k_dense_single_edit,1047,0,1047,0,0,0,487104988,100000,700,0,0
+2026-01-27_222859_fullscale.json,2026-01-27T22:28:59.775223+00:00,a6e0acbad05f,HEAD,True,perf_50k_identical,366,0,366,0,0,0,480033375,100000,5000000,0,0
+2026-01-27_222859_fullscale.json,2026-01-27T22:28:59.775223+00:00,a6e0acbad05f,HEAD,True,_SUMMARY_,4547,,,,,,,600000,10001750,,
