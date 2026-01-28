@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
 """
-Package the Linux CLI into a tar.gz for download.
-
-Example:
-  python scripts/package_cli_linux.py --target x86_64-unknown-linux-gnu
+Package the Windows CLI into a zip for download.
 """
-
 from __future__ import annotations
 
 import argparse
@@ -30,20 +26,18 @@ def read_version(cargo_toml: Path) -> str:
 
 def arch_from_target(target: str) -> str:
     mapping = {
-        "x86_64-unknown-linux-gnu": "x86_64",
-        "aarch64-unknown-linux-gnu": "arm64",
-        "x86_64-unknown-linux-musl": "x86_64",
-        "aarch64-unknown-linux-musl": "arm64",
+        "x86_64-pc-windows-msvc": "x86_64",
+        "aarch64-pc-windows-msvc": "arm64",
     }
     return mapping.get(target, target)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Package the Linux CLI tar.gz")
+    parser = argparse.ArgumentParser(description="Package the Windows CLI zip")
     parser.add_argument("--target", required=True, help="Rust target triple")
     parser.add_argument("--profile", default="release-cli", help="Cargo profile name")
     parser.add_argument("--out-dir", default="target/dist", help="Output directory")
-    parser.add_argument("--bin-name", default="tabulensis", help="Binary name")
+    parser.add_argument("--bin-name", default="tabulensis.exe", help="Binary name")
     parser.add_argument("--no-build", action="store_true", help="Skip cargo build")
     parser.add_argument("--no-locked", action="store_true", help="Build without --locked")
     parser.add_argument("--version", default=None, help="Override version string")
@@ -68,20 +62,14 @@ def main() -> int:
             cmd.append("--locked")
         run(cmd)
 
-    bin_path = (
-        repo_root
-        / "target"
-        / args.target
-        / args.profile
-        / args.bin_name
-    )
+    bin_path = repo_root / "target" / args.target / args.profile / args.bin_name
     if not bin_path.exists():
         raise FileNotFoundError(f"Binary not found at {bin_path}")
 
     out_dir = repo_root / args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    artifact_name = f"tabulensis-v{version}-linux-{arch}"
+    artifact_name = f"tabulensis-v{version}-windows-{arch}"
     stage_dir = out_dir / artifact_name
 
     if stage_dir.exists():
@@ -93,16 +81,17 @@ def main() -> int:
     shutil.copy2(repo_root / "LICENSE.txt", stage_dir / "LICENSE.txt")
     shutil.copy2(repo_root / "THIRD_PARTY_NOTICES.txt", stage_dir / "THIRD_PARTY_NOTICES.txt")
 
-    tar_path = out_dir / f"{artifact_name}.tar.gz"
-    if tar_path.exists():
-        tar_path.unlink()
+    zip_path = out_dir / f"{artifact_name}.zip"
+    if zip_path.exists():
+        zip_path.unlink()
 
-    import tarfile
+    import zipfile
 
-    with tarfile.open(tar_path, "w:gz") as tar:
-        tar.add(stage_dir, arcname=artifact_name)
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for item in stage_dir.iterdir():
+            zf.write(item, arcname=f"{artifact_name}/{item.name}")
 
-    print(f"Created {tar_path}")
+    print(f"Created {zip_path}")
     return 0
 
 

@@ -35,6 +35,9 @@
       </object>
       <object class="wxMenu" name="help_menu">
         <label>&amp;Help</label>
+        <object class="wxMenuItem" name="license_menu">
+          <label>License...</label>
+        </object>
         <object class="wxMenuItem" name="about_menu">
           <label>About</label>
         </object>

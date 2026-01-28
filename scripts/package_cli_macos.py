@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
 """
-Package the Linux CLI into a tar.gz for download.
-
-Example:
-  python scripts/package_cli_linux.py --target x86_64-unknown-linux-gnu
+Package the macOS CLI into a tar.gz for download.
 """
-
 from __future__ import annotations
 
 import argparse
@@ -30,16 +26,15 @@ def read_version(cargo_toml: Path) -> str:
 
 def arch_from_target(target: str) -> str:
     mapping = {
-        "x86_64-unknown-linux-gnu": "x86_64",
-        "aarch64-unknown-linux-gnu": "arm64",
-        "x86_64-unknown-linux-musl": "x86_64",
-        "aarch64-unknown-linux-musl": "arm64",
+        "x86_64-apple-darwin": "x86_64",
+        "aarch64-apple-darwin": "arm64",
+        "universal-apple-darwin": "universal",
     }
     return mapping.get(target, target)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Package the Linux CLI tar.gz")
+    parser = argparse.ArgumentParser(description="Package the macOS CLI tar.gz")
     parser.add_argument("--target", required=True, help="Rust target triple")
     parser.add_argument("--profile", default="release-cli", help="Cargo profile name")
     parser.add_argument("--out-dir", default="target/dist", help="Output directory")
@@ -68,20 +63,14 @@ def main() -> int:
             cmd.append("--locked")
         run(cmd)
 
-    bin_path = (
-        repo_root
-        / "target"
-        / args.target
-        / args.profile
-        / args.bin_name
-    )
+    bin_path = repo_root / "target" / args.target / args.profile / args.bin_name
     if not bin_path.exists():
         raise FileNotFoundError(f"Binary not found at {bin_path}")
 
     out_dir = repo_root / args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    artifact_name = f"tabulensis-v{version}-linux-{arch}"
+    artifact_name = f"tabulensis-v{version}-macos-{arch}"
     stage_dir = out_dir / artifact_name
 
     if stage_dir.exists():

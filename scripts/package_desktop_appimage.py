@@ -127,6 +127,12 @@ def main() -> int:
 
     shutil.copy2(bin_path, appdir_root / "usr" / "bin" / args.bin_name)
 
+    doc_dir = appdir_root / "usr" / "share" / "doc" / "tabulensis"
+    doc_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(repo_root / "README.md", doc_dir / "README.md")
+    shutil.copy2(repo_root / "LICENSE.txt", doc_dir / "LICENSE.txt")
+    shutil.copy2(repo_root / "THIRD_PARTY_NOTICES.txt", doc_dir / "THIRD_PARTY_NOTICES.txt")
+
     desktop_entry = appdir_root / "tabulensis.desktop"
     desktop_entry.write_text(
         "[Desktop Entry]\n"

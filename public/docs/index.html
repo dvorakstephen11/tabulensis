@@ -33,12 +33,14 @@
       <section class="section">
         <div>
           <h2>Quickstart</h2>
-          <div class="note">tabulensis diff old.xlsx new.xlsx</div>
-          <p>Use <code>--format json</code> or <code>--format jsonl</code> to integrate with tooling.</p>
+          <div class="note">tabulensis license activate &lt;KEY&gt;</div>
+          <p>Activate your license first, then run diffs. Use <code>--format json</code> or <code>--format jsonl</code> to integrate with tooling.</p>
         </div>
         <div class="card">
           <h3>Popular commands</h3>
           <ul>
+            <li><code>tabulensis license status</code></li>
+            <li><code>tabulensis license deactivate</code></li>
             <li><code>tabulensis diff a.xlsx b.xlsx --format json</code></li>
             <li><code>tabulensis diff a.xlsx b.xlsx --git-diff</code></li>
             <li><code>tabulensis info workbook.xlsx --queries</code></li>
@@ -61,6 +63,21 @@
         </div>
       </section>
 
+      <section class="section">
+        <div>
+          <h2>Licensing</h2>
+          <p>Licenses allow up to two active devices. Offline access is granted with a short-lived token.</p>
+        </div>
+        <div class="card">
+          <h3>Activation flow</h3>
+          <ul>
+            <li>Buy or start a trial from <a href="/download">Download</a></li>
+            <li>Run <code>tabulensis license activate &lt;KEY&gt;</code></li>
+            <li>Use <code>tabulensis license status</code> to confirm</li>
+          </ul>
+        </div>
+      </section>
+
       <div class="page-links">
         <a href="/download">Get the CLI</a>
         <a href="/support">Support</a>
@@ -68,7 +85,7 @@
 
       <footer>
         <div>Need deeper docs? Keep them in the repo for now.</div>
-        <div>&copy; 2025 Tabulensis</div>
+        <div>&copy; 2026 Tabulensis</div>
       </footer>
     </div>
   </body>

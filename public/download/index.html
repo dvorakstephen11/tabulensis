@@ -24,24 +24,62 @@
         </nav>
       </header>
 
-      <h1 class="page-title">Download the CLI</h1>
+      <h1 class="page-title">Download &amp; Activate</h1>
       <p class="page-body">
-        Grab the latest release binaries or install from source with Rust. Everything runs locally
-        and your workbooks stay on your machine.
+        Start a trial, receive a license key, then download the CLI or desktop app.
+        Everything runs locally and your workbooks stay on your machine.
       </p>
+
+      <div class="checkout-row">
+        <input id="checkout-email" class="input" type="email" placeholder="Email for license delivery">
+        <button id="checkout-btn" class="cta primary" data-checkout-url="/api/checkout/start">Start trial / Buy</button>
+        <a class="cta" href="/docs">Docs</a>
+      </div>
+      <div id="checkout-status" class="note" style="display:none;"></div>
       <div class="card-grid">
         <div class="card">
-          <h3>Release binaries</h3>
-          <p>macOS, Windows, and Linux assets are published with every release.</p>
+          <h3>Windows</h3>
+          <p>Download the latest Windows zip or exe from the releases page.</p>
+          <div class="page-links">
+            <a href="/download">Windows release</a>
+          </div>
         </div>
         <div class="card">
-          <h3>From source</h3>
+          <h3>macOS</h3>
+          <p>Universal macOS binaries are available with each release.</p>
+          <div class="page-links">
+            <a href="/download">macOS release</a>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Linux</h3>
+          <p>Download the tar.gz or AppImage package for Linux.</p>
+          <div class="page-links">
+            <a href="/download">Linux release</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div>
+          <h2>Activation steps</h2>
+          <p>After checkout, you will receive a license key. Activate it before running diffs.</p>
+        </div>
+        <div class="card">
+          <h3>CLI activation</h3>
+          <div class="note">tabulensis license activate &lt;KEY&gt;</div>
+          <p>Check status with <code>tabulensis license status</code>.</p>
+        </div>
+      </div>
+
+      <div class="section">
+        <div>
+          <h2>From source</h2>
           <p>Install the CLI directly from the repo when you want the freshest build.</p>
-          <div class="note">cargo install --locked --path cli</div>
         </div>
         <div class="card">
-          <h3>Rust crate</h3>
-          <p>Use the core library in your own tooling via the <code>excel_diff</code> crate.</p>
+          <div class="note">cargo install --locked --path cli</div>
+          <p>Use the <code>excel_diff</code> crate if you are embedding diffs.</p>
         </div>
       </div>
       <p class="page-body">
@@ -49,14 +87,58 @@
         <a href="/eula">EULA</a>.
       </p>
       <div class="page-links">
-        <a href="/docs">CLI reference</a>
-        <a href="/support">Need help?</a>
+        <a href="/download/success">Post-checkout help</a>
+        <a href="/support/resend">Resend license</a>
+        <a href="/support/billing">Cancel or update billing</a>
       </div>
 
       <footer>
         <div>Shipping diffs without the noise.</div>
-        <div>&copy; 2025 Tabulensis</div>
+        <div>&copy; 2026 Tabulensis</div>
       </footer>
     </div>
+    <script type="module">
+      const btn = document.getElementById("checkout-btn");
+      const status = document.getElementById("checkout-status");
+      const emailInput = document.getElementById("checkout-email");
+
+      async function startCheckout() {
+        if (!btn) return;
+        btn.disabled = true;
+        btn.textContent = "Starting checkout...";
+        if (status) {
+          status.style.display = "none";
+          status.textContent = "";
+        }
+        try {
+          const res = await fetch(btn.dataset.checkoutUrl || "/api/checkout/start", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email: emailInput?.value || undefined }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data?.error || "Checkout failed");
+          }
+          if (data.checkout_url) {
+            window.location.href = data.checkout_url;
+            return;
+          }
+          throw new Error("Missing checkout URL");
+        } catch (err) {
+          if (status) {
+            status.style.display = "block";
+            status.textContent = String(err);
+          }
+        } finally {
+          btn.disabled = false;
+          btn.textContent = "Start trial / Buy";
+        }
+      }
+
+      if (btn) {
+        btn.addEventListener("click", startCheckout);
+      }
+    </script>
   </body>
 </html>

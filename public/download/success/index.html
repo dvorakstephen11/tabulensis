@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Activation | Tabulensis</title>
+    <meta name="description" content="Activate your Tabulensis license after checkout.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../styles.css">
+  </head>
+  <body>
+    <div class="shell">
+      <header>
+        <div class="brand">Tabulensis</div>
+        <nav>
+          <a href="/download">Download</a>
+          <a href="/docs">Docs</a>
+          <a href="/support">Support</a>
+          <a href="/privacy">Privacy</a>
+          <a href="/terms">Terms</a>
+          <a href="/eula">EULA</a>
+        </nav>
+      </header>
+
+      <h1 class="page-title">Thanks! Activate your license</h1>
+      <p class="page-body">
+        Your checkout is complete. Use your license key to activate Tabulensis on this device.
+      </p>
+
+      <div class="card-grid">
+        <div class="card">
+          <h3>Your license key</h3>
+          <p id="license-key" class="note">Waiting for key...</p>
+          <p class="page-body">If this stays blank, check your email or use the resend form.</p>
+        </div>
+        <div class="card">
+          <h3>CLI activation</h3>
+          <div class="note">tabulensis license activate &lt;KEY&gt;</div>
+          <p>Then run <code>tabulensis license status</code> to confirm.</p>
+        </div>
+        <div class="card">
+          <h3>Desktop activation</h3>
+          <p>Open the app and go to <strong>Help → License</strong> to activate.</p>
+        </div>
+      </div>
+
+      <div class="page-links">
+        <a href="/download">Downloads</a>
+        <a href="/support/resend">Resend license</a>
+        <a href="/support/billing">Billing &amp; cancel</a>
+      </div>
+
+      <footer>
+        <div>Activation issues? We are here to help.</div>
+        <div>&copy; 2026 Tabulensis</div>
+      </footer>
+    </div>
+    <script type="module">
+      const output = document.getElementById("license-key");
+      const params = new URLSearchParams(window.location.search);
+      const licenseKey = params.get("license_key");
+      const sessionId = params.get("session_id");
+
+      async function loadBySession() {
+        if (!sessionId) return;
+        try {
+          const res = await fetch(`/api/checkout/status?session_id=${encodeURIComponent(sessionId)}`);
+          const data = await res.json();
+          if (data?.license_key) {
+            output.textContent = data.license_key;
+          } else {
+            output.textContent = "Check your email for the license key.";
+          }
+        } catch (err) {
+          output.textContent = "Check your email for the license key.";
+        }
+      }
+
+      if (output) {
+        if (licenseKey) {
+          output.textContent = licenseKey;
+        } else {
+          loadBySession();
+        }
+      }
+    </script>
+  </body>
+</html>

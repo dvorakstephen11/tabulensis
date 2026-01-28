@@ -13,3 +13,4 @@ ui_payload = { path = "../../ui_payload" }
 serde_json = "1.0"
 log = "0.4"
 quick-xml = "0.32"
+license_client = { path = "../../license_client" }

@@ -1,0 +1,11 @@
+Tabulensis Proprietary License Notice
+
+Copyright (c) 2026 Tabulensis
+All rights reserved.
+
+This software is proprietary and licensed, not sold.
+Use of this software is subject to the Tabulensis End User License Agreement (EULA)
+available at https://tabulensis.com/eula and the Terms of Service at
+https://tabulensis.com/terms.
+
+Unauthorized copying, distribution, or use is prohibited.

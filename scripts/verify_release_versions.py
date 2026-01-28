@@ -68,8 +68,17 @@ def main() -> int:
     parser.add_argument(
         "--crates",
         nargs="*",
-        default=["core", "cli", "wasm", "ui_payload", "desktop/backend", "desktop/wx"],
-        help="Crate directories to check (default: core cli wasm ui_payload desktop/backend desktop/wx)",
+        default=[
+            "core",
+            "cli",
+            "wasm",
+            "ui_payload",
+            "desktop/backend",
+            "desktop/wx",
+            "license_client",
+            "license_service",
+        ],
+        help="Crate directories to check (default: core cli wasm ui_payload desktop/backend desktop/wx license_client license_service)",
     )
     args = parser.parse_args()
 

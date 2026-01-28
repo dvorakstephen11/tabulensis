@@ -17,6 +17,7 @@ use ui_payload::{
     DiffOutcome, DiffOutcomeConfig, DiffOutcomeMode, DiffPreset, SummaryMeta, SummarySink,
     limits_from_config, summarize_report,
 };
+use license_client::LicenseClient;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Verbosity {
@@ -55,6 +56,11 @@ pub fn run(
     max_ops: Option<usize>,
     metrics_json: Option<String>,
 ) -> Result<ExitCode> {
+    let license_client = LicenseClient::from_env().context("Failed to initialize license client")?;
+    license_client
+        .ensure_valid_or_refresh()
+        .context("License check failed. Run `tabulensis license activate <KEY>`.")?;
+
     if fast && precise {
         bail!("Cannot use both --fast and --precise flags together");
     }

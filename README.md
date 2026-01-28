@@ -114,6 +114,22 @@ tabulensis info workbook.xlsx            # Show sheets
 tabulensis info workbook.xlsx --queries  # Include Power Query info
 ```
 
+## Licensing
+
+Tabulensis requires activation before running diffs.
+
+```bash
+tabulensis license activate <KEY>
+tabulensis license status
+tabulensis license deactivate
+```
+
+Environment variables:
+- `TABULENSIS_LICENSE_BASE_URL` (default: https://license.tabulensis.com)
+- `TABULENSIS_LICENSE_PUBLIC_KEY` (Ed25519 public key, base64)
+- `TABULENSIS_LICENSE_SKIP=1` (dev-only bypass)
+- `TABULENSIS_LICENSE_OFFLINE=1` (prevent refresh, require valid local token)
+
 ### Exit Codes
 
 - `0`: Files are identical
@@ -171,6 +187,8 @@ For large workbooks, prefer streaming output (`diff_streaming`) and consider set
 - Architecture: [docs/architecture.md](docs/architecture.md)
 - Migration guide: [docs/migration.md](docs/migration.md)
 - Release readiness: [docs/release_readiness.md](docs/release_readiness.md)
+- Licensing service: [docs/licensing_service.md](docs/licensing_service.md)
+- Ops: [docs/operations.md](docs/operations.md)
 
 ## Testing
 

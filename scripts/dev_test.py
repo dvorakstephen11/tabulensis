@@ -1,11 +1,12 @@
+import os
 import shlex
 import subprocess
 import sys
 
 
-def run(cmd: list[str]) -> None:
+def run(cmd: list[str], env: dict | None = None) -> None:
     print(f"+ {' '.join(shlex.quote(part) for part in cmd)}", flush=True)
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True, env=env)
 
 
 def main() -> int:
@@ -30,7 +31,8 @@ def main() -> int:
                 "fixtures/manifest_cli_tests.lock.json",
             ]
         )
-        run(["cargo", "test", "--workspace"])
+        test_env = dict(**os.environ, TABULENSIS_LICENSE_SKIP="1")
+        run(["cargo", "test", "--workspace"], env=test_env)
     except subprocess.CalledProcessError as exc:
         return exc.returncode
     return 0

@@ -13,6 +13,10 @@ __pycache__/
 # Local scratch
 tmp/
 corpus_private/
+license_service/data/
+*.sqlite
+*.sqlite-journal
+.env
 
 # Shared Generated Data
 fixtures/generated/*.xlsx

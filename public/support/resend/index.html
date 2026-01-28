@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Resend License | Tabulensis</title>
+    <meta name="description" content="Resend your Tabulensis license key.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../styles.css">
+  </head>
+  <body>
+    <div class="shell">
+      <header>
+        <div class="brand">Tabulensis</div>
+        <nav>
+          <a href="/download">Download</a>
+          <a href="/docs">Docs</a>
+          <a href="/support">Support</a>
+          <a href="/privacy">Privacy</a>
+          <a href="/terms">Terms</a>
+          <a href="/eula">EULA</a>
+        </nav>
+      </header>
+
+      <h1 class="page-title">Resend your license</h1>
+      <p class="page-body">
+        Enter the email address used at checkout or your license key. We will resend it shortly.
+      </p>
+
+      <div class="card">
+        <div class="form-grid">
+          <input id="resend-email" class="input" type="email" placeholder="you@company.com">
+          <input id="resend-key" class="input" type="text" placeholder="TABU-XXXX-XXXX-XXXX">
+          <button id="resend-btn" class="cta primary">Resend license</button>
+        </div>
+        <div id="resend-status" class="note" style="display:none;"></div>
+      </div>
+
+      <div class="page-links">
+        <a href="/support">Support home</a>
+        <a href="/support/billing">Billing &amp; cancel</a>
+      </div>
+
+      <footer>
+        <div>Need help? Email support@tabulensis.com.</div>
+        <div>&copy; 2026 Tabulensis</div>
+      </footer>
+    </div>
+    <script type="module">
+      const btn = document.getElementById("resend-btn");
+      const status = document.getElementById("resend-status");
+      const email = document.getElementById("resend-email");
+      const key = document.getElementById("resend-key");
+
+      async function resend() {
+        btn.disabled = true;
+        if (status) {
+          status.style.display = "none";
+          status.textContent = "";
+        }
+        try {
+          const res = await fetch("/license/resend", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              email: email?.value || undefined,
+              license_key: key?.value || undefined,
+            }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data?.error || "Resend failed");
+          }
+          if (status) {
+            status.style.display = "block";
+            status.textContent = "Resend queued. Check your inbox.";
+          }
+        } catch (err) {
+          if (status) {
+            status.style.display = "block";
+            status.textContent = String(err);
+          }
+        } finally {
+          btn.disabled = false;
+        }
+      }
+
+      if (btn) {
+        btn.addEventListener("click", resend);
+      }
+    </script>
+  </body>
+</html>

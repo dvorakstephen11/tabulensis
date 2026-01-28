@@ -67,6 +67,32 @@ pub enum Commands {
         #[arg(long, help = "Include Power Query information")]
         queries: bool,
     },
+    #[command(about = "Manage your Tabulensis license")]
+    License {
+        #[command(subcommand)]
+        command: LicenseCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum LicenseCommands {
+    #[command(about = "Activate a license key on this device")]
+    Activate {
+        #[arg(help = "License key")]
+        key: String,
+    },
+    #[command(about = "Check license status")]
+    Status {
+        #[arg(long, help = "Optional license key (defaults to local token)")]
+        key: Option<String>,
+        #[arg(long, help = "Force refresh from server")]
+        refresh: bool,
+    },
+    #[command(about = "Deactivate this device for a license")]
+    Deactivate {
+        #[arg(long, help = "Optional license key (defaults to local token)")]
+        key: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
@@ -135,6 +161,7 @@ fn main() -> ExitCode {
             metrics_json,
         ),
         Some(Commands::Info { path, queries }) => commands::info::run(&path, queries),
+        Some(Commands::License { command }) => commands::license::run(command),
         None => {
             let mut cmd = Cli::command();
             let _ = cmd.print_help();

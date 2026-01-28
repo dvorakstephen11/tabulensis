@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Billing | Tabulensis</title>
+    <meta name="description" content="Manage billing for Tabulensis.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../styles.css">
+  </head>
+  <body>
+    <div class="shell">
+      <header>
+        <div class="brand">Tabulensis</div>
+        <nav>
+          <a href="/download">Download</a>
+          <a href="/docs">Docs</a>
+          <a href="/support">Support</a>
+          <a href="/privacy">Privacy</a>
+          <a href="/terms">Terms</a>
+          <a href="/eula">EULA</a>
+        </nav>
+      </header>
+
+      <h1 class="page-title">Billing &amp; cancellation</h1>
+      <p class="page-body">
+        Use the portal to update your card, download invoices, or cancel a subscription.
+      </p>
+
+      <div class="card">
+        <div class="form-grid">
+          <input id="billing-email" class="input" type="email" placeholder="you@company.com">
+          <input id="billing-key" class="input" type="text" placeholder="TABU-XXXX-XXXX-XXXX">
+          <button id="billing-btn" class="cta primary">Open billing portal</button>
+        </div>
+        <div id="billing-status" class="note" style="display:none;"></div>
+      </div>
+
+      <p class="page-body">Or email <strong>support@tabulensis.com</strong> for cancellation help.</p>
+
+      <div class="page-links">
+        <a href="/support">Support home</a>
+        <a href="/support/resend">Resend license</a>
+      </div>
+
+      <footer>
+        <div>We will respond within one business day.</div>
+        <div>&copy; 2026 Tabulensis</div>
+      </footer>
+    </div>
+    <script type="module">
+      const btn = document.getElementById("billing-btn");
+      const status = document.getElementById("billing-status");
+      const email = document.getElementById("billing-email");
+      const key = document.getElementById("billing-key");
+
+      async function openPortal() {
+        btn.disabled = true;
+        if (status) {
+          status.style.display = "none";
+          status.textContent = "";
+        }
+        try {
+          const res = await fetch("/portal/session", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              email: email?.value || undefined,
+              license_key: key?.value || undefined,
+            }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data?.error || "Portal failed");
+          }
+          if (data.url) {
+            window.location.href = data.url;
+            return;
+          }
+          throw new Error("Missing portal URL");
+        } catch (err) {
+          if (status) {
+            status.style.display = "block";
+            status.textContent = String(err);
+          }
+        } finally {
+          btn.disabled = false;
+        }
+      }
+
+      if (btn) {
+        btn.addEventListener("click", openPortal);
+      }
+    </script>
+  </body>
+</html>

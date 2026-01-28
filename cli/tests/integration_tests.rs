@@ -1,7 +1,9 @@
 use std::process::Command;
 
 fn tabulensis_cmd() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_tabulensis"))
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tabulensis"));
+    cmd.env("TABULENSIS_LICENSE_SKIP", "1");
+    cmd
 }
 
 fn fixture_path(name: &str) -> String {
@@ -1268,4 +1270,3 @@ fn info_pbix_includes_embedded_queries() {
         stdout
     );
 }
-

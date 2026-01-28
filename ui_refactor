@@ -1,0 +1,313 @@
+Based on the code you shared, you’re sitting on a very high‑leverage UI situation:
+
+* The current desktop app is a wxWidgets/wxdragon GUI that already has the right *workflow surface area* (Compare / Recents / Batch / Search), but the “results” experience is mostly **pretty‑printed JSON dumped into text controls** (e.g., setting `summary_text` and `detail_text` to `serde_json::to_string_pretty(...)`). 
+* In parallel, you already have a **much more modern, user-facing UI** living in `/web` (dark theme, structured summaries, interactive grid viewer(s), review navigation across “anchors”, HTML export with captured grid previews, recents/batch/search sections that are explicitly gated behind `isDesktop()`), and it’s clearly written to support a desktop host via a platform bridge.  
+* Your desktop backend already supports exactly the shape this web UI wants: it can return a **payload mode** (full report + snapshots) or a **large mode** summary and then load per‑sheet payload on demand (your web UI’s “large sheet” flow calls `loadSheetPayload(diffId, sheetName)` and then `renderResults(...)`). 
+
+That combination strongly suggests the fastest path to a “purchase-ready” desktop UI is **not** polishing the existing wx controls—it’s **embedding the `/web` UI into the desktop app and wiring the bridge**.
+
+Below is a plan that improves the desktop UI in a few *very high-leverage* ways immediately, then extends cleanly into a medium/long-term roadmap without painting you into a corner.
+
+---
+
+## The key architectural insight
+
+A diff tool lives or dies on “review velocity”:
+
+1. **Orient me:** What changed overall? Is this diff complete? Any warnings?
+2. **Direct me:** Where should I look first (largest changes, suspicious sheets, key regions)?
+3. **Confirm for me:** Show a tight before/after view that makes changes undeniable.
+4. **Let me ship it:** Export/share a report and move on.
+
+Your `/web` UI already embodies that shape (summary + per-sheet expand + grid previews + review anchors + exports). 
+Your current wx UI mostly stops at “the diff exists; here’s JSON”. 
+
+So the architectural goal is:
+
+**One UI, many hosts.**
+
+* **UI:** `/web` (HTML/CSS/JS) renders and handles interaction.
+* **Host:** Desktop app provides file dialogs, storage, licensing gates, and native exports.
+* **Contract:** Typed JSON payloads (DiffOutcome, DiffWithSheets, etc.) with a small RPC bridge.
+
+You already have the contract pieces in `ui_payload` (DiffOutcome modes, HostCapabilities, DiffOptions).   
+
+---
+
+## Near-term, high-leverage improvements for the desktop UI
+
+### 1) Replace the “results” pane with the existing web UI (biggest value jump)
+
+**Outcome:** Your desktop app instantly becomes a modern review tool: card summaries, expandable sheet sections, canvas grid viewer, “next/prev change” navigation, HTML export, etc.  
+
+**Approach:** Use wxdragon’s WebView support to host `/web/index.html` inside your desktop window. wxdragon already exposes the primitives you need: create a WebView, load content, register script message handlers, receive `ScriptMessageReceived`, and intercept navigation.  
+
+**Why this is low risk / high payoff:**
+
+* You’re not inventing a new UI—just reusing the one you already built.
+* The desktop backend already supports “large mode” and per-sheet payload loading, which is exactly how the web UI avoids blowing up on big diffs. 
+
+**One critical practical note (Windows):** your web UI uses modern JS modules and modern layout; you’ll want the Edge (WebView2) backend. wxdragon has explicit backend selection and availability checks.  
+Plan for a graceful message if WebView2 isn’t available (or keep the legacy wx UI as a fallback).
+
+---
+
+### 2) Implement the “desktop platform bridge” the web UI already expects
+
+Your `/web` code is already structured around a platform abstraction: `isDesktop()`, `createAppDiffClient(...)`, file dialogs, recents, stored diff loading, audit export, batch compare, search, capabilities, etc.  
+
+Right now, those are stubs in the web build, but in desktop mode they’re the unlock.
+
+**Design the bridge as a tiny JSON-RPC layer**
+
+* JS sends `{id, method, params}` to native
+* Native replies `{id, ok, result}` or `{id, ok, error}`
+* Native can also push “notifications” (progress, status changes) without an `id`
+
+This keeps the interface stable and makes it easy to test.
+
+**Methods to implement first (highest UX leverage):**
+
+1. `openFileDialog({ filters }) -> { path, name } | null`
+2. `openFolderDialog() -> { path } | null`
+3. `createAppDiffClient({ onStatus })` with:
+
+   * `ready() -> engineVersion`
+   * `diff({ oldPath, newPath, oldName, newName }, engineOptions) -> DiffOutcome`
+   * `cancel()`
+4. `loadRecents() -> RecentComparison[]`
+5. `saveRecent(entry) -> void`
+6. `loadDiffSummary(diffId) -> summary`
+7. `loadSheetPayload(diffId, sheetName) -> DiffWithSheets` (for large mode)
+8. `exportAuditXlsx(diffId) -> void`
+9. `runBatchCompare({ rootDir, globA, globB, options }) -> batchId/summary`
+10. `loadBatchSummary(batchId) -> summary`
+11. `searchDiffOps(diffId, query, limit) -> results`
+12. `buildSearchIndex(path, side) -> indexId`
+13. `searchWorkbookIndex(indexId, query, limit) -> results`
+14. `getCapabilities() -> HostCapabilities`
+
+Most of these map cleanly to your existing desktop backend capabilities and tests (e.g., summary loading, audit export, search index). 
+
+**Why capabilities matter:**
+You already have a formal structure for host capabilities (`HostCapabilities` includes engine version, features, and presets). Returning it allows the UI to *enable/disable* features in a principled way instead of “buttons that sometimes error.” 
+
+---
+
+### 3) Make progress and cancellation feel “native” and trustworthy
+
+Users don’t just need speed—they need *confidence* that the tool isn’t hung.
+
+* Your backend emits progress events with `stage` and `detail`. The web UI already has a stage system (`showStage(...)`) and status updates.  
+* Your diff runner already supports cancellation via an `AtomicBool` in the request. Wire `cancel()` to flip that flag. 
+
+**High-leverage UX detail:** treat warnings and “incomplete diff” as first-class.
+
+* Your stored summaries include `complete` and `warnings`. 
+* Your UI should surface this at the top of the report (banner + explanation), not buried.
+
+This single design choice dramatically reduces “can I trust this output?” anxiety.
+
+---
+
+### 4) Desktop exports that feel like “deliverables,” not developer artifacts
+
+The web UI already supports:
+
+* Export JSON
+* Export HTML report **including captured grid previews** (it collects mounted viewers and calls `capturePng()`)  
+* Export audit (desktop-only) 
+
+**Make desktop export UX excellent:**
+
+* After export, offer “Open file” and “Reveal in folder”.
+* Put export buttons in the same place every time, and disable them when invalid (e.g., large mode JSON export disabled, but HTML enabled — which your web UI already models). 
+
+If you do only one “polish” item: make exports foolproof. People pay for “I can send this to my auditor/client/boss.”
+
+---
+
+### 5) Unify Recents / Batch / Search across desktop and web UI
+
+Your wx app already has these tabs; your web UI also has these sections and only shows them when desktop mode is true.  
+
+Once the platform bridge is implemented, you get (almost for free):
+
+* A recents list with click-to-load and “swap selection” behavior. 
+* Batch comparisons + clickable results. 
+* Workbook indexing search (build index once, then query). 
+
+This is exactly the kind of “feels like a real product, not a demo” lift that increases conversion.
+
+---
+
+## The recommended desktop UI architecture
+
+Here’s the “verbal diagram” of the system you want:
+
+**Desktop window (wx)**
+
+* Native menu bar (File/Open, Export, License, Help)
+* Hosts **one WebView** that renders your `/web` app
+
+**Web UI (JS)**
+
+* Owns rendering + interaction
+* Calls `platform.*` functions to do anything “native”
+* Treats engine results as data; builds view models; paints the grid viewer
+
+**Bridge (RPC)**
+
+* Single script message channel (e.g., `tabulensis`)
+* Request/response + notifications
+* Versioned (optional but recommended)
+
+**Backend (Rust)**
+
+* DiffRunner + OpStore + exporters
+* License checks at the boundary
+* Provides DiffOutcome and per-sheet payload building (especially for large mode) 
+
+This architecture is “boringly scalable”: it keeps UI iteration fast (edit HTML/CSS/JS) while keeping performance and correctness in Rust.
+
+---
+
+## Medium-term UI roadmap (after the initial “modern UI” ship)
+
+These are the improvements that turn the UI from “nice viewer” into “workflow tool.”
+
+### A) “Projects” and repeatable comparisons
+
+Your differentiation plan even calls out that recurring workflows want saved configs (“Monthly Budget vs Actuals”). 
+UI additions:
+
+* Save a comparison as a Project:
+
+  * old/new paths (or folder patterns)
+  * preset + advanced options
+  * filters (ignore formatting? ignore blank-to-blank?)
+* One-click re-run, with history
+
+Architecturally: store `project.json` entries next to your recents store, and allow “project runs” to produce stored diff IDs in OpStore.
+
+---
+
+### B) Advanced diff configuration without overwhelming users
+
+You already support:
+
+* Presets (`fastest`, `balanced`, `most_precise`) 
+* Trusted mode (exposed in DiffOptions and in the wx UI)  
+* Limits via `DiffLimits` 
+
+UI pattern:
+
+* Keep the main compare screen simple (Preset dropdown).
+* Add an “Advanced” drawer for:
+
+  * memory/time limits
+  * ignore rules
+  * “database mode” / key columns (next item)
+  * trusted toggle
+
+---
+
+### C) Database-mode / key-column alignment as a first-class UI feature
+
+You already have logic that can infer key columns in some cases (`suggest_key_columns(...)` tests show composite key inference). 
+
+UI additions:
+
+* On a sheet with lots of row inserts/deletes, show a banner:
+
+  * “This looks like a table. Want to align by key columns?”
+* Offer:
+
+  * “Auto” (use inference)
+  * “Choose columns…” (multi-select headers)
+* Show an “Alignment confidence” indicator and explain when it’s ambiguous.
+
+This is one of the most monetizable “Pro” features because it saves real time on messy financial tables.
+
+---
+
+### D) Search that jumps you directly to the change (not just a list)
+
+You already have “anchors” in the web view model and a review order built from them. 
+Make search results clickable:
+
+* Click result -> navigate to sheet -> scroll to anchor -> flash highlight
+
+This is the “Difference Report hyperlink” loop that incumbents win on, but you can do it non-destructively. 
+
+---
+
+### E) Stronger “diff story” summary
+
+Add a narrative layer to the summary:
+
+* “Sheets added/removed/renamed”
+* “Largest changes”
+* “Potentially risky changes” (formula edits, named ranges, external links, query steps)
+* “Diff incomplete” / “preview skipped” explanations
+
+You already carry “preview skipped” reasoning in alignment/preview guardrails. 
+
+---
+
+## Long-term UI roadmap (category-defining moves)
+
+This is where your differentiation plan goes beyond “better highlighting” and into “better understanding.”
+
+### 1) A read-only web viewer + shareable reports
+
+Your plan explicitly calls out a free read-only viewer and later shareable links/comments.  
+UI implications:
+
+* Desktop export can optionally produce a “share package” (HTML + JSON + assets).
+* A hosted viewer can load that package.
+* Later: authenticated sharing links and comment threads anchored to cell diffs.
+
+This turns Tabulensis from a tool into a workflow.
+
+---
+
+### 2) “Modern Excel” views: Power Query (M) and Data Model (DAX)
+
+Your plan calls out M-code and DAX diffs as a future wedge.  
+And your engine already contains substantial DataMashup parsing infrastructure. 
+
+UI direction:
+
+* Add a top-level navigation in the report:
+
+  * “Workbook”
+  * “Power Query”
+  * “Data Model”
+  * “VBA / Macros”
+* Each gets its own viewer:
+
+  * syntax highlighting
+  * AST-aware diff (semantic, not just text)
+  * dependencies (which query feeds which table)
+
+This is the kind of UI incumbents simply don’t have.
+
+---
+
+### 3) GitHub PR metaphor, but for spreadsheets
+
+Your differentiation plan explicitly recommends adopting the PR review metaphor (non-destructive overlays, unified diffs). 
+You already have the beginnings:
+
+* structured view models
+* anchors
+* review ordering
+* before/after grid rendering
+
+Long-term UI upgrades:
+
+* “Unified row diff” view for table-like sheets
+* “Approve / needs changes” markers per section
+* “Review checklist” and “export review summary”
+

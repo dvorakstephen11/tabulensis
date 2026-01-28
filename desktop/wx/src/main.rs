@@ -11,6 +11,7 @@ use desktop_backend::{
     BatchOutcome, BatchRequest, BackendConfig, DesktopBackend, DiffErrorPayload, DiffMode, DiffOutcome, DiffRequest,
     DiffRunSummary, ProgressRx, RecentComparison, SearchIndexResult, SearchIndexSummary, SearchResult, SheetPayloadRequest,
 };
+use license_client::LicenseClient;
 use logic::{base_name, parse_globs, preset_from_selection};
 use log::{debug, info, LevelFilter, Metadata, Record};
 use ui_payload::{DiffOptions, DiffPreset};
@@ -72,6 +73,7 @@ struct MainUi {
     compare_menu: MenuItem,
     cancel_menu: MenuItem,
     export_audit_menu: MenuItem,
+    license_menu: MenuItem,
     about_menu: MenuItem,
     status_bar: StatusBar,
     root_tabs: Notebook,
@@ -149,6 +151,8 @@ impl MainUi {
             .unwrap_or_else(|| panic!("Failed to find menu item: cancel_menu"));
         let export_audit_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "export_audit_menu")
             .unwrap_or_else(|| panic!("Failed to find menu item: export_audit_menu"));
+        let license_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "license_menu")
+            .unwrap_or_else(|| panic!("Failed to find menu item: license_menu"));
         let about_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "about_menu")
             .unwrap_or_else(|| panic!("Failed to find menu item: about_menu"));
 
@@ -214,6 +218,7 @@ impl MainUi {
             compare_menu,
             cancel_menu,
             export_audit_menu,
+            license_menu,
             about_menu,
             status_bar,
             root_tabs,
@@ -301,6 +306,7 @@ struct UiHandles {
     compare_menu: MenuItem,
     cancel_menu: MenuItem,
     export_audit_menu: MenuItem,
+    license_menu: MenuItem,
     about_menu: MenuItem,
     status_bar: StatusBar,
     progress_text: StaticText,
@@ -390,6 +396,163 @@ fn update_status_in_ctx(ctx: &mut UiContext, message: &str) {
 fn update_status(message: &str) {
     let message = message.to_string();
     let _ = with_ui_context(|ctx| update_status_in_ctx(ctx, &message));
+}
+
+fn ensure_license_ready(action: &str) -> bool {
+    let result = LicenseClient::from_env().and_then(|client| client.ensure_valid_or_refresh());
+    match result {
+        Ok(status) => {
+            let _ = with_ui_context(|ctx| {
+                update_status_in_ctx(ctx, &format!("License status: {}", status.status));
+            });
+            true
+        }
+        Err(err) => {
+            let message = format!(
+                "{action} requires an active license.\n\nError: {err}\n\nUse Help → License to activate or update status."
+            );
+            let _ = with_ui_context(|ctx| {
+                let dialog = MessageDialog::builder(&ctx.ui.frame, &message, "License required")
+                    .with_style(MessageDialogStyle::IconWarning | MessageDialogStyle::OK)
+                    .build();
+                let _ = dialog.show_modal();
+            });
+            false
+        }
+    }
+}
+
+fn show_license_dialog() {
+    let _ = with_ui_context(|ctx| {
+        let actions = [
+            "Activate license",
+            "Check status",
+            "Deactivate this device",
+        ];
+        let dialog = SingleChoiceDialog::builder(&ctx.ui.frame, "Choose a license action:", "License", &actions)
+            .build();
+        if dialog.show_modal() != ID_OK {
+            return;
+        }
+
+        let selection = dialog.get_selection();
+        drop(dialog);
+
+        match selection {
+            0 => {
+                let input = TextEntryDialog::builder(
+                    &ctx.ui.frame,
+                    "Enter your license key:",
+                    "Activate License",
+                )
+                .build();
+                if input.show_modal() != ID_OK {
+                    return;
+                }
+                let Some(key) = input.get_value() else {
+                    return;
+                };
+                let client = match LicenseClient::from_env() {
+                    Ok(client) => client,
+                    Err(err) => {
+                        update_status_in_ctx(ctx, &format!("License client error: {err}"));
+                        return;
+                    }
+                };
+                match client.activate(key.trim()) {
+                    Ok(result) => {
+                        update_status_in_ctx(ctx, "License activated.");
+                        let message = format!(
+                            "License activated.\n\nStatus: {}\nDevices: {}",
+                            result.status.status, result.status.max_devices
+                        );
+                        let info = MessageDialog::builder(&ctx.ui.frame, &message, "License")
+                            .with_style(MessageDialogStyle::IconInformation | MessageDialogStyle::OK)
+                            .build();
+                        let _ = info.show_modal();
+                    }
+                    Err(err) => {
+                        update_status_in_ctx(ctx, &format!("Activation failed: {err}"));
+                        let info = MessageDialog::builder(
+                            &ctx.ui.frame,
+                            &format!("Activation failed:\n{err}"),
+                            "License",
+                        )
+                        .with_style(MessageDialogStyle::IconError | MessageDialogStyle::OK)
+                        .build();
+                        let _ = info.show_modal();
+                    }
+                }
+            }
+            1 => {
+                let client = match LicenseClient::from_env() {
+                    Ok(client) => client,
+                    Err(err) => {
+                        update_status_in_ctx(ctx, &format!("License client error: {err}"));
+                        return;
+                    }
+                };
+                let status = match client.status_remote(None) {
+                    Ok(status) => status,
+                    Err(err) => {
+                        let info = MessageDialog::builder(
+                            &ctx.ui.frame,
+                            &format!("Status failed:\n{err}"),
+                            "License",
+                        )
+                        .with_style(MessageDialogStyle::IconError | MessageDialogStyle::OK)
+                        .build();
+                        let _ = info.show_modal();
+                        return;
+                    }
+                };
+                let message = format!(
+                    "License: {}\nStatus: {}\nDevices: {} / {}",
+                    status.license_key,
+                    status.status,
+                    status.activations.len(),
+                    status.max_devices
+                );
+                let info = MessageDialog::builder(&ctx.ui.frame, &message, "License")
+                    .with_style(MessageDialogStyle::IconInformation | MessageDialogStyle::OK)
+                    .build();
+                let _ = info.show_modal();
+            }
+            2 => {
+                let client = match LicenseClient::from_env() {
+                    Ok(client) => client,
+                    Err(err) => {
+                        update_status_in_ctx(ctx, &format!("License client error: {err}"));
+                        return;
+                    }
+                };
+                match client.deactivate(None) {
+                    Ok(()) => {
+                        update_status_in_ctx(ctx, "License deactivated for this device.");
+                        let info = MessageDialog::builder(
+                            &ctx.ui.frame,
+                            "This device has been deactivated.",
+                            "License",
+                        )
+                        .with_style(MessageDialogStyle::IconInformation | MessageDialogStyle::OK)
+                        .build();
+                        let _ = info.show_modal();
+                    }
+                    Err(err) => {
+                        let info = MessageDialog::builder(
+                            &ctx.ui.frame,
+                            &format!("Deactivation failed:\n{err}"),
+                            "License",
+                        )
+                        .with_style(MessageDialogStyle::IconError | MessageDialogStyle::OK)
+                        .build();
+                        let _ = info.show_modal();
+                    }
+                }
+            }
+            _ => {}
+        }
+    });
 }
 
 fn layout_debug_enabled() -> bool {
@@ -574,6 +737,9 @@ fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
 }
 
 fn start_compare() {
+    if !ensure_license_ready("Run diffs") {
+        return;
+    }
     let mut args = None;
     let _ = with_ui_context(|ctx| {
         let old_path = ctx.ui.old_picker.get_path();
@@ -731,6 +897,9 @@ fn load_diff_summary_into_ui(diff_id: String) {
 }
 
 fn run_batch() {
+    if !ensure_license_ready("Run batch diffs") {
+        return;
+    }
     let mut request = None;
     let _ = with_ui_context(|ctx| {
         let old_root = ctx.ui.batch_old_dir.get_path();
@@ -1030,6 +1199,7 @@ fn setup_menu_handlers(ids: MenuIds) {
         compare_id,
         cancel_id,
         export_id,
+        license_id,
         about_id,
     } = ids;
 
@@ -1071,6 +1241,7 @@ fn setup_menu_handlers(ids: MenuIds) {
             id if id == compare_id => start_compare(),
             id if id == cancel_id => cancel_current(),
             id if id == export_id => export_audit(),
+            id if id == license_id => show_license_dialog(),
             id if id == about_id => {
                 let _ = with_ui_context(|ctx| {
                     let dialog = MessageDialog::builder(
@@ -1138,6 +1309,7 @@ struct MenuIds {
     compare_id: i32,
     cancel_id: i32,
     export_id: i32,
+    license_id: i32,
     about_id: i32,
 }
 
@@ -1162,6 +1334,7 @@ fn main() {
             compare_menu: ui.compare_menu,
             cancel_menu: ui.cancel_menu,
             export_audit_menu: ui.export_audit_menu,
+            license_menu: ui.license_menu,
             about_menu: ui.about_menu,
             status_bar: ui.status_bar,
             progress_text: ui.progress_text,
@@ -1233,6 +1406,7 @@ fn main() {
             compare_id: ctx.ui.compare_menu.get_id(),
             cancel_id: ctx.ui.cancel_menu.get_id(),
             export_id: ctx.ui.export_audit_menu.get_id(),
+            license_id: ctx.ui.license_menu.get_id(),
             about_id: ctx.ui.about_menu.get_id(),
         })
         .unwrap();
