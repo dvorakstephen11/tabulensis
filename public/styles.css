@@ -225,6 +225,12 @@ footer {
   color: var(--ink-soft);
 }
 
+.footer-meta {
+  display: grid;
+  gap: 4px;
+  text-align: right;
+}
+
 .page-title {
   margin-top: 48px;
   font-size: clamp(28px, 3vw, 40px);
