@@ -630,6 +630,7 @@ dependencies = [
  "license_client",
  "log",
  "quick-xml 0.32.0",
+ "serde",
  "serde_json",
  "ui_payload",
  "wxdragon",

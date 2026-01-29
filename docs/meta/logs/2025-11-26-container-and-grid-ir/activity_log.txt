@@ -1,9 +1,0 @@
-2025-11-26 15:30 - Created activity log for cycle 2025-11-26-container-and-grid-ir.
-2025-11-26 15:30 - Reviewed mini-spec docs/meta/plans/2025-11-26-container-and-grid-ir.md to capture scope, behavioral contract, constraints, and tests.
-2025-11-26 15:30 - Reviewed implementation process in docs/rust_docs/excel_diff_meta_programming.md (Section 4) for guardrails and logging expectations.
-2025-11-26 16:05 - Added core library structure: created core/src/lib.rs and workbook/addressing modules with IR types and A1 helpers; introduced Cargo features/deps (zip, quick-xml, thiserror).
-2025-11-26 16:05 - Implemented addressing unit tests for index_to_address/address_to_index round-trips per PG2 spec.
-2025-11-26 16:30 - Built Excel Open XML parser (content types validation, workbook/sheet discovery, shared strings, grid reconstruction with addressing) and error mapping.
-2025-11-26 16:40 - Added integration tests for container errors, PG1 workbook/grid fixtures, and PG2 addressing matrix; retained fixture path helper.
-2025-11-26 16:45 - Ran cargo fmt, cargo clippy --all-targets --all-features, and cargo test (all passing).
-2025-11-26 16:50 - Installed wasm32-unknown-unknown target and ran cargo check --target wasm32-unknown-unknown --no-default-features.

@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -14,8 +14,12 @@ use desktop_backend::{
 use license_client::LicenseClient;
 use logic::{base_name, parse_globs, preset_from_selection};
 use log::{debug, info, LevelFilter, Metadata, Record};
+use serde::Deserialize;
+use serde_json::json;
 use ui_payload::{DiffOptions, DiffPreset};
+use wxdragon::event::WebViewEvents;
 use wxdragon::prelude::*;
+use wxdragon::widgets::{WebView, WebViewBackend, WebViewUserScriptInjectionTime};
 use wxdragon::xrc::{FromXrcPtr, XmlResource};
 use wxdragon_sys as ffi;
 use xrc_validation::validate_xrc;
@@ -67,6 +71,7 @@ fn min_root_tabs_size() -> Size {
 
 struct MainUi {
     main_frame: Frame,
+    main_panel: Panel,
     open_old_menu: MenuItem,
     open_new_menu: MenuItem,
     exit_menu: MenuItem,
@@ -212,6 +217,7 @@ impl MainUi {
 
         Self {
             main_frame,
+            main_panel,
             open_old_menu,
             open_new_menu,
             exit_menu,
@@ -300,6 +306,7 @@ fn maybe_validate_xrc() {
 
 struct UiHandles {
     frame: Frame,
+    main_panel: Panel,
     open_old_menu: MenuItem,
     open_new_menu: MenuItem,
     exit_menu: MenuItem,
@@ -343,6 +350,7 @@ struct UiHandles {
     recents_view: Option<DataViewCtrl>,
     batch_view: Option<DataViewCtrl>,
     search_view: Option<DataViewCtrl>,
+    webview: Option<WebView>,
 }
 
 struct ActiveRun {
@@ -351,6 +359,7 @@ struct ActiveRun {
 
 struct AppState {
     backend: DesktopBackend,
+    engine_version: String,
     run_counter: u64,
     active_run: Option<ActiveRun>,
     current_diff_id: Option<String>,
@@ -366,6 +375,7 @@ struct AppState {
     recents_model: Option<DataViewListModel>,
     batch_model: Option<DataViewListModel>,
     search_model: Option<DataViewListModel>,
+    webview_enabled: bool,
 }
 
 struct UiContext {
@@ -583,6 +593,660 @@ fn log_layout_sizes(ctx: &UiContext) {
     );
 }
 
+const WEBVIEW_HANDLER_NAME: &str = "tabulensis";
+const WEBVIEW_BRIDGE_SCRIPT: &str = r#"
+(function () {
+  window.__TABULENSIS_DESKTOP__ = true;
+  window.__tabulensisPostMessage = function (message) {
+    try {
+      if (window.chrome && window.chrome.webview && typeof window.chrome.webview.postMessage === "function") {
+        window.chrome.webview.postMessage(message);
+        return true;
+      }
+      if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tabulensis) {
+        window.webkit.messageHandlers.tabulensis.postMessage(message);
+        return true;
+      }
+      if (window.external && typeof window.external.invoke === "function") {
+        window.external.invoke(message);
+        return true;
+      }
+      if (window.wx && typeof window.wx.postMessage === "function") {
+        window.wx.postMessage(message);
+        return true;
+      }
+    } catch (err) {
+      console.warn("Tabulensis bridge error:", err);
+    }
+    return false;
+  };
+})();
+"#;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RpcRequest {
+    id: u64,
+    method: String,
+    params: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DiffParams {
+    old_path: String,
+    new_path: String,
+    #[serde(default)]
+    options: Option<DiffOptions>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SheetPayloadParams {
+    diff_id: String,
+    sheet_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DiffIdParams {
+    diff_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchIdParams {
+    batch_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchDiffParams {
+    diff_id: String,
+    query: String,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BuildSearchIndexParams {
+    path: String,
+    side: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchWorkbookIndexParams {
+    index_id: String,
+    query: String,
+    limit: Option<usize>,
+}
+
+fn resolve_web_index_path() -> Option<PathBuf> {
+    if let Ok(root) = std::env::var("EXCEL_DIFF_WEB_ROOT") {
+        let candidate = PathBuf::from(root).join("index.html");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    let mut candidates = Vec::new();
+    if let Ok(current) = std::env::current_dir() {
+        candidates.push(current.join("web").join("index.html"));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("web").join("index.html"));
+            if let Some(parent) = dir.parent() {
+                candidates.push(parent.join("web").join("index.html"));
+                if let Some(grand) = parent.parent() {
+                    candidates.push(grand.join("web").join("index.html"));
+                }
+            }
+        }
+    }
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web/index.html"));
+
+    candidates.into_iter().find(|path| path.exists())
+}
+
+fn path_to_file_url(path: &Path) -> Option<String> {
+    let abs = path.canonicalize().ok()?;
+    let mut raw = abs.to_string_lossy().replace('\\', "/");
+    if cfg!(target_os = "windows") && !raw.starts_with('/') {
+        raw = format!("/{raw}");
+    }
+    Some(format!("file://{raw}"))
+}
+
+fn send_rpc_payload(webview: WebView, payload: serde_json::Value) {
+    if !webview.is_valid() {
+        return;
+    }
+    let Ok(payload_json) = serde_json::to_string(&payload) else {
+        return;
+    };
+    let script = format!("window.__tabulensisReceive({payload_json});");
+    let _ = webview.run_script(&script);
+}
+
+fn send_rpc_payload_async(webview: WebView, payload: serde_json::Value) {
+    wxdragon::call_after(Box::new(move || send_rpc_payload(webview, payload)));
+}
+
+fn rpc_ok(id: u64, result: serde_json::Value) -> serde_json::Value {
+    json!({ "id": id, "ok": true, "result": result })
+}
+
+fn rpc_err(id: u64, error: serde_json::Value) -> serde_json::Value {
+    json!({ "id": id, "ok": false, "error": error })
+}
+
+fn rpc_notify(method: &str, params: serde_json::Value) -> serde_json::Value {
+    json!({ "method": method, "params": params })
+}
+
+fn setup_webview(ctx: &mut UiContext) -> bool {
+    let backend = if cfg!(target_os = "windows") {
+        if WebView::is_backend_available(WebViewBackend::Edge) {
+            WebViewBackend::Edge
+        } else {
+            update_status_in_ctx(ctx, "WebView2 runtime not available. Using legacy UI.");
+            return false;
+        }
+    } else if WebView::is_backend_available(WebViewBackend::Default) {
+        WebViewBackend::Default
+    } else {
+        return false;
+    };
+
+    let Some(index_url) = resolve_web_index_path().and_then(|path| path_to_file_url(&path)) else {
+        update_status_in_ctx(ctx, "Web UI not found (set EXCEL_DIFF_WEB_ROOT).");
+        return false;
+    };
+
+    let webview = WebView::builder(&ctx.ui.main_panel)
+        .with_backend(backend)
+        .build();
+    let _ = webview.add_script_message_handler(WEBVIEW_HANDLER_NAME);
+    let _ = webview.add_user_script(WEBVIEW_BRIDGE_SCRIPT, WebViewUserScriptInjectionTime::AtDocumentStart);
+
+    webview.on_script_message_received(move |event| {
+        let Some(message) = event.get_string() else { return; };
+        handle_webview_rpc(webview, message);
+    });
+
+    webview.load_url(&index_url);
+
+    let sizer = BoxSizer::builder(Orientation::Vertical).build();
+    sizer.add(&webview, 1, SizerFlag::Expand, 0);
+    ctx.ui.main_panel.set_sizer(sizer, true);
+    ctx.ui.root_tabs.hide();
+    ctx.ui.main_panel.layout();
+    ctx.ui.frame.layout();
+
+    ctx.ui.webview = Some(webview);
+    ctx.state.webview_enabled = true;
+    true
+}
+
+fn send_progress_to_webview(webview: WebView, rx: ProgressRx, run_id: u64) {
+    thread::spawn(move || {
+        for event in rx.iter() {
+            if run_id != 0 && event.run_id != run_id {
+                continue;
+            }
+            let payload = rpc_notify(
+                "status",
+                json!({
+                    "stage": event.stage,
+                    "detail": event.detail,
+                    "source": "desktop"
+                }),
+            );
+            send_rpc_payload_async(webview, payload);
+        }
+    });
+}
+
+fn handle_webview_rpc(webview: WebView, message: String) {
+    let request: Result<RpcRequest, _> = serde_json::from_str(&message);
+    let request = match request {
+        Ok(req) => req,
+        Err(err) => {
+            let payload = rpc_notify("error", json!({ "message": err.to_string() }));
+            send_rpc_payload_async(webview, payload);
+            return;
+        }
+    };
+
+    match request.method.as_str() {
+        "ready" => {
+            let version = with_ui_context(|ctx| ctx.state.engine_version.clone()).unwrap_or_default();
+            send_rpc_payload_async(webview, rpc_ok(request.id, json!(version)));
+        }
+        "getCapabilities" => {
+            let caps = with_ui_context(|ctx| ui_payload::HostCapabilities::new(ctx.state.engine_version.clone()))
+                .unwrap_or_else(|| ui_payload::HostCapabilities::new(String::new()));
+            send_rpc_payload_async(webview, rpc_ok(request.id, json!(caps)));
+        }
+        "openFileDialog" => {
+            let path = with_ui_context(|ctx| {
+                let dialog = FileDialog::builder(&ctx.ui.frame)
+                    .with_message("Open file")
+                    .with_wildcard("Excel/PBIX files (*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit)|*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit|All files (*.*)|*.*")
+                    .with_style(FileDialogStyle::Open | FileDialogStyle::FileMustExist)
+                    .build();
+                if dialog.show_modal() == ID_OK {
+                    dialog.get_path()
+                } else {
+                    None
+                }
+            })
+            .flatten();
+            send_rpc_payload_async(webview, rpc_ok(request.id, json!(path)));
+        }
+        "openFolderDialog" => {
+            let path = with_ui_context(|ctx| {
+                let dialog = DirDialog::builder(&ctx.ui.frame, "Select folder", "")
+                    .with_style(DirDialogStyle::MustExist.bits())
+                    .build();
+                if dialog.show_modal() == ID_OK {
+                    dialog.get_path()
+                } else {
+                    None
+                }
+            })
+            .flatten();
+            send_rpc_payload_async(webview, rpc_ok(request.id, json!(path)));
+        }
+        "diff" => {
+            if !ensure_license_ready("Run diffs") {
+                send_rpc_payload_async(
+                    webview,
+                    rpc_err(request.id, json!({ "message": "License required." })),
+                );
+                return;
+            }
+            let params: Result<DiffParams, _> = request
+                .params
+                .clone()
+                .ok_or_else(|| "Missing diff params".to_string())
+                .and_then(|value| serde_json::from_value(value).map_err(|e| e.to_string()));
+            let params = match params {
+                Ok(params) => params,
+                Err(err) => {
+                    send_rpc_payload_async(webview, rpc_err(request.id, json!({ "message": err })));
+                    return;
+                }
+            };
+
+            let mut args = None;
+            let _ = with_ui_context(|ctx| {
+                if ctx.state.active_run.is_some() {
+                    send_rpc_payload_async(
+                        webview,
+                        rpc_err(request.id, json!({ "message": "Diff already running." })),
+                    );
+                    return;
+                }
+
+                ctx.state.run_counter = ctx.state.run_counter.saturating_add(1);
+                let run_id = ctx.state.run_counter;
+                let cancel = Arc::new(AtomicBool::new(false));
+                ctx.state.active_run = Some(ActiveRun { cancel: cancel.clone() });
+
+                let options = params.options.unwrap_or_default();
+                let backend = ctx.state.backend.clone();
+                args = Some((backend, run_id, cancel, params.old_path, params.new_path, options));
+            });
+
+            let Some((backend, run_id, cancel, old_path, new_path, options)) = args else {
+                return;
+            };
+
+            let (progress_tx, progress_rx) = DesktopBackend::new_progress_channel();
+            send_progress_to_webview(webview, progress_rx, run_id);
+
+            thread::spawn(move || {
+                let result = backend.runner.diff(DiffRequest {
+                    old_path,
+                    new_path,
+                    run_id,
+                    options,
+                    cancel,
+                    progress: progress_tx,
+                });
+                wxdragon::call_after(Box::new(move || handle_webview_diff_result(webview, request.id, result)));
+            });
+        }
+        "cancel" => {
+            cancel_current();
+            send_rpc_payload_async(webview, rpc_ok(request.id, json!(true)));
+        }
+        "loadRecents" => {
+            let result = with_ui_context(|ctx| ctx.state.backend.load_recents());
+            match result {
+                Some(Ok(recents)) => send_rpc_payload_async(webview, rpc_ok(request.id, json!(recents))),
+                Some(Err(err)) => send_rpc_payload_async(webview, rpc_err(request.id, json!(err))),
+                None => send_rpc_payload_async(
+                    webview,
+                    rpc_err(request.id, json!({ "message": "Backend unavailable." })),
+                ),
+            }
+        }
+        "saveRecent" => {
+            let params: Result<RecentComparison, _> = request
+                .params
+                .clone()
+                .ok_or_else(|| "Missing recent entry".to_string())
+                .and_then(|value| serde_json::from_value(value).map_err(|e| e.to_string()));
+            let entry = match params {
+                Ok(entry) => entry,
+                Err(err) => {
+                    send_rpc_payload_async(webview, rpc_err(request.id, json!({ "message": err })));
+                    return;
+                }
+            };
+            let result = with_ui_context(|ctx| ctx.state.backend.save_recent(entry));
+            match result {
+                Some(Ok(recents)) => send_rpc_payload_async(webview, rpc_ok(request.id, json!(recents))),
+                Some(Err(err)) => send_rpc_payload_async(webview, rpc_err(request.id, json!(err))),
+                None => send_rpc_payload_async(
+                    webview,
+                    rpc_err(request.id, json!({ "message": "Backend unavailable." })),
+                ),
+            }
+        }
+        "loadDiffSummary" => {
+            let params: Result<DiffIdParams, _> = request
+                .params
+                .clone()
+                .ok_or_else(|| "Missing diff id".to_string())
+                .and_then(|value| serde_json::from_value(value).map_err(|e| e.to_string()));
+            let params = match params {
+                Ok(params) => params,
+                Err(err) => {
+                    send_rpc_payload_async(webview, rpc_err(request.id, json!({ "message": err })));
+                    return;
+                }
+            };
+            let backend = with_ui_context(|ctx| ctx.state.backend.clone());
+            let Some(backend) = backend else {
+                send_rpc_payload_async(
+                    webview,
+                    rpc_err(request.id, json!({ "message": "Backend unavailable." })),
+                );
+                return;
+            };
+            thread::spawn(move || {
+                let payload = backend.load_diff_summary(&params.diff_id);
+                wxdragon::call_after(Box::new(move || match payload {
+                    Ok(summary) => send_rpc_payload(webview, rpc_ok(request.id, json!(summary))),
+                    Err(err) => send_rpc_payload(webview, rpc_err(request.id, json!(err))),
+                }));
+            });
+        }
+        "loadSheetPayload" => {
+            let params: Result<SheetPayloadParams, _> = request
+                .params
+                .clone()
+                .ok_or_else(|| "Missing sheet payload params".to_string())
+                .and_then(|value| serde_json::from_value(value).map_err(|e| e.to_string()));
+            let params = match params {
+                Ok(params) => params,
+                Err(err) => {
+                    send_rpc_payload_async(webview, rpc_err(request.id, json!({ "message": err })));
+                    return;
+                }
+            };
+
+            let backend = with_ui_context(|ctx| ctx.state.backend.clone());
+            let Some(backend) = backend else {
+                send_rpc_payload_async(
+                    webview,
+                    rpc_err(request.id, json!({ "message": "Backend unavailable." })),
+                );
+                return;
+            };
+            let (progress_tx, progress_rx) = DesktopBackend::new_progress_channel();
+            send_progress_to_webview(webview, progress_rx, 0);
+            thread::spawn(move || {
+                let payload = backend.runner.load_sheet_payload(SheetPayloadRequest {
+                    diff_id: params.diff_id,
+                    sheet_name: params.sheet_name,
+                    cancel: Arc::new(AtomicBool::new(false)),
+                    progress: progress_tx,
+                });
+                wxdragon::call_after(Box::new(move || match payload {
+                    Ok(result) => send_rpc_payload(webview, rpc_ok(request.id, json!(result))),
+                    Err(err) => send_rpc_payload(webview, rpc_err(request.id, json!(err))),
+                }));
+            });
+        }
+        "exportAuditXlsx" => {
+            let params: Result<DiffIdParams, _> = request
+                .params
+                .clone()
+                .ok_or_else(|| "Missing diff id".to_string())
+                .and_then(|value| serde_json::from_value(value).map_err(|e| e.to_string()));
+            let params = match params {
+                Ok(params) => params,
+                Err(err) => {
+                    send_rpc_payload_async(webview, rpc_err(request.id, json!({ "message": err })));
+                    return;
+                }
+            };
+            let selection = with_ui_context(|ctx| {
+                let summary = ctx.state.backend.load_diff_summary(&params.diff_id).ok();
+                let filename = summary
+                    .as_ref()
+                    .map(|summary| DesktopBackend::default_export_name(summary, "audit", "xlsx"))
+                    .unwrap_or_else(|| "tabulensis-audit.xlsx".to_string());
+                let dialog = FileDialog::builder(&ctx.ui.frame)
+                    .with_message("Export audit XLSX")
+                    .with_default_file(&filename)
+                    .with_wildcard("Excel (*.xlsx)|*.xlsx|All files (*.*)|*.*")
+                    .with_style(FileDialogStyle::Save | FileDialogStyle::OverwritePrompt)
+                    .build();
+                if dialog.show_modal() == ID_OK {
+                    dialog.get_path()
+                } else {
+                    None
+                }
+            })
+            .flatten();
+
+            let Some(path) = selection else {
+                send_rpc_payload_async(webview, rpc_ok(request.id, json!(null)));
+                return;
+            };
+
+            let backend = with_ui_context(|ctx| ctx.state.backend.clone());
+            let Some(backend) = backend else {
+                send_rpc_payload_async(
+                    webview,
+                    rpc_err(request.id, json!({ "message": "Backend unavailable." })),
+                );
+                return;
+            };
+
+            thread::spawn(move || {
+                let result = backend.export_audit_xlsx_to_path(&params.diff_id, Path::new(&path));
+                wxdragon::call_after(Box::new(move || match result {
+                    Ok(()) => send_rpc_payload(webview, rpc_ok(request.id, json!(path))),
+                    Err(err) => send_rpc_payload(webview, rpc_err(request.id, json!(err))),
+                }));
+            });
+        }
+        "runBatchCompare" => {
+            if !ensure_license_ready("Run batch diffs") {
+                send_rpc_payload_async(
+                    webview,
+                    rpc_err(request.id, json!({ "message": "License required." })),
+                );
+                return;
+            }
+            let params: Result<BatchRequest, _> = request
+                .params
+                .clone()
+                .ok_or_else(|| "Missing batch params".to_string())
+                .and_then(|value| serde_json::from_value(value).map_err(|e| e.to_string()));
+            let params = match params {
+                Ok(params) => params,
+                Err(err) => {
+                    send_rpc_payload_async(webview, rpc_err(request.id, json!({ "message": err })));
+                    return;
+                }
+            };
+
+            let backend = with_ui_context(|ctx| ctx.state.backend.clone());
+            let Some(backend) = backend else {
+                send_rpc_payload_async(
+                    webview,
+                    rpc_err(request.id, json!({ "message": "Backend unavailable." })),
+                );
+                return;
+            };
+
+            let (progress_tx, progress_rx) = DesktopBackend::new_progress_channel();
+            send_progress_to_webview(webview, progress_rx, 0);
+
+            thread::spawn(move || {
+                let outcome = backend.run_batch_compare(params, progress_tx);
+                wxdragon::call_after(Box::new(move || match outcome {
+                    Ok(result) => send_rpc_payload(webview, rpc_ok(request.id, json!(result))),
+                    Err(err) => send_rpc_payload(webview, rpc_err(request.id, json!(err))),
+                }));
+            });
+        }
+        "loadBatchSummary" => {
+            let params: Result<BatchIdParams, _> = request
+                .params
+                .clone()
+                .ok_or_else(|| "Missing batch id".to_string())
+                .and_then(|value| serde_json::from_value(value).map_err(|e| e.to_string()));
+            let params = match params {
+                Ok(params) => params,
+                Err(err) => {
+                    send_rpc_payload_async(webview, rpc_err(request.id, json!({ "message": err })));
+                    return;
+                }
+            };
+            let backend = with_ui_context(|ctx| ctx.state.backend.clone());
+            let Some(backend) = backend else {
+                send_rpc_payload_async(
+                    webview,
+                    rpc_err(request.id, json!({ "message": "Backend unavailable." })),
+                );
+                return;
+            };
+            thread::spawn(move || {
+                let payload = backend.load_batch_summary(&params.batch_id);
+                wxdragon::call_after(Box::new(move || match payload {
+                    Ok(summary) => send_rpc_payload(webview, rpc_ok(request.id, json!(summary))),
+                    Err(err) => send_rpc_payload(webview, rpc_err(request.id, json!(err))),
+                }));
+            });
+        }
+        "searchDiffOps" => {
+            let params: Result<SearchDiffParams, _> = request
+                .params
+                .clone()
+                .ok_or_else(|| "Missing search params".to_string())
+                .and_then(|value| serde_json::from_value(value).map_err(|e| e.to_string()));
+            let params = match params {
+                Ok(params) => params,
+                Err(err) => {
+                    send_rpc_payload_async(webview, rpc_err(request.id, json!({ "message": err })));
+                    return;
+                }
+            };
+            let limit = params.limit.unwrap_or(100);
+            let backend = with_ui_context(|ctx| ctx.state.backend.clone());
+            let Some(backend) = backend else {
+                send_rpc_payload_async(
+                    webview,
+                    rpc_err(request.id, json!({ "message": "Backend unavailable." })),
+                );
+                return;
+            };
+            thread::spawn(move || {
+                let payload = backend.search_diff_ops(&params.diff_id, &params.query, limit);
+                wxdragon::call_after(Box::new(move || match payload {
+                    Ok(results) => send_rpc_payload(webview, rpc_ok(request.id, json!(results))),
+                    Err(err) => send_rpc_payload(webview, rpc_err(request.id, json!(err))),
+                }));
+            });
+        }
+        "buildSearchIndex" => {
+            let params: Result<BuildSearchIndexParams, _> = request
+                .params
+                .clone()
+                .ok_or_else(|| "Missing index params".to_string())
+                .and_then(|value| serde_json::from_value(value).map_err(|e| e.to_string()));
+            let params = match params {
+                Ok(params) => params,
+                Err(err) => {
+                    send_rpc_payload_async(webview, rpc_err(request.id, json!({ "message": err })));
+                    return;
+                }
+            };
+            let backend = with_ui_context(|ctx| ctx.state.backend.clone());
+            let Some(backend) = backend else {
+                send_rpc_payload_async(
+                    webview,
+                    rpc_err(request.id, json!({ "message": "Backend unavailable." })),
+                );
+                return;
+            };
+            thread::spawn(move || {
+                let payload = backend.build_search_index(Path::new(&params.path), &params.side);
+                wxdragon::call_after(Box::new(move || match payload {
+                    Ok(summary) => send_rpc_payload(webview, rpc_ok(request.id, json!(summary))),
+                    Err(err) => send_rpc_payload(webview, rpc_err(request.id, json!(err))),
+                }));
+            });
+        }
+        "searchWorkbookIndex" => {
+            let params: Result<SearchWorkbookIndexParams, _> = request
+                .params
+                .clone()
+                .ok_or_else(|| "Missing index params".to_string())
+                .and_then(|value| serde_json::from_value(value).map_err(|e| e.to_string()));
+            let params = match params {
+                Ok(params) => params,
+                Err(err) => {
+                    send_rpc_payload_async(webview, rpc_err(request.id, json!({ "message": err })));
+                    return;
+                }
+            };
+            let limit = params.limit.unwrap_or(100);
+            let backend = with_ui_context(|ctx| ctx.state.backend.clone());
+            let Some(backend) = backend else {
+                send_rpc_payload_async(
+                    webview,
+                    rpc_err(request.id, json!({ "message": "Backend unavailable." })),
+                );
+                return;
+            };
+            thread::spawn(move || {
+                let payload = backend.search_workbook_index(&params.index_id, &params.query, limit);
+                wxdragon::call_after(Box::new(move || match payload {
+                    Ok(results) => send_rpc_payload(webview, rpc_ok(request.id, json!(results))),
+                    Err(err) => send_rpc_payload(webview, rpc_err(request.id, json!(err))),
+                }));
+            });
+        }
+        _ => {
+            send_rpc_payload_async(
+                webview,
+                rpc_err(request.id, json!({ "message": "Unknown method." })),
+            );
+        }
+    }
+}
+
 fn create_dataview(parent: &Panel, columns: &[(&str, i32)]) -> DataViewCtrl {
     let ctrl = DataViewCtrl::builder(parent)
         .with_style(DataViewStyle::RowLines | DataViewStyle::VerticalRules)
@@ -734,6 +1398,31 @@ fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
             }
         }
     });
+}
+
+fn handle_webview_diff_result(
+    webview: WebView,
+    request_id: u64,
+    result: Result<DiffOutcome, DiffErrorPayload>,
+) {
+    let payload = match result {
+        Ok(outcome) => {
+            let _ = with_ui_context(|ctx| {
+                ctx.state.current_diff_id = Some(outcome.diff_id.clone());
+                ctx.state.current_mode = Some(outcome.mode);
+                ctx.state.current_summary = outcome.summary.clone();
+                ctx.state.active_run = None;
+            });
+            rpc_ok(request_id, json!(outcome))
+        }
+        Err(err) => {
+            let _ = with_ui_context(|ctx| {
+                ctx.state.active_run = None;
+            });
+            rpc_err(request_id, json!(err))
+        }
+    };
+    send_rpc_payload(webview, payload);
 }
 
 fn start_compare() {
@@ -1328,6 +2017,7 @@ fn main() {
 
         let ui_handles = UiHandles {
             frame: ui.main_frame,
+            main_panel: ui.main_panel,
             open_old_menu: ui.open_old_menu,
             open_new_menu: ui.open_new_menu,
             exit_menu: ui.exit_menu,
@@ -1371,10 +2061,12 @@ fn main() {
             recents_view: None,
             batch_view: None,
             search_view: None,
+            webview: None,
         };
 
         let state = AppState {
             backend,
+            engine_version: env!("CARGO_PKG_VERSION").to_string(),
             run_counter: 0,
             active_run: None,
             current_diff_id: None,
@@ -1390,6 +2082,7 @@ fn main() {
             recents_model: None,
             batch_model: None,
             search_model: None,
+            webview_enabled: false,
         };
 
         UI_CONTEXT.with(|ctx| {
@@ -1413,38 +2106,42 @@ fn main() {
 
         setup_menu_handlers(menu_ids);
 
+        let _webview_enabled = with_ui_context(|ctx| setup_webview(ctx)).unwrap_or(false);
+
         let _ = with_ui_context(|ctx| {
-            ctx.ui.root_tabs.set_selection(0);
-            ctx.ui.cancel_btn.enable(false);
-            update_status_in_ctx(ctx, "Ready");
+            if !ctx.state.webview_enabled {
+                ctx.ui.root_tabs.set_selection(0);
+                ctx.ui.cancel_btn.enable(false);
+                update_status_in_ctx(ctx, "Ready");
 
-            ctx.ui.preset_choice.append("Balanced");
-            ctx.ui.preset_choice.append("Fastest");
-            ctx.ui.preset_choice.append("Most precise");
-            ctx.ui.preset_choice.set_selection(0);
+                ctx.ui.preset_choice.append("Balanced");
+                ctx.ui.preset_choice.append("Fastest");
+                ctx.ui.preset_choice.append("Most precise");
+                ctx.ui.preset_choice.set_selection(0);
 
-            ctx.ui.search_scope_choice.append("Changes");
-            ctx.ui.search_scope_choice.append("Old workbook");
-            ctx.ui.search_scope_choice.append("New workbook");
-            ctx.ui.search_scope_choice.set_selection(0);
+                ctx.ui.search_scope_choice.append("Changes");
+                ctx.ui.search_scope_choice.append("Old workbook");
+                ctx.ui.search_scope_choice.append("New workbook");
+                ctx.ui.search_scope_choice.set_selection(0);
 
-            ctx.ui.compare_btn.on_click(|_| start_compare());
-            ctx.ui.cancel_btn.on_click(|_| cancel_current());
-            ctx.ui.open_recent_btn.on_click(|_| open_recent());
-            ctx.ui.run_batch_btn.on_click(|_| run_batch());
-            ctx.ui.search_btn.on_click(|_| handle_search());
-            ctx.ui.build_old_index_btn.on_click(|_| build_index("old"));
-            ctx.ui.build_new_index_btn.on_click(|_| build_index("new"));
+                ctx.ui.compare_btn.on_click(|_| start_compare());
+                ctx.ui.cancel_btn.on_click(|_| cancel_current());
+                ctx.ui.open_recent_btn.on_click(|_| open_recent());
+                ctx.ui.run_batch_btn.on_click(|_| run_batch());
+                ctx.ui.search_btn.on_click(|_| handle_search());
+                ctx.ui.build_old_index_btn.on_click(|_| build_index("old"));
+                ctx.ui.build_new_index_btn.on_click(|_| build_index("new"));
 
-            ctx.ui.compare_splitter.set_minimum_pane_size(200);
-            if !ctx.ui
-                .compare_splitter
-                .split_vertically(&ctx.ui.sheets_list_panel, &ctx.ui.compare_right_panel, 320)
-            {
-                ctx.ui.compare_splitter.set_sash_position(320, false);
+                ctx.ui.compare_splitter.set_minimum_pane_size(200);
+                if !ctx.ui
+                    .compare_splitter
+                    .split_vertically(&ctx.ui.sheets_list_panel, &ctx.ui.compare_right_panel, 320)
+                {
+                    ctx.ui.compare_splitter.set_sash_position(320, false);
+                }
+                ctx.ui.compare_container.layout();
+                ctx.ui.root_tabs.layout();
             }
-            ctx.ui.compare_container.layout();
-            ctx.ui.root_tabs.layout();
             ctx.ui.frame.layout();
             ctx.ui.frame.show(true);
             let size = ctx.ui.frame.get_size();
@@ -1456,6 +2153,9 @@ fn main() {
 
         wxdragon::call_after(Box::new(move || {
             let _ = with_ui_context(|ctx| {
+                if ctx.state.webview_enabled {
+                    return;
+                }
                 let sheets_view = create_dataview(&ctx.ui.sheets_list_panel, &SHEETS_COLUMNS);
                 let recents_view = create_dataview(&ctx.ui.recents_list_panel, &RECENTS_COLUMNS);
                 let batch_view = create_dataview(&ctx.ui.batch_results_list_panel, &BATCH_COLUMNS);

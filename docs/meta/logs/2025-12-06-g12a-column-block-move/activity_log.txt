@@ -1,8 +1,0 @@
-2025-12-06
-- Reviewed excel_diff_meta_programming.md Section 4 guardrails and the G12a mini-spec/decision for branch 2025-12-06-g12a-column-block-move; noted scope, contracts, constraints, and tests.
-- Recorded plan: column block move detector mirrored from G11 row move, integrate into diff_grids, add G12 fixtures/generator, add workbook + detector unit tests, then fmt/clippy/test.
-- Implemented ColumnBlockMove struct and detect_exact_column_block_move in core/src/column_alignment.rs with size/repetition/blank guards and unique-hash candidate search; added unit tests for success, internal edits, and repetition bailout.
-- Wired diff_grids in core/src/engine.rs to run column move fast path after row block moves via emit_column_block_move helper, preserving existing alignment ordering.
-- Added ColumnMoveG12Generator to fixtures/src/generators/grid.py, registered it in fixtures/src/generate.py, extended fixtures/manifest.yaml with g12_column_block_move, and regenerated fixtures (column_move_a/b.xlsx included).
-- Created core/tests/g12_column_block_move_grid_workbook_tests.rs covering positive fixture path and repeated-column ambiguity guard.
-- Ran cargo fmt, cargo clippy, and cargo test (reran m_section_splitting_tests after initial broken pipe) successfully.

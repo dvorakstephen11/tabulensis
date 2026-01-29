@@ -1,5 +1,0 @@
-[2025-12-05 12:20] Started implementation; read mini-spec, decision record, implementer prompt Section 4, and testing plan G5-G7 guidance.
-[2025-12-05 12:32] Added G5-G7 fixture manifest entries; implemented multi_cell_diff and grid_tail_diff generators and registry wiring.
-[2025-12-05 12:40] Generated G5-G7 workbook fixtures using new generators (multi_cell_diff, grid_tail_diff) into fixtures/generated/.
-[2025-12-05 12:50] Added core/tests/g5_g7_grid_workbook_tests.rs covering multi-cell edits and tail row/column append/delete expectations.
-[2025-12-05 13:05] Ran cargo fmt, cargo clippy (clean), and cargo test; second test run resolved initial broken pipe while listing tests.

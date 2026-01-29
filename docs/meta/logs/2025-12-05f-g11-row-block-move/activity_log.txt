@@ -1,8 +1,0 @@
-2025-12-06
-- Read mini-spec at docs/meta/plans/2025-12-05f-g11-row-block-move/spec.md and decision.yaml for branch 2025-12-05f-g11-row-block-move.
-- Reviewed excel_diff_meta_programming.md role guidance and existing row_alignment/grid_view/engine modules for context.
-- Implemented RowBlockMove struct and detect_exact_row_block_move in core/src/row_alignment.rs with size/repetition/low-info guards and symmetric candidate search; added unit tests for detection success and internal-edit rejection.
-- Wired diff_grids in core/src/engine.rs to call detect_exact_row_block_move first and emit BlockMovedRows via new helper.
-- Added RowBlockMoveG11Generator to fixtures/src/generators/grid.py, registered in generate.py, extended fixtures/manifest.yaml with g11_row_block_move scenario, and generated row_block_move_a/b.xlsx fixtures (fixed insertion index bug and regenerated).
-- Created core/tests/g11_row_block_move_grid_workbook_tests.rs covering positive fixture path and repeated-row guard; adjusted negative case to ensure duplicated block hashes are rejected.
-- Ran cargo fmt, cargo clippy (resolved warnings), and cargo test (full suite) successfully.

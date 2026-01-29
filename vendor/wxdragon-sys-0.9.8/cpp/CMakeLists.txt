@@ -49,7 +49,7 @@ set(wxUSE_RICHTEXT ${wxdUSE_RICHTEXT} CACHE BOOL "Use Rich Text Control widget")
 set(wxUSE_GUI ON CACHE BOOL "Use wxWidgets GUI features")
 set(wxUSE_BASE ON CACHE BOOL "Use wxWidgets base features")
 set(wxUSE_ADV ON CACHE BOOL "Use wxWidgets advanced features")
-set(wxUSE_HTML OFF CACHE BOOL "Use wxWidgets HTML features" FORCE)
+set(wxUSE_HTML ${wxdUSE_WEBVIEW} CACHE BOOL "Use wxWidgets HTML features" FORCE)
 set(wxUSE_OPENGL OFF CACHE BOOL "Use wxWidgets OpenGL features" FORCE)
 set(wxUSE_SOCKETS ON CACHE BOOL "Use wxWidgets sockets")
 set(wxUSE_HELP OFF CACHE BOOL "Use wxWidgets help controller" FORCE)
@@ -136,14 +136,18 @@ set(WXDRAGON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/static_text.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/textctrl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/dialog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/dir_dialog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/font_dialog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/file_dialog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/message_dialog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/single_choice_dialog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/text_entry_dialog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/filepickerctrl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/dirpickerctrl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/search_ctrl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/dataview.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/platform_aware_staticbitmap_handler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/array_string.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/wxd_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/wxd_utils.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/wxd_logging.cpp
