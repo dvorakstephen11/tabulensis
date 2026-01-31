@@ -114,6 +114,22 @@ tabulensis info workbook.xlsx            # Show sheets
 tabulensis info workbook.xlsx --queries  # Include Power Query info
 ```
 
+### Desktop App (from source)
+
+Run the desktop UI from this repo:
+
+```bash
+cargo run -p desktop_wx
+```
+
+Release profile (faster, optimized build):
+
+```bash
+cargo run -p desktop_wx --profile release-desktop
+```
+
+The binary is named `desktop_wx` and will be in `target/<target>/release-desktop/desktop_wx` after a release build.
+
 ## Licensing
 
 Tabulensis requires activation before running diffs.

@@ -754,9 +754,12 @@ fn setup_webview(ctx: &mut UiContext) -> bool {
             update_status_in_ctx(ctx, "WebView2 runtime not available. Using legacy UI.");
             return false;
         }
+    } else if WebView::is_backend_available(WebViewBackend::WebKit) {
+        WebViewBackend::WebKit
     } else if WebView::is_backend_available(WebViewBackend::Default) {
         WebViewBackend::Default
     } else {
+        update_status_in_ctx(ctx, "WebView backend not available. Using legacy UI.");
         return false;
     };
 
