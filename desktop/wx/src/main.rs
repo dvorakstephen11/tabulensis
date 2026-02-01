@@ -781,6 +781,16 @@ fn setup_webview(ctx: &mut UiContext) -> bool {
 
     webview.load_url(&index_url);
 
+    // Remove legacy chrome when the web UI is active.
+    // This avoids mismatched theming and legacy menu actions that don't target the web UI.
+    unsafe {
+        ffi::wxd_Frame_SetMenuBar(
+            ctx.ui.frame.handle_ptr() as *mut ffi::wxd_Frame_t,
+            std::ptr::null_mut(),
+        );
+    }
+    ctx.ui.frame.set_existing_status_bar(None);
+
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
     sizer.add(&webview, 1, SizerFlag::Expand, 0);
     ctx.ui.main_panel.set_sizer(sizer, true);
