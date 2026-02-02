@@ -146,7 +146,10 @@ set(WXDRAGON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/dirpickerctrl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/search_ctrl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/dataview.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/dataviewvirtuallistmodel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/dataviewvirtuallistmodel_custom.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/platform_aware_staticbitmap_handler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/clipboard.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/array_string.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/wxd_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/wxd_utils.h

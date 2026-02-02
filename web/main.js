@@ -12,6 +12,7 @@ import {
   loadDiffSummary,
   loadSheetPayload,
   exportAuditXlsx,
+  openPath,
   runBatchCompare,
   loadBatchSummary,
   searchDiffOps,
@@ -68,6 +69,7 @@ let lastDiffId = null;
 let lastSummary = null;
 let lastMode = "payload";
 let lastEngineOptions = null;
+let lastAuditPath = null;
 let isDesktopApp = false;
 let selectedOld = null;
 let selectedNew = null;
@@ -107,9 +109,13 @@ function setExportsEnabled({ json = false, html = false, audit = false } = {}) {
   const jsonBtn = byId("exportJson");
   const htmlBtn = byId("exportHtml");
   const auditBtn = document.getElementById("exportAudit");
+  const openBtn = document.getElementById("openAudit");
+  const revealBtn = document.getElementById("revealAudit");
   if (jsonBtn) jsonBtn.disabled = !json;
   if (htmlBtn) htmlBtn.disabled = !html;
   if (auditBtn) auditBtn.disabled = !audit;
+  if (openBtn) openBtn.disabled = !lastAuditPath || !isDesktopApp;
+  if (revealBtn) revealBtn.disabled = !lastAuditPath || !isDesktopApp;
 }
 
 function clearResults() {
@@ -122,6 +128,7 @@ function clearResults() {
   lastDiffId = null;
   lastSummary = null;
   lastMode = "payload";
+  lastAuditPath = null;
   if (largeModeNav) {
     largeModeNav.innerHTML = "";
     largeModeNav.classList.remove("visible");
@@ -1111,11 +1118,19 @@ function setupReviewWorkflow(rootEl, workbookVm, payloadCache, options = {}, sta
   const searchInput = rootEl.querySelector(".sheet-search");
   const focusRowsInput = rootEl.querySelector('input[data-filter="focus-rows"]');
   const focusColsInput = rootEl.querySelector('input[data-filter="focus-cols"]');
+  const structuralInput = rootEl.querySelector('input[data-filter="only-structural"]');
+  const movedInput = rootEl.querySelector('input[data-filter="only-moved"]');
+  const limitedInput = rootEl.querySelector('input[data-filter="only-limited"]');
+  const sheetChangeInput = rootEl.querySelector('input[data-filter="only-sheet-changes"]');
   const ignoreBlankInput = rootEl.querySelector('input[data-filter="ignore-blank"]');
   const contentModeSelect = rootEl.querySelector('select[data-filter="content-mode"]');
 
   if (focusRowsInput) focusRowsInput.checked = displayOptions.focusRows;
   if (focusColsInput) focusColsInput.checked = displayOptions.focusCols;
+  if (structuralInput) structuralInput.checked = Boolean(state.onlyStructural);
+  if (movedInput) movedInput.checked = Boolean(state.onlyMoved);
+  if (limitedInput) limitedInput.checked = Boolean(state.onlyLimited);
+  if (sheetChangeInput) sheetChangeInput.checked = Boolean(state.onlySheetChanges);
   if (ignoreBlankInput) ignoreBlankInput.checked = options.ignoreBlankToBlank !== false;
   if (contentModeSelect) contentModeSelect.value = displayOptions.contentMode;
 
@@ -1128,21 +1143,45 @@ function setupReviewWorkflow(rootEl, workbookVm, payloadCache, options = {}, sta
 
   function applySheetFilter(value) {
     const term = String(value || "").trim().toLowerCase();
+    const requireStructural = structuralInput?.checked;
+    const requireMoved = movedInput?.checked;
+    const requireLimited = limitedInput?.checked;
+    const requireSheetChange = sheetChangeInput?.checked;
     const sections = rootEl.querySelectorAll(".sheet-section");
     const indexItems = rootEl.querySelectorAll(".sheet-index-item");
     for (const section of sections) {
       const name = (section.dataset.sheet || "").toLowerCase();
-      section.hidden = term ? !name.includes(term) : false;
+      const structuralOk = !requireStructural || section.dataset.structural === "1";
+      const movedOk = !requireMoved || section.dataset.moved === "1";
+      const limitedOk = !requireLimited || section.dataset.limited === "1";
+      const sheetChangeOk = !requireSheetChange || Boolean(section.dataset.sheetState);
+      const termOk = term ? name.includes(term) : true;
+      section.hidden = !(termOk && structuralOk && movedOk && limitedOk && sheetChangeOk);
     }
     for (const item of indexItems) {
       const name = (item.dataset.sheet || "").toLowerCase();
-      item.hidden = term ? !name.includes(term) : false;
+      const structuralOk = !requireStructural || item.dataset.structural === "1";
+      const movedOk = !requireMoved || item.dataset.moved === "1";
+      const limitedOk = !requireLimited || item.dataset.limited === "1";
+      const sheetChangeOk = !requireSheetChange || Boolean(item.dataset.sheetState);
+      const termOk = term ? name.includes(term) : true;
+      item.hidden = !(termOk && structuralOk && movedOk && limitedOk && sheetChangeOk);
     }
   }
 
   if (searchInput) {
     searchInput.value = state.sheetFilter || "";
-    if (state.sheetFilter) applySheetFilter(state.sheetFilter);
+    if (state.sheetFilter || state.onlyStructural || state.onlyMoved || state.onlyLimited || state.onlySheetChanges) {
+      applySheetFilter(state.sheetFilter || "");
+    }
+  }
+
+  const initialSections = rootEl.querySelectorAll(".sheet-section");
+  for (const section of initialSections) {
+    if (!section.dataset.activeTab) {
+      const activeTab = section.querySelector(".sheet-tab.active")?.dataset.tab || section.dataset.defaultTab;
+      if (activeTab) section.dataset.activeTab = activeTab;
+    }
   }
 
   function getSheetSection(sheetName) {
@@ -1158,6 +1197,19 @@ function setupReviewWorkflow(rootEl, workbookVm, payloadCache, options = {}, sta
     if (!section) return null;
     section.classList.add("expanded");
     return section;
+  }
+
+  function setActiveTab(section, tabId) {
+    if (!section || !tabId) return;
+    const tabs = section.querySelectorAll(".sheet-tab");
+    const contents = section.querySelectorAll(".sheet-tab-content");
+    for (const tab of tabs) {
+      tab.classList.toggle("active", tab.dataset.tab === tabId);
+    }
+    for (const content of contents) {
+      content.classList.toggle("active", content.dataset.tab === tabId);
+    }
+    section.dataset.activeTab = tabId;
   }
 
   function ensureViewer(sheetName) {
@@ -1226,6 +1278,14 @@ function setupReviewWorkflow(rootEl, workbookVm, payloadCache, options = {}, sta
     for (const section of sections) {
       if (section.dataset.sheet) expandedSheets.add(section.dataset.sheet);
     }
+    const sheetTabs = {};
+    const allSections = rootEl.querySelectorAll(".sheet-section");
+    for (const section of allSections) {
+      const name = section.dataset.sheet;
+      if (!name) continue;
+      const activeTab = section.dataset.activeTab || section.querySelector(".sheet-tab.active")?.dataset.tab;
+      if (activeTab) sheetTabs[name] = activeTab;
+    }
     return {
       expandedSheets,
       activeSheetName: reviewState.activeSheetName,
@@ -1233,7 +1293,12 @@ function setupReviewWorkflow(rootEl, workbookVm, payloadCache, options = {}, sta
       contentMode: displayOptions.contentMode,
       focusRows: displayOptions.focusRows,
       focusCols: displayOptions.focusCols,
-      sheetFilter: searchInput ? searchInput.value : ""
+      sheetFilter: searchInput ? searchInput.value : "",
+      onlyStructural: structuralInput?.checked || false,
+      onlyMoved: movedInput?.checked || false,
+      onlyLimited: limitedInput?.checked || false,
+      onlySheetChanges: sheetChangeInput?.checked || false,
+      sheetTabs
     };
   }
 
@@ -1244,6 +1309,59 @@ function setupReviewWorkflow(rootEl, workbookVm, payloadCache, options = {}, sta
   }
 
   function onRootClick(event) {
+    const tabBtn = event.target.closest(".sheet-tab");
+    if (tabBtn) {
+      event.preventDefault();
+      const section = tabBtn.closest(".sheet-section");
+      const tabId = tabBtn.dataset.tab;
+      if (section && tabId) {
+        setActiveTab(section, tabId);
+        const sheetName = section.dataset.sheet;
+        if (sheetName && tabId === "grid") {
+          ensureViewer(sheetName);
+        }
+        if (sheetName) {
+          reviewState.activeSheetName = sheetName;
+          setActiveSheet(sheetName);
+        }
+      }
+      return;
+    }
+
+    const previewAction = event.target.closest(".preview-action");
+    if (previewAction) {
+      event.preventDefault();
+      const action = previewAction.dataset.action;
+      const sheetName = previewAction.dataset.sheet;
+      if (action === "show-hunks" && sheetName) {
+        const section = getSheetSection(sheetName);
+        if (section) {
+          setActiveTab(section, "hunks");
+          section.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+        return;
+      }
+      if (action === "export-audit") {
+        if (lastDiffId) {
+          exportAuditXlsx(lastDiffId).then(path => {
+            if (path) {
+              lastAuditPath = path;
+              setExportsEnabled({ json: Boolean(lastReport), html: true, audit: isDesktopApp });
+            }
+          }).catch(handleError);
+        }
+        return;
+      }
+      if (action === "open-audit") {
+        if (lastAuditPath) {
+          openPath(lastAuditPath, false).catch(handleError);
+        } else {
+          setStatus("Export an audit workbook first.", "error");
+        }
+        return;
+      }
+    }
+
     const navBtn = event.target.closest(".review-nav-btn");
     if (navBtn) {
       event.preventDefault();
@@ -1264,6 +1382,38 @@ function setupReviewWorkflow(rootEl, workbookVm, payloadCache, options = {}, sta
       return;
     }
 
+    const hunkOpen = event.target.closest(".hunk-open");
+    if (hunkOpen) {
+      event.preventDefault();
+      const sheetName = hunkOpen.dataset.sheet;
+      const anchorId = hunkOpen.dataset.anchor;
+      if (sheetName && anchorId) {
+        navigateToAnchor(sheetName, anchorId);
+      }
+      return;
+    }
+
+    const opsJump = event.target.closest(".ops-jump");
+    if (opsJump) {
+      event.preventDefault();
+      const sheetName = opsJump.dataset.sheet;
+      const viewRow = Number(opsJump.dataset.viewRow);
+      const viewCol = Number(opsJump.dataset.viewCol);
+      if (sheetName && Number.isFinite(viewRow) && Number.isFinite(viewCol)) {
+        const section = expandSheet(sheetName);
+        if (section) {
+          setActiveTab(section, "grid");
+          const viewer = ensureViewer(sheetName);
+          if (viewer) {
+            viewer.jumpTo(viewRow, viewCol);
+            viewer.focus();
+          }
+          section.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      }
+      return;
+    }
+
     const statusBtn = event.target.closest(".status-pill");
     if (statusBtn && statusBtn.tagName === "BUTTON") {
       event.preventDefault();
@@ -1272,6 +1422,7 @@ function setupReviewWorkflow(rootEl, workbookVm, payloadCache, options = {}, sta
       if (sheetName) {
         const section = expandSheet(sheetName);
         if (section) {
+          setActiveTab(section, "grid");
           const warning = section.querySelector(".grid-skip-warning");
           if (warning) {
             warning.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -1291,7 +1442,11 @@ function setupReviewWorkflow(rootEl, workbookVm, payloadCache, options = {}, sta
       if (sheetName) {
         const section = expandSheet(sheetName);
         if (section) {
-          ensureViewer(sheetName);
+          const tabId = section.dataset.activeTab || section.dataset.defaultTab || "grid";
+          setActiveTab(section, tabId);
+          if (tabId === "grid") {
+            ensureViewer(sheetName);
+          }
           section.scrollIntoView({ behavior: "smooth", block: "start" });
           reviewState.activeSheetName = sheetName;
           reviewState.activeAnchorId = null;
@@ -1304,6 +1459,19 @@ function setupReviewWorkflow(rootEl, workbookVm, payloadCache, options = {}, sta
   function onRootInput(event) {
     if (event.target.classList.contains("sheet-search")) {
       applySheetFilter(event.target.value);
+      return;
+    }
+    if (event.target.classList.contains("ops-search")) {
+      const section = event.target.closest(".sheet-section");
+      const tab = event.target.closest(".sheet-tab-content");
+      if (!section) return;
+      const term = String(event.target.value || "").trim().toLowerCase();
+      const rows = tab ? tab.querySelectorAll(".ops-row") : section.querySelectorAll(".ops-row");
+      for (const row of rows) {
+        if (row.classList.contains("ops-header")) continue;
+        const text = row.dataset.opText || "";
+        row.hidden = term ? !text.includes(term) : false;
+      }
     }
   }
 
@@ -1314,6 +1482,8 @@ function setupReviewWorkflow(rootEl, workbookVm, payloadCache, options = {}, sta
     } else if (event.target === focusColsInput) {
       displayOptions.focusCols = focusColsInput.checked;
       viewerManager.setDisplayOptions(displayOptions);
+    } else if (event.target === structuralInput || event.target === movedInput || event.target === limitedInput || event.target === sheetChangeInput) {
+      applySheetFilter(searchInput ? searchInput.value : "");
     } else if (event.target === ignoreBlankInput) {
       rebuildResults(ignoreBlankInput.checked);
     } else if (event.target === contentModeSelect) {
@@ -1351,6 +1521,18 @@ function setupReviewWorkflow(rootEl, workbookVm, payloadCache, options = {}, sta
 
   viewerManager.setDisplayOptions(displayOptions);
 
+  if (state.sheetTabs) {
+    for (const [sheetName, tabId] of Object.entries(state.sheetTabs)) {
+      const section = getSheetSection(sheetName);
+      if (section) {
+        setActiveTab(section, tabId);
+        if (tabId === "grid") {
+          ensureViewer(sheetName);
+        }
+      }
+    }
+  }
+
   if (reviewState.activeSheetName && reviewState.activeAnchorId) {
     const moved = navigateToAnchor(reviewState.activeSheetName, reviewState.activeAnchorId);
     if (!moved) {
@@ -1387,6 +1569,10 @@ function hydrateGridViewers(rootEl, workbookVm, displayOptions = {}, expandedShe
 
   function mountForSection(section) {
     if (!section) return;
+    const gridTab = section.querySelector('.sheet-tab-content[data-tab="grid"]');
+    if (gridTab && !gridTab.classList.contains("active")) {
+      return;
+    }
     const mount = section.querySelector(".grid-viewer-mount");
     if (!mount || mount.dataset.mounted) return;
     const sheetName = section.dataset.sheet || mount.dataset.sheet;
@@ -1412,6 +1598,18 @@ function hydrateGridViewers(rootEl, workbookVm, displayOptions = {}, expandedShe
     const section = getSectionByName(sheetName);
     if (!section) return null;
     section.classList.add("expanded");
+    const gridTab = section.querySelector('.sheet-tab-content[data-tab="grid"]');
+    if (gridTab && !gridTab.classList.contains("active")) {
+      const tabs = section.querySelectorAll(".sheet-tab");
+      const contents = section.querySelectorAll(".sheet-tab-content");
+      for (const tab of tabs) {
+        tab.classList.toggle("active", tab.dataset.tab === "grid");
+      }
+      for (const content of contents) {
+        content.classList.toggle("active", content.dataset.tab === "grid");
+      }
+      section.dataset.activeTab = "grid";
+    }
     mountForSection(section);
     return viewers.get(sheetName) || null;
   }
@@ -1538,7 +1736,35 @@ async function main() {
       exportAuditBtn.addEventListener("click", async () => {
         if (!lastDiffId) return;
         try {
-          await exportAuditXlsx(lastDiffId);
+          const path = await exportAuditXlsx(lastDiffId);
+          if (path) {
+            lastAuditPath = path;
+            setExportsEnabled({ json: Boolean(lastReport), html: true, audit: isDesktopApp });
+          }
+        } catch (err) {
+          handleError(err);
+        }
+      });
+    }
+
+    const openAuditBtn = document.getElementById("openAudit");
+    if (openAuditBtn) {
+      openAuditBtn.addEventListener("click", async () => {
+        if (!lastAuditPath) return;
+        try {
+          await openPath(lastAuditPath, false);
+        } catch (err) {
+          handleError(err);
+        }
+      });
+    }
+
+    const revealAuditBtn = document.getElementById("revealAudit");
+    if (revealAuditBtn) {
+      revealAuditBtn.addEventListener("click", async () => {
+        if (!lastAuditPath) return;
+        try {
+          await openPath(lastAuditPath, true);
         } catch (err) {
           handleError(err);
         }

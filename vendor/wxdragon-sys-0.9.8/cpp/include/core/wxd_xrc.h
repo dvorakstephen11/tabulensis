@@ -15,6 +15,10 @@ wxd_XmlResource_Get(void);
 WXD_EXPORTED void
 wxd_XmlResource_InitAllHandlers(wxd_XmlResource_t* self);
 
+// Initialize sizer handler explicitly (covers XRC spacer nodes)
+WXD_EXPORTED void
+wxd_XmlResource_InitSizerHandlers(wxd_XmlResource_t* self);
+
 // Load XRC from file
 WXD_EXPORTED bool
 wxd_XmlResource_LoadFromFile(wxd_XmlResource_t* self, const char* filemask);

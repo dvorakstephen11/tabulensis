@@ -8,33 +8,66 @@
     <object class="wxMenuBar" name="menu_bar">
       <object class="wxMenu" name="file_menu">
         <label>&amp;File</label>
+        <object class="wxMenuItem" name="open_pair_menu">
+          <label>Open Pair...\tCtrl+O</label>
+        </object>
         <object class="wxMenuItem" name="open_old_menu">
-          <label>Open Old...</label>
+          <label>Open Old...\tCtrl+Shift+O</label>
         </object>
         <object class="wxMenuItem" name="open_new_menu">
-          <label>Open New...</label>
+          <label>Open New...\tCtrl+Shift+N</label>
         </object>
+        <object class="wxMenuItem" name="open_recent_menu">
+          <label>Open Recent...\tCtrl+R</label>
+        </object>
+        <object class="wxMenuItem" name="export_audit_menu">
+          <label>Export Audit XLSX...\tCtrl+S</label>
+        </object>
+        <object class="separator"></object>
         <object class="wxMenuItem" name="exit_menu">
-          <label>Exit</label>
+          <label>Quit\tCtrl+Q</label>
         </object>
       </object>
       <object class="wxMenu" name="run_menu">
         <label>&amp;Run</label>
         <object class="wxMenuItem" name="compare_menu">
-          <label>Compare</label>
+          <label>Compare\tF5</label>
         </object>
         <object class="wxMenuItem" name="cancel_menu">
           <label>Cancel</label>
         </object>
+        <object class="separator"></object>
+        <object class="wxMenuItem" name="next_diff_menu">
+          <label>Next Difference\tF8</label>
+        </object>
+        <object class="wxMenuItem" name="prev_diff_menu">
+          <label>Previous Difference\tShift+F8</label>
+        </object>
       </object>
-      <object class="wxMenu" name="export_menu">
-        <label>&amp;Export</label>
-        <object class="wxMenuItem" name="export_audit_menu">
-          <label>Export Audit XLSX...</label>
+      <object class="wxMenu" name="edit_menu">
+        <label>&amp;Edit</label>
+        <object class="wxMenuItem" name="copy_menu">
+          <label>Copy\tCtrl+C</label>
+        </object>
+        <object class="wxMenuItem" name="find_menu">
+          <label>Find...\tCtrl+F</label>
+        </object>
+      </object>
+      <object class="wxMenu" name="view_menu">
+        <label>&amp;View</label>
+        <object class="wxMenuItem" name="toggle_sheets_menu">
+          <label>Show Sheets Panel\tCtrl+1</label>
+          <kind>check</kind>
+        </object>
+        <object class="wxMenuItem" name="reset_layout_menu">
+          <label>Reset Layout</label>
         </object>
       </object>
       <object class="wxMenu" name="help_menu">
         <label>&amp;Help</label>
+        <object class="wxMenuItem" name="docs_menu">
+          <label>Docs...\tF1</label>
+        </object>
         <object class="wxMenuItem" name="license_menu">
           <label>License...</label>
         </object>

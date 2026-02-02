@@ -1,5 +1,14 @@
 use std::cell::RefCell;
+use std::ffi::CString;
+use std::fs::OpenOptions;
+use std::io::Write;
+#[cfg(target_os = "linux")]
+use std::os::unix::io::AsRawFd;
+#[cfg(target_os = "linux")]
+use std::os::raw::{c_char, c_void};
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -10,19 +19,24 @@ mod xrc_validation;
 use desktop_backend::{
     BatchOutcome, BatchRequest, BackendConfig, DesktopBackend, DiffErrorPayload, DiffMode, DiffOutcome, DiffRequest,
     DiffRunSummary, ProgressRx, RecentComparison, SearchIndexResult, SearchIndexSummary, SearchResult, SheetPayloadRequest,
+    SheetMetaRequest, OpsRangeRequest, CellsRangeRequest, RangeBounds,
 };
 use license_client::LicenseClient;
 use logic::{base_name, parse_globs, preset_from_selection};
 use log::{debug, info, LevelFilter, Metadata, Record};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use ui_payload::{DiffOptions, DiffPreset};
 use wxdragon::event::WebViewEvents;
 use wxdragon::prelude::*;
+use wxdragon::widgets::dataview::{CustomDataViewVirtualListModel, DataViewItemAttr, Variant};
 use wxdragon::widgets::{WebView, WebViewBackend, WebViewUserScriptInjectionTime};
 use wxdragon::xrc::{FromXrcPtr, XmlResource};
 use wxdragon_sys as ffi;
 use xrc_validation::validate_xrc;
+
+#[cfg(target_os = "linux")]
+use libc;
 
 const SHEETS_COLUMNS: [(&str, i32); 6] = [
     ("Sheet", 200),
@@ -69,16 +83,55 @@ fn min_root_tabs_size() -> Size {
     Size::new(640, 360)
 }
 
+const DEFAULT_SASH_POSITION: i32 = 420;
+const MIN_SASH_POSITION: i32 = 260;
+// wxWidgets key codes for F6/F8 (WXK_F1=340).
+const WXK_F6: i32 = 345;
+const WXK_F8: i32 = 347;
+
+fn show_startup_error(message: &str) -> ! {
+    show_startup_error_with_parent(None, message)
+}
+
+fn show_startup_error_with_parent(parent: Option<&dyn WxWidget>, message: &str) -> ! {
+    if let Some(parent) = parent {
+        let dialog = MessageDialog::builder(parent, message, "UI startup error")
+            .with_style(MessageDialogStyle::IconError | MessageDialogStyle::OK)
+            .build();
+        let _ = dialog.show_modal();
+    } else {
+        let frame = Frame::builder()
+            .with_title("Tabulensis")
+            .with_size(Size::new(520, 320))
+            .build();
+        let dialog = MessageDialog::builder(&frame, message, "UI startup error")
+            .with_style(MessageDialogStyle::IconError | MessageDialogStyle::OK)
+            .build();
+        let _ = dialog.show_modal();
+        frame.destroy();
+    }
+    std::process::exit(1);
+}
+
 struct MainUi {
     main_frame: Frame,
     main_panel: Panel,
+    open_pair_menu: MenuItem,
     open_old_menu: MenuItem,
     open_new_menu: MenuItem,
+    open_recent_menu: MenuItem,
     exit_menu: MenuItem,
     compare_menu: MenuItem,
     cancel_menu: MenuItem,
     export_audit_menu: MenuItem,
+    next_diff_menu: MenuItem,
+    prev_diff_menu: MenuItem,
+    copy_menu: MenuItem,
+    find_menu: MenuItem,
+    toggle_sheets_menu: MenuItem,
+    reset_layout_menu: MenuItem,
     license_menu: MenuItem,
+    docs_menu: MenuItem,
     about_menu: MenuItem,
     status_bar: StatusBar,
     root_tabs: Notebook,
@@ -115,39 +168,69 @@ struct MainUi {
     _resource: XmlResource,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct UiState {
+    window_x: Option<i32>,
+    window_y: Option<i32>,
+    window_width: Option<i32>,
+    window_height: Option<i32>,
+    window_maximized: Option<bool>,
+    root_tab: Option<usize>,
+    compare_sash: Option<i32>,
+    sheets_panel_visible: Option<bool>,
+    last_old_path: Option<String>,
+    last_new_path: Option<String>,
+    preset_choice: Option<u32>,
+    trusted_files: Option<bool>,
+}
+
+struct VirtualTable {
+    model: CustomDataViewVirtualListModel,
+    rows: Rc<RefCell<Vec<Vec<String>>>>,
+}
+
 impl MainUi {
     const XRC_DATA: &'static str = include_str!("../ui/main.xrc");
 
     pub fn new(parent: Option<&dyn WxWidget>, auto_destroy_root: bool) -> Self {
         maybe_validate_xrc();
         let resource = XmlResource::get();
-        resource.init_platform_aware_staticbitmap_handler();
         resource.init_all_handlers();
+        resource.init_platform_aware_staticbitmap_handler();
+        resource.init_sizer_handlers();
         info!("Loading XRC data.");
         resource
             .load_from_string(Self::XRC_DATA)
             .unwrap_or_else(|err| {
-                panic!(
-                    "Failed to load XRC data: {err}\nEnable EXCEL_DIFF_VALIDATE_XRC=1 for structural checks."
-                )
+                show_startup_error(&format!(
+                    "Failed to load UI resources.\n\n{err}\n\nEnable EXCEL_DIFF_VALIDATE_XRC=1 for structural checks."
+                ))
             });
 
         info!("Loading main frame.");
         let main_frame = resource
             .load_frame(parent, "main_frame")
-            .unwrap_or_else(|| panic!("Failed to load XRC root object: main_frame"));
+            .unwrap_or_else(|| show_startup_error("Failed to load main window from UI resources."));
         if parent.is_none() {
             main_frame.set_min_size(min_window_size());
             main_frame.set_size(default_window_size());
         }
+        main_frame.add_style(
+            WindowStyle::MaximizeBox | WindowStyle::MinimizeBox | WindowStyle::ThickFrame | WindowStyle::SysMenu,
+        );
         let _menu_bar = main_frame
             .get_menu_bar()
             .unwrap_or_else(|| panic!("Failed to get MenuBar from Frame"));
 
+        let open_pair_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "open_pair_menu")
+            .unwrap_or_else(|| panic!("Failed to find menu item: open_pair_menu"));
         let open_old_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "open_old_menu")
             .unwrap_or_else(|| panic!("Failed to find menu item: open_old_menu"));
         let open_new_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "open_new_menu")
             .unwrap_or_else(|| panic!("Failed to find menu item: open_new_menu"));
+        let open_recent_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "open_recent_menu")
+            .unwrap_or_else(|| panic!("Failed to find menu item: open_recent_menu"));
         let exit_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "exit_menu")
             .unwrap_or_else(|| panic!("Failed to find menu item: exit_menu"));
         let compare_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "compare_menu")
@@ -156,8 +239,22 @@ impl MainUi {
             .unwrap_or_else(|| panic!("Failed to find menu item: cancel_menu"));
         let export_audit_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "export_audit_menu")
             .unwrap_or_else(|| panic!("Failed to find menu item: export_audit_menu"));
+        let next_diff_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "next_diff_menu")
+            .unwrap_or_else(|| panic!("Failed to find menu item: next_diff_menu"));
+        let prev_diff_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "prev_diff_menu")
+            .unwrap_or_else(|| panic!("Failed to find menu item: prev_diff_menu"));
+        let copy_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "copy_menu")
+            .unwrap_or_else(|| panic!("Failed to find menu item: copy_menu"));
+        let find_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "find_menu")
+            .unwrap_or_else(|| panic!("Failed to find menu item: find_menu"));
+        let toggle_sheets_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "toggle_sheets_menu")
+            .unwrap_or_else(|| panic!("Failed to find menu item: toggle_sheets_menu"));
+        let reset_layout_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "reset_layout_menu")
+            .unwrap_or_else(|| panic!("Failed to find menu item: reset_layout_menu"));
         let license_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "license_menu")
             .unwrap_or_else(|| panic!("Failed to find menu item: license_menu"));
+        let docs_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "docs_menu")
+            .unwrap_or_else(|| panic!("Failed to find menu item: docs_menu"));
         let about_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "about_menu")
             .unwrap_or_else(|| panic!("Failed to find menu item: about_menu"));
 
@@ -186,6 +283,8 @@ impl MainUi {
         let result_tabs = find_xrc_child::<Notebook>(&compare_container, "result_tabs");
         let compare_splitter = find_xrc_child::<SplitterWindow>(&compare_container, "compare_splitter");
         let compare_right_panel = find_xrc_child::<Panel>(&compare_container, "compare_right_panel");
+        sheets_list.set_min_size(Size::new(MIN_SASH_POSITION, 240));
+        compare_right_panel.set_min_size(Size::new(320, 240));
         let old_picker = find_xrc_child::<FilePickerCtrl>(&compare_container, "old_picker");
         let new_picker = find_xrc_child::<FilePickerCtrl>(&compare_container, "new_picker");
         let compare_btn = find_xrc_child::<Button>(&compare_container, "compare_btn");
@@ -218,13 +317,22 @@ impl MainUi {
         Self {
             main_frame,
             main_panel,
+            open_pair_menu,
             open_old_menu,
             open_new_menu,
+            open_recent_menu,
             exit_menu,
             compare_menu,
             cancel_menu,
             export_audit_menu,
+            next_diff_menu,
+            prev_diff_menu,
+            copy_menu,
+            find_menu,
+            toggle_sheets_menu,
+            reset_layout_menu,
             license_menu,
+            docs_menu,
             about_menu,
             status_bar,
             root_tabs,
@@ -277,15 +385,19 @@ where
 {
     let id = XmlResource::get_xrc_id(name);
     if id == 0 || id == -1 {
-        panic!(
-            "Failed to find XRC id: {name}. Enable EXCEL_DIFF_VALIDATE_XRC=1 for details."
+        show_startup_error_with_parent(
+            Some(parent),
+            &format!("Missing XRC id: {name}. Enable EXCEL_DIFF_VALIDATE_XRC=1 for details."),
         );
     }
 
     let child_ptr = unsafe { ffi::wxd_Window_FindWindowById(parent.handle_ptr(), id) };
     if child_ptr.is_null() {
-        panic!(
-            "Failed to find XRC child: {name}. Check widget names in the XRC and run with EXCEL_DIFF_VALIDATE_XRC=1."
+        show_startup_error_with_parent(
+            Some(parent),
+            &format!(
+                "Missing XRC widget: {name}. Check widget names in the XRC and run with EXCEL_DIFF_VALIDATE_XRC=1."
+            ),
         );
     }
 
@@ -304,16 +416,145 @@ fn maybe_validate_xrc() {
     }
 }
 
+fn load_ui_state(path: &Path) -> UiState {
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return UiState::default();
+    };
+    serde_json::from_str(&contents).unwrap_or_default()
+}
+
+fn save_ui_state(path: &Path, state: &UiState) {
+    let Ok(payload) = serde_json::to_string_pretty(state) else {
+        return;
+    };
+    let Ok(mut file) = OpenOptions::new().create(true).truncate(true).write(true).open(path) else {
+        return;
+    };
+    let _ = file.write_all(payload.as_bytes());
+}
+
+fn clear_ui_state(path: &Path) {
+    let _ = std::fs::remove_file(path);
+}
+
+fn capture_ui_state(ctx: &UiContext) -> UiState {
+    let size = ctx.ui.frame.get_size();
+    let pos = ctx.ui.frame.get_position();
+    let selection = ctx.ui.root_tabs.selection();
+    let old_path = ctx.ui.old_picker.get_path();
+    let new_path = ctx.ui.new_picker.get_path();
+
+    UiState {
+        window_x: Some(pos.x),
+        window_y: Some(pos.y),
+        window_width: Some(size.width),
+        window_height: Some(size.height),
+        window_maximized: Some(ctx.ui.frame.is_maximized()),
+        root_tab: if selection >= 0 { Some(selection as usize) } else { None },
+        compare_sash: Some(ctx.state.sheets_sash_position),
+        sheets_panel_visible: Some(ctx.state.sheets_panel_visible),
+        last_old_path: if old_path.trim().is_empty() { None } else { Some(old_path) },
+        last_new_path: if new_path.trim().is_empty() { None } else { Some(new_path) },
+        preset_choice: ctx.ui.preset_choice.get_selection(),
+        trusted_files: Some(ctx.ui.trusted_checkbox.is_checked()),
+    }
+}
+
+fn apply_frame_state(ctx: &mut UiContext, ui_state: &UiState) {
+    if let (Some(width), Some(height)) = (ui_state.window_width, ui_state.window_height) {
+        if width > 0 && height > 0 {
+            let min_size = min_window_size();
+            let width = width.max(min_size.width);
+            let height = height.max(min_size.height);
+            if let (Some(x), Some(y)) = (ui_state.window_x, ui_state.window_y) {
+                ctx.ui.frame.set_size_with_pos(x, y, width, height);
+            } else {
+                ctx.ui.frame.set_size(Size::new(width, height));
+            }
+        }
+    } else if let (Some(x), Some(y)) = (ui_state.window_x, ui_state.window_y) {
+        ctx.ui.frame.move_window(x, y);
+    }
+}
+
+fn should_start_maximized(ui_state: &UiState) -> bool {
+    if let Some(value) = env_flag("EXCEL_DIFF_START_MAXIMIZED") {
+        return value;
+    }
+    if let Some(value) = ui_state.window_maximized {
+        return value;
+    }
+    true
+}
+
+fn apply_ui_state(ctx: &mut UiContext, ui_state: &UiState) {
+    apply_frame_state(ctx, ui_state);
+    if let Some(old_path) = ui_state.last_old_path.as_ref() {
+        ctx.ui.old_picker.set_path(old_path);
+    }
+    if let Some(new_path) = ui_state.last_new_path.as_ref() {
+        ctx.ui.new_picker.set_path(new_path);
+    }
+    if let Some(preset) = ui_state.preset_choice {
+        let max = ctx.ui.preset_choice.get_count().saturating_sub(1);
+        let choice = (preset as u32).min(max);
+        ctx.ui.preset_choice.set_selection(choice);
+    }
+    if let Some(trusted) = ui_state.trusted_files {
+        ctx.ui.trusted_checkbox.set_value(trusted);
+    }
+    if let Some(tab) = ui_state.root_tab {
+        if tab < ctx.ui.root_tabs.get_page_count() {
+            ctx.ui.root_tabs.set_selection(tab);
+        }
+    }
+
+    ctx.ui.compare_splitter.set_minimum_pane_size(MIN_SASH_POSITION);
+    let visible = ui_state
+        .sheets_panel_visible
+        .unwrap_or(ctx.state.sheets_panel_visible);
+    let mut sash = ui_state.compare_sash.unwrap_or(ctx.state.sheets_sash_position);
+    if sash < MIN_SASH_POSITION {
+        sash = DEFAULT_SASH_POSITION;
+    }
+    ctx.state.sheets_panel_visible = visible;
+    ctx.state.sheets_sash_position = sash;
+    if visible {
+        if !ctx
+            .ui
+            .compare_splitter
+            .split_vertically(&ctx.ui.sheets_list_panel, &ctx.ui.compare_right_panel, sash)
+        {
+            ctx.ui.compare_splitter.set_sash_position(sash, false);
+        }
+    } else {
+        let _ = ctx
+            .ui
+            .compare_splitter
+            .unsplit(Some(&ctx.ui.sheets_list_panel));
+    }
+    ctx.ui.toggle_sheets_menu.check(visible);
+}
+
 struct UiHandles {
     frame: Frame,
     main_panel: Panel,
+    open_pair_menu: MenuItem,
     open_old_menu: MenuItem,
     open_new_menu: MenuItem,
+    open_recent_menu: MenuItem,
     exit_menu: MenuItem,
     compare_menu: MenuItem,
     cancel_menu: MenuItem,
     export_audit_menu: MenuItem,
+    next_diff_menu: MenuItem,
+    prev_diff_menu: MenuItem,
+    copy_menu: MenuItem,
+    find_menu: MenuItem,
+    toggle_sheets_menu: MenuItem,
+    reset_layout_menu: MenuItem,
     license_menu: MenuItem,
+    docs_menu: MenuItem,
     about_menu: MenuItem,
     status_bar: StatusBar,
     progress_text: StaticText,
@@ -371,11 +612,14 @@ struct AppState {
     search_old_index: Option<SearchIndexSummary>,
     search_new_index: Option<SearchIndexSummary>,
     batch_outcome: Option<BatchOutcome>,
-    sheets_model: Option<DataViewListModel>,
-    recents_model: Option<DataViewListModel>,
-    batch_model: Option<DataViewListModel>,
-    search_model: Option<DataViewListModel>,
+    sheets_table: Option<VirtualTable>,
+    recents_table: Option<VirtualTable>,
+    batch_table: Option<VirtualTable>,
+    search_table: Option<VirtualTable>,
     webview_enabled: bool,
+    sheets_panel_visible: bool,
+    sheets_sash_position: i32,
+    ui_state_path: PathBuf,
 }
 
 struct UiContext {
@@ -403,12 +647,46 @@ fn update_status_in_ctx(ctx: &mut UiContext, message: &str) {
     ctx.ui.status_bar.set_status_text(message, 0);
 }
 
+fn update_status_counts_in_ctx(ctx: &mut UiContext, summary: Option<&DiffRunSummary>) {
+    if let Some(summary) = summary {
+        let counts = format!(
+            "{} ops | +{} -{} ~{} ↔{}",
+            summary.op_count,
+            summary.counts.added,
+            summary.counts.removed,
+            summary.counts.modified,
+            summary.counts.moved
+        );
+        ctx.ui.status_bar.set_status_text(&counts, 1);
+    } else {
+        ctx.ui.status_bar.set_status_text("", 1);
+    }
+    ctx.ui.status_bar.set_status_text("Filters: none", 2);
+}
+
 fn update_status(message: &str) {
     let message = message.to_string();
     let _ = with_ui_context(|ctx| update_status_in_ctx(ctx, &message));
 }
 
+fn license_check_disabled() -> bool {
+    if env_flag("EXCEL_DIFF_REQUIRE_LICENSE") == Some(true) {
+        return false;
+    }
+    if env_flag("EXCEL_DIFF_SKIP_LICENSE") == Some(true) {
+        return true;
+    }
+    cfg!(debug_assertions)
+}
+
 fn ensure_license_ready(action: &str) -> bool {
+    if license_check_disabled() {
+        static SKIP_NOTED: AtomicBool = AtomicBool::new(false);
+        if !SKIP_NOTED.swap(true, Ordering::Relaxed) {
+            let _ = with_ui_context(|ctx| update_status_in_ctx(ctx, "License check skipped (dev)."));
+        }
+        return true;
+    }
     let result = LicenseClient::from_env().and_then(|client| client.ensure_valid_or_refresh());
     match result {
         Ok(status) => {
@@ -655,6 +933,14 @@ struct DiffIdParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct OpenPathParams {
+    path: String,
+    #[serde(default)]
+    reveal: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct BatchIdParams {
     batch_id: String,
 }
@@ -680,6 +966,39 @@ struct SearchWorkbookIndexParams {
     index_id: String,
     query: String,
     limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RangeParams {
+    row_start: Option<u32>,
+    row_end: Option<u32>,
+    col_start: Option<u32>,
+    col_end: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SheetMetaParams {
+    diff_id: String,
+    sheet_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpsRangeParams {
+    diff_id: String,
+    sheet_name: String,
+    range: Option<RangeParams>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CellsRangeParams {
+    diff_id: String,
+    sheet_name: String,
+    side: String,
+    range: Option<RangeParams>,
 }
 
 fn resolve_web_index_path() -> Option<PathBuf> {
@@ -708,6 +1027,46 @@ fn resolve_web_index_path() -> Option<PathBuf> {
     candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web/index.html"));
 
     candidates.into_iter().find(|path| path.exists())
+}
+
+fn open_path(path: &Path, reveal: bool) -> Result<(), String> {
+    if cfg!(target_os = "windows") {
+        if reveal {
+            Command::new("explorer")
+                .arg("/select,")
+                .arg(path)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        } else {
+            Command::new("cmd")
+                .args(["/C", "start", "", path.to_string_lossy().as_ref()])
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        }
+        return Ok(());
+    }
+
+    if cfg!(target_os = "macos") {
+        let mut cmd = Command::new("open");
+        if reveal {
+            cmd.arg("-R");
+        }
+        cmd.arg(path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    let target = if reveal {
+        path.parent().unwrap_or(path)
+    } else {
+        path
+    };
+    Command::new("xdg-open")
+        .arg(target)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn path_to_file_url(path: &Path) -> Option<String> {
@@ -1037,6 +1396,131 @@ fn handle_webview_rpc(webview: WebView, message: String) {
                 }));
             });
         }
+        "loadSheetMeta" => {
+            let params: Result<SheetMetaParams, _> = request
+                .params
+                .clone()
+                .ok_or_else(|| "Missing sheet meta params".to_string())
+                .and_then(|value| serde_json::from_value(value).map_err(|e| e.to_string()));
+            let params = match params {
+                Ok(params) => params,
+                Err(err) => {
+                    send_rpc_payload_async(webview, rpc_err(request.id, json!({ "message": err })));
+                    return;
+                }
+            };
+
+            let backend = with_ui_context(|ctx| ctx.state.backend.clone());
+            let Some(backend) = backend else {
+                send_rpc_payload_async(
+                    webview,
+                    rpc_err(request.id, json!({ "message": "Backend unavailable." })),
+                );
+                return;
+            };
+            thread::spawn(move || {
+                let payload = backend.runner.load_sheet_meta(SheetMetaRequest {
+                    diff_id: params.diff_id,
+                    sheet_name: params.sheet_name,
+                    cancel: Arc::new(AtomicBool::new(false)),
+                });
+                wxdragon::call_after(Box::new(move || match payload {
+                    Ok(result) => send_rpc_payload(webview, rpc_ok(request.id, json!(result))),
+                    Err(err) => send_rpc_payload(webview, rpc_err(request.id, json!(err))),
+                }));
+            });
+        }
+        "loadOpsInRange" => {
+            let params: Result<OpsRangeParams, _> = request
+                .params
+                .clone()
+                .ok_or_else(|| "Missing ops range params".to_string())
+                .and_then(|value| serde_json::from_value(value).map_err(|e| e.to_string()));
+            let params = match params {
+                Ok(params) => params,
+                Err(err) => {
+                    send_rpc_payload_async(webview, rpc_err(request.id, json!({ "message": err })));
+                    return;
+                }
+            };
+
+            let backend = with_ui_context(|ctx| ctx.state.backend.clone());
+            let Some(backend) = backend else {
+                send_rpc_payload_async(
+                    webview,
+                    rpc_err(request.id, json!({ "message": "Backend unavailable." })),
+                );
+                return;
+            };
+            let range = params.range.unwrap_or(RangeParams {
+                row_start: None,
+                row_end: None,
+                col_start: None,
+                col_end: None,
+            });
+            thread::spawn(move || {
+                let payload = backend.runner.load_ops_in_range(OpsRangeRequest {
+                    diff_id: params.diff_id,
+                    sheet_name: params.sheet_name,
+                    range: RangeBounds {
+                        row_start: range.row_start,
+                        row_end: range.row_end,
+                        col_start: range.col_start,
+                        col_end: range.col_end,
+                    },
+                });
+                wxdragon::call_after(Box::new(move || match payload {
+                    Ok(result) => send_rpc_payload(webview, rpc_ok(request.id, json!(result))),
+                    Err(err) => send_rpc_payload(webview, rpc_err(request.id, json!(err))),
+                }));
+            });
+        }
+        "loadCellsInRange" => {
+            let params: Result<CellsRangeParams, _> = request
+                .params
+                .clone()
+                .ok_or_else(|| "Missing cells range params".to_string())
+                .and_then(|value| serde_json::from_value(value).map_err(|e| e.to_string()));
+            let params = match params {
+                Ok(params) => params,
+                Err(err) => {
+                    send_rpc_payload_async(webview, rpc_err(request.id, json!({ "message": err })));
+                    return;
+                }
+            };
+
+            let backend = with_ui_context(|ctx| ctx.state.backend.clone());
+            let Some(backend) = backend else {
+                send_rpc_payload_async(
+                    webview,
+                    rpc_err(request.id, json!({ "message": "Backend unavailable." })),
+                );
+                return;
+            };
+            let range = params.range.unwrap_or(RangeParams {
+                row_start: None,
+                row_end: None,
+                col_start: None,
+                col_end: None,
+            });
+            thread::spawn(move || {
+                let payload = backend.runner.load_cells_in_range(CellsRangeRequest {
+                    diff_id: params.diff_id,
+                    sheet_name: params.sheet_name,
+                    side: params.side,
+                    range: RangeBounds {
+                        row_start: range.row_start,
+                        row_end: range.row_end,
+                        col_start: range.col_start,
+                        col_end: range.col_end,
+                    },
+                });
+                wxdragon::call_after(Box::new(move || match payload {
+                    Ok(result) => send_rpc_payload(webview, rpc_ok(request.id, json!(result))),
+                    Err(err) => send_rpc_payload(webview, rpc_err(request.id, json!(err))),
+                }));
+            });
+        }
         "exportAuditXlsx" => {
             let params: Result<DiffIdParams, _> = request
                 .params
@@ -1091,6 +1575,27 @@ fn handle_webview_rpc(webview: WebView, message: String) {
                     Err(err) => send_rpc_payload(webview, rpc_err(request.id, json!(err))),
                 }));
             });
+        }
+        "openPath" => {
+            let params: Result<OpenPathParams, _> = request
+                .params
+                .clone()
+                .ok_or_else(|| "Missing open path params".to_string())
+                .and_then(|value| serde_json::from_value(value).map_err(|e| e.to_string()));
+            let params = match params {
+                Ok(params) => params,
+                Err(err) => {
+                    send_rpc_payload_async(webview, rpc_err(request.id, json!({ "message": err })));
+                    return;
+                }
+            };
+            let path = PathBuf::from(params.path);
+            let reveal = params.reveal;
+            let result = open_path(&path, reveal);
+            match result {
+                Ok(()) => send_rpc_payload_async(webview, rpc_ok(request.id, json!(true))),
+                Err(err) => send_rpc_payload_async(webview, rpc_err(request.id, json!({ "message": err }))),
+            }
         }
         "runBatchCompare" => {
             if !ensure_license_ready("Run batch diffs") {
@@ -1281,21 +1786,33 @@ fn create_dataview(parent: &Panel, columns: &[(&str, i32)]) -> DataViewCtrl {
     ctrl
 }
 
-fn rebuild_model(ctrl: &DataViewCtrl, columns: &[(&str, i32)], rows: Vec<Vec<String>>) -> DataViewListModel {
-    let model = DataViewListModel::new();
-    for (label, _) in columns {
-        let _ = model.append_column(label);
-    }
-
-    for (row_idx, row) in rows.into_iter().enumerate() {
-        let _ = model.append_row();
-        for (col_idx, value) in row.into_iter().enumerate() {
-            let _ = model.set_value(row_idx, col_idx, value);
-        }
-    }
-
+fn create_virtual_table(ctrl: &DataViewCtrl) -> VirtualTable {
+    let rows: Rc<RefCell<Vec<Vec<String>>>> = Rc::new(RefCell::new(Vec::new()));
+    let rows_ref = rows.clone();
+    let model = CustomDataViewVirtualListModel::new(
+        0,
+        rows_ref,
+        |data, row, col| {
+            let rows = data.borrow();
+            let value = rows
+                .get(row)
+                .and_then(|cols| cols.get(col))
+                .cloned()
+                .unwrap_or_default();
+            Variant::from_string(&value)
+        },
+        None::<fn(&Rc<RefCell<Vec<Vec<String>>>>, usize, usize, &Variant) -> bool>,
+        None::<fn(&Rc<RefCell<Vec<Vec<String>>>>, usize, usize) -> Option<DataViewItemAttr>>,
+        None::<fn(&Rc<RefCell<Vec<Vec<String>>>>, usize, usize) -> bool>,
+    );
     let _ = ctrl.associate_model(&model);
-    model
+    VirtualTable { model, rows }
+}
+
+fn update_virtual_table(table: &mut VirtualTable, rows: Vec<Vec<String>>) {
+    *table.rows.borrow_mut() = rows;
+    let size = table.rows.borrow().len();
+    table.model.reset(size);
 }
 
 fn spawn_progress_forwarder(rx: ProgressRx) {
@@ -1314,7 +1831,7 @@ fn preset_from_choice(choice: &Choice) -> DiffPreset {
 }
 
 fn populate_sheet_list(ctx: &mut UiContext, summary: &DiffRunSummary) {
-    let Some(view) = ctx.ui.sheets_view else {
+    let Some(table) = ctx.state.sheets_table.as_mut() else {
         debug!("Sheets view not initialized yet.");
         return;
     };
@@ -1339,11 +1856,11 @@ fn populate_sheet_list(ctx: &mut UiContext, summary: &DiffRunSummary) {
         })
         .collect::<Vec<_>>();
 
-    ctx.state.sheets_model = Some(rebuild_model(&view, &SHEETS_COLUMNS, rows));
+    update_virtual_table(table, rows);
 }
 
 fn populate_recents(ctx: &mut UiContext, recents: Vec<RecentComparison>) {
-    let Some(view) = ctx.ui.recents_view else {
+    let Some(table) = ctx.state.recents_table.as_mut() else {
         debug!("Recents view not initialized yet.");
         return;
     };
@@ -1360,7 +1877,7 @@ fn populate_recents(ctx: &mut UiContext, recents: Vec<RecentComparison>) {
     .collect::<Vec<_>>();
 
     ctx.state.recents = recents;
-    ctx.state.recents_model = Some(rebuild_model(&view, &RECENTS_COLUMNS, rows));
+    update_virtual_table(table, rows);
 }
 
 fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
@@ -1382,6 +1899,7 @@ fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
                         .set_value(&serde_json::to_string_pretty(&summary).unwrap_or_else(|_| "{}".to_string()));
                     ctx.ui.detail_text.set_value("");
                     populate_sheet_list(ctx, &summary);
+                    update_status_counts_in_ctx(ctx, Some(&summary));
 
                     let recent = RecentComparison {
                         old_path: summary.old_path.clone(),
@@ -1399,6 +1917,8 @@ fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
                     if let Ok(recents) = ctx.state.backend.save_recent(recent) {
                         populate_recents(ctx, recents);
                     }
+                } else {
+                    update_status_counts_in_ctx(ctx, None);
                 }
 
                 update_status_in_ctx(ctx, "Diff complete.");
@@ -1408,6 +1928,7 @@ fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
                     .detail_text
                     .set_value(&format!("{}: {}", err.code, err.message));
                 update_status_in_ctx(ctx, &format!("Diff failed: {}", err.message));
+                update_status_counts_in_ctx(ctx, None);
             }
         }
     });
@@ -1464,6 +1985,7 @@ fn start_compare() {
         ctx.state.current_payload = None;
         ctx.state.current_summary = None;
         ctx.state.sheet_names.clear();
+        update_status_counts_in_ctx(ctx, None);
 
         ctx.ui.compare_btn.enable(false);
         ctx.ui.cancel_btn.enable(true);
@@ -1589,6 +2111,7 @@ fn load_diff_summary_into_ui(diff_id: String) {
                         .set_value(&serde_json::to_string_pretty(&summary).unwrap_or_else(|_| "{}".to_string()));
                     ctx.ui.detail_text.set_value("");
                     populate_sheet_list(ctx, &summary);
+                    update_status_counts_in_ctx(ctx, Some(&summary));
                     ctx.ui.root_tabs.set_selection(0);
                     update_status_in_ctx(ctx, "Summary loaded.");
                 });
@@ -1643,7 +2166,7 @@ fn run_batch() {
 fn handle_batch_result(result: Result<BatchOutcome, DiffErrorPayload>) {
     let _ = with_ui_context(|ctx| {
         ctx.ui.run_batch_btn.enable(true);
-        let Some(view) = ctx.ui.batch_view else {
+        let Some(table) = ctx.state.batch_table.as_mut() else {
             debug!("Batch view not initialized yet.");
             return;
         };
@@ -1669,7 +2192,7 @@ fn handle_batch_result(result: Result<BatchOutcome, DiffErrorPayload>) {
                     })
                     .collect::<Vec<_>>();
 
-                ctx.state.batch_model = Some(rebuild_model(&view, &BATCH_COLUMNS, rows));
+                update_virtual_table(table, rows);
                 update_status_in_ctx(ctx, "Batch compare complete.");
             }
             Err(err) => update_status_in_ctx(ctx, &format!("Batch failed: {}", err.message)),
@@ -1764,7 +2287,7 @@ enum SearchRequest {
 
 fn apply_search_results(results: Vec<SearchResult>) {
     let _ = with_ui_context(|ctx| {
-        let Some(view) = ctx.ui.search_view else {
+        let Some(table) = ctx.state.search_table.as_mut() else {
             debug!("Search view not initialized yet.");
             return;
         };
@@ -1781,14 +2304,14 @@ fn apply_search_results(results: Vec<SearchResult>) {
             })
             .collect::<Vec<_>>();
 
-        ctx.state.search_model = Some(rebuild_model(&view, &SEARCH_COLUMNS, rows));
+        update_virtual_table(table, rows);
         update_status_in_ctx(ctx, &format!("Search returned {} results.", results.len()));
     });
 }
 
 fn apply_index_results(results: Vec<SearchIndexResult>) {
     let _ = with_ui_context(|ctx| {
-        let Some(view) = ctx.ui.search_view else {
+        let Some(table) = ctx.state.search_table.as_mut() else {
             debug!("Search view not initialized yet.");
             return;
         };
@@ -1805,7 +2328,7 @@ fn apply_index_results(results: Vec<SearchIndexResult>) {
             })
             .collect::<Vec<_>>();
 
-        ctx.state.search_model = Some(rebuild_model(&view, &SEARCH_COLUMNS, rows));
+        update_virtual_table(table, rows);
         update_status_in_ctx(ctx, &format!("Search returned {} results.", results.len()));
     });
 }
@@ -1893,20 +2416,218 @@ fn open_recent() {
     load_diff_summary_into_ui(diff_id);
 }
 
+fn open_pair_dialog() {
+    let _ = with_ui_context(|ctx| {
+        let dialog = FileDialog::builder(&ctx.ui.frame)
+            .with_message("Open old file")
+            .with_wildcard("Excel/PBIX files (*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit)|*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit|All files (*.*)|*.*")
+            .with_style(FileDialogStyle::Open | FileDialogStyle::FileMustExist)
+            .build();
+        if dialog.show_modal() != ID_OK {
+            return;
+        }
+        let Some(old_path) = dialog.get_path() else {
+            return;
+        };
+
+        let dialog = FileDialog::builder(&ctx.ui.frame)
+            .with_message("Open new file")
+            .with_wildcard("Excel/PBIX files (*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit)|*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit|All files (*.*)|*.*")
+            .with_style(FileDialogStyle::Open | FileDialogStyle::FileMustExist)
+            .build();
+        if dialog.show_modal() != ID_OK {
+            return;
+        }
+        let Some(new_path) = dialog.get_path() else {
+            return;
+        };
+
+        ctx.ui.old_picker.set_path(&old_path);
+        ctx.ui.new_picker.set_path(&new_path);
+        ctx.ui.root_tabs.set_selection(0);
+    });
+}
+
+fn focus_search() {
+    let _ = with_ui_context(|ctx| {
+        ctx.ui.root_tabs.set_selection(3);
+        ctx.ui.search_ctrl.set_focus();
+    });
+}
+
+fn copy_current_text() {
+    let _ = with_ui_context(|ctx| {
+        let selected_tab = ctx.ui.result_tabs.selection();
+        let (selected, full) = if selected_tab == 1 {
+            (ctx.ui.detail_text.get_string_selection(), ctx.ui.detail_text.get_value())
+        } else {
+            (ctx.ui.summary_text.get_string_selection(), ctx.ui.summary_text.get_value())
+        };
+        let text = if selected.trim().is_empty() { full } else { selected };
+        if text.trim().is_empty() {
+            update_status_in_ctx(ctx, "Nothing to copy.");
+            return;
+        }
+        let clipboard = Clipboard::get();
+        if clipboard.set_text(&text) {
+            update_status_in_ctx(ctx, "Copied to clipboard.");
+        } else {
+            update_status_in_ctx(ctx, "Clipboard unavailable.");
+        }
+    });
+}
+
+fn select_next_diff() {
+    let _ = with_ui_context(|ctx| {
+        let Some(view) = ctx.ui.sheets_view else {
+            return;
+        };
+        let row_count = ctx.state.sheet_names.len();
+        if row_count == 0 {
+            return;
+        }
+        let current = view.get_selected_row().unwrap_or(0);
+        let next = (current + 1).min(row_count - 1);
+        let _ = view.select_row(next);
+    });
+}
+
+fn select_prev_diff() {
+    let _ = with_ui_context(|ctx| {
+        let Some(view) = ctx.ui.sheets_view else {
+            return;
+        };
+        let row_count = ctx.state.sheet_names.len();
+        if row_count == 0 {
+            return;
+        }
+        let current = view.get_selected_row().unwrap_or(0);
+        let prev = current.saturating_sub(1);
+        let _ = view.select_row(prev);
+    });
+}
+
+fn toggle_sheets_panel() {
+    let _ = with_ui_context(|ctx| {
+        if ctx.state.webview_enabled {
+            return;
+        }
+        if ctx.state.sheets_panel_visible {
+            ctx.state.sheets_sash_position = ctx.ui.compare_splitter.sash_position();
+            let _ = ctx
+                .ui
+                .compare_splitter
+                .unsplit(Some(&ctx.ui.sheets_list_panel));
+            ctx.state.sheets_panel_visible = false;
+        } else {
+            let sash = ctx.state.sheets_sash_position.max(MIN_SASH_POSITION);
+            if !ctx
+                .ui
+                .compare_splitter
+                .split_vertically(&ctx.ui.sheets_list_panel, &ctx.ui.compare_right_panel, sash)
+            {
+                ctx.ui.compare_splitter.set_sash_position(sash, false);
+            }
+            ctx.state.sheets_panel_visible = true;
+        }
+        ctx.ui.toggle_sheets_menu.check(ctx.state.sheets_panel_visible);
+        ctx.ui.compare_container.layout();
+        ctx.ui.frame.layout();
+    });
+}
+
+fn reset_layout() {
+    let _ = with_ui_context(|ctx| {
+        if ctx.state.webview_enabled {
+            return;
+        }
+        ctx.state.sheets_panel_visible = true;
+        ctx.state.sheets_sash_position = DEFAULT_SASH_POSITION;
+        let _ = ctx.ui.compare_splitter.unsplit(None::<&Panel>);
+        if !ctx
+            .ui
+            .compare_splitter
+            .split_vertically(&ctx.ui.sheets_list_panel, &ctx.ui.compare_right_panel, DEFAULT_SASH_POSITION)
+        {
+            ctx.ui.compare_splitter.set_sash_position(DEFAULT_SASH_POSITION, false);
+        }
+        ctx.ui.toggle_sheets_menu.check(true);
+        ctx.ui.frame.set_size(default_window_size());
+        ctx.ui.frame.centre();
+        ctx.ui.compare_container.layout();
+        ctx.ui.root_tabs.layout();
+        ctx.ui.frame.layout();
+        update_status_in_ctx(ctx, "Layout reset.");
+        clear_ui_state(&ctx.state.ui_state_path);
+    });
+}
+
+fn open_docs() {
+    let docs_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/desktop.md");
+    if !docs_path.exists() {
+        let _ = with_ui_context(|ctx| {
+            let dialog = MessageDialog::builder(
+                &ctx.ui.frame,
+                "Docs not found. See docs/desktop.md in the repo.",
+                "Docs",
+            )
+            .with_style(MessageDialogStyle::IconInformation | MessageDialogStyle::OK)
+            .build();
+            let _ = dialog.show_modal();
+        });
+        return;
+    }
+
+    let path_str = docs_path.to_string_lossy().to_string();
+    let launch = if cfg!(target_os = "windows") {
+        Command::new("cmd")
+            .args(["/C", "start", "", &path_str])
+            .spawn()
+    } else if cfg!(target_os = "macos") {
+        Command::new("open").arg(&path_str).spawn()
+    } else {
+        Command::new("xdg-open").arg(&path_str).spawn()
+    };
+
+    if launch.is_err() {
+        let _ = with_ui_context(|ctx| {
+            let dialog = MessageDialog::builder(
+                &ctx.ui.frame,
+                &format!("Open docs at:\n{path_str}"),
+                "Docs",
+            )
+            .with_style(MessageDialogStyle::IconInformation | MessageDialogStyle::OK)
+            .build();
+            let _ = dialog.show_modal();
+        });
+    }
+}
+
 fn setup_menu_handlers(ids: MenuIds) {
     let MenuIds {
+        open_pair_id,
         open_old_id,
         open_new_id,
+        open_recent_id,
         exit_id,
         compare_id,
         cancel_id,
         export_id,
+        next_diff_id,
+        prev_diff_id,
+        copy_id,
+        find_id,
+        toggle_sheets_id,
+        reset_layout_id,
         license_id,
+        docs_id,
         about_id,
     } = ids;
 
     let _ = with_ui_context(|ctx| {
         ctx.ui.frame.on_menu_selected(move |event| match event.get_id() {
+            id if id == open_pair_id => open_pair_dialog(),
             id if id == open_old_id => {
                 let _ = with_ui_context(|ctx| {
                     let dialog = FileDialog::builder(&ctx.ui.frame)
@@ -1935,6 +2656,11 @@ fn setup_menu_handlers(ids: MenuIds) {
                     }
                 });
             }
+            id if id == open_recent_id => {
+                let _ = with_ui_context(|ctx| {
+                    ctx.ui.root_tabs.set_selection(1);
+                });
+            }
             id if id == exit_id => {
                 let _ = with_ui_context(|ctx| {
                     ctx.ui.frame.close(true);
@@ -1943,7 +2669,14 @@ fn setup_menu_handlers(ids: MenuIds) {
             id if id == compare_id => start_compare(),
             id if id == cancel_id => cancel_current(),
             id if id == export_id => export_audit(),
+            id if id == next_diff_id => select_next_diff(),
+            id if id == prev_diff_id => select_prev_diff(),
+            id if id == copy_id => copy_current_text(),
+            id if id == find_id => focus_search(),
+            id if id == toggle_sheets_id => toggle_sheets_panel(),
+            id if id == reset_layout_id => reset_layout(),
             id if id == license_id => show_license_dialog(),
+            id if id == docs_id => open_docs(),
             id if id == about_id => {
                 let _ = with_ui_context(|ctx| {
                     let dialog = MessageDialog::builder(
@@ -2005,39 +2738,61 @@ fn export_audit() {
 
 #[derive(Clone, Copy)]
 struct MenuIds {
+    open_pair_id: i32,
     open_old_id: i32,
     open_new_id: i32,
+    open_recent_id: i32,
     exit_id: i32,
     compare_id: i32,
     cancel_id: i32,
     export_id: i32,
+    next_diff_id: i32,
+    prev_diff_id: i32,
+    copy_id: i32,
+    find_id: i32,
+    toggle_sheets_id: i32,
+    reset_layout_id: i32,
     license_id: i32,
+    docs_id: i32,
     about_id: i32,
 }
 
 fn main() {
     init_logging();
-    wxdragon::main(|_| {
-        let backend = DesktopBackend::init(BackendConfig {
-            app_name: "excel_diff".to_string(),
-            app_version: env!("CARGO_PKG_VERSION").to_string(),
-            engine_version: env!("CARGO_PKG_VERSION").to_string(),
-        })
-        .unwrap_or_else(|err| panic!("Backend init failed: {}", err.message));
+    configure_linux_environment();
+    install_glib_log_suppression();
+    maybe_redirect_stdio_to_null();
+    let backend = DesktopBackend::init(BackendConfig {
+        app_name: "excel_diff".to_string(),
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        engine_version: env!("CARGO_PKG_VERSION").to_string(),
+    })
+    .unwrap_or_else(|err| panic!("Backend init failed: {}", err.message));
+    install_panic_log(backend.paths.app_data_dir.join("crash.log"));
 
+    wxdragon::main(move |_| {
         let ui = MainUi::new(None, false);
         let layout_debug = layout_debug_enabled();
 
         let ui_handles = UiHandles {
             frame: ui.main_frame,
             main_panel: ui.main_panel,
+            open_pair_menu: ui.open_pair_menu,
             open_old_menu: ui.open_old_menu,
             open_new_menu: ui.open_new_menu,
+            open_recent_menu: ui.open_recent_menu,
             exit_menu: ui.exit_menu,
             compare_menu: ui.compare_menu,
             cancel_menu: ui.cancel_menu,
             export_audit_menu: ui.export_audit_menu,
+            next_diff_menu: ui.next_diff_menu,
+            prev_diff_menu: ui.prev_diff_menu,
+            copy_menu: ui.copy_menu,
+            find_menu: ui.find_menu,
+            toggle_sheets_menu: ui.toggle_sheets_menu,
+            reset_layout_menu: ui.reset_layout_menu,
             license_menu: ui.license_menu,
+            docs_menu: ui.docs_menu,
             about_menu: ui.about_menu,
             status_bar: ui.status_bar,
             progress_text: ui.progress_text,
@@ -2077,6 +2832,8 @@ fn main() {
             webview: None,
         };
 
+        let ui_state_path = backend.paths.app_data_dir.join("ui_state.json");
+        let ui_state = load_ui_state(&ui_state_path);
         let state = AppState {
             backend,
             engine_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -2091,11 +2848,14 @@ fn main() {
             search_old_index: None,
             search_new_index: None,
             batch_outcome: None,
-            sheets_model: None,
-            recents_model: None,
-            batch_model: None,
-            search_model: None,
+            sheets_table: None,
+            recents_table: None,
+            batch_table: None,
+            search_table: None,
             webview_enabled: false,
+            sheets_panel_visible: ui_state.sheets_panel_visible.unwrap_or(true),
+            sheets_sash_position: ui_state.compare_sash.unwrap_or(DEFAULT_SASH_POSITION),
+            ui_state_path,
         };
 
         UI_CONTEXT.with(|ctx| {
@@ -2106,24 +2866,57 @@ fn main() {
         });
 
         let menu_ids = with_ui_context(|ctx| MenuIds {
+            open_pair_id: ctx.ui.open_pair_menu.get_id(),
             open_old_id: ctx.ui.open_old_menu.get_id(),
             open_new_id: ctx.ui.open_new_menu.get_id(),
+            open_recent_id: ctx.ui.open_recent_menu.get_id(),
             exit_id: ctx.ui.exit_menu.get_id(),
             compare_id: ctx.ui.compare_menu.get_id(),
             cancel_id: ctx.ui.cancel_menu.get_id(),
             export_id: ctx.ui.export_audit_menu.get_id(),
+            next_diff_id: ctx.ui.next_diff_menu.get_id(),
+            prev_diff_id: ctx.ui.prev_diff_menu.get_id(),
+            copy_id: ctx.ui.copy_menu.get_id(),
+            find_id: ctx.ui.find_menu.get_id(),
+            toggle_sheets_id: ctx.ui.toggle_sheets_menu.get_id(),
+            reset_layout_id: ctx.ui.reset_layout_menu.get_id(),
             license_id: ctx.ui.license_menu.get_id(),
+            docs_id: ctx.ui.docs_menu.get_id(),
             about_id: ctx.ui.about_menu.get_id(),
         })
         .unwrap();
 
         setup_menu_handlers(menu_ids);
 
-        let _webview_enabled = with_ui_context(|ctx| setup_webview(ctx)).unwrap_or(false);
+        let _webview_enabled = with_ui_context(|ctx| {
+            if webview_enabled_by_env() {
+                setup_webview(ctx)
+            } else {
+                false
+            }
+        })
+        .unwrap_or(false);
 
+        let ui_state_for_init = ui_state.clone();
+        let should_maximize = should_start_maximized(&ui_state_for_init);
+        let should_center = (ui_state_for_init.window_x.is_none() || ui_state_for_init.window_y.is_none())
+            && !should_maximize;
         let _ = with_ui_context(|ctx| {
+            ctx.ui.frame.on_close(|event| {
+                let _ = with_ui_context(|ctx| {
+                    let state = capture_ui_state(ctx);
+                    save_ui_state(&ctx.state.ui_state_path, &state);
+                });
+                event.skip(true);
+            });
+
             if !ctx.state.webview_enabled {
-                ctx.ui.root_tabs.set_selection(0);
+                ctx.ui.status_bar.set_fields_count(3);
+                ctx.ui
+                    .status_bar
+                    .set_status_widths(&[-1, 220, 180]);
+                update_status_counts_in_ctx(ctx, None);
+
                 ctx.ui.cancel_btn.enable(false);
                 update_status_in_ctx(ctx, "Ready");
 
@@ -2144,23 +2937,49 @@ fn main() {
                 ctx.ui.search_btn.on_click(|_| handle_search());
                 ctx.ui.build_old_index_btn.on_click(|_| build_index("old"));
                 ctx.ui.build_new_index_btn.on_click(|_| build_index("new"));
+                ctx.ui.frame.on_key_down(|event| {
+                    if let wxdragon::event::WindowEventData::Keyboard(key) = event {
+                        if let Some(code) = key.get_key_code() {
+                            if code == WXK_F6 || (code == WXK_F8 && !key.shift_down()) {
+                                select_next_diff();
+                            } else if code == WXK_F8 && key.shift_down() {
+                                select_prev_diff();
+                            }
+                        }
+                    }
+                });
 
-                ctx.ui.compare_splitter.set_minimum_pane_size(200);
-                if !ctx.ui
-                    .compare_splitter
-                    .split_vertically(&ctx.ui.sheets_list_panel, &ctx.ui.compare_right_panel, 320)
-                {
-                    ctx.ui.compare_splitter.set_sash_position(320, false);
-                }
+                ctx.ui.compare_splitter.on_sash_position_changed(|event| {
+                    if let Some(pos) = event.get_sash_position() {
+                        let _ = with_ui_context(|ctx| {
+                            ctx.state.sheets_sash_position = pos;
+                        });
+                    }
+                });
+                ctx.ui.compare_splitter.on_unsplit(|_| {
+                    let _ = with_ui_context(|ctx| {
+                        ctx.state.sheets_panel_visible = false;
+                        ctx.ui.toggle_sheets_menu.check(false);
+                    });
+                });
+
+                apply_ui_state(ctx, &ui_state_for_init);
                 ctx.ui.compare_container.layout();
                 ctx.ui.root_tabs.layout();
+            } else {
+                apply_frame_state(ctx, &ui_state_for_init);
             }
+
             ctx.ui.frame.layout();
             ctx.ui.frame.show(true);
             let size = ctx.ui.frame.get_size();
             ctx.ui.frame.set_size(size);
             ctx.ui.frame.layout();
-            ctx.ui.frame.centre();
+            if should_maximize {
+                ctx.ui.frame.maximize(true);
+            } else if should_center {
+                ctx.ui.frame.centre();
+            }
             wxdragon::set_top_window(&ctx.ui.frame);
         });
 
@@ -2174,10 +2993,10 @@ fn main() {
                 let batch_view = create_dataview(&ctx.ui.batch_results_list_panel, &BATCH_COLUMNS);
                 let search_view = create_dataview(&ctx.ui.search_results_list_panel, &SEARCH_COLUMNS);
 
-                ctx.state.sheets_model = Some(rebuild_model(&sheets_view, &SHEETS_COLUMNS, Vec::new()));
-                ctx.state.recents_model = Some(rebuild_model(&recents_view, &RECENTS_COLUMNS, Vec::new()));
-                ctx.state.batch_model = Some(rebuild_model(&batch_view, &BATCH_COLUMNS, Vec::new()));
-                ctx.state.search_model = Some(rebuild_model(&search_view, &SEARCH_COLUMNS, Vec::new()));
+                ctx.state.sheets_table = Some(create_virtual_table(&sheets_view));
+                ctx.state.recents_table = Some(create_virtual_table(&recents_view));
+                ctx.state.batch_table = Some(create_virtual_table(&batch_view));
+                ctx.state.search_table = Some(create_virtual_table(&search_view));
 
                 ctx.ui.sheets_view = Some(sheets_view);
                 ctx.ui.recents_view = Some(recents_view);
@@ -2214,8 +3033,11 @@ fn main() {
                     });
                 }
 
-                ctx.ui.compare_splitter.set_minimum_pane_size(200);
-                ctx.ui.compare_splitter.set_sash_position(320, true);
+                if ctx.state.sheets_panel_visible {
+                    ctx.ui
+                        .compare_splitter
+                        .set_sash_position(ctx.state.sheets_sash_position, true);
+                }
                 ctx.ui.frame.layout();
                 let size = ctx.ui.frame.get_size();
                 ctx.ui.frame.set_size(size);
@@ -2232,6 +3054,126 @@ fn init_logging() {
     static LOGGER: SimpleLogger = SimpleLogger;
     let _ = log::set_logger(&LOGGER);
     log::set_max_level(log_level_from_env());
+}
+
+fn env_flag(name: &str) -> Option<bool> {
+    match std::env::var(name).as_deref() {
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES") | Ok("on") | Ok("ON") => Some(true),
+        Ok("0") | Ok("false") | Ok("FALSE") | Ok("no") | Ok("NO") | Ok("off") | Ok("OFF") => Some(false),
+        _ => None,
+    }
+}
+
+fn configure_linux_environment() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+
+    let suppress = env_flag("EXCEL_DIFF_SUPPRESS_GTK_WARNINGS").unwrap_or(cfg!(debug_assertions));
+    if suppress {
+        std::env::set_var("GSETTINGS_BACKEND", "memory");
+    }
+
+    let disable_overlay = env_flag("EXCEL_DIFF_DISABLE_OVERLAY_SCROLLBARS").unwrap_or(suppress);
+    if disable_overlay {
+        std::env::set_var("GTK_OVERLAY_SCROLLING", "0");
+    }
+
+    if let Ok(theme) = std::env::var("EXCEL_DIFF_CURSOR_THEME") {
+        if !theme.trim().is_empty() {
+            std::env::set_var("XCURSOR_THEME", theme);
+        }
+    } else if env_flag("EXCEL_DIFF_FORCE_CURSOR_THEME") == Some(true) || suppress {
+        std::env::set_var("XCURSOR_THEME", "Adwaita");
+    }
+
+    if let Ok(size) = std::env::var("EXCEL_DIFF_CURSOR_SIZE") {
+        if !size.trim().is_empty() {
+            std::env::set_var("XCURSOR_SIZE", size);
+        }
+    } else if suppress {
+        std::env::set_var("XCURSOR_SIZE", "24");
+    }
+}
+
+#[cfg(target_os = "linux")]
+extern "C" {
+    fn g_log_set_handler(
+        log_domain: *const c_char,
+        log_levels: i32,
+        log_func: Option<extern "C" fn(*const c_char, i32, *const c_char, *mut c_void)>,
+        user_data: *mut c_void,
+    ) -> u32;
+    fn g_log_set_default_handler(
+        log_func: Option<extern "C" fn(*const c_char, i32, *const c_char, *mut c_void)>,
+        user_data: *mut c_void,
+    ) -> u32;
+}
+
+#[cfg(target_os = "linux")]
+extern "C" fn ignore_glib_log(_domain: *const c_char, _level: i32, _message: *const c_char, _data: *mut c_void) {}
+
+#[cfg(target_os = "linux")]
+fn install_glib_log_suppression() {
+    if !env_flag("EXCEL_DIFF_SUPPRESS_GTK_WARNINGS").unwrap_or(cfg!(debug_assertions)) {
+        return;
+    }
+    let levels = 0xFF;
+    unsafe {
+        g_log_set_default_handler(Some(ignore_glib_log), std::ptr::null_mut());
+        g_log_set_handler(std::ptr::null(), levels, Some(ignore_glib_log), std::ptr::null_mut());
+    }
+    for domain in ["Gdk", "Gtk", "GLib", "GLib-GObject", "GdkPixbuf", "Pango"] {
+        let Ok(cstr) = CString::new(domain) else {
+            continue;
+        };
+        let leaked = Box::leak(cstr.into_boxed_c_str());
+        unsafe {
+            g_log_set_handler(leaked.as_ptr(), levels, Some(ignore_glib_log), std::ptr::null_mut());
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn install_glib_log_suppression() {}
+
+#[cfg(target_os = "linux")]
+fn maybe_redirect_stdio_to_null() {
+    if !env_flag("EXCEL_DIFF_SUPPRESS_GTK_WARNINGS").unwrap_or(cfg!(debug_assertions)) {
+        return;
+    }
+    let Ok(file) = OpenOptions::new().read(true).open("/dev/null") else {
+        return;
+    };
+    unsafe {
+        let fd = file.as_raw_fd();
+        libc::dup2(fd, libc::STDERR_FILENO);
+        libc::dup2(fd, libc::STDOUT_FILENO);
+    }
+    std::mem::forget(file);
+}
+
+#[cfg(not(target_os = "linux"))]
+fn maybe_redirect_stdio_to_null() {}
+
+fn install_panic_log(path: PathBuf) {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let _ = writeln!(file, "---- crash {} ----", ts);
+            let _ = writeln!(file, "{info}");
+            if let Ok(backtrace) = std::env::var("RUST_BACKTRACE") {
+                if backtrace != "0" {
+                    let _ = writeln!(file, "{:?}", std::backtrace::Backtrace::force_capture());
+                }
+            }
+        }
+        default_hook(info);
+    }));
 }
 
 struct SimpleLogger;
@@ -2257,6 +3199,10 @@ fn log_level_from_env() -> LevelFilter {
         Ok("debug") => LevelFilter::Debug,
         Ok("trace") => LevelFilter::Trace,
         Ok("off") => LevelFilter::Off,
-        _ => LevelFilter::Info,
+        _ => LevelFilter::Warn,
     }
+}
+
+fn webview_enabled_by_env() -> bool {
+    env_flag("EXCEL_DIFF_USE_WEBVIEW").unwrap_or(false)
 }

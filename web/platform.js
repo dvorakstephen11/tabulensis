@@ -158,6 +158,30 @@ export async function exportAuditXlsx(diffId) {
   return rpc.request("exportAuditXlsx", { diffId });
 }
 
+export async function openPath(path, reveal = false) {
+  const rpc = getNativeRpc();
+  if (!rpc) return null;
+  return rpc.request("openPath", { path, reveal });
+}
+
+export async function loadSheetMeta(diffId, sheetName) {
+  const rpc = getNativeRpc();
+  if (!rpc) return null;
+  return rpc.request("loadSheetMeta", { diffId, sheetName });
+}
+
+export async function loadOpsInRange(diffId, sheetName, range) {
+  const rpc = getNativeRpc();
+  if (!rpc) return null;
+  return rpc.request("loadOpsInRange", { diffId, sheetName, range });
+}
+
+export async function loadCellsInRange(diffId, sheetName, side, range) {
+  const rpc = getNativeRpc();
+  if (!rpc) return null;
+  return rpc.request("loadCellsInRange", { diffId, sheetName, side, range });
+}
+
 export async function runBatchCompare(request) {
   const rpc = getNativeRpc();
   if (!rpc) return null;

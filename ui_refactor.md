@@ -1,398 +1,474 @@
-Below is a concrete plan that (a) keeps **all feature logic unified** while you split web UI vs desktop UI, (b) pushes **low‑hanging fruit first**, and (c) fixes the specific desktop issues you pasted (Gdk cursor theme warnings + XRC “spacer” handler errors) .
+Below is a concrete plan to add an in-app visual diff viewer for Excel workbook comparisons in this codebase, centered on a **true grid visualization** for grid-related diffs (cell edits, row/col inserts/deletes, moved blocks, replaced regions), while still surfacing non-grid changes in a structured, reviewable way.
+
+I’ll assume the goal is a customer-grade “review changes” experience: fast orientation, easy navigation, and clear trust signals when previews are limited.
 
 ---
 
-## 1) The architectural rule that makes “two UIs, one app” actually work
+## Product outcome and UX goals
 
-If you want the desktop UI to be maximally excellent *and* avoid logic drift between web and desktop, adopt one non‑negotiable:
+### What customers should be able to do (core workflow)
 
-**All user-visible behavior lives in a single “engine” layer.**
-Desktop + Web are just **renderers** that:
+1. **Orient**: Immediately understand *what changed* and *which sheets* are impacted.
+2. **Inspect**: Click a sheet and **see changes in a grid**, not just a list of operations.
+3. **Navigate**: Jump to next/previous change; filter by change type; search.
+4. **Understand**: For any highlighted cell/row/rect, see old vs new values/formulas and the “why” (moved vs edited vs replaced).
+5. **Trust**: When the preview is partial (budgets / caps), the UI must say so clearly and offer alternatives (e.g., export audit workbook).
 
-* dispatch **Commands**
-* receive **Events**
-* bind **ViewModels** to widgets
+### Design principles (to keep the UI “obvious” and scalable)
 
-### 1.1 Target layering (Rust-friendly, testable, avoids duplication)
-
-You already have a shape close to this (core + desktop backend + ui_payload) based on your build logs . Formalize it:
-
-**A) `tabulensis_core` (pure domain)**
-
-* deterministic logic only: parsing, diffing, normalization, rules, indexing, export transforms
-* no UI concepts, no threads, no file dialogs
-* heavy unit + property tests live here
-
-**B) `tabulensis_engine` (application / use-cases)**
-
-* orchestrates workflows: “open left/right”, “compare”, “apply filters”, “export”
-* owns authoritative state: current session, options, caches, progress, cancellation
-* emits events suitable for *any* UI
-* the only place allowed to implement “what happens when user clicks X”
-
-**C) `ui_payload` (shared protocol + DTOs)**
-
-* `Command`, `Event`, `Query`, `Response`, `ErrorPayload`
-* should be stable + versioned (even if only internally)
-
-**D) Adapters**
-
-* `desktop_backend`: filesystem, OS integration, native dialogs, clipboard, etc.
-* `web_backend`: HTTP/WebSocket adapters, auth, etc.
-
-**E) UI renderers**
-
-* `desktop_wx`: wx widgets, layout, input handling, binding
-* `web_ui`: React/Svelte/… (completely separate, calling the same protocol)
-
-### 1.2 Make “unified behavior” enforceable (not aspirational)
-
-Low-effort guardrails that prevent drift:
-
-* **Contract tests** for the protocol:
-
-  * feed commands → assert emitted events & resulting state match snapshots (“golden”)
-* **One “feature spec” per workflow** stored as tests:
-
-  * Example: open files → compare → filter → export should always produce identical export bytes given same inputs and options.
-* **No direct core calls from UI crates**:
-
-  * UI crates can only call the engine interface (or protocol), not `tabulensis_core` directly.
+* **Grid-first** for sheet diffs: people think in cells and ranges, not JSON.
+* **Progressive disclosure**: start with “change hunks” / focused regions; allow expanding to larger context.
+* **Graceful degradation**: never “freeze”; for large sheets or enormous diffs, switch to region-based rendering and summaries.
+* **Keyboard-first review**: next/prev change, search, copy cell details.
+* **Explain the model**: show aligned row/col headers when structural changes exist.
 
 ---
 
-## 2) Desktop UI excellence: what “maximally excellent” means in practice
+## Where this fits in the existing architecture
 
-“High-fidelity desktop-native” usually wins on:
+You already have almost everything needed on the backend side:
 
-* **latency** (instant interactions)
-* **keyboard** (fast power-user workflows)
-* **large-data handling** (virtualized tables/grids)
-* **native integration** (menus, drag/drop, file associations)
-* **polish** (layout, theming, accessibility)
+* The diff runner supports **two modes**: `Payload` vs `Large` and can load per-sheet payload on demand via `load_sheet_payload`. 
+* UI payloads already include:
 
-So the plan below is oriented around those strengths—starting with quick wins.
+  * **Sparse sheet snapshots** (cells with value/formula, plus truncation note). 
+  * **Row/column alignments** for visualizing structural diffs, with explicit “insert/delete/move” axis entries and skip reasons for very large sheets. 
+* Snapshot/preview guardrails exist:
 
----
+  * Structural preview caps: **200 rows x 80 cols** (used to choose interesting regions). 
+  * Alignment caps: **10,000 rows** / **200 cols** (preview disabled beyond this). 
+* The wx desktop app already supports a WebView UI and an RPC bridge with methods like `loadSheetPayload` and `exportAuditXlsx`. 
 
-## 3) Implementation plan (low-hanging fruit first)
+So the plan is mainly a **front-end visual diff viewer**, plus a small set of backend/RPC enhancements to make large cases pleasant.
 
-### Phase 0 — Stop the bleeding: clean startup, clean logs, deterministic UI boot
-
-These are the cheapest changes that immediately improve dev velocity and perceived quality.
-
-#### 0.1 Fix XRC “spacer” handler errors (your immediate issue)
-
-You’re seeing:
-
-* `no handler found for XML node "object" (class "spacer")`
-* `unexpected item in sizer` 
-
-**Root cause (most likely):** the XRC system hasn’t registered the handler(s) that understand spacer nodes before you load the XRC.
-
-**Fix path A (preferred): init all XRC handlers before loading resources**
-In wxWidgets terms, you want the equivalent of:
-
-```cpp
-wxXmlResource::Get()->InitAllHandlers();
-wxInitAllImageHandlers(); // if you use bitmaps/icons in XRC
-wxXmlResource::Get()->Load(...);
-```
-
-In your Rust/wxDragon layer, do the same *before* `Load...()`.
-
-**Also add a “fail fast” rule:** if XRC load returns errors, abort startup and show a dialog with “broken UI resources” instead of limping along.
-
-#### 0.2 If InitAllHandlers still doesn’t pick up spacers: explicitly add spacer/sizer handlers
-
-Some builds (or wrappers) effectively omit handlers unless referenced.
-
-In wxWidgets C++ the explicit version looks like:
-
-```cpp
-#include <wx/xrc/xh_sizer.h>
-wxXmlResource::Get()->AddHandler(new wxSizerXmlHandler);
-wxXmlResource::Get()->AddHandler(new wxSpacerXmlHandler);
-```
-
-If wxDragon doesn’t expose this directly, the pragmatic fix is:
-
-* add a tiny C++ shim in your wxdragon-sys layer that calls these functions
-* bind it to Rust as `xrc_init_handlers()` and call it once at startup
-
-#### 0.3 Add an automated “XRC loads” smoke test
-
-This is *extremely* low effort and prevents regressions:
-
-* a test binary (or `#[test]` behind a feature flag) that:
-
-  * initializes wx
-  * calls your XRC init
-  * loads all XRC files
-  * asserts “no XRC errors logged”
-
-This catches mismatched XRC schemas instantly in CI.
+(Also: the current legacy desktop UI shows JSON/summary text only. )
 
 ---
 
-### Phase 1 — Remove the desktop/web coupling without losing shared logic
+## Target UI: information architecture
 
-You said: separate web UI and desktop UI, but unify feature logic.
+### Top-level “Results” layout
 
-#### 1.1 Define the canonical engine API (even if desktop calls it in-process)
+* **Left sidebar: Sheet Navigator**
 
-A simple model that works great:
+  * Sheet name
+  * Counts (added/removed/modified/moved)
+  * Badges for special states: added sheet, removed sheet, renamed sheet
+  * Filter toggles: “Only changed sheets”, “Only structural changes”, “Only moved”, etc.
 
-* UI thread sends `Command`
-* engine runs in background (or same thread if cheap)
-* engine emits `Event` stream:
+* **Main panel: Sheet Diff Viewer**
 
-  * progress
-  * state updates
-  * results deltas
-  * errors (structured)
+  * Header: sheet name, change summary, preview status (“preview limited” if truncated)
+  * Tabs:
 
-This supports:
+    1. **Grid** (default when sheet has grid ops)
+    2. **Non-grid changes** (named ranges, queries, VBA, charts, model…)
+    3. **Operations list** (raw, filterable table; also acts as navigation)
 
-* desktop UI (in-process)
-* web UI (server process + websocket)
-* tests (run engine headless)
+* **Bottom/right inspector (collapsible)**
 
-**Low-hanging fruit:** use the *same* `ui_payload` in both. You already have a crate named `ui_payload` in your build log —lean into it.
+  * Selected cell/range details: old vs new value, formula, change classification
+  * Move metadata (move group id, src/dst ranges)
+  * Copy buttons (“Copy old value”, “Copy new value”, “Copy A1 address(es)”)
 
-#### 1.2 Decide what’s stateful vs derived
+### Grid view: two complementary modes
 
-To keep UIs thin, the engine should own:
+1. **Aligned side-by-side grid (primary)**
 
-* current “session” (inputs, options, computed diff index, filters)
-* export settings
-* caching (e.g., computed sheet summaries)
-* long-running tasks + cancellation tokens
+   * Old grid on left, new grid on right
+   * Synchronized scrolling
+   * Row/col headers reflect alignment:
 
-The UI should own:
+     * Insert row/col: blank placeholder on old side with “+”
+     * Delete row/col: blank placeholder on new side with “–”
+     * MoveSrc / MoveDst: markers with a move-id badge
+   * Cell-level highlights for edits
 
-* widget state that doesn’t affect meaning (scroll position, column widths)
-* purely presentational state (expanded nodes in tree)
+   Alignment data is already produced as `SheetAlignment { rows: Vec<AxisEntry>, cols: Vec<AxisEntry>, moves: Vec<MoveGroup> }`. 
 
----
+2. **Change hunks view (best for huge sheets / skipped alignment)**
 
-### Phase 2 — Desktop skeleton that feels native immediately (quick wins)
+   * Shows a vertical list of “regions of interest” (like diff hunks in code review)
+   * Each hunk renders a small side-by-side mini-grid (e.g., up to 30x20, with context)
+   * Great when alignment is skipped due to row/col caps or when rendering a full aligned grid would be noisy
 
-This phase is about “it already feels like a real desktop app” even before advanced features.
-
-#### 2.1 App chrome: menus, shortcuts, status, recent files
-
-Low effort, huge payoff.
-
-* **Menu bar** with standard items:
-
-  * File: Open Left, Open Right, Open Pair…, Recent, Export…, Quit
-  * Edit: Copy, Find
-  * View: Toggle panels, Reset layout
-  * Help: About, Docs
-* **Keyboard shortcuts** (platform-aware):
-
-  * Ctrl/Cmd+O (open), Ctrl/Cmd+F (find), Ctrl/Cmd+S (export)
-  * F6/F8 (next difference), Shift+F8 (prev)
-* **Status bar**:
-
-  * current operation (“Comparing…”)
-  * row count (“1,284 diffs”)
-  * filter summary (“Filtered: 12% hidden”)
-
-#### 2.2 Window layout: choose a strong default (don’t over-engineer)
-
-A solid default for a diff-heavy app:
-
-* **Top toolbar**: Open Left, Open Right, Compare, Export, Search
-* **Left panel**: inputs + options + summary
-* **Main panel**: results table (diff list)
-* **Right/bottom panel**: detail inspector / preview of selected change
-
-Use `wxSplitterWindow` for low complexity initially; you can graduate to AUI docking later.
-
-#### 2.3 First-pass rendering controls (choose scalable widgets now)
-
-* Summary: `wxTreeCtrl` or `wxDataViewTreeCtrl`
-* Diff list: `wxDataViewCtrl` with a **virtual model** (this matters for performance)
-* Detail: simple `wxPanel` with read-only text; later upgrade to grid preview
+This directly matches how snapshots are already generated: `collect_interest_rects(...)` builds rectangles around cell edits, row/col ops, rect moves, etc. 
 
 ---
 
-### Phase 3 — Make it *fast* and *powerful* (where native desktop shines)
+## Data-to-visual mapping (the heart of the grid viewer)
 
-This is where you surpass a web UI.
+### 1) Normalize what the UI needs into a “SheetViewModel”
 
-#### 3.1 Virtualization + incremental loading
+For a selected sheet, the web UI should build (client-side) an in-memory view model:
 
-If diffs can be large:
+* `rowAxis[]`: from `alignment.rows` (or a synthetic axis if alignment skipped)
+* `colAxis[]`: from `alignment.cols`
+* `oldCellMap`: map `(row,col) -> {value, formula}` from snapshot cells
+* `newCellMap`: same for new
+* `changeMarkers`:
 
-* never push all rows into the widget at once
-* implement:
+  * row markers: added/removed/replaced/moved
+  * col markers: added/removed/moved
+  * rect markers: moved rect, replaced rect
+  * cell markers: edited cell
 
-  * virtual list model
-  * background indexing
-  * progressive rendering (“first 500 diffs ready…”)
+The raw diff ops are available inside `DiffWithSheets.report`. 
 
-#### 3.2 Instant search + filter UX
+### 2) Coordinate systems (avoid subtle bugs)
 
-* search box with:
+You’ll display in **aligned axis coordinates**, not raw workbook coordinates:
 
-  * tokenized filters (`sheet:Summary type:value_changed`)
-  * highlight matches
-  * debounce on keypress (but keep it snappy)
-* filters should be **engine-owned**:
+* Let `i` be an index into `rowAxis`, `j` be an index into `colAxis`.
+* Each axis entry gives:
 
-  * UI sends `SetFilter(FilterSpec)`
-  * engine responds with `DiffListChanged { visible_count, … }`
+  * `oldRow?: u32`, `newRow?: u32`
+  * `oldCol?: u32`, `newCol?: u32`
+* For a displayed cell `(i,j)`:
 
-That guarantees identical behavior in both UIs.
+  * Old cell lookup uses `(oldRow, oldCol)` if both exist
+  * New cell lookup uses `(newRow, newCol)` if both exist
+  * If one side is missing, render an “empty placeholder” for inserts/deletes
 
-#### 3.3 Diff navigation & selection semantics
+This makes structural diffs readable and keeps both sides visually aligned.
 
-Make keyboard navigation excellent:
+### 3) Derive render “cell state” from ops
 
-* next/prev diff
-* jump to next diff in same sheet
-* “pin” selection while background tasks run
-* consistent selection even when filters change (stable IDs)
+For each cell/row/col/rect, determine a primary visual classification:
 
-This is mostly engine + view model work, not widget work.
+* **Inserted row/col** (green-ish accent + “+” marker in header)
+* **Deleted row/col** (red-ish accent + “–” marker)
+* **Moved blocks** (distinct style + move badge; hover highlights both src/dst)
+* **Edited cell**:
 
----
+  * value changed
+  * formula changed
+  * both changed
+  * “equivalent after shift” (if formula diff indicates) — show in inspector
+* **Replaced row/rect**:
 
-### Phase 4 — High-fidelity “desktop polish”
+  * treat as “large replacement”; highlight entire region and show a message like “Dense change; individual cell edits suppressed.”
 
-This is the difference between “it works” and “it feels premium”.
+Why this matters: the diff engine emits `RowReplaced` / `RectReplaced` for dense edits rather than many cell edits. 
+Your grid view must treat those as first-class operations, not “missing detail.”
 
-#### 4.1 Theming and DPI correctness
+### 4) What to display inside cells
 
-* Respect system fonts and dark mode where possible.
-* Use SVG or multi-resolution icons (`wxBitmapBundle` style approach).
-* Test at 100/125/150/200% scaling.
-* Ensure consistent spacing: define a tiny “design tokens” module:
+Default display: show the **value**.
+On hover / selection: show value + formula.
 
-  * `SPACING_SM`, `SPACING_MD`, `SPACING_LG`
-  * standard margins around panels
-  * consistent row heights
-
-#### 4.2 Accessibility and UX finishing
-
-* full keyboard access to every control
-* visible focus rings
-* high-contrast safe coloring (don’t rely on red/green only)
-* screen-reader friendly labels (where supported)
-
-#### 4.3 State persistence
-
-* restore:
-
-  * last opened pair (optional)
-  * window size/position
-  * splitter positions
-  * last used filters
-* but **don’t** persist ephemeral bugs (provide “Reset layout”)
+Snapshot cells store formula with the leading `=` already applied in `push_cell`. 
 
 ---
 
-### Phase 5 — Packaging, updates, crash diagnostics
+## Implementation plan by layers
 
-This is part of “excellent” desktop UX.
+## Layer A — UI foundation choice
 
-* installers per OS
-* auto-update strategy (or at least “check for updates”)
-* crash report capture (even if only local file)
-* dependency bundling strategy (especially important if using webview backends)
+### Preferred: build the visual diff viewer in the WebView UI (recommended)
 
----
+Rationale:
 
-## 4) Fixing your current desktop issues (specific, actionable)
+* Grid virtualization and rich interactions are dramatically easier and more consistent in a web UI.
+* You already have a WebView mode and an RPC bridge including `loadSheetPayload` and `exportAuditXlsx`. 
 
-### 4.1 XRC `spacer` handler errors
+**Deliverable:** a self-contained `web/` UI that can render the new grid diff viewer and drive the existing backend via RPC.
 
-You’re getting XRC “no handler… class spacer” + “unexpected item in sizer” .
+### Optional: integrate visuals into the legacy wx UI incrementally
 
-**What to do:**
+Even if you keep the current legacy interface, you can add a **“Visual” tab** that hosts a WebView instance and uses the same viewer. This avoids duplicating grid rendering in wx widgets and keeps a fallback for environments without web assets.
 
-1. **Initialize XRC handlers before any XRC load**
-
-   * equivalent of `InitAllHandlers()`
-2. **If spacers still fail, explicitly register sizer + spacer handlers**
-3. **Add an XRC smoke test** to prevent regression
-
-**Fallback option (if you need a quick unblock):**
-
-* Replace spacers in XRC with a `wxPanel` (or equivalent) with fixed min size.
-* This is uglier long-term, but will remove handler dependence.
+The legacy UI today only shows counts or JSON in a text control when selecting sheets. 
+This is the strongest, lowest-risk way to add visuals without rewriting everything at once.
 
 ---
 
-### 4.2 Gdk cursor theme warnings (`sb_h_double_arrow`, `sb_v_double_arrow`)
+## Layer B — Web UI: components and state
 
-You’re seeing:
+### 1) RPC client + session state
 
-* `Unable to load sb_h_double_arrow from the cursor theme`
-* `Unable to load sb_v_double_arrow from the cursor theme` 
+Create a thin RPC client in the web UI:
 
-**What this usually means:** the *system* cursor theme is incomplete (common in minimal Linux environments / WSL GUI stacks). It’s not typically an application bug.
+* `diff(oldPath, newPath, options)` -> `DiffOutcome`
+* `loadDiffSummary(diffId)` -> summary
+* `loadSheetPayload(diffId, sheetName)` -> `DiffWithSheets`
+* `exportAuditXlsx(diffId)` -> path or null
 
-**Your options, from “most correct” to “most pragmatic”:**
+These are already implemented server-side in the wx host. 
 
-1. **Document + fix dev environment**
+Maintain a `DiffSession` state:
 
-   * Ensure a cursor theme that includes those cursors is installed.
-   * Set `XCURSOR_THEME` to something known-good (e.g., Adwaita) in your dev run script.
+* `diffId`, `mode`, `summary`
+* cached `sheetPayloadsByName` (LRU cache to avoid re-fetching)
+* currently selected sheet
 
-2. **App-level mitigation (only if you really want silent logs)**
+### 2) Sheet Navigator
 
-   * On Linux, set environment variables early in `main()` (before GTK initializes), for example:
+Render from `summary.sheets`:
 
-     * `XCURSOR_THEME`
-     * `XCURSOR_SIZE`
-   * Or install/ship guidance for required system packages.
+* group by: changed vs unchanged
+* allow sorting by: op_count, name, modified count
+* show an icon for “preview limited” once you’ve loaded payload and see `SheetSnapshot.truncated`
 
-3. **Ignore**
+### 3) Sheet Diff Viewer shell
 
-   * If functionality is fine, treat it as a harmless warning.
-   * But if you’re aiming for “maximally excellent,” I’d at least do (1) and ensure your CI/dev docs don’t spam warnings.
+Once a sheet is selected:
 
----
+* if `mode=Payload` and you already have the payload: hydrate immediately
+* if `mode=Large`: call `loadSheetPayload` and show a skeleton/progress state
 
-## 5) Bonus: you likely also want to address the GTK scrollbar criticals
-
-Your logs show repeated GTK criticals about `gtk_box_gadget_distribute: assertion 'size >= 0' failed in GtkScrollbar` .
-
-These are often triggered by layout calculations producing negative allocations (usually a sizer/min-size issue or a GTK quirk when a widget collapses too small).
-
-**Practical mitigation checklist:**
-
-* Ensure every panel created from XRC has:
-
-  * a sizer attached
-  * sane min sizes (never negative)
-* After building the frame:
-
-  * call `Layout()` and send an initial size event (the wxWidgets equivalent) so controls get a real allocation early
-* Avoid “fixed pixel sizes” in XRC unless necessary; prefer proportions + expand flags.
-* If it’s a GTK overlay scrollbar quirk in your environment, disabling overlay scrollbars can reduce noise (environment-level workaround).
-
-Even if you don’t solve the root cause immediately, reducing these makes the desktop app feel more stable and makes real issues easier to spot.
+This matches how the backend loads per-sheet payload in large mode. 
 
 ---
 
-## 6) A concrete “first 10 tasks” checklist (ordered for fastest payoff)
+## Layer C — Grid Diff Viewer (aligned side-by-side)
 
-1. **Add XRC handler initialization** before loading XRC (fix spacer errors).
-2. **Add XRC smoke test** that fails CI on any XRC parse/handler error.
-3. **Fail fast on XRC load errors** (dialog + exit) instead of partial UI.
-4. **Fix dev cursor theme warnings** via documented package/env setup (or app env set).
-5. **Introduce engine command/event interface** (even if desktop calls directly).
-6. **Refactor desktop UI to call engine only** (no direct domain logic).
-7. **Implement menus + shortcuts + status bar** (native feel immediately).
-8. **Build the main layout** (splitter + results table + details).
-9. **Virtualize the diff list** (so it stays fast as data grows).
-10. **Implement search/filter as engine-owned specs** (guarantees parity with web).
+### 1) Rendering approach (performance + UX)
+
+Use a **2D virtualized grid** for each side, with sticky row/col headers, synchronized scroll.
+
+* DOM approach: a virtualized grid component (e.g., fixed-size cells) that only renders visible rows/cols + small overscan.
+* Keep cell rendering very lightweight (text truncation, minimal DOM nesting).
+* Provide zoom by changing cell size + font scale.
+
+Why: even though snapshots are sparse, the alignment axes can be large (up to 10k x 200 before preview is disabled). 
+You must not render a full matrix.
+
+### 2) Synchronized scrolling
+
+* A single scroll container drives both grids.
+* Each grid uses the same `rowAxis`/`colAxis` and computes old/new cell content based on axis entries.
+* Selection/hover should highlight both sides.
+
+### 3) Headers: show alignment semantics
+
+Row header shows:
+
+* old row number (if present)
+* new row number (if present)
+* markers:
+
+  * Insert (only new row exists)
+  * Delete (only old row exists)
+  * MoveSrc / MoveDst (move badge)
+
+This uses `AxisKind` and `move_id` from `AxisEntry`. 
+
+Similarly for columns.
+
+### 4) Cell styling rules (readable, accessible)
+
+Don’t rely on color alone:
+
+* Use a subtle background + an icon glyph/border:
+
+  * Added: plus marker
+  * Removed: minus marker
+  * Modified: outline + dot
+  * Moved: dashed outline + move badge
+* Provide a legend (collapsible) and tooltips.
+
+### 5) Inspector panel
+
+On selecting a cell:
+
+* show old/new A1 addresses (can be derived from axis mapping)
+* show old/new value + formula
+* show change category and any move information
+* provide copy actions
+
+Note: `CellAddress` serializes as A1 strings already, which is great for UI display and for copying. 
 
 ---
 
-If you tell me what toolkit you’re using for the desktop UI (it looks like wxDragon/wxWidgets + XRC from your logs ) and whether your XRC is generated by wxFormBuilder/wxGlade, I can give you an exact “here’s the handler init function to call in wxDragon” snippet and an example XRC smoke test structure.
+## Layer D — Change Hunks View (for large sheets / better review)
+
+### Why it matters
+
+Even when alignment is available, customers often prefer reviewing “only what changed” rather than scrolling through mostly empty context.
+
+The backend snapshot system already chooses rectangles around meaningful ops, including moved blocks, replaced regions, row/col ops, and duplicate key clusters. 
+
+### Implementation options
+
+**Option 1 (client-side hunks):**
+
+* Re-implement the interest-rect generation in the web UI using the same logic:
+
+  * cell edits -> 1x1 rect
+  * row ops -> 1 row x previewCols rect
+  * col ops -> previewRows x 1 col rect
+  * moved blocks -> include both src and dst rects
+  * expand by context rows/cols
+
+You can align this with the current caps (200x80, context 1) found in `ui_payload`. 
+This is quick, but you must keep logic in sync.
+
+**Option 2 (preferred, server-side hunks):**
+Extend `ui_payload` to return `interestRects` per sheet in the payload (they’re already computed internally). 
+This makes the UI simpler and ensures parity across desktop/web clients.
+
+### Hunk rendering UX
+
+Each hunk card:
+
+* Title: `Sheet1!A120:D150` (old and new range if different)
+* Badges: “moved”, “replaced region”, “row inserted”, etc.
+* Mini grid (two panes) with limited size; click “Open in full grid” to jump/zoom.
+
+---
+
+## Layer E — Non-grid diffs: make them visual too (without pretending they are grids)
+
+Grid diffs are the star, but customers also need clarity on:
+
+* Power Query changes
+* Named range changes
+* VBA module changes
+* Model changes (relationships, columns, measures) when enabled
+* Charts / metadata
+
+You already export these into separate sheets in the audit workbook (Summary, Warnings, Cells, Structure, PowerQuery, Model, OtherOps). 
+Use that as an information architecture guide inside the UI:
+
+* Render these as tables with:
+
+  * change type column
+  * entity name
+  * old/new values
+  * “diff” view for long text (query definitions, M expressions, VBA text)
+
+For long text diffs: use a line-based diff component, and allow “copy old/new”.
+
+---
+
+## Layer F — Backend/RPC enhancements (to make it feel “instant” on big diffs)
+
+You can ship an MVP without changing backend APIs. But to make this maximally useful under real enterprise-sized workbooks, add two strategic capabilities.
+
+### 1) “Open exported audit” / “reveal in file explorer”
+
+When user exports audit XLSX via `exportAuditXlsx`, provide an “Open” button.
+
+* Add an RPC method like `openPath({ path })` that uses OS-specific shell open (you already use `std::process::Command` in the wx host). 
+  This avoids the “now go find it manually” pain.
+
+### 2) Range-based loading (advanced, but pays off)
+
+Problem: `loadSheetPayload` returns ops + snapshots. For certain sheets, that can still be huge.
+
+You already store ops in SQLite with indexed fields such as `sheet_id`, `row`, `col`, `row_end`, `col_end`, `move_id`, etc. (see how index fields are derived for ops). 
+
+Add APIs that let the web UI request just what it needs:
+
+* `loadSheetMeta(diffId, sheetName)` -> sheet dimensions, alignment availability, truncation flags
+* `loadOpsInRange(diffId, sheetName, rowStart, rowEnd, colStart, colEnd)` -> only ops intersecting a viewport/hunk
+* `loadCellsInRange(diffId, sheetName, side, rowStart, rowEnd, colStart, colEnd)` -> sparse cell values/formulas from the workbook cache
+
+This allows:
+
+* true infinite scroll on huge sheets
+* “jump to change” without preloading everything
+* faster initial render
+
+---
+
+## Layer G — Making preview limitations honest and helpful
+
+The payload already contains explicit signals:
+
+* `SheetSnapshot.truncated` plus a human note like “Preview limited: showing X of Y non-empty cells.” 
+* `SheetAlignment.skipped` with a concrete `skip_reason` when rows/cols exceed caps. 
+
+UX requirements:
+
+* Show a small banner in the sheet viewer:
+
+  * “Preview limited” with a short reason
+  * Buttons: “Export audit workbook”, “Show change hunks”, “Try loading more context” (if you implement range loading)
+* Never silently hide: if alignment is skipped, explicitly switch to Hunks View as default.
+
+---
+
+## Testing strategy (so grid visuals are trustworthy)
+
+### 1) Golden-file fixtures for visual logic
+
+Create a set of small workbook fixtures that exercise:
+
+* single cell edit
+* row inserted above edits
+* column removed
+* moved row block
+* moved rect block
+* dense row replaced / dense rect replaced
+* renamed sheet
+* added/removed sheet
+
+For each fixture, validate:
+
+* alignment axis correctness (in `ui_payload`)
+* change markers mapping correctness (in UI)
+* navigation order (“next diff” visits expected coordinates)
+
+### 2) Contract tests for RPC payloads
+
+Add a TypeScript schema validation layer (zod/io-ts) on the web UI side:
+
+* fail fast if payload shape changes
+* makes refactors safer
+
+### 3) Performance regression guardrails
+
+Automate:
+
+* time-to-first-grid-render on a moderate sheet
+* memory usage for loading a large-mode diff and opening 3–5 sheets
+* verify that virtualization keeps DOM node count bounded
+
+---
+
+## Phased rollout plan
+
+### Phase 1 — MVP (high value, low risk)
+
+* Build web UI grid viewer (Aligned + Inspector)
+* Implement Sheet Navigator + sheet selection
+* Render cell edits + row/col insert/delete + rect replaced + moved blocks (highlight + inspector)
+* Show preview-limit banners and fall back to Hunks View when alignment is skipped
+* Wire `exportAuditXlsx` into the UI
+
+Uses existing APIs as-is (`loadSheetPayload`, etc.). 
+
+### Phase 2 — Review ergonomics
+
+* Next/prev change navigation within a sheet
+* Search integration (hook into existing backend search endpoints if desired)
+* Better move visualization: hover highlights both src/dst; click “jump to counterpart”
+* “Show formulas” toggle + formula diff explanation in inspector
+
+### Phase 3 — Big-sheet excellence
+
+* Add range-based loading APIs
+* Implement viewport ops/cells fetching for near-infinite sheets
+* Optional: “minimap” overview of change distribution
+
+### Phase 4 — Desktop polish and defaults
+
+* Make the visual UI the default desktop experience (remove reliance on an env flag), while keeping legacy fallback
+* Add “Open exported audit workbook” / “Reveal in folder”
+* Ship web assets reliably (bundle `web/` next to the binary, consistent with index resolution logic)
+
+---
+
+## What you’ll end up with
+
+A desktop experience where customers can:
+
+* pick a sheet, immediately see a familiar spreadsheet-like grid,
+* understand structural changes via aligned headers,
+* inspect exact old/new values and formulas,
+* review large diffs safely via hunks and progressive loading,
+* and always have an escape hatch (export audit workbook) when previews are necessarily limited.
+
+If you’d like, I can also outline a clean TypeScript data model (types/interfaces) that mirrors the Rust payloads (`DiffWithSheets`, `SheetSnapshot`, `SheetAlignment`, `DiffOp`) and the exact marker derivation rules for each grid-relevant `DiffOp` variant—so implementation stays deterministic and testable.

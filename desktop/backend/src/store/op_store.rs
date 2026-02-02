@@ -1,7 +1,8 @@
 use std::path::Path;
 
 use excel_diff::{DiffOp, DiffReport, DiffSummary};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
+use rusqlite::types::Value;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
@@ -342,6 +343,59 @@ impl OpStore {
             "SELECT payload_json FROM diff_ops WHERE diff_id = ?1 AND sheet_id = ?2 ORDER BY op_idx",
         )?;
         let rows = stmt.query_map(params![diff_id, sheet_id as i64], |row| row.get::<_, String>(0))?;
+        let mut ops = Vec::new();
+        for row in rows {
+            let payload = row?;
+            let op: DiffOp = serde_json::from_str(&payload)?;
+            ops.push(op);
+        }
+        Ok(ops)
+    }
+
+    pub fn load_ops_in_range(
+        &self,
+        diff_id: &str,
+        sheet_name: &str,
+        row_start: Option<u32>,
+        row_end: Option<u32>,
+        col_start: Option<u32>,
+        col_end: Option<u32>,
+    ) -> Result<Vec<DiffOp>, StoreError> {
+        let sheet_id = self.sheet_id_for_name(diff_id, sheet_name)?;
+        let mut sql = String::from(
+            "SELECT payload_json FROM diff_ops WHERE diff_id = ?1 AND sheet_id = ?2",
+        );
+        let mut params_list: Vec<Value> = vec![diff_id.to_string().into(), (sheet_id as i64).into()];
+        let mut idx = 3;
+
+        let row_start = row_start.or(row_end);
+        let row_end = row_end.or(row_start);
+        if let (Some(start), Some(end)) = (row_start, row_end) {
+            sql.push_str(&format!(
+                " AND (row IS NULL OR (row_end IS NULL AND row BETWEEN ?{idx} AND ?{idx_plus}) OR (row_end IS NOT NULL AND row_end >= ?{idx} AND row <= ?{idx_plus}))",
+                idx = idx,
+                idx_plus = idx + 1
+            ));
+            params_list.push((start as i64).into());
+            params_list.push((end as i64).into());
+            idx += 2;
+        }
+
+        let col_start = col_start.or(col_end);
+        let col_end = col_end.or(col_start);
+        if let (Some(start), Some(end)) = (col_start, col_end) {
+            sql.push_str(&format!(
+                " AND (col IS NULL OR (col_end IS NULL AND col BETWEEN ?{idx} AND ?{idx_plus}) OR (col_end IS NOT NULL AND col_end >= ?{idx} AND col <= ?{idx_plus}))",
+                idx = idx,
+                idx_plus = idx + 1
+            ));
+            params_list.push((start as i64).into());
+            params_list.push((end as i64).into());
+        }
+
+        sql.push_str(" ORDER BY op_idx");
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(params_list), |row| row.get::<_, String>(0))?;
         let mut ops = Vec::new();
         for row in rows {
             let payload = row?;

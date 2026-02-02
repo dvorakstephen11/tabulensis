@@ -31,6 +31,13 @@ impl XmlResource {
         }
     }
 
+    /// Initialize sizer handler explicitly (covers XRC spacer nodes)
+    pub fn init_sizer_handlers(&self) {
+        unsafe {
+            ffi::wxd_XmlResource_InitSizerHandlers(self.ptr);
+        }
+    }
+
     /// Initialize platform-aware StaticBitmap handler for XRC files
     ///
     /// This should be called after `init_all_handlers()` and before loading XRC files.

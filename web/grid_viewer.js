@@ -46,6 +46,7 @@ function buildCellSummary(cell, viewRow, viewCol) {
     diffKind: cell?.diffKind || "empty",
     moveId: cell?.moveId || "",
     moveRole: cell?.moveRole || "",
+    formulaDiff: cell?.edit?.formulaDiff || "",
     oldAddress: "",
     newAddress: "",
     old: extractSideDetails(cell, "old"),
@@ -135,10 +136,14 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
   canvasWrap.append(scroll, tooltip);
 
   const inspector = createEl("div", "grid-inspector");
+  const inspectorHeader = createEl("div", "grid-inspector-header");
   const inspectorTitle = createEl("div", "grid-inspector-title", "Inspector");
+  const inspectorToggle = createEl("button", "grid-inspector-toggle", "Collapse");
+  inspectorToggle.type = "button";
+  inspectorHeader.append(inspectorTitle, inspectorToggle);
   const inspectorEmpty = createEl("div", "grid-inspector-empty", "Select a cell to inspect.");
   const inspectorContent = createEl("div", "grid-inspector-content");
-  inspector.append(inspectorTitle, inspectorEmpty, inspectorContent);
+  inspector.append(inspectorHeader, inspectorEmpty, inspectorContent);
 
   body.append(canvasWrap, inspector);
   root.append(toolbar, body);
@@ -146,6 +151,8 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
 
   const ctx = canvas.getContext("2d");
   let rafId = null;
+  const perfStart = performance.now();
+  let firstPaint = true;
 
   let contentWidth = 0;
   let contentHeight = 0;
@@ -359,6 +366,11 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
       hover: state.hover,
       hoverMoveId: state.hoverMoveId
     });
+    if (firstPaint) {
+      firstPaint = false;
+      const duration = performance.now() - perfStart;
+      root.dispatchEvent(new CustomEvent("gridviewer:rendered", { detail: { duration } }));
+    }
     if (state.flash) {
       schedulePaint();
     }
@@ -493,6 +505,14 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
     if (summary.moveId) {
       addRow("Move", summary.moveRole ? `${summary.moveRole} ${summary.moveId}` : summary.moveId);
     }
+    if (summary.formulaDiff) {
+      addRow("Formula Diff", String(summary.formulaDiff).replace(/_/g, " "));
+    }
+    const moveInfo = summary.moveId && sheetVm.moveLookup ? sheetVm.moveLookup.get(summary.moveId) : null;
+    if (moveInfo) {
+      addRow("Move From", moveInfo.src);
+      addRow("Move To", moveInfo.dst);
+    }
     addRow("Old", summary.oldAddress);
     if (state.contentMode === "formulas") {
       if (summary.old.formula) addRow("Old Formula", summary.old.formula);
@@ -508,6 +528,50 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
     } else {
       if (summary.fresh.value) addRow("New Value", summary.fresh.value);
       if (summary.fresh.formula) addRow("New Formula", summary.fresh.formula);
+    }
+
+    function copyText(value) {
+      if (!value) return;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(value).catch(() => {});
+        return;
+      }
+      const textarea = createEl("textarea");
+      textarea.value = value;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.append(textarea);
+      textarea.select();
+      try {
+        document.execCommand("copy");
+      } catch (_) {}
+      textarea.remove();
+    }
+
+    const actionWrap = createEl("div", "grid-inspector-actions");
+    const oldCopy = summary.old.value || summary.old.formula;
+    const newCopy = summary.fresh.value || summary.fresh.formula;
+    const addrCopy = summary.newAddress || summary.oldAddress || summary.viewAddress;
+    if (oldCopy) {
+      const btn = createEl("button", "grid-inspector-copy", "Copy old");
+      btn.type = "button";
+      btn.addEventListener("click", () => copyText(oldCopy));
+      actionWrap.append(btn);
+    }
+    if (newCopy) {
+      const btn = createEl("button", "grid-inspector-copy", "Copy new");
+      btn.type = "button";
+      btn.addEventListener("click", () => copyText(newCopy));
+      actionWrap.append(btn);
+    }
+    if (addrCopy) {
+      const btn = createEl("button", "grid-inspector-copy", "Copy address");
+      btn.type = "button";
+      btn.addEventListener("click", () => copyText(addrCopy));
+      actionWrap.append(btn);
+    }
+    if (actionWrap.children.length > 0) {
+      inspectorContent.append(actionWrap);
     }
 
     const jumpTarget = resolveMoveTarget(cell);
@@ -827,7 +891,14 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
     }
   }
 
+  function toggleInspector() {
+    inspector.classList.toggle("collapsed");
+    inspectorToggle.textContent = inspector.classList.contains("collapsed") ? "Expand" : "Collapse";
+    root.classList.toggle("inspector-collapsed", inspector.classList.contains("collapsed"));
+  }
+
   toolbar.addEventListener("click", onModeClick);
+  inspectorToggle.addEventListener("click", toggleInspector);
   scroll.addEventListener("scroll", onScroll);
   canvas.addEventListener("pointermove", onPointerMove);
   canvas.addEventListener("pointerleave", onPointerLeave);
@@ -849,6 +920,7 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
       if (rafId !== null) cancelAnimationFrame(rafId);
       resizeObserver.disconnect();
       toolbar.removeEventListener("click", onModeClick);
+      inspectorToggle.removeEventListener("click", toggleInspector);
       scroll.removeEventListener("scroll", onScroll);
       canvas.removeEventListener("pointermove", onPointerMove);
       canvas.removeEventListener("pointerleave", onPointerLeave);

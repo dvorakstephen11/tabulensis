@@ -627,6 +627,7 @@ name = "desktop_wx"
 version = "0.1.0"
 dependencies = [
  "desktop_backend",
+ "libc",
  "license_client",
  "log",
  "quick-xml 0.32.0",

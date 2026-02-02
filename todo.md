@@ -13,6 +13,15 @@
             * Maybe also a way to accept the response?
                 * I.e., to prompt the model in such a way that it generates predictable output that Tabulensis can use (e.g. to merge workbooks, set defaults, etc)
             * What about running performance experiments based on output from AI? That is to say, it could suggest different formulas to use and then Tabulensis could be natively set up to facilitate deterministic experimentation and comparison.
+    * Create a script and skill file related to the task of reducing waste
+        * git checkout new branch (“waste_removal_<datestamp>” ?)
+        * Codex investigation and update
+        * test suite + full performance suite
+        * If no regressions, commit + merge into development + push to origin
+    * Make sure every run of the performance suite produces a record
+- Product Development Strategy
+    * Expanding testing and perforamnce metrics
+        * Make a plan for finding real-world files to use to test the performance of Tabulensis
     * Near-term Improvements
         * Might as well try to improve the algorithms if I find myself having down time.
         * Need guidance about automating testing on different operating systems, or about testing on different OSs in general
@@ -22,13 +31,6 @@
             * Color palette for UI? Gray, green, yellow
             * Logo? Have Claude, Gemini and GPT describe various logos, then have nano banana create it
             * Could a species named Tabulensis be useful in a logo?
-    * Create a script and skill file related to the task of reducing waste
-        * git checkout new branch (“waste_removal_<datestamp>” ?)
-        * Codex investigation and update
-        * test suite + full performance suite
-        * If no regressions, commit + merge into development + push to origin
-    * Make sure every run of the performance suite produces a record
-    * Make a plan for finding real-world files to use to test the performance of Tabulensis
 - Marketing Strategy
     * As I improve the product, what improvements map to what price points? If MVP = $80/yr, are there conceivable offerings at $300/yr or more? How far away are they?
     * Partnerships

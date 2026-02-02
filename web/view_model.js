@@ -6,7 +6,9 @@ const DEFAULT_OPTS = {
   maxCellsPerRegion: 200,
   maxVisualCells: 5000,
   mergeGap: 1,
-  ignoreBlankToBlank: true
+  ignoreBlankToBlank: true,
+  previewRows: 200,
+  previewCols: 80
 };
 
 function resolveString(report, id) {
@@ -112,11 +114,13 @@ function normalizePayload(payloadOrReport) {
   const report = payload.report || payloadOrReport || {};
   const rawSheets = payload.sheets || null;
   const alignments = Array.isArray(payload.alignments) ? payload.alignments : [];
+  const interestRectsRaw = payload.interestRects || payload.interest_rects;
+  const interestRects = Array.isArray(interestRectsRaw) ? interestRectsRaw : [];
   const sheets = {
     oldSheets: normalizeSheetList(rawSheets?.old),
     newSheets: normalizeSheetList(rawSheets?.new)
   };
-  return { report, sheets, alignments };
+  return { report, sheets, alignments, interestRects };
 }
 
 function buildSheetLookup(sheets) {
@@ -135,6 +139,18 @@ function buildAlignmentLookup(alignments) {
   for (const alignment of alignments) {
     if (alignment && typeof alignment.sheet === "string") {
       map.set(alignment.sheet, alignment);
+    }
+  }
+  return map;
+}
+
+function buildInterestRectLookup(interestRects) {
+  const map = new Map();
+  if (!Array.isArray(interestRects)) return map;
+  for (const entry of interestRects) {
+    if (entry && typeof entry.sheet === "string") {
+      const rects = Array.isArray(entry.rects) ? entry.rects : [];
+      map.set(entry.sheet, rects);
     }
   }
   return map;
@@ -190,6 +206,9 @@ function categorizeOps(report) {
       else modifiedCount++;
     } else if (kind.startsWith("Chart")) {
       chartOps.push(op);
+      const sheetName = resolveString(report, op.sheet);
+      if (!sheetOps.has(sheetName)) sheetOps.set(sheetName, []);
+      sheetOps.get(sheetName).push(op);
       if (kind.includes("Added")) addedCount++;
       else if (kind.includes("Removed")) removedCount++;
       else modifiedCount++;
@@ -216,6 +235,52 @@ function categorizeOps(report) {
     modelOps,
     counts: { added: addedCount, removed: removedCount, modified: modifiedCount, moved: movedCount }
   };
+}
+
+function isGridKind(kind) {
+  return (
+    kind === "CellEdited" ||
+    kind.startsWith("Row") ||
+    kind.startsWith("Column") ||
+    kind.startsWith("Block") ||
+    kind.startsWith("Rect") ||
+    kind === "DuplicateKeyCluster"
+  );
+}
+
+function changeTypeForKind(kind) {
+  if (!kind) return "modified";
+  if (kind.includes("Added")) return "added";
+  if (kind.includes("Removed")) return "removed";
+  if (kind.includes("Moved")) return "moved";
+  if (kind.includes("Renamed")) return "modified";
+  if (kind.includes("Edited") || kind.includes("Changed") || kind.includes("Replaced")) return "modified";
+  return "modified";
+}
+
+function groupForKind(kind) {
+  if (!kind) return "other";
+  if (kind.startsWith("Row")) return "rows";
+  if (kind.startsWith("Column")) return "cols";
+  if (kind === "CellEdited" || kind.startsWith("Rect")) return "cells";
+  if (kind.startsWith("Block") || kind.includes("Moved")) return "moves";
+  if (kind.startsWith("Chart") || kind.startsWith("NamedRange") || kind.startsWith("Vba") || kind.startsWith("Query") || isModelKind(kind)) {
+    return "other";
+  }
+  return "other";
+}
+
+function buildSheetCounts(ops) {
+  const counts = { added: 0, removed: 0, modified: 0, moved: 0 };
+  for (const op of ops || []) {
+    const kind = op.kind || "";
+    const changeType = changeTypeForKind(kind);
+    if (changeType === "added") counts.added += 1;
+    else if (changeType === "removed") counts.removed += 1;
+    else if (changeType === "moved") counts.moved += 1;
+    else counts.modified += 1;
+  }
+  return counts;
 }
 
 function makeAxisVm(entries, oldLen, newLen) {
@@ -276,10 +341,11 @@ function makeEditMap(report, sheetOps, rowsVm, colsVm, opts) {
     const toValue = op.to ? formatValue(report, op.to.value) : "";
     const fromFormula = resolveFormula(report, op.from?.formula);
     const toFormula = resolveFormula(report, op.to?.formula);
+    const formulaDiff = op.formula_diff || op.formulaDiff || "";
     if (ignoreBlank && !fromValue && !toValue && !fromFormula && !toFormula) {
       continue;
     }
-    editMap.set(key, { fromValue, toValue, fromFormula, toFormula });
+    editMap.set(key, { fromValue, toValue, fromFormula, toFormula, formulaDiff });
   }
   return editMap;
 }
@@ -1130,6 +1196,401 @@ function buildRegions({ ops, rowsVm, colsVm, editMap, opts }) {
   return regions;
 }
 
+function normalizeInterestRect(rect) {
+  if (!rect) return null;
+  const rowStart = rect.rowStart ?? rect.row_start;
+  const rowEnd = rect.rowEnd ?? rect.row_end ?? rowStart;
+  const colStart = rect.colStart ?? rect.col_start;
+  const colEnd = rect.colEnd ?? rect.col_end ?? colStart;
+  return {
+    id: rect.id || rect.rectId || rect.key || "",
+    kind: rect.kind || "rect",
+    side: rect.side || "both",
+    moveId: rect.moveId || rect.move_id || "",
+    rowStart: Number.isFinite(rowStart) ? rowStart : 0,
+    rowEnd: Number.isFinite(rowEnd) ? rowEnd : 0,
+    colStart: Number.isFinite(colStart) ? colStart : 0,
+    colEnd: Number.isFinite(colEnd) ? colEnd : 0
+  };
+}
+
+function buildAlignedHunks(regions, anchors) {
+  const anchorIds = new Set((anchors || []).map(anchor => anchor.id));
+  return (regions || []).map(region => ({
+    id: region.id,
+    kind: region.kind,
+    label: region.label,
+    moveId: region.moveId || "",
+    viewBounds: region.renderBounds || region,
+    anchorId: anchorIds.has(`region:${region.id}`) ? `region:${region.id}` : ""
+  }));
+}
+
+function buildRawHunks({ rects, oldSheet, newSheet, opts }) {
+  const hunks = [];
+  if (!Array.isArray(rects) || rects.length === 0) return hunks;
+  const oldRows = oldSheet?.nrows || 0;
+  const oldCols = oldSheet?.ncols || 0;
+  const newRows = newSheet?.nrows || 0;
+  const newCols = newSheet?.ncols || 0;
+
+  for (const rect of rects) {
+    const normalized = normalizeInterestRect(rect);
+    if (!normalized) continue;
+    const bounds = {
+      top: normalized.rowStart,
+      bottom: normalized.rowEnd,
+      left: normalized.colStart,
+      right: normalized.colEnd
+    };
+    let oldBounds = null;
+    let newBounds = null;
+    if (normalized.side === "old") {
+      oldBounds = bounds;
+    } else if (normalized.side === "new") {
+      newBounds = bounds;
+    } else {
+      oldBounds = bounds;
+      newBounds = bounds;
+    }
+
+    const renderOld =
+      oldBounds && oldRows > 0 && oldCols > 0
+        ? expandBounds(oldBounds, oldRows, oldCols, opts)
+        : null;
+    const renderNew =
+      newBounds && newRows > 0 && newCols > 0
+        ? expandBounds(newBounds, newRows, newCols, opts)
+        : null;
+
+    const labelParts = [];
+    if (oldBounds) {
+      const start = formatCellAddress(oldBounds.top, oldBounds.left);
+      const end = formatCellAddress(oldBounds.bottom, oldBounds.right);
+      labelParts.push(oldBounds.top === oldBounds.bottom && oldBounds.left === oldBounds.right ? `Old ${start}` : `Old ${start}:${end}`);
+    }
+    if (newBounds) {
+      const start = formatCellAddress(newBounds.top, newBounds.left);
+      const end = formatCellAddress(newBounds.bottom, newBounds.right);
+      labelParts.push(newBounds.top === newBounds.bottom && newBounds.left === newBounds.right ? `New ${start}` : `New ${start}:${end}`);
+    }
+
+    hunks.push({
+      id: normalized.id || `${normalized.kind}-${normalized.rowStart}-${normalized.colStart}`,
+      kind: normalized.kind,
+      moveId: normalized.moveId,
+      label: labelParts.join(" -> ") || "Change hunk",
+      oldBounds,
+      newBounds,
+      renderOld,
+      renderNew
+    });
+  }
+  return hunks;
+}
+
+function buildInterestRectsFromOps({ ops, oldSheet, newSheet, opts }) {
+  const rects = [];
+  const previewRows = opts.previewRows ?? 200;
+  const previewCols = opts.previewCols ?? 80;
+  const oldRows = oldSheet?.nrows || 0;
+  const oldCols = oldSheet?.ncols || 0;
+  const newRows = newSheet?.nrows || 0;
+  const newCols = newSheet?.ncols || 0;
+
+  const previewColsOld = Math.min(previewCols, oldCols);
+  const previewColsNew = Math.min(previewCols, newCols);
+  const previewRowsOld = Math.min(previewRows, oldRows);
+  const previewRowsNew = Math.min(previewRows, newRows);
+
+  const pushRect = (kind, side, bounds, moveId = "") => {
+    if (!bounds) return;
+    rects.push({
+      id: `${kind}-${side}-${bounds.top}-${bounds.left}-${bounds.bottom}-${bounds.right}`,
+      kind,
+      side,
+      moveId,
+      rowStart: bounds.top,
+      rowEnd: bounds.bottom,
+      colStart: bounds.left,
+      colEnd: bounds.right
+    });
+  };
+
+  for (const op of ops || []) {
+    const kind = op.kind || "";
+    if (kind === "CellEdited") {
+      const addr = parseCellAddress(op.addr);
+      if (!addr) continue;
+      pushRect("cell", "both", { top: addr.row, bottom: addr.row, left: addr.col, right: addr.col });
+    } else if (kind === "RectReplaced") {
+      pushRect("rect_replaced", "both", {
+        top: op.start_row,
+        bottom: op.start_row + op.row_count - 1,
+        left: op.start_col,
+        right: op.start_col + op.col_count - 1
+      });
+    } else if (kind === "RowAdded") {
+      if (previewColsNew > 0) {
+        pushRect("row_added", "new", { top: op.row_idx, bottom: op.row_idx, left: 0, right: previewColsNew - 1 });
+      }
+    } else if (kind === "RowRemoved") {
+      if (previewColsOld > 0) {
+        pushRect("row_removed", "old", { top: op.row_idx, bottom: op.row_idx, left: 0, right: previewColsOld - 1 });
+      }
+    } else if (kind === "RowReplaced") {
+      if (previewColsOld > 0) {
+        pushRect("row_replaced", "old", { top: op.row_idx, bottom: op.row_idx, left: 0, right: previewColsOld - 1 });
+      }
+      if (previewColsNew > 0) {
+        pushRect("row_replaced", "new", { top: op.row_idx, bottom: op.row_idx, left: 0, right: previewColsNew - 1 });
+      }
+    } else if (kind === "ColumnAdded") {
+      if (previewRowsNew > 0) {
+        pushRect("col_added", "new", { top: 0, bottom: previewRowsNew - 1, left: op.col_idx, right: op.col_idx });
+      }
+    } else if (kind === "ColumnRemoved") {
+      if (previewRowsOld > 0) {
+        pushRect("col_removed", "old", { top: 0, bottom: previewRowsOld - 1, left: op.col_idx, right: op.col_idx });
+      }
+    } else if (kind === "BlockMovedRows") {
+      const moveId = `r:${op.src_start_row}+${op.row_count}->${op.dst_start_row}`;
+      if (previewColsOld > 0) {
+        pushRect("move_src", "old", {
+          top: op.src_start_row,
+          bottom: op.src_start_row + op.row_count - 1,
+          left: 0,
+          right: previewColsOld - 1
+        }, moveId);
+      }
+      if (previewColsNew > 0) {
+        pushRect("move_dst", "new", {
+          top: op.dst_start_row,
+          bottom: op.dst_start_row + op.row_count - 1,
+          left: 0,
+          right: previewColsNew - 1
+        }, moveId);
+      }
+    } else if (kind === "BlockMovedColumns") {
+      const moveId = `c:${op.src_start_col}+${op.col_count}->${op.dst_start_col}`;
+      if (previewRowsOld > 0) {
+        pushRect("move_src", "old", {
+          top: 0,
+          bottom: previewRowsOld - 1,
+          left: op.src_start_col,
+          right: op.src_start_col + op.col_count - 1
+        }, moveId);
+      }
+      if (previewRowsNew > 0) {
+        pushRect("move_dst", "new", {
+          top: 0,
+          bottom: previewRowsNew - 1,
+          left: op.dst_start_col,
+          right: op.dst_start_col + op.col_count - 1
+        }, moveId);
+      }
+    } else if (kind === "BlockMovedRect") {
+      const moveId = `rect:${op.src_start_row},${op.src_start_col}+${op.src_row_count}x${op.src_col_count}->${op.dst_start_row},${op.dst_start_col}`;
+      pushRect("move_src", "old", {
+        top: op.src_start_row,
+        bottom: op.src_start_row + op.src_row_count - 1,
+        left: op.src_start_col,
+        right: op.src_start_col + op.src_col_count - 1
+      }, moveId);
+      pushRect("move_dst", "new", {
+        top: op.dst_start_row,
+        bottom: op.dst_start_row + op.src_row_count - 1,
+        left: op.dst_start_col,
+        right: op.dst_start_col + op.src_col_count - 1
+      }, moveId);
+    } else if (kind === "DuplicateKeyCluster") {
+      if (previewColsOld > 0) {
+        for (const rowIdx of op.left_rows || []) {
+          pushRect("row_cluster", "old", { top: rowIdx, bottom: rowIdx, left: 0, right: previewColsOld - 1 });
+        }
+      }
+      if (previewColsNew > 0) {
+        for (const rowIdx of op.right_rows || []) {
+          pushRect("row_cluster", "new", { top: rowIdx, bottom: rowIdx, left: 0, right: previewColsNew - 1 });
+        }
+      }
+    }
+  }
+
+  return rects;
+}
+
+function buildMoveLookup({ report, alignment, ops }) {
+  const moveMap = new Map();
+  const moves = Array.isArray(alignment?.moves) ? alignment.moves : [];
+  for (const move of moves) {
+    if (!move?.id) continue;
+    if (move.axis === "row") {
+      const start = move.src_start + 1;
+      const end = move.src_start + move.count;
+      const dstStart = move.dst_start + 1;
+      const dstEnd = move.dst_start + move.count;
+      moveMap.set(move.id, {
+        axis: "row",
+        src: start === end ? `Row ${start}` : `Rows ${start}-${end}`,
+        dst: dstStart === dstEnd ? `Row ${dstStart}` : `Rows ${dstStart}-${dstEnd}`
+      });
+    } else if (move.axis === "col") {
+      const start = colToLetter(move.src_start);
+      const end = colToLetter(move.src_start + move.count - 1);
+      const dstStart = colToLetter(move.dst_start);
+      const dstEnd = colToLetter(move.dst_start + move.count - 1);
+      moveMap.set(move.id, {
+        axis: "col",
+        src: start === end ? `Column ${start}` : `Columns ${start}-${end}`,
+        dst: dstStart === dstEnd ? `Column ${dstStart}` : `Columns ${dstStart}-${dstEnd}`
+      });
+    }
+  }
+
+  for (const op of ops || []) {
+    if (op.kind !== "BlockMovedRect") continue;
+    const moveId = `rect:${op.src_start_row},${op.src_start_col}+${op.src_row_count}x${op.src_col_count}->${op.dst_start_row},${op.dst_start_col}`;
+    const srcStart = formatCellAddress(op.src_start_row, op.src_start_col);
+    const srcEnd = formatCellAddress(op.src_start_row + op.src_row_count - 1, op.src_start_col + op.src_col_count - 1);
+    const dstStart = formatCellAddress(op.dst_start_row, op.dst_start_col);
+    const dstEnd = formatCellAddress(op.dst_start_row + op.src_row_count - 1, op.dst_start_col + op.src_col_count - 1);
+    moveMap.set(moveId, {
+      axis: "rect",
+      src: `${srcStart}:${srcEnd}`,
+      dst: `${dstStart}:${dstEnd}`
+    });
+  }
+
+  return moveMap;
+}
+
+function buildOpRows({ report, ops, rowsVm, colsVm }) {
+  const rows = [];
+  let idx = 0;
+
+  for (const op of ops || []) {
+    const kind = op.kind || "Unknown";
+    const changeType = changeTypeForKind(kind);
+    const group = groupForKind(kind);
+    const row = {
+      id: `op-${idx++}`,
+      kind,
+      changeType,
+      group,
+      location: "",
+      detail: "",
+      viewRow: null,
+      viewCol: null,
+      navTargets: []
+    };
+
+    if (kind === "CellEdited") {
+      const addr = parseCellAddress(op.addr);
+      if (addr) {
+        row.location = formatCellAddress(addr.row, addr.col);
+        row.viewRow = mapIndexToView(addr.row, rowsVm.newToView);
+        row.viewCol = mapIndexToView(addr.col, colsVm.newToView);
+      }
+      const fromVal = op.from ? formatValue(report, op.from.value) : "";
+      const toVal = op.to ? formatValue(report, op.to.value) : "";
+      if (fromVal || toVal) {
+        row.detail = `${fromVal || "(empty)"} -> ${toVal || "(empty)"}`;
+      }
+    } else if (kind === "RowAdded" || kind === "RowRemoved" || kind === "RowReplaced") {
+      const rowNum = op.row_idx + 1;
+      row.location = `Row ${rowNum}`;
+      const map = kind === "RowRemoved" ? rowsVm.oldToView : rowsVm.newToView;
+      row.viewRow = mapIndexToView(op.row_idx, map);
+      row.viewCol = 0;
+    } else if (kind === "ColumnAdded" || kind === "ColumnRemoved") {
+      const colLetter = colToLetter(op.col_idx);
+      row.location = `Column ${colLetter}`;
+      const map = kind === "ColumnRemoved" ? colsVm.oldToView : colsVm.newToView;
+      row.viewCol = mapIndexToView(op.col_idx, map);
+      row.viewRow = 0;
+    } else if (kind === "BlockMovedRows") {
+      const start = op.src_start_row + 1;
+      const end = op.src_start_row + op.row_count;
+      row.location = start === end ? `Row ${start}` : `Rows ${start}-${end}`;
+      row.detail = `Moved to row ${op.dst_start_row + 1}`;
+      const srcView = mapIndexToView(op.src_start_row, rowsVm.oldToView);
+      const dstView = mapIndexToView(op.dst_start_row, rowsVm.newToView);
+      if (srcView !== null && srcView !== undefined) {
+        row.navTargets.push({ viewRow: srcView, viewCol: 0, label: "From" });
+      }
+      if (dstView !== null && dstView !== undefined) {
+        row.navTargets.push({ viewRow: dstView, viewCol: 0, label: "To" });
+      }
+    } else if (kind === "BlockMovedColumns") {
+      const start = colToLetter(op.src_start_col);
+      const end = colToLetter(op.src_start_col + op.col_count - 1);
+      row.location = start === end ? `Column ${start}` : `Columns ${start}-${end}`;
+      row.detail = `Moved to column ${colToLetter(op.dst_start_col)}`;
+      const srcView = mapIndexToView(op.src_start_col, colsVm.oldToView);
+      const dstView = mapIndexToView(op.dst_start_col, colsVm.newToView);
+      if (srcView !== null && srcView !== undefined) {
+        row.navTargets.push({ viewRow: 0, viewCol: srcView, label: "From" });
+      }
+      if (dstView !== null && dstView !== undefined) {
+        row.navTargets.push({ viewRow: 0, viewCol: dstView, label: "To" });
+      }
+    } else if (kind === "BlockMovedRect") {
+      const srcStart = formatCellAddress(op.src_start_row, op.src_start_col);
+      const srcEnd = formatCellAddress(op.src_start_row + op.src_row_count - 1, op.src_start_col + op.src_col_count - 1);
+      const dstStart = formatCellAddress(op.dst_start_row, op.dst_start_col);
+      const dstEnd = formatCellAddress(op.dst_start_row + op.src_row_count - 1, op.dst_start_col + op.src_col_count - 1);
+      row.location = `${srcStart}:${srcEnd}`;
+      row.detail = `Moved to ${dstStart}:${dstEnd}`;
+      const srcRows = mapRangeToView(op.src_start_row, op.src_row_count, rowsVm.oldToView);
+      const srcCols = mapRangeToView(op.src_start_col, op.src_col_count, colsVm.oldToView);
+      const dstRows = mapRangeToView(op.dst_start_row, op.src_row_count, rowsVm.newToView);
+      const dstCols = mapRangeToView(op.dst_start_col, op.src_col_count, colsVm.newToView);
+      if (srcRows && srcCols) {
+        row.navTargets.push({ viewRow: srcRows.start, viewCol: srcCols.start, label: "From" });
+      }
+      if (dstRows && dstCols) {
+        row.navTargets.push({ viewRow: dstRows.start, viewCol: dstCols.start, label: "To" });
+      }
+    } else if (kind === "RectReplaced") {
+      const start = formatCellAddress(op.start_row, op.start_col);
+      const end = formatCellAddress(op.start_row + op.row_count - 1, op.start_col + op.col_count - 1);
+      row.location = `${start}:${end}`;
+      row.detail = "Region replaced";
+      const viewRow = mapIndexToView(op.start_row, rowsVm.newToView);
+      const viewCol = mapIndexToView(op.start_col, colsVm.newToView);
+      row.viewRow = viewRow;
+      row.viewCol = viewCol;
+    } else if (kind.startsWith("Sheet")) {
+      if (kind === "SheetRenamed") {
+        const fromName = resolveString(report, op.from);
+        const toName = resolveString(report, op.to ?? op.sheet);
+        row.location = "Sheet renamed";
+        row.detail = `${fromName} -> ${toName}`;
+      } else {
+        row.location = kind.replace(/([A-Z])/g, " $1").trim();
+      }
+    } else if (kind.startsWith("Chart")) {
+      const name = resolveString(report, op.name);
+      row.location = `Chart: ${name}`;
+    } else if (kind.startsWith("NamedRange")) {
+      const name = resolveString(report, op.name);
+      row.location = `Named Range: ${name}`;
+    } else if (kind.startsWith("Vba")) {
+      const name = resolveString(report, op.name);
+      row.location = `VBA Module: ${name}`;
+    } else if (kind.startsWith("Query")) {
+      const name = resolveString(report, op.name ?? op.from ?? op.to);
+      row.location = `Query: ${name}`;
+      if (op.semantic_detail?.step_diffs?.length) row.detail = "Step diffs";
+    }
+
+    rows.push(row);
+  }
+
+  return rows;
+}
+
 function labelRegion(region, rowsVm, colsVm) {
   const startRow = viewIndexForSide(rowsVm, region.top, "new");
   const endRow = viewIndexForSide(rowsVm, region.bottom, "new");
@@ -1144,7 +1605,7 @@ function labelRegion(region, rowsVm, colsVm) {
   return `Cells ${startAddr}:${endAddr}`;
 }
 
-function buildSheetViewModel({ report, sheetName, ops, oldSheet, newSheet, alignment, opts }) {
+function buildSheetViewModel({ report, sheetName, ops, oldSheet, newSheet, alignment, interestRects, opts }) {
   const oldRows = oldSheet?.nrows || 0;
   const oldCols = oldSheet?.ncols || 0;
   const newRows = newSheet?.nrows || 0;
@@ -1170,6 +1631,26 @@ function buildSheetViewModel({ report, sheetName, ops, oldSheet, newSheet, align
   }
 
   const items = buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions: baseRegions });
+  const counts = buildSheetCounts(ops);
+
+  let sheetState = "";
+  let renameFrom = "";
+  for (const op of ops) {
+    if (op.kind === "SheetRemoved") sheetState = "removed";
+    else if (op.kind === "SheetAdded" && sheetState !== "removed") sheetState = "added";
+    else if (op.kind === "SheetRenamed" && !sheetState) {
+      sheetState = "renamed";
+      renameFrom = resolveString(report, op.from);
+    }
+  }
+
+  const hasStructural = ops.some(op => {
+    const kind = op.kind || "";
+    return kind.startsWith("Row") || kind.startsWith("Column") || kind.startsWith("Block") || kind === "RectReplaced";
+  });
+  const hasMoves = ops.some(op => (op.kind || "").includes("Moved"));
+  const hasGridOps = ops.some(op => isGridKind(op.kind || ""));
+  const moveLookup = buildMoveLookup({ report, alignment, ops });
 
   const kindOrder = { move_src: 0, move_dst: 0, rect: 1, cell: 2 };
   baseRegions.sort((a, b) => {
@@ -1222,16 +1703,42 @@ function buildSheetViewModel({ report, sheetName, ops, oldSheet, newSheet, align
       ? baseRegions.map(region => region.id)
       : [];
 
+  const opRows = buildOpRows({ report, ops, rowsVm, colsVm });
+  const nonGridOps = opRows.filter(row => row.group === "other");
+  const interestList = Array.isArray(interestRects) && interestRects.length
+    ? interestRects
+    : buildInterestRectsFromOps({ ops, oldSheet, newSheet, opts });
+  const rawHunks = buildRawHunks({ rects: interestList, oldSheet, newSheet, opts });
+  const alignedHunks = buildAlignedHunks(baseRegions, anchors);
+  const useAlignedHunks = status.kind === "ok" || status.kind === "partial";
+  const hunks = useAlignedHunks ? alignedHunks : rawHunks;
+  const hunkMode = useAlignedHunks ? "aligned" : "raw";
+
   return {
     name: sheetName,
+    sheetState,
+    renameFrom,
+    counts,
+    flags: { hasStructural, hasMoves, hasGridOps },
     axis: { rows: rowsVm, cols: colsVm },
     preview,
+    moveLookup,
     ensureCellIndex: () => ensureCellMaps(),
     cellAt: (viewRow, viewCol) => {
       ensureCellMaps();
       return buildCellVm(viewRow, viewCol, rowsVm, colsVm, oldCells, newCells, editMap);
     },
+    cellAtRaw: (side, row, col) => {
+      ensureCellMaps();
+      const map = side === "old" ? oldCells : newCells;
+      if (!map) return null;
+      return map.get(row * CELL_KEY_STRIDE + col) || null;
+    },
     changes: { items, regions: baseRegions, anchors },
+    ops: opRows,
+    nonGridOps,
+    hunks,
+    hunkMode,
     renderPlan: {
       regionsToRender,
       status,
@@ -1250,10 +1757,21 @@ function buildOtherItems(report, ops, prefix) {
     const name = op.name !== undefined ? resolveString(report, op.name) : "";
     let label = "";
     let detail = "";
+    let oldValue = "";
+    let newValue = "";
     if (kind.startsWith("Query")) {
       label = `Query: ${name}`;
       if (op.semantic_detail?.step_diffs?.length) {
         detail = "Step diffs";
+      }
+      if (kind === "QueryRenamed") {
+        const fromName = resolveString(report, op.from);
+        const toName = resolveString(report, op.to);
+        oldValue = fromName;
+        newValue = toName;
+      } else if (kind === "QueryMetadataChanged") {
+        oldValue = op.old != null ? resolveString(report, op.old) : "<none>";
+        newValue = op.new != null ? resolveString(report, op.new) : "<none>";
       }
     } else if (kind.startsWith("Table")) {
       label = `Table: ${name}`;
@@ -1267,10 +1785,14 @@ function buildOtherItems(report, ops, prefix) {
         const oldType = op.old_type != null ? resolveString(report, op.old_type) : "<none>";
         const newType = op.new_type != null ? resolveString(report, op.new_type) : "<none>";
         detail = `Type: ${oldType} -> ${newType}`;
+        oldValue = oldType;
+        newValue = newType;
       } else if (kind === "ModelColumnPropertyChanged") {
         const oldVal = op.old != null ? resolveString(report, op.old) : "<none>";
         const newVal = op.new != null ? resolveString(report, op.new) : "<none>";
         detail = `${formatFieldLabel(op.field)}: ${oldVal} -> ${newVal}`;
+        oldValue = oldVal;
+        newValue = newVal;
       } else if (kind === "ModelColumnAdded" && op.data_type != null) {
         detail = `Type: ${resolveString(report, op.data_type)}`;
       } else if (kind === "CalculatedColumnDefinitionChanged") {
@@ -1283,6 +1805,8 @@ function buildOtherItems(report, ops, prefix) {
         const oldVal = op.old != null ? resolveString(report, op.old) : "<none>";
         const newVal = op.new != null ? resolveString(report, op.new) : "<none>";
         detail = `${formatFieldLabel(op.field)}: ${oldVal} -> ${newVal}`;
+        oldValue = oldVal;
+        newValue = newVal;
       }
     } else if (kind.startsWith("Measure")) {
       label = `Measure: ${name}`;
@@ -1292,6 +1816,10 @@ function buildOtherItems(report, ops, prefix) {
       }
     } else if (kind.startsWith("NamedRange")) {
       label = `Named Range: ${name}`;
+      if (kind === "NamedRangeChanged") {
+        oldValue = resolveString(report, op.old_ref);
+        newValue = resolveString(report, op.new_ref);
+      }
     } else if (kind.startsWith("Chart")) {
       label = `Chart: ${name}`;
     } else if (kind.startsWith("Vba")) {
@@ -1304,20 +1832,26 @@ function buildOtherItems(report, ops, prefix) {
       id: `${kind}-${name}`,
       changeType,
       label,
-      detail
+      detail,
+      kind,
+      name,
+      oldValue,
+      newValue,
+      raw: op
     });
   }
   return items;
 }
 
 export function buildWorkbookViewModel(payloadOrReport, opts = {}) {
-  const { report, sheets, alignments } = normalizePayload(payloadOrReport);
+  const { report, sheets, alignments, interestRects } = normalizePayload(payloadOrReport);
   const options = { ...DEFAULT_OPTS, ...opts };
   const { sheetOps, renameMap, vbaOps, namedRangeOps, chartOps, queryOps, modelOps, counts } = categorizeOps(report);
 
   const oldLookup = buildSheetLookup(sheets.oldSheets);
   const newLookup = buildSheetLookup(sheets.newSheets);
   const alignmentLookup = buildAlignmentLookup(alignments);
+  const interestLookup = buildInterestRectLookup(interestRects);
 
   const sheetVms = [];
   for (const [sheetName, ops] of sheetOps.entries()) {
@@ -1328,6 +1862,7 @@ export function buildWorkbookViewModel(payloadOrReport, opts = {}) {
       oldSheet: oldLookup.get(sheetName) || oldLookup.get(renameMap.get(sheetName)) || null,
       newSheet: newLookup.get(sheetName) || null,
       alignment: alignmentLookup.get(sheetName) || alignmentLookup.get(renameMap.get(sheetName)) || null,
+      interestRects: interestLookup.get(sheetName) || interestLookup.get(renameMap.get(sheetName)) || [],
       opts: options
     });
     sheetVms.push(sheetVm);

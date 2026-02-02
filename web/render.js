@@ -10,6 +10,7 @@ function esc(s) {
 }
 
 function resolveString(report, id) {
+  if (id === null || id === undefined) return "";
   if (typeof id !== "number") return String(id);
   if (!report || !Array.isArray(report.strings)) return "<unknown>";
   return report.strings[id] != null ? report.strings[id] : "<unknown>";
@@ -1133,6 +1134,22 @@ function renderReviewToolbar(vm) {
           Show only changed columns
         </label>
         <label class="toolbar-toggle">
+          <input type="checkbox" data-filter="only-structural" />
+          Structural only
+        </label>
+        <label class="toolbar-toggle">
+          <input type="checkbox" data-filter="only-moved" />
+          Moved only
+        </label>
+        <label class="toolbar-toggle">
+          <input type="checkbox" data-filter="only-limited" />
+          Preview limited only
+        </label>
+        <label class="toolbar-toggle">
+          <input type="checkbox" data-filter="only-sheet-changes" />
+          Sheet add/remove/rename
+        </label>
+        <label class="toolbar-toggle">
           <input type="checkbox" data-filter="ignore-blank" checked />
           Ignore blank-to-blank
         </label>
@@ -1168,15 +1185,29 @@ function renderSheetIndex(vm) {
     const statusKind = sheet.renderPlan?.status?.kind || "ok";
     const statusLabel = statusKind === "ok" ? "OK" : statusKind.toUpperCase();
     const statusTitle = sheet.renderPlan?.status?.message ? ` title="${esc(sheet.renderPlan.status.message)}"` : "";
+    const counts = sheet.counts || {};
+    const sheetState = sheet.sheetState || "";
+    const stateLabel =
+      sheetState === "added" ? "Added" : sheetState === "removed" ? "Removed" : sheetState === "renamed" ? "Renamed" : "";
+    const limitedFlag = statusKind !== "ok" ? "1" : "0";
+    const structuralFlag = sheet.flags?.hasStructural ? "1" : "0";
+    const movedFlag = counts.moved > 0 ? "1" : "0";
 
     html += `
-      <button type="button" class="sheet-index-item" data-sheet="${esc(sheet.name)}">
+      <button type="button" class="sheet-index-item" data-sheet="${esc(sheet.name)}" data-structural="${structuralFlag}" data-moved="${movedFlag}" data-limited="${limitedFlag}" data-sheet-state="${esc(sheetState)}">
         <div class="sheet-index-main">
           <span class="sheet-index-name">${esc(sheet.name)}</span>
           <span class="sheet-index-badges">
             <span class="sheet-index-badge">${sheet.opCount}</span>
             <span class="sheet-index-badge">${anchorCount}</span>
+            ${stateLabel ? `<span class="sheet-index-state ${esc(sheetState)}">${esc(stateLabel)}</span>` : ""}
           </span>
+        </div>
+        <div class="sheet-index-counts">
+          <span class="pill added">+${counts.added || 0}</span>
+          <span class="pill removed">-${counts.removed || 0}</span>
+          <span class="pill modified">~${counts.modified || 0}</span>
+          <span class="pill moved">&gt;${counts.moved || 0}</span>
         </div>
         <div class="sheet-index-meta">
           <div class="density-bar"><span style="width: ${densityPct}%"></span></div>
@@ -1233,11 +1264,219 @@ function renderChangeGroupVm(title, icon, items, sheetName) {
 
 function renderGridLegend() {
   return `
-    <div class="grid-legend">
-      <span class="legend-item"><span class="legend-box legend-edited"></span> Modified</span>
-      <span class="legend-item"><span class="legend-box legend-added"></span> Added row/col</span>
-      <span class="legend-item"><span class="legend-box legend-removed"></span> Removed row/col</span>
-      <span class="legend-item"><span class="legend-box legend-moved"></span> Moved row/col</span>
+    <details class="grid-legend" open>
+      <summary>Legend</summary>
+      <div class="grid-legend-items">
+        <span class="legend-item"><span class="legend-box legend-edited"></span> Modified</span>
+        <span class="legend-item"><span class="legend-box legend-added"></span> Added row/col</span>
+        <span class="legend-item"><span class="legend-box legend-removed"></span> Removed row/col</span>
+        <span class="legend-item"><span class="legend-box legend-moved"></span> Moved row/col</span>
+      </div>
+    </details>
+  `;
+}
+
+function renderPreviewBanner(sheetVm) {
+  const status = sheetVm.renderPlan?.status;
+  if (!status || status.kind === "ok") return "";
+  const kind = status.kind;
+  const title =
+    kind === "partial"
+      ? "Preview limited"
+      : kind === "skipped"
+        ? "Preview unavailable"
+        : "Preview missing";
+  const message = status.message || "Preview data is unavailable.";
+  return `
+    <div class="preview-banner ${esc(kind)}" data-sheet="${esc(sheetVm.name)}">
+      <div class="preview-banner-title">${esc(title)}</div>
+      <div class="preview-banner-text">${esc(message)}</div>
+      <div class="preview-banner-actions">
+        <button type="button" class="secondary-btn preview-action" data-action="show-hunks" data-sheet="${esc(sheetVm.name)}">Show change hunks</button>
+        <button type="button" class="secondary-btn preview-action" data-action="export-audit" data-sheet="${esc(sheetVm.name)}">Export audit workbook</button>
+        <button type="button" class="secondary-btn preview-action" data-action="open-audit" data-sheet="${esc(sheetVm.name)}">Open audit workbook</button>
+      </div>
+    </div>
+  `;
+}
+
+function hunkBadge(kind) {
+  if (!kind) return { label: "Change", cls: "modified" };
+  if (kind.includes("added")) return { label: "Added", cls: "added" };
+  if (kind.includes("removed")) return { label: "Removed", cls: "removed" };
+  if (kind.includes("move")) return { label: "Moved", cls: "moved" };
+  if (kind.includes("replaced")) return { label: "Replaced", cls: "modified" };
+  if (kind.includes("cluster")) return { label: "Cluster", cls: "modified" };
+  return { label: "Modified", cls: "modified" };
+}
+
+function rawCellClass(hunk, side) {
+  if (!hunk) return "cell-unchanged";
+  const kind = hunk.kind || "";
+  if (kind.includes("added") && side === "new") return "cell-added";
+  if (kind.includes("removed") && side === "old") return "cell-removed";
+  if (kind.includes("move") && side === "old") return "cell-move-src";
+  if (kind.includes("move") && side === "new") return "cell-move-dst";
+  if (kind.includes("replaced") || kind.includes("cell")) return "cell-edited";
+  if (kind.includes("cluster")) return "cell-edited";
+  return "cell-unchanged";
+}
+
+function renderRawHunkGridSide(sheetVm, bounds, side, hunk) {
+  if (!bounds) {
+    return `<div class="hunk-grid-empty">No ${side} preview</div>`;
+  }
+  const numCols = bounds.right - bounds.left + 1;
+  let html = `<div class="sheet-grid-container">
+    <div class="sheet-grid" style="grid-template-columns: 50px repeat(${numCols}, minmax(100px, 1fr));">`;
+
+  html += `<div class="grid-cell grid-corner"></div>`;
+  for (let c = bounds.left; c <= bounds.right; c++) {
+    html += `<div class="grid-cell grid-col-header">${colToLetter(c)}</div>`;
+  }
+
+  for (let r = bounds.top; r <= bounds.bottom; r++) {
+    html += `<div class="grid-cell grid-row-header">${r + 1}</div>`;
+    for (let c = bounds.left; c <= bounds.right; c++) {
+      const cell = sheetVm.cellAtRaw(side, r, c);
+      const value = cell?.value ?? cell?.formula ?? "";
+      const cls = `grid-cell ${rawCellClass(hunk, side)}`;
+      const title = value ? ` title="${esc(value)}"` : "";
+      html += `<div class="${cls}"${title}>${esc(truncateText(String(value || "")))}</div>`;
+    }
+  }
+
+  html += `</div></div>`;
+  return html;
+}
+
+function renderRawHunkGrid(sheetVm, hunk) {
+  const oldGrid = renderRawHunkGridSide(sheetVm, hunk.renderOld, "old", hunk);
+  const newGrid = renderRawHunkGridSide(sheetVm, hunk.renderNew, "new", hunk);
+  return `
+    <div class="hunk-grid-pair">
+      <div class="hunk-grid-side">
+        <div class="hunk-grid-label">Old</div>
+        ${oldGrid}
+      </div>
+      <div class="hunk-grid-side">
+        <div class="hunk-grid-label">New</div>
+        ${newGrid}
+      </div>
+    </div>
+  `;
+}
+
+function renderHunksVm(sheetVm) {
+  const hunks = sheetVm.hunks || [];
+  if (hunks.length === 0) {
+    return `<div class="empty-state">No change hunks available.</div>`;
+  }
+  return `
+    <div class="hunk-list">
+      ${hunks
+        .map(hunk => {
+          const badge = hunkBadge(hunk.kind);
+          const moveMeta = hunk.moveId ? `<span class="hunk-move-id">${esc(hunk.moveId)}</span>` : "";
+          const openBtn = hunk.anchorId
+            ? `<button type="button" class="secondary-btn hunk-open" data-sheet="${esc(sheetVm.name)}" data-anchor="${esc(hunk.anchorId)}">Open in grid</button>`
+            : "";
+          const gridHtml =
+            sheetVm.hunkMode === "aligned" && hunk.viewBounds
+              ? renderRegionGrid(sheetVm, hunk.viewBounds)
+              : renderRawHunkGrid(sheetVm, hunk);
+          return `
+            <div class="hunk-card">
+              <div class="hunk-header">
+                <div class="hunk-title">${esc(hunk.label || "Change hunk")}</div>
+                <div class="hunk-badges">
+                  <span class="pill ${badge.cls}">${esc(badge.label)}</span>
+                  ${moveMeta}
+                </div>
+                <div class="hunk-actions">
+                  ${openBtn}
+                </div>
+              </div>
+              ${gridHtml}
+            </div>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function renderOpsTableVm(sheetVm) {
+  const ops = sheetVm.ops || [];
+  if (!ops.length) {
+    return `<div class="empty-state">No operations for this sheet.</div>`;
+  }
+  const rowsHtml = ops
+    .map(op => {
+      const navButtons = op.navTargets && op.navTargets.length
+        ? op.navTargets
+            .map(
+              target =>
+                `<button type="button" class="ops-jump" data-sheet="${esc(sheetVm.name)}" data-view-row="${target.viewRow}" data-view-col="${target.viewCol}">${esc(target.label || "Jump")}</button>`
+            )
+            .join("")
+        : Number.isFinite(op.viewRow) && Number.isFinite(op.viewCol)
+          ? `<button type="button" class="ops-jump" data-sheet="${esc(sheetVm.name)}" data-view-row="${op.viewRow}" data-view-col="${op.viewCol}">Jump</button>`
+          : "";
+      const filterText = `${op.kind} ${op.location || ""} ${op.detail || ""}`.toLowerCase();
+      return `
+        <div class="ops-row ${esc(op.changeType || "modified")}" data-op-text="${esc(filterText)}">
+          <div class="ops-kind">${esc(op.kind)}</div>
+          <div class="ops-location">${esc(op.location || "")}</div>
+          <div class="ops-detail">${esc(op.detail || "")}</div>
+          <div class="ops-actions">${navButtons}</div>
+        </div>
+      `;
+    })
+    .join("");
+  return `
+    <div class="ops-toolbar">
+      <input type="search" class="ops-search" placeholder="Filter operations" data-sheet="${esc(sheetVm.name)}" />
+    </div>
+    <div class="ops-table">
+      <div class="ops-row ops-header">
+        <div class="ops-kind">Type</div>
+        <div class="ops-location">Location</div>
+        <div class="ops-detail">Detail</div>
+        <div class="ops-actions">Jump</div>
+      </div>
+      ${rowsHtml}
+    </div>
+  `;
+}
+
+function renderNonGridOpsVm(sheetVm) {
+  const items = sheetVm.nonGridOps || [];
+  if (!items.length) {
+    return `<div class="empty-state">No non-grid changes for this sheet.</div>`;
+  }
+  const rowsHtml = items
+    .map(item => {
+      const filterText = `${item.kind} ${item.location || ""} ${item.detail || ""}`.toLowerCase();
+      return `
+        <div class="ops-row ${esc(item.changeType || "modified")}" data-op-text="${esc(filterText)}">
+          <div class="ops-kind">${esc(item.kind)}</div>
+          <div class="ops-location">${esc(item.location || "")}</div>
+          <div class="ops-detail">${esc(item.detail || "")}</div>
+          <div class="ops-actions"></div>
+        </div>
+      `;
+    })
+    .join("");
+  return `
+    <div class="ops-table">
+      <div class="ops-row ops-header">
+        <div class="ops-kind">Type</div>
+        <div class="ops-location">Item</div>
+        <div class="ops-detail">Detail</div>
+        <div class="ops-actions"></div>
+      </div>
+      ${rowsHtml}
     </div>
   `;
 }
@@ -1328,15 +1567,6 @@ function renderSheetGridVm(sheetVm) {
     `;
   }
 
-  const warningHtml =
-    status.kind === "partial"
-      ? `
-        <div class="grid-partial-warning">
-          ${esc(status.message || "Preview limited for performance; edited cells remain exact.")}
-        </div>
-      `
-      : "";
-
   const regionIds = sheetVm.renderPlan.regionsToRender || [];
   const hasGridAnchors = Array.isArray(sheetVm.changes?.anchors)
     ? sheetVm.changes.anchors.some(anchor => anchor.target?.kind === "grid")
@@ -1349,7 +1579,6 @@ function renderSheetGridVm(sheetVm) {
   const initialAnchorId = initialAnchor ? initialAnchor.id : "0";
 
   return `
-    ${warningHtml}
     <div class="grid-viewer-mount" data-sheet="${esc(sheetVm.name)}" data-initial-mode="side_by_side" data-initial-anchor="${esc(initialAnchorId)}"></div>
     ${renderGridLegend()}
   `;
@@ -1366,19 +1595,10 @@ function renderSheetVm(sheetVm) {
   const statusTitle = status.message ? ` title="${esc(status.message)}"` : "";
   const statusPill = `<button type="button" class="status-pill ${status.kind}" data-sheet="${esc(sheetVm.name)}"${statusTitle}>${statusLabel}</button>`;
   const gridHtml = renderSheetGridVm(sheetVm);
-
-  let contentHtml = "";
-  if (gridHtml) {
-    contentHtml += `
-      <div class="change-group">
-        <div class="change-group-title">
-          <span>*</span>
-          <span>Visual Diff</span>
-        </div>
-        ${gridHtml}
-      </div>
-    `;
-  }
+  const hunksHtml = renderHunksVm(sheetVm);
+  const nonGridHtml = renderNonGridOpsVm(sheetVm);
+  const opsTableHtml = renderOpsTableVm(sheetVm);
+  const previewBanner = renderPreviewBanner(sheetVm);
 
   const rowItems = sheetVm.changes.items.filter(item => item.group === "rows");
   const colItems = sheetVm.changes.items.filter(item => item.group === "cols");
@@ -1393,39 +1613,116 @@ function renderSheetVm(sheetVm) {
   detailsHtml += renderChangeGroupVm("Moved Blocks", ">", moveItems, sheetVm.name);
   detailsHtml += renderChangeGroupVm("Other Changes", "?", otherItems, sheetVm.name);
 
-  if (detailsHtml) {
-    contentHtml += `
-      <details class="details-section" open>
-        <summary class="details-toggle">Detailed Changes</summary>
-        <div class="details-content">
-          ${detailsHtml}
-        </div>
-      </details>
-    `;
-  }
+  const defaultTab =
+    status.kind === "skipped" || status.kind === "missing"
+      ? (sheetVm.hunks && sheetVm.hunks.length ? "hunks" : "ops")
+      : "grid";
+  const counts = sheetVm.counts || {};
+  const sheetState = sheetVm.sheetState || "";
+  const stateLabel =
+    sheetState === "added" ? "Added" : sheetState === "removed" ? "Removed" : sheetState === "renamed" ? "Renamed" : "";
+  const limitedFlag = status.kind !== "ok" ? "1" : "0";
+  const structuralFlag = sheetVm.flags?.hasStructural ? "1" : "0";
+  const movedFlag = counts.moved > 0 ? "1" : "0";
 
   return `
-    <section class="sheet-section" data-sheet="${esc(sheetVm.name)}">
+    <section class="sheet-section" data-sheet="${esc(sheetVm.name)}" data-structural="${structuralFlag}" data-moved="${movedFlag}" data-limited="${limitedFlag}" data-sheet-state="${esc(sheetState)}" data-default-tab="${esc(defaultTab)}">
       <div class="sheet-header">
         <div class="sheet-title">
           <div class="sheet-icon">#</div>
           <span class="sheet-name">${esc(sheetVm.name)}</span>
           <span class="sheet-badge">${badge}</span>
           ${anchorBadge}
+          ${stateLabel ? `<span class="sheet-badge sheet-state ${esc(sheetState)}">${esc(stateLabel)}</span>` : ""}
           ${statusPill}
+        </div>
+        <div class="sheet-meta">
+          <span class="pill added">+${counts.added || 0}</span>
+          <span class="pill removed">-${counts.removed || 0}</span>
+          <span class="pill modified">~${counts.modified || 0}</span>
+          <span class="pill moved">&gt;${counts.moved || 0}</span>
         </div>
         <svg class="expand-icon" width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
           <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" />
         </svg>
       </div>
       <div class="sheet-content">
-        ${contentHtml}
+        <div class="sheet-tabs">
+          <button type="button" class="sheet-tab ${defaultTab === "grid" ? "active" : ""}" data-tab="grid">Grid</button>
+          <button type="button" class="sheet-tab ${defaultTab === "hunks" ? "active" : ""}" data-tab="hunks">Change hunks</button>
+          <button type="button" class="sheet-tab ${defaultTab === "non-grid" ? "active" : ""}" data-tab="non-grid">Non-grid</button>
+          <button type="button" class="sheet-tab ${defaultTab === "ops" ? "active" : ""}" data-tab="ops">Operations</button>
+        </div>
+        <div class="sheet-tab-content ${defaultTab === "grid" ? "active" : ""}" data-tab="grid">
+          ${previewBanner}
+          ${gridHtml || `<div class="empty-state">No grid preview available.</div>`}
+        </div>
+        <div class="sheet-tab-content ${defaultTab === "hunks" ? "active" : ""}" data-tab="hunks">
+          ${hunksHtml}
+        </div>
+        <div class="sheet-tab-content ${defaultTab === "non-grid" ? "active" : ""}" data-tab="non-grid">
+          ${nonGridHtml}
+        </div>
+        <div class="sheet-tab-content ${defaultTab === "ops" ? "active" : ""}" data-tab="ops">
+          ${detailsHtml ? `
+            <details class="details-section" open>
+              <summary class="details-toggle">Grouped changes</summary>
+              <div class="details-content">
+                ${detailsHtml}
+              </div>
+            </details>
+          ` : ""}
+          ${opsTableHtml}
+        </div>
       </div>
     </section>
   `;
 }
 
-function renderOtherChangesVm(title, icon, items) {
+function renderStepDiffs(report, item) {
+  const diffs = item?.raw?.semantic_detail?.step_diffs || [];
+  if (!diffs.length) return "";
+  const lines = diffs.map(diff => {
+    const kind = diff.kind || "";
+    if (kind === "step_added") {
+      const name = resolveString(report, diff.step?.name);
+      return `Added step ${name || "<unknown>"}`;
+    }
+    if (kind === "step_removed") {
+      const name = resolveString(report, diff.step?.name);
+      return `Removed step ${name || "<unknown>"}`;
+    }
+    if (kind === "step_reordered") {
+      const name = resolveString(report, diff.name);
+      return `Reordered step ${name || "<unknown>"} (${diff.from_index} -> ${diff.to_index})`;
+    }
+    if (kind === "step_modified") {
+      const beforeName = resolveString(report, diff.before?.name);
+      const afterName = resolveString(report, diff.after?.name);
+      const changes = (diff.changes || []).map(change => {
+        if (change.kind === "renamed") {
+          const from = resolveString(report, change.from);
+          const to = resolveString(report, change.to);
+          return `renamed ${from} -> ${to}`;
+        }
+        return change.kind || "change";
+      });
+      const changeText = changes.length ? ` (${changes.join(", ")})` : "";
+      return `Modified step ${beforeName || "<unknown>"} -> ${afterName || "<unknown>"}${changeText}`;
+    }
+    return kind || "step";
+  });
+  return `
+    <div class="step-diffs">
+      <div class="step-diffs-title">Step diffs</div>
+      <ul>
+        ${lines.map(line => `<li>${esc(line)}</li>`).join("")}
+      </ul>
+    </div>
+  `;
+}
+
+function renderOtherChangesVm(title, icon, items, report) {
   if (!items || items.length === 0) return "";
   return `
     <div class="other-changes">
@@ -1433,8 +1730,31 @@ function renderOtherChangesVm(title, icon, items) {
         <span class="icon">${icon}</span>
         <span>${esc(title)} (${items.length})</span>
       </div>
-      <div class="change-list">
-        ${items.map(item => renderChangeItemVm(item, "workbook")).join("")}
+      <div class="other-table">
+        <div class="other-row other-header">
+          <div class="other-kind">Type</div>
+          <div class="other-name">Item</div>
+          <div class="other-detail">Detail</div>
+          <div class="other-old">Old</div>
+          <div class="other-new">New</div>
+        </div>
+        ${items
+          .map(item => {
+            const oldVal = item.oldValue || "";
+            const newVal = item.newValue || "";
+            const detail = item.detail || "";
+            const stepDiffs = renderStepDiffs(report, item);
+            return `
+              <div class="other-row ${esc(item.changeType || "modified")}">
+                <div class="other-kind">${esc(item.kind || "")}</div>
+                <div class="other-name">${esc(item.label || item.name || "")}</div>
+                <div class="other-detail">${esc(detail)}${stepDiffs}</div>
+                <div class="other-old">${esc(oldVal)}</div>
+                <div class="other-new">${esc(newVal)}</div>
+              </div>
+            `;
+          })
+          .join("")}
       </div>
     </div>
   `;
@@ -1458,11 +1778,11 @@ export function renderWorkbookVm(vm) {
     html += renderSheetVm(sheetVm);
   }
 
-  html += renderOtherChangesVm("VBA Modules", "V", vm.other.vba);
-  html += renderOtherChangesVm("Named Ranges", "N", vm.other.namedRanges);
-  html += renderOtherChangesVm("Charts", "C", vm.other.charts);
-  html += renderOtherChangesVm("Power Query", "Q", vm.other.queries);
-  html += renderOtherChangesVm("Model", "M", vm.other.model);
+  html += renderOtherChangesVm("VBA Modules", "V", vm.other.vba, vm.report);
+  html += renderOtherChangesVm("Named Ranges", "N", vm.other.namedRanges, vm.report);
+  html += renderOtherChangesVm("Charts", "C", vm.other.charts, vm.report);
+  html += renderOtherChangesVm("Power Query", "Q", vm.other.queries, vm.report);
+  html += renderOtherChangesVm("Model", "M", vm.other.model, vm.report);
 
   return html;
 }

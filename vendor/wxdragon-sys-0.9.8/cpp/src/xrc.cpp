@@ -2,6 +2,7 @@
 #include <wx/wx.h>
 #include "wxdragon.h"
 #include <wx/xrc/xmlres.h>
+#include <wx/xrc/xh_sizer.h>
 #include <wx/xml/xml.h>
 #include <wx/stream.h>
 #include <wx/mstream.h>
@@ -25,6 +26,16 @@ wxd_XmlResource_InitAllHandlers(wxd_XmlResource_t* self)
     wxXmlResource* resource = reinterpret_cast<wxXmlResource*>(self);
     if (resource) {
         resource->InitAllHandlers();
+    }
+}
+
+// Initialize sizer + spacer handlers explicitly (covers XRC spacer nodes)
+extern "C" WXD_EXPORTED void
+wxd_XmlResource_InitSizerHandlers(wxd_XmlResource_t* self)
+{
+    wxXmlResource* resource = reinterpret_cast<wxXmlResource*>(self);
+    if (resource) {
+        resource->AddHandler(new wxSizerXmlHandler);
     }
 }
 

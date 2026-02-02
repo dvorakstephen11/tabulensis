@@ -253,46 +253,7 @@ Each iteration is an increment you can ship, market, and monetize independently.
 
 ---
 
-# Iteration 3 — Power BI Desktop integration (be where users click)
-
-**Theme:** “One-click compare from inside Power BI Desktop.”
-
-### Features
-
-1. Ship a **Power BI External Tool** entry that can:
-
-   * Diff the current PBIX/PBIT or PBected baseline
-   * Diff “current” vs “last exported snapshot”
-   * Open a focused view on model/query/report changes
-     Power BI Desktop supports external tools and provides launch context. ([Microsoft Learn][5])
-
-2. “Export project artifacts” helper
-
-   * If the user is still in PBIX, offer a guided “export to PBIP/PBIR/TMDL” flow (where feasible and permitted)
-
-### Technical notes
-
-* External tool integration is mostly packaging + robust path detection + UX. ([Microsoft Learn][5])
-* Add a “workspace” concept in your desktop app:
-
-  * remembers last baseline
-  * stores snapshots
-  * supports quick compare
-
-### Difficulty: **2**
-
-### Pricing/package
-
-* Pro includes external tool integration; free tier can include it but limit usage.
-
-### Marketing focus
-
-* “It shows up in the External Tools ribbon.” That’s a concrete adoption step that reduces friction.
-* Make a short “install + first compare in 60 seconds” video and a 1-page PDF cheat sheet.
-
----
-
-# Iteration 4 — Excel parity expansion (formatting + pivots + validations)
+# Iteration 3 — Excel parity expansion (formatting + pivots + validations)
 
 **Theme:** “Match and exceed the feature completeness of classic Excel diff tools.”
 
@@ -337,7 +298,7 @@ Each iteration is an increment you can ship, market, and monetize independently.
 
 ---
 
-# Iteration 5 — Merge v1 (2‑way apply) for table-like sheets
+# Iteration 4 — Merge v1 (2‑way apply) for table-like sheets
 
 **Theme:** “Make the diff actionable.”
 
@@ -383,7 +344,12 @@ This is where you start matching the “merge changes” selling point that user
 
 ---
 
-# Iteration 6 — 3‑way merge (the “xlCompare killer” feature)
+# Iteration 4.5 — Automating most things in Power BI, Excel, and Tabular
+**Theme:** "Let Tabulensis do the boring work for you."
+
+
+
+# Iteration 5 — 3‑way merge (the “xlCompare killer” feature)
 
 **Theme:** “Real version-control workflows for spreadsheets and models.”
 
@@ -428,7 +394,7 @@ Your research notes that **3‑way merge is uniquely native to one Excel-focused
 
 ---
 
-# Iteration 7 — Built-in version history & rollback (local + Git-backed)
+# Iteration 6 — Built-in version history & rollback (local + Git-backed)
 
 **Theme:** “Never lose context; every change has a timeline.”
 
@@ -473,97 +439,7 @@ Version history and rollback is a major gap in classic compare tools; specialize
 
 ---
 
-# Iteration 8 — Shareable diffs + collaborative review (PR workflow)
-
-**Theme:** “Google Docs suggestion mode / GitHub PR review, but for Excel + BI.”
-
-Your research explicitly calls out the gap: no shareable read-only diffs via URL, no commenting, no review workflows.
-
-### Features
-
-1. Shareable read-only diff links (hosted)
-2. Comment threads on changes (cell/range/query/measure)
-3. Approvals + reviewers + change requests
-4. Notifications:
-
-   * email
-   * integrations with collaboration tools (later expansion)
-
-### Technical notes
-
-* You’ll need a cloud service that stores:
-
-  * diff payloads (or encrypted blobs)
-  * access control
-  * audit trails
-* Consider a “zero-knowledge” option:
-
-  * store encrypted diffs client-side; server only hosts ciphertext
-  * aligns with your privacy posture.
-
-### Difficulty: **4**
-
-(New platform surface + auth + storage.)
-
-### Pricing/package
-
-* This is where **Team** becomes a real SKU:
-
-  * per-seat pricing
-  * limits by storage or number of shared diffs
-
-### Marketing focus
-
-* “Stop screenshotting diffs into Slack.”
-* Launch with a “pull request for spreadsheets” landing page and a guided demo.
-
----
-
-# Iteration 9 — Monitoring & alerts (Excel + Power BI governance-lite)
-
-**Theme:** “Be the Sentinel for spreadsheets.”
-
-Monitoring/alerts is strong in the BI realm and under-served in Excel, per your research.
-
-### Features
-
-1. Scheduled snapshots and diffs:
-
-   * Watch OneDrive/SharePoint folders
-   * Watch Power BI workspaces (datasets/reports)
-2. Alert policies:
-
-   * “Query changed”
-   * “Measure changed”
-   * “External connection changed”
-   * “New hidden sheet added”
-3. Change feed + audit export
-
-### Technical notes
-
-* This requires connectors + identity + secure storage:
-
-  * Microsoft cloud APIs will add complexity and support load
-* Start with “ageninstalled in org) to satisfy security teams; offer pure SaaS later.
-
-### Difficulty: **4–5**
-
-(Connectors, scale, security, product scope.)
-
-### Pricing/package
-
-* Team: limited monitors
-* Enterprise: unlimited + retention + compliance
-
-### Marketing focus
-
-* Sell to managers/admins: “Know when critical business logic changes.”
-* Case studies: SOX-like controls, finance planning models, BI governance.
-
----
-
-
-# Iteration 10 — Intelligent insights (AI + analytics) that reduce noise & surface risk
+# Iteration 7 — Intelligent insights (AI + analytics) that reduce noise & surface risk
 
 **Theme:** “From diff → decision.”
 
@@ -608,11 +484,104 @@ Your research highlights “intelligent insights” as the path to leapfrogging 
 * “Spend 10 minutes reviewing changes instead of 2 hours.”
 * This is where you shift from “tool” to “platform.”
 
+
+
+---
+
+# Iteration 8 — Monitoring & alerts (Excel + Power BI governance-lite)
+
+**Theme:** “Be the Sentinel for spreadsheets.”
+
+Monitoring/alerts is strong in the BI realm and under-served in Excel, per your research.
+
+### Features
+
+1. Scheduled snapshots and diffs:
+
+   * Watch OneDrive/SharePoint folders
+   * Watch Power BI workspaces (datasets/reports)
+2. Alert policies:
+
+   * “Query changed”
+   * “Measure changed”
+   * “External connection changed”
+   * “New hidden sheet added”
+3. Change feed + audit export
+
+### Technical notes
+
+* This requires connectors + identity + secure storage:
+
+  * Microsoft cloud APIs will add complexity and support load
+* Start with “ageninstalled in org) to satisfy security teams; offer pure SaaS later.
+
+### Difficulty: **4–5**
+
+(Connectors, scale, security, product scope.)
+
+### Pricing/package
+
+* Team: limited monitors
+* Enterprise: unlimited + retention + compliance
+
+### Marketing focus
+
+* Sell to managers/admins: “Know when critical business logic changes.”
+* Case studies: SOX-like controls, finance planning models, BI governance.
+
+---
+
+
+# Iteration 9 — Shareable diffs + collaborative review (PR workflow)
+
+**Theme:** “Google Docs suggestion mode / GitHub PR review, but for Excel + BI.”
+
+Your research explicitly calls out the gap: no shareable read-only diffs via URL, no commenting, no review workflows.
+
+### Features
+
+1. Shareable read-only diff links (hosted)
+2. Comment threads on changes (cell/range/query/measure)
+3. Approvals + reviewers + change requests
+4. Notifications:
+
+   * email
+   * integrations with collaboration tools (later expansion)
+
+### Technical notes
+
+* You’ll need a cloud service that stores:
+
+  * diff payloads (or encrypted blobs)
+  * access control
+  * audit trails
+* Consider a “zero-knowledge” option:
+
+  * store encrypted diffs client-side; server only hosts ciphertext
+  * aligns with your privacy posture.
+
+### Difficulty: **4**
+
+(New platform surface + auth + storage.)
+
+### Pricing/package
+
+* This is where **Team** becomes a real SKU:
+
+  * per-seat pricing
+  * limits by storage or number of shared diffs
+
+### Marketing focus
+
+* “Stop screenshotting diffs into Slack.”
+* Launch with a “pull request for spreadsheets” landing page and a guided demo.
+
+
 ---
 
 
 
-# Iteration 11 — Enterprise governance (permissions, logs, retention, on‑prem)
+# Iteration 10 — Enterprise governance (permissions, logs, retention, on‑prem)
 
 **Theme:** “Make it approvable by serious IT.”
 
@@ -651,7 +620,7 @@ Governance features are a differentiator in enterprise spreadsheet management to
 ---
 
 
-# Iteration 12 — Ecosystem: SDK, plugins, API, marketplace
+# Iteration 11 — Ecosystem: SDK, plugins, API, marketplace
 
 **Theme:** “Let the ecosystem build the long tail.”
 
@@ -687,6 +656,46 @@ Governance features are a differentiator in enterprise spreadsheet management to
 * Enterprise: private plugin registry + polieting focus
 * “Build your own governance rules” / “Bring your own artifacts.”
 * Partner channel: consultants and enterprise tooling vendors.
+
+---
+
+# Iteration 12 — Power BI Desktop integration (be where users click)
+
+**Theme:** “One-click compare from inside Power BI Desktop.”
+
+### Features
+
+1. Ship a **Power BI External Tool** entry that can:
+
+   * Diff the current PBIX/PBIT or PBected baseline
+   * Diff “current” vs “last exported snapshot”
+   * Open a focused view on model/query/report changes
+     Power BI Desktop supports external tools and provides launch context. ([Microsoft Learn][5])
+
+2. “Export project artifacts” helper
+
+   * If the user is still in PBIX, offer a guided “export to PBIP/PBIR/TMDL” flow (where feasible and permitted)
+
+### Technical notes
+
+* External tool integration is mostly packaging + robust path detection + UX. ([Microsoft Learn][5])
+* Add a “workspace” concept in your desktop app:
+
+  * remembers last baseline
+  * stores snapshots
+  * supports quick compare
+
+### Difficulty: **2**
+
+### Pricing/package
+
+* Pro includes external tool integration; free tier can include it but limit usage.
+
+### Marketing focus
+
+* “It shows up in the External Tools ribbon.” That’s a concrete adoption step that reduces friction.
+* Make a short “install + first compare in 60 seconds” video and a 1-page PDF cheat sheet.
+
 
 ---
 
@@ -739,15 +748,7 @@ Tactics:
   * “diff DAX measures”
   * “Excel compare for Mac”
 
-### Stage 2: Be everywhere users already work (Iterations 3–4)
-
-**Angle:** “One click inside Power BI Desktop; works in Excel on Mac.” ([Microsoft Learn][5])
-Tactics:
-
-* External tools listing + tutorials
-* Excel add-in listing + “no admin rights” deployment story (big for enterprises)
-
-### Stage 3: Own merges + versioning (Iterations 6–8)
+### Stage 2: Own merges + versioning (Iterations 6–8)
 
 **Angle:** “Stop emailing files. Merge changes safely.”
 Tactics:
@@ -758,7 +759,16 @@ Tactics:
   * forecasting models with multiple contributors
 * Pricing story: merge is where you charge more (clear ROI)
 
-### Stage 4: Become the platform (Iterations 9–11)
+
+### Stage 2.5 (Rename later): Automate analysis tools
+**Angle:** "Save time while managing analytical assets safely; use AI deterministically."
+
+* Case studies:
+    * Automating visualizations in Power BI, the application of themes in Power BI, certain cleansing routines in Excel, RLS features in Tabular, etc.
+
+* Pricing story: Maybe there's a separate automation product? Or that comes with Pro+, Team, and Enterprise. 
+
+### Stage 3: Become the platform (Iterations 9–11)
 
 **Angle:** “Govern business logic like software.”
 Tactics:
@@ -767,7 +777,7 @@ Tactics:
 * Partner with governance-focused consultants
 * “Security & privacy” pages that align with local-first and enterprise expectations
 
-### Stage 5: Win with insight (Iteration 12+)
+### Stage 4: Win with insight (Iteration 12+)
 
 **Angle:** “We t
 Tactics:

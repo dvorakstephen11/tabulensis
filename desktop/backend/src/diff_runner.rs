@@ -43,6 +43,67 @@ pub struct SheetPayloadRequest {
     pub progress: ProgressTx,
 }
 
+#[derive(Debug, Clone)]
+pub struct SheetMetaRequest {
+    pub diff_id: String,
+    pub sheet_name: String,
+    pub cancel: Arc<AtomicBool>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RangeBounds {
+    pub row_start: Option<u32>,
+    pub row_end: Option<u32>,
+    pub col_start: Option<u32>,
+    pub col_end: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OpsRangeRequest {
+    pub diff_id: String,
+    pub sheet_name: String,
+    pub range: RangeBounds,
+}
+
+#[derive(Debug, Clone)]
+pub struct CellsRangeRequest {
+    pub diff_id: String,
+    pub sheet_name: String,
+    pub side: String,
+    pub range: RangeBounds,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SheetPreviewMeta {
+    pub truncated_old: bool,
+    pub truncated_new: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SheetMeta {
+    pub sheet_name: String,
+    pub old_rows: u32,
+    pub old_cols: u32,
+    pub new_rows: u32,
+    pub new_cols: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alignment: Option<ui_payload::SheetAlignment>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<SheetPreviewMeta>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SheetCellsPayload {
+    pub sheet_name: String,
+    pub side: String,
+    pub cells: Vec<ui_payload::SheetCell>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiffOutcome {
@@ -146,6 +207,54 @@ impl DiffRunner {
             DiffErrorPayload::new("engine_down", e.to_string(), false)
         })?
     }
+
+    pub fn load_sheet_meta(
+        &self,
+        request: SheetMetaRequest,
+    ) -> Result<SheetMeta, DiffErrorPayload> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        self.tx
+            .send(EngineCommand::LoadSheetMeta {
+                request,
+                respond_to: reply_tx,
+            })
+            .map_err(|e| DiffErrorPayload::new("engine_down", e.to_string(), false))?;
+        reply_rx.recv().map_err(|e| {
+            DiffErrorPayload::new("engine_down", e.to_string(), false)
+        })?
+    }
+
+    pub fn load_ops_in_range(
+        &self,
+        request: OpsRangeRequest,
+    ) -> Result<DiffReport, DiffErrorPayload> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        self.tx
+            .send(EngineCommand::LoadOpsRange {
+                request,
+                respond_to: reply_tx,
+            })
+            .map_err(|e| DiffErrorPayload::new("engine_down", e.to_string(), false))?;
+        reply_rx.recv().map_err(|e| {
+            DiffErrorPayload::new("engine_down", e.to_string(), false)
+        })?
+    }
+
+    pub fn load_cells_in_range(
+        &self,
+        request: CellsRangeRequest,
+    ) -> Result<SheetCellsPayload, DiffErrorPayload> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        self.tx
+            .send(EngineCommand::LoadCellsRange {
+                request,
+                respond_to: reply_tx,
+            })
+            .map_err(|e| DiffErrorPayload::new("engine_down", e.to_string(), false))?;
+        reply_rx.recv().map_err(|e| {
+            DiffErrorPayload::new("engine_down", e.to_string(), false)
+        })?
+    }
 }
 
 enum EngineCommand {
@@ -156,6 +265,18 @@ enum EngineCommand {
     LoadSheet {
         request: SheetPayloadRequest,
         respond_to: Sender<Result<ui_payload::DiffWithSheets, DiffErrorPayload>>,
+    },
+    LoadSheetMeta {
+        request: SheetMetaRequest,
+        respond_to: Sender<Result<SheetMeta, DiffErrorPayload>>,
+    },
+    LoadOpsRange {
+        request: OpsRangeRequest,
+        respond_to: Sender<Result<DiffReport, DiffErrorPayload>>,
+    },
+    LoadCellsRange {
+        request: CellsRangeRequest,
+        respond_to: Sender<Result<SheetCellsPayload, DiffErrorPayload>>,
     },
 }
 
@@ -194,6 +315,18 @@ impl EngineState {
                 }
                 EngineCommand::LoadSheet { request, respond_to } => {
                     let result = self.handle_load_sheet(request);
+                    let _ = respond_to.send(result);
+                }
+                EngineCommand::LoadSheetMeta { request, respond_to } => {
+                    let result = self.handle_load_sheet_meta(request);
+                    let _ = respond_to.send(result);
+                }
+                EngineCommand::LoadOpsRange { request, respond_to } => {
+                    let result = self.handle_load_ops_range(request);
+                    let _ = respond_to.send(result);
+                }
+                EngineCommand::LoadCellsRange { request, respond_to } => {
+                    let result = self.handle_load_cells_range(request);
                     let _ = respond_to.send(result);
                 }
             }
@@ -443,6 +576,158 @@ impl EngineState {
         Ok(ui_payload::build_payload_from_workbook_report(report, &old_pkg, &new_pkg))
     }
 
+    fn handle_load_sheet_meta(
+        &mut self,
+        request: SheetMetaRequest,
+    ) -> Result<SheetMeta, DiffErrorPayload> {
+        let store = OpStore::open(&self.store_path).map_err(map_store_error)?;
+        let summary = store.load_summary(&request.diff_id).map_err(map_store_error)?;
+
+        if request.cancel.load(Ordering::Relaxed) {
+            return Err(DiffErrorPayload::new("canceled", "Diff canceled.", false));
+        }
+
+        let old_path = PathBuf::from(&summary.old_path);
+        let new_path = PathBuf::from(&summary.new_path);
+        let old_pkg = self.open_workbook_cached(&old_path, summary.trusted)?;
+        let new_pkg = self.open_workbook_cached(&new_path, summary.trusted)?;
+
+        let ops = store
+            .load_sheet_ops(&request.diff_id, &request.sheet_name)
+            .map_err(map_store_error)?;
+        let strings = store.load_strings(&request.diff_id).map_err(map_store_error)?;
+        let mut report = DiffReport::new(ops.clone());
+        report.strings = strings;
+        report.complete = summary.complete;
+        report.warnings = summary.warnings.clone();
+
+        let old_sheet_name = resolve_old_sheet_name(&report, &request.sheet_name)
+            .unwrap_or_else(|| request.sheet_name.clone());
+
+        let old_sheet = find_sheet_by_name(&old_pkg.workbook, &old_sheet_name);
+        let new_sheet = find_sheet_by_name(&new_pkg.workbook, &request.sheet_name);
+        let old_rows = old_sheet.map(|s| s.grid.nrows).unwrap_or(0);
+        let old_cols = old_sheet.map(|s| s.grid.ncols).unwrap_or(0);
+        let new_rows = new_sheet.map(|s| s.grid.nrows).unwrap_or(0);
+        let new_cols = new_sheet.map(|s| s.grid.ncols).unwrap_or(0);
+
+        let alignment = if ops.is_empty() {
+            None
+        } else {
+            Some(ui_payload::build_alignment_for_sheet(
+                &request.sheet_name,
+                if old_rows > 0 && old_cols > 0 { Some((old_rows, old_cols)) } else { None },
+                if new_rows > 0 && new_cols > 0 { Some((new_rows, new_cols)) } else { None },
+                &ops,
+            ))
+        };
+
+        let truncated_old = old_sheet
+            .map(|s| s.grid.cell_count() > ui_payload::MAX_SNAPSHOT_CELLS_PER_SHEET)
+            .unwrap_or(false);
+        let truncated_new = new_sheet
+            .map(|s| s.grid.cell_count() > ui_payload::MAX_SNAPSHOT_CELLS_PER_SHEET)
+            .unwrap_or(false);
+        let preview = if truncated_old || truncated_new {
+            Some(SheetPreviewMeta {
+                truncated_old,
+                truncated_new,
+                note: Some("Preview likely limited for large sheets.".to_string()),
+            })
+        } else {
+            None
+        };
+
+        Ok(SheetMeta {
+            sheet_name: request.sheet_name,
+            old_rows,
+            old_cols,
+            new_rows,
+            new_cols,
+            alignment,
+            preview,
+        })
+    }
+
+    fn handle_load_ops_range(
+        &mut self,
+        request: OpsRangeRequest,
+    ) -> Result<DiffReport, DiffErrorPayload> {
+        let store = OpStore::open(&self.store_path).map_err(map_store_error)?;
+        let summary = store.load_summary(&request.diff_id).map_err(map_store_error)?;
+        let ops = store
+            .load_ops_in_range(
+                &request.diff_id,
+                &request.sheet_name,
+                request.range.row_start,
+                request.range.row_end,
+                request.range.col_start,
+                request.range.col_end,
+            )
+            .map_err(map_store_error)?;
+        let strings = store.load_strings(&request.diff_id).map_err(map_store_error)?;
+        let mut report = DiffReport::new(ops);
+        report.strings = strings;
+        report.complete = summary.complete;
+        report.warnings = summary.warnings.clone();
+        Ok(report)
+    }
+
+    fn handle_load_cells_range(
+        &mut self,
+        request: CellsRangeRequest,
+    ) -> Result<SheetCellsPayload, DiffErrorPayload> {
+        let store = OpStore::open(&self.store_path).map_err(map_store_error)?;
+        let summary = store.load_summary(&request.diff_id).map_err(map_store_error)?;
+
+        let old_path = PathBuf::from(&summary.old_path);
+        let new_path = PathBuf::from(&summary.new_path);
+        let old_pkg = self.open_workbook_cached(&old_path, summary.trusted)?;
+        let new_pkg = self.open_workbook_cached(&new_path, summary.trusted)?;
+
+        let side = request.side.to_ascii_lowercase();
+        let sheet = if side == "old" {
+            find_sheet_by_name(&old_pkg.workbook, &request.sheet_name)
+        } else {
+            find_sheet_by_name(&new_pkg.workbook, &request.sheet_name)
+        };
+
+        let Some(sheet) = sheet else {
+            return Ok(SheetCellsPayload {
+                sheet_name: request.sheet_name,
+                side,
+                cells: Vec::new(),
+            });
+        };
+
+        let Some((row_start, row_end, col_start, col_end)) =
+            normalize_range(&request.range, sheet.grid.nrows, sheet.grid.ncols)
+        else {
+            return Ok(SheetCellsPayload {
+                sheet_name: request.sheet_name,
+                side,
+                cells: Vec::new(),
+            });
+        };
+
+        let cells = excel_diff::with_default_session(|session| {
+            let mut out = Vec::new();
+            for ((row, col), cell) in sheet.grid.iter_cells() {
+                if row < row_start || row > row_end || col < col_start || col > col_end {
+                    continue;
+                }
+                out.push(render_sheet_cell(&session.strings, row, col, cell));
+            }
+            out
+        });
+
+        Ok(SheetCellsPayload {
+            sheet_name: request.sheet_name,
+            side,
+            cells,
+        })
+    }
+
     fn open_workbook_cached(&mut self, path: &Path, trusted: bool) -> Result<WorkbookPackage, DiffErrorPayload> {
         let key = cache_key(path, trusted)?;
         if let Some(pkg) = self.workbook_cache.get(&key) {
@@ -524,6 +809,78 @@ fn trusted_limits() -> ContainerLimits {
         max_part_uncompressed_bytes: base.max_part_uncompressed_bytes.saturating_mul(4),
         max_total_uncompressed_bytes: base.max_total_uncompressed_bytes.saturating_mul(4),
     }
+}
+
+fn resolve_old_sheet_name(report: &DiffReport, sheet_name: &str) -> Option<String> {
+    for op in &report.ops {
+        let excel_diff::DiffOp::SheetRenamed { sheet, from, .. } = op else {
+            continue;
+        };
+        let new_name = report.resolve(*sheet).unwrap_or("");
+        if new_name.eq_ignore_ascii_case(sheet_name) {
+            return Some(report.resolve(*from).unwrap_or("").to_string());
+        }
+    }
+    None
+}
+
+fn find_sheet_by_name<'a>(
+    workbook: &'a excel_diff::Workbook,
+    sheet_name: &str,
+) -> Option<&'a excel_diff::Sheet> {
+    let idx = excel_diff::with_default_session(|session| {
+        workbook
+            .sheets
+            .iter()
+            .position(|sheet| session.strings.resolve(sheet.name).eq_ignore_ascii_case(sheet_name))
+    });
+    idx.and_then(|i| workbook.sheets.get(i))
+}
+
+fn normalize_range(
+    range: &RangeBounds,
+    nrows: u32,
+    ncols: u32,
+) -> Option<(u32, u32, u32, u32)> {
+    if nrows == 0 || ncols == 0 {
+        return None;
+    }
+    let mut row_start = range.row_start.unwrap_or(0);
+    let mut row_end = range.row_end.unwrap_or(nrows.saturating_sub(1));
+    let mut col_start = range.col_start.unwrap_or(0);
+    let mut col_end = range.col_end.unwrap_or(ncols.saturating_sub(1));
+
+    row_start = row_start.min(nrows.saturating_sub(1));
+    row_end = row_end.min(nrows.saturating_sub(1));
+    col_start = col_start.min(ncols.saturating_sub(1));
+    col_end = col_end.min(ncols.saturating_sub(1));
+
+    if row_end < row_start {
+        std::mem::swap(&mut row_start, &mut row_end);
+    }
+    if col_end < col_start {
+        std::mem::swap(&mut col_start, &mut col_end);
+    }
+
+    Some((row_start, row_end, col_start, col_end))
+}
+
+fn render_sheet_cell(
+    pool: &excel_diff::StringPool,
+    row: u32,
+    col: u32,
+    cell: &excel_diff::Cell,
+) -> ui_payload::SheetCell {
+    let value = match &cell.value {
+        None => None,
+        Some(excel_diff::CellValue::Blank) => Some(String::new()),
+        Some(excel_diff::CellValue::Number(n)) => Some(n.to_string()),
+        Some(excel_diff::CellValue::Text(id)) => Some(pool.resolve(*id).to_string()),
+        Some(excel_diff::CellValue::Bool(b)) => Some(if *b { "TRUE".to_string() } else { "FALSE".to_string() }),
+        Some(excel_diff::CellValue::Error(id)) => Some(pool.resolve(*id).to_string()),
+    };
+    let formula = cell.formula.map(|id| format!("={}", pool.resolve(id)));
+    ui_payload::SheetCell { row, col, value, formula }
 }
 
 fn estimate_diff_cell_volume(old: &excel_diff::Workbook, new: &excel_diff::Workbook) -> u64 {

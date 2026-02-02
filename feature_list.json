@@ -1,0 +1,2480 @@
+[
+  {
+    "feature": "\"Explain diffs in PR language\" output mode",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 2",
+    "package": "Unspecified",
+    "difficulty": "2-3"
+  },
+  {
+    "feature": "API: get diff payloads",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 11",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "API: post review status",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 11",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "API: submit artifacts",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 11",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "APIs",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Automation via CLI",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "CI recipes",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 2",
+    "package": "Unspecified",
+    "difficulty": "2-3"
+  },
+  {
+    "feature": "CI/CD hooks",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Customizable policies per org",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 7",
+    "package": "Unspecified",
+    "difficulty": "3-4"
+  },
+  {
+    "feature": "Customizable policies per project",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 7",
+    "package": "Unspecified",
+    "difficulty": "3-4"
+  },
+  {
+    "feature": "Desktop app workspace concept",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 12",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "Export project artifacts helper",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 12",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "External tool: diff current PBIX/PBIT vs \"PBected baseline\"",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 12",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "External tool: focused view on model/query/report changes",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 12",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "Git UX kit",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 2",
+    "package": "Unspecified",
+    "difficulty": "2-3"
+  },
+  {
+    "feature": "Git difftool integrations",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Guided export from PBIX to PBIP/PBIR/TMDL",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 12",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "Integrations with CI pipelines",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 11",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Integrations with chat ops",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 11",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Integrations with ticketing systems",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 11",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Plugin SDK",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 11",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Plugin SDK for custom diff rules",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 11",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Plugin SDK for new artifact types (custom Excel objects)",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 11",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Plugin SDK for normalizers",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 11",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Policies",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Power BI External Tool entry",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 12",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "REST API",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 11",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Recommended difftool config",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 2",
+    "package": "Unspecified",
+    "difficulty": "2-3"
+  },
+  {
+    "feature": "Repo templates: .gitattributes",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 2",
+    "package": "Unspecified",
+    "difficulty": "2-3"
+  },
+  {
+    "feature": "Workspace remembers last baseline",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 12",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "Workspace supports quick compare",
+    "group": "Automation, integrations, and ecosystem",
+    "iteration": "Iteration 12",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "Approvals",
+    "group": "Collaboration and review workflow",
+    "iteration": "Iteration 9",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Assignments",
+    "group": "Collaboration and review workflow",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Change requests",
+    "group": "Collaboration and review workflow",
+    "iteration": "Iteration 9",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Comment threads on cells",
+    "group": "Collaboration and review workflow",
+    "iteration": "Iteration 9",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Comment threads on changes",
+    "group": "Collaboration and review workflow",
+    "iteration": "Iteration 9",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Comment threads on measures",
+    "group": "Collaboration and review workflow",
+    "iteration": "Iteration 9",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Comment threads on queries",
+    "group": "Collaboration and review workflow",
+    "iteration": "Iteration 9",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Comment threads on ranges",
+    "group": "Collaboration and review workflow",
+    "iteration": "Iteration 9",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Comments",
+    "group": "Collaboration and review workflow",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Notifications",
+    "group": "Collaboration and review workflow",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Notifications via collaboration tool integrations (later)",
+    "group": "Collaboration and review workflow",
+    "iteration": "Iteration 9",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Notifications via email",
+    "group": "Collaboration and review workflow",
+    "iteration": "Iteration 9",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Objects: comments",
+    "group": "Collaboration and review workflow",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Objects: threaded comments",
+    "group": "Collaboration and review workflow",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Reviewers",
+    "group": "Collaboration and review workflow",
+    "iteration": "Iteration 9",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Shareable diffs",
+    "group": "Collaboration and review workflow",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Shareable read-only diff links (hosted)",
+    "group": "Collaboration and review workflow",
+    "iteration": "Iteration 9",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Shareable reviews",
+    "group": "Collaboration and review workflow",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Team tier: review workflow (approvals)",
+    "group": "Collaboration and review workflow",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Team tier: review workflow (comments)",
+    "group": "Collaboration and review workflow",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Team tier: shareable diffs",
+    "group": "Collaboration and review workflow",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "review workflow (approvals)",
+    "group": "Collaboration and review workflow",
+    "iteration": "Unassigned",
+    "package": "Team",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "review workflow (comments)",
+    "group": "Collaboration and review workflow",
+    "iteration": "Unassigned",
+    "package": "Team",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "shareable diffs",
+    "group": "Collaboration and review workflow",
+    "iteration": "Unassigned",
+    "package": "Team",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "\"Why did this number change?\" view",
+    "group": "Diff UX, explainability, and controls",
+    "iteration": "Iteration 1",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "Change Summary panel",
+    "group": "Diff UX, explainability, and controls",
+    "iteration": "Iteration 1",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "Change counts by category",
+    "group": "Diff UX, explainability, and controls",
+    "iteration": "Iteration 1",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "Change counts by severity",
+    "group": "Diff UX, explainability, and controls",
+    "iteration": "Iteration 1",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "Change counts by sheet",
+    "group": "Diff UX, explainability, and controls",
+    "iteration": "Iteration 1",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "Collapse moved blocks",
+    "group": "Diff UX, explainability, and controls",
+    "iteration": "Iteration 1",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "Ignore formatting",
+    "group": "Diff UX, explainability, and controls",
+    "iteration": "Iteration 1",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "Ignore whitespace-only changes",
+    "group": "Diff UX, explainability, and controls",
+    "iteration": "Iteration 1",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "Noise controls in UI",
+    "group": "Diff UX, explainability, and controls",
+    "iteration": "Iteration 1",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "Performance instrumentation: memory",
+    "group": "Diff UX, explainability, and controls",
+    "iteration": "Iteration 1",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "Performance instrumentation: ops count",
+    "group": "Diff UX, explainability, and controls",
+    "iteration": "Iteration 1",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "Performance instrumentation: time",
+    "group": "Diff UX, explainability, and controls",
+    "iteration": "Iteration 1",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "Plugin SDK for severity scoring",
+    "group": "Diff UX, explainability, and controls",
+    "iteration": "Iteration 11",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Saved comparison presets",
+    "group": "Diff UX, explainability, and controls",
+    "iteration": "Iteration 1",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "Semantic-only mode for DAX",
+    "group": "Diff UX, explainability, and controls",
+    "iteration": "Iteration 1",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "Semantic-only mode for M",
+    "group": "Diff UX, explainability, and controls",
+    "iteration": "Iteration 1",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "Show when limits triggered",
+    "group": "Diff UX, explainability, and controls",
+    "iteration": "Iteration 1",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "Auto key suggestion patterns",
+    "group": "Diff primitives and modes",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Cell edits",
+    "group": "Diff primitives and modes",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Column operations",
+    "group": "Diff primitives and modes",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Database mode",
+    "group": "Diff primitives and modes",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Grid diff",
+    "group": "Diff primitives and modes",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Keyed database-mode comparisons for table-like sheets",
+    "group": "Diff primitives and modes",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Moved blocks",
+    "group": "Diff primitives and modes",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Row operations",
+    "group": "Diff primitives and modes",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Basic \"pivot output changed\" to \"source changed\" hints",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 3",
+    "package": "Unspecified",
+    "difficulty": "3"
+  },
+  {
+    "feature": "Cell style changes",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 3",
+    "package": "Unspecified",
+    "difficulty": "3"
+  },
+  {
+    "feature": "Chart change detection (hash-based)",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Chart data range deltas",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 3",
+    "package": "Unspecified",
+    "difficulty": "3"
+  },
+  {
+    "feature": "Chart diff v2",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 3",
+    "package": "Unspecified",
+    "difficulty": "3"
+  },
+  {
+    "feature": "Chart type deltas",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 3",
+    "package": "Unspecified",
+    "difficulty": "3"
+  },
+  {
+    "feature": "Code/advanced: Office Scripts",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Code/advanced: VBA diff export",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Code/advanced: VBA modules",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Code/advanced: VBA textual diff views",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Code/advanced: add-in custom functions metadata",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Compare VBA",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Compare charts",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Compare connections",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Compare pivots",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Compare workbooks",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Conditional formatting changes",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 3",
+    "package": "Unspecified",
+    "difficulty": "3"
+  },
+  {
+    "feature": "Connections diffs",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 3",
+    "package": "Unspecified",
+    "difficulty": "3"
+  },
+  {
+    "feature": "Data validation diffs",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 3",
+    "package": "Unspecified",
+    "difficulty": "3"
+  },
+  {
+    "feature": "External links diffs",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 3",
+    "package": "Unspecified",
+    "difficulty": "3"
+  },
+  {
+    "feature": "Formatting diffs (optional / noise-filtered)",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 3",
+    "package": "Unspecified",
+    "difficulty": "3"
+  },
+  {
+    "feature": "Formatting: borders",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Formatting: cell styles",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Formatting: conditional formatting",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Formatting: fills",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Formatting: fonts",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Formatting: number formats",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Formatting: table styles",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Grid content: blanks",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Grid content: determinism guarantees",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Grid content: errors",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Grid content: formulas",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Grid content: large-sheet performance",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Grid content: limits handling",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Grid content: semantic normalization for formulas",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Grid content: streaming comparisons",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Grid content: types",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Grid content: values",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Link changed pivot output cell to upstream changed input table cell",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 1",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "Link changed pivot output cell to upstream changed query step",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 1",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "Model column changes",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Named range diffs",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Named styles diffs",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 3",
+    "package": "Unspecified",
+    "difficulty": "3"
+  },
+  {
+    "feature": "Number format changes",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 3",
+    "package": "Unspecified",
+    "difficulty": "3"
+  },
+  {
+    "feature": "Object diffs",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Objects: SmartArt",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Objects: chart add/remove/change detection",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Objects: chart metadata diffs",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Objects: data validation rules",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Objects: images",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Objects: notes",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Objects: pivot caches",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Objects: pivot tables",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Objects: shapes",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Objects: slicers",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Objects: sparklines",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Objects: timelines",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Pivot cache changes",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 3",
+    "package": "Unspecified",
+    "difficulty": "3"
+  },
+  {
+    "feature": "Pivot diff v1",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 3",
+    "package": "Unspecified",
+    "difficulty": "3"
+  },
+  {
+    "feature": "Pivot table definition changes",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 3",
+    "package": "Unspecified",
+    "difficulty": "3"
+  },
+  {
+    "feature": "Pro tier: export audit workbook",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Pro tier: formatting toggles",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Query semantic vs formatting-only change detection",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Slicer changes",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 3",
+    "package": "Unspecified",
+    "difficulty": "3"
+  },
+  {
+    "feature": "Table diffs",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 3",
+    "package": "Unspecified",
+    "difficulty": "3"
+  },
+  {
+    "feature": "Timeline changes",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 3",
+    "package": "Unspecified",
+    "difficulty": "3"
+  },
+  {
+    "feature": "VBA module diffs (normalized text compare)",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Workbook structure: defined names",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Workbook structure: external links",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Workbook structure: hidden sheets",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Workbook structure: name scope",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Workbook structure: protection settings",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Workbook structure: sheet add",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Workbook structure: sheet remove",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Workbook structure: sheet rename",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Workbook structure: sheet reordering",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Workbook structure: very hidden sheets",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Workbook structure: workbook connections",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "export audit workbook",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Pro",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "formatting toggles",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Unassigned",
+    "package": "Pro",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "git_diff-style output",
+    "group": "Excel workbook and objects diffs",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Hidden sheets risk detection",
+    "group": "Insights and intelligence",
+    "iteration": "Iteration 7",
+    "package": "Unspecified",
+    "difficulty": "3-4"
+  },
+  {
+    "feature": "High-riskrnal links detection",
+    "group": "Insights and intelligence",
+    "iteration": "Iteration 7",
+    "package": "Unspecified",
+    "difficulty": "3-4"
+  },
+  {
+    "feature": "Impact scoring",
+    "group": "Insights and intelligence",
+    "iteration": "Iteration 7",
+    "package": "Unspecified",
+    "difficulty": "3-4"
+  },
+  {
+    "feature": "Intelligent insights: change impact",
+    "group": "Insights and intelligence",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Intelligent insights: noise suppression",
+    "group": "Insights and intelligence",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Intelligent insights: risk scoring",
+    "group": "Insights and intelligence",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Macros risk detection",
+    "group": "Insights and intelligence",
+    "iteration": "Iteration 7",
+    "package": "Unspecified",
+    "difficulty": "3-4"
+  },
+  {
+    "feature": "Measure change impact: used in which visuals",
+    "group": "Insights and intelligence",
+    "iteration": "Iteration 7",
+    "package": "Unspecified",
+    "difficulty": "3-4"
+  },
+  {
+    "feature": "Narrative summaries: \"What changed?\"",
+    "group": "Insights and intelligence",
+    "iteration": "Iteration 7",
+    "package": "Unspecified",
+    "difficulty": "3-4"
+  },
+  {
+    "feature": "Narrative summaries: \"Why it matters?\"",
+    "group": "Insights and intelligence",
+    "iteration": "Iteration 7",
+    "package": "Unspecified",
+    "difficulty": "3-4"
+  },
+  {
+    "feature": "Noise suppression: auto classify formatting-only changes",
+    "group": "Insights and intelligence",
+    "iteration": "Iteration 7",
+    "package": "Unspecified",
+    "difficulty": "3-4"
+  },
+  {
+    "feature": "Noise suppression: auto classify reorder-only changes",
+    "group": "Insights and intelligence",
+    "iteration": "Iteration 7",
+    "package": "Unspecified",
+    "difficulty": "3-4"
+  },
+  {
+    "feature": "Query change impact: affects which outputs",
+    "group": "Insights and intelligence",
+    "iteration": "Iteration 7",
+    "package": "Unspecified",
+    "difficulty": "3-4"
+  },
+  {
+    "feature": "Rules engine",
+    "group": "Insights and intelligence",
+    "iteration": "Iteration 7",
+    "package": "Unspecified",
+    "difficulty": "3-4"
+  },
+  {
+    "feature": "Semantic-noise suppression options for model diffs",
+    "group": "Insights and intelligence",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "2-way conflict detection",
+    "group": "Merge and conflict resolution",
+    "iteration": "Iteration 4",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "2-way merge",
+    "group": "Merge and conflict resolution",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "3-way merge",
+    "group": "Merge and conflict resolution",
+    "iteration": "Iteration 5",
+    "package": "Unspecified",
+    "difficulty": "5"
+  },
+  {
+    "feature": "3-way merge for general grid",
+    "group": "Merge and conflict resolution",
+    "iteration": "Iteration 5",
+    "package": "Unspecified",
+    "difficulty": "5"
+  },
+  {
+    "feature": "3-way merge for table-like sheets",
+    "group": "Merge and conflict resolution",
+    "iteration": "Iteration 5",
+    "package": "Unspecified",
+    "difficulty": "5"
+  },
+  {
+    "feature": "3-way merge upsell",
+    "group": "Merge and conflict resolution",
+    "iteration": "Unassigned",
+    "package": "Pro+ Merge",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Accept mine",
+    "group": "Merge and conflict resolution",
+    "iteration": "Iteration 5",
+    "package": "Unspecified",
+    "difficulty": "5"
+  },
+  {
+    "feature": "Accept theirs",
+    "group": "Merge and conflict resolution",
+    "iteration": "Iteration 5",
+    "package": "Unspecified",
+    "difficulty": "5"
+  },
+  {
+    "feature": "Apply selected diffs into a target workbook",
+    "group": "Merge and conflict resolution",
+    "iteration": "Iteration 4",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Conflict UI",
+    "group": "Merge and conflict resolution",
+    "iteration": "Iteration 5",
+    "package": "Unspecified",
+    "difficulty": "5"
+  },
+  {
+    "feature": "Conflict log",
+    "group": "Merge and conflict resolution",
+    "iteration": "Iteration 5",
+    "package": "Unspecified",
+    "difficulty": "5"
+  },
+  {
+    "feature": "Conflict resolution for code",
+    "group": "Merge and conflict resolution",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Conflict resolution for models",
+    "group": "Merge and conflict resolution",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Conflict resolution for tables",
+    "group": "Merge and conflict resolution",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Fuzzy key matching",
+    "group": "Merge and conflict resolution",
+    "iteration": "Iteration 4",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Highlight ambiguous merges",
+    "group": "Merge and conflict resolution",
+    "iteration": "Iteration 4",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Key column mapping",
+    "group": "Merge and conflict resolution",
+    "iteration": "Iteration 4",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Key-based row alignment",
+    "group": "Merge and conflict resolution",
+    "iteration": "Iteration 4",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Manual edit resolution",
+    "group": "Merge and conflict resolution",
+    "iteration": "Iteration 5",
+    "package": "Unspecified",
+    "difficulty": "5"
+  },
+  {
+    "feature": "Merge report: applied",
+    "group": "Merge and conflict resolution",
+    "iteration": "Iteration 4",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Merge report: conflicted",
+    "group": "Merge and conflict resolution",
+    "iteration": "Iteration 4",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Merge report: skipped",
+    "group": "Merge and conflict resolution",
+    "iteration": "Iteration 4",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Output merged workbook",
+    "group": "Merge and conflict resolution",
+    "iteration": "Iteration 5",
+    "package": "Unspecified",
+    "difficulty": "5"
+  },
+  {
+    "feature": "Produce a new merged workbook",
+    "group": "Merge and conflict resolution",
+    "iteration": "Iteration 4",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Require user conflict resolution",
+    "group": "Merge and conflict resolution",
+    "iteration": "Iteration 4",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "Side-by-side resolution",
+    "group": "Merge and conflict resolution",
+    "iteration": "Iteration 5",
+    "package": "Unspecified",
+    "difficulty": "5"
+  },
+  {
+    "feature": "Table-aware merge",
+    "group": "Merge and conflict resolution",
+    "iteration": "Iteration 4",
+    "package": "Unspecified",
+    "difficulty": "4"
+  },
+  {
+    "feature": "apply diffs / 2-way merge",
+    "group": "Merge and conflict resolution",
+    "iteration": "Unassigned",
+    "package": "Pro+ Merge",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Calculated column changes",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Compare DAX",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Compare Power Query (M)",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "DAX semantic diffs",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Link changed pivot output cell to upstream changed DAX measure",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Iteration 1",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "Measure changes",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Model property changes",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Model table changes",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Model type changes",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Power Pivot / Excel tabular: calculated columns",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Power Pivot / Excel tabular: formatting strings",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Power Pivot / Excel tabular: hierarchies",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Power Pivot / Excel tabular: measures",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Power Pivot / Excel tabular: relationships",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Power Pivot / Excel tabular: roles",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Power Query (M) diffs",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Power Query: diff",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Power Query: grouping paths",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Power Query: metadata (load to model)",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Power Query: metadata (load to sheet)",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Power Query: parse",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Power Query: step graph diff",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Query added detection",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Query metadata change detection",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Query removed detection",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Query renamed detection",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Relationship changes",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Step-level query diffs",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Tabular model diffs",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Workbook structure: Power Pivot / data model presence flags",
+    "group": "Modern Excel and BI semantic layer diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Alert policy: \"External connection changed\"",
+    "group": "Monitoring and governance",
+    "iteration": "Iteration 8",
+    "package": "Unspecified",
+    "difficulty": "4-5"
+  },
+  {
+    "feature": "Alert policy: \"Measure changed\"",
+    "group": "Monitoring and governance",
+    "iteration": "Iteration 8",
+    "package": "Unspecified",
+    "difficulty": "4-5"
+  },
+  {
+    "feature": "Alert policy: \"New hidden sheet added\"",
+    "group": "Monitoring and governance",
+    "iteration": "Iteration 8",
+    "package": "Unspecified",
+    "difficulty": "4-5"
+  },
+  {
+    "feature": "Alert policy: \"Query changed\"",
+    "group": "Monitoring and governance",
+    "iteration": "Iteration 8",
+    "package": "Unspecified",
+    "difficulty": "4-5"
+  },
+  {
+    "feature": "Alerts",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Audit logs",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Backups",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Central inventory of critical spreadsheets and models",
+    "group": "Monitoring and governance",
+    "iteration": "Iteration 10",
+    "package": "Unspecified",
+    "difficulty": "5"
+  },
+  {
+    "feature": "Change feed",
+    "group": "Monitoring and governance",
+    "iteration": "Iteration 8",
+    "package": "Unspecified",
+    "difficulty": "4-5"
+  },
+  {
+    "feature": "DLP-friendly architecture",
+    "group": "Monitoring and governance",
+    "iteration": "Iteration 10",
+    "package": "Unspecified",
+    "difficulty": "5"
+  },
+  {
+    "feature": "Enterprise tier: RBAC",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Enterprise tier: SSO",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Enterprise tier: alerts",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Enterprise tier: connectors",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Enterprise tier: governance suite",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Enterprise tier: logs",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Enterprise tier: monitoring",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Enterprise tier: on-prem",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Enterprise tier: retention",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Immutable audit logs",
+    "group": "Monitoring and governance",
+    "iteration": "Iteration 10",
+    "package": "Unspecified",
+    "difficulty": "5"
+  },
+  {
+    "feature": "Logs",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Monitoring and alerts",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "On-prem deployments",
+    "group": "Monitoring and governance",
+    "iteration": "Iteration 10",
+    "package": "Unspecified",
+    "difficulty": "5"
+  },
+  {
+    "feature": "Permissions",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Private cloud deployments",
+    "group": "Monitoring and governance",
+    "iteration": "Iteration 10",
+    "package": "Unspecified",
+    "difficulty": "5"
+  },
+  {
+    "feature": "RBAC",
+    "group": "Monitoring and governance",
+    "iteration": "Iteration 10",
+    "package": "Enterprise",
+    "difficulty": "5"
+  },
+  {
+    "feature": "Retention",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Retention policies",
+    "group": "Monitoring and governance",
+    "iteration": "Iteration 10",
+    "package": "Unspecified",
+    "difficulty": "5"
+  },
+  {
+    "feature": "SCIM",
+    "group": "Monitoring and governance",
+    "iteration": "Iteration 10",
+    "package": "Unspecified",
+    "difficulty": "5"
+  },
+  {
+    "feature": "SSO",
+    "group": "Monitoring and governance",
+    "iteration": "Iteration 10",
+    "package": "Enterprise",
+    "difficulty": "5"
+  },
+  {
+    "feature": "Scheduled diffs",
+    "group": "Monitoring and governance",
+    "iteration": "Iteration 8",
+    "package": "Unspecified",
+    "difficulty": "4-5"
+  },
+  {
+    "feature": "Watch OneDrive folders",
+    "group": "Monitoring and governance",
+    "iteration": "Iteration 8",
+    "package": "Unspecified",
+    "difficulty": "4-5"
+  },
+  {
+    "feature": "Watch Power BI workspaces",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Watch Power BI workspaces (datasets/reports)",
+    "group": "Monitoring and governance",
+    "iteration": "Iteration 8",
+    "package": "Unspecified",
+    "difficulty": "4-5"
+  },
+  {
+    "feature": "Watch SharePoint",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Watch SharePoint folders",
+    "group": "Monitoring and governance",
+    "iteration": "Iteration 8",
+    "package": "Unspecified",
+    "difficulty": "4-5"
+  },
+  {
+    "feature": "Watch folders",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "alerts",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Enterprise",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "connectors",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Enterprise",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "governance suite",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Enterprise",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "logs",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Enterprise",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "monitoring",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Enterprise",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "on-prem",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Enterprise",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "retention",
+    "group": "Monitoring and governance",
+    "iteration": "Unassigned",
+    "package": "Enterprise",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Pro tier: advanced diff presets",
+    "group": "Packaging and tiers",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Pro tier: semantic toggles",
+    "group": "Packaging and tiers",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "advanced diff presets",
+    "group": "Packaging and tiers",
+    "iteration": "Unassigned",
+    "package": "Pro",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "semantic toggles",
+    "group": "Packaging and tiers",
+    "iteration": "Unassigned",
+    "package": "Pro",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Compare semantic models",
+    "group": "Platform Promise",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Explain differences",
+    "group": "Platform Promise",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Merge safely",
+    "group": "Platform Promise",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Operationalize change",
+    "group": "Platform Promise",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Root-cause chains",
+    "group": "Platform Promise",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Semantic vs noise classification",
+    "group": "Platform Promise",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Compare PBIP projects",
+    "group": "Power BI / Tabular formats diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Compare PBIX/PBIT",
+    "group": "Power BI / Tabular formats diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Compare report definitions",
+    "group": "Power BI / Tabular formats diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Diff/merge/insight support for PBIP/PBIR/TMDL repositories",
+    "group": "Power BI / Tabular formats diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "PBIP import and compare (folder-to-folder diff)",
+    "group": "Power BI / Tabular formats diffs",
+    "iteration": "Iteration 2",
+    "package": "Unspecified",
+    "difficulty": "2-3"
+  },
+  {
+    "feature": "PBIP support",
+    "group": "Power BI / Tabular formats diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "PBIR bookmark diffs",
+    "group": "Power BI / Tabular formats diffs",
+    "iteration": "Iteration 2",
+    "package": "Unspecified",
+    "difficulty": "2-3"
+  },
+  {
+    "feature": "PBIR diff viewer",
+    "group": "Power BI / Tabular formats diffs",
+    "iteration": "Iteration 2",
+    "package": "Unspecified",
+    "difficulty": "2-3"
+  },
+  {
+    "feature": "PBIR page-level diffs",
+    "group": "Power BI / Tabular formats diffs",
+    "iteration": "Iteration 2",
+    "package": "Unspecified",
+    "difficulty": "2-3"
+  },
+  {
+    "feature": "PBIR selection pane diffs",
+    "group": "Power BI / Tabular formats diffs",
+    "iteration": "Iteration 2",
+    "package": "Unspecified",
+    "difficulty": "2-3"
+  },
+  {
+    "feature": "PBIR support",
+    "group": "Power BI / Tabular formats diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "PBIR theme diffs",
+    "group": "Power BI / Tabular formats diffs",
+    "iteration": "Iteration 2",
+    "package": "Unspecified",
+    "difficulty": "2-3"
+  },
+  {
+    "feature": "PBIR visual-level diffs",
+    "group": "Power BI / Tabular formats diffs",
+    "iteration": "Iteration 2",
+    "package": "Unspecified",
+    "difficulty": "2-3"
+  },
+  {
+    "feature": "TMDL diff viewer",
+    "group": "Power BI / Tabular formats diffs",
+    "iteration": "Iteration 2",
+    "package": "Unspecified",
+    "difficulty": "2-3"
+  },
+  {
+    "feature": "TMDL support",
+    "group": "Power BI / Tabular formats diffs",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "CLI",
+    "group": "Surfaces, outputs, and privacy",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "CLI access",
+    "group": "Surfaces, outputs, and privacy",
+    "iteration": "Unassigned",
+    "package": "Pro",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "CLI output: JSON",
+    "group": "Surfaces, outputs, and privacy",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "CLI output: JSONL",
+    "group": "Surfaces, outputs, and privacy",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "CLI output: outcome",
+    "group": "Surfaces, outputs, and privacy",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "CLI output: payload",
+    "group": "Surfaces, outputs, and privacy",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "CLI output: text",
+    "group": "Surfaces, outputs, and privacy",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Desktop GUI (wxDragon)",
+    "group": "Surfaces, outputs, and privacy",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Free tier: usable web demo",
+    "group": "Surfaces, outputs, and privacy",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Licensing/trial infrastructure",
+    "group": "Surfaces, outputs, and privacy",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Local execution (files are not uploaded)",
+    "group": "Surfaces, outputs, and privacy",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Local-first privacy posture",
+    "group": "Surfaces, outputs, and privacy",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Pro tier: CLI access",
+    "group": "Surfaces, outputs, and privacy",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Pro tier: export JSON",
+    "group": "Surfaces, outputs, and privacy",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Pro tier: git-friendly output",
+    "group": "Surfaces, outputs, and privacy",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Robust JSON semantic diff (ignore ordering)",
+    "group": "Surfaces, outputs, and privacy",
+    "iteration": "Iteration 2",
+    "package": "Unspecified",
+    "difficulty": "2-3"
+  },
+  {
+    "feature": "Robust JSON semantic diff (normalize GUID noise)",
+    "group": "Surfaces, outputs, and privacy",
+    "iteration": "Iteration 2",
+    "package": "Unspecified",
+    "difficulty": "2-3"
+  },
+  {
+    "feature": "Web/WASM demo",
+    "group": "Surfaces, outputs, and privacy",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "export JSON",
+    "group": "Surfaces, outputs, and privacy",
+    "iteration": "Unassigned",
+    "package": "Pro",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "git-friendly output",
+    "group": "Surfaces, outputs, and privacy",
+    "iteration": "Unassigned",
+    "package": "Pro",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "usable web demo",
+    "group": "Surfaces, outputs, and privacy",
+    "iteration": "Unassigned",
+    "package": "Free",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Audit export",
+    "group": "Utility workflows",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Batch compare",
+    "group": "Utility workflows",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Deep search",
+    "group": "Utility workflows",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Deep search index patterns",
+    "group": "Utility workflows",
+    "iteration": "Iteration 0",
+    "package": "Unspecified",
+    "difficulty": "done"
+  },
+  {
+    "feature": "Free tier: file-size cap",
+    "group": "Utility workflows",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Free tier: limited comparisons per month",
+    "group": "Utility workflows",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Free tier: local compare + view",
+    "group": "Utility workflows",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Pro tier: export HTML",
+    "group": "Utility workflows",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Pro tier: unlimited compares",
+    "group": "Utility workflows",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "export HTML",
+    "group": "Utility workflows",
+    "iteration": "Unassigned",
+    "package": "Pro",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "file-size cap",
+    "group": "Utility workflows",
+    "iteration": "Unassigned",
+    "package": "Free",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "limited comparisons per month",
+    "group": "Utility workflows",
+    "iteration": "Unassigned",
+    "package": "Free",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "local compare + view",
+    "group": "Utility workflows",
+    "iteration": "Unassigned",
+    "package": "Free",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "unlimited compares",
+    "group": "Utility workflows",
+    "iteration": "Unassigned",
+    "package": "Pro",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "\"watchrate with CI\" snapshot trigger",
+    "group": "Versioning and history",
+    "iteration": "Iteration 6",
+    "package": "Unspecified",
+    "difficulty": "3-4"
+  },
+  {
+    "feature": "Export any version",
+    "group": "Versioning and history",
+    "iteration": "Iteration 6",
+    "package": "Unspecified",
+    "difficulty": "3-4"
+  },
+  {
+    "feature": "External tool: diff current vs last exported snapshot",
+    "group": "Versioning and history",
+    "iteration": "Iteration 12",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "Local repository backend",
+    "group": "Versioning and history",
+    "iteration": "Iteration 6",
+    "package": "Unspecified",
+    "difficulty": "3-4"
+  },
+  {
+    "feature": "Manual snapshot trigger",
+    "group": "Versioning and history",
+    "iteration": "Iteration 6",
+    "package": "Unspecified",
+    "difficulty": "3-4"
+  },
+  {
+    "feature": "Optional Git backend",
+    "group": "Versioning and history",
+    "iteration": "Iteration 6",
+    "package": "Unspecified",
+    "difficulty": "3-4"
+  },
+  {
+    "feature": "Project concept",
+    "group": "Versioning and history",
+    "iteration": "Iteration 6",
+    "package": "Unspecified",
+    "difficulty": "3-4"
+  },
+  {
+    "feature": "Rollback",
+    "group": "Versioning and history",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Rollback any version",
+    "group": "Versioning and history",
+    "iteration": "Iteration 6",
+    "package": "Unspecified",
+    "difficulty": "3-4"
+  },
+  {
+    "feature": "Scheduled snapshots",
+    "group": "Versioning and history",
+    "iteration": "Iteration 8",
+    "package": "Unspecified",
+    "difficulty": "4-5"
+  },
+  {
+    "feature": "Show diffs between any two points",
+    "group": "Versioning and history",
+    "iteration": "Iteration 6",
+    "package": "Unspecified",
+    "difficulty": "3-4"
+  },
+  {
+    "feature": "Team tier: shared history",
+    "group": "Versioning and history",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Track versions of a workbook/model",
+    "group": "Versioning and history",
+    "iteration": "Iteration 6",
+    "package": "Unspecified",
+    "difficulty": "3-4"
+  },
+  {
+    "feature": "Version history",
+    "group": "Versioning and history",
+    "iteration": "Unassigned",
+    "package": "Unspecified",
+    "difficulty": "n/a"
+  },
+  {
+    "feature": "Workspace stores snapshots",
+    "group": "Versioning and history",
+    "iteration": "Iteration 12",
+    "package": "Unspecified",
+    "difficulty": "2"
+  },
+  {
+    "feature": "shared history",
+    "group": "Versioning and history",
+    "iteration": "Unassigned",
+    "package": "Team",
+    "difficulty": "n/a"
+  }
+]

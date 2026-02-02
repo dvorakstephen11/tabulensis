@@ -10,7 +10,10 @@ mod store;
 use std::path::Path;
 
 pub use batch::{BatchOutcome, BatchRequest};
-pub use diff_runner::{DiffErrorPayload, DiffOutcome, DiffRequest, DiffRunner, SheetPayloadRequest};
+pub use diff_runner::{
+    CellsRangeRequest, DiffErrorPayload, DiffOutcome, DiffRequest, DiffRunner, OpsRangeRequest,
+    RangeBounds, SheetCellsPayload, SheetMeta, SheetMetaRequest, SheetPayloadRequest,
+};
 pub use events::{ProgressEvent, ProgressRx, ProgressTx};
 pub use paths::BackendPaths;
 pub use recents::RecentComparison;

@@ -83,7 +83,7 @@ pub fn build_alignments(
             .copied()
             .or_else(|| rename_map.get(&sheet).and_then(|old| old_lookup.get(old).copied()));
         let new_sheet = new_lookup.get(&sheet).copied();
-        alignments.push(build_sheet_alignment(&sheet, old_sheet, new_sheet, ops));
+        alignments.push(build_sheet_alignment_for(&sheet, old_sheet, new_sheet, ops));
     }
 
     alignments
@@ -145,7 +145,7 @@ fn build_rename_map(report: &excel_diff::DiffReport) -> HashMap<String, String> 
     map
 }
 
-fn build_sheet_alignment(
+pub fn build_sheet_alignment_for(
     sheet: &str,
     old_sheet: Option<&SheetSnapshot>,
     new_sheet: Option<&SheetSnapshot>,
