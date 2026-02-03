@@ -5,19 +5,19 @@ This is the shortest path to reproduce the perf CI suites locally and keep basel
 ## Quick suite (CI default)
 
 ```bash
-python scripts/check_perf_thresholds.py --suite quick --baseline benchmarks/baselines/quick.json --export-json benchmarks/latest_quick.json --export-csv benchmarks/latest_quick.csv
+python scripts/check_perf_thresholds.py --suite quick --parallel --baseline benchmarks/baselines/quick.json --export-json benchmarks/latest_quick.json --export-csv benchmarks/latest_quick.csv
 ```
 
 ## Gate suite (50k smoke)
 
 ```bash
-python scripts/check_perf_thresholds.py --suite gate --baseline benchmarks/baselines/gate.json --test-target perf_large_grid_tests
+python scripts/check_perf_thresholds.py --suite gate --parallel --baseline benchmarks/baselines/gate.json --test-target perf_large_grid_tests
 ```
 
 ## Full-scale suite (ignored long-runs)
 
 ```bash
-python scripts/check_perf_thresholds.py --suite full-scale --require-baseline --baseline benchmarks/baselines/full-scale.json --export-json benchmarks/latest_fullscale.json --export-csv benchmarks/latest_fullscale.csv
+python scripts/check_perf_thresholds.py --suite full-scale --parallel --require-baseline --baseline benchmarks/baselines/full-scale.json --export-json benchmarks/latest_fullscale.json --export-csv benchmarks/latest_fullscale.csv
 ```
 
 ## E2E metrics (open + diff)
@@ -38,9 +38,9 @@ Baseline bumps are acceptable when:
 Otherwise, treat the regression as a bug and fix it before updating baselines.
 
 ```bash
-python scripts/update_baselines.py --suite quick
-python scripts/update_baselines.py --suite gate --test-target perf_large_grid_tests
-python scripts/update_baselines.py --suite full-scale
+python scripts/update_baselines.py --suite quick --parallel
+python scripts/update_baselines.py --suite gate --parallel --test-target perf_large_grid_tests
+python scripts/update_baselines.py --suite full-scale --parallel
 ```
 
 The update script runs the suite, compares against the previous baseline, and

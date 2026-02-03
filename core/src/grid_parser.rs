@@ -449,6 +449,7 @@ pub fn parse_sheet_xml(
     let mut reader = Reader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
+    let mut cell_buf = Vec::new();
 
     let mut dimension_hint: Option<(u32, u32)> = None;
     let mut parsed_cells: Vec<ParsedCell> = Vec::new();
@@ -459,11 +460,11 @@ pub fn parse_sheet_xml(
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == b"dimension" => {
                 if let Some(r) = get_attr_value(&reader, xml, &e, b"ref")? {
-                    dimension_hint = dimension_from_ref(&r);
+                    dimension_hint = dimension_from_ref(r.as_ref());
                 }
             }
             Ok(Event::Start(e)) if e.name().as_ref() == b"c" => {
-                let cell = parse_cell(&mut reader, xml, e, shared_strings, pool)?;
+                let cell = parse_cell(&mut reader, xml, e, shared_strings, pool, &mut cell_buf)?;
                 max_row = Some(max_row.map_or(cell.row, |r| r.max(cell.row)));
                 max_col = Some(max_col.map_or(cell.col, |c| c.max(cell.col)));
                 parsed_cells.push(cell);
@@ -498,42 +499,45 @@ fn parse_cell(
     start: BytesStart,
     shared_strings: &[StringId],
     pool: &mut StringPool,
+    buf: &mut Vec<u8>,
 ) -> Result<ParsedCell, GridParseError> {
-    let address_raw =
-        get_attr_value(reader, xml, &start, b"r")?.ok_or_else(|| {
-            xml_msg_err(reader, xml, "cell missing address")
-        })?;
-    let (row, col) = address_to_index(&address_raw)
-        .ok_or_else(|| GridParseError::InvalidAddress(address_raw.clone()))?;
+    let address_raw = get_attr_value(reader, xml, &start, b"r")?
+        .ok_or_else(|| xml_msg_err(reader, xml, "cell missing address"))?;
+    let (row, col) = address_to_index(address_raw.as_ref())
+        .ok_or_else(|| GridParseError::InvalidAddress(address_raw.into_owned()))?;
 
     let cell_type = get_attr_value(reader, xml, &start, b"t")?;
 
-    let mut value_text: Option<String> = None;
-    let mut formula_text: Option<String> = None;
-    let mut inline_text: Option<String> = None;
-    let mut buf = Vec::new();
+    let mut value: Option<CellValue> = None;
+    let mut formula: Option<StringId> = None;
 
+    buf.clear();
     loop {
-        match reader.read_event_into(&mut buf) {
+        match reader.read_event_into(buf) {
             Ok(Event::Start(e)) if e.name().as_ref() == b"v" => {
                 let text = reader
                     .read_text(e.name())
-                    .map_err(|e| xml_err(reader, xml, e))?
-                    .into_owned();
-                value_text = Some(text);
+                    .map_err(|e| xml_err(reader, xml, e))?;
+                value = convert_value(
+                    Some(text.as_ref()),
+                    cell_type.as_deref(),
+                    shared_strings,
+                    pool,
+                    reader,
+                    xml,
+                )?;
             }
             Ok(Event::Start(e)) if e.name().as_ref() == b"f" => {
                 let text = reader
                     .read_text(e.name())
-                    .map_err(|e| xml_err(reader, xml, e))?
-                    .into_owned();
-                let unescaped = quick_xml::escape::unescape(&text)
-                    .map_err(|e| xml_msg_err(reader, xml, e.to_string()))?
-                    .into_owned();
-                formula_text = Some(unescaped);
+                    .map_err(|e| xml_err(reader, xml, e))?;
+                let unescaped = quick_xml::escape::unescape(text.as_ref())
+                    .map_err(|e| xml_msg_err(reader, xml, e.to_string()))?;
+                formula = Some(pool.intern(unescaped.as_ref()));
             }
             Ok(Event::Start(e)) if e.name().as_ref() == b"is" => {
-                inline_text = Some(read_inline_string(reader, xml)?);
+                let inline = read_inline_string(reader, xml)?;
+                value = Some(CellValue::Text(pool.intern(&inline)));
             }
             Ok(Event::End(e)) if e.name().as_ref() == start.name().as_ref() => break,
             Ok(Event::Eof) => {
@@ -545,23 +549,11 @@ fn parse_cell(
         buf.clear();
     }
 
-    let value = match inline_text {
-        Some(text) => Some(CellValue::Text(pool.intern(&text))),
-        None => convert_value(
-            value_text.as_deref(),
-            cell_type.as_deref(),
-            shared_strings,
-            pool,
-            reader,
-            xml,
-        )?,
-    };
-
     Ok(ParsedCell {
         row,
         col,
         value,
-        formula: formula_text.map(|f| pool.intern(&f)),
+        formula,
     })
 }
 
@@ -664,20 +656,19 @@ fn build_grid(nrows: u32, ncols: u32, cells: Vec<ParsedCell>) -> Result<Grid, Gr
     Ok(grid)
 }
 
-fn get_attr_value(
+fn get_attr_value<'a>(
     reader: &Reader<&[u8]>,
     xml: &[u8],
-    element: &BytesStart<'_>,
+    element: &'a BytesStart<'a>,
     key: &[u8],
-) -> Result<Option<String>, GridParseError> {
+) -> Result<Option<std::borrow::Cow<'a, str>>, GridParseError> {
     for attr in element.attributes() {
         let attr = attr.map_err(|e| xml_msg_err(reader, xml, e.to_string()))?;
         if attr.key.as_ref() == key {
-            return Ok(Some(
-                attr.unescape_value()
-                    .map_err(|e| xml_err(reader, xml, e))?
-                    .into_owned(),
-            ));
+            let v = attr
+                .unescape_value()
+                .map_err(|e| xml_err(reader, xml, e))?;
+            return Ok(Some(v));
         }
     }
     Ok(None)

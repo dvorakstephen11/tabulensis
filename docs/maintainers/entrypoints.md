@@ -25,7 +25,8 @@ This document maps the main entry points across the codebase so new changes can 
 - `desktop/wx/src/main.rs`: wxDragon UI wiring + interaction flow.
 - `desktop/backend/src/diff_runner.rs`: diff orchestration, store integration, and progress events.
 - `desktop/backend/src/store`: persisted op storage + diff summaries.
-- Run from source: `cargo run -p desktop_wx` (use `--profile release-desktop` for optimized builds).
+- Run from source: `cargo run -p desktop_wx --bin desktop_wx` (use `--profile release-desktop` for optimized builds).
+- The `desktop_wx` package ships multiple binaries (including `xrc_smoke`), so `--bin` is required when using `cargo run`.
 
 ## Web
 

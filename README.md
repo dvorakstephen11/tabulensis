@@ -119,13 +119,15 @@ tabulensis info workbook.xlsx --queries  # Include Power Query info
 Run the desktop UI from this repo:
 
 ```bash
-cargo run -p desktop_wx
+cargo run -p desktop_wx --bin desktop_wx
 ```
+
+Note: the workspace defines multiple binaries (e.g., `desktop_wx`, `xrc_smoke`), so `--bin desktop_wx` is required to avoid ambiguity.
 
 Release profile (faster, optimized build):
 
 ```bash
-cargo run -p desktop_wx --profile release-desktop
+cargo run -p desktop_wx --profile release-desktop --bin desktop_wx
 ```
 
 The binary is named `desktop_wx` and will be in `target/<target>/release-desktop/desktop_wx` after a release build.

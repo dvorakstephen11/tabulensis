@@ -12,9 +12,17 @@ use excel_diff::{
     should_use_large_mode, ContainerError, ContainerLimits, DiffConfig, DiffError, DiffReport,
     DiffSink, DiffSummary, PbixPackage, ProgressCallback, WorkbookPackage,
 };
-use lru::LruCache;
 use serde::Serialize;
+
 use crate::events::{ProgressEvent, ProgressTx};
+
+#[cfg(all(not(feature = "custom-lru"), not(feature = "lru-crate")))]
+compile_error!("Enable feature `lru-crate` or `custom-lru` for desktop_backend.");
+
+#[cfg(feature = "custom-lru")]
+use crate::tiny_lru::TinyLruCache as LruCache;
+#[cfg(all(not(feature = "custom-lru"), feature = "lru-crate"))]
+use lru::LruCache;
 
 use crate::export::export_audit_xlsx_from_store;
 use crate::store::{
@@ -24,6 +32,45 @@ use crate::store::{
 use ui_payload::{build_payload_from_pbix_report, limits_from_config, DiffOptions, DiffOutcomeConfig, DiffPreset};
 const WORKBOOK_CACHE_CAPACITY: usize = 4;
 const PBIX_CACHE_CAPACITY: usize = 2;
+const DIFF_KEY_CACHE_CAPACITY: usize = 16;
+
+#[cfg(feature = "arc-cache")]
+type WorkbookHandle = Arc<WorkbookPackage>;
+#[cfg(not(feature = "arc-cache"))]
+type WorkbookHandle = WorkbookPackage;
+
+#[cfg(feature = "arc-cache")]
+type PbixHandle = Arc<PbixPackage>;
+#[cfg(not(feature = "arc-cache"))]
+type PbixHandle = PbixPackage;
+
+#[cfg(feature = "arc-cache")]
+fn wrap_workbook(pkg: WorkbookPackage) -> WorkbookHandle {
+    Arc::new(pkg)
+}
+
+#[cfg(not(feature = "arc-cache"))]
+fn wrap_workbook(pkg: WorkbookPackage) -> WorkbookHandle {
+    pkg
+}
+
+#[cfg(feature = "arc-cache")]
+fn wrap_pbix(pkg: PbixPackage) -> PbixHandle {
+    Arc::new(pkg)
+}
+
+#[cfg(not(feature = "arc-cache"))]
+fn wrap_pbix(pkg: PbixPackage) -> PbixHandle {
+    pkg
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct CacheStats {
+    pub workbook_hits: u64,
+    pub workbook_misses: u64,
+    pub pbix_hits: u64,
+    pub pbix_misses: u64,
+}
 
 #[derive(Debug, Clone)]
 pub struct DiffRequest {
@@ -255,6 +302,29 @@ impl DiffRunner {
             DiffErrorPayload::new("engine_down", e.to_string(), false)
         })?
     }
+
+    pub fn cache_stats(&self) -> Result<CacheStats, DiffErrorPayload> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        self.tx
+            .send(EngineCommand::CacheStats { respond_to: reply_tx })
+            .map_err(|e| DiffErrorPayload::new("engine_down", e.to_string(), false))?;
+        reply_rx.recv().map_err(|e| {
+            DiffErrorPayload::new("engine_down", e.to_string(), false)
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiffCacheKind {
+    Workbook,
+    Pbix,
+}
+
+#[derive(Debug, Clone)]
+struct DiffKeyEntry {
+    kind: DiffCacheKind,
+    old_key: CacheKey,
+    new_key: CacheKey,
 }
 
 enum EngineCommand {
@@ -278,14 +348,22 @@ enum EngineCommand {
         request: CellsRangeRequest,
         respond_to: Sender<Result<SheetCellsPayload, DiffErrorPayload>>,
     },
+    CacheStats {
+        respond_to: Sender<CacheStats>,
+    },
 }
 
 struct EngineState {
     store_path: PathBuf,
     app_version: String,
     engine_version: String,
-    workbook_cache: LruCache<CacheKey, WorkbookPackage>,
-    pbix_cache: LruCache<CacheKey, PbixPackage>,
+    workbook_cache: LruCache<CacheKey, WorkbookHandle>,
+    pbix_cache: LruCache<CacheKey, PbixHandle>,
+    diff_key_cache: LruCache<String, DiffKeyEntry>,
+    workbook_cache_hits: u64,
+    workbook_cache_misses: u64,
+    pbix_cache_hits: u64,
+    pbix_cache_misses: u64,
     rx: mpsc::Receiver<EngineCommand>,
 }
 
@@ -302,6 +380,11 @@ impl EngineState {
             engine_version,
             workbook_cache: LruCache::new(NonZeroUsize::new(WORKBOOK_CACHE_CAPACITY).unwrap()),
             pbix_cache: LruCache::new(NonZeroUsize::new(PBIX_CACHE_CAPACITY).unwrap()),
+            diff_key_cache: LruCache::new(NonZeroUsize::new(DIFF_KEY_CACHE_CAPACITY).unwrap()),
+            workbook_cache_hits: 0,
+            workbook_cache_misses: 0,
+            pbix_cache_hits: 0,
+            pbix_cache_misses: 0,
             rx,
         }
     }
@@ -329,8 +412,66 @@ impl EngineState {
                     let result = self.handle_load_cells_range(request);
                     let _ = respond_to.send(result);
                 }
+                EngineCommand::CacheStats { respond_to } => {
+                    let _ = respond_to.send(self.cache_stats());
+                }
             }
         }
+    }
+
+    fn cache_stats(&self) -> CacheStats {
+        CacheStats {
+            workbook_hits: self.workbook_cache_hits,
+            workbook_misses: self.workbook_cache_misses,
+            pbix_hits: self.pbix_cache_hits,
+            pbix_misses: self.pbix_cache_misses,
+        }
+    }
+
+    fn diff_key_entry(&mut self, diff_id: &String, kind: DiffCacheKind) -> Option<DiffKeyEntry> {
+        self.diff_key_cache.get(diff_id).and_then(|entry| {
+            if entry.kind == kind {
+                Some(entry.clone())
+            } else {
+                None
+            }
+        })
+    }
+
+    fn store_diff_keys(
+        &mut self,
+        diff_id: &String,
+        kind: DiffCacheKind,
+        old_key: CacheKey,
+        new_key: CacheKey,
+    ) {
+        self.diff_key_cache.put(
+            diff_id.clone(),
+            DiffKeyEntry {
+                kind,
+                old_key,
+                new_key,
+            },
+        );
+    }
+
+    fn load_workbooks_for_diff(
+        &mut self,
+        diff_id: &String,
+        old_path: &Path,
+        new_path: &Path,
+        trusted: bool,
+    ) -> Result<(WorkbookHandle, WorkbookHandle), DiffErrorPayload> {
+        if let Some(entry) = self.diff_key_entry(diff_id, DiffCacheKind::Workbook) {
+            let old_pkg = self.get_or_open_workbook_by_key(&entry.old_key, old_path, trusted)?;
+            let new_pkg = self.get_or_open_workbook_by_key(&entry.new_key, new_path, trusted)?;
+            return Ok((old_pkg, new_pkg));
+        }
+
+        let (old_key, old_pkg) = self.open_workbook_cached_with_key(old_path, trusted)?;
+        let (new_key, new_pkg) = self.open_workbook_cached_with_key(new_path, trusted)?;
+        self.store_diff_keys(diff_id, DiffCacheKind::Workbook, old_key, new_key);
+        Ok((old_pkg, new_pkg))
     }
 
     fn handle_diff(&mut self, request: DiffRequest) -> Result<DiffOutcome, DiffErrorPayload> {
@@ -367,8 +508,8 @@ impl EngineState {
 
         match old_kind {
             ui_payload::HostKind::Workbook => {
-                let old_pkg = self.open_workbook_cached(&old_path, trusted)?;
-                let new_pkg = self.open_workbook_cached(&new_path, trusted)?;
+                let (old_key, old_pkg) = self.open_workbook_cached_with_key(&old_path, trusted)?;
+                let (new_key, new_pkg) = self.open_workbook_cached_with_key(&new_path, trusted)?;
 
                 let estimated_cells = estimate_diff_cell_volume(&old_pkg.workbook, &new_pkg.workbook);
                 let mode = if should_use_large_mode(estimated_cells, &config) {
@@ -388,6 +529,7 @@ impl EngineState {
                         trusted,
                     )
                     .map_err(map_store_error)?;
+                self.store_diff_keys(&diff_id, DiffCacheKind::Workbook, old_key, new_key);
 
                 match mode {
                     DiffMode::Payload => {
@@ -471,8 +613,8 @@ impl EngineState {
                 }
             }
             ui_payload::HostKind::Pbix => {
-                let old_pkg = self.open_pbix_cached(&old_path, trusted)?;
-                let new_pkg = self.open_pbix_cached(&new_path, trusted)?;
+                let (old_key, old_pkg) = self.open_pbix_cached_with_key(&old_path, trusted)?;
+                let (new_key, new_pkg) = self.open_pbix_cached_with_key(&new_path, trusted)?;
 
                 let diff_id = store
                     .start_run(
@@ -485,6 +627,7 @@ impl EngineState {
                         trusted,
                     )
                     .map_err(map_store_error)?;
+                self.store_diff_keys(&diff_id, DiffCacheKind::Pbix, old_key, new_key);
 
                 emit_progress(&request.progress, request.run_id, "diff", "Streaming PBIX diff to disk...");
                 let progress = EngineProgress::new(request.progress.clone(), request.run_id, request.cancel.clone());
@@ -561,8 +704,8 @@ impl EngineState {
 
         let old_path = PathBuf::from(&summary.old_path);
         let new_path = PathBuf::from(&summary.new_path);
-        let old_pkg = self.open_workbook_cached(&old_path, summary.trusted)?;
-        let new_pkg = self.open_workbook_cached(&new_path, summary.trusted)?;
+        let (old_pkg, new_pkg) =
+            self.load_workbooks_for_diff(&request.diff_id, &old_path, &new_path, summary.trusted)?;
 
         let ops = store.load_sheet_ops(&request.diff_id, &request.sheet_name).map_err(map_store_error)?;
         let strings = store.load_strings(&request.diff_id).map_err(map_store_error)?;
@@ -589,8 +732,8 @@ impl EngineState {
 
         let old_path = PathBuf::from(&summary.old_path);
         let new_path = PathBuf::from(&summary.new_path);
-        let old_pkg = self.open_workbook_cached(&old_path, summary.trusted)?;
-        let new_pkg = self.open_workbook_cached(&new_path, summary.trusted)?;
+        let (old_pkg, new_pkg) =
+            self.load_workbooks_for_diff(&request.diff_id, &old_path, &new_path, summary.trusted)?;
 
         let ops = store
             .load_sheet_ops(&request.diff_id, &request.sheet_name)
@@ -682,8 +825,8 @@ impl EngineState {
 
         let old_path = PathBuf::from(&summary.old_path);
         let new_path = PathBuf::from(&summary.new_path);
-        let old_pkg = self.open_workbook_cached(&old_path, summary.trusted)?;
-        let new_pkg = self.open_workbook_cached(&new_path, summary.trusted)?;
+        let (old_pkg, new_pkg) =
+            self.load_workbooks_for_diff(&request.diff_id, &old_path, &new_path, summary.trusted)?;
 
         let side = request.side.to_ascii_lowercase();
         let sheet = if side == "old" {
@@ -728,11 +871,21 @@ impl EngineState {
         })
     }
 
-    fn open_workbook_cached(&mut self, path: &Path, trusted: bool) -> Result<WorkbookPackage, DiffErrorPayload> {
-        let key = cache_key(path, trusted)?;
-        if let Some(pkg) = self.workbook_cache.get(&key) {
-            return Ok(pkg.clone());
+    fn get_workbook_cached_by_key(&mut self, key: &CacheKey) -> Option<WorkbookHandle> {
+        if let Some(pkg) = self.workbook_cache.get(key) {
+            self.workbook_cache_hits += 1;
+            return Some(pkg.clone());
         }
+        self.workbook_cache_misses += 1;
+        None
+    }
+
+    fn open_workbook_from_key(
+        &mut self,
+        key: CacheKey,
+        path: &Path,
+        trusted: bool,
+    ) -> Result<WorkbookHandle, DiffErrorPayload> {
         let file = File::open(path).map_err(|e| DiffErrorPayload::new("io", e.to_string(), false))?;
         let pkg = if trusted {
             WorkbookPackage::open_with_limits(file, trusted_limits())
@@ -741,15 +894,48 @@ impl EngineState {
             WorkbookPackage::open(file)
                 .map_err(map_package_error)?
         };
+        let pkg = wrap_workbook(pkg);
         self.workbook_cache.put(key, pkg.clone());
         Ok(pkg)
     }
 
-    fn open_pbix_cached(&mut self, path: &Path, trusted: bool) -> Result<PbixPackage, DiffErrorPayload> {
-        let key = cache_key(path, trusted)?;
-        if let Some(pkg) = self.pbix_cache.get(&key) {
-            return Ok(pkg.clone());
+    fn get_or_open_workbook_by_key(
+        &mut self,
+        key: &CacheKey,
+        path: &Path,
+        trusted: bool,
+    ) -> Result<WorkbookHandle, DiffErrorPayload> {
+        if let Some(pkg) = self.get_workbook_cached_by_key(key) {
+            return Ok(pkg);
         }
+        self.open_workbook_from_key(key.clone(), path, trusted)
+    }
+
+    fn open_workbook_cached_with_key(
+        &mut self,
+        path: &Path,
+        trusted: bool,
+    ) -> Result<(CacheKey, WorkbookHandle), DiffErrorPayload> {
+        let key = cache_key(path, trusted)?;
+        let pkg = self.get_or_open_workbook_by_key(&key, path, trusted)?;
+        Ok((key, pkg))
+    }
+
+    fn get_pbix_cached_by_key(&mut self, key: &CacheKey) -> Option<PbixHandle> {
+        if let Some(pkg) = self.pbix_cache.get(key) {
+            self.pbix_cache_hits += 1;
+            return Some(pkg.clone());
+        }
+        self.pbix_cache_misses += 1;
+        None
+    }
+
+    fn open_pbix_from_key(
+        &mut self,
+        key: CacheKey,
+        path: &Path,
+        trusted: bool,
+    ) -> Result<PbixHandle, DiffErrorPayload> {
         let file = File::open(path).map_err(|e| DiffErrorPayload::new("io", e.to_string(), false))?;
         let pkg = if trusted {
             PbixPackage::open_with_limits(file, trusted_limits())
@@ -758,9 +944,33 @@ impl EngineState {
             PbixPackage::open(file)
                 .map_err(map_package_error)?
         };
+        let pkg = wrap_pbix(pkg);
         self.pbix_cache.put(key, pkg.clone());
         Ok(pkg)
     }
+
+    fn get_or_open_pbix_by_key(
+        &mut self,
+        key: &CacheKey,
+        path: &Path,
+        trusted: bool,
+    ) -> Result<PbixHandle, DiffErrorPayload> {
+        if let Some(pkg) = self.get_pbix_cached_by_key(key) {
+            return Ok(pkg);
+        }
+        self.open_pbix_from_key(key.clone(), path, trusted)
+    }
+
+    fn open_pbix_cached_with_key(
+        &mut self,
+        path: &Path,
+        trusted: bool,
+    ) -> Result<(CacheKey, PbixHandle), DiffErrorPayload> {
+        let key = cache_key(path, trusted)?;
+        let pkg = self.get_or_open_pbix_by_key(&key, path, trusted)?;
+        Ok((key, pkg))
+    }
+
 }
 
 fn report_to_summary(report: &DiffReport) -> DiffSummary {
@@ -1065,5 +1275,31 @@ mod tests {
             DiffMode::Payload
         };
         assert_eq!(mode, DiffMode::Large);
+    }
+
+    #[cfg(feature = "arc-cache")]
+    #[test]
+    fn open_workbook_cached_reuses_arc_on_hit() {
+        let fixtures = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/generated");
+        let path = fixtures.join("single_cell_value_a.xlsx");
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let mut engine = super::EngineState::new(
+            std::path::PathBuf::new(),
+            "test".to_string(),
+            "test".to_string(),
+            rx,
+        );
+
+        let first = engine
+            .open_workbook_cached_with_key(&path, true)
+            .expect("open first workbook")
+            .1;
+        let second = engine
+            .open_workbook_cached_with_key(&path, true)
+            .expect("open second workbook")
+            .1;
+
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
     }
 }

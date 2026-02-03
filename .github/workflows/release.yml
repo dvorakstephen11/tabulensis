@@ -40,7 +40,7 @@ jobs:
           python-version: "3.11"
 
       - name: Run full-scale perf suite
-        run: python scripts/check_perf_thresholds.py --suite full-scale --require-baseline --baseline benchmarks/baselines/full-scale.json --export-csv benchmarks/latest_fullscale.csv --export-json benchmarks/latest_fullscale.json
+        run: python scripts/check_perf_thresholds.py --suite full-scale --parallel --require-baseline --baseline benchmarks/baselines/full-scale.json --export-csv benchmarks/latest_fullscale.csv --export-json benchmarks/latest_fullscale.json
 
       - name: Compare perf results
         run: python scripts/compare_perf_results.py benchmarks/baselines/full-scale.json benchmarks/latest_fullscale.json

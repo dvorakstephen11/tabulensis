@@ -164,13 +164,13 @@ Add `docs/perf_playbook.md` with:
 
 * How to run quick suite locally:
 
-  * `python scripts/check_perf_thresholds.py --suite quick --baseline benchmarks/baselines/quick.json --export-json benchmarks/latest_quick.json --export-csv benchmarks/latest_quick.csv`
+  * `python scripts/check_perf_thresholds.py --suite quick --parallel --baseline benchmarks/baselines/quick.json --export-json benchmarks/latest_quick.json --export-csv benchmarks/latest_quick.csv`
 * How to run gate suite locally:
 
-  * `python scripts/check_perf_thresholds.py --suite gate --baseline benchmarks/baselines/gate.json --test-target perf_large_grid_tests`
+  * `python scripts/check_perf_thresholds.py --suite gate --parallel --baseline benchmarks/baselines/gate.json --test-target perf_large_grid_tests`
 * How to run full-scale:
 
-  * `python scripts/check_perf_thresholds.py --suite full-scale --baseline benchmarks/baselines/full-scale.json`
+  * `python scripts/check_perf_thresholds.py --suite full-scale --parallel --baseline benchmarks/baselines/full-scale.json`
 * How to run e2e:
 
   * `python scripts/export_e2e_metrics.py --baseline benchmarks/baselines/e2e.json`
@@ -461,9 +461,9 @@ This is the exact “done means done” list:
 
 2. **Perf suites**
 
-* `python scripts/check_perf_thresholds.py --suite quick --baseline benchmarks/baselines/quick.json`
-* `python scripts/check_perf_thresholds.py --suite gate --baseline benchmarks/baselines/gate.json --test-target perf_large_grid_tests`
-* `python scripts/check_perf_thresholds.py --suite full-scale --baseline benchmarks/baselines/full-scale.json`
+* `python scripts/check_perf_thresholds.py --suite quick --parallel --baseline benchmarks/baselines/quick.json`
+* `python scripts/check_perf_thresholds.py --suite gate --parallel --baseline benchmarks/baselines/gate.json --test-target perf_large_grid_tests`
+* `python scripts/check_perf_thresholds.py --suite full-scale --parallel --baseline benchmarks/baselines/full-scale.json`
 
 3. **E2E metrics (scheduled in CI, but run locally before RC)** 
 

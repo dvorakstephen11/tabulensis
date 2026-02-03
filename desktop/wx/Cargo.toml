@@ -8,7 +8,7 @@ license = "MIT"
 [dependencies]
 wxdragon = { version = "0.9.7", features = ["xrc", "webview"] }
 wxdragon-sys = { version = "0.9.7", features = ["webview"] }
-desktop_backend = { path = "../backend" }
+desktop_backend = { path = "../backend", default-features = false }
 ui_payload = { path = "../../ui_payload" }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
@@ -16,3 +16,10 @@ log = "0.4"
 quick-xml = "0.32"
 license_client = { path = "../../license_client" }
 libc = "0.2"
+
+[features]
+default = ["backend-lru-crate", "backend-arc-cache"]
+backend-lru-crate = ["desktop_backend/model-diff", "desktop_backend/lru-crate"]
+backend-custom-lru = ["desktop_backend/model-diff", "desktop_backend/custom-lru"]
+backend-arc-cache = ["desktop_backend/arc-cache"]
+perf-metrics = ["desktop_backend/perf-metrics"]

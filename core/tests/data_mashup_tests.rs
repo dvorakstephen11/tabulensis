@@ -1,11 +1,9 @@
 use std::fs::File;
 use std::io::{ErrorKind, Read};
 
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
 use excel_diff::{
     ContainerError, DataMashupError, PackageError, RawDataMashup, build_data_mashup,
-    open_data_mashup,
+    decode_datamashup_base64, open_data_mashup,
 };
 use quick_xml::{Reader, events::Event};
 use zip::ZipArchive;
@@ -212,9 +210,7 @@ fn datamashup_bytes_from_fixture(path: &std::path::Path) -> Vec<u8> {
         let mut buf = Vec::new();
         file.read_to_end(&mut buf).expect("XML part should read");
         if let Some(text) = extract_datamashup_base64(&buf) {
-            let cleaned: String = text.split_whitespace().collect();
-            return STANDARD
-                .decode(cleaned.as_bytes())
+            return decode_datamashup_base64(&text)
                 .expect("DataMashup base64 should decode");
         }
     }
@@ -239,8 +235,8 @@ fn extract_datamashup_base64(xml: &[u8]) -> Option<String> {
                 content.clear();
             }
             Ok(Event::Text(t)) if in_datamashup => {
-                let text = t.unescape().ok()?.into_owned();
-                content.push_str(&text);
+                let text = t.unescape().ok()?;
+                content.push_str(text.as_ref());
             }
             Ok(Event::CData(t)) if in_datamashup => {
                 content.push_str(&String::from_utf8_lossy(&t.into_inner()));

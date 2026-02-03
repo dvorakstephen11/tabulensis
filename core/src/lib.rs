@@ -266,7 +266,11 @@ pub use datamashup::{
     DataMashup, Metadata, Permissions, Query, QueryMetadata, build_data_mashup,
     build_data_mashup_with_decryptor, build_embedded_queries, build_queries,
 };
-pub use datamashup_framing::{DataMashupError, RawDataMashup, parse_data_mashup};
+pub use datamashup_framing::{
+    DataMashupError, RawDataMashup, decode_datamashup_base64, parse_data_mashup,
+};
+#[doc(hidden)]
+pub use datamashup_framing::read_datamashup_text;
 pub use datamashup_package::{
     DataMashupLimits, EmbeddedContent, PackageParts, PackageXml, SectionDocument,
     parse_package_parts, parse_package_parts_with_limits,

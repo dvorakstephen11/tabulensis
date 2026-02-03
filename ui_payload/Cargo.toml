@@ -8,7 +8,7 @@ repository = "https://tabulensis.com"
 homepage = "https://tabulensis.com"
 
 [dependencies]
-excel_diff = { path = "../core", default-features = false, features = ["excel-open-xml"] }
+excel_diff = { path = "../core", default-features = false, features = ["excel-open-xml", "base64-crate"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 

@@ -18,7 +18,7 @@ where
     pool.install(f)
 }
 
-fn normalize_summary(summary: excel_diff::DiffSummary) -> excel_diff::DiffSummary {
+fn normalize_summary(mut summary: excel_diff::DiffSummary) -> excel_diff::DiffSummary {
     #[cfg(feature = "perf-metrics")]
     {
         summary.metrics = None;

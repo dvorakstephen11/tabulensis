@@ -236,20 +236,21 @@ pub fn parse_permissions(xml_bytes: &[u8]) -> Permissions {
             Ok(Event::Text(t)) => {
                 if let Some(tag) = current_tag.as_deref() {
                     let value = match t.unescape() {
-                        Ok(v) => v.into_owned(),
+                        Ok(v) => v,
                         Err(_) => {
                             // Any unescape failure means the permissions payload is unusable; fall back to defaults.
                             return Permissions::default();
                         }
                     };
+                    let value = value.as_ref();
                     match tag {
                         "CanEvaluateFuturePackages" => {
-                            if let Some(v) = parse_bool(&value) {
+                            if let Some(v) = parse_bool(value) {
                                 permissions.can_evaluate_future_packages = v;
                             }
                         }
                         "FirewallEnabled" => {
-                            if let Some(v) = parse_bool(&value) {
+                            if let Some(v) = parse_bool(value) {
                                 permissions.firewall_enabled = v;
                             }
                         }
@@ -350,14 +351,13 @@ pub fn parse_metadata(metadata_bytes: &[u8]) -> Result<Metadata, DataMashupError
                 if let Some(tag) = element_stack.last() {
                     let value = t
                         .unescape()
-                        .map_err(|e| DataMashupError::XmlError(e.to_string()))?
-                        .into_owned();
+                        .map_err(|e| DataMashupError::XmlError(e.to_string()))?;
                     match tag.as_str() {
                         "ItemType" => {
-                            item_type = Some(value.trim().to_string());
+                            item_type = Some(value.as_ref().trim().to_string());
                         }
                         "ItemPath" => {
-                            item_path = Some(value.trim().to_string());
+                            item_path = Some(value.as_ref().trim().to_string());
                         }
                         _ => {}
                     }

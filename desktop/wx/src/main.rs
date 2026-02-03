@@ -1105,6 +1105,25 @@ fn rpc_notify(method: &str, params: serde_json::Value) -> serde_json::Value {
     json!({ "method": method, "params": params })
 }
 
+fn dialog_selected_path(dialog: &FileDialog) -> Option<String> {
+    let path = dialog.get_path().filter(|value| !value.trim().is_empty());
+    if path.is_some() {
+        return path;
+    }
+    let paths = dialog.get_paths();
+    if let Some(first) = paths.into_iter().find(|value| !value.trim().is_empty()) {
+        return Some(first);
+    }
+    let dir = dialog.get_directory();
+    let name = dialog.get_filename();
+    if let (Some(dir), Some(name)) = (dir, name) {
+        if !dir.trim().is_empty() && !name.trim().is_empty() {
+            return Some(PathBuf::from(dir).join(name).to_string_lossy().to_string());
+        }
+    }
+    None
+}
+
 fn setup_webview(ctx: &mut UiContext) -> bool {
     let backend = if cfg!(target_os = "windows") {
         if WebView::is_backend_available(WebViewBackend::Edge) {
@@ -1135,7 +1154,7 @@ fn setup_webview(ctx: &mut UiContext) -> bool {
 
     webview.on_script_message_received(move |event| {
         let Some(message) = event.get_string() else { return; };
-        handle_webview_rpc(webview, message);
+        wxdragon::call_after(Box::new(move || handle_webview_rpc(webview, message)));
     });
 
     webview.load_url(&index_url);
@@ -1210,7 +1229,7 @@ fn handle_webview_rpc(webview: WebView, message: String) {
                     .with_style(FileDialogStyle::Open | FileDialogStyle::FileMustExist)
                     .build();
                 if dialog.show_modal() == ID_OK {
-                    dialog.get_path()
+                    dialog_selected_path(&dialog)
                 } else {
                     None
                 }

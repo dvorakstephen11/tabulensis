@@ -6,6 +6,8 @@ mod paths;
 mod recents;
 mod search;
 mod store;
+#[cfg(feature = "custom-lru")]
+mod tiny_lru;
 
 use std::path::Path;
 
@@ -14,6 +16,7 @@ pub use diff_runner::{
     CellsRangeRequest, DiffErrorPayload, DiffOutcome, DiffRequest, DiffRunner, OpsRangeRequest,
     RangeBounds, SheetCellsPayload, SheetMeta, SheetMetaRequest, SheetPayloadRequest,
 };
+pub use diff_runner::CacheStats;
 pub use events::{ProgressEvent, ProgressRx, ProgressTx};
 pub use paths::BackendPaths;
 pub use recents::RecentComparison;

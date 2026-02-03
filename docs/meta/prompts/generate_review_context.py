@@ -748,10 +748,29 @@ def collect_test_results(ctx: ProjectContext) -> list[tuple[str, str]]:
 
 
 def get_latest_benchmark_result(ctx: ProjectContext) -> Path | None:
-    benchmarks_dir = ctx.root / "benchmarks" / "results"
-    if not benchmarks_dir.exists():
+    candidates: list[Path] = []
+    benchmarks_root = ctx.root / "benchmarks"
+    for name in ("latest_fullscale.json", "latest_gate.json", "latest_quick.json"):
+        path = benchmarks_root / name
+        if path.exists():
+            candidates.append(path)
+    benchmarks_dir = benchmarks_root / "results"
+    if benchmarks_dir.exists():
+        candidates.extend(list(benchmarks_dir.glob("*.json")))
+    if not candidates:
         return None
-    json_files = sorted(benchmarks_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return max(candidates, key=lambda p: p.stat().st_mtime)
+
+
+def get_latest_e2e_result(ctx: ProjectContext) -> Path | None:
+    benchmarks_root = ctx.root / "benchmarks"
+    latest = benchmarks_root / "latest_e2e.json"
+    if latest.exists():
+        return latest
+    results_dir = benchmarks_root / "results_e2e"
+    if not results_dir.exists():
+        return None
+    json_files = sorted(results_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
     return json_files[0] if json_files else None
 
 
@@ -760,34 +779,33 @@ def get_combined_benchmarks_csv(ctx: ProjectContext) -> Path | None:
     return csv_path if csv_path.exists() else None
 
 
-def render_benchmark_results(benchmark_path: Path | None) -> str:
-    lines = [
-        "=" * 60,
-        "PERFORMANCE BENCHMARK RESULTS",
-        "=" * 60,
-        "",
-    ]
+def render_benchmark_section(title: str, benchmark_path: Path | None) -> list[str]:
+    lines: list[str] = [title, "-" * 60, ""]
     if not benchmark_path or not benchmark_path.exists():
-        lines.append("(No benchmark results found in benchmarks/results/)")
-        return "\n".join(lines) + "\n"
+        lines.append("(No benchmark results found.)")
+        lines.append("")
+        return lines
 
     try:
         data = json.loads(benchmark_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as e:
         lines.append(f"(Error reading benchmark file: {e})")
-        return "\n".join(lines) + "\n"
+        lines.append("")
+        return lines
 
-    lines.extend([
-        f"Source: {benchmark_path.name}",
-        f"Timestamp: {data.get('timestamp', 'unknown')}",
-        f"Git Commit: {data.get('git_commit', 'unknown')}",
-        f"Git Branch: {data.get('git_branch', 'unknown')}",
-        f"Full Scale: {data.get('full_scale', False)}",
-        "",
-        "-" * 60,
-        f"{'Test':<40} {'Time (ms)':>10} {'Rows':>10} {'Cells':>12}",
-        "-" * 60,
-    ])
+    lines.extend(
+        [
+            f"Source: {benchmark_path.name}",
+            f"Timestamp: {data.get('timestamp', 'unknown')}",
+            f"Git Commit: {data.get('git_commit', 'unknown')}",
+            f"Git Branch: {data.get('git_branch', 'unknown')}",
+        ]
+    )
+    if "full_scale" in data:
+        lines.append(f"Full Scale: {data.get('full_scale', False)}")
+    lines.append("")
+    lines.append(f"{'Test':<40} {'Time (ms)':>10} {'Rows':>10} {'Cells':>12}")
+    lines.append("-" * 60)
 
     tests = data.get("tests", {})
     for test_name, metrics in sorted(tests.items()):
@@ -797,19 +815,40 @@ def render_benchmark_results(benchmark_path: Path | None) -> str:
         lines.append(f"{test_name:<40} {time_ms:>10,} {rows:>10,} {cells:>12,}")
 
     summary = data.get("summary", {})
-    lines.extend([
-        "-" * 60,
-        f"{'TOTAL':<40} {summary.get('total_time_ms', 0):>10,} "
-        f"{summary.get('total_rows_processed', 0):>10,} {summary.get('total_cells_compared', 0):>12,}",
+    lines.extend(
+        [
+            "-" * 60,
+            f"{'TOTAL':<40} {summary.get('total_time_ms', 0):>10,} "
+            f"{summary.get('total_rows_processed', 0):>10,} {summary.get('total_cells_compared', 0):>12,}",
+            "",
+        ]
+    )
+    return lines
+
+
+def render_benchmark_results(perf_path: Path | None, e2e_path: Path | None) -> str:
+    lines = [
+        "=" * 60,
+        "BENCHMARK RESULTS",
         "=" * 60,
         "",
-        "Performance Notes:",
-        "- Times are in milliseconds for release builds",
-        "- 'Full Scale' indicates 50K row tests vs 1K row quick tests",
-        "- See benchmarks/README.md for threshold targets",
-        "",
-    ])
+    ]
+    if not perf_path and not e2e_path:
+        lines.append("(No benchmark results found.)")
+        return "\n".join(lines) + "\n"
 
+    lines.extend(render_benchmark_section("PERF (GRID) BENCHMARKS", perf_path))
+    lines.append("")
+    lines.extend(render_benchmark_section("E2E (OPEN + DIFF) BENCHMARKS", e2e_path))
+    lines.extend(
+        [
+            "",
+            "Benchmark Notes:",
+            "- Times are in milliseconds for release builds",
+            "- See benchmarks/README.md for threshold targets",
+            "",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -987,7 +1026,11 @@ def render_cycle_plan(branch_name: str, spec_file: Path | None, decision_file: P
 
 
 def render_cycle_summary(
-    branch_name: str, files: Sequence[tuple[Path, Path]], cycle_plan: Path, benchmark_path: Path | None = None
+    branch_name: str,
+    files: Sequence[tuple[Path, Path]],
+    cycle_plan: Path,
+    perf_path: Path | None = None,
+    e2e_path: Path | None = None,
 ) -> str:
     lines = [
         "=" * 60,
@@ -1004,10 +1047,51 @@ def render_cycle_summary(
             lines.append(f"  - {dst.name} (from {src})")
     if cycle_plan.exists():
         lines.append("  - cycle_plan.md (combined decision + spec)")
-    if benchmark_path and benchmark_path.exists():
-        lines.append(f"  - benchmark_results.json (from {benchmark_path.name})")
+    if perf_path or e2e_path:
+        sources: list[str] = []
+        if perf_path and perf_path.exists():
+            sources.append(perf_path.name)
+        if e2e_path and e2e_path.exists():
+            sources.append(e2e_path.name)
+        source_note = ", ".join(sources) if sources else "missing sources"
+        lines.append(f"  - benchmark_results.json (combined from {source_note})")
     lines.extend(["", "=" * 60, "ACTIVITY LOG", "=" * 60, ""])
     return "\n".join(lines)
+
+
+def load_benchmark_payload(path: Path | None, root: Path) -> tuple[dict | None, str | None]:
+    if not path or not path.exists():
+        return None, None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None, str(path.relative_to(root))
+    return payload, str(path.relative_to(root))
+
+
+def build_combined_benchmark_payload(
+    ctx: ProjectContext, perf_path: Path | None, e2e_path: Path | None
+) -> dict:
+    perf_payload, perf_source = load_benchmark_payload(perf_path, ctx.root)
+    e2e_payload, e2e_source = load_benchmark_payload(e2e_path, ctx.root)
+    return {
+        "generated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "git_commit": ctx.current_commit() or "unknown",
+        "git_branch": ctx.branch or "unknown",
+        "perf_source": perf_source,
+        "e2e_source": e2e_source,
+        "perf": perf_payload,
+        "e2e": e2e_payload,
+    }
+
+
+def add_combined_benchmark_results(
+    builder: ContextBuilder, ctx: ProjectContext, perf_path: Path | None, e2e_path: Path | None
+) -> Path | None:
+    if not perf_path and not e2e_path:
+        return None
+    payload = build_combined_benchmark_payload(ctx, perf_path, e2e_path)
+    return builder.add_content("benchmark_results.json", json.dumps(payload, indent=2))
 
 def run_cargo_tests_and_save(ctx: ProjectContext, branch_name: str | None = None) -> bool:
     branch = branch_name or ctx.branch
@@ -1032,6 +1116,54 @@ def run_cargo_tests_and_save(ctx: ProjectContext, branch_name: str | None = None
     except Exception as exc:
         print(f"Error running cargo test: {exc}")
         return False
+
+
+def run_perf_benchmarks(ctx: ProjectContext, parallel: bool = True) -> bool:
+    print("Running full-scale perf benchmarks...")
+    latest_json = ctx.root / "benchmarks" / "latest_fullscale.json"
+    latest_csv = ctx.root / "benchmarks" / "latest_fullscale.csv"
+    baseline = ctx.root / "benchmarks" / "baselines" / "full-scale.json"
+    cmd = [
+        sys.executable,
+        "scripts/check_perf_thresholds.py",
+        "--suite",
+        "full-scale",
+        "--export-json",
+        str(latest_json),
+        "--export-csv",
+        str(latest_csv),
+    ]
+    if parallel:
+        cmd.append("--parallel")
+    if baseline.exists():
+        cmd.extend(["--baseline", str(baseline)])
+    result = subprocess.run(cmd, cwd=ctx.root)
+    if result.returncode != 0:
+        print("ERROR: Perf benchmarks failed.")
+        return False
+    return True
+
+
+def run_e2e_benchmarks(ctx: ProjectContext) -> bool:
+    print("Running e2e benchmarks...")
+    latest_json = ctx.root / "benchmarks" / "latest_e2e.json"
+    latest_csv = ctx.root / "benchmarks" / "latest_e2e.csv"
+    baseline = ctx.root / "benchmarks" / "baselines" / "e2e.json"
+    cmd = [
+        sys.executable,
+        "scripts/export_e2e_metrics.py",
+        "--latest-json",
+        str(latest_json),
+        "--export-csv",
+        str(latest_csv),
+    ]
+    if baseline.exists():
+        cmd.extend(["--baseline", str(baseline)])
+    result = subprocess.run(cmd, cwd=ctx.root)
+    if result.returncode != 0:
+        print("ERROR: E2E benchmarks failed.")
+        return False
+    return True
 
 
 def collate_post_implementation_review(
@@ -1069,8 +1201,9 @@ def collate_post_implementation_review(
 
     activity_log = ctx.root / "docs" / "meta" / "logs" / branch / "activity_log.txt"
     test_results = ctx.root / "docs" / "meta" / "results" / f"{branch}.txt"
-    benchmark_path = get_latest_benchmark_result(ctx)
-    summary_lines = render_cycle_summary(branch, files_to_copy, cycle_plan_path, benchmark_path).splitlines()
+    perf_path = get_latest_benchmark_result(ctx)
+    e2e_path = get_latest_e2e_result(ctx)
+    summary_lines = render_cycle_summary(branch, files_to_copy, cycle_plan_path, perf_path, e2e_path).splitlines()
     summary_lines.extend(
         [
             "",
@@ -1086,12 +1219,11 @@ def collate_post_implementation_review(
             "",
             read_text(test_results) if test_results.exists() else "(Test results not found)",
             "",
-            render_benchmark_results(benchmark_path),
+            render_benchmark_results(perf_path, e2e_path),
         ]
     )
     builder.add_content("cycle_summary.txt", "\n".join(summary_lines) + "\n")
-    if benchmark_path and benchmark_path.exists():
-        builder.add_benchmark_file(benchmark_path)
+    add_combined_benchmark_results(builder, ctx, perf_path, e2e_path)
     combined_csv = get_combined_benchmarks_csv(ctx)
     if combined_csv:
         builder.add_file(combined_csv, dest_name="combined_benchmark_results.csv")
@@ -1135,10 +1267,10 @@ def collate_percent_completion(ctx: ProjectContext, downloads_dir: Path | None =
     builder.add_content("combined_activity_logs.txt", render_activity_logs(branch_logs))
     builder.add_content("combined_test_results.txt", render_test_results(collect_test_results(ctx)))
 
-    benchmark_path = get_latest_benchmark_result(ctx)
-    builder.add_content("benchmark_results.txt", render_benchmark_results(benchmark_path))
-    if benchmark_path and benchmark_path.exists():
-        builder.add_benchmark_file(benchmark_path)
+    perf_path = get_latest_benchmark_result(ctx)
+    e2e_path = get_latest_e2e_result(ctx)
+    builder.add_content("benchmark_results.txt", render_benchmark_results(perf_path, e2e_path))
+    add_combined_benchmark_results(builder, ctx, perf_path, e2e_path)
     combined_csv = get_combined_benchmarks_csv(ctx)
     if combined_csv:
         builder.add_file(combined_csv, dest_name="combined_benchmark_results.csv")
@@ -1165,10 +1297,10 @@ def collate_planner(ctx: ProjectContext, downloads_dir: Path | None = None) -> P
         latest_result = results[-1]
     builder.add_content("development_history.txt", render_development_history(branch_logs, latest_result))
 
-    benchmark_path = get_latest_benchmark_result(ctx)
-    builder.add_content("benchmark_results.txt", render_benchmark_results(benchmark_path))
-    if benchmark_path and benchmark_path.exists():
-        builder.add_benchmark_file(benchmark_path)
+    perf_path = get_latest_benchmark_result(ctx)
+    e2e_path = get_latest_e2e_result(ctx)
+    builder.add_content("benchmark_results.txt", render_benchmark_results(perf_path, e2e_path))
+    add_combined_benchmark_results(builder, ctx, perf_path, e2e_path)
     combined_csv = get_combined_benchmarks_csv(ctx)
     if combined_csv:
         builder.add_file(combined_csv, dest_name="combined_benchmark_results.csv")
@@ -1306,10 +1438,10 @@ def collate_design_evaluation(ctx: ProjectContext, downloads_dir: Path | None = 
         destination = builder.add_content(filename, content)
         token_report.append((destination.name, estimate_tokens(content)))
 
-    benchmark_path = get_latest_benchmark_result(ctx)
-    builder.add_content("benchmark_results.txt", render_benchmark_results(benchmark_path))
-    if benchmark_path and benchmark_path.exists():
-        builder.add_benchmark_file(benchmark_path)
+    perf_path = get_latest_benchmark_result(ctx)
+    e2e_path = get_latest_e2e_result(ctx)
+    builder.add_content("benchmark_results.txt", render_benchmark_results(perf_path, e2e_path))
+    add_combined_benchmark_results(builder, ctx, perf_path, e2e_path)
     combined_csv = get_combined_benchmarks_csv(ctx)
     if combined_csv:
         builder.add_file(combined_csv, dest_name="combined_benchmark_results.csv")
@@ -1376,6 +1508,26 @@ def build_parser() -> argparse.ArgumentParser:
     review_parser.add_argument("--branch", help="Branch name (defaults to current)")
     review_parser.add_argument("--skip-tests", action="store_true", help="Skip running cargo test")
     review_parser.add_argument(
+        "--skip-benchmarks",
+        action="store_true",
+        help="Skip running perf and e2e benchmarks",
+    )
+    review_parser.add_argument(
+        "--skip-perf",
+        action="store_true",
+        help="Skip running full-scale perf benchmarks",
+    )
+    review_parser.add_argument(
+        "--skip-e2e",
+        action="store_true",
+        help="Skip running e2e benchmarks",
+    )
+    review_parser.add_argument(
+        "--no-perf-parallel",
+        action="store_true",
+        help="Disable the parallel feature when running perf benchmarks",
+    )
+    review_parser.add_argument(
         "--context-output",
         default=CODEBASE_CONTEXT_FILENAME,
         help="Output filename for review context",
@@ -1417,6 +1569,15 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_review(ctx: ProjectContext, args: argparse.Namespace) -> None:
     if not args.skip_tests:
         run_cargo_tests_and_save(ctx, branch_name=args.branch)
+    if not args.skip_benchmarks:
+        if not args.skip_perf:
+            perf_ok = run_perf_benchmarks(ctx, parallel=not args.no_perf_parallel)
+            if not perf_ok:
+                raise RuntimeError("Perf benchmarks failed. Aborting review bundle generation.")
+        if not args.skip_e2e:
+            e2e_ok = run_e2e_benchmarks(ctx)
+            if not e2e_ok:
+                raise RuntimeError("E2E benchmarks failed. Aborting review bundle generation.")
     context_path = generate_review_context(ctx, output_file=args.context_output)
     collate_post_implementation_review(
         ctx,

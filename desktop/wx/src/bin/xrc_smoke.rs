@@ -1,7 +1,6 @@
-use wxdragon::prelude::*;
 use wxdragon::xrc::XmlResource;
 
-const XRC_DATA: &str = include_str!("../ui/main.xrc");
+const XRC_DATA: &str = include_str!("../../ui/main.xrc");
 
 fn main() {
     wxdragon::main(|_| {

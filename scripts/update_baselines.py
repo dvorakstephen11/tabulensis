@@ -36,6 +36,11 @@ def main() -> int:
         action="store_true",
         help="Skip baseline regression checks (still enforces absolute caps).",
     )
+    parser.add_argument(
+        "--parallel",
+        action="store_true",
+        help="Enable the parallel feature when running perf tests.",
+    )
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parents[1]
@@ -55,6 +60,8 @@ def main() -> int:
             "--export-csv",
             str(latest_csv),
         ]
+        if args.parallel:
+            cmd.append("--parallel")
         if args.test_target:
             cmd.extend(["--test-target", args.test_target])
         if args.skip_baseline:

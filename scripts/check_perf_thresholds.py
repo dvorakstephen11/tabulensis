@@ -7,8 +7,8 @@ This script runs perf tests and enforces:
   - Baseline regression checks for total time and peak memory
 
 Usage:
-  python scripts/check_perf_thresholds.py [--suite quick|gate|full-scale] [--require-baseline] [--export-json PATH] [--export-csv PATH]
-  python scripts/check_perf_thresholds.py --full-scale [--require-baseline] [--export-json PATH] [--export-csv PATH]
+  python scripts/check_perf_thresholds.py [--suite quick|gate|full-scale] [--parallel] [--require-baseline] [--export-json PATH] [--export-csv PATH]
+  python scripts/check_perf_thresholds.py --full-scale [--parallel] [--require-baseline] [--export-json PATH] [--export-csv PATH]
 """
 
 import argparse
@@ -199,7 +199,7 @@ def collect_passed_tests(stdout: str) -> list[str]:
     return tests
 
 
-def export_json(path: Path, metrics: dict, suite_name: str, full_scale: bool):
+def export_json(path: Path, metrics: dict, suite_name: str, full_scale: bool, parallel: bool):
     timestamp = datetime.now(timezone.utc).isoformat()
     payload = {
         "timestamp": timestamp,
@@ -207,6 +207,7 @@ def export_json(path: Path, metrics: dict, suite_name: str, full_scale: bool):
         "git_branch": get_git_branch(),
         "suite": suite_name,
         "full_scale": full_scale,
+        "parallel": parallel,
         "tests": metrics,
         "summary": {
             "total_tests": len(metrics),
@@ -336,6 +337,11 @@ def main():
         default=None,
         help="Run only a specific integration test target (e.g., perf_large_grid_tests)",
     )
+    parser.add_argument(
+        "--parallel",
+        action="store_true",
+        help="Enable the parallel feature when running perf tests",
+    )
     args = parser.parse_args()
 
     if args.suite and args.full_scale:
@@ -407,12 +413,16 @@ def main():
     if not core_dir.exists():
         core_dir = Path("core")
 
+    features = ["perf-metrics"]
+    if args.parallel:
+        features.append("parallel")
+
     cmd = [
         "cargo",
         "test",
         "--release",
         "--features",
-        "perf-metrics",
+        ",".join(features),
     ]
 
     test_target = args.test_target or config["default_test_target"]
@@ -476,7 +486,9 @@ def main():
         return 1
 
     if args.export_json:
-        export_json(args.export_json, suite_metrics, suite_name, config["full_scale"])
+        export_json(
+            args.export_json, suite_metrics, suite_name, config["full_scale"], args.parallel
+        )
         print(f"Wrote JSON results to {args.export_json}")
 
     if args.export_csv:

@@ -7,7 +7,7 @@ use crate::config::DiffConfig;
 use crate::grid_metadata::classify_row_frequencies;
 use crate::hashing::{hash_cell_value, hash_row_content_128};
 use crate::memory_estimate::estimate_gridview_bytes;
-use crate::workbook::{Cell, CellValue, ColSignature, Grid, RowSignature};
+use crate::workbook::{Cell, CellValue, ColSignature, Grid, GridStorage, RowSignature};
 use xxhash_rust::xxh3::Xxh3;
 
 pub use crate::grid_metadata::{FrequencyClass, RowMeta};
@@ -61,6 +61,9 @@ impl<'a> GridView<'a> {
         #[cfg(test)]
         {
             GRIDVIEW_BUILD_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+        }
+        if matches!(&grid.cells, GridStorage::Dense(_)) {
+            return build_gridview_dense(grid, config);
         }
         let nrows = grid.nrows as usize;
         let ncols = grid.ncols as usize;
@@ -151,6 +154,86 @@ impl<'a> GridView<'a> {
             .filter(|m| m.non_blank_count == 0)
             .count();
         blank * 2 > self.col_meta.len()
+    }
+}
+
+fn build_gridview_dense<'a>(grid: &'a Grid, config: &DiffConfig) -> GridView<'a> {
+    let nrows = grid.nrows as usize;
+    let ncols = grid.ncols as usize;
+
+    let mut row_counts = vec![0u32; nrows];
+    let mut row_first_non_blank: Vec<Option<u32>> = vec![None; nrows];
+
+    let mut col_counts = vec![0u32; ncols];
+    let mut col_first_non_blank: Vec<Option<u32>> = vec![None; ncols];
+
+    let mut rows: Vec<RowView<'a>> = (0..nrows)
+        .map(|_| RowView { cells: Vec::new() })
+        .collect();
+
+    let mut row_hashers: Vec<Xxh3> = (0..nrows).map(|_| Xxh3::new()).collect();
+    let mut col_hashers: Vec<Xxh3> = (0..ncols).map(|_| Xxh3::new()).collect();
+
+    for ((row, col), cell) in grid.iter_cells() {
+        let r = row as usize;
+        let c = col as usize;
+
+        debug_assert!(
+            r < nrows && c < ncols,
+            "cell coordinates must lie within the grid bounds"
+        );
+
+        row_counts[r] = row_counts[r].saturating_add(1);
+        col_counts[c] = col_counts[c].saturating_add(1);
+
+        row_first_non_blank[r] =
+            Some(row_first_non_blank[r].map_or(col, |cur| cur.min(col)));
+        col_first_non_blank[c] =
+            Some(col_first_non_blank[c].map_or(row, |cur| cur.min(row)));
+
+        rows[r].cells.push((col, cell));
+
+        let row_hasher = &mut row_hashers[r];
+        hash_cell_value(&cell.value, row_hasher);
+        cell.formula.hash(row_hasher);
+
+        let col_hasher = &mut col_hashers[c];
+        hash_cell_value(&cell.value, col_hasher);
+        cell.formula.hash(col_hasher);
+    }
+
+    let mut row_meta: Vec<RowMeta> = rows
+        .iter()
+        .enumerate()
+        .map(|(idx, row_view)| {
+            row_meta_for_row_with_hash(
+                idx,
+                row_view,
+                &row_counts,
+                &row_first_non_blank,
+                row_hashers[idx].digest128(),
+            )
+        })
+        .collect();
+
+    classify_row_frequencies(&mut row_meta, config);
+
+    let col_meta: Vec<ColMeta> = (0..ncols)
+        .map(|col_idx| ColMeta {
+            col_idx: col_idx as u32,
+            hash: ColSignature {
+                hash: col_hashers[col_idx].digest128(),
+            },
+            non_blank_count: to_u16(col_counts[col_idx]),
+            first_non_blank_row: col_first_non_blank[col_idx].map(to_u16).unwrap_or(0),
+        })
+        .collect();
+
+    GridView {
+        rows,
+        row_meta,
+        col_meta,
+        source: grid,
     }
 }
 
@@ -482,6 +565,39 @@ fn row_meta_for_row<'a>(
     }
 }
 
+fn row_meta_for_row_with_hash<'a>(
+    idx: usize,
+    row_view: &RowView<'a>,
+    row_counts: &[u32],
+    row_first_non_blank: &[Option<u32>],
+    hash: u128,
+) -> RowMeta {
+    let count = row_counts.get(idx).copied().unwrap_or(0);
+    let non_blank_count = to_u16(count);
+    let first_non_blank_col = row_first_non_blank
+        .get(idx)
+        .and_then(|c| c.map(to_u16))
+        .unwrap_or(0);
+    let is_low_info = compute_is_low_info(non_blank_count, row_view);
+
+    let signature = RowSignature { hash };
+
+    let frequency_class = if is_low_info {
+        FrequencyClass::LowInfo
+    } else {
+        FrequencyClass::Common
+    };
+
+    RowMeta {
+        row_idx: idx as u32,
+        signature,
+        non_blank_count,
+        first_non_blank_col,
+        frequency_class,
+        is_low_info,
+    }
+}
+
 fn is_non_blank(cell: &Cell) -> bool {
     cell.value.is_some() || cell.formula.is_some()
 }
@@ -516,4 +632,34 @@ fn compute_is_low_info(non_blank_count: u16, row_view: &RowView<'_>) -> bool {
 
 fn to_u16(value: u32) -> u16 {
     u16::try_from(value).unwrap_or(u16::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::string_pool::StringPool;
+
+    #[test]
+    fn dense_gridview_signatures_match_grid() {
+        let mut pool = StringPool::new();
+        let text_id = pool.intern("alpha");
+        let formula_id = pool.intern("SUM(A1:B1)");
+
+        let mut grid = Grid::new_dense(3, 4);
+        grid.insert_cell(0, 0, Some(CellValue::Text(text_id)), None);
+        grid.insert_cell(0, 2, Some(CellValue::Number(42.0)), Some(formula_id));
+        grid.insert_cell(2, 1, Some(CellValue::Bool(true)), None);
+
+        let view = GridView::from_grid(&grid);
+
+        for row in 0..grid.nrows {
+            let meta = &view.row_meta[row as usize];
+            assert_eq!(meta.signature, grid.compute_row_signature(row));
+        }
+
+        for col in 0..grid.ncols {
+            let meta = &view.col_meta[col as usize];
+            assert_eq!(meta.hash, grid.compute_col_signature(col));
+        }
+    }
 }

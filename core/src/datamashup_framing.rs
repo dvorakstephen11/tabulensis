@@ -1,5 +1,10 @@
-use base64::Engine;
+#[cfg(not(feature = "base64-crate"))]
+compile_error!("No Base64 backend selected. Enable feature \"base64-crate\" (default).");
+
+#[cfg(feature = "base64-crate")]
 use base64::engine::general_purpose::STANDARD;
+#[cfg(feature = "base64-crate")]
+use base64::Engine;
 use quick_xml::Reader;
 use quick_xml::events::Event;
 use thiserror::Error;
@@ -116,9 +121,8 @@ pub fn read_datamashup_text(xml: &[u8]) -> Result<Option<String>, DataMashupErro
             Ok(Event::Text(t)) if in_datamashup => {
                 let text = t
                     .unescape()
-                    .map_err(|e| DataMashupError::XmlError(e.to_string()))?
-                    .into_owned();
-                content.push_str(&text);
+                    .map_err(|e| DataMashupError::XmlError(e.to_string()))?;
+                content.push_str(text.as_ref());
             }
             Ok(Event::CData(t)) if in_datamashup => {
                 let data = t.into_inner();
@@ -129,7 +133,7 @@ pub fn read_datamashup_text(xml: &[u8]) -> Result<Option<String>, DataMashupErro
                     return Err(DataMashupError::FramingInvalid);
                 }
                 in_datamashup = false;
-                found_content = Some(content.clone());
+                found_content = Some(std::mem::take(&mut content));
             }
             Ok(Event::Eof) if in_datamashup => {
                 return Err(DataMashupError::FramingInvalid);
@@ -142,11 +146,33 @@ pub fn read_datamashup_text(xml: &[u8]) -> Result<Option<String>, DataMashupErro
     }
 }
 
-pub fn decode_datamashup_base64(text: &str) -> Result<Vec<u8>, DataMashupError> {
-    let cleaned: String = text.split_whitespace().collect();
+// Baseline: third-party base64 crate, but avoid allocating a cleaned String.
+#[cfg(feature = "base64-crate")]
+fn decode_datamashup_base64_crate(text: &str) -> Result<Vec<u8>, DataMashupError> {
+    let bytes = text.as_bytes();
+
+    // Fast path: no ASCII whitespace -> decode directly, zero extra allocation.
+    if !bytes.iter().any(|b| b.is_ascii_whitespace()) {
+        return STANDARD
+            .decode(bytes)
+            .map_err(|_| DataMashupError::Base64Invalid);
+    }
+
+    // Slow path: strip ASCII whitespace into a byte buffer (cheaper than split_whitespace + String).
+    let mut cleaned = Vec::with_capacity(bytes.len());
+    for &b in bytes {
+        if !b.is_ascii_whitespace() {
+            cleaned.push(b);
+        }
+    }
+
     STANDARD
-        .decode(cleaned.as_bytes())
+        .decode(&cleaned)
         .map_err(|_| DataMashupError::Base64Invalid)
+}
+
+pub fn decode_datamashup_base64(text: &str) -> Result<Vec<u8>, DataMashupError> {
+    decode_datamashup_base64_crate(text)
 }
 
 pub(crate) fn decode_datamashup_xml(xml: &[u8]) -> Result<Option<Vec<u8>>, DataMashupError> {
@@ -401,6 +427,13 @@ mod tests {
     fn decode_datamashup_base64_rejects_invalid() {
         let err = decode_datamashup_base64("!!!").expect_err("invalid base64 should fail");
         assert!(matches!(err, DataMashupError::Base64Invalid));
+    }
+
+    #[test]
+    fn decode_datamashup_base64_ignores_ascii_whitespace() {
+        let text = "  Q Q==\n\t\r";
+        let out = decode_datamashup_base64(text).unwrap();
+        assert_eq!(out, b"A");
     }
 
     #[test]

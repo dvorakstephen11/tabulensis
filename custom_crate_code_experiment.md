@@ -4,6 +4,7 @@
 - Scanned Rust workspace crates: `core`, `cli`, `wasm`, `ui_payload`, `desktop/backend`, `desktop/wx`, `license_client`, `license_service`.
 - Focused on hot-path parsing/serialization and widely-used dependencies where a custom, narrower implementation could be faster or smaller.
 - References below point to current usage sites.
+- Default policy: **always run the full test suite and perf-metrics** (baseline + post-change). Skipping tests/perf is not allowed unless the user explicitly asks to skip.
 
 ## Experiment plan (detailed)
 
@@ -13,16 +14,45 @@
 - Measure **binary size and dependency footprint** changes.
 - Confirm **behavioral equivalence** across realistic and adversarial inputs.
 
+### Profiling gate (pre-rewrite)
+- Before implementing a rewrite, capture at least one flamegraph/perf profile on a representative workload.
+- Proceed only if the target crate/function is a meaningful contributor (e.g., >=1-2% of total time).
+
 ### Baseline and variants (A/B/C)
 For each candidate, run the following variants on the same machine and inputs:
 - **A: Baseline** – current implementation using the third-party crate.
 - **B: Custom** – new custom implementation behind a feature flag.
-- **C: Custom + fallback (optional)** – custom path plus a runtime “fallback to crate on parse failure” path for differential testing only (not for release).
+- **C: Parity tests (optional)** – build with both implementations enabled and run side-by-side tests; keep any runtime fallback strictly `cfg(test)` / dev-only (not for release).
 
 Implementation rules:
 - Add **feature flags** per candidate (e.g., `custom-xml`, `custom-zip`, `custom-json`, `custom-base64`, `custom-lru`).
+- Make third-party deps **optional** and gate them behind a **baseline feature** (enabled by default) so custom builds can actually remove them from the graph.
 - Keep **default** behavior on baseline crates until the experiment concludes.
+- Prefer **parity tests** over runtime fallback paths; if you add a fallback for differential testing, keep it test-only.
 - Avoid combining multiple custom flags in the same run except for a final “all-on” sanity check.
+
+### Documentation & iteration protocol (required)
+Each candidate has a **dedicated experiment doc** that interleaves GPT-5.2-Pro guidance with measured results.
+
+Workflow (repeat until complete):
+1) **Start doc with the initial GPT-5.2-Pro response file** (verbatim content).
+2) **Establish a baseline** before any code changes:
+   - Run full tests and perf-metrics (see “Default test/perf policy” below).
+   - Record environment details and raw `PERF_METRIC` lines.
+3) **Implement the suggestions** from the current GPT-5.2-Pro response.
+4) **Run full tests and perf-metrics again** on the same machine and datasets.
+5) **Append results to the experiment doc**:
+   - Include command list, pass/fail status, raw metrics, and **delta vs baseline**.
+6) **Send updated results + codebase to GPT-5.2-Pro**, save the response to a file.
+7) **Append the new GPT-5.2-Pro response file** to the doc and repeat.
+
+Completion criteria:
+- A final section in the doc summarizes the decision (ship, keep behind flag, or delete) and the evidence.
+- The doc includes **baseline + post-change metrics for each iteration**.
+
+Naming guidance:
+- One file per candidate (e.g., `base64_custom_crate_experiment.md`).
+- Append each GPT-5.2-Pro response file and each measurement block in chronological order.
 
 ### Workloads and datasets
 Use deterministic fixture generation and a tiered workload matrix:
@@ -56,6 +86,10 @@ Collect **both end-to-end and microbench metrics**:
 - Dependency changes using `cargo tree -i <crate>`.
 - Optional: `cargo bloat` if available.
 
+**Build time metrics**
+- Clean build time for `cli` and `desktop_wx`.
+- Incremental build time for `cli` and `desktop_wx` after a small code change.
+
 **Consistency & correctness metrics**
 - Parse success rate (must match baseline).
 - Diff output hash (same schema and semantic content).
@@ -65,6 +99,20 @@ Collect **both end-to-end and microbench metrics**:
 - Use **criterion** for microbenchmarks (existing `core/benches/diff_benchmarks.rs`).
 - For end-to-end runs: **5–10 iterations**, discard first run (warm-up), report median and p95.
 - Record machine details: CPU model, OS, Rust version, and whether CPU scaling is enabled.
+
+### Automation / runner
+- Add a single script or `xtask` that builds each variant with fixed flags/profiles, runs the same workloads, and stores JSON/CSV results.
+- Embed feature set, commit hash, and environment details in the output to prevent apples-to-oranges comparisons.
+- The runner **must** execute tests and perf-metrics by default; it should require explicit opt-out flags to skip.
+
+### Default test/perf policy (must-follow)
+For every iteration (baseline and post-change), run:
+- **Tests**: `cargo test -p excel_diff`
+- **Perf-metrics**: `cargo test -p excel_diff --features perf-metrics -- --ignored --nocapture`
+
+Optional but encouraged when relevant:
+- Criterion microbench: `cargo bench -p excel_diff <bench_name>`
+- Isolated perf tests when allocator noise is a concern (run the perf test as a single target).
 
 ### Test suite expansion
 Add tests that **force edge conditions** for the custom code:
@@ -99,6 +147,7 @@ Add tests that **force edge conditions** for the custom code:
 For each candidate:
 - Add **side-by-side tests** that run both implementations on the same input and compare output (or error codes).
 - For large outputs, compare hashes or normalized JSON.
+- Keep any fallback paths **test-only**; do not ship runtime fallback in release builds.
 
 ### Decision criteria
 Promote custom code if it meets **all**:
@@ -110,10 +159,18 @@ Promote custom code if it meets **all**:
 If results are mixed, keep feature flag off and document follow-up improvements.
 
 ### Reporting template
-Track results in a short table per candidate:
+Each candidate’s doc **must** interleave guidance and results:
+1) GPT-5.2-Pro response (verbatim)
+2) Baseline test + perf results (commands + raw `PERF_METRIC` lines)
+3) Implementation summary
+4) Post-change test + perf results (commands + raw `PERF_METRIC` lines + delta vs baseline)
+5) Follow-up GPT-5.2-Pro response (verbatim)
+6) Repeat as needed
+
+For each measurement block, include:
 - Workload name
-- Baseline median / p95
-- Custom median / p95
+- Baseline median / p95 (if applicable)
+- Post-change median / p95 (if applicable)
 - % change
 - Peak memory delta
 - Binary size delta

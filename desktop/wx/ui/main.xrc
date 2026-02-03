@@ -142,8 +142,8 @@
                         <border>4</border>
                       </object>
                       <object class="sizeritem">
-                        <object class="spacer">
-                          <size>0,0</size>
+                        <object class="wxBoxSizer">
+                          <orient>wxHORIZONTAL</orient>
                         </object>
                         <flag>wxEXPAND</flag>
                         <option>1</option>
@@ -244,8 +244,8 @@
                         <border>4</border>
                       </object>
                       <object class="sizeritem">
-                        <object class="spacer">
-                          <size>0,0</size>
+                        <object class="wxBoxSizer">
+                          <orient>wxHORIZONTAL</orient>
                         </object>
                         <flag>wxEXPAND</flag>
                         <option>1</option>
