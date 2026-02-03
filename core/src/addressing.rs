@@ -39,38 +39,47 @@ pub fn index_to_address(row: u32, col: u32) -> String {
 /// Parse an A1 address into zero-based (row, col) indices.
 /// Returns `None` for malformed addresses.
 pub fn address_to_index(a1: &str) -> Option<(u32, u32)> {
-    if a1.is_empty() {
+    let bytes = a1.as_bytes();
+    if bytes.is_empty() {
         return None;
     }
 
+    let mut i: usize = 0;
     let mut col: u32 = 0;
-    let mut row: u32 = 0;
-    let mut saw_letter = false;
-    let mut saw_digit = false;
 
-    for ch in a1.chars() {
-        if ch.is_ascii_alphabetic() {
-            saw_letter = true;
-            if saw_digit {
-                // Letters after digits are not allowed.
-                return None;
-            }
-            let upper = ch.to_ascii_uppercase() as u8;
-            if !upper.is_ascii_uppercase() {
-                return None;
-            }
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b.is_ascii_alphabetic() {
+            let upper = b.to_ascii_uppercase();
             col = col
                 .checked_mul(26)?
                 .checked_add((upper - b'A' + 1) as u32)?;
-        } else if ch.is_ascii_digit() {
-            saw_digit = true;
-            row = row.checked_mul(10)?.checked_add((ch as u8 - b'0') as u32)?;
+            i += 1;
+        } else {
+            break;
+        }
+    }
+
+    if col == 0 {
+        return None;
+    }
+
+    if i >= bytes.len() || !bytes[i].is_ascii_digit() {
+        return None;
+    }
+
+    let mut row: u32 = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b.is_ascii_digit() {
+            row = row.checked_mul(10)?.checked_add((b - b'0') as u32)?;
+            i += 1;
         } else {
             return None;
         }
     }
 
-    if !saw_letter || !saw_digit || row == 0 || col == 0 {
+    if row == 0 {
         return None;
     }
 

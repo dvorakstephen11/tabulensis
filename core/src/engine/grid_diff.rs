@@ -6,7 +6,8 @@ use crate::perf::{DiffMetrics, Phase};
 use crate::progress::ProgressCallback;
 use crate::sink::{DiffSink, SinkFinishGuard, VecSink};
 use crate::string_pool::StringPool;
-use crate::workbook::{CellAddress, CellValue, Grid, RowSignature};
+use crate::hashing::hash_row_content_128;
+use crate::workbook::{CellAddress, CellContent, CellValue, Grid, GridStorage, RowSignature};
 use std::collections::{HashMap, HashSet};
 
 use crate::diff::SheetId;
@@ -394,7 +395,14 @@ fn diff_grids_core<'p, S: DiffSink>(
         return Ok(());
     }
 
+    #[cfg(feature = "parallel")]
+    let (old_view, new_view) = rayon::join(
+        || GridView::from_grid_with_config(old, config),
+        || GridView::from_grid_with_config(new, config),
+    );
+    #[cfg(not(feature = "parallel"))]
     let old_view = GridView::from_grid_with_config(old, config);
+    #[cfg(not(feature = "parallel"))]
     let new_view = GridView::from_grid_with_config(new, config);
     #[cfg(feature = "perf-metrics")]
     if let Some(m) = metrics.as_mut() {
@@ -1619,11 +1627,48 @@ fn row_signatures_for_grid(grid: &Grid) -> Vec<RowSignature> {
     if let Some(sigs) = &grid.row_signatures {
         return sigs.clone();
     }
-    let mut out = Vec::with_capacity(grid.nrows as usize);
-    for row in 0..grid.nrows {
-        out.push(grid.compute_row_signature(row));
+    match &grid.cells {
+        GridStorage::Dense(_) => {
+            let mut out = Vec::with_capacity(grid.nrows as usize);
+            for row in 0..grid.nrows {
+                out.push(grid.compute_row_signature(row));
+            }
+            out
+        }
+        GridStorage::Sparse(map) => {
+            let nrows = grid.nrows as usize;
+            let mut row_counts = vec![0usize; nrows];
+            for ((row, _col), _cell) in map.iter() {
+                let idx = *row as usize;
+                if idx < nrows {
+                    row_counts[idx] = row_counts[idx].saturating_add(1);
+                }
+            }
+
+            let mut row_cells: Vec<Vec<(u32, &CellContent)>> = row_counts
+                .iter()
+                .map(|count| Vec::with_capacity(*count))
+                .collect();
+
+            for ((row, col), cell) in map.iter() {
+                let idx = *row as usize;
+                if idx < nrows {
+                    row_cells[idx].push((*col, cell));
+                }
+            }
+
+            for row in row_cells.iter_mut() {
+                row.sort_unstable_by_key(|(col, _)| *col);
+            }
+
+            row_cells
+                .iter()
+                .map(|row| RowSignature {
+                    hash: hash_row_content_128(row),
+                })
+                .collect()
+        }
     }
-    out
 }
 
 fn rows_with_context(rows: &[u32], context: u32, max_rows: u32) -> Vec<u32> {

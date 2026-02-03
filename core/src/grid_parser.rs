@@ -446,6 +446,8 @@ pub fn parse_sheet_xml(
     shared_strings: &[StringId],
     pool: &mut StringPool,
 ) -> Result<Grid, GridParseError> {
+    const STREAM_CELL_BUFFER_LIMIT: usize = 4096;
+
     let mut reader = Reader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
@@ -453,6 +455,7 @@ pub fn parse_sheet_xml(
 
     let mut dimension_hint: Option<(u32, u32)> = None;
     let mut parsed_cells: Vec<ParsedCell> = Vec::new();
+    let mut grid: Option<Grid> = None;
     let mut max_row: Option<u32> = None;
     let mut max_col: Option<u32> = None;
 
@@ -461,13 +464,56 @@ pub fn parse_sheet_xml(
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == b"dimension" => {
                 if let Some(r) = get_attr_value(&reader, xml, &e, b"ref")? {
                     dimension_hint = dimension_from_ref(r.as_ref());
+                    if grid.is_none()
+                        && dimension_hint.is_some()
+                        && parsed_cells.len() >= STREAM_CELL_BUFFER_LIMIT
+                    {
+                        let (nrows, ncols) =
+                            grid_bounds_from_hint(dimension_hint, max_row, max_col);
+                        let new_grid = build_grid(
+                            nrows,
+                            ncols,
+                            std::mem::take(&mut parsed_cells),
+                        )?;
+                        grid = Some(new_grid);
+                    }
                 }
             }
             Ok(Event::Start(e)) if e.name().as_ref() == b"c" => {
                 let cell = parse_cell(&mut reader, xml, e, shared_strings, pool, &mut cell_buf)?;
                 max_row = Some(max_row.map_or(cell.row, |r| r.max(cell.row)));
                 max_col = Some(max_col.map_or(cell.col, |c| c.max(cell.col)));
-                parsed_cells.push(cell);
+                if grid.is_some() {
+                    let needs_resize = grid
+                        .as_ref()
+                        .map(|existing| cell.row >= existing.nrows || cell.col >= existing.ncols)
+                        .unwrap_or(false);
+                    if needs_resize {
+                        let (mut nrows, mut ncols) =
+                            grid_bounds_from_hint(dimension_hint, max_row, max_col);
+                        nrows = nrows.max(cell.row.saturating_add(1));
+                        ncols = ncols.max(cell.col.saturating_add(1));
+                        let rebuilt = rebuild_grid(grid.take().unwrap(), nrows, ncols);
+                        grid = Some(rebuilt);
+                    }
+                    grid.as_mut()
+                        .unwrap()
+                        .insert_cell(cell.row, cell.col, cell.value, cell.formula);
+                } else {
+                    parsed_cells.push(cell);
+                    if dimension_hint.is_some()
+                        && parsed_cells.len() >= STREAM_CELL_BUFFER_LIMIT
+                    {
+                        let (nrows, ncols) =
+                            grid_bounds_from_hint(dimension_hint, max_row, max_col);
+                        let new_grid = build_grid(
+                            nrows,
+                            ncols,
+                            std::mem::take(&mut parsed_cells),
+                        )?;
+                        grid = Some(new_grid);
+                    }
+                }
             }
             Ok(Event::Eof) => break,
             Err(e) => return Err(xml_err(&reader, xml, e)),
@@ -476,20 +522,29 @@ pub fn parse_sheet_xml(
         buf.clear();
     }
 
+    if let Some(mut grid) = grid {
+        if !parsed_cells.is_empty() {
+            let (nrows, ncols) = grid_bounds_from_hint(dimension_hint, max_row, max_col);
+            if nrows > grid.nrows || ncols > grid.ncols {
+                grid = rebuild_grid(grid, nrows, ncols);
+            }
+            for cell in parsed_cells {
+                grid.insert_cell(cell.row, cell.col, cell.value, cell.formula);
+            }
+        } else {
+            let (nrows, ncols) = grid_bounds_from_hint(dimension_hint, max_row, max_col);
+            if nrows > grid.nrows || ncols > grid.ncols {
+                grid = rebuild_grid(grid, nrows, ncols);
+            }
+        }
+        return Ok(grid);
+    }
+
     if parsed_cells.is_empty() {
         return Ok(Grid::new(0, 0));
     }
 
-    let mut nrows = dimension_hint.map(|(r, _)| r).unwrap_or(0);
-    let mut ncols = dimension_hint.map(|(_, c)| c).unwrap_or(0);
-
-    if let Some(max_r) = max_row {
-        nrows = nrows.max(max_r + 1);
-    }
-    if let Some(max_c) = max_col {
-        ncols = ncols.max(max_c + 1);
-    }
-
+    let (nrows, ncols) = grid_bounds_from_hint(dimension_hint, max_row, max_col);
     build_grid(nrows, ncols, parsed_cells)
 }
 
@@ -501,12 +556,25 @@ fn parse_cell(
     pool: &mut StringPool,
     buf: &mut Vec<u8>,
 ) -> Result<ParsedCell, GridParseError> {
-    let address_raw = get_attr_value(reader, xml, &start, b"r")?
-        .ok_or_else(|| xml_msg_err(reader, xml, "cell missing address"))?;
+    let mut address_raw = None;
+    let mut cell_type = None;
+
+    for attr in start.attributes() {
+        let attr = attr.map_err(|e| xml_msg_err(reader, xml, e.to_string()))?;
+        match attr.key.as_ref() {
+            b"r" => {
+                address_raw = Some(attr.unescape_value().map_err(|e| xml_err(reader, xml, e))?);
+            }
+            b"t" => {
+                cell_type = Some(attr.unescape_value().map_err(|e| xml_err(reader, xml, e))?);
+            }
+            _ => {}
+        }
+    }
+
+    let address_raw = address_raw.ok_or_else(|| xml_msg_err(reader, xml, "cell missing address"))?;
     let (row, col) = address_to_index(address_raw.as_ref())
         .ok_or_else(|| GridParseError::InvalidAddress(address_raw.into_owned()))?;
-
-    let cell_type = get_attr_value(reader, xml, &start, b"t")?;
 
     let mut value: Option<CellValue> = None;
     let mut formula: Option<StringId> = None;
@@ -593,6 +661,78 @@ fn convert_value(
     reader: &Reader<&[u8]>,
     xml: &[u8],
 ) -> Result<Option<CellValue>, GridParseError> {
+    fn parse_usize_decimal(s: &str) -> Option<usize> {
+        let bytes = s.as_bytes();
+        if bytes.is_empty() {
+            return None;
+        }
+        let mut n: usize = 0;
+        for &b in bytes {
+            if !b.is_ascii_digit() {
+                return None;
+            }
+            let d = (b - b'0') as usize;
+            n = n.checked_mul(10)?.checked_add(d)?;
+        }
+        Some(n)
+    }
+
+    fn parse_f64_fast(s: &str) -> Option<f64> {
+        let bytes = s.as_bytes();
+        if bytes.is_empty() {
+            return None;
+        }
+
+        let mut i = 0usize;
+        let mut neg = false;
+        match bytes[0] {
+            b'-' => {
+                neg = true;
+                i = 1;
+            }
+            b'+' => {
+                i = 1;
+            }
+            _ => {}
+        }
+
+        if i >= bytes.len() {
+            return None;
+        }
+
+        let mut int: u64 = 0;
+        let mut saw_digit = false;
+
+        while i < bytes.len() {
+            let b = bytes[i];
+            if b.is_ascii_digit() {
+                saw_digit = true;
+                let d = (b - b'0') as u64;
+                if int > (u64::MAX - d) / 10 {
+                    return s.parse::<f64>().ok();
+                }
+                int = int * 10 + d;
+                i += 1;
+                continue;
+            }
+            break;
+        }
+
+        if !saw_digit {
+            return None;
+        }
+
+        if i == bytes.len() {
+            let v = int as f64;
+            return Some(if neg { -v } else { v });
+        }
+
+        match bytes[i] {
+            b'.' | b'e' | b'E' => s.parse::<f64>().ok(),
+            _ => None,
+        }
+    }
+
     let raw = match value_text {
         Some(t) => t,
         None => return Ok(None),
@@ -605,9 +745,12 @@ fn convert_value(
 
     match cell_type {
         Some("s") => {
-            let idx = trimmed
-                .parse::<usize>()
-                .map_err(|e| xml_msg_err(reader, xml, e.to_string()))?;
+            let idx = match parse_usize_decimal(trimmed) {
+                Some(v) => v,
+                None => trimmed
+                    .parse::<usize>()
+                    .map_err(|e| xml_msg_err(reader, xml, e.to_string()))?,
+            };
             let text_id = *shared_strings
                 .get(idx)
                 .ok_or(GridParseError::SharedStringOutOfBounds(idx))?;
@@ -621,7 +764,7 @@ fn convert_value(
         Some("e") => Ok(Some(CellValue::Error(pool.intern(trimmed)))),
         Some("str") | Some("inlineStr") => Ok(Some(CellValue::Text(pool.intern(raw)))),
         _ => {
-            if let Ok(n) = trimmed.parse::<f64>() {
+            if let Some(n) = parse_f64_fast(trimmed) {
                 Ok(Some(CellValue::Number(n)))
             } else {
                 Ok(Some(CellValue::Text(pool.intern(trimmed))))
@@ -641,6 +784,24 @@ fn dimension_from_ref(reference: &str) -> Option<(u32, u32)> {
     Some((height, width))
 }
 
+fn grid_bounds_from_hint(
+    dimension_hint: Option<(u32, u32)>,
+    max_row: Option<u32>,
+    max_col: Option<u32>,
+) -> (u32, u32) {
+    let mut nrows = dimension_hint.map(|(r, _)| r).unwrap_or(0);
+    let mut ncols = dimension_hint.map(|(_, c)| c).unwrap_or(0);
+
+    if let Some(max_r) = max_row {
+        nrows = nrows.max(max_r.saturating_add(1));
+    }
+    if let Some(max_c) = max_col {
+        ncols = ncols.max(max_c.saturating_add(1));
+    }
+
+    (nrows, ncols)
+}
+
 fn build_grid(nrows: u32, ncols: u32, cells: Vec<ParsedCell>) -> Result<Grid, GridParseError> {
     let filled = cells.len();
     let mut grid = if Grid::should_use_dense(nrows, ncols, filled) {
@@ -654,6 +815,25 @@ fn build_grid(nrows: u32, ncols: u32, cells: Vec<ParsedCell>) -> Result<Grid, Gr
     }
 
     Ok(grid)
+}
+
+fn rebuild_grid(grid: Grid, nrows: u32, ncols: u32) -> Grid {
+    if grid.nrows == nrows && grid.ncols == ncols {
+        return grid;
+    }
+
+    let filled = grid.cell_count();
+    let mut rebuilt = if Grid::should_use_dense(nrows, ncols, filled) {
+        Grid::new_dense(nrows, ncols)
+    } else {
+        Grid::new(nrows, ncols)
+    };
+
+    for ((row, col), cell) in grid.iter_cells() {
+        rebuilt.insert_cell(row, col, cell.value.clone(), cell.formula);
+    }
+
+    rebuilt
 }
 
 fn get_attr_value<'a>(

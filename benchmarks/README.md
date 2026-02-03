@@ -15,6 +15,19 @@ benchmarks/
 
 ## Running Benchmarks
 
+### Perf Cycle (Required for Rust changes)
+
+When changing Rust code (`.rs`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`), run a pre/post cycle and compare deltas:
+
+```bash
+python3 scripts/perf_cycle.py pre
+# ...make Rust changes...
+python3 scripts/perf_cycle.py post --cycle <cycle_id>
+```
+
+The delta summary is written to `benchmarks/perf_cycles/<cycle_id>/cycle_delta.md`.
+If fixture generation fails in your environment, add `--skip-fixtures`.
+
 ### Perf Gate Suites (scripts used by CI)
 
 Quick suite (PR gate, small grids):

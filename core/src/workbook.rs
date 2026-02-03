@@ -214,6 +214,8 @@ impl DenseGrid {
         DenseCellIter {
             cells: &self.cells,
             idx: 0,
+            row: 0,
+            col: 0,
             ncols: self.ncols,
         }
     }
@@ -302,6 +304,8 @@ impl<'a> Iterator for GridCellIter<'a> {
 pub struct DenseCellIter<'a> {
     cells: &'a [CellContent],
     idx: usize,
+    row: u32,
+    col: u32,
     ncols: u32,
 }
 
@@ -312,20 +316,22 @@ impl<'a> Iterator for DenseCellIter<'a> {
         while self.idx < self.cells.len() {
             let idx = self.idx;
             self.idx += 1;
+
+            let row = self.row;
+            let col = self.col;
+
+            if self.ncols != 0 {
+                self.col += 1;
+                if self.col == self.ncols {
+                    self.col = 0;
+                    self.row += 1;
+                }
+            }
+
             let cell = &self.cells[idx];
             if !cell_is_non_empty(cell) {
                 continue;
             }
-            let row = if self.ncols == 0 {
-                0
-            } else {
-                (idx as u32) / self.ncols
-            };
-            let col = if self.ncols == 0 {
-                0
-            } else {
-                (idx as u32) % self.ncols
-            };
             return Some(((row, col), cell));
         }
         None
@@ -407,6 +413,15 @@ impl PartialEq for CellValue {
         match (self, other) {
             (CellValue::Blank, CellValue::Blank) => true,
             (CellValue::Number(a), CellValue::Number(b)) => {
+                if a.to_bits() == b.to_bits() {
+                    return true;
+                }
+                if a.is_nan() && b.is_nan() {
+                    return true;
+                }
+                if *a == 0.0 && *b == 0.0 {
+                    return true;
+                }
                 normalize_float_for_hash(*a) == normalize_float_for_hash(*b)
             }
             (CellValue::Text(a), CellValue::Text(b)) => a == b,
@@ -516,8 +531,12 @@ impl Grid {
     }
 
     pub fn get_mut(&mut self, row: u32, col: u32) -> Option<&mut CellContent> {
-        self.row_signatures = None;
-        self.col_signatures = None;
+        if self.row_signatures.is_some() {
+            self.row_signatures = None;
+        }
+        if self.col_signatures.is_some() {
+            self.col_signatures = None;
+        }
         self.cells.get_mut(row, col)
     }
 
@@ -532,8 +551,12 @@ impl Grid {
             row < self.nrows && col < self.ncols,
             "cell coordinates must lie within the grid bounds"
         );
-        self.row_signatures = None;
-        self.col_signatures = None;
+        if self.row_signatures.is_some() {
+            self.row_signatures = None;
+        }
+        if self.col_signatures.is_some() {
+            self.col_signatures = None;
+        }
         self.cells
             .insert(row, col, CellContent { value, formula });
         self.maybe_upgrade_to_dense();

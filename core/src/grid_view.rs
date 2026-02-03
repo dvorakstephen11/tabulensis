@@ -167,8 +167,21 @@ fn build_gridview_dense<'a>(grid: &'a Grid, config: &DiffConfig) -> GridView<'a>
     let mut col_counts = vec![0u32; ncols];
     let mut col_first_non_blank: Vec<Option<u32>> = vec![None; ncols];
 
+    let cell_count = grid.cell_count();
+    let avg_per_row = if nrows == 0 {
+        0
+    } else {
+        cell_count
+            .saturating_add(nrows)
+            .saturating_sub(1)
+            / nrows
+    };
+    let row_cap = avg_per_row.saturating_add(4).min(ncols);
+
     let mut rows: Vec<RowView<'a>> = (0..nrows)
-        .map(|_| RowView { cells: Vec::new() })
+        .map(|_| RowView {
+            cells: Vec::with_capacity(row_cap),
+        })
         .collect();
 
     let mut row_hashers: Vec<Xxh3> = (0..nrows).map(|_| Xxh3::new()).collect();
@@ -183,13 +196,15 @@ fn build_gridview_dense<'a>(grid: &'a Grid, config: &DiffConfig) -> GridView<'a>
             "cell coordinates must lie within the grid bounds"
         );
 
-        row_counts[r] = row_counts[r].saturating_add(1);
-        col_counts[c] = col_counts[c].saturating_add(1);
+        row_counts[r] += 1;
+        col_counts[c] += 1;
 
-        row_first_non_blank[r] =
-            Some(row_first_non_blank[r].map_or(col, |cur| cur.min(col)));
-        col_first_non_blank[c] =
-            Some(col_first_non_blank[c].map_or(row, |cur| cur.min(row)));
+        if row_first_non_blank[r].is_none() {
+            row_first_non_blank[r] = Some(col);
+        }
+        if col_first_non_blank[c].is_none() {
+            col_first_non_blank[c] = Some(row);
+        }
 
         rows[r].cells.push((col, cell));
 

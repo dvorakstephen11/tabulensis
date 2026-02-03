@@ -1,0 +1,17 @@
+{
+  "cycle": "2026-02-03_194917",
+  "pre": {
+    "timestamp": "2026-02-03T19:49:17.042980+00:00",
+    "git_commit": "60b1eaaa099d",
+    "git_branch": "20260203_perf_improvement",
+    "fullscale_json": "benchmarks/perf_cycles/2026-02-03_194917/pre_fullscale.json",
+    "e2e_json": "benchmarks/perf_cycles/2026-02-03_194917/pre_e2e.json"
+  },
+  "post": {
+    "timestamp": "2026-02-03T19:50:13.195554+00:00",
+    "git_commit": "60b1eaaa099d",
+    "git_branch": "20260203_perf_improvement",
+    "fullscale_json": "benchmarks/perf_cycles/2026-02-03_194917/post_fullscale.json",
+    "e2e_json": "benchmarks/perf_cycles/2026-02-03_194917/post_e2e.json"
+  }
+}

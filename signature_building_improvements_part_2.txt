@@ -1,0 +1,321 @@
+## `core/src/engine/grid_diff.rs`
+
+Replace this:
+
+```rust
+    let old_view = GridView::from_grid_with_config(old, config);
+    let new_view = GridView::from_grid_with_config(new, config);
+```
+
+With this:
+
+```rust
+    #[cfg(feature = "parallel")]
+    let (old_view, new_view) = rayon::join(
+        || GridView::from_grid_with_config(old, config),
+        || GridView::from_grid_with_config(new, config),
+    );
+    #[cfg(not(feature = "parallel"))]
+    let old_view = GridView::from_grid_with_config(old, config);
+    #[cfg(not(feature = "parallel"))]
+    let new_view = GridView::from_grid_with_config(new, config);
+```
+
+---
+
+## `core/src/grid_view.rs`
+
+Replace this:
+
+```rust
+fn build_gridview_dense<'a>(grid: &'a Grid, config: &DiffConfig) -> GridView<'a> {
+    let nrows = grid.nrows as usize;
+    let ncols = grid.ncols as usize;
+
+    let mut row_counts = vec![0u32; nrows];
+    let mut row_first_non_blank: Vec<Option<u32>> = vec![None; nrows];
+
+    let mut col_counts = vec![0u32; ncols];
+    let mut col_first_non_blank: Vec<Option<u32>> = vec![None; ncols];
+
+    let mut rows: Vec<RowView<'a>> = (0..nrows)
+        .map(|_| RowView { cells: Vec::new() })
+        .collect();
+
+    let mut row_hashers: Vec<Xxh3> = (0..nrows).map(|_| Xxh3::new()).collect();
+    let mut col_hashers: Vec<Xxh3> = (0..ncols).map(|_| Xxh3::new()).collect();
+
+    for ((row, col), cell) in grid.iter_cells() {
+        let r = row as usize;
+        let c = col as usize;
+
+        debug_assert!(
+            r < nrows && c < ncols,
+            "cell coordinates must lie within the grid bounds"
+        );
+
+        row_counts[r] = row_counts[r].saturating_add(1);
+        col_counts[c] = col_counts[c].saturating_add(1);
+
+        row_first_non_blank[r] =
+            Some(row_first_non_blank[r].map_or(col, |cur| cur.min(col)));
+        col_first_non_blank[c] =
+            Some(col_first_non_blank[c].map_or(row, |cur| cur.min(row)));
+
+        rows[r].cells.push((col, cell));
+
+        let row_hasher = &mut row_hashers[r];
+        hash_cell_value(&cell.value, row_hasher);
+        cell.formula.hash(row_hasher);
+
+        let col_hasher = &mut col_hashers[c];
+        hash_cell_value(&cell.value, col_hasher);
+        cell.formula.hash(col_hasher);
+    }
+
+    let mut row_meta: Vec<RowMeta> = rows
+        .iter()
+        .enumerate()
+        .map(|(idx, row_view)| {
+            row_meta_for_row_with_hash(
+                idx,
+                row_view,
+                &row_counts,
+                &row_first_non_blank,
+                row_hashers[idx].digest128(),
+            )
+        })
+        .collect();
+
+    classify_row_frequencies(&mut row_meta, config);
+
+    let col_meta: Vec<ColMeta> = (0..ncols)
+        .map(|col_idx| ColMeta {
+            col_idx: col_idx as u32,
+            hash: ColSignature {
+                hash: col_hashers[col_idx].digest128(),
+            },
+            non_blank_count: to_u16(col_counts[col_idx]),
+            first_non_blank_row: col_first_non_blank[col_idx].map(to_u16).unwrap_or(0),
+        })
+        .collect();
+
+    GridView {
+        rows,
+        row_meta,
+        col_meta,
+        source: grid,
+    }
+}
+```
+
+With this:
+
+```rust
+fn build_gridview_dense<'a>(grid: &'a Grid, config: &DiffConfig) -> GridView<'a> {
+    let nrows = grid.nrows as usize;
+    let ncols = grid.ncols as usize;
+
+    let mut row_counts = vec![0u32; nrows];
+    let mut row_first_non_blank: Vec<Option<u32>> = vec![None; nrows];
+
+    let mut col_counts = vec![0u32; ncols];
+    let mut col_first_non_blank: Vec<Option<u32>> = vec![None; ncols];
+
+    let cell_count = grid.cell_count();
+    let avg_per_row = if nrows == 0 {
+        0
+    } else {
+        cell_count
+            .saturating_add(nrows)
+            .saturating_sub(1)
+            / nrows
+    };
+    let row_cap = avg_per_row.saturating_add(4).min(ncols);
+
+    let mut rows: Vec<RowView<'a>> = (0..nrows)
+        .map(|_| RowView {
+            cells: Vec::with_capacity(row_cap),
+        })
+        .collect();
+
+    let mut row_hashers: Vec<Xxh3> = (0..nrows).map(|_| Xxh3::new()).collect();
+    let mut col_hashers: Vec<Xxh3> = (0..ncols).map(|_| Xxh3::new()).collect();
+
+    for ((row, col), cell) in grid.iter_cells() {
+        let r = row as usize;
+        let c = col as usize;
+
+        debug_assert!(
+            r < nrows && c < ncols,
+            "cell coordinates must lie within the grid bounds"
+        );
+
+        row_counts[r] += 1;
+        col_counts[c] += 1;
+
+        if row_first_non_blank[r].is_none() {
+            row_first_non_blank[r] = Some(col);
+        }
+        if col_first_non_blank[c].is_none() {
+            col_first_non_blank[c] = Some(row);
+        }
+
+        rows[r].cells.push((col, cell));
+
+        let row_hasher = &mut row_hashers[r];
+        hash_cell_value(&cell.value, row_hasher);
+        cell.formula.hash(row_hasher);
+
+        let col_hasher = &mut col_hashers[c];
+        hash_cell_value(&cell.value, col_hasher);
+        cell.formula.hash(col_hasher);
+    }
+
+    let mut row_meta: Vec<RowMeta> = rows
+        .iter()
+        .enumerate()
+        .map(|(idx, row_view)| {
+            row_meta_for_row_with_hash(
+                idx,
+                row_view,
+                &row_counts,
+                &row_first_non_blank,
+                row_hashers[idx].digest128(),
+            )
+        })
+        .collect();
+
+    classify_row_frequencies(&mut row_meta, config);
+
+    let col_meta: Vec<ColMeta> = (0..ncols)
+        .map(|col_idx| ColMeta {
+            col_idx: col_idx as u32,
+            hash: ColSignature {
+                hash: col_hashers[col_idx].digest128(),
+            },
+            non_blank_count: to_u16(col_counts[col_idx]),
+            first_non_blank_row: col_first_non_blank[col_idx].map(to_u16).unwrap_or(0),
+        })
+        .collect();
+
+    GridView {
+        rows,
+        row_meta,
+        col_meta,
+        source: grid,
+    }
+}
+```
+
+---
+
+## `core/src/workbook.rs`
+
+Replace this:
+
+```rust
+fn iter(&self) -> DenseCellIter<'_> {
+        DenseCellIter {
+            cells: &self.cells,
+            idx: 0,
+            ncols: self.ncols,
+        }
+    }
+```
+
+With this:
+
+```rust
+fn iter(&self) -> DenseCellIter<'_> {
+        DenseCellIter {
+            cells: &self.cells,
+            idx: 0,
+            row: 0,
+            col: 0,
+            ncols: self.ncols,
+        }
+    }
+```
+
+---
+
+## `core/src/workbook.rs`
+
+Replace this:
+
+```rust
+pub struct DenseCellIter<'a> {
+    cells: &'a [CellContent],
+    idx: usize,
+    ncols: u32,
+}
+
+impl<'a> Iterator for DenseCellIter<'a> {
+    type Item = ((u32, u32), &'a CellContent);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.idx < self.cells.len() {
+            let idx = self.idx;
+            self.idx += 1;
+            let cell = &self.cells[idx];
+            if !cell_is_non_empty(cell) {
+                continue;
+            }
+            let row = if self.ncols == 0 {
+                0
+            } else {
+                (idx as u32) / self.ncols
+            };
+            let col = if self.ncols == 0 {
+                0
+            } else {
+                (idx as u32) % self.ncols
+            };
+            return Some(((row, col), cell));
+        }
+        None
+    }
+}
+```
+
+With this:
+
+```rust
+pub struct DenseCellIter<'a> {
+    cells: &'a [CellContent],
+    idx: usize,
+    row: u32,
+    col: u32,
+    ncols: u32,
+}
+
+impl<'a> Iterator for DenseCellIter<'a> {
+    type Item = ((u32, u32), &'a CellContent);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.idx < self.cells.len() {
+            let idx = self.idx;
+            self.idx += 1;
+
+            let row = self.row;
+            let col = self.col;
+
+            if self.ncols != 0 {
+                self.col += 1;
+                if self.col == self.ncols {
+                    self.col = 0;
+                    self.row += 1;
+                }
+            }
+
+            let cell = &self.cells[idx];
+            if !cell_is_non_empty(cell) {
+                continue;
+            }
+            return Some(((row, col), cell));
+        }
+        None
+    }
+}
+```

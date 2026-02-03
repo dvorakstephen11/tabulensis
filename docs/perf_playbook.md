@@ -2,6 +2,19 @@
 
 This is the shortest path to reproduce the perf CI suites locally and keep baselines sane.
 
+## Required perf cycle for Rust changes
+
+Before editing Rust files (`.rs`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`), capture a pre-change baseline. After edits, re-run the same suites and generate a delta summary:
+
+```bash
+python3 scripts/perf_cycle.py pre
+# ...make Rust changes...
+python3 scripts/perf_cycle.py post --cycle <cycle_id>
+```
+
+The delta summary is written to `benchmarks/perf_cycles/<cycle_id>/cycle_delta.md`.
+If fixture generation fails in your environment, add `--skip-fixtures`.
+
 ## Quick suite (CI default)
 
 ```bash
