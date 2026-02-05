@@ -1,0 +1,12 @@
+{
+  "name": "Compare Basic",
+  "description": "Small diff using committed templates to validate summary + details panels.",
+  "oldPath": "../../../fixtures/templates/vba_base.xlsm",
+  "newPath": "../../../fixtures/templates/vba_changed.xlsm",
+  "autoRunDiff": true,
+  "stableWaitMs": 800,
+  "expectMode": "payload",
+  "focusPanel": "summary",
+  "preset": "balanced",
+  "trustedFiles": true
+}

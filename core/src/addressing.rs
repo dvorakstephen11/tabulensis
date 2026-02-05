@@ -49,34 +49,28 @@ pub fn address_to_index(a1: &str) -> Option<(u32, u32)> {
 
     while i < bytes.len() {
         let b = bytes[i];
-        if b.is_ascii_alphabetic() {
-            let upper = b.to_ascii_uppercase();
-            col = col
-                .checked_mul(26)?
-                .checked_add((upper - b'A' + 1) as u32)?;
-            i += 1;
-        } else {
+        if !b.is_ascii_alphabetic() {
             break;
         }
+        let upper = b.to_ascii_uppercase();
+        col = col
+            .checked_mul(26)?
+            .checked_add((upper - b'A' + 1) as u32)?;
+        i += 1;
     }
 
-    if col == 0 {
-        return None;
-    }
-
-    if i >= bytes.len() || !bytes[i].is_ascii_digit() {
+    if i == 0 || i >= bytes.len() || col == 0 {
         return None;
     }
 
     let mut row: u32 = 0;
     while i < bytes.len() {
         let b = bytes[i];
-        if b.is_ascii_digit() {
-            row = row.checked_mul(10)?.checked_add((b - b'0') as u32)?;
-            i += 1;
-        } else {
+        if !b.is_ascii_digit() {
             return None;
         }
+        row = row.checked_mul(10)?.checked_add((b - b'0') as u32)?;
+        i += 1;
     }
 
     if row == 0 {

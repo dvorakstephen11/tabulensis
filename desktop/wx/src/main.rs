@@ -12,8 +12,10 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod logic;
+mod dev_scenario;
 mod xrc_validation;
 
 use desktop_backend::{
@@ -34,6 +36,7 @@ use wxdragon::widgets::{WebView, WebViewBackend, WebViewUserScriptInjectionTime}
 use wxdragon::xrc::{FromXrcPtr, XmlResource};
 use wxdragon_sys as ffi;
 use xrc_validation::validate_xrc;
+use dev_scenario::{load_from_env as load_dev_scenario, UiScenario};
 
 #[cfg(target_os = "linux")]
 use libc;
@@ -478,6 +481,9 @@ fn apply_frame_state(ctx: &mut UiContext, ui_state: &UiState) {
 }
 
 fn should_start_maximized(ui_state: &UiState) -> bool {
+    if window_size_override().is_some() || env_string("EXCEL_DIFF_DEV_SCENARIO").is_some() {
+        return false;
+    }
     if let Some(value) = env_flag("EXCEL_DIFF_START_MAXIMIZED") {
         return value;
     }
@@ -620,6 +626,9 @@ struct AppState {
     sheets_panel_visible: bool,
     sheets_sash_position: i32,
     ui_state_path: PathBuf,
+    dev_scenario: Option<UiScenario>,
+    dev_ready_file: Option<PathBuf>,
+    dev_ready_fired: bool,
 }
 
 struct UiContext {
@@ -1900,6 +1909,7 @@ fn populate_recents(ctx: &mut UiContext, recents: Vec<RecentComparison>) {
 }
 
 fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
+    let mut ready_signal: Option<(u64, &'static str)> = None;
     let _ = with_ui_context(|ctx| {
         ctx.ui.compare_btn.enable(true);
         ctx.ui.cancel_btn.enable(false);
@@ -1941,6 +1951,15 @@ fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
                 }
 
                 update_status_in_ctx(ctx, "Diff complete.");
+                if ctx.state.dev_ready_file.is_some() && !ctx.state.dev_ready_fired {
+                    let delay = ctx
+                        .state
+                        .dev_scenario
+                        .as_ref()
+                        .map(|s| s.stable_wait_ms)
+                        .unwrap_or(0);
+                    ready_signal = Some((delay, "diff_complete"));
+                }
             }
             Err(err) => {
                 ctx.ui
@@ -1948,9 +1967,22 @@ fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
                     .set_value(&format!("{}: {}", err.code, err.message));
                 update_status_in_ctx(ctx, &format!("Diff failed: {}", err.message));
                 update_status_counts_in_ctx(ctx, None);
+                if ctx.state.dev_ready_file.is_some() && !ctx.state.dev_ready_fired {
+                    let delay = ctx
+                        .state
+                        .dev_scenario
+                        .as_ref()
+                        .map(|s| s.stable_wait_ms)
+                        .unwrap_or(0);
+                    ready_signal = Some((delay, "diff_failed"));
+                }
             }
         }
     });
+
+    if let Some((delay, reason)) = ready_signal {
+        schedule_ready_signal(delay, reason);
+    }
 }
 
 fn handle_webview_diff_result(
@@ -2789,6 +2821,14 @@ fn main() {
     .unwrap_or_else(|err| panic!("Backend init failed: {}", err.message));
     install_panic_log(backend.paths.app_data_dir.join("crash.log"));
 
+    let dev_scenario = match load_dev_scenario() {
+        Ok(scenario) => scenario,
+        Err(err) => {
+            eprintln!("UI scenario error: {err}");
+            std::process::exit(1);
+        }
+    };
+
     wxdragon::main(move |_| {
         let ui = MainUi::new(None, false);
         let layout_debug = layout_debug_enabled();
@@ -2852,7 +2892,11 @@ fn main() {
         };
 
         let ui_state_path = backend.paths.app_data_dir.join("ui_state.json");
-        let ui_state = load_ui_state(&ui_state_path);
+        let ui_state = if ui_state_disabled() {
+            UiState::default()
+        } else {
+            load_ui_state(&ui_state_path)
+        };
         let state = AppState {
             backend,
             engine_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -2875,6 +2919,9 @@ fn main() {
             sheets_panel_visible: ui_state.sheets_panel_visible.unwrap_or(true),
             sheets_sash_position: ui_state.compare_sash.unwrap_or(DEFAULT_SASH_POSITION),
             ui_state_path,
+            dev_scenario: dev_scenario.clone(),
+            dev_ready_file: None,
+            dev_ready_fired: false,
         };
 
         UI_CONTEXT.with(|ctx| {
@@ -2922,10 +2969,12 @@ fn main() {
             && !should_maximize;
         let _ = with_ui_context(|ctx| {
             ctx.ui.frame.on_close(|event| {
-                let _ = with_ui_context(|ctx| {
-                    let state = capture_ui_state(ctx);
-                    save_ui_state(&ctx.state.ui_state_path, &state);
-                });
+                if !ui_state_disabled() {
+                    let _ = with_ui_context(|ctx| {
+                        let state = capture_ui_state(ctx);
+                        save_ui_state(&ctx.state.ui_state_path, &state);
+                    });
+                }
                 event.skip(true);
             });
 
@@ -2983,10 +3032,12 @@ fn main() {
                 });
 
                 apply_ui_state(ctx, &ui_state_for_init);
+                apply_window_size_override(ctx);
                 ctx.ui.compare_container.layout();
                 ctx.ui.root_tabs.layout();
             } else {
                 apply_frame_state(ctx, &ui_state_for_init);
+                apply_window_size_override(ctx);
             }
 
             ctx.ui.frame.layout();
@@ -3002,7 +3053,9 @@ fn main() {
             wxdragon::set_top_window(&ctx.ui.frame);
         });
 
+        let dev_scenario_for_init = dev_scenario.clone();
         wxdragon::call_after(Box::new(move || {
+            let mut scenario_to_run: Option<UiScenario> = None;
             let _ = with_ui_context(|ctx| {
                 if ctx.state.webview_enabled {
                     return;
@@ -3063,7 +3116,20 @@ fn main() {
                 if layout_debug {
                     log_layout_sizes(ctx);
                 }
+
+                if let Some(scenario) = dev_scenario_for_init.clone() {
+                    apply_dev_scenario(ctx, &scenario);
+                    scenario_to_run = Some(scenario);
+                }
             });
+
+            if let Some(scenario) = scenario_to_run {
+                if scenario.auto_run_diff {
+                    start_compare();
+                } else {
+                    schedule_ready_signal(scenario.stable_wait_ms, "idle_ready");
+                }
+            }
         }));
     })
     .expect("wxDragon app failed");
@@ -3081,6 +3147,158 @@ fn env_flag(name: &str) -> Option<bool> {
         Ok("0") | Ok("false") | Ok("FALSE") | Ok("no") | Ok("NO") | Ok("off") | Ok("OFF") => Some(false),
         _ => None,
     }
+}
+
+fn env_string(name: &str) -> Option<String> {
+    match std::env::var(name) {
+        Ok(value) if !value.trim().is_empty() => Some(value),
+        _ => None,
+    }
+}
+
+fn ui_state_disabled() -> bool {
+    env_flag("EXCEL_DIFF_UI_DISABLE_STATE").unwrap_or(false) || env_string("EXCEL_DIFF_DEV_SCENARIO").is_some()
+}
+
+fn parse_window_size(value: &str) -> Option<Size> {
+    let clean = value.trim().replace('x', " ").replace('X', " ").replace(',', " ");
+    let mut parts = clean.split_whitespace();
+    let width = parts.next()?.parse::<i32>().ok()?;
+    let height = parts.next()?.parse::<i32>().ok()?;
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    Some(Size::new(width, height))
+}
+
+fn window_size_override() -> Option<Size> {
+    env_string("EXCEL_DIFF_WINDOW_SIZE").and_then(|value| parse_window_size(&value))
+}
+
+fn apply_window_size_override(ctx: &mut UiContext) -> bool {
+    let Some(size) = window_size_override() else {
+        return false;
+    };
+    let min_size = min_window_size();
+    let width = size.width.max(min_size.width);
+    let height = size.height.max(min_size.height);
+    ctx.ui.frame.set_size(Size::new(width, height));
+    true
+}
+
+fn dev_ready_file_path() -> Option<PathBuf> {
+    env_string("EXCEL_DIFF_UI_READY_FILE").map(PathBuf::from)
+}
+
+fn preset_index_from_name(value: &str) -> Option<u32> {
+    let normalized = value.trim().to_lowercase().replace('_', "-");
+    match normalized.as_str() {
+        "balanced" | "default" => Some(0),
+        "fast" | "fastest" => Some(1),
+        "precise" | "most-precise" => Some(2),
+        _ => None,
+    }
+}
+
+fn apply_focus_panel(ctx: &mut UiContext, focus: Option<&str>) {
+    let Some(focus) = focus else {
+        return;
+    };
+    match focus.trim().to_lowercase().as_str() {
+        "compare" => ctx.ui.root_tabs.set_selection(0),
+        "recents" => ctx.ui.root_tabs.set_selection(1),
+        "batch" => ctx.ui.root_tabs.set_selection(2),
+        "search" => ctx.ui.root_tabs.set_selection(3),
+        "summary" => {
+            ctx.ui.root_tabs.set_selection(0);
+            ctx.ui.result_tabs.set_selection(0);
+        }
+        "details" => {
+            ctx.ui.root_tabs.set_selection(0);
+            ctx.ui.result_tabs.set_selection(1);
+        }
+        _ => {}
+    }
+}
+
+fn apply_dev_scenario(ctx: &mut UiContext, scenario: &UiScenario) {
+    ctx.state.dev_scenario = Some(scenario.clone());
+    ctx.state.dev_ready_file = dev_ready_file_path();
+    ctx.state.dev_ready_fired = false;
+
+    ctx.ui
+        .old_picker
+        .set_path(&scenario.old_path.to_string_lossy());
+    ctx.ui
+        .new_picker
+        .set_path(&scenario.new_path.to_string_lossy());
+
+    if let Some(trusted) = scenario.trusted_files {
+        ctx.ui.trusted_checkbox.set_value(trusted);
+    }
+
+    if let Some(preset) = scenario.preset.as_ref().and_then(|value| preset_index_from_name(value)) {
+        let max = ctx.ui.preset_choice.get_count().saturating_sub(1);
+        let choice = preset.min(max);
+        ctx.ui.preset_choice.set_selection(choice);
+    }
+
+    apply_focus_panel(ctx, scenario.focus_panel.as_deref());
+    update_status_in_ctx(ctx, &format!("Scenario loaded: {}", scenario.name));
+}
+
+fn schedule_ready_signal(delay_ms: u64, reason: &str) {
+    let reason = reason.to_string();
+    thread::spawn(move || {
+        if delay_ms > 0 {
+            thread::sleep(Duration::from_millis(delay_ms));
+        }
+        wxdragon::call_after(Box::new(move || mark_ui_ready(&reason)));
+    });
+}
+
+
+fn mark_ui_ready(reason: &str) {
+    let reason = reason.to_string();
+    let _ = with_ui_context(|ctx| {
+        if ctx.state.dev_ready_fired {
+            return;
+        }
+        let Some(path) = ctx.state.dev_ready_file.clone() else {
+            return;
+        };
+        ctx.state.dev_ready_fired = true;
+
+        let scenario = ctx.state.dev_scenario.as_ref();
+        let expected_mode = scenario
+            .and_then(|s| s.expect_mode.as_ref())
+            .map(|value| value.to_lowercase());
+        let actual_mode = ctx.state.current_mode.as_ref().map(|mode| mode.as_str().to_string());
+
+        let status = match (&expected_mode, &actual_mode) {
+            (Some(expected), Some(actual)) if expected != actual => "mode_mismatch",
+            _ => "ok",
+        };
+
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        let payload = json!({
+            "scenario": scenario.map(|s| s.name.clone()),
+            "reason": reason,
+            "status": status,
+            "timestamp_unix": timestamp,
+            "expected_mode": expected_mode,
+            "actual_mode": actual_mode,
+            "diff_id": ctx.state.current_diff_id,
+        });
+
+        if let Ok(body) = serde_json::to_string_pretty(&payload) {
+            let _ = std::fs::write(path, body);
+        }
+    });
 }
 
 fn configure_linux_environment() {

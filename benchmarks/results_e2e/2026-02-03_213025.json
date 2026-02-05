@@ -1,13 +1,13 @@
 {
-  "timestamp": "2026-02-03T21:31:31.158551+00:00",
+  "timestamp": "2026-02-03T21:30:25.337488+00:00",
   "git_commit": "c370707ec9f3",
   "git_branch": "20260203_perf_improvement",
   "tests": {
     "e2e_p1_dense": {
-      "total_time_ms": 4836,
-      "parse_time_ms": 4826,
-      "diff_time_ms": 10,
-      "signature_build_time_ms": 8,
+      "total_time_ms": 4374,
+      "parse_time_ms": 4357,
+      "diff_time_ms": 17,
+      "signature_build_time_ms": 15,
       "move_detection_time_ms": 0,
       "alignment_time_ms": 0,
       "cell_diff_time_ms": 0,
@@ -29,10 +29,10 @@
       "total_input_bytes": 6561969
     },
     "e2e_p2_noise": {
-      "total_time_ms": 1881,
-      "parse_time_ms": 1870,
+      "total_time_ms": 1779,
+      "parse_time_ms": 1768,
       "diff_time_ms": 11,
-      "signature_build_time_ms": 9,
+      "signature_build_time_ms": 8,
       "move_detection_time_ms": 0,
       "alignment_time_ms": 0,
       "cell_diff_time_ms": 0,
@@ -54,10 +54,10 @@
       "total_input_bytes": 25368107
     },
     "e2e_p3_repetitive": {
-      "total_time_ms": 5515,
-      "parse_time_ms": 5474,
-      "diff_time_ms": 41,
-      "signature_build_time_ms": 33,
+      "total_time_ms": 5544,
+      "parse_time_ms": 5520,
+      "diff_time_ms": 24,
+      "signature_build_time_ms": 19,
       "move_detection_time_ms": 0,
       "alignment_time_ms": 0,
       "cell_diff_time_ms": 0,
@@ -79,8 +79,8 @@
       "total_input_bytes": 16131435
     },
     "e2e_p4_sparse": {
-      "total_time_ms": 165,
-      "parse_time_ms": 133,
+      "total_time_ms": 166,
+      "parse_time_ms": 134,
       "diff_time_ms": 32,
       "signature_build_time_ms": 32,
       "move_detection_time_ms": 0,
@@ -104,9 +104,9 @@
       "total_input_bytes": 1066165
     },
     "e2e_p5_identical": {
-      "total_time_ms": 25129,
-      "parse_time_ms": 25110,
-      "diff_time_ms": 19,
+      "total_time_ms": 28125,
+      "parse_time_ms": 28076,
+      "diff_time_ms": 49,
       "signature_build_time_ms": 0,
       "move_detection_time_ms": 0,
       "alignment_time_ms": 0,
@@ -131,7 +131,7 @@
   },
   "summary": {
     "total_tests": 5,
-    "total_time_ms": 37526,
+    "total_time_ms": 39988,
     "total_rows_processed": 500002,
     "total_cells_compared": 5001430
   }

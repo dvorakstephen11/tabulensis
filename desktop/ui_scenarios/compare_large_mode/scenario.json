@@ -1,0 +1,12 @@
+{
+  "name": "Compare Large Mode",
+  "description": "Large dense workbook to exercise large-mode UI behavior.",
+  "oldPath": "../../../fixtures/generated/e2e_p1_dense_a.xlsx",
+  "newPath": "../../../fixtures/generated/e2e_p1_dense_b.xlsx",
+  "autoRunDiff": true,
+  "stableWaitMs": 1500,
+  "expectMode": "large",
+  "focusPanel": "summary",
+  "preset": "balanced",
+  "trustedFiles": true
+}

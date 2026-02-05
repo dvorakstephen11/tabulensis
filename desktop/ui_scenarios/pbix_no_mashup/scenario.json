@@ -1,0 +1,12 @@
+{
+  "name": "PBIX No DataMashup",
+  "description": "PBIX with missing DataMashup to validate error and messaging UI state.",
+  "oldPath": "../../../fixtures/generated/pbix_no_datamashup.pbix",
+  "newPath": "../../../fixtures/generated/pbix_no_datamashup_no_schema.pbix",
+  "autoRunDiff": true,
+  "stableWaitMs": 1200,
+  "expectMode": "payload",
+  "focusPanel": "details",
+  "preset": "balanced",
+  "trustedFiles": true
+}

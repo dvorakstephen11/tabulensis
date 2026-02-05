@@ -1,0 +1,70 @@
+name: UI Visual Regression
+
+on:
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: "Scenario name"
+        required: false
+        default: "compare_basic"
+      update_baseline:
+        description: "Update baseline"
+        required: false
+        default: "false"
+  pull_request:
+    types: [opened, synchronize, labeled]
+  push:
+    branches: [main, master]
+
+jobs:
+  ui-visual:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ui-visual'))
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb xdotool imagemagick libgtk-3-dev libwebkit2gtk-4.0-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run UI visual regression
+        env:
+          EXCEL_DIFF_UI_HEADLESS: "1"
+          EXCEL_DIFF_WINDOW_SIZE: "1280x720"
+          EXCEL_DIFF_START_MAXIMIZED: "0"
+          EXCEL_DIFF_UI_DISABLE_STATE: "1"
+        run: |
+          SCENARIO="${{ github.event.inputs.scenario || 'compare_basic' }}"
+          UPDATE_BASELINE="${{ github.event.inputs.update_baseline || 'false' }}"
+          if [ "$UPDATE_BASELINE" = "true" ]; then
+            scripts/ui_pipeline.sh "$SCENARIO" --update-baseline
+          else
+            scripts/ui_pipeline.sh "$SCENARIO"
+          fi
+
+      - name: Upload UI artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-visual-${{ github.run_id }}
+          path: |
+            desktop/ui_snapshots/**
+            desktop/ui_reports/**

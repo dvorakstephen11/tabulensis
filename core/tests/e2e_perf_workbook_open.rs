@@ -12,15 +12,23 @@ fn open_fixture_with_size(name: &str) -> (WorkbookPackage, u64) {
     let bytes = std::fs::metadata(&path)
         .map(|meta| meta.len())
         .unwrap_or(0);
-    let file = File::open(&path).unwrap_or_else(|e| {
+    let mut file = File::open(&path).unwrap_or_else(|e| {
         panic!("failed to open fixture {}: {e}", path.display());
     });
+
+    let mut data = Vec::with_capacity(bytes.min(usize::MAX as u64) as usize);
+    use std::io::Read;
+    file.read_to_end(&mut data).unwrap_or_else(|e| {
+        panic!("failed to read fixture {}: {e}", path.display());
+    });
+
     let limits = ContainerLimits {
         max_entries: 10_000,
         max_part_uncompressed_bytes: 512 * 1024 * 1024,
         max_total_uncompressed_bytes: 1024 * 1024 * 1024,
     };
-    let pkg = WorkbookPackage::open_with_limits(file, limits).unwrap_or_else(|e| {
+    let cursor = std::io::Cursor::new(data);
+    let pkg = WorkbookPackage::open_with_limits(cursor, limits).unwrap_or_else(|e| {
         panic!("failed to parse fixture {}: {e}", path.display());
     });
     (pkg, bytes)

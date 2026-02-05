@@ -20,7 +20,10 @@
 - [Perf playbook](perf_playbook.md)
 - [Migration guide (from legacy APIs)](migration.md)
 - [Desktop app](desktop.md)
+- [UI visual regression](ui_visual_regression.md)
+- [UI visual regression manual](ui_visual_regression_manual.md)
 
 ## Other references
 
 - [Error codes](errors.md)
+- [UI guidelines](ui_guidelines.md)

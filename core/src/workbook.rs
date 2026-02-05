@@ -531,13 +531,12 @@ impl Grid {
     }
 
     pub fn get_mut(&mut self, row: u32, col: u32) -> Option<&mut CellContent> {
-        if self.row_signatures.is_some() {
+        let out = self.cells.get_mut(row, col);
+        if out.is_some() && (self.row_signatures.is_some() || self.col_signatures.is_some()) {
             self.row_signatures = None;
-        }
-        if self.col_signatures.is_some() {
             self.col_signatures = None;
         }
-        self.cells.get_mut(row, col)
+        out
     }
 
     pub fn insert_cell(
@@ -549,12 +548,12 @@ impl Grid {
     ) {
         debug_assert!(
             row < self.nrows && col < self.ncols,
-            "cell coordinates must lie within the grid bounds"
+            "insert_cell out of bounds: ({row},{col}) for grid {}x{}",
+            self.nrows,
+            self.ncols
         );
-        if self.row_signatures.is_some() {
+        if self.row_signatures.is_some() || self.col_signatures.is_some() {
             self.row_signatures = None;
-        }
-        if self.col_signatures.is_some() {
             self.col_signatures = None;
         }
         self.cells

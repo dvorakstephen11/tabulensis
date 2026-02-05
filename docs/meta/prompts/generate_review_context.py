@@ -762,6 +762,45 @@ def get_latest_benchmark_result(ctx: ProjectContext) -> Path | None:
     return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
+def _parse_cycle_timestamp(name: str) -> datetime | None:
+    try:
+        return datetime.strptime(name, "%Y-%m-%d_%H%M%S")
+    except ValueError:
+        return None
+
+
+def get_latest_perf_cycle_dir(ctx: ProjectContext) -> Path | None:
+    cycles_root = ctx.root / "benchmarks" / "perf_cycles"
+    if not cycles_root.exists():
+        return None
+    candidates = [path for path in cycles_root.iterdir() if path.is_dir()]
+    if not candidates:
+        return None
+
+    def sort_key(path: Path) -> datetime:
+        parsed = _parse_cycle_timestamp(path.name)
+        if parsed:
+            return parsed
+        return datetime.fromtimestamp(path.stat().st_mtime)
+
+    return max(candidates, key=sort_key)
+
+
+def add_perf_cycle_files(builder: ContextBuilder, cycle_dir: Path) -> Path | None:
+    if not cycle_dir.exists():
+        return None
+    dest_root = builder.out_dir / "perf_cycles" / cycle_dir.name
+    for src in sorted(cycle_dir.rglob("*")):
+        if not src.is_file():
+            continue
+        rel = src.relative_to(cycle_dir)
+        dest = dest_root / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+        builder.manifest.append(dest)
+    return dest_root
+
+
 def get_latest_e2e_result(ctx: ProjectContext) -> Path | None:
     benchmarks_root = ctx.root / "benchmarks"
     latest = benchmarks_root / "latest_e2e.json"
@@ -1031,6 +1070,7 @@ def render_cycle_summary(
     cycle_plan: Path,
     perf_path: Path | None = None,
     e2e_path: Path | None = None,
+    perf_cycle: tuple[Path, Path] | None = None,
 ) -> str:
     lines = [
         "=" * 60,
@@ -1047,6 +1087,11 @@ def render_cycle_summary(
             lines.append(f"  - {dst.name} (from {src})")
     if cycle_plan.exists():
         lines.append("  - cycle_plan.md (combined decision + spec)")
+    if perf_cycle:
+        src_dir, dst_dir = perf_cycle
+        if dst_dir.exists():
+            dest_display = f"{dst_dir.parent.name}/{dst_dir.name}"
+            lines.append(f"  - {dest_display} (from {src_dir})")
     if perf_path or e2e_path:
         sources: list[str] = []
         if perf_path and perf_path.exists():
@@ -1203,7 +1248,17 @@ def collate_post_implementation_review(
     test_results = ctx.root / "docs" / "meta" / "results" / f"{branch}.txt"
     perf_path = get_latest_benchmark_result(ctx)
     e2e_path = get_latest_e2e_result(ctx)
-    summary_lines = render_cycle_summary(branch, files_to_copy, cycle_plan_path, perf_path, e2e_path).splitlines()
+    perf_cycle_dir = get_latest_perf_cycle_dir(ctx)
+    perf_cycle_dest = add_perf_cycle_files(builder, perf_cycle_dir) if perf_cycle_dir else None
+    perf_cycle_entry = (perf_cycle_dir, perf_cycle_dest) if perf_cycle_dir and perf_cycle_dest else None
+    summary_lines = render_cycle_summary(
+        branch,
+        files_to_copy,
+        cycle_plan_path,
+        perf_path,
+        e2e_path,
+        perf_cycle=perf_cycle_entry,
+    ).splitlines()
     summary_lines.extend(
         [
             "",

@@ -811,7 +811,20 @@ fn build_grid(nrows: u32, ncols: u32, cells: Vec<ParsedCell>) -> Result<Grid, Gr
     };
 
     for parsed in cells {
-        grid.insert_cell(parsed.row, parsed.col, parsed.value, parsed.formula);
+        if parsed.value.is_none() && parsed.formula.is_none() {
+            continue;
+        }
+
+        debug_assert!(parsed.row < nrows && parsed.col < ncols);
+
+        grid.cells.insert(
+            parsed.row,
+            parsed.col,
+            crate::workbook::CellContent {
+                value: parsed.value,
+                formula: parsed.formula,
+            },
+        );
     }
 
     Ok(grid)
