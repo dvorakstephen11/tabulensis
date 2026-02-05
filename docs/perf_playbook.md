@@ -1,14 +1,28 @@
 # Perf Playbook
 
-This is the shortest path to reproduce the perf CI suites locally and keep baselines sane.
+This is the shortest path to reproduce perf suites locally and keep baselines sane.
 
-## Required perf cycle for Rust changes
+## Perf validation policy
 
-Before editing Rust files (`.rs`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`), capture a pre-change baseline. After edits, re-run the same suites and generate a delta summary:
+Use the **full perf cycle** for **major perf-risk changes**.
+Use **quick/gate suites** for routine changes.
+
+Run the full perf cycle when any of these are true:
+- You change parse/open/container/alignment/diff behavior in Rust.
+- You change desktop backend runtime/storage orchestration (`desktop/backend/src/**`) or payload shaping (`ui_payload/src/**`).
+- You change Rust dependencies/toolchain/profiles (`Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`).
+- You make an intentional optimization or expect non-trivial runtime/memory/I/O impact.
+
+For routine non-major Rust changes, run quick suite first, then gate suite if the touched code affects large-grid or streaming behavior.
+
+Escalation rule:
+- If quick/gate fails, regresses unexpectedly, or results are noisy/suspicious, run the full perf cycle before merging.
+
+## Full perf cycle (major changes)
 
 ```bash
 python3 scripts/perf_cycle.py pre
-# ...make Rust changes...
+# ...make changes...
 python3 scripts/perf_cycle.py post --cycle <cycle_id>
 ```
 

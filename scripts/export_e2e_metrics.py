@@ -118,7 +118,12 @@ def get_git_branch() -> str:
 
 
 def run_command(
-    cmd: list[str], cwd: Path, *, capture_output: bool = False, timeout: int | None = None
+    cmd: list[str],
+    cwd: Path,
+    *,
+    capture_output: bool = False,
+    timeout: int | None = None,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     print(f"Running: {' '.join(cmd)}")
     return subprocess.run(
@@ -127,15 +132,29 @@ def run_command(
         capture_output=capture_output,
         text=True,
         timeout=timeout,
+        env=env,
     )
 
 
-def install_fixture_generator(repo_root: Path) -> None:
+def fixture_env(repo_root: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    user_base = env.get("EXCEL_DIFF_FIXTURE_USERBASE")
+    if not user_base:
+        user_base = str(repo_root / ".pip-user")
+    env["PYTHONUSERBASE"] = user_base
+    user_bin = str(Path(user_base) / "bin")
+    env["PATH"] = os.pathsep.join([user_bin, env.get("PATH", "")])
+    return env
+
+
+def install_fixture_generator(repo_root: Path, env: dict[str, str]) -> None:
     python = sys.executable
     requirements = repo_root / "fixtures" / "requirements.txt"
+    print(f"Using fixture PYTHONUSERBASE: {env['PYTHONUSERBASE']}")
     result = run_command(
         [python, "-m", "pip", "install", "-r", str(requirements)],
         cwd=repo_root,
+        env=env,
     )
     if result.returncode != 0:
         raise RuntimeError("Failed to install fixture generator requirements.")
@@ -143,15 +162,17 @@ def install_fixture_generator(repo_root: Path) -> None:
     result = run_command(
         [python, "-m", "pip", "install", "-e", "fixtures", "--no-deps"],
         cwd=repo_root,
+        env=env,
     )
     if result.returncode != 0:
         raise RuntimeError("Failed to install fixture generator package.")
 
 
-def generate_fixtures(repo_root: Path, manifest: Path) -> None:
+def generate_fixtures(repo_root: Path, manifest: Path, env: dict[str, str]) -> None:
     result = run_command(
         ["generate-fixtures", "--manifest", str(manifest), "--force"],
         cwd=repo_root,
+        env=env,
     )
     if result.returncode != 0:
         raise RuntimeError("Failed to generate e2e fixtures.")
@@ -445,8 +466,9 @@ def main() -> int:
 
     try:
         if not args.skip_fixtures:
-            install_fixture_generator(repo_root)
-            generate_fixtures(repo_root, manifest)
+            env = fixture_env(repo_root)
+            install_fixture_generator(repo_root, env)
+            generate_fixtures(repo_root, manifest, env)
     except RuntimeError as exc:
         print(f"ERROR: {exc}")
         return 1

@@ -11,6 +11,8 @@ use crate::vba::VbaModule;
 use crate::workbook::{Sheet, Workbook};
 #[cfg(feature = "perf-metrics")]
 use crate::perf::DiffMetrics;
+#[cfg(feature = "excel-open-xml")]
+use std::time::Instant;
 
 /// A parsed workbook plus optional associated content (Power Query and VBA).
 ///
@@ -46,6 +48,14 @@ impl From<Workbook> for WorkbookPackage {
     }
 }
 
+#[cfg(feature = "excel-open-xml")]
+fn open_profile_enabled() -> bool {
+    match std::env::var("EXCEL_DIFF_PROFILE_OPEN") {
+        Ok(value) => value == "1" || value.eq_ignore_ascii_case("true"),
+        Err(_) => false,
+    }
+}
+
 impl WorkbookPackage {
     #[cfg(feature = "excel-open-xml")]
     /// Parse a workbook from any `Read + Seek` source.
@@ -67,26 +77,56 @@ impl WorkbookPackage {
         reader: R,
     ) -> Result<Self, crate::excel_open_xml::PackageError> {
         crate::with_default_session(|session| {
-            #[cfg(feature = "perf-metrics")]
-            let start = std::time::Instant::now();
+            let profile_enabled = open_profile_enabled();
+            let total_start = Instant::now();
             let mut container = crate::container::OpcContainer::open_from_reader(reader)?;
-            let workbook = crate::excel_open_xml::open_workbook_from_container(
-                &mut container,
-                &mut session.strings,
-            )?;
+
+            let workbook_start = Instant::now();
+            let workbook =
+                crate::excel_open_xml::open_workbook_from_container(&mut container, &mut session.strings)?;
+            let workbook_ms = workbook_start.elapsed().as_millis() as u64;
+
+            let data_mashup_start = Instant::now();
             let raw = crate::excel_open_xml::open_data_mashup_from_container(&mut container)?;
             let data_mashup = match raw {
                 Some(raw) => Some(crate::datamashup::build_data_mashup(&raw)?),
                 None => None,
             };
-            let vba_modules =
-                crate::excel_open_xml::open_vba_modules_from_container(&mut container, &mut session.strings)?;
+            let data_mashup_ms = data_mashup_start.elapsed().as_millis() as u64;
+
+            let vba_start = Instant::now();
+            let vba_modules = crate::excel_open_xml::open_vba_modules_from_container(
+                &mut container,
+                &mut session.strings,
+            )?;
+            let vba_ms = vba_start.elapsed().as_millis() as u64;
+
+            #[cfg(feature = "perf-metrics")]
+            let parse_time_ms = total_start.elapsed().as_millis() as u64;
+            #[cfg(not(feature = "perf-metrics"))]
+            let parse_time_ms = 0_u64;
+
+            if profile_enabled {
+                let vba_modules_count = vba_modules.as_ref().map(|items| items.len()).unwrap_or(0);
+                println!(
+                    "PERF_OPEN_PACKAGE total_ms={} workbook_ms={} data_mashup_ms={} vba_ms={} parse_time_ms={} sheets={} has_data_mashup={} vba_modules={}",
+                    total_start.elapsed().as_millis() as u64,
+                    workbook_ms,
+                    data_mashup_ms,
+                    vba_ms,
+                    parse_time_ms,
+                    workbook.sheets.len(),
+                    data_mashup.is_some(),
+                    vba_modules_count
+                );
+            }
+
             Ok(Self {
                 workbook,
                 data_mashup,
                 vba_modules,
                 #[cfg(feature = "perf-metrics")]
-                parse_time_ms: start.elapsed().as_millis() as u64,
+                parse_time_ms,
             })
         })
     }
@@ -98,27 +138,57 @@ impl WorkbookPackage {
         limits: crate::ContainerLimits,
     ) -> Result<Self, crate::excel_open_xml::PackageError> {
         crate::with_default_session(|session| {
-            #[cfg(feature = "perf-metrics")]
-            let start = std::time::Instant::now();
+            let profile_enabled = open_profile_enabled();
+            let total_start = Instant::now();
             let mut container =
                 crate::container::OpcContainer::open_from_reader_with_limits(reader, limits)?;
-            let workbook = crate::excel_open_xml::open_workbook_from_container(
-                &mut container,
-                &mut session.strings,
-            )?;
+
+            let workbook_start = Instant::now();
+            let workbook =
+                crate::excel_open_xml::open_workbook_from_container(&mut container, &mut session.strings)?;
+            let workbook_ms = workbook_start.elapsed().as_millis() as u64;
+
+            let data_mashup_start = Instant::now();
             let raw = crate::excel_open_xml::open_data_mashup_from_container(&mut container)?;
             let data_mashup = match raw {
                 Some(raw) => Some(crate::datamashup::build_data_mashup(&raw)?),
                 None => None,
             };
-            let vba_modules =
-                crate::excel_open_xml::open_vba_modules_from_container(&mut container, &mut session.strings)?;
+            let data_mashup_ms = data_mashup_start.elapsed().as_millis() as u64;
+
+            let vba_start = Instant::now();
+            let vba_modules = crate::excel_open_xml::open_vba_modules_from_container(
+                &mut container,
+                &mut session.strings,
+            )?;
+            let vba_ms = vba_start.elapsed().as_millis() as u64;
+
+            #[cfg(feature = "perf-metrics")]
+            let parse_time_ms = total_start.elapsed().as_millis() as u64;
+            #[cfg(not(feature = "perf-metrics"))]
+            let parse_time_ms = 0_u64;
+
+            if profile_enabled {
+                let vba_modules_count = vba_modules.as_ref().map(|items| items.len()).unwrap_or(0);
+                println!(
+                    "PERF_OPEN_PACKAGE total_ms={} workbook_ms={} data_mashup_ms={} vba_ms={} parse_time_ms={} sheets={} has_data_mashup={} vba_modules={}",
+                    total_start.elapsed().as_millis() as u64,
+                    workbook_ms,
+                    data_mashup_ms,
+                    vba_ms,
+                    parse_time_ms,
+                    workbook.sheets.len(),
+                    data_mashup.is_some(),
+                    vba_modules_count
+                );
+            }
+
             Ok(Self {
                 workbook,
                 data_mashup,
                 vba_modules,
                 #[cfg(feature = "perf-metrics")]
-                parse_time_ms: start.elapsed().as_millis() as u64,
+                parse_time_ms,
             })
         })
     }

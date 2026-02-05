@@ -1,0 +1,24 @@
+# Perf Cycle Delta Summary
+
+Cycle: `2026-02-05_192612`
+Pre: `7ed19c558ceb` (20260203_perf_improvement) at 2026-02-05T19:26:12.740588+00:00
+Post: `7ed19c558ceb` (20260203_perf_improvement) at 2026-02-05T19:29:18.981393+00:00
+
+## Full-scale (total_time_ms)
+| Test | Pre | Post | Delta |
+| --- | --- | --- | --- |
+| `perf_50k_99_percent_blank` | 33 | 30 | -3 ms (-9.1%) |
+| `perf_50k_adversarial_repetitive` | 21 | 20 | -1 ms (-4.8%) |
+| `perf_50k_alignment_block_move` | 281 | 294 | +13 ms (+4.6%) |
+| `perf_50k_completely_different` | 218 | 224 | +6 ms (+2.8%) |
+| `perf_50k_dense_single_edit` | 39 | 41 | +2 ms (+5.1%) |
+| `perf_50k_identical` | 16 | 19 | +3 ms (+18.8%) |
+
+## E2E (total/parse/diff time)
+| Test | Pre Total | Post Total | Delta | Pre Parse | Post Parse | Delta | Pre Diff | Post Diff | Delta |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `e2e_p1_dense` | 3293 | 3100 | -193 ms (-5.9%) | 3282 | 3090 | -192 ms (-5.9%) | 11 | 10 | -1 ms (-9.1%) |
+| `e2e_p2_noise` | 1512 | 1390 | -122 ms (-8.1%) | 1502 | 1380 | -122 ms (-8.1%) | 10 | 10 | +0 ms (+0.0%) |
+| `e2e_p3_repetitive` | 4468 | 4160 | -308 ms (-6.9%) | 4445 | 4137 | -308 ms (-6.9%) | 23 | 23 | +0 ms (+0.0%) |
+| `e2e_p4_sparse` | 152 | 147 | -5 ms (-3.3%) | 119 | 116 | -3 ms (-2.5%) | 33 | 31 | -2 ms (-6.1%) |
+| `e2e_p5_identical` | 20213 | 18104 | -2109 ms (-10.4%) | 20194 | 18087 | -2107 ms (-10.4%) | 19 | 17 | -2 ms (-10.5%) |

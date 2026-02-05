@@ -3205,10 +3205,18 @@ fn apply_focus_panel(ctx: &mut UiContext, focus: Option<&str>) {
         return;
     };
     match focus.trim().to_lowercase().as_str() {
-        "compare" => ctx.ui.root_tabs.set_selection(0),
-        "recents" => ctx.ui.root_tabs.set_selection(1),
-        "batch" => ctx.ui.root_tabs.set_selection(2),
-        "search" => ctx.ui.root_tabs.set_selection(3),
+        "compare" => {
+            ctx.ui.root_tabs.set_selection(0);
+        }
+        "recents" => {
+            ctx.ui.root_tabs.set_selection(1);
+        }
+        "batch" => {
+            ctx.ui.root_tabs.set_selection(2);
+        }
+        "search" => {
+            ctx.ui.root_tabs.set_selection(3);
+        }
         "summary" => {
             ctx.ui.root_tabs.set_selection(0);
             ctx.ui.result_tabs.set_selection(0);
@@ -3244,7 +3252,14 @@ fn apply_dev_scenario(ctx: &mut UiContext, scenario: &UiScenario) {
     }
 
     apply_focus_panel(ctx, scenario.focus_panel.as_deref());
-    update_status_in_ctx(ctx, &format!("Scenario loaded: {}", scenario.name));
+    let status = scenario
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|desc| !desc.is_empty())
+        .map(|desc| format!("Scenario loaded: {} ({})", scenario.name, desc))
+        .unwrap_or_else(|| format!("Scenario loaded: {}", scenario.name));
+    update_status_in_ctx(ctx, &status);
 }
 
 fn schedule_ready_signal(delay_ms: u64, reason: &str) {

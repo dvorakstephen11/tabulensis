@@ -1,0 +1,10 @@
+{
+  "cycle": "2026-02-05_194240",
+  "pre": {
+    "timestamp": "2026-02-05T19:42:40.880647+00:00",
+    "git_commit": "7ed19c558ceb",
+    "git_branch": "20260203_perf_improvement",
+    "fullscale_json": "benchmarks/perf_cycles/2026-02-05_194240/pre_fullscale.json",
+    "e2e_json": "benchmarks/perf_cycles/2026-02-05_194240/pre_e2e.json"
+  }
+}

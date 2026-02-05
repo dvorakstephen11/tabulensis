@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Run a required perf cycle around Rust code changes.
+Run a full pre/post perf cycle for major perf-risk Rust changes.
 
 Workflow:
   1) Before edits:  python3 scripts/perf_cycle.py pre
   2) After edits:   python3 scripts/perf_cycle.py post --cycle <cycle_id>
 
 This runs the full-scale perf suite + e2e suite twice and produces a delta report.
+Use quick/gate suites for routine low-risk changes; reserve this script for major changes.
 """
 
 from __future__ import annotations
@@ -208,7 +209,9 @@ def render_markdown_summary(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run perf cycle (pre/post) for Rust changes")
+    parser = argparse.ArgumentParser(
+        description="Run full perf cycle (pre/post) for major perf-risk Rust changes"
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     common = argparse.ArgumentParser(add_help=False)

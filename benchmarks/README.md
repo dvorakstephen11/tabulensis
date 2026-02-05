@@ -15,9 +15,17 @@ benchmarks/
 
 ## Running Benchmarks
 
-### Perf Cycle (Required for Rust changes)
+### Perf Validation Policy
 
-When changing Rust code (`.rs`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`), run a pre/post cycle and compare deltas:
+Run the **full perf cycle** only for **major perf-risk changes**.
+
+Major-change triggers:
+- Core parse/open/container/alignment/diff behavior changes (`core/src/**` hot paths).
+- Desktop backend runtime/storage or payload-shaping changes (`desktop/backend/src/**`, `ui_payload/src/**`).
+- Rust dependency/toolchain/profile changes (`Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`).
+- Intentional optimization work expected to move runtime or memory materially.
+
+Full cycle commands:
 
 ```bash
 python3 scripts/perf_cycle.py pre
@@ -27,6 +35,11 @@ python3 scripts/perf_cycle.py post --cycle <cycle_id>
 
 The delta summary is written to `benchmarks/perf_cycles/<cycle_id>/cycle_delta.md`.
 If fixture generation fails in your environment, add `--skip-fixtures`.
+
+For routine non-major changes:
+- Run quick suite.
+- Add gate suite when touching large-grid/streaming paths.
+- Escalate to full cycle if quick/gate fails or behaves unexpectedly.
 
 ### Perf Gate Suites (scripts used by CI)
 

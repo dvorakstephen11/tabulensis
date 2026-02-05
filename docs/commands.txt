@@ -82,6 +82,21 @@ Save test output to results file (uses current branch name, works from any subdi
 # Run Criterion benchmarks with HTML reports
 cd core && cargo bench
 
+# Perf policy:
+# - Routine changes: run quick (and gate if large-grid/streaming paths touched)
+# - Major perf-risk changes: run full pre/post perf cycle
+
+# Quick suite (routine)
+python scripts/check_perf_thresholds.py --suite quick --parallel --baseline benchmarks/baselines/quick.json --export-json benchmarks/latest_quick.json --export-csv benchmarks/latest_quick.csv
+
+# Gate suite (routine when large-grid/streaming paths touched)
+python scripts/check_perf_thresholds.py --suite gate --parallel --baseline benchmarks/baselines/gate.json --test-target perf_large_grid_tests
+
+# Full cycle (major changes only)
+python3 scripts/perf_cycle.py pre
+# ...make changes...
+python3 scripts/perf_cycle.py post --cycle <cycle_id>
+
 # Export quick metrics to JSON
 python scripts/export_perf_metrics.py
 
