@@ -1056,27 +1056,173 @@ fn convert_value_bytes(
     reader: &Reader<&[u8]>,
     xml: &[u8],
 ) -> Result<Option<CellValue>, GridParseError> {
+    fn parse_usize_decimal_bytes(raw: &[u8]) -> Option<usize> {
+        if raw.is_empty() {
+            return None;
+        }
+        let mut n: usize = 0;
+        for &b in raw {
+            if !b.is_ascii_digit() {
+                return None;
+            }
+            let d = (b - b'0') as usize;
+            n = n.checked_mul(10)?.checked_add(d)?;
+        }
+        Some(n)
+    }
+
+    fn parse_f64_fast_bytes(raw: &[u8]) -> Option<f64> {
+        if raw.is_empty() {
+            return None;
+        }
+        let mut i = 0usize;
+        let mut neg = false;
+        match raw[0] {
+            b'-' => {
+                neg = true;
+                i = 1;
+            }
+            b'+' => {
+                i = 1;
+            }
+            _ => {}
+        }
+        if i >= raw.len() {
+            return None;
+        }
+
+        let mut int: u64 = 0;
+        let mut saw_digit = false;
+        while i < raw.len() {
+            let b = raw[i];
+            if b.is_ascii_digit() {
+                saw_digit = true;
+                let d = (b - b'0') as u64;
+                if int > (u64::MAX - d) / 10 {
+                    let s = std::str::from_utf8(raw).ok()?;
+                    return s.parse::<f64>().ok();
+                }
+                int = int * 10 + d;
+                i += 1;
+                continue;
+            }
+            break;
+        }
+        if !saw_digit {
+            return None;
+        }
+        if i == raw.len() {
+            let v = int as f64;
+            return Some(if neg { -v } else { v });
+        }
+        match raw[i] {
+            b'.' | b'e' | b'E' => {
+                let s = std::str::from_utf8(raw).ok()?;
+                s.parse::<f64>().ok()
+            }
+            _ => None,
+        }
+    }
+
+    fn trim_ascii_bytes(raw: &[u8]) -> &[u8] {
+        if raw.is_empty() {
+            return raw;
+        }
+        let first = raw[0];
+        let last = raw[raw.len() - 1];
+        if !first.is_ascii_whitespace() && !last.is_ascii_whitespace() {
+            return raw;
+        }
+        let mut start = 0usize;
+        let mut end = raw.len();
+        while start < end && raw[start].is_ascii_whitespace() {
+            start += 1;
+        }
+        while end > start && raw[end - 1].is_ascii_whitespace() {
+            end -= 1;
+        }
+        &raw[start..end]
+    }
+
+    fn utf8<'a>(
+        raw: &'a [u8],
+        reader: &Reader<&[u8]>,
+        xml: &[u8],
+    ) -> Result<&'a str, GridParseError> {
+        std::str::from_utf8(raw)
+            .map_err(|e| xml_msg_err(reader, xml, format!("invalid UTF-8 in cell value: {e}")))
+    }
+
     let Some(raw_bytes) = value_bytes else {
         return Ok(None);
     };
 
-    let raw = std::str::from_utf8(raw_bytes)
-        .map_err(|e| xml_msg_err(reader, xml, format!("invalid UTF-8 in cell value: {e}")))?;
-
-    if raw_bytes.contains(&b'&') {
-        let unescaped = quick_xml::escape::unescape(raw)
-            .map_err(|e| xml_msg_err(reader, xml, e.to_string()))?;
-        return convert_value(
-            Some(unescaped.as_ref()),
-            cell_type,
-            shared_strings,
-            pool,
-            reader,
-            xml,
-        );
+    if raw_bytes.is_empty() {
+        return Ok(Some(CellValue::Text(pool.intern(""))));
     }
 
-    convert_value(Some(raw), cell_type, shared_strings, pool, reader, xml)
+    let trimmed_bytes = trim_ascii_bytes(raw_bytes);
+    if trimmed_bytes.is_empty() {
+        return Ok(Some(CellValue::Text(pool.intern(""))));
+    }
+
+    match cell_type {
+        Some(CellTypeTag::SharedString) => {
+            let idx = match parse_usize_decimal_bytes(trimmed_bytes) {
+                Some(v) => v,
+                None => {
+                    let trimmed = utf8(trimmed_bytes, reader, xml)?;
+                    trimmed
+                        .parse::<usize>()
+                        .map_err(|e| xml_msg_err(reader, xml, e.to_string()))?
+                }
+            };
+            let text_id = *shared_strings
+                .get(idx)
+                .ok_or(GridParseError::SharedStringOutOfBounds(idx))?;
+            Ok(Some(CellValue::Text(text_id)))
+        }
+        Some(CellTypeTag::Bool) => Ok(match trimmed_bytes {
+            b"1" => Some(CellValue::Bool(true)),
+            b"0" => Some(CellValue::Bool(false)),
+            _ => None,
+        }),
+        Some(CellTypeTag::Error) => {
+            if trimmed_bytes.contains(&b'&') {
+                let raw = utf8(trimmed_bytes, reader, xml)?;
+                let unescaped = quick_xml::escape::unescape(raw)
+                    .map_err(|e| xml_msg_err(reader, xml, e.to_string()))?;
+                Ok(Some(CellValue::Error(pool.intern(unescaped.as_ref()))))
+            } else {
+                let raw = utf8(trimmed_bytes, reader, xml)?;
+                Ok(Some(CellValue::Error(pool.intern(raw))))
+            }
+        }
+        Some(CellTypeTag::FormulaString) | Some(CellTypeTag::InlineString) => {
+            if raw_bytes.contains(&b'&') {
+                let raw = utf8(raw_bytes, reader, xml)?;
+                let unescaped = quick_xml::escape::unescape(raw)
+                    .map_err(|e| xml_msg_err(reader, xml, e.to_string()))?;
+                Ok(Some(CellValue::Text(pool.intern(unescaped.as_ref()))))
+            } else {
+                let raw = utf8(raw_bytes, reader, xml)?;
+                Ok(Some(CellValue::Text(pool.intern(raw))))
+            }
+        }
+        _ => {
+            if let Some(n) = parse_f64_fast_bytes(trimmed_bytes) {
+                Ok(Some(CellValue::Number(n)))
+            } else if trimmed_bytes.contains(&b'&') {
+                let raw = utf8(trimmed_bytes, reader, xml)?;
+                let unescaped = quick_xml::escape::unescape(raw)
+                    .map_err(|e| xml_msg_err(reader, xml, e.to_string()))?;
+                Ok(Some(CellValue::Text(pool.intern(unescaped.as_ref()))))
+            } else {
+                let raw = utf8(trimmed_bytes, reader, xml)?;
+                Ok(Some(CellValue::Text(pool.intern(raw))))
+            }
+        }
+    }
 }
 
 fn dimension_from_ref(reference: &str) -> Option<(u32, u32)> {
