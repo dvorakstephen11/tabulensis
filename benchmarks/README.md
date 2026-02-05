@@ -121,6 +121,27 @@ This runs the performance tests and saves timestamped results to `benchmarks/res
 3. Re-run the suite with `--baseline` to confirm no regressions.
 4. Use `python scripts/compare_perf_results.py` to summarize deltas in the PR.
 
+### Multi-Metric History Trendlines
+
+To build trendline data across both historical benchmark runs and perf-cycle artifacts:
+
+```bash
+python3 scripts/perf_history_trends.py --output-dir benchmarks/history
+```
+
+Outputs:
+- `benchmarks/history/history_points.csv` (per test-point, all metrics)
+- `benchmarks/history/history_run_aggregates.csv` (per run aggregates)
+- `benchmarks/history/history_metric_trends.csv` (suite+metric first/latest deltas)
+- `benchmarks/history/history_test_metric_trends.csv` (suite+test+metric first/latest deltas)
+- `benchmarks/history/history_trend_summary.md` (human-readable summary)
+
+Optional plots (requires `matplotlib`):
+
+```bash
+python3 scripts/perf_history_trends.py --output-dir benchmarks/history --plots
+```
+
 ## Size Tracking
 
 Release artifact sizes (CLI binaries, desktop installers) are tracked separately from perf.

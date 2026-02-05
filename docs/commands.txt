@@ -106,3 +106,9 @@ python scripts/export_perf_metrics.py --full-scale
 
 # Compare two result files
 python scripts/compare_perf_results.py --latest
+
+# Build multi-metric perf history trendlines (results + perf_cycles)
+python3 scripts/perf_history_trends.py --output-dir benchmarks/history
+
+# Optional plot generation (requires matplotlib/pandas stack)
+python3 scripts/perf_history_trends.py --output-dir benchmarks/history --plots
