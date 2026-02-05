@@ -600,25 +600,56 @@ fn parse_cell(
     buf: &mut Vec<u8>,
     inline_string_scratch: &mut String,
 ) -> Result<ParsedCell, GridParseError> {
-    let mut address_raw = None;
-    let mut cell_type = None;
+    let mut address = None;
+    let mut cell_type: Option<&'static str> = None;
 
     for attr in start.attributes() {
         let attr = attr.map_err(|e| xml_msg_err(reader, xml, e.to_string()))?;
         match attr.key.as_ref() {
             b"r" => {
-                address_raw = Some(attr.unescape_value().map_err(|e| xml_err(reader, xml, e))?);
+                let raw = attr.value.as_ref();
+                if raw.contains(&b'&') {
+                    let unescaped = attr.unescape_value().map_err(|e| xml_err(reader, xml, e))?;
+                    address = address_to_index(unescaped.as_ref());
+                    if address.is_none() {
+                        return Err(GridParseError::InvalidAddress(unescaped.into_owned()));
+                    }
+                } else {
+                    address = address_to_index_ascii_bytes(raw);
+                    if address.is_none() {
+                        return Err(GridParseError::InvalidAddress(
+                            String::from_utf8_lossy(raw).into_owned(),
+                        ));
+                    }
+                }
             }
             b"t" => {
-                cell_type = Some(attr.unescape_value().map_err(|e| xml_err(reader, xml, e))?);
+                let raw = attr.value.as_ref();
+                cell_type = match raw {
+                    b"s" => Some("s"),
+                    b"b" => Some("b"),
+                    b"e" => Some("e"),
+                    b"str" => Some("str"),
+                    b"inlineStr" => Some("inlineStr"),
+                    _ if raw.contains(&b'&') => {
+                        let unescaped = attr.unescape_value().map_err(|e| xml_err(reader, xml, e))?;
+                        match unescaped.as_ref() {
+                            "s" => Some("s"),
+                            "b" => Some("b"),
+                            "e" => Some("e"),
+                            "str" => Some("str"),
+                            "inlineStr" => Some("inlineStr"),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
             }
             _ => {}
         }
     }
 
-    let address_raw = address_raw.ok_or_else(|| xml_msg_err(reader, xml, "cell missing address"))?;
-    let (row, col) = address_to_index(address_raw.as_ref())
-        .ok_or_else(|| GridParseError::InvalidAddress(address_raw.into_owned()))?;
+    let (row, col) = address.ok_or_else(|| xml_msg_err(reader, xml, "cell missing address"))?;
 
     let mut value: Option<CellValue> = None;
     let mut formula: Option<StringId> = None;
@@ -632,7 +663,7 @@ fn parse_cell(
                     .map_err(|e| xml_err(reader, xml, e))?;
                 value = convert_value(
                     Some(text.as_ref()),
-                    cell_type.as_deref(),
+                    cell_type,
                     shared_strings,
                     pool,
                     reader,
@@ -698,6 +729,46 @@ fn read_inline_string(
         buf.clear();
     }
     Ok(())
+}
+
+fn address_to_index_ascii_bytes(a1: &[u8]) -> Option<(u32, u32)> {
+    if a1.is_empty() {
+        return None;
+    }
+
+    let mut i: usize = 0;
+    let mut col: u32 = 0;
+    while i < a1.len() {
+        let b = a1[i];
+        if !b.is_ascii_alphabetic() {
+            break;
+        }
+        let upper = b.to_ascii_uppercase();
+        col = col
+            .checked_mul(26)?
+            .checked_add((upper - b'A' + 1) as u32)?;
+        i += 1;
+    }
+
+    if i == 0 || i >= a1.len() || col == 0 {
+        return None;
+    }
+
+    let mut row: u32 = 0;
+    while i < a1.len() {
+        let b = a1[i];
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        row = row.checked_mul(10)?.checked_add((b - b'0') as u32)?;
+        i += 1;
+    }
+
+    if row == 0 {
+        return None;
+    }
+
+    Some((row - 1, col - 1))
 }
 
 fn convert_value(
@@ -966,8 +1037,8 @@ struct ParsedCell {
 #[cfg(test)]
 mod tests {
     use super::{
-        GridParseError, convert_value, parse_shared_strings, parse_sheet_xml_with_drawing_rids,
-        read_inline_string,
+        GridParseError, address_to_index_ascii_bytes, convert_value, parse_shared_strings,
+        parse_sheet_xml_with_drawing_rids, read_inline_string,
     };
     use crate::string_pool::StringPool;
     use crate::workbook::CellValue;
@@ -986,6 +1057,23 @@ mod tests {
         let strings = parse_shared_strings(xml, &mut pool).expect("shared strings should parse");
         let first = strings.first().copied().unwrap();
         assert_eq!(pool.resolve(first), "Hello World");
+    }
+
+    #[test]
+    fn address_to_index_ascii_bytes_parses_common_addresses() {
+        assert_eq!(address_to_index_ascii_bytes(b"A1"), Some((0, 0)));
+        assert_eq!(address_to_index_ascii_bytes(b"Z1"), Some((0, 25)));
+        assert_eq!(address_to_index_ascii_bytes(b"AA10"), Some((9, 26)));
+        assert_eq!(address_to_index_ascii_bytes(b"XFD1048576"), Some((1_048_575, 16_383)));
+    }
+
+    #[test]
+    fn address_to_index_ascii_bytes_rejects_invalid_addresses() {
+        assert_eq!(address_to_index_ascii_bytes(b""), None);
+        assert_eq!(address_to_index_ascii_bytes(b"A"), None);
+        assert_eq!(address_to_index_ascii_bytes(b"A0"), None);
+        assert_eq!(address_to_index_ascii_bytes(b"1A"), None);
+        assert_eq!(address_to_index_ascii_bytes(b"A1A"), None);
     }
 
     #[test]
