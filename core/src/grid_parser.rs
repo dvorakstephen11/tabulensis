@@ -46,6 +46,12 @@ pub struct SheetDescriptor {
     pub sheet_id: Option<u32>,
 }
 
+#[derive(Debug)]
+pub struct ParsedSheetXml {
+    pub grid: Grid,
+    pub drawing_rids: Vec<String>,
+}
+
 pub fn parse_shared_strings(
     xml: &[u8],
     pool: &mut StringPool,
@@ -441,11 +447,20 @@ fn normalize_target(target: &str) -> String {
     }
 }
 
-pub fn parse_sheet_xml(
+pub fn parse_sheet_xml_with_drawing_rids(
     xml: &[u8],
     shared_strings: &[StringId],
     pool: &mut StringPool,
-) -> Result<Grid, GridParseError> {
+) -> Result<ParsedSheetXml, GridParseError> {
+    parse_sheet_xml_internal(xml, shared_strings, pool, true)
+}
+
+fn parse_sheet_xml_internal(
+    xml: &[u8],
+    shared_strings: &[StringId],
+    pool: &mut StringPool,
+    collect_drawing_rids: bool,
+) -> Result<ParsedSheetXml, GridParseError> {
     const STREAM_CELL_BUFFER_LIMIT: usize = 4096;
 
     let mut reader = Reader::from_reader(xml);
@@ -458,6 +473,7 @@ pub fn parse_sheet_xml(
     let mut grid: Option<Grid> = None;
     let mut max_row: Option<u32> = None;
     let mut max_col: Option<u32> = None;
+    let mut drawing_rids = Vec::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -476,6 +492,18 @@ pub fn parse_sheet_xml(
                             std::mem::take(&mut parsed_cells),
                         )?;
                         grid = Some(new_grid);
+                    }
+                }
+            }
+            Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                if collect_drawing_rids && local_tag_name(e.name().as_ref()) == b"drawing" =>
+            {
+                for attr in e.attributes().flatten() {
+                    if attr.key.as_ref() != b"r:id" {
+                        continue;
+                    }
+                    if let Ok(rid) = attr.unescape_value() {
+                        drawing_rids.push(rid.into_owned());
                     }
                 }
             }
@@ -537,15 +565,21 @@ pub fn parse_sheet_xml(
                 grid = rebuild_grid(grid, nrows, ncols);
             }
         }
-        return Ok(grid);
+        return Ok(ParsedSheetXml { grid, drawing_rids });
     }
 
     if parsed_cells.is_empty() {
-        return Ok(Grid::new(0, 0));
+        return Ok(ParsedSheetXml {
+            grid: Grid::new(0, 0),
+            drawing_rids,
+        });
     }
 
     let (nrows, ncols) = grid_bounds_from_hint(dimension_hint, max_row, max_col);
-    build_grid(nrows, ncols, parsed_cells)
+    Ok(ParsedSheetXml {
+        grid: build_grid(nrows, ncols, parsed_cells)?,
+        drawing_rids,
+    })
 }
 
 fn parse_cell(
@@ -830,6 +864,10 @@ fn build_grid(nrows: u32, ncols: u32, cells: Vec<ParsedCell>) -> Result<Grid, Gr
     Ok(grid)
 }
 
+fn local_tag_name(name: &[u8]) -> &[u8] {
+    name.rsplit(|&b| b == b':').next().unwrap_or(name)
+}
+
 fn rebuild_grid(grid: Grid, nrows: u32, ncols: u32) -> Grid {
     if grid.nrows == nrows && grid.ncols == ncols {
         return grid;
@@ -914,7 +952,10 @@ struct ParsedCell {
 
 #[cfg(test)]
 mod tests {
-    use super::{GridParseError, convert_value, parse_shared_strings, read_inline_string};
+    use super::{
+        GridParseError, convert_value, parse_shared_strings, parse_sheet_xml_with_drawing_rids,
+        read_inline_string,
+    };
     use crate::string_pool::StringPool;
     use crate::workbook::CellValue;
     use quick_xml::Reader;
@@ -1011,5 +1052,34 @@ mod tests {
             })
             .expect("error id");
         assert_eq!(pool.resolve(err_id), "#DIV/0!");
+    }
+
+    #[test]
+    fn parse_sheet_xml_with_drawing_rids_captures_rids_and_grid() {
+        let xml = br#"<worksheet xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <dimension ref="A1"/>
+  <drawing r:id="rId1"/>
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="inlineStr">
+        <is><t>hello</t></is>
+      </c>
+    </row>
+  </sheetData>
+  <drawing r:id="rId7"/>
+</worksheet>"#;
+
+        let mut pool = StringPool::new();
+        let parsed = parse_sheet_xml_with_drawing_rids(xml, &[], &mut pool)
+            .expect("sheet xml should parse");
+
+        assert_eq!(parsed.drawing_rids, vec!["rId1".to_string(), "rId7".to_string()]);
+        let text_id = parsed
+            .grid
+            .get(0, 0)
+            .and_then(|cell| cell.value.as_ref())
+            .and_then(CellValue::as_text_id)
+            .expect("A1 text value should be present");
+        assert_eq!(pool.resolve(text_id), "hello");
     }
 }

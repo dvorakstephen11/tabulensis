@@ -11,7 +11,8 @@ use crate::datamashup_framing::{
 use crate::error_codes;
 use crate::grid_parser::{
     GridParseError, parse_defined_names, parse_relationships, parse_relationships_all,
-    parse_shared_strings, parse_sheet_xml, parse_workbook_xml, resolve_sheet_target,
+    parse_shared_strings, parse_sheet_xml_with_drawing_rids, parse_workbook_xml,
+    resolve_sheet_target,
 };
 #[cfg(feature = "vba")]
 use crate::vba::VbaModuleType;
@@ -298,9 +299,9 @@ pub(crate) fn open_workbook_from_container(
 
         let sheet_name_id = pool.intern(&sheet.name);
 
-        let grid = {
+        let parsed_sheet = {
             let started = Instant::now();
-            let parsed = parse_sheet_xml(&sheet_bytes, &shared_strings, pool)
+            let parsed = parse_sheet_xml_with_drawing_rids(&sheet_bytes, &shared_strings, pool)
                 .map_err(|e| wrap_grid_parse_error(e, &target))?;
             if profile_enabled {
                 profile.sheet_parse_ms = profile
@@ -309,27 +310,15 @@ pub(crate) fn open_workbook_from_container(
             }
             parsed
         };
+
         sheet_ir.push(Sheet {
             name: sheet_name_id,
             workbook_sheet_id: sheet.sheet_id,
             kind: SheetKind::Worksheet,
-            grid,
+            grid: parsed_sheet.grid,
         });
 
-        let drawing_rids = match {
-            let started = Instant::now();
-            let parsed = parse_worksheet_drawing_rids(&sheet_bytes);
-            if profile_enabled {
-                profile.drawing_parse_ms = profile
-                    .drawing_parse_ms
-                    .saturating_add(started.elapsed().as_millis() as u64);
-            }
-            parsed
-        } {
-            Ok(rids) => rids,
-            Err(_) => continue,
-        };
-        for drawing_rid in drawing_rids {
+        for drawing_rid in parsed_sheet.drawing_rids {
             let sheet_rels_path = rels_part_path(&target);
             let sheet_rels_bytes = match {
                 let started = Instant::now();
@@ -659,39 +648,6 @@ fn normalize_part_path(path: &str) -> String {
 
 fn local_name(name: &[u8]) -> &[u8] {
     name.rsplit(|&b| b == b':').next().unwrap_or(name)
-}
-
-fn parse_worksheet_drawing_rids(xml: &[u8]) -> Result<Vec<String>, GridParseError> {
-    let mut reader = quick_xml::Reader::from_reader(xml);
-    reader.config_mut().trim_text(true);
-    let mut buf = Vec::new();
-    let mut rids = Vec::new();
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(quick_xml::events::Event::Start(e))
-            | Ok(quick_xml::events::Event::Empty(e))
-                if local_name(e.name().as_ref()) == b"drawing" =>
-            {
-                for attr in e.attributes() {
-                    let attr = attr.map_err(|e| GridParseError::XmlError(e.to_string()))?;
-                    if attr.key.as_ref() == b"r:id" {
-                        let rid = attr
-                            .unescape_value()
-                            .map_err(|e| GridParseError::XmlError(e.to_string()))?
-                            .into_owned();
-                        rids.push(rid);
-                    }
-                }
-            }
-            Ok(quick_xml::events::Event::Eof) => break,
-            Err(e) => return Err(GridParseError::XmlError(e.to_string())),
-            _ => {}
-        }
-        buf.clear();
-    }
-
-    Ok(rids)
 }
 
 fn parse_drawing_chart_refs(drawing_xml: &[u8]) -> Result<Vec<DrawingChartRef>, GridParseError> {
