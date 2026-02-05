@@ -38,6 +38,14 @@ jobs:
             --max-rust-files 100 \
             --allow-token "[allow-wide-scope]"
 
+      - name: Perf-cycle guard (PR retention scope)
+        if: github.event_name == 'pull_request'
+        run: |
+          python scripts/check_perf_cycle_scope.py \
+            --from-ref "${{ github.event.pull_request.base.sha }}" \
+            --to-ref "${{ github.sha }}" \
+            --allow-token "[allow-multi-cycle]"
+
       - name: Run test flow (fixtures + guard)
         run: python scripts/dev_test.py
 

@@ -21,8 +21,17 @@ Full perf cycle commands:
 2. **After edits:** `python3 scripts/perf_cycle.py post --cycle <cycle_id>` (same run count + aggregation).
 
 This produces `benchmarks/perf_cycles/<cycle_id>/cycle_delta.md`.
+`perf_cycle.py post` also writes a noise-aware signal report at `benchmarks/perf_cycles/<cycle_id>/cycle_signal.md`.
 If fixture generation fails in your environment, add `--skip-fixtures`.
 Use `--runs <n>` only when you intentionally need a different run count.
+
+Perf-cycle retention rule:
+- Keep **one complete cycle directory per meaningful iteration** (commit pair `pre.git_commit -> post.git_commit`).
+- Remove incomplete pre-only/post-only local cycles before running a new iteration.
+- Use the guard:
+  - `python3 scripts/check_perf_cycle_scope.py`
+  - auto-prune local extras/incomplete: `python3 scripts/check_perf_cycle_scope.py --apply-prune`
+- CI enforces this for PR diffs; use commit token `[allow-multi-cycle]` only when intentionally keeping multiple cycles in one PR with rationale.
 
 For routine Rust changes (non-major), run lighter checks instead:
 1. Quick suite:
@@ -46,6 +55,8 @@ Escalation rule: if quick/gate fails or results are noisy/suspicious, run the fu
 - Run workspace-wide formatting only when the task explicitly requires a repo-wide formatting pass.
 - Before commit, run blast-radius guard for the staged set:
   - `python3 scripts/check_change_scope.py --staged`
+- Before commit with perf artifacts, run perf-cycle retention guard:
+  - `python3 scripts/check_perf_cycle_scope.py --staged`
 - If a wide-scope change is intentional, include `[allow-wide-scope]` in commit message and document why.
 
 ### Fixture manifests and `--clean`

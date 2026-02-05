@@ -8,6 +8,7 @@ Workflow:
 
 By default each suite is executed 3 times and aggregated via median to reduce noise.
 Use quick/gate suites for routine low-risk changes; reserve this script for major changes.
+Post runs also emit cycle_signal.{md,json} for noise-aware confidence scoring.
 """
 
 from __future__ import annotations
@@ -74,6 +75,12 @@ def run(cmd: list[str], cwd: Path) -> None:
     result = subprocess.run(cmd, cwd=cwd)
     if result.returncode != 0:
         raise SystemExit(result.returncode)
+
+
+def run_optional(cmd: list[str], cwd: Path) -> bool:
+    print(f"Running (optional): {' '.join(cmd)}")
+    result = subprocess.run(cmd, cwd=cwd)
+    return result.returncode == 0
 
 
 def git_cmd(root: Path, args: list[str]) -> str:
@@ -643,6 +650,18 @@ def main() -> int:
         "e2e": e2e_rows,
     }
     write_json(cycle_dir / "cycle_delta.json", summary_json)
+
+    signal_ok = run_optional(
+        [
+            sys.executable,
+            "scripts/perf_cycle_signal.py",
+            "--cycle",
+            cycle,
+        ],
+        root,
+    )
+    if not signal_ok:
+        print("WARNING: signal report generation failed; continuing without cycle_signal output.")
 
     print(f"Post-cycle complete. Delta summary written to {summary_path}")
     return 0

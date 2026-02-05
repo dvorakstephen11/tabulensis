@@ -12,6 +12,7 @@ Optional plots are generated when matplotlib is available.
 Usage:
   python3 scripts/perf_history_trends.py
   python3 scripts/perf_history_trends.py --output-dir benchmarks/history --plots
+  python3 scripts/perf_history_trends.py --output-dir benchmarks/history --tracked-only
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import subprocess
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -219,18 +221,46 @@ def points_from_perf_cycle_json(path: Path, root: Path, cycle_id: str) -> list[d
     return out
 
 
-def collect_points(results_dir: Path, perf_cycles_dir: Path, root: Path) -> list[dict[str, Any]]:
+def tracked_paths(root: Path) -> set[str]:
+    result = subprocess.run(
+        ["git", "ls-files", "benchmarks/results", "benchmarks/perf_cycles"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return set()
+    return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+
+
+def collect_points(
+    results_dir: Path,
+    perf_cycles_dir: Path,
+    root: Path,
+    tracked_only: bool = False,
+) -> list[dict[str, Any]]:
     points: list[dict[str, Any]] = []
+    tracked = tracked_paths(root) if tracked_only else None
 
     if results_dir.exists():
         for path in sorted(results_dir.glob("*.json")):
+            rel = str(path.relative_to(root))
+            if tracked is not None and rel not in tracked:
+                continue
             points.extend(points_from_result_json(path, root))
 
     if perf_cycles_dir.exists():
         for cycle_dir in sorted(p for p in perf_cycles_dir.iterdir() if p.is_dir()):
             for path in sorted(cycle_dir.glob("pre_*.json")):
+                rel = str(path.relative_to(root))
+                if tracked is not None and rel not in tracked:
+                    continue
                 points.extend(points_from_perf_cycle_json(path, root, cycle_dir.name))
             for path in sorted(cycle_dir.glob("post_*.json")):
+                rel = str(path.relative_to(root))
+                if tracked is not None and rel not in tracked:
+                    continue
                 points.extend(points_from_perf_cycle_json(path, root, cycle_dir.name))
 
     points.sort(key=lambda r: (r["timestamp"], r["run_id"], r["suite"], r["test_name"]))
@@ -558,6 +588,11 @@ def main() -> int:
         action="store_true",
         help="Generate plot PNGs if matplotlib is available",
     )
+    parser.add_argument(
+        "--tracked-only",
+        action="store_true",
+        help="Only include git-tracked benchmark artifacts",
+    )
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parent.parent
@@ -567,7 +602,12 @@ def main() -> int:
     )
     output_dir = args.output_dir if args.output_dir.is_absolute() else root / args.output_dir
 
-    points = collect_points(results_dir, perf_cycles_dir, root)
+    points = collect_points(
+        results_dir=results_dir,
+        perf_cycles_dir=perf_cycles_dir,
+        root=root,
+        tracked_only=args.tracked_only,
+    )
     if not points:
         print("No historical perf points found.")
         return 1

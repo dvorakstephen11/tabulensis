@@ -34,11 +34,20 @@ python3 scripts/perf_cycle.py post --cycle <cycle_id>
 ```
 
 The delta summary is written to `benchmarks/perf_cycles/<cycle_id>/cycle_delta.md`.
+`perf_cycle.py post` also writes `benchmarks/perf_cycles/<cycle_id>/cycle_signal.md` with noise-aware confidence scoring from run-level IQR.
 By default, each suite runs **3 times** and writes a **median-aggregated** `pre_*.json` / `post_*.json` to reduce run-to-run noise.
 Per-run raw artifacts are also saved as `pre_*_runN.json` and `post_*_runN.json`.
 Use `--runs <n>` to override the default run count.
 Within `perf_cycle.py`, baseline regression checks are skipped per run; the key signal is the within-cycle pre/post delta.
 If fixture generation fails in your environment, add `--skip-fixtures`.
+
+Perf-cycle retention rule:
+- Keep one complete cycle directory per meaningful iteration (`pre.git_commit -> post.git_commit`).
+- Remove incomplete or duplicate local cycles before starting a new iteration:
+
+```bash
+python3 scripts/check_perf_cycle_scope.py --apply-prune
+```
 
 For routine non-major changes:
 - Run quick suite.
@@ -131,6 +140,12 @@ To build trendline data across both historical benchmark runs and perf-cycle art
 
 ```bash
 python3 scripts/perf_history_trends.py --output-dir benchmarks/history
+```
+
+To reduce noise from local untracked artifacts, prefer tracked-only trendlines for shared reporting:
+
+```bash
+python3 scripts/perf_history_trends.py --output-dir benchmarks/history --tracked-only
 ```
 
 Outputs:

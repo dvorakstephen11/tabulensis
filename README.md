@@ -217,10 +217,12 @@ To reduce accidental workspace-wide churn from formatting or broad edits:
 ```bash
 python3 scripts/safe_rustfmt.py
 python3 scripts/check_change_scope.py --staged
+python3 scripts/check_perf_cycle_scope.py --staged
 ```
 
 - `safe_rustfmt.py` formats only an explicit/narrow Rust file set (staged by default).
 - `check_change_scope.py` fails when blast radius exceeds configured thresholds.
+- `check_perf_cycle_scope.py` enforces one complete perf cycle per commit-pair iteration and flags incomplete local cycle artifacts.
 - If a wide-scope change is intentional, use commit token `[allow-wide-scope]` and document rationale.
 
 ## Testing

@@ -27,11 +27,26 @@ python3 scripts/perf_cycle.py post --cycle <cycle_id>
 ```
 
 The delta summary is written to `benchmarks/perf_cycles/<cycle_id>/cycle_delta.md`.
+`perf_cycle.py post` also writes `benchmarks/perf_cycles/<cycle_id>/cycle_signal.md` (noise-aware confidence using run-level IQR).
 `perf_cycle.py` defaults to `--runs 3` and aggregates with median to reduce noise.
 Raw runs are kept as `*_runN.json` alongside the aggregated `pre_*.json` / `post_*.json`.
 Use `--runs <n>` only when you intentionally need a different sample size.
 During perf-cycle runs, baseline regression checks are intentionally skipped per run; the decision signal is the pre/post delta from the same cycle window.
 If fixture generation fails in your environment, add `--skip-fixtures`.
+
+Retention guard:
+- Keep one complete cycle per meaningful commit-pair iteration.
+- Prune incomplete/duplicate local cycles:
+
+```bash
+python3 scripts/check_perf_cycle_scope.py --apply-prune
+```
+
+- Pre-commit check for staged perf artifacts:
+
+```bash
+python3 scripts/check_perf_cycle_scope.py --staged
+```
 
 ## Quick suite (CI default)
 

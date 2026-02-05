@@ -6,9 +6,9 @@
 use crate::addressing::address_to_index;
 use crate::error_codes;
 use crate::string_pool::{StringId, StringPool};
-use crate::workbook::{CellValue, Grid, NamedRange};
-use quick_xml::Reader;
+use crate::workbook::{CellContent, CellValue, Grid, GridStorage, NamedRange};
 use quick_xml::events::{BytesStart, Event};
+use quick_xml::Reader;
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -59,6 +59,11 @@ pub struct ParsedSheetXml {
     pub grid: Grid,
     pub drawing_rids: Vec<String>,
 }
+
+const STREAM_CELL_BUFFER_LIMIT: usize = 4096;
+const STREAM_DENSE_REEVAL_INTERVAL: usize = 4096;
+const STREAM_DENSE_COVERAGE_DIVISOR: u64 = 20;
+const STREAM_DENSE_COVERAGE_MAX_CELLS: u64 = 250_000;
 
 pub fn parse_shared_strings(
     xml: &[u8],
@@ -471,12 +476,11 @@ fn parse_sheet_xml_internal(
     pool: &mut StringPool,
     collect_drawing_rids: bool,
 ) -> Result<ParsedSheetXml, GridParseError> {
-    const STREAM_CELL_BUFFER_LIMIT: usize = 4096;
-
     let mut reader = Reader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
     let mut cell_buf = Vec::new();
+    let mut value_text_scratch = Vec::new();
     let mut inline_string_scratch = String::new();
 
     let mut dimension_hint: Option<(u32, u32)> = None;
@@ -485,6 +489,7 @@ fn parse_sheet_xml_internal(
     let mut max_row: Option<u32> = None;
     let mut max_col: Option<u32> = None;
     let mut drawing_rids = Vec::new();
+    let mut stream_dense_recheck = 0usize;
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -497,7 +502,12 @@ fn parse_sheet_xml_internal(
                     {
                         let (nrows, ncols) =
                             grid_bounds_from_hint(dimension_hint, max_row, max_col);
-                        let new_grid = build_grid(nrows, ncols, std::mem::take(&mut parsed_cells))?;
+                        let new_grid = build_grid(
+                            nrows,
+                            ncols,
+                            std::mem::take(&mut parsed_cells),
+                            observed_bounds(max_row, max_col),
+                        )?;
                         grid = Some(new_grid);
                     }
                 }
@@ -522,6 +532,7 @@ fn parse_sheet_xml_internal(
                     shared_strings,
                     pool,
                     &mut cell_buf,
+                    &mut value_text_scratch,
                     &mut inline_string_scratch,
                 )?;
                 max_row = Some(max_row.map_or(cell.row, |r| r.max(cell.row)));
@@ -536,21 +547,62 @@ fn parse_sheet_xml_internal(
                             grid_bounds_from_hint(dimension_hint, max_row, max_col);
                         nrows = nrows.max(cell.row.saturating_add(1));
                         ncols = ncols.max(cell.col.saturating_add(1));
-                        let rebuilt = rebuild_grid(grid.take().unwrap(), nrows, ncols);
+                        let rebuilt = rebuild_grid(
+                            grid.take().unwrap(),
+                            nrows,
+                            ncols,
+                            observed_bounds(max_row, max_col),
+                        );
                         grid = Some(rebuilt);
                     }
-                    grid.as_mut().unwrap().insert_cell(
-                        cell.row,
-                        cell.col,
-                        cell.value,
-                        cell.formula,
-                    );
+                    {
+                        let existing = grid.as_mut().expect("grid should be initialized");
+                        existing.cells.insert(
+                            cell.row,
+                            cell.col,
+                            CellContent {
+                                value: cell.value,
+                                formula: cell.formula,
+                            },
+                        );
+                    }
+
+                    stream_dense_recheck = stream_dense_recheck.saturating_add(1);
+                    if stream_dense_recheck >= STREAM_DENSE_REEVAL_INTERVAL {
+                        stream_dense_recheck = 0;
+                        let should_promote = {
+                            let existing = grid.as_ref().expect("grid should be initialized");
+                            matches!(existing.cells, GridStorage::Sparse(_))
+                                && prefer_dense_storage(
+                                    existing.nrows,
+                                    existing.ncols,
+                                    existing.cell_count(),
+                                    observed_bounds(max_row, max_col),
+                                )
+                        };
+                        if should_promote {
+                            let (nrows, ncols) =
+                                grid_bounds_from_hint(dimension_hint, max_row, max_col);
+                            let rebuilt = rebuild_grid(
+                                grid.take().unwrap(),
+                                nrows,
+                                ncols,
+                                observed_bounds(max_row, max_col),
+                            );
+                            grid = Some(rebuilt);
+                        }
+                    }
                 } else {
                     parsed_cells.push(cell);
                     if dimension_hint.is_some() && parsed_cells.len() >= STREAM_CELL_BUFFER_LIMIT {
                         let (nrows, ncols) =
                             grid_bounds_from_hint(dimension_hint, max_row, max_col);
-                        let new_grid = build_grid(nrows, ncols, std::mem::take(&mut parsed_cells))?;
+                        let new_grid = build_grid(
+                            nrows,
+                            ncols,
+                            std::mem::take(&mut parsed_cells),
+                            observed_bounds(max_row, max_col),
+                        )?;
                         grid = Some(new_grid);
                     }
                 }
@@ -566,15 +618,34 @@ fn parse_sheet_xml_internal(
         if !parsed_cells.is_empty() {
             let (nrows, ncols) = grid_bounds_from_hint(dimension_hint, max_row, max_col);
             if nrows > grid.nrows || ncols > grid.ncols {
-                grid = rebuild_grid(grid, nrows, ncols);
+                grid = rebuild_grid(grid, nrows, ncols, observed_bounds(max_row, max_col));
             }
             for cell in parsed_cells {
-                grid.insert_cell(cell.row, cell.col, cell.value, cell.formula);
+                grid.cells.insert(
+                    cell.row,
+                    cell.col,
+                    CellContent {
+                        value: cell.value,
+                        formula: cell.formula,
+                    },
+                );
+            }
+            if matches!(grid.cells, GridStorage::Sparse(_))
+                && prefer_dense_storage(
+                    grid.nrows,
+                    grid.ncols,
+                    grid.cell_count(),
+                    observed_bounds(max_row, max_col),
+                )
+            {
+                let nrows = grid.nrows;
+                let ncols = grid.ncols;
+                grid = rebuild_grid(grid, nrows, ncols, observed_bounds(max_row, max_col));
             }
         } else {
             let (nrows, ncols) = grid_bounds_from_hint(dimension_hint, max_row, max_col);
             if nrows > grid.nrows || ncols > grid.ncols {
-                grid = rebuild_grid(grid, nrows, ncols);
+                grid = rebuild_grid(grid, nrows, ncols, observed_bounds(max_row, max_col));
             }
         }
         return Ok(ParsedSheetXml { grid, drawing_rids });
@@ -589,7 +660,12 @@ fn parse_sheet_xml_internal(
 
     let (nrows, ncols) = grid_bounds_from_hint(dimension_hint, max_row, max_col);
     Ok(ParsedSheetXml {
-        grid: build_grid(nrows, ncols, parsed_cells)?,
+        grid: build_grid(
+            nrows,
+            ncols,
+            parsed_cells,
+            observed_bounds(max_row, max_col),
+        )?,
         drawing_rids,
     })
 }
@@ -601,6 +677,7 @@ fn parse_cell(
     shared_strings: &[StringId],
     pool: &mut StringPool,
     buf: &mut Vec<u8>,
+    value_text_scratch: &mut Vec<u8>,
     inline_string_scratch: &mut String,
 ) -> Result<ParsedCell, GridParseError> {
     let mut address = None;
@@ -647,17 +724,8 @@ fn parse_cell(
     loop {
         match reader.read_event_into(buf) {
             Ok(Event::Start(e)) if e.name().as_ref() == b"v" => {
-                let text = reader
-                    .read_text(e.name())
-                    .map_err(|e| xml_err(reader, xml, e))?;
-                value = convert_value(
-                    Some(text.as_ref()),
-                    cell_type,
-                    shared_strings,
-                    pool,
-                    reader,
-                    xml,
-                )?;
+                let raw = read_element_text_bytes(reader, xml, b"v", buf, value_text_scratch)?;
+                value = convert_value_bytes(raw, cell_type, shared_strings, pool, reader, xml)?;
             }
             Ok(Event::Start(e)) if e.name().as_ref() == b"f" => {
                 let text = reader
@@ -718,6 +786,43 @@ fn read_inline_string(
         buf.clear();
     }
     Ok(())
+}
+
+fn read_element_text_bytes<'a>(
+    reader: &mut Reader<&[u8]>,
+    xml: &[u8],
+    end_tag: &[u8],
+    buf: &mut Vec<u8>,
+    scratch: &'a mut Vec<u8>,
+) -> Result<Option<&'a [u8]>, GridParseError> {
+    scratch.clear();
+    loop {
+        match reader.read_event_into(buf) {
+            Ok(Event::Text(t)) => {
+                scratch.extend_from_slice(t.as_ref());
+            }
+            Ok(Event::CData(t)) => {
+                scratch.extend_from_slice(t.as_ref());
+            }
+            Ok(Event::End(e)) if e.name().as_ref() == end_tag => break,
+            Ok(Event::Eof) => {
+                return Err(xml_msg_err(
+                    reader,
+                    xml,
+                    "unexpected EOF while reading element text",
+                ));
+            }
+            Err(e) => return Err(xml_err(reader, xml, e)),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    if scratch.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(scratch.as_slice()))
+    }
 }
 
 fn address_to_index_ascii_bytes(a1: &[u8]) -> Option<(u32, u32)> {
@@ -943,6 +1048,37 @@ fn convert_value(
     }
 }
 
+fn convert_value_bytes(
+    value_bytes: Option<&[u8]>,
+    cell_type: Option<CellTypeTag>,
+    shared_strings: &[StringId],
+    pool: &mut StringPool,
+    reader: &Reader<&[u8]>,
+    xml: &[u8],
+) -> Result<Option<CellValue>, GridParseError> {
+    let Some(raw_bytes) = value_bytes else {
+        return Ok(None);
+    };
+
+    let raw = std::str::from_utf8(raw_bytes)
+        .map_err(|e| xml_msg_err(reader, xml, format!("invalid UTF-8 in cell value: {e}")))?;
+
+    if raw_bytes.contains(&b'&') {
+        let unescaped = quick_xml::escape::unescape(raw)
+            .map_err(|e| xml_msg_err(reader, xml, e.to_string()))?;
+        return convert_value(
+            Some(unescaped.as_ref()),
+            cell_type,
+            shared_strings,
+            pool,
+            reader,
+            xml,
+        );
+    }
+
+    convert_value(Some(raw), cell_type, shared_strings, pool, reader, xml)
+}
+
 fn dimension_from_ref(reference: &str) -> Option<(u32, u32)> {
     let mut parts = reference.split(':');
     let start = parts.next()?;
@@ -972,9 +1108,58 @@ fn grid_bounds_from_hint(
     (nrows, ncols)
 }
 
-fn build_grid(nrows: u32, ncols: u32, cells: Vec<ParsedCell>) -> Result<Grid, GridParseError> {
+fn observed_bounds(max_row: Option<u32>, max_col: Option<u32>) -> Option<(u32, u32)> {
+    match (max_row, max_col) {
+        (Some(row), Some(col)) => Some((row, col)),
+        _ => None,
+    }
+}
+
+fn dense_coverage_required(total_cells: u64) -> u64 {
+    if total_cells == 0 {
+        return 0;
+    }
+    let by_ratio = total_cells / STREAM_DENSE_COVERAGE_DIVISOR;
+    let bounded = by_ratio.max(STREAM_CELL_BUFFER_LIMIT as u64);
+    bounded
+        .min(STREAM_DENSE_COVERAGE_MAX_CELLS)
+        .min(total_cells)
+}
+
+fn prefer_dense_storage(
+    nrows: u32,
+    ncols: u32,
+    filled_cells: usize,
+    observed: Option<(u32, u32)>,
+) -> bool {
+    if Grid::should_use_dense(nrows, ncols, filled_cells) {
+        return true;
+    }
+
+    let Some((max_row, max_col)) = observed else {
+        return false;
+    };
+    let observed_rows = max_row.saturating_add(1);
+    let observed_cols = max_col.saturating_add(1);
+    let observed_cells = (observed_rows as u64).saturating_mul(observed_cols as u64);
+    let total_cells = (nrows as u64).saturating_mul(ncols as u64);
+    if total_cells == 0 {
+        return false;
+    }
+    if observed_cells < dense_coverage_required(total_cells) {
+        return false;
+    }
+    Grid::should_use_dense(observed_rows, observed_cols, filled_cells)
+}
+
+fn build_grid(
+    nrows: u32,
+    ncols: u32,
+    cells: Vec<ParsedCell>,
+    observed: Option<(u32, u32)>,
+) -> Result<Grid, GridParseError> {
     let filled = cells.len();
-    let mut grid = if Grid::should_use_dense(nrows, ncols, filled) {
+    let mut grid = if prefer_dense_storage(nrows, ncols, filled, observed) {
         Grid::new_dense(nrows, ncols)
     } else {
         Grid::new(nrows, ncols)
@@ -1004,13 +1189,17 @@ fn local_tag_name(name: &[u8]) -> &[u8] {
     name.rsplit(|&b| b == b':').next().unwrap_or(name)
 }
 
-fn rebuild_grid(grid: Grid, nrows: u32, ncols: u32) -> Grid {
+fn rebuild_grid(grid: Grid, nrows: u32, ncols: u32, observed: Option<(u32, u32)>) -> Grid {
+    let filled = grid.cell_count();
+    let target_dense = prefer_dense_storage(nrows, ncols, filled, observed);
     if grid.nrows == nrows && grid.ncols == ncols {
-        return grid;
+        let already_dense = matches!(grid.cells, GridStorage::Dense(_));
+        if already_dense == target_dense {
+            return grid;
+        }
     }
 
-    let filled = grid.cell_count();
-    let mut rebuilt = if Grid::should_use_dense(nrows, ncols, filled) {
+    let mut rebuilt = if target_dense {
         Grid::new_dense(nrows, ncols)
     } else {
         Grid::new(nrows, ncols)
@@ -1087,8 +1276,9 @@ struct ParsedCell {
 #[cfg(test)]
 mod tests {
     use super::{
-        CellTypeTag, GridParseError, address_to_index_ascii_bytes, convert_value,
-        parse_shared_strings, parse_sheet_xml_with_drawing_rids, read_inline_string,
+        address_to_index_ascii_bytes, convert_value, dense_coverage_required, parse_shared_strings,
+        parse_sheet_xml_with_drawing_rids, prefer_dense_storage, read_inline_string, CellTypeTag,
+        GridParseError,
     };
     use crate::string_pool::StringPool;
     use crate::workbook::CellValue;
@@ -1276,5 +1466,36 @@ mod tests {
             .and_then(CellValue::as_text_id)
             .expect("A1 text value should be present");
         assert_eq!(pool.resolve(text_id), "hello");
+    }
+
+    #[test]
+    fn dense_coverage_required_is_bounded() {
+        assert_eq!(dense_coverage_required(0), 0);
+        assert_eq!(dense_coverage_required(3_000), 3_000);
+        assert_eq!(dense_coverage_required(5_000_000), 250_000);
+    }
+
+    #[test]
+    fn prefer_dense_storage_promotes_large_dense_sheet_early() {
+        let nrows = 50_000;
+        let ncols = 100;
+        let filled_cells = 250_000;
+        let observed = Some((2_499, 99));
+        assert!(
+            prefer_dense_storage(nrows, ncols, filled_cells, observed),
+            "observed dense window should trigger early dense storage"
+        );
+    }
+
+    #[test]
+    fn prefer_dense_storage_keeps_sparse_for_large_low_density_sheet() {
+        let nrows = 50_000;
+        let ncols = 100;
+        let filled_cells = 50_000;
+        let observed = Some((49_999, 99));
+        assert!(
+            !prefer_dense_storage(nrows, ncols, filled_cells, observed),
+            "low observed density should remain sparse"
+        );
     }
 }
