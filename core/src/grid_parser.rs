@@ -15,17 +15,25 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum GridParseError {
-    #[error("[EXDIFF_GRID_001] XML parse error: {0}. Suggestion: re-save the file in Excel or verify it is valid XML.")]
+    #[error(
+        "[EXDIFF_GRID_001] XML parse error: {0}. Suggestion: re-save the file in Excel or verify it is valid XML."
+    )]
     XmlError(String),
-    #[error("[EXDIFF_GRID_001] XML parse error at line {line}, column {column}: {message}. Suggestion: re-save the file in Excel or verify it is valid XML.")]
+    #[error(
+        "[EXDIFF_GRID_001] XML parse error at line {line}, column {column}: {message}. Suggestion: re-save the file in Excel or verify it is valid XML."
+    )]
     XmlErrorAt {
         line: usize,
         column: usize,
         message: String,
     },
-    #[error("[EXDIFF_GRID_002] invalid cell address: {0}. Suggestion: the workbook may be corrupt.")]
+    #[error(
+        "[EXDIFF_GRID_002] invalid cell address: {0}. Suggestion: the workbook may be corrupt."
+    )]
     InvalidAddress(String),
-    #[error("[EXDIFF_GRID_003] shared string index {0} out of bounds. Suggestion: the workbook may be corrupt.")]
+    #[error(
+        "[EXDIFF_GRID_003] shared string index {0} out of bounds. Suggestion: the workbook may be corrupt."
+    )]
     SharedStringOutOfBounds(usize),
 }
 
@@ -178,7 +186,8 @@ pub fn parse_defined_names(
                 let mut name = None;
                 let mut local_sheet_id = None;
                 for attr in e.attributes() {
-                    let attr = attr.map_err(|e| xml_msg_err(&reader, workbook_xml, e.to_string()))?;
+                    let attr =
+                        attr.map_err(|e| xml_msg_err(&reader, workbook_xml, e.to_string()))?;
                     match attr.key.as_ref() {
                         b"name" => {
                             name = Some(
@@ -248,7 +257,8 @@ pub fn parse_defined_names(
                 let mut name = None;
                 let mut local_sheet_id = None;
                 for attr in e.attributes() {
-                    let attr = attr.map_err(|e| xml_msg_err(&reader, workbook_xml, e.to_string()))?;
+                    let attr =
+                        attr.map_err(|e| xml_msg_err(&reader, workbook_xml, e.to_string()))?;
                     match attr.key.as_ref() {
                         b"name" => {
                             name = Some(
@@ -487,11 +497,7 @@ fn parse_sheet_xml_internal(
                     {
                         let (nrows, ncols) =
                             grid_bounds_from_hint(dimension_hint, max_row, max_col);
-                        let new_grid = build_grid(
-                            nrows,
-                            ncols,
-                            std::mem::take(&mut parsed_cells),
-                        )?;
+                        let new_grid = build_grid(nrows, ncols, std::mem::take(&mut parsed_cells))?;
                         grid = Some(new_grid);
                     }
                 }
@@ -533,21 +539,18 @@ fn parse_sheet_xml_internal(
                         let rebuilt = rebuild_grid(grid.take().unwrap(), nrows, ncols);
                         grid = Some(rebuilt);
                     }
-                    grid.as_mut()
-                        .unwrap()
-                        .insert_cell(cell.row, cell.col, cell.value, cell.formula);
+                    grid.as_mut().unwrap().insert_cell(
+                        cell.row,
+                        cell.col,
+                        cell.value,
+                        cell.formula,
+                    );
                 } else {
                     parsed_cells.push(cell);
-                    if dimension_hint.is_some()
-                        && parsed_cells.len() >= STREAM_CELL_BUFFER_LIMIT
-                    {
+                    if dimension_hint.is_some() && parsed_cells.len() >= STREAM_CELL_BUFFER_LIMIT {
                         let (nrows, ncols) =
                             grid_bounds_from_hint(dimension_hint, max_row, max_col);
-                        let new_grid = build_grid(
-                            nrows,
-                            ncols,
-                            std::mem::take(&mut parsed_cells),
-                        )?;
+                        let new_grid = build_grid(nrows, ncols, std::mem::take(&mut parsed_cells))?;
                         grid = Some(new_grid);
                     }
                 }
@@ -601,7 +604,7 @@ fn parse_cell(
     inline_string_scratch: &mut String,
 ) -> Result<ParsedCell, GridParseError> {
     let mut address = None;
-    let mut cell_type: Option<&'static str> = None;
+    let mut cell_type: Option<CellTypeTag> = None;
 
     for attr in start.attributes() {
         let attr = attr.map_err(|e| xml_msg_err(reader, xml, e.to_string()))?;
@@ -625,25 +628,11 @@ fn parse_cell(
             }
             b"t" => {
                 let raw = attr.value.as_ref();
-                cell_type = match raw {
-                    b"s" => Some("s"),
-                    b"b" => Some("b"),
-                    b"e" => Some("e"),
-                    b"str" => Some("str"),
-                    b"inlineStr" => Some("inlineStr"),
-                    _ if raw.contains(&b'&') => {
-                        let unescaped = attr.unescape_value().map_err(|e| xml_err(reader, xml, e))?;
-                        match unescaped.as_ref() {
-                            "s" => Some("s"),
-                            "b" => Some("b"),
-                            "e" => Some("e"),
-                            "str" => Some("str"),
-                            "inlineStr" => Some("inlineStr"),
-                            _ => None,
-                        }
-                    }
-                    _ => None,
-                };
+                cell_type = parse_cell_type_tag_bytes(raw);
+                if cell_type.is_none() && raw.contains(&b'&') {
+                    let unescaped = attr.unescape_value().map_err(|e| xml_err(reader, xml, e))?;
+                    cell_type = parse_cell_type_tag_str(unescaped.as_ref());
+                }
             }
             _ => {}
         }
@@ -771,9 +760,70 @@ fn address_to_index_ascii_bytes(a1: &[u8]) -> Option<(u32, u32)> {
     Some((row - 1, col - 1))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CellTypeTag {
+    SharedString,
+    Bool,
+    Error,
+    FormulaString,
+    InlineString,
+}
+
+fn parse_cell_type_tag_bytes(raw: &[u8]) -> Option<CellTypeTag> {
+    match raw {
+        b"s" => Some(CellTypeTag::SharedString),
+        b"b" => Some(CellTypeTag::Bool),
+        b"e" => Some(CellTypeTag::Error),
+        b"str" => Some(CellTypeTag::FormulaString),
+        b"inlineStr" => Some(CellTypeTag::InlineString),
+        _ => None,
+    }
+}
+
+fn parse_cell_type_tag_str(raw: &str) -> Option<CellTypeTag> {
+    match raw {
+        "s" => Some(CellTypeTag::SharedString),
+        "b" => Some(CellTypeTag::Bool),
+        "e" => Some(CellTypeTag::Error),
+        "str" => Some(CellTypeTag::FormulaString),
+        "inlineStr" => Some(CellTypeTag::InlineString),
+        _ => None,
+    }
+}
+
+fn trim_cell_text(raw: &str) -> &str {
+    let bytes = raw.as_bytes();
+    if bytes.is_empty() {
+        return raw;
+    }
+
+    let first = bytes[0];
+    let last = bytes[bytes.len() - 1];
+
+    if first >= 0x80 || last >= 0x80 {
+        return raw.trim();
+    }
+
+    if !first.is_ascii_whitespace() && !last.is_ascii_whitespace() {
+        return raw;
+    }
+
+    let mut start = 0usize;
+    let mut end = bytes.len();
+    while start < end && bytes[start].is_ascii_whitespace() {
+        start += 1;
+    }
+    while end > start && bytes[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+
+    // SAFETY: start/end are advanced only across ASCII bytes, so UTF-8 boundaries are preserved.
+    unsafe { std::str::from_utf8_unchecked(&bytes[start..end]) }
+}
+
 fn convert_value(
     value_text: Option<&str>,
-    cell_type: Option<&str>,
+    cell_type: Option<CellTypeTag>,
     shared_strings: &[StringId],
     pool: &mut StringPool,
     reader: &Reader<&[u8]>,
@@ -856,13 +906,13 @@ fn convert_value(
         None => return Ok(None),
     };
 
-    let trimmed = raw.trim();
+    let trimmed = trim_cell_text(raw);
     if raw.is_empty() || trimmed.is_empty() {
         return Ok(Some(CellValue::Text(pool.intern(""))));
     }
 
     match cell_type {
-        Some("s") => {
+        Some(CellTypeTag::SharedString) => {
             let idx = match parse_usize_decimal(trimmed) {
                 Some(v) => v,
                 None => trimmed
@@ -874,13 +924,15 @@ fn convert_value(
                 .ok_or(GridParseError::SharedStringOutOfBounds(idx))?;
             Ok(Some(CellValue::Text(text_id)))
         }
-        Some("b") => Ok(match trimmed {
+        Some(CellTypeTag::Bool) => Ok(match trimmed {
             "1" => Some(CellValue::Bool(true)),
             "0" => Some(CellValue::Bool(false)),
             _ => None,
         }),
-        Some("e") => Ok(Some(CellValue::Error(pool.intern(trimmed)))),
-        Some("str") | Some("inlineStr") => Ok(Some(CellValue::Text(pool.intern(raw)))),
+        Some(CellTypeTag::Error) => Ok(Some(CellValue::Error(pool.intern(trimmed)))),
+        Some(CellTypeTag::FormulaString) | Some(CellTypeTag::InlineString) => {
+            Ok(Some(CellValue::Text(pool.intern(raw))))
+        }
         _ => {
             if let Some(n) = parse_f64_fast(trimmed) {
                 Ok(Some(CellValue::Number(n)))
@@ -980,9 +1032,7 @@ fn get_attr_value<'a>(
     for attr in element.attributes() {
         let attr = attr.map_err(|e| xml_msg_err(reader, xml, e.to_string()))?;
         if attr.key.as_ref() == key {
-            let v = attr
-                .unescape_value()
-                .map_err(|e| xml_err(reader, xml, e))?;
+            let v = attr.unescape_value().map_err(|e| xml_err(reader, xml, e))?;
             return Ok(Some(v));
         }
     }
@@ -1037,8 +1087,8 @@ struct ParsedCell {
 #[cfg(test)]
 mod tests {
     use super::{
-        GridParseError, address_to_index_ascii_bytes, convert_value, parse_shared_strings,
-        parse_sheet_xml_with_drawing_rids, read_inline_string,
+        CellTypeTag, GridParseError, address_to_index_ascii_bytes, convert_value,
+        parse_shared_strings, parse_sheet_xml_with_drawing_rids, read_inline_string,
     };
     use crate::string_pool::StringPool;
     use crate::workbook::CellValue;
@@ -1064,7 +1114,10 @@ mod tests {
         assert_eq!(address_to_index_ascii_bytes(b"A1"), Some((0, 0)));
         assert_eq!(address_to_index_ascii_bytes(b"Z1"), Some((0, 25)));
         assert_eq!(address_to_index_ascii_bytes(b"AA10"), Some((9, 26)));
-        assert_eq!(address_to_index_ascii_bytes(b"XFD1048576"), Some((1_048_575, 16_383)));
+        assert_eq!(
+            address_to_index_ascii_bytes(b"XFD1048576"),
+            Some((1_048_575, 16_383))
+        );
     }
 
     #[test]
@@ -1092,13 +1145,13 @@ mod tests {
         let dummy_reader = Reader::from_reader(dummy_xml);
         let converted = convert_value(
             Some(value.as_str()),
-            Some("inlineStr"),
+            Some(CellTypeTag::InlineString),
             &[],
             &mut pool,
             &dummy_reader,
             dummy_xml,
         )
-            .expect("inlineStr conversion should succeed");
+        .expect("inlineStr conversion should succeed");
         let text_id = converted
             .as_ref()
             .and_then(CellValue::as_text_id)
@@ -1112,17 +1165,38 @@ mod tests {
         let dummy_reader = Reader::from_reader(dummy_xml);
 
         let mut pool = StringPool::new();
-        let false_val = convert_value(Some("0"), Some("b"), &[], &mut pool, &dummy_reader, dummy_xml)
-            .expect("bool cell conversion should succeed");
+        let false_val = convert_value(
+            Some("0"),
+            Some(CellTypeTag::Bool),
+            &[],
+            &mut pool,
+            &dummy_reader,
+            dummy_xml,
+        )
+        .expect("bool cell conversion should succeed");
         assert_eq!(false_val, Some(CellValue::Bool(false)));
 
         let mut pool = StringPool::new();
-        let true_val = convert_value(Some("1"), Some("b"), &[], &mut pool, &dummy_reader, dummy_xml)
-            .expect("bool cell conversion should succeed");
+        let true_val = convert_value(
+            Some("1"),
+            Some(CellTypeTag::Bool),
+            &[],
+            &mut pool,
+            &dummy_reader,
+            dummy_xml,
+        )
+        .expect("bool cell conversion should succeed");
         assert_eq!(true_val, Some(CellValue::Bool(true)));
 
-        let none_val = convert_value(Some("2"), Some("b"), &[], &mut pool, &dummy_reader, dummy_xml)
-            .expect("unexpected bool tokens should still parse");
+        let none_val = convert_value(
+            Some("2"),
+            Some(CellTypeTag::Bool),
+            &[],
+            &mut pool,
+            &dummy_reader,
+            dummy_xml,
+        )
+        .expect("unexpected bool tokens should still parse");
         assert!(none_val.is_none());
     }
 
@@ -1133,8 +1207,15 @@ mod tests {
 
         let mut pool = StringPool::new();
         let only_id = pool.intern("only");
-        let err = convert_value(Some("5"), Some("s"), &[only_id], &mut pool, &dummy_reader, dummy_xml)
-            .expect_err("invalid shared string index should error");
+        let err = convert_value(
+            Some("5"),
+            Some(CellTypeTag::SharedString),
+            &[only_id],
+            &mut pool,
+            &dummy_reader,
+            dummy_xml,
+        )
+        .expect_err("invalid shared string index should error");
         assert!(matches!(err, GridParseError::SharedStringOutOfBounds(5)));
     }
 
@@ -1144,8 +1225,15 @@ mod tests {
         let dummy_reader = Reader::from_reader(dummy_xml);
 
         let mut pool = StringPool::new();
-        let value = convert_value(Some("#DIV/0!"), Some("e"), &[], &mut pool, &dummy_reader, dummy_xml)
-            .expect("error cell should convert");
+        let value = convert_value(
+            Some("#DIV/0!"),
+            Some(CellTypeTag::Error),
+            &[],
+            &mut pool,
+            &dummy_reader,
+            dummy_xml,
+        )
+        .expect("error cell should convert");
         let err_id = value
             .and_then(|v| {
                 if let CellValue::Error(id) = v {
@@ -1174,10 +1262,13 @@ mod tests {
 </worksheet>"#;
 
         let mut pool = StringPool::new();
-        let parsed = parse_sheet_xml_with_drawing_rids(xml, &[], &mut pool)
-            .expect("sheet xml should parse");
+        let parsed =
+            parse_sheet_xml_with_drawing_rids(xml, &[], &mut pool).expect("sheet xml should parse");
 
-        assert_eq!(parsed.drawing_rids, vec!["rId1".to_string(), "rId7".to_string()]);
+        assert_eq!(
+            parsed.drawing_rids,
+            vec!["rId1".to_string(), "rId7".to_string()]
+        );
         let text_id = parsed
             .grid
             .get(0, 0)
