@@ -467,6 +467,7 @@ fn parse_sheet_xml_internal(
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
     let mut cell_buf = Vec::new();
+    let mut inline_string_scratch = String::new();
 
     let mut dimension_hint: Option<(u32, u32)> = None;
     let mut parsed_cells: Vec<ParsedCell> = Vec::new();
@@ -508,7 +509,15 @@ fn parse_sheet_xml_internal(
                 }
             }
             Ok(Event::Start(e)) if e.name().as_ref() == b"c" => {
-                let cell = parse_cell(&mut reader, xml, e, shared_strings, pool, &mut cell_buf)?;
+                let cell = parse_cell(
+                    &mut reader,
+                    xml,
+                    e,
+                    shared_strings,
+                    pool,
+                    &mut cell_buf,
+                    &mut inline_string_scratch,
+                )?;
                 max_row = Some(max_row.map_or(cell.row, |r| r.max(cell.row)));
                 max_col = Some(max_col.map_or(cell.col, |c| c.max(cell.col)));
                 if grid.is_some() {
@@ -589,6 +598,7 @@ fn parse_cell(
     shared_strings: &[StringId],
     pool: &mut StringPool,
     buf: &mut Vec<u8>,
+    inline_string_scratch: &mut String,
 ) -> Result<ParsedCell, GridParseError> {
     let mut address_raw = None;
     let mut cell_type = None;
@@ -638,8 +648,8 @@ fn parse_cell(
                 formula = Some(pool.intern(unescaped.as_ref()));
             }
             Ok(Event::Start(e)) if e.name().as_ref() == b"is" => {
-                let inline = read_inline_string(reader, xml)?;
-                value = Some(CellValue::Text(pool.intern(&inline)));
+                read_inline_string(reader, xml, buf, inline_string_scratch)?;
+                value = Some(CellValue::Text(pool.intern(inline_string_scratch.as_str())));
             }
             Ok(Event::End(e)) if e.name().as_ref() == start.name().as_ref() => break,
             Ok(Event::Eof) => {
@@ -659,17 +669,20 @@ fn parse_cell(
     })
 }
 
-fn read_inline_string(reader: &mut Reader<&[u8]>, xml: &[u8]) -> Result<String, GridParseError> {
-    let mut buf = Vec::new();
-    let mut value = String::new();
+fn read_inline_string(
+    reader: &mut Reader<&[u8]>,
+    xml: &[u8],
+    buf: &mut Vec<u8>,
+    value: &mut String,
+) -> Result<(), GridParseError> {
+    value.clear();
     loop {
-        match reader.read_event_into(&mut buf) {
+        match reader.read_event_into(buf) {
             Ok(Event::Start(e)) if e.name().as_ref() == b"t" => {
                 let text = reader
                     .read_text(e.name())
-                    .map_err(|e| xml_err(reader, xml, e))?
-                    .into_owned();
-                value.push_str(&text);
+                    .map_err(|e| xml_err(reader, xml, e))?;
+                value.push_str(text.as_ref());
             }
             Ok(Event::End(e)) if e.name().as_ref() == b"is" => break,
             Ok(Event::Eof) => {
@@ -684,7 +697,7 @@ fn read_inline_string(reader: &mut Reader<&[u8]>, xml: &[u8]) -> Result<String, 
         }
         buf.clear();
     }
-    Ok(value)
+    Ok(())
 }
 
 fn convert_value(
@@ -980,7 +993,10 @@ mod tests {
         let xml = br#"<is><t xml:space="preserve"> hello</t></is>"#;
         let mut reader = Reader::from_reader(xml.as_ref());
         reader.config_mut().trim_text(false);
-        let value = read_inline_string(&mut reader, xml).expect("inline string should parse");
+        let mut buf = Vec::new();
+        let mut value = String::new();
+        read_inline_string(&mut reader, xml, &mut buf, &mut value)
+            .expect("inline string should parse");
         assert_eq!(value, " hello");
 
         let mut pool = StringPool::new();

@@ -57,11 +57,22 @@ generate-fixtures --manifest fixtures/manifest_cli_tests.yaml --force --clean
 generate-fixtures --manifest fixtures/manifest_cli_tests.yaml --verify-lock fixtures/manifest_cli_tests.lock.json
 ```
 
+To generate only e2e perf workbook-open fixtures (without removing other fixture sets):
+
+```bash
+generate-fixtures --manifest fixtures/manifest_perf_e2e.yaml --force
+```
+
+Important:
+- `--clean` removes files not listed in the selected manifest.
+- Do not use `--clean` with `manifest_perf_e2e.yaml` unless you intentionally want only the e2e perf fixture subset in `fixtures/generated/`.
+
 ### Manifests
 
 - `fixtures/manifest.yaml`: broad fixture catalog
 - `fixtures/manifest_cli_tests.yaml`: CI + local test fixtures
 - `fixtures/manifest_release_smoke.yaml`: release smoke fixtures
+- `fixtures/manifest_perf_e2e.yaml`: e2e workbook-open perf fixtures (`e2e_p1`..`e2e_p5`)
 
 ### Command Line Arguments
 

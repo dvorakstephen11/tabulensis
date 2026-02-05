@@ -208,6 +208,8 @@ For large workbooks, prefer streaming output (`diff_streaming`) and consider set
 - Licensing service: [docs/licensing_service.md](docs/licensing_service.md)
 - Ops: [docs/operations.md](docs/operations.md)
 
+Agent note: if you discover a repeatable workflow optimization or failure trap, proactively update `AGENTS.md`, relevant `SKILL.md`, and/or this README in the same PR when practical.
+
 ## Testing
 
 ### Recommended (mirrors CI)

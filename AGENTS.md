@@ -30,3 +30,37 @@ For routine Rust changes (non-major), run lighter checks instead:
    `python scripts/check_perf_thresholds.py --suite gate --parallel --baseline benchmarks/baselines/gate.json --test-target perf_large_grid_tests`
 
 Escalation rule: if quick/gate fails or results are noisy/suspicious, run the full perf cycle before merging.
+
+## Agent Guardrails (Formatting + Fixtures)
+
+### Formatting scope
+
+- Avoid `cargo fmt --all` for targeted changes; it can create workspace-wide churn.
+- Prefer file- or crate-scoped formatting:
+  - `rustfmt <path/to/file.rs>`
+  - `cargo fmt -p <crate>`
+- Run workspace-wide formatting only when the task explicitly requires a repo-wide formatting pass.
+
+### Fixture manifests and `--clean`
+
+- `generate-fixtures --clean` removes files not present in the selected manifest.
+- Use manifest-specific generation for perf e2e fixtures without deleting unrelated fixtures:
+  - `generate-fixtures --manifest fixtures/manifest_perf_e2e.yaml --force`
+- Use `--clean` only when intentionally resetting to one manifest set (typically `manifest_cli_tests.yaml` for CI-like local runs).
+- If you used `--clean` on a narrow manifest, regenerate required fixture sets before running other tests.
+
+## Continuous Agent Improvement
+
+When you find a repeatable way to improve speed, correctness, or operator clarity, proactively document it in the same change when practical.
+
+Preferred update targets:
+- `AGENTS.md` for repository-wide workflow rules and guardrails.
+- Relevant skill docs (`SKILL.md`) when the improvement is skill-specific.
+- `README.md` (or nearest user-facing doc) when the behavior affects normal developer usage.
+
+Minimum standard for doc updates:
+- Capture the concrete trigger/condition.
+- Provide exact command(s) or file path(s).
+- State common failure mode(s) and safe default behavior.
+
+If a skill doc is outside writable scope, add the guidance to `AGENTS.md` and note that the external skill should be updated later.

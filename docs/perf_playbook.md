@@ -50,8 +50,14 @@ python scripts/check_perf_thresholds.py --suite full-scale --parallel --require-
 ## E2E metrics (open + diff)
 
 ```bash
+# Ensure e2e fixtures exist (keeps other fixture sets intact)
+generate-fixtures --manifest fixtures/manifest_perf_e2e.yaml --force
+
 python scripts/export_e2e_metrics.py --baseline benchmarks/baselines/e2e.json
 ```
+
+Note:
+- Avoid `--clean` when generating `manifest_perf_e2e.yaml` unless you intentionally want only that subset in `fixtures/generated/`.
 
 ## Baseline updates
 

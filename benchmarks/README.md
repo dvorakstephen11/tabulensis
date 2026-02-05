@@ -64,8 +64,13 @@ python scripts/check_perf_thresholds.py --suite full-scale --baseline benchmarks
 E2E parse+diff suite (scheduled, xlsx fixtures):
 
 ```bash
+# Keep e2e perf fixtures fresh without clearing other fixture sets
+generate-fixtures --manifest fixtures/manifest_perf_e2e.yaml --force
+
 python scripts/export_e2e_metrics.py --baseline benchmarks/baselines/e2e.json --export-csv benchmarks/latest_e2e.csv
 ```
+
+Note: `--clean` with a narrow manifest removes non-listed fixtures. Avoid `--clean` for `manifest_perf_e2e.yaml` unless that cleanup is intentional.
 
 ### Quick Performance Tests (CI-friendly, ~1K rows)
 

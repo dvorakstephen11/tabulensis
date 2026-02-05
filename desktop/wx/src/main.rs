@@ -613,6 +613,8 @@ struct AppState {
     current_mode: Option<DiffMode>,
     current_summary: Option<DiffRunSummary>,
     current_payload: Option<ui_payload::DiffWithSheets>,
+    pending_detail_payload: Option<ui_payload::DiffWithSheets>,
+    pending_detail_sheet_name: Option<String>,
     sheet_names: Vec<String>,
     recents: Vec<RecentComparison>,
     search_old_index: Option<SearchIndexSummary>,
@@ -676,6 +678,75 @@ fn update_status_counts_in_ctx(ctx: &mut UiContext, summary: Option<&DiffRunSumm
 fn update_status(message: &str) {
     let message = message.to_string();
     let _ = with_ui_context(|ctx| update_status_in_ctx(ctx, &message));
+}
+
+fn format_summary_text(summary: &DiffRunSummary) -> String {
+    let mut lines = Vec::new();
+    lines.push(format!("Diff ID: {}", summary.diff_id));
+    lines.push(format!("Mode: {}", summary.mode.as_str()));
+    lines.push(format!("Status: {:?}", summary.status));
+    lines.push(format!("Old: {}", summary.old_path));
+    lines.push(format!("New: {}", summary.new_path));
+    lines.push(format!("Started: {}", summary.started_at));
+    lines.push(format!(
+        "Finished: {}",
+        summary.finished_at.as_deref().unwrap_or("in progress"),
+    ));
+    lines.push(String::new());
+    lines.push(format!("Ops: {}", summary.op_count));
+    lines.push(format!(
+        "Counts: +{} -{} ~{} ↔{}",
+        summary.counts.added, summary.counts.removed, summary.counts.modified, summary.counts.moved
+    ));
+    lines.push(format!("Sheets with changes: {}", summary.sheets.len()));
+    lines.push(format!("Trusted files: {}", summary.trusted));
+    lines.push(format!("Complete: {}", summary.complete));
+    lines.push(format!("Engine version: {}", summary.engine_version));
+    lines.push(format!("App version: {}", summary.app_version));
+
+    if summary.warnings.is_empty() {
+        lines.push(String::new());
+        lines.push("Warnings: none".to_string());
+    } else {
+        lines.push(String::new());
+        lines.push(format!("Warnings ({}):", summary.warnings.len()));
+        for warning in summary.warnings.iter().take(10) {
+            lines.push(format!("- {warning}"));
+        }
+        if summary.warnings.len() > 10 {
+            lines.push(format!("... {} more warning(s)", summary.warnings.len() - 10));
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn stage_detail_payload(ctx: &mut UiContext, sheet_name: String, payload: ui_payload::DiffWithSheets) {
+    ctx.state.pending_detail_sheet_name = Some(sheet_name.clone());
+    ctx.state.pending_detail_payload = Some(payload);
+    if ctx.ui.result_tabs.selection() == 1 {
+        render_staged_detail_payload(ctx);
+        return;
+    }
+
+    ctx.ui.detail_text.set_value(&format!(
+        "Sheet payload ready for '{sheet_name}'.\nOpen the Details tab to render full JSON."
+    ));
+    update_status_in_ctx(ctx, "Sheet payload ready (deferred until Details tab).");
+}
+
+fn render_staged_detail_payload(ctx: &mut UiContext) {
+    let Some(payload) = ctx.state.pending_detail_payload.take() else {
+        return;
+    };
+    let sheet_name = ctx
+        .state
+        .pending_detail_sheet_name
+        .take()
+        .unwrap_or_else(|| "sheet".to_string());
+    let text = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string());
+    ctx.ui.detail_text.set_value(&text);
+    update_status_in_ctx(ctx, &format!("Sheet payload loaded: {sheet_name}."));
 }
 
 fn license_check_disabled() -> bool {
@@ -1922,10 +1993,11 @@ fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
                 ctx.state.current_mode = Some(outcome.mode);
                 ctx.state.current_payload = outcome.payload;
                 ctx.state.current_summary = outcome.summary.clone();
+                ctx.state.pending_detail_payload = None;
+                ctx.state.pending_detail_sheet_name = None;
 
                 if let Some(summary) = outcome.summary {
-                    ctx.ui.summary_text
-                        .set_value(&serde_json::to_string_pretty(&summary).unwrap_or_else(|_| "{}".to_string()));
+                    ctx.ui.summary_text.set_value(&format_summary_text(&summary));
                     ctx.ui.detail_text.set_value("");
                     populate_sheet_list(ctx, &summary);
                     update_status_counts_in_ctx(ctx, Some(&summary));
@@ -2035,12 +2107,16 @@ fn start_compare() {
         ctx.state.active_run = Some(ActiveRun { cancel: cancel.clone() });
         ctx.state.current_payload = None;
         ctx.state.current_summary = None;
+        ctx.state.pending_detail_payload = None;
+        ctx.state.pending_detail_sheet_name = None;
         ctx.state.sheet_names.clear();
         update_status_counts_in_ctx(ctx, None);
 
         ctx.ui.compare_btn.enable(false);
         ctx.ui.cancel_btn.enable(true);
         ctx.ui.progress_gauge.set_value(0);
+        ctx.ui.summary_text.set_value("");
+        ctx.ui.detail_text.set_value("");
         update_status_in_ctx(ctx, "Starting diff...");
 
         let options = DiffOptions {
@@ -2093,6 +2169,8 @@ fn handle_sheet_selection(row: usize) {
                             sheet.counts.moved,
                         );
                         ctx.ui.detail_text.set_value(&text);
+                        ctx.state.pending_detail_payload = None;
+                        ctx.state.pending_detail_sheet_name = None;
                     }
                 }
             }
@@ -2120,6 +2198,7 @@ fn handle_sheet_selection(row: usize) {
     spawn_progress_forwarder(progress_rx);
 
     thread::spawn(move || {
+        let requested_sheet = sheet_name.clone();
         let payload = backend.runner.load_sheet_payload(SheetPayloadRequest {
             diff_id,
             sheet_name,
@@ -2129,10 +2208,8 @@ fn handle_sheet_selection(row: usize) {
 
         wxdragon::call_after(Box::new(move || match payload {
             Ok(payload) => {
-                let text = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string());
                 let _ = with_ui_context(|ctx| {
-                    ctx.ui.detail_text.set_value(&text);
-                    update_status_in_ctx(ctx, "Sheet payload loaded.");
+                    stage_detail_payload(ctx, requested_sheet.clone(), payload);
                 });
             }
             Err(err) => {
@@ -2157,9 +2234,10 @@ fn load_diff_summary_into_ui(diff_id: String) {
                     ctx.state.current_mode = Some(summary.mode);
                     ctx.state.current_summary = Some(summary.clone());
                     ctx.state.current_payload = None;
+                    ctx.state.pending_detail_payload = None;
+                    ctx.state.pending_detail_sheet_name = None;
 
-                    ctx.ui.summary_text
-                        .set_value(&serde_json::to_string_pretty(&summary).unwrap_or_else(|_| "{}".to_string()));
+                    ctx.ui.summary_text.set_value(&format_summary_text(&summary));
                     ctx.ui.detail_text.set_value("");
                     populate_sheet_list(ctx, &summary);
                     update_status_counts_in_ctx(ctx, Some(&summary));
@@ -2906,6 +2984,8 @@ fn main() {
             current_mode: None,
             current_summary: None,
             current_payload: None,
+            pending_detail_payload: None,
+            pending_detail_sheet_name: None,
             sheet_names: Vec::new(),
             recents: Vec::new(),
             search_old_index: None,
@@ -3005,6 +3085,11 @@ fn main() {
                 ctx.ui.search_btn.on_click(|_| handle_search());
                 ctx.ui.build_old_index_btn.on_click(|_| build_index("old"));
                 ctx.ui.build_new_index_btn.on_click(|_| build_index("new"));
+                ctx.ui.result_tabs.on_page_changed(|event| {
+                    if event.get_selection() == Some(1) {
+                        let _ = with_ui_context(|ctx| render_staged_detail_payload(ctx));
+                    }
+                });
                 ctx.ui.frame.on_key_down(|event| {
                     if let wxdragon::event::WindowEventData::Keyboard(key) = event {
                         if let Some(code) = key.get_key_code() {
@@ -3224,6 +3309,7 @@ fn apply_focus_panel(ctx: &mut UiContext, focus: Option<&str>) {
         "details" => {
             ctx.ui.root_tabs.set_selection(0);
             ctx.ui.result_tabs.set_selection(1);
+            render_staged_detail_payload(ctx);
         }
         _ => {}
     }
