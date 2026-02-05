@@ -34,6 +34,10 @@ python3 scripts/perf_cycle.py post --cycle <cycle_id>
 ```
 
 The delta summary is written to `benchmarks/perf_cycles/<cycle_id>/cycle_delta.md`.
+By default, each suite runs **3 times** and writes a **median-aggregated** `pre_*.json` / `post_*.json` to reduce run-to-run noise.
+Per-run raw artifacts are also saved as `pre_*_runN.json` and `post_*_runN.json`.
+Use `--runs <n>` to override the default run count.
+Within `perf_cycle.py`, baseline regression checks are skipped per run; the key signal is the within-cycle pre/post delta.
 If fixture generation fails in your environment, add `--skip-fixtures`.
 
 For routine non-major changes:

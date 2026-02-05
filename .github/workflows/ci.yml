@@ -28,6 +28,16 @@ jobs:
       - name: Install fixture generator
         run: python -m pip install -e fixtures --no-deps
 
+      - name: Scope guard (PR blast radius)
+        if: github.event_name == 'pull_request'
+        run: |
+          python scripts/check_change_scope.py \
+            --from-ref "${{ github.event.pull_request.base.sha }}" \
+            --to-ref "${{ github.sha }}" \
+            --max-files 180 \
+            --max-rust-files 100 \
+            --allow-token "[allow-wide-scope]"
+
       - name: Run test flow (fixtures + guard)
         run: python scripts/dev_test.py
 

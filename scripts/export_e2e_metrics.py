@@ -451,6 +451,11 @@ def main() -> int:
         default=repo_root / "benchmarks" / "results_e2e",
         help="Directory containing baseline JSON results",
     )
+    parser.add_argument(
+        "--skip-baseline-check",
+        action="store_true",
+        help="Skip baseline regression checks (still enforces absolute thresholds)",
+    )
     args = parser.parse_args()
 
     print("=" * 70)
@@ -504,25 +509,28 @@ def main() -> int:
 
     failures = enforce_thresholds(metrics, effective_thresholds)
 
-    baseline = None
-    baseline_path = None
-    if args.baseline:
-        baseline, baseline_path = load_baseline_file(args.baseline)
+    if args.skip_baseline_check:
+        print("Baseline: skipped (--skip-baseline-check)")
     else:
-        pinned = repo_root / "benchmarks" / "baselines" / "e2e.json"
-        if pinned.exists():
-            baseline, baseline_path = load_baseline_file(pinned)
-        else:
-            baseline, baseline_path = load_baseline_dir(args.baseline_dir)
-
-    if baseline and baseline_path:
-        print(f"Baseline: {baseline_path}")
-        failures.extend(enforce_baseline(metrics, baseline, expected_tests))
-    else:
+        baseline = None
+        baseline_path = None
         if args.baseline:
-            print(f"WARNING: Baseline file not found: {args.baseline}")
+            baseline, baseline_path = load_baseline_file(args.baseline)
         else:
-            print(f"WARNING: No baseline results found in {args.baseline_dir}")
+            pinned = repo_root / "benchmarks" / "baselines" / "e2e.json"
+            if pinned.exists():
+                baseline, baseline_path = load_baseline_file(pinned)
+            else:
+                baseline, baseline_path = load_baseline_dir(args.baseline_dir)
+
+        if baseline and baseline_path:
+            print(f"Baseline: {baseline_path}")
+            failures.extend(enforce_baseline(metrics, baseline, expected_tests))
+        else:
+            if args.baseline:
+                print(f"WARNING: Baseline file not found: {args.baseline}")
+            else:
+                print(f"WARNING: No baseline results found in {args.baseline_dir}")
 
     if failures:
         print("=" * 70)

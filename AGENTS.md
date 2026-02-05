@@ -17,11 +17,12 @@ Run full cycle when any of these are true:
 - You make an intentional performance optimization or expect non-trivial runtime/memory/I/O impact.
 
 Full perf cycle commands:
-1. **Before edits:** `python3 scripts/perf_cycle.py pre`
-2. **After edits:** `python3 scripts/perf_cycle.py post --cycle <cycle_id>`
+1. **Before edits:** `python3 scripts/perf_cycle.py pre` (defaults to median-of-3 runs).
+2. **After edits:** `python3 scripts/perf_cycle.py post --cycle <cycle_id>` (same run count + aggregation).
 
 This produces `benchmarks/perf_cycles/<cycle_id>/cycle_delta.md`.
 If fixture generation fails in your environment, add `--skip-fixtures`.
+Use `--runs <n>` only when you intentionally need a different run count.
 
 For routine Rust changes (non-major), run lighter checks instead:
 1. Quick suite:
@@ -39,7 +40,13 @@ Escalation rule: if quick/gate fails or results are noisy/suspicious, run the fu
 - Prefer file- or crate-scoped formatting:
   - `rustfmt <path/to/file.rs>`
   - `cargo fmt -p <crate>`
+- Prefer the repo wrapper for targeted formatting:
+  - `python3 scripts/safe_rustfmt.py` (staged Rust files)
+  - `python3 scripts/safe_rustfmt.py --worktree` (all changed Rust files)
 - Run workspace-wide formatting only when the task explicitly requires a repo-wide formatting pass.
+- Before commit, run blast-radius guard for the staged set:
+  - `python3 scripts/check_change_scope.py --staged`
+- If a wide-scope change is intentional, include `[allow-wide-scope]` in commit message and document why.
 
 ### Fixture manifests and `--clean`
 

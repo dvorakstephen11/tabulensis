@@ -1,0 +1,2 @@
+# Keep Rust sources normalized to LF to reduce cross-platform formatting churn.
+*.rs text eol=lf

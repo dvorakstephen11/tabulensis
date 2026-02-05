@@ -332,6 +332,11 @@ def main():
         help="Fail if the baseline file or expected tests are missing",
     )
     parser.add_argument(
+        "--skip-baseline-check",
+        action="store_true",
+        help="Skip baseline regression checks (still enforces absolute thresholds)",
+    )
+    parser.add_argument(
         "--test-target",
         type=str,
         default=None,
@@ -532,89 +537,94 @@ def main():
     print()
 
     baseline_failures = []
-    baseline = None
-    baseline_path = None
-    if args.baseline:
-        baseline, baseline_path = load_baseline_file(args.baseline)
+    if args.skip_baseline_check:
+        print("Baseline: skipped (--skip-baseline-check)")
     else:
-        repo_root = Path(__file__).parent.parent
-        pinned = repo_root / "benchmarks" / "baselines" / f"{suite_name}.json"
-        if pinned.exists():
-            baseline, baseline_path = load_baseline_file(pinned)
+        baseline = None
+        baseline_path = None
+        if args.baseline:
+            baseline, baseline_path = load_baseline_file(args.baseline)
         else:
-            baseline, baseline_path = load_baseline_dir(
-                args.baseline_dir, config["full_scale"]
-            )
+            repo_root = Path(__file__).parent.parent
+            pinned = repo_root / "benchmarks" / "baselines" / f"{suite_name}.json"
+            if pinned.exists():
+                baseline, baseline_path = load_baseline_file(pinned)
+            else:
+                baseline, baseline_path = load_baseline_dir(
+                    args.baseline_dir, config["full_scale"]
+                )
 
-    if baseline and baseline_path:
-        print(f"Baseline: {baseline_path}")
-        baseline_tests = baseline.get("tests", {})
-        missing_baseline = sorted(expected_tests - set(baseline_tests.keys()))
-        if missing_baseline:
-            if require_baseline:
+        if baseline and baseline_path:
+            print(f"Baseline: {baseline_path}")
+            baseline_tests = baseline.get("tests", {})
+            missing_baseline = sorted(expected_tests - set(baseline_tests.keys()))
+            if missing_baseline:
+                if require_baseline:
+                    print(
+                        "ERROR: Baseline missing expected tests: "
+                        + ", ".join(missing_baseline)
+                    )
+                    return 1
                 print(
-                    "ERROR: Baseline missing expected tests: "
+                    "WARNING: Baseline missing expected tests: "
                     + ", ".join(missing_baseline)
                 )
-                return 1
-            print(
-                "WARNING: Baseline missing expected tests: "
-                + ", ".join(missing_baseline)
-            )
 
-        for test_name in expected_tests:
-            if test_name not in baseline_tests:
-                print(f"  WARNING: No baseline for {test_name}; skipping regression check")
-                continue
-
-            base = baseline_tests[test_name]
-            current = suite_metrics.get(test_name, {})
-            base_time = base.get("total_time_ms")
-            curr_time = current.get("total_time_ms")
-            if base_time is None or curr_time is None:
-                print(f"  WARNING: Missing total_time_ms for {test_name}; skipping")
-                continue
-
-            time_cap = base_time * (1.0 + baseline_slack)
-            if curr_time > time_cap:
-                baseline_failures.append(
-                    (
-                        test_name,
-                        "total_time_ms",
-                        curr_time,
-                        base_time,
-                        baseline_slack,
+            for test_name in expected_tests:
+                if test_name not in baseline_tests:
+                    print(
+                        f"  WARNING: No baseline for {test_name}; skipping regression check"
                     )
-                )
+                    continue
 
-            base_peak = base.get("peak_memory_bytes")
-            curr_peak = current.get("peak_memory_bytes")
-            if base_peak is None or curr_peak is None or base_peak <= 0:
-                continue
+                base = baseline_tests[test_name]
+                current = suite_metrics.get(test_name, {})
+                base_time = base.get("total_time_ms")
+                curr_time = current.get("total_time_ms")
+                if base_time is None or curr_time is None:
+                    print(f"  WARNING: Missing total_time_ms for {test_name}; skipping")
+                    continue
 
-            peak_cap = base_peak * (1.0 + baseline_slack)
-            if curr_peak > peak_cap:
-                baseline_failures.append(
-                    (
-                        test_name,
-                        "peak_memory_bytes",
-                        curr_peak,
-                        base_peak,
-                        baseline_slack,
+                time_cap = base_time * (1.0 + baseline_slack)
+                if curr_time > time_cap:
+                    baseline_failures.append(
+                        (
+                            test_name,
+                            "total_time_ms",
+                            curr_time,
+                            base_time,
+                            baseline_slack,
+                        )
                     )
-                )
 
-    else:
-        if require_baseline:
-            if args.baseline:
-                print(f"ERROR: Baseline file not found: {args.baseline}")
-            else:
-                print(f"ERROR: No baseline results found in {args.baseline_dir}")
-            return 1
-        if args.baseline:
-            print(f"WARNING: Baseline file not found: {args.baseline}")
+                base_peak = base.get("peak_memory_bytes")
+                curr_peak = current.get("peak_memory_bytes")
+                if base_peak is None or curr_peak is None or base_peak <= 0:
+                    continue
+
+                peak_cap = base_peak * (1.0 + baseline_slack)
+                if curr_peak > peak_cap:
+                    baseline_failures.append(
+                        (
+                            test_name,
+                            "peak_memory_bytes",
+                            curr_peak,
+                            base_peak,
+                            baseline_slack,
+                        )
+                    )
+
         else:
-            print(f"WARNING: No baseline results found in {args.baseline_dir}")
+            if require_baseline:
+                if args.baseline:
+                    print(f"ERROR: Baseline file not found: {args.baseline}")
+                else:
+                    print(f"ERROR: No baseline results found in {args.baseline_dir}")
+                return 1
+            if args.baseline:
+                print(f"WARNING: Baseline file not found: {args.baseline}")
+            else:
+                print(f"WARNING: No baseline results found in {args.baseline_dir}")
 
     if failures or baseline_failures:
         print("=" * 60)

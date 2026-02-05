@@ -6,14 +6,16 @@ Workflow:
   1) Before edits:  python3 scripts/perf_cycle.py pre
   2) After edits:   python3 scripts/perf_cycle.py post --cycle <cycle_id>
 
-This runs the full-scale perf suite + e2e suite twice and produces a delta report.
+By default each suite is executed 3 times and aggregated via median to reduce noise.
 Use quick/gate suites for routine low-risk changes; reserve this script for major changes.
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+import statistics
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -21,6 +23,46 @@ from pathlib import Path
 
 
 RUST_SENTINELS = {"Cargo.toml", "Cargo.lock", "rust-toolchain.toml"}
+
+FULLSCALE_CSV_FIELDS = [
+    "total_time_ms",
+    "parse_time_ms",
+    "diff_time_ms",
+    "move_detection_time_ms",
+    "alignment_time_ms",
+    "cell_diff_time_ms",
+    "peak_memory_bytes",
+    "rows_processed",
+    "cells_compared",
+    "anchors_found",
+    "moves_detected",
+]
+
+E2E_CSV_FIELDS = [
+    "total_time_ms",
+    "parse_time_ms",
+    "diff_time_ms",
+    "signature_build_time_ms",
+    "move_detection_time_ms",
+    "alignment_time_ms",
+    "cell_diff_time_ms",
+    "op_emit_time_ms",
+    "report_serialize_time_ms",
+    "peak_memory_bytes",
+    "grid_storage_bytes",
+    "string_pool_bytes",
+    "op_buffer_bytes",
+    "alignment_buffer_bytes",
+    "rows_processed",
+    "cells_compared",
+    "anchors_found",
+    "moves_detected",
+    "hash_lookups_est",
+    "allocations_est",
+    "old_bytes",
+    "new_bytes",
+    "total_input_bytes",
+]
 
 
 def repo_root() -> Path:
@@ -50,7 +92,7 @@ def git_cmd(root: Path, args: list[str]) -> str:
     return "unknown"
 
 
-def rust_changes(root: Path) -> list[str]:
+def git_status_lines(root: Path) -> list[str]:
     result = subprocess.run(
         ["git", "status", "--porcelain"],
         cwd=root,
@@ -59,17 +101,24 @@ def rust_changes(root: Path) -> list[str]:
     )
     if result.returncode != 0:
         return []
+    return [line for line in result.stdout.splitlines() if line]
 
-    paths = []
-    for line in result.stdout.splitlines():
-        if not line:
-            continue
+
+def porcelain_paths(lines: list[str]) -> list[str]:
+    paths: list[str] = []
+    for line in lines:
         path = line[3:]
         if "->" in path:
             path = path.split("->", 1)[1].strip()
-        if path.endswith(".rs") or Path(path).name in RUST_SENTINELS:
+        if path:
             paths.append(path)
     return sorted(set(paths))
+
+
+def rust_changes(root: Path) -> list[str]:
+    paths = porcelain_paths(git_status_lines(root))
+    rust_paths = [p for p in paths if p.endswith(".rs") or Path(p).name in RUST_SENTINELS]
+    return sorted(set(rust_paths))
 
 
 def now_id() -> str:
@@ -96,54 +145,195 @@ def write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def run_fullscale(root: Path, cycle_dir: Path, label: str, parallel: bool) -> Path:
+def median_int(values: list[int]) -> int:
+    if not values:
+        return 0
+    return int(round(statistics.median(values)))
+
+
+def aggregate_run_payloads(
+    root: Path,
+    run_json_paths: list[Path],
+    output_json: Path,
+    output_csv: Path,
+    suite_name: str,
+    full_scale: bool,
+    parallel: bool,
+    csv_fields_hint: list[str],
+) -> dict:
+    run_payloads = [load_json(path) for path in run_json_paths]
+
+    all_tests = sorted(
+        {
+            test_name
+            for payload in run_payloads
+            for test_name in payload.get("tests", {}).keys()
+        }
+    )
+
+    aggregated_tests: dict[str, dict[str, int]] = {}
+    for test_name in all_tests:
+        metric_names = sorted(
+            {
+                metric
+                for payload in run_payloads
+                for metric, value in payload.get("tests", {}).get(test_name, {}).items()
+                if isinstance(value, (int, float))
+            }
+        )
+        aggregated_metric: dict[str, int] = {}
+        for metric in metric_names:
+            values = [
+                int(payload.get("tests", {}).get(test_name, {}).get(metric, 0))
+                for payload in run_payloads
+                if isinstance(payload.get("tests", {}).get(test_name, {}).get(metric), (int, float))
+            ]
+            aggregated_metric[metric] = median_int(values)
+
+        aggregated_metric.setdefault("total_time_ms", 0)
+        aggregated_tests[test_name] = aggregated_metric
+
+    payload = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "git_commit": git_cmd(root, ["rev-parse", "HEAD"])[:12],
+        "git_branch": git_cmd(root, ["rev-parse", "--abbrev-ref", "HEAD"]),
+        "suite": suite_name,
+        "full_scale": full_scale,
+        "parallel": parallel,
+        "aggregation": {
+            "method": "median",
+            "runs": len(run_json_paths),
+            "source_run_json": [str(path.relative_to(root)) for path in run_json_paths],
+        },
+        "tests": aggregated_tests,
+        "summary": {
+            "total_tests": len(aggregated_tests),
+            "total_time_ms": sum(m.get("total_time_ms", 0) for m in aggregated_tests.values()),
+            "total_rows_processed": sum(
+                m.get("rows_processed", 0) for m in aggregated_tests.values()
+            ),
+            "total_cells_compared": sum(
+                m.get("cells_compared", 0) for m in aggregated_tests.values()
+            ),
+        },
+    }
+    write_json(output_json, payload)
+
+    all_metric_fields = sorted(
+        {
+            field
+            for data in aggregated_tests.values()
+            for field, value in data.items()
+            if isinstance(value, (int, float))
+        }
+    )
+    ordered_metric_fields = [
+        field for field in csv_fields_hint if field in all_metric_fields
+    ] + [field for field in all_metric_fields if field not in csv_fields_hint]
+
+    output_csv.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["test_name"] + ordered_metric_fields)
+        writer.writeheader()
+        for test_name, data in sorted(aggregated_tests.items()):
+            row = {"test_name": test_name}
+            for field in ordered_metric_fields:
+                row[field] = data.get(field, 0)
+            writer.writerow(row)
+
+    return payload
+
+
+def run_fullscale(
+    root: Path,
+    cycle_dir: Path,
+    label: str,
+    parallel: bool,
+    runs: int,
+) -> tuple[Path, list[Path]]:
     output_json = cycle_dir / f"{label}_fullscale.json"
     output_csv = cycle_dir / f"{label}_fullscale.csv"
 
-    cmd = [
-        sys.executable,
-        "scripts/check_perf_thresholds.py",
-        "--suite",
-        "full-scale",
-    ]
-    if parallel:
-        cmd.append("--parallel")
-    cmd.extend(
-        [
-            "--require-baseline",
-            "--baseline",
-            "benchmarks/baselines/full-scale.json",
+    run_json_paths: list[Path] = []
+    for idx in range(1, runs + 1):
+        run_json = cycle_dir / f"{label}_fullscale_run{idx}.json"
+        run_csv = cycle_dir / f"{label}_fullscale_run{idx}.csv"
+
+        cmd = [
+            sys.executable,
+            "scripts/check_perf_thresholds.py",
+            "--suite",
+            "full-scale",
+            "--skip-baseline-check",
             "--export-json",
-            str(output_json),
+            str(run_json),
             "--export-csv",
-            str(output_csv),
+            str(run_csv),
         ]
+        if parallel:
+            cmd.append("--parallel")
+        run(cmd, root)
+        run_json_paths.append(run_json)
+
+    aggregate_run_payloads(
+        root,
+        run_json_paths,
+        output_json,
+        output_csv,
+        suite_name="full-scale",
+        full_scale=True,
+        parallel=parallel,
+        csv_fields_hint=FULLSCALE_CSV_FIELDS,
     )
-    run(cmd, root)
-    return output_json
+
+    return output_json, run_json_paths
 
 
-def run_e2e(root: Path, cycle_dir: Path, label: str, skip_fixtures: bool) -> Path:
+def run_e2e(
+    root: Path,
+    cycle_dir: Path,
+    label: str,
+    skip_fixtures: bool,
+    runs: int,
+) -> tuple[Path, list[Path]]:
     output_json = cycle_dir / f"{label}_e2e.json"
     output_csv = cycle_dir / f"{label}_e2e.csv"
-    output_dir = cycle_dir / f"results_e2e_{label}"
 
-    cmd = [
-        sys.executable,
-        "scripts/export_e2e_metrics.py",
-        "--baseline",
-        "benchmarks/baselines/e2e.json",
-        "--latest-json",
-        str(output_json),
-        "--export-csv",
-        str(output_csv),
-        "--output-dir",
-        str(output_dir),
-    ]
-    if skip_fixtures:
-        cmd.append("--skip-fixtures")
-    run(cmd, root)
-    return output_json
+    run_json_paths: list[Path] = []
+    for idx in range(1, runs + 1):
+        run_json = cycle_dir / f"{label}_e2e_run{idx}.json"
+        run_csv = cycle_dir / f"{label}_e2e_run{idx}.csv"
+        run_output_dir = cycle_dir / f"results_e2e_{label}_run{idx}"
+
+        cmd = [
+            sys.executable,
+            "scripts/export_e2e_metrics.py",
+            "--skip-baseline-check",
+            "--latest-json",
+            str(run_json),
+            "--export-csv",
+            str(run_csv),
+            "--output-dir",
+            str(run_output_dir),
+        ]
+        # Avoid paying fixture-generation cost repeatedly in median runs.
+        if skip_fixtures or idx > 1:
+            cmd.append("--skip-fixtures")
+        run(cmd, root)
+        run_json_paths.append(run_json)
+
+    aggregate_run_payloads(
+        root,
+        run_json_paths,
+        output_json,
+        output_csv,
+        suite_name="e2e",
+        full_scale=False,
+        parallel=False,
+        csv_fields_hint=E2E_CSV_FIELDS,
+    )
+
+    return output_json, run_json_paths
 
 
 def format_delta(pre: int | None, post: int | None) -> str:
@@ -174,15 +364,21 @@ def delta_table(pre_tests: dict, post_tests: dict, keys: list[str], fields: list
 
 def render_markdown_summary(
     cycle: str,
+    meta: dict,
     pre_meta: dict,
     post_meta: dict,
     full_rows: list[list[str]],
     e2e_rows: list[list[str]],
 ) -> str:
+    config = meta.get("config", {})
+    runs = config.get("runs", 1)
+    aggregation = config.get("aggregation", "single")
+
     lines = [
         f"# Perf Cycle Delta Summary",
         "",
         f"Cycle: `{cycle}`",
+        f"Aggregation: `{aggregation}` over **{runs} run(s)**",
         f"Pre: `{pre_meta.get('git_commit')}` ({pre_meta.get('git_branch')}) at {pre_meta.get('timestamp')}",
         f"Post: `{post_meta.get('git_commit')}` ({post_meta.get('git_branch')}) at {post_meta.get('timestamp')}",
         "",
@@ -208,6 +404,38 @@ def render_markdown_summary(
     return "\n".join(lines)
 
 
+def stage_meta(
+    root: Path,
+    timestamp: str,
+    full_json: Path,
+    e2e_json: Path,
+    full_run_jsons: list[Path],
+    e2e_run_jsons: list[Path],
+    parallel: bool,
+    skip_fixtures: bool,
+    runs: int,
+    rust_dirty: list[str],
+    dirty_paths: list[str],
+) -> dict:
+    return {
+        "timestamp": timestamp,
+        "git_commit": git_cmd(root, ["rev-parse", "HEAD"])[:12],
+        "git_branch": git_cmd(root, ["rev-parse", "--abbrev-ref", "HEAD"]),
+        "fullscale_json": str(full_json.relative_to(root)),
+        "e2e_json": str(e2e_json.relative_to(root)),
+        "fullscale_run_json": [str(p.relative_to(root)) for p in full_run_jsons],
+        "e2e_run_json": [str(p.relative_to(root)) for p in e2e_run_jsons],
+        "runs": runs,
+        "aggregation": "median",
+        "parallel": parallel,
+        "skip_fixtures": skip_fixtures,
+        "dirty_worktree": bool(dirty_paths),
+        "dirty_paths_count": len(dirty_paths),
+        "dirty_paths_sample": dirty_paths[:200],
+        "dirty_rust_paths": rust_dirty,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Run full perf cycle (pre/post) for major perf-risk Rust changes"
@@ -216,6 +444,12 @@ def main() -> int:
 
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--cycle", type=str, default=None, help="Cycle id (timestamp)")
+    common.add_argument(
+        "--runs",
+        type=int,
+        default=3,
+        help="Number of runs per suite (median-aggregated; default: 3)",
+    )
     common.add_argument(
         "--skip-fixtures",
         action="store_true",
@@ -237,6 +471,10 @@ def main() -> int:
 
     args = parser.parse_args()
 
+    if args.runs < 1:
+        print("ERROR: --runs must be >= 1")
+        return 2
+
     root = repo_root()
     cycle = args.cycle or now_id()
     cycle_dir = ensure_cycle_dir(root, cycle)
@@ -254,26 +492,46 @@ def main() -> int:
     if args.command == "post" and not rust_dirty:
         print("WARNING: No Rust changes detected in working tree.")
 
-    git_commit = git_cmd(root, ["rev-parse", "HEAD"])[:12]
-    git_branch = git_cmd(root, ["rev-parse", "--abbrev-ref", "HEAD"])
-    timestamp = datetime.now(timezone.utc).isoformat()
-
     parallel = not args.no_parallel
+    dirty_paths = porcelain_paths(git_status_lines(root))
 
     if args.command == "pre":
         if meta_path.exists():
             print(f"WARNING: cycle metadata already exists at {meta_path}")
-        pre_full = run_fullscale(root, cycle_dir, "pre", parallel)
-        pre_e2e = run_e2e(root, cycle_dir, "pre", args.skip_fixtures)
+
+        pre_full, pre_full_runs = run_fullscale(
+            root, cycle_dir, "pre", parallel=parallel, runs=args.runs
+        )
+        pre_e2e, pre_e2e_runs = run_e2e(
+            root,
+            cycle_dir,
+            "pre",
+            skip_fixtures=args.skip_fixtures,
+            runs=args.runs,
+        )
+
+        timestamp = datetime.now(timezone.utc).isoformat()
         meta = {
             "cycle": cycle,
-            "pre": {
-                "timestamp": timestamp,
-                "git_commit": git_commit,
-                "git_branch": git_branch,
-                "fullscale_json": str(pre_full.relative_to(root)),
-                "e2e_json": str(pre_e2e.relative_to(root)),
+            "config": {
+                "runs": args.runs,
+                "aggregation": "median",
+                "parallel": parallel,
+                "skip_fixtures": args.skip_fixtures,
             },
+            "pre": stage_meta(
+                root,
+                timestamp,
+                pre_full,
+                pre_e2e,
+                pre_full_runs,
+                pre_e2e_runs,
+                parallel=parallel,
+                skip_fixtures=args.skip_fixtures,
+                runs=args.runs,
+                rust_dirty=rust_dirty,
+                dirty_paths=dirty_paths,
+            ),
         }
         write_json(meta_path, meta)
         print(f"Pre-cycle complete. Cycle id: {cycle}")
@@ -285,17 +543,57 @@ def main() -> int:
         print("ERROR: Missing pre-cycle results. Run: python3 scripts/perf_cycle.py pre")
         return 2
 
-    post_full = run_fullscale(root, cycle_dir, "post", parallel)
-    post_e2e = run_e2e(root, cycle_dir, "post", args.skip_fixtures)
+    post_full, post_full_runs = run_fullscale(
+        root, cycle_dir, "post", parallel=parallel, runs=args.runs
+    )
+    post_e2e, post_e2e_runs = run_e2e(
+        root,
+        cycle_dir,
+        "post",
+        skip_fixtures=args.skip_fixtures,
+        runs=args.runs,
+    )
 
+    timestamp = datetime.now(timezone.utc).isoformat()
     meta = load_json(meta_path) if meta_path.exists() else {"cycle": cycle}
-    meta["post"] = {
-        "timestamp": timestamp,
-        "git_commit": git_commit,
-        "git_branch": git_branch,
-        "fullscale_json": str(post_full.relative_to(root)),
-        "e2e_json": str(post_e2e.relative_to(root)),
-    }
+    meta.setdefault(
+        "config",
+        {
+            "runs": args.runs,
+            "aggregation": "median",
+            "parallel": parallel,
+            "skip_fixtures": args.skip_fixtures,
+        },
+    )
+
+    if "pre" not in meta:
+        # Recover minimal provenance if pre metadata file was missing or overwritten.
+        pre_full_data = load_json(pre_full_path)
+        pre_e2e_data = load_json(pre_e2e_path)
+        meta["pre"] = {
+            "timestamp": pre_e2e_data.get("timestamp") or pre_full_data.get("timestamp"),
+            "git_commit": pre_e2e_data.get("git_commit") or pre_full_data.get("git_commit"),
+            "git_branch": pre_e2e_data.get("git_branch") or pre_full_data.get("git_branch"),
+            "fullscale_json": str(pre_full_path.relative_to(root)),
+            "e2e_json": str(pre_e2e_path.relative_to(root)),
+            "runs": meta.get("config", {}).get("runs", args.runs),
+            "aggregation": meta.get("config", {}).get("aggregation", "median"),
+            "reconstructed": True,
+        }
+
+    meta["post"] = stage_meta(
+        root,
+        timestamp,
+        post_full,
+        post_e2e,
+        post_full_runs,
+        post_e2e_runs,
+        parallel=parallel,
+        skip_fixtures=args.skip_fixtures,
+        runs=args.runs,
+        rust_dirty=rust_dirty,
+        dirty_paths=dirty_paths,
+    )
     write_json(meta_path, meta)
 
     pre_full = load_json(pre_full_path)
@@ -303,8 +601,14 @@ def main() -> int:
     pre_e2e = load_json(pre_e2e_path)
     post_e2e_data = load_json(post_e2e)
 
-    full_keys = sorted(set(pre_full.get("tests", {}).keys()) | set(post_full_data.get("tests", {}).keys()))
-    e2e_keys = sorted(set(pre_e2e.get("tests", {}).keys()) | set(post_e2e_data.get("tests", {}).keys()))
+    full_keys = sorted(
+        set(pre_full.get("tests", {}).keys())
+        | set(post_full_data.get("tests", {}).keys())
+    )
+    e2e_keys = sorted(
+        set(pre_e2e.get("tests", {}).keys())
+        | set(post_e2e_data.get("tests", {}).keys())
+    )
 
     full_rows = delta_table(
         pre_full.get("tests", {}),
@@ -321,6 +625,7 @@ def main() -> int:
 
     summary_md = render_markdown_summary(
         cycle,
+        meta,
         meta.get("pre", {}),
         meta.get("post", {}),
         full_rows,
@@ -331,6 +636,7 @@ def main() -> int:
 
     summary_json = {
         "cycle": cycle,
+        "config": meta.get("config", {}),
         "pre": meta.get("pre", {}),
         "post": meta.get("post", {}),
         "fullscale": full_rows,

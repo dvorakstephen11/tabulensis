@@ -210,6 +210,19 @@ For large workbooks, prefer streaming output (`diff_streaming`) and consider set
 
 Agent note: if you discover a repeatable workflow optimization or failure trap, proactively update `AGENTS.md`, relevant `SKILL.md`, and/or this README in the same PR when practical.
 
+## Developer Guardrails
+
+To reduce accidental workspace-wide churn from formatting or broad edits:
+
+```bash
+python3 scripts/safe_rustfmt.py
+python3 scripts/check_change_scope.py --staged
+```
+
+- `safe_rustfmt.py` formats only an explicit/narrow Rust file set (staged by default).
+- `check_change_scope.py` fails when blast radius exceeds configured thresholds.
+- If a wide-scope change is intentional, use commit token `[allow-wide-scope]` and document rationale.
+
 ## Testing
 
 ### Recommended (mirrors CI)

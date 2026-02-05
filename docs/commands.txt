@@ -66,6 +66,8 @@ BUILD & TEST (Rust)
     cargo test            # Run tests (console only)
     cargo fmt             # Format current package
     rustfmt path/to/file.rs  # Preferred for targeted edits (avoid accidental workspace-wide churn)
+    python3 scripts/safe_rustfmt.py  # Format staged Rust files safely (preferred)
+    python3 scripts/check_change_scope.py --staged  # Blast-radius guard before commit
     cargo clippy --all-targets  # Lint all targets
     cargo build --target wasm32-unknown-unknown  # WASM build
 
@@ -97,6 +99,7 @@ python scripts/check_perf_thresholds.py --suite gate --parallel --baseline bench
 python3 scripts/perf_cycle.py pre
 # ...make changes...
 python3 scripts/perf_cycle.py post --cycle <cycle_id>
+# (default is median-of-3 runs; override with --runs <n> if needed)
 
 # Export quick metrics to JSON
 python scripts/export_perf_metrics.py
