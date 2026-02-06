@@ -98,3 +98,25 @@ scenarios:
       cols: 100
       mode: "dense"
     output: "e2e_p5_identical_b.xlsx"
+
+  - id: "e2e_p6_sharedstrings_changed_numeric_only_a"
+    generator: "perf_large"
+    args:
+      rows: 50000
+      cols: 20
+      mode: "noise"
+      seed: 424242
+      include_header: false
+      sharedstrings_salt: "SALT_A"
+    output: "e2e_p6_sharedstrings_changed_numeric_only_a.xlsx"
+
+  - id: "e2e_p6_sharedstrings_changed_numeric_only_b"
+    generator: "perf_large"
+    args:
+      rows: 50000
+      cols: 20
+      mode: "noise"
+      seed: 424242
+      include_header: false
+      sharedstrings_salt: "SALT_B"
+    output: "e2e_p6_sharedstrings_changed_numeric_only_b.xlsx"
