@@ -18,6 +18,7 @@ import csv
 import json
 import statistics
 import subprocess
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -311,6 +312,9 @@ def run_e2e(
         run_json = cycle_dir / f"{label}_e2e_run{idx}.json"
         run_csv = cycle_dir / f"{label}_e2e_run{idx}.csv"
         run_output_dir = cycle_dir / f"results_e2e_{label}_run{idx}"
+        if run_output_dir.exists():
+            # Keep perf-cycle artifacts deterministic (avoid accumulating old timestamped JSONs).
+            shutil.rmtree(run_output_dir, ignore_errors=True)
 
         cmd = [
             sys.executable,
@@ -498,6 +502,11 @@ def main() -> int:
 
     if args.command == "post" and not rust_dirty:
         print("WARNING: No Rust changes detected in working tree.")
+    if args.command == "post" and rust_dirty:
+        print(
+            "WARNING: Rust changes detected in working tree. Consider committing before running "
+            "post so perf-cycle artifacts record an accurate post SHA."
+        )
 
     parallel = not args.no_parallel
     dirty_paths = porcelain_paths(git_status_lines(root))

@@ -27,6 +27,7 @@ python3 scripts/perf_cycle.py post --cycle <cycle_id>
 ```
 
 The delta summary is written to `benchmarks/perf_cycles/<cycle_id>/cycle_delta.md`.
+Recommendation: commit your code changes before running `post` so `cycle.json` records an accurate `post.git_commit` (this improves historical trendline attribution).
 `perf_cycle.py post` also writes `benchmarks/perf_cycles/<cycle_id>/cycle_signal.md` (noise-aware confidence using run-level IQR).
 `perf_cycle.py` defaults to `--runs 3` and aggregates with median to reduce noise.
 Raw runs are kept as `*_runN.json` alongside the aggregated `pre_*.json` / `post_*.json`.

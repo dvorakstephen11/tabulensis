@@ -54,6 +54,7 @@ Escalation rule: if quick/gate fails or results are noisy/suspicious, run the fu
   - `python3 scripts/safe_rustfmt.py --worktree` (all changed Rust files)
 - Run workspace-wide formatting only when the task explicitly requires a repo-wide formatting pass.
 - Before commit, run blast-radius guard for the staged set:
+  - `python3 scripts/check_line_endings.py --staged`
   - `python3 scripts/check_change_scope.py --staged`
 - Before commit with perf artifacts, run perf-cycle retention guard:
   - `python3 scripts/check_perf_cycle_scope.py --staged`
