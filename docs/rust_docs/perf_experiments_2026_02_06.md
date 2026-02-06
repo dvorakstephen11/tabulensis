@@ -212,6 +212,15 @@ The OpenXML open/diff path touches many parts (`xl/workbook.xml`, rels, multiple
 
 - If zip crate API prevents safe or consistent by-index usage, abandon this experiment rather than shipping behavioral risk.
 
+## Outcome (2026-02-06)
+
+This iteration did **not** improve workbook-open performance. The perf cycle showed a consistent regression in e2e open/parse time (for example, `e2e_p1_dense` and `e2e_p2_noise` both got slower), so the code changes were reverted.
+
+Perf-cycle artifacts (pre/post) are recorded at:
+- `benchmarks/perf_cycles/2026-02-06_221034/`
+- Delta summary: `benchmarks/perf_cycles/2026-02-06_221034/cycle_delta.md`
+- Signal report: `benchmarks/perf_cycles/2026-02-06_221034/cycle_signal.md`
+
 ---
 
 # Experiment 3: Scratch-Buffer Reads and Pre-Sizing for ZIP Part Reads (No Streaming Yet)
