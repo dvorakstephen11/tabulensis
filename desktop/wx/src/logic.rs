@@ -45,7 +45,11 @@ mod tests {
         let result = parse_globs(" foo,bar \n baz ");
         assert_eq!(
             result,
-            Some(vec!["foo".to_string(), "bar".to_string(), "baz".to_string()])
+            Some(vec![
+                "foo".to_string(),
+                "bar".to_string(),
+                "baz".to_string()
+            ])
         );
         assert!(parse_globs(" \n , ").is_none());
     }

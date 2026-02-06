@@ -32,7 +32,9 @@ use crate::store::{
     resolve_sheet_stats, DiffMode, DiffRunSummary, OpStore, OpStoreSink, RunStatus, SheetStats,
     StoreError,
 };
-use ui_payload::{build_payload_from_pbix_report, limits_from_config, DiffOptions, DiffOutcomeConfig, DiffPreset};
+use ui_payload::{
+    build_payload_from_pbix_report, limits_from_config, DiffOptions, DiffOutcomeConfig, DiffPreset,
+};
 const WORKBOOK_CACHE_CAPACITY: usize = 4;
 const PBIX_CACHE_CAPACITY: usize = 2;
 const DIFF_KEY_CACHE_CAPACITY: usize = 16;
@@ -235,12 +237,10 @@ impl DiffRunner {
                 request,
                 respond_to: reply_tx,
             })
-            .map_err(|e| {
-                DiffErrorPayload::new("engine_down", e.to_string(), false)
-            })?;
-        reply_rx.recv().map_err(|e| {
-            DiffErrorPayload::new("engine_down", e.to_string(), false)
-        })?
+            .map_err(|e| DiffErrorPayload::new("engine_down", e.to_string(), false))?;
+        reply_rx
+            .recv()
+            .map_err(|e| DiffErrorPayload::new("engine_down", e.to_string(), false))?
     }
 
     pub fn load_sheet_payload(
@@ -254,9 +254,9 @@ impl DiffRunner {
                 respond_to: reply_tx,
             })
             .map_err(|e| DiffErrorPayload::new("engine_down", e.to_string(), false))?;
-        reply_rx.recv().map_err(|e| {
-            DiffErrorPayload::new("engine_down", e.to_string(), false)
-        })?
+        reply_rx
+            .recv()
+            .map_err(|e| DiffErrorPayload::new("engine_down", e.to_string(), false))?
     }
 
     pub fn load_sheet_meta(
@@ -270,9 +270,9 @@ impl DiffRunner {
                 respond_to: reply_tx,
             })
             .map_err(|e| DiffErrorPayload::new("engine_down", e.to_string(), false))?;
-        reply_rx.recv().map_err(|e| {
-            DiffErrorPayload::new("engine_down", e.to_string(), false)
-        })?
+        reply_rx
+            .recv()
+            .map_err(|e| DiffErrorPayload::new("engine_down", e.to_string(), false))?
     }
 
     pub fn load_ops_in_range(
@@ -286,9 +286,9 @@ impl DiffRunner {
                 respond_to: reply_tx,
             })
             .map_err(|e| DiffErrorPayload::new("engine_down", e.to_string(), false))?;
-        reply_rx.recv().map_err(|e| {
-            DiffErrorPayload::new("engine_down", e.to_string(), false)
-        })?
+        reply_rx
+            .recv()
+            .map_err(|e| DiffErrorPayload::new("engine_down", e.to_string(), false))?
     }
 
     pub fn load_cells_in_range(
@@ -302,19 +302,21 @@ impl DiffRunner {
                 respond_to: reply_tx,
             })
             .map_err(|e| DiffErrorPayload::new("engine_down", e.to_string(), false))?;
-        reply_rx.recv().map_err(|e| {
-            DiffErrorPayload::new("engine_down", e.to_string(), false)
-        })?
+        reply_rx
+            .recv()
+            .map_err(|e| DiffErrorPayload::new("engine_down", e.to_string(), false))?
     }
 
     pub fn cache_stats(&self) -> Result<CacheStats, DiffErrorPayload> {
         let (reply_tx, reply_rx) = mpsc::channel();
         self.tx
-            .send(EngineCommand::CacheStats { respond_to: reply_tx })
+            .send(EngineCommand::CacheStats {
+                respond_to: reply_tx,
+            })
             .map_err(|e| DiffErrorPayload::new("engine_down", e.to_string(), false))?;
-        reply_rx.recv().map_err(|e| {
-            DiffErrorPayload::new("engine_down", e.to_string(), false)
-        })
+        reply_rx
+            .recv()
+            .map_err(|e| DiffErrorPayload::new("engine_down", e.to_string(), false))
     }
 }
 
@@ -396,23 +398,38 @@ impl EngineState {
     fn run(mut self) {
         while let Ok(cmd) = self.rx.recv() {
             match cmd {
-                EngineCommand::Diff { request, respond_to } => {
+                EngineCommand::Diff {
+                    request,
+                    respond_to,
+                } => {
                     let result = self.handle_diff(request);
                     let _ = respond_to.send(result);
                 }
-                EngineCommand::LoadSheet { request, respond_to } => {
+                EngineCommand::LoadSheet {
+                    request,
+                    respond_to,
+                } => {
                     let result = self.handle_load_sheet(request);
                     let _ = respond_to.send(result);
                 }
-                EngineCommand::LoadSheetMeta { request, respond_to } => {
+                EngineCommand::LoadSheetMeta {
+                    request,
+                    respond_to,
+                } => {
                     let result = self.handle_load_sheet_meta(request);
                     let _ = respond_to.send(result);
                 }
-                EngineCommand::LoadOpsRange { request, respond_to } => {
+                EngineCommand::LoadOpsRange {
+                    request,
+                    respond_to,
+                } => {
                     let result = self.handle_load_ops_range(request);
                     let _ = respond_to.send(result);
                 }
-                EngineCommand::LoadCellsRange { request, respond_to } => {
+                EngineCommand::LoadCellsRange {
+                    request,
+                    respond_to,
+                } => {
                     let result = self.handle_load_cells_range(request);
                     let _ = respond_to.send(result);
                 }
@@ -479,15 +496,24 @@ impl EngineState {
     }
 
     fn handle_diff(&mut self, request: DiffRequest) -> Result<DiffOutcome, DiffErrorPayload> {
-        emit_progress(&request.progress, request.run_id, "read", "Reading files...");
+        emit_progress(
+            &request.progress,
+            request.run_id,
+            "read",
+            None,
+            "Reading files...",
+            None,
+        );
 
         let old_path = PathBuf::from(&request.old_path);
         let new_path = PathBuf::from(&request.new_path);
 
-        let old_kind = ui_payload::host_kind_from_path(&old_path)
-            .ok_or_else(|| DiffErrorPayload::new("unsupported", "Unsupported old file extension", false))?;
-        let new_kind = ui_payload::host_kind_from_path(&new_path)
-            .ok_or_else(|| DiffErrorPayload::new("unsupported", "Unsupported new file extension", false))?;
+        let old_kind = ui_payload::host_kind_from_path(&old_path).ok_or_else(|| {
+            DiffErrorPayload::new("unsupported", "Unsupported old file extension", false)
+        })?;
+        let new_kind = ui_payload::host_kind_from_path(&new_path).ok_or_else(|| {
+            DiffErrorPayload::new("unsupported", "Unsupported new file extension", false)
+        })?;
 
         if old_kind != new_kind {
             return Err(DiffErrorPayload::new(
@@ -533,38 +559,75 @@ impl EngineState {
                         trusted,
                     )
                     .map_err(map_store_error)?;
-                self.store_diff_keys(&diff_id, DiffCacheKind::Workbook, old_key.clone(), new_key.clone());
+                self.store_diff_keys(
+                    &diff_id,
+                    DiffCacheKind::Workbook,
+                    old_key.clone(),
+                    new_key.clone(),
+                );
 
                 match mode {
                     DiffMode::Payload => {
-                        let old_pkg = self.get_or_open_workbook_by_key(&old_key, &old_path, trusted)?;
-                        let new_pkg = self.get_or_open_workbook_by_key(&new_key, &new_path, trusted)?;
+                        let old_pkg =
+                            self.get_or_open_workbook_by_key(&old_key, &old_path, trusted)?;
+                        let new_pkg =
+                            self.get_or_open_workbook_by_key(&new_key, &new_path, trusted)?;
 
-                        emit_progress(&request.progress, request.run_id, "diff", "Diffing workbooks...");
-                        let progress = EngineProgress::new(request.progress.clone(), request.run_id, request.cancel.clone());
+                        emit_progress(
+                            &request.progress,
+                            request.run_id,
+                            "diff",
+                            None,
+                            "Diffing workbooks...",
+                            None,
+                        );
+                        let progress = EngineProgress::new(
+                            request.progress.clone(),
+                            request.run_id,
+                            request.cancel.clone(),
+                        );
                         let report = match run_diff_with_progress(
                             || old_pkg.diff_with_progress(&new_pkg, &config, &progress),
                             &request.cancel,
                         ) {
                             Ok(report) => report,
                             Err(err) => {
-                                let _ = store.fail_run(&diff_id, status_for_error(&err), &err.message);
+                                let _ =
+                                    store.fail_run(&diff_id, status_for_error(&err), &err.message);
                                 return Err(err);
                             }
                         };
 
-                        emit_progress(&request.progress, request.run_id, "snapshot", "Building previews...");
+                        emit_progress(
+                            &request.progress,
+                            request.run_id,
+                            "snapshot",
+                            None,
+                            "Building previews...",
+                            None,
+                        );
                         let (counts, sheet_stats) = store
                             .insert_ops_from_report(&diff_id, &report)
                             .map_err(map_store_error)?;
-                        let resolved = resolve_sheet_stats(&report.strings, &sheet_stats).map_err(map_store_error)?;
+                        let resolved = resolve_sheet_stats(&report.strings, &sheet_stats)
+                            .map_err(map_store_error)?;
                         let summary = report_to_summary(&report);
                         store
-                            .finish_run(&diff_id, &summary, &report.strings, &counts, &resolved, RunStatus::Complete)
+                            .finish_run(
+                                &diff_id,
+                                &summary,
+                                &report.strings,
+                                &counts,
+                                &resolved,
+                                RunStatus::Complete,
+                            )
                             .map_err(map_store_error)?;
 
-                        let payload = ui_payload::build_payload_from_workbook_report(report, &old_pkg, &new_pkg);
-                        let summary_record = store.load_summary(&diff_id).map_err(map_store_error)?;
+                        let payload = ui_payload::build_payload_from_workbook_report(
+                            report, &old_pkg, &new_pkg,
+                        );
+                        let summary_record =
+                            store.load_summary(&diff_id).map_err(map_store_error)?;
                         Ok(DiffOutcome {
                             diff_id,
                             mode,
@@ -574,15 +637,29 @@ impl EngineState {
                         })
                     }
                     DiffMode::Large => {
-                        emit_progress(&request.progress, request.run_id, "diff", "Streaming diff to disk...");
-                        let progress = EngineProgress::new(request.progress.clone(), request.run_id, request.cancel.clone());
-                        let sink_store = OpStore::open(&self.store_path).map_err(map_store_error)?;
+                        emit_progress(
+                            &request.progress,
+                            request.run_id,
+                            "diff",
+                            None,
+                            "Streaming diff to disk...",
+                            None,
+                        );
+                        let progress = EngineProgress::new(
+                            request.progress.clone(),
+                            request.run_id,
+                            request.cancel.clone(),
+                        );
+                        let sink_store =
+                            OpStore::open(&self.store_path).map_err(map_store_error)?;
                         let conn = sink_store.into_connection();
                         let mut sink = OpStoreSink::new(conn, diff_id.clone())
                             .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
 
-                        let old_file = File::open(&old_path).map_err(|e| DiffErrorPayload::new("io", e.to_string(), false))?;
-                        let new_file = File::open(&new_path).map_err(|e| DiffErrorPayload::new("io", e.to_string(), false))?;
+                        let old_file = File::open(&old_path)
+                            .map_err(|e| DiffErrorPayload::new("io", e.to_string(), false))?;
+                        let new_file = File::open(&new_path)
+                            .map_err(|e| DiffErrorPayload::new("io", e.to_string(), false))?;
 
                         let summary = match run_diff_with_progress(
                             || {
@@ -597,11 +674,7 @@ impl EngineState {
                                     )
                                 } else {
                                     WorkbookPackage::diff_openxml_streaming_fast_with_progress(
-                                        old_file,
-                                        new_file,
-                                        &config,
-                                        &mut sink,
-                                        &progress,
+                                        old_file, new_file, &config, &mut sink, &progress,
                                     )
                                 }
                             },
@@ -615,22 +688,33 @@ impl EngineState {
                             Ok(summary) => summary,
                             Err(err) => {
                                 let _ = sink.finish();
-                                let _ = store.fail_run(&diff_id, status_for_error(&err), &err.message);
+                                let _ =
+                                    store.fail_run(&diff_id, status_for_error(&err), &err.message);
                                 return Err(err);
                             }
                         };
 
-                        sink.finish().map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
+                        sink.finish()
+                            .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
                         let (_, counts, stats, _) = sink.into_parts();
                         let strings = current_strings();
                         let mut stats: Vec<SheetStats> = stats.into_values().collect();
                         stats.sort_by_key(|entry| entry.sheet_id);
-                        let resolved = resolve_sheet_stats(&strings, &stats).map_err(map_store_error)?;
+                        let resolved =
+                            resolve_sheet_stats(&strings, &stats).map_err(map_store_error)?;
                         store
-                            .finish_run(&diff_id, &summary, &strings, &counts, &resolved, RunStatus::Complete)
+                            .finish_run(
+                                &diff_id,
+                                &summary,
+                                &strings,
+                                &counts,
+                                &resolved,
+                                RunStatus::Complete,
+                            )
                             .map_err(map_store_error)?;
 
-                        let summary_record = store.load_summary(&diff_id).map_err(map_store_error)?;
+                        let summary_record =
+                            store.load_summary(&diff_id).map_err(map_store_error)?;
                         Ok(DiffOutcome {
                             diff_id,
                             mode,
@@ -658,15 +742,29 @@ impl EngineState {
                     .map_err(map_store_error)?;
                 self.store_diff_keys(&diff_id, DiffCacheKind::Pbix, old_key, new_key);
 
-                emit_progress(&request.progress, request.run_id, "diff", "Streaming PBIX diff to disk...");
-                let progress = EngineProgress::new(request.progress.clone(), request.run_id, request.cancel.clone());
+                emit_progress(
+                    &request.progress,
+                    request.run_id,
+                    "diff",
+                    None,
+                    "Streaming PBIX diff to disk...",
+                    None,
+                );
+                let progress = EngineProgress::new(
+                    request.progress.clone(),
+                    request.run_id,
+                    request.cancel.clone(),
+                );
                 let sink_store = OpStore::open(&self.store_path).map_err(map_store_error)?;
                 let conn = sink_store.into_connection();
                 let mut sink = OpStoreSink::new(conn, diff_id.clone())
                     .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
 
                 let summary = match run_diff_with_progress(
-                    || old_pkg.diff_streaming_with_progress(&new_pkg, &config, &mut sink, &progress),
+                    || {
+                        old_pkg
+                            .diff_streaming_with_progress(&new_pkg, &config, &mut sink, &progress)
+                    },
                     &request.cancel,
                 ) {
                     Ok(result) => result.map_err(diff_error_from_diff),
@@ -682,7 +780,8 @@ impl EngineState {
                     }
                 };
 
-                sink.finish().map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
+                sink.finish()
+                    .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
                 let (_, counts, stats, _) = sink.into_parts();
                 let strings = current_strings();
                 let mut stats: Vec<SheetStats> = stats.into_values().collect();
@@ -690,10 +789,19 @@ impl EngineState {
                 let resolved = resolve_sheet_stats(&strings, &stats).map_err(map_store_error)?;
                 let use_large_mode = should_use_large_mode(summary.op_count as u64, &config);
                 if use_large_mode {
-                    store.set_mode(&diff_id, DiffMode::Large).map_err(map_store_error)?;
+                    store
+                        .set_mode(&diff_id, DiffMode::Large)
+                        .map_err(map_store_error)?;
                 }
                 store
-                    .finish_run(&diff_id, &summary, &strings, &counts, &resolved, RunStatus::Complete)
+                    .finish_run(
+                        &diff_id,
+                        &summary,
+                        &strings,
+                        &counts,
+                        &resolved,
+                        RunStatus::Complete,
+                    )
                     .map_err(map_store_error)?;
 
                 let summary_record = store.load_summary(&diff_id).map_err(map_store_error)?;
@@ -725,35 +833,9 @@ impl EngineState {
         request: SheetPayloadRequest,
     ) -> Result<ui_payload::DiffWithSheets, DiffErrorPayload> {
         let store = OpStore::open(&self.store_path).map_err(map_store_error)?;
-        let summary = store.load_summary(&request.diff_id).map_err(map_store_error)?;
-
-        if request.cancel.load(Ordering::Relaxed) {
-            return Err(DiffErrorPayload::new("canceled", "Diff canceled.", false));
-        }
-
-        let old_path = PathBuf::from(&summary.old_path);
-        let new_path = PathBuf::from(&summary.new_path);
-        let (old_pkg, new_pkg) =
-            self.load_workbooks_for_diff(&request.diff_id, &old_path, &new_path, summary.trusted)?;
-
-        let ops = store.load_sheet_ops(&request.diff_id, &request.sheet_name).map_err(map_store_error)?;
-        let strings = store.load_strings(&request.diff_id).map_err(map_store_error)?;
-
-        let mut report = DiffReport::new(ops);
-        report.strings = strings;
-        report.complete = summary.complete;
-        report.warnings = summary.warnings.clone();
-
-        emit_progress(&request.progress, 0, "snapshot", "Building previews...");
-        Ok(ui_payload::build_payload_from_workbook_report(report, &old_pkg, &new_pkg))
-    }
-
-    fn handle_load_sheet_meta(
-        &mut self,
-        request: SheetMetaRequest,
-    ) -> Result<SheetMeta, DiffErrorPayload> {
-        let store = OpStore::open(&self.store_path).map_err(map_store_error)?;
-        let summary = store.load_summary(&request.diff_id).map_err(map_store_error)?;
+        let summary = store
+            .load_summary(&request.diff_id)
+            .map_err(map_store_error)?;
 
         if request.cancel.load(Ordering::Relaxed) {
             return Err(DiffErrorPayload::new("canceled", "Diff canceled.", false));
@@ -767,7 +849,52 @@ impl EngineState {
         let ops = store
             .load_sheet_ops(&request.diff_id, &request.sheet_name)
             .map_err(map_store_error)?;
-        let strings = store.load_strings(&request.diff_id).map_err(map_store_error)?;
+        let strings = store
+            .load_strings(&request.diff_id)
+            .map_err(map_store_error)?;
+
+        let mut report = DiffReport::new(ops);
+        report.strings = strings;
+        report.complete = summary.complete;
+        report.warnings = summary.warnings.clone();
+
+        emit_progress(
+            &request.progress,
+            0,
+            "snapshot",
+            None,
+            "Building previews...",
+            None,
+        );
+        Ok(ui_payload::build_payload_from_workbook_report(
+            report, &old_pkg, &new_pkg,
+        ))
+    }
+
+    fn handle_load_sheet_meta(
+        &mut self,
+        request: SheetMetaRequest,
+    ) -> Result<SheetMeta, DiffErrorPayload> {
+        let store = OpStore::open(&self.store_path).map_err(map_store_error)?;
+        let summary = store
+            .load_summary(&request.diff_id)
+            .map_err(map_store_error)?;
+
+        if request.cancel.load(Ordering::Relaxed) {
+            return Err(DiffErrorPayload::new("canceled", "Diff canceled.", false));
+        }
+
+        let old_path = PathBuf::from(&summary.old_path);
+        let new_path = PathBuf::from(&summary.new_path);
+        let (old_pkg, new_pkg) =
+            self.load_workbooks_for_diff(&request.diff_id, &old_path, &new_path, summary.trusted)?;
+
+        let ops = store
+            .load_sheet_ops(&request.diff_id, &request.sheet_name)
+            .map_err(map_store_error)?;
+        let strings = store
+            .load_strings(&request.diff_id)
+            .map_err(map_store_error)?;
         let mut report = DiffReport::new(ops.clone());
         report.strings = strings;
         report.complete = summary.complete;
@@ -788,8 +915,16 @@ impl EngineState {
         } else {
             Some(ui_payload::build_alignment_for_sheet(
                 &request.sheet_name,
-                if old_rows > 0 && old_cols > 0 { Some((old_rows, old_cols)) } else { None },
-                if new_rows > 0 && new_cols > 0 { Some((new_rows, new_cols)) } else { None },
+                if old_rows > 0 && old_cols > 0 {
+                    Some((old_rows, old_cols))
+                } else {
+                    None
+                },
+                if new_rows > 0 && new_cols > 0 {
+                    Some((new_rows, new_cols))
+                } else {
+                    None
+                },
                 &ops,
             ))
         };
@@ -826,7 +961,9 @@ impl EngineState {
         request: OpsRangeRequest,
     ) -> Result<DiffReport, DiffErrorPayload> {
         let store = OpStore::open(&self.store_path).map_err(map_store_error)?;
-        let summary = store.load_summary(&request.diff_id).map_err(map_store_error)?;
+        let summary = store
+            .load_summary(&request.diff_id)
+            .map_err(map_store_error)?;
         let ops = store
             .load_ops_in_range(
                 &request.diff_id,
@@ -837,7 +974,9 @@ impl EngineState {
                 request.range.col_end,
             )
             .map_err(map_store_error)?;
-        let strings = store.load_strings(&request.diff_id).map_err(map_store_error)?;
+        let strings = store
+            .load_strings(&request.diff_id)
+            .map_err(map_store_error)?;
         let mut report = DiffReport::new(ops);
         report.strings = strings;
         report.complete = summary.complete;
@@ -850,7 +989,9 @@ impl EngineState {
         request: CellsRangeRequest,
     ) -> Result<SheetCellsPayload, DiffErrorPayload> {
         let store = OpStore::open(&self.store_path).map_err(map_store_error)?;
-        let summary = store.load_summary(&request.diff_id).map_err(map_store_error)?;
+        let summary = store
+            .load_summary(&request.diff_id)
+            .map_err(map_store_error)?;
 
         let old_path = PathBuf::from(&summary.old_path);
         let new_path = PathBuf::from(&summary.new_path);
@@ -915,13 +1056,12 @@ impl EngineState {
         path: &Path,
         trusted: bool,
     ) -> Result<WorkbookHandle, DiffErrorPayload> {
-        let file = File::open(path).map_err(|e| DiffErrorPayload::new("io", e.to_string(), false))?;
+        let file =
+            File::open(path).map_err(|e| DiffErrorPayload::new("io", e.to_string(), false))?;
         let pkg = if trusted {
-            WorkbookPackage::open_with_limits(file, trusted_limits())
-                .map_err(map_package_error)?
+            WorkbookPackage::open_with_limits(file, trusted_limits()).map_err(map_package_error)?
         } else {
-            WorkbookPackage::open(file)
-                .map_err(map_package_error)?
+            WorkbookPackage::open(file).map_err(map_package_error)?
         };
         let pkg = wrap_workbook(pkg);
         self.workbook_cache.put(key, pkg.clone());
@@ -965,13 +1105,12 @@ impl EngineState {
         path: &Path,
         trusted: bool,
     ) -> Result<PbixHandle, DiffErrorPayload> {
-        let file = File::open(path).map_err(|e| DiffErrorPayload::new("io", e.to_string(), false))?;
+        let file =
+            File::open(path).map_err(|e| DiffErrorPayload::new("io", e.to_string(), false))?;
         let pkg = if trusted {
-            PbixPackage::open_with_limits(file, trusted_limits())
-                .map_err(map_package_error)?
+            PbixPackage::open_with_limits(file, trusted_limits()).map_err(map_package_error)?
         } else {
-            PbixPackage::open(file)
-                .map_err(map_package_error)?
+            PbixPackage::open(file).map_err(map_package_error)?
         };
         let pkg = wrap_pbix(pkg);
         self.pbix_cache.put(key, pkg.clone());
@@ -999,7 +1138,6 @@ impl EngineState {
         let pkg = self.get_or_open_pbix_by_key(&key, path, trusted)?;
         Ok((key, pkg))
     }
-
 }
 
 fn report_to_summary(report: &DiffReport) -> DiffSummary {
@@ -1013,7 +1151,13 @@ fn report_to_summary(report: &DiffReport) -> DiffSummary {
 }
 
 fn outcome_config_from_options(options: &DiffOptions, cfg: &DiffConfig) -> DiffOutcomeConfig {
-    let preset = if options.config_json.as_ref().map(|v| v.trim()).unwrap_or("").is_empty() {
+    let preset = if options
+        .config_json
+        .as_ref()
+        .map(|v| v.trim())
+        .unwrap_or("")
+        .is_empty()
+    {
         Some(options.preset.unwrap_or(DiffPreset::Balanced))
     } else {
         None
@@ -1027,9 +1171,12 @@ fn outcome_config_from_options(options: &DiffOptions, cfg: &DiffConfig) -> DiffO
 fn cache_key(path: &Path, trusted: bool) -> Result<CacheKey, DiffErrorPayload> {
     let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let normalized = canonical.to_string_lossy().to_lowercase();
-    let meta = std::fs::metadata(&canonical).map_err(|e| DiffErrorPayload::new("io", e.to_string(), false))?;
+    let meta = std::fs::metadata(&canonical)
+        .map_err(|e| DiffErrorPayload::new("io", e.to_string(), false))?;
     let size = meta.len();
-    let mtime = meta.modified().ok()
+    let mtime = meta
+        .modified()
+        .ok()
         .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|dur| dur.as_secs())
         .unwrap_or(0);
@@ -1068,19 +1215,17 @@ fn find_sheet_by_name<'a>(
     sheet_name: &str,
 ) -> Option<&'a excel_diff::Sheet> {
     let idx = excel_diff::with_default_session(|session| {
-        workbook
-            .sheets
-            .iter()
-            .position(|sheet| session.strings.resolve(sheet.name).eq_ignore_ascii_case(sheet_name))
+        workbook.sheets.iter().position(|sheet| {
+            session
+                .strings
+                .resolve(sheet.name)
+                .eq_ignore_ascii_case(sheet_name)
+        })
     });
     idx.and_then(|i| workbook.sheets.get(i))
 }
 
-fn normalize_range(
-    range: &RangeBounds,
-    nrows: u32,
-    ncols: u32,
-) -> Option<(u32, u32, u32, u32)> {
+fn normalize_range(range: &RangeBounds, nrows: u32, ncols: u32) -> Option<(u32, u32, u32, u32)> {
     if nrows == 0 || ncols == 0 {
         return None;
     }
@@ -1115,11 +1260,20 @@ fn render_sheet_cell(
         Some(excel_diff::CellValue::Blank) => Some(String::new()),
         Some(excel_diff::CellValue::Number(n)) => Some(n.to_string()),
         Some(excel_diff::CellValue::Text(id)) => Some(pool.resolve(*id).to_string()),
-        Some(excel_diff::CellValue::Bool(b)) => Some(if *b { "TRUE".to_string() } else { "FALSE".to_string() }),
+        Some(excel_diff::CellValue::Bool(b)) => Some(if *b {
+            "TRUE".to_string()
+        } else {
+            "FALSE".to_string()
+        }),
         Some(excel_diff::CellValue::Error(id)) => Some(pool.resolve(*id).to_string()),
     };
     let formula = cell.formula.map(|id| format!("={}", pool.resolve(id)));
-    ui_payload::SheetCell { row, col, value, formula }
+    ui_payload::SheetCell {
+        row,
+        col,
+        value,
+        formula,
+    }
 }
 
 #[cfg(test)]
@@ -1181,7 +1335,11 @@ where
             if cancel.load(Ordering::Relaxed) {
                 Err(DiffErrorPayload::new("canceled", "Diff canceled.", false))
             } else {
-                Err(DiffErrorPayload::new("failed", "Diff failed unexpectedly.", false))
+                Err(DiffErrorPayload::new(
+                    "failed",
+                    "Diff failed unexpectedly.",
+                    false,
+                ))
             }
         }
     }
@@ -1231,25 +1389,44 @@ impl ProgressCallback for EngineProgress {
             panic!("diff canceled");
         }
         if self.should_emit(phase) {
-            emit_progress(&self.progress, self.run_id, "diff", Self::map_detail(phase));
+            emit_progress(
+                &self.progress,
+                self.run_id,
+                "diff",
+                Some(phase),
+                Self::map_detail(phase),
+                None,
+            );
         }
     }
 }
 
-fn emit_progress(progress: &ProgressTx, run_id: u64, stage: &str, detail: &str) {
+fn emit_progress(
+    progress: &ProgressTx,
+    run_id: u64,
+    stage: &str,
+    phase: Option<&str>,
+    detail: &str,
+    percent: Option<u8>,
+) {
     let _ = progress.send(ProgressEvent {
         run_id,
         stage: stage.to_string(),
+        phase: phase.map(|value| value.to_string()),
         detail: detail.to_string(),
+        percent,
     });
 }
 
 #[allow(dead_code)]
-pub fn export_audit_xlsx(diff_id: &str, store_path: &Path, output_path: &Path) -> Result<(), DiffErrorPayload> {
+pub fn export_audit_xlsx(
+    diff_id: &str,
+    store_path: &Path,
+    output_path: &Path,
+) -> Result<(), DiffErrorPayload> {
     let store = OpStore::open(store_path).map_err(map_store_error)?;
-    export_audit_xlsx_from_store(&store, diff_id, output_path).map_err(|e| {
-        DiffErrorPayload::new("export", e.to_string(), false)
-    })
+    export_audit_xlsx_from_store(&store, diff_id, output_path)
+        .map_err(|e| DiffErrorPayload::new("export", e.to_string(), false))
 }
 
 pub fn diff_error_from_diff(diff_error: DiffError) -> DiffErrorPayload {
@@ -1269,8 +1446,8 @@ mod tests {
     use super::estimate_diff_cell_volume;
     use crate::store::DiffMode;
     use excel_diff::{
-        CellValue, DiffConfig, Grid, Sheet, SheetKind, Workbook, AUTO_STREAM_CELL_THRESHOLD,
-        should_use_large_mode, with_default_session,
+        should_use_large_mode, with_default_session, CellValue, DiffConfig, Grid, Sheet, SheetKind,
+        Workbook, AUTO_STREAM_CELL_THRESHOLD,
     };
 
     fn create_dense_grid(nrows: u32, ncols: u32) -> Grid {
@@ -1318,8 +1495,8 @@ mod tests {
     #[cfg(feature = "arc-cache")]
     #[test]
     fn open_workbook_cached_reuses_arc_on_hit() {
-        let fixtures = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../fixtures/generated");
+        let fixtures =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/generated");
         let path = fixtures.join("single_cell_value_a.xlsx");
         let (_tx, rx) = std::sync::mpsc::channel();
         let mut engine = super::EngineState::new(

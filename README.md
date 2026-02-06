@@ -144,7 +144,7 @@ tabulensis license deactivate
 
 Environment variables:
 - `TABULENSIS_LICENSE_BASE_URL` (default: https://license.tabulensis.com)
-- `TABULENSIS_LICENSE_PUBLIC_KEY` (Ed25519 public key, base64)
+- `TABULENSIS_LICENSE_PUBLIC_KEY` (optional override; the client fetches `${TABULENSIS_LICENSE_BASE_URL}/public_key` on first run and caches it)
 - `TABULENSIS_LICENSE_SKIP=1` (dev-only bypass)
 - `TABULENSIS_LICENSE_OFFLINE=1` (prevent refresh, require valid local token)
 

@@ -1,39 +1,233 @@
-import {
-	createHash,
-	createHmac,
-	createPrivateKey,
-	randomBytes,
-	randomUUID,
-	sign as cryptoSign,
-	timingSafeEqual,
-} from 'node:crypto';
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import nacl from 'tweetnacl';
 
-type LicenseStatus = 'trialing' | 'active' | 'past_due' | 'canceled' | 'revoked';
+type LicenseStatus = 'pending' | 'trialing' | 'active' | 'past_due' | 'canceled' | 'revoked';
 
 type Env = {
 	DB: D1Database;
-	STRIPE_SECRET_KEY: string;
-	STRIPE_WEBHOOK_SECRET: string;
-	STRIPE_PRICE_ID_YEARLY: string;
-	APP_ORIGIN: string;
-	LICENSE_SIGNING_PRIVATE_KEY: string;
-	LICENSE_SIGNING_KEY_ID?: string;
-	LICENSE_TOKEN_TTL_SECONDS?: string;
+
+	// Stripe
+	STRIPE_SECRET_KEY?: string;
+	STRIPE_WEBHOOK_SECRET?: string;
+	STRIPE_PRICE_ID?: string;
+	STRIPE_SUCCESS_URL?: string;
+	STRIPE_CANCEL_URL?: string;
+	STRIPE_PORTAL_RETURN_URL?: string;
+	STRIPE_TRIAL_DAYS?: string;
+
+	// Licensing
+	LICENSE_SIGNING_KEY_B64?: string; // 32-byte Ed25519 seed, base64
+	LICENSE_TOKEN_TTL_DAYS?: string; // default 14
+	LICENSE_PAST_DUE_GRACE_DAYS?: string; // default 3
+	LICENSE_MAX_DEVICES?: string; // default 2
+	LICENSE_ADMIN_TOKEN?: string;
+	LICENSE_MOCK_STRIPE?: string;
+
+	// CORS allowlist for browser requests (CORS never applies to CLI/desktop).
+	APP_ORIGIN?: string;
 };
 
-const JSON_HEADERS = {
-	'content-type': 'application/json',
+type CheckoutStartRequest = {
+	email?: string;
+};
+
+type CheckoutStartResponse = {
+	checkout_url: string;
+	session_id: string;
+	license_key: string;
+};
+
+type CheckoutStatusResponse = {
+	session_id: string;
+	license_key: string | null;
+	status: string | null;
+};
+
+type LicenseActivateRequest = {
+	license_key: string;
+	device_id: string;
+	device_label?: string;
+};
+
+type LicenseDeactivateRequest = {
+	license_key: string;
+	device_id: string;
+};
+
+type LicenseStatusRequest = {
+	license_key: string;
+	device_id?: string;
+};
+
+type LicenseResendRequest = {
+	email?: string;
+	license_key?: string;
+};
+
+type LicenseResetRequest = {
+	license_key: string;
+};
+
+type PortalSessionRequest = {
+	license_key?: string;
+	email?: string;
+};
+
+type PortalSessionResponse = {
+	url: string;
+};
+
+type ActivationTokenPayload = {
+	license_key: string;
+	device_id: string;
+	status: string;
+	issued_at: number;
+	expires_at: number;
+	grace_until: number | null;
+	period_end: number | null;
+};
+
+type ActivationToken = {
+	payload: ActivationTokenPayload;
+	signature: string;
+};
+
+type ActivationInfo = {
+	device_id: string;
+	device_label: string | null;
+	activated_at: number;
+	last_seen_at: number | null;
+};
+
+type LicenseStatusResponse = {
+	license_key: string;
+	status: string;
+	max_devices: number;
+	trial_end: number | null;
+	period_end: number | null;
+	activations: ActivationInfo[];
+};
+
+type ActivateResult = {
+	token: ActivationToken;
+	status: LicenseStatusResponse;
 };
 
 const STRIPE_API_BASE = 'https://api.stripe.com/v1';
 const WEBHOOK_TOLERANCE_SECONDS = 300;
 
-function jsonResponse(data: unknown, status = 200): Response {
-	return new Response(JSON.stringify(data), { status, headers: JSON_HEADERS });
+const JSON_HEADERS = {
+	'content-type': 'application/json',
+};
+
+let schemaEnsured = false;
+let schemaEnsuring: Promise<void> | null = null;
+
+function envFlag(value: string | undefined): boolean {
+	return value === '1' || value?.toLowerCase() === 'true';
 }
 
-function errorResponse(message: string, status = 400): Response {
-	return jsonResponse({ error: message }, status);
+function envInt(value: string | undefined, fallback: number): number {
+	const parsed = Number(value);
+	return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function nowSeconds(): number {
+	return Math.floor(Date.now() / 1000);
+}
+
+function daysToSeconds(days: number): number {
+	return Math.max(0, Math.trunc(days)) * 86400;
+}
+
+function base32NoPad(bytes: Uint8Array): string {
+	const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+	let output = '';
+	let buffer = 0;
+	let bitsLeft = 0;
+	for (const byte of bytes) {
+		buffer = (buffer << 8) | byte;
+		bitsLeft += 8;
+		while (bitsLeft >= 5) {
+			const index = (buffer >> (bitsLeft - 5)) & 0x1f;
+			output += alphabet[index] ?? '';
+			bitsLeft -= 5;
+		}
+	}
+	return output;
+}
+
+function generateLicenseKey(): string {
+	const bytes = randomBytes(12);
+	const encoded = base32NoPad(bytes);
+	return `TABU-${encoded.slice(0, 4)}-${encoded.slice(4, 8)}-${encoded.slice(8, 12)}`;
+}
+
+function generateShortId(): string {
+	return randomBytes(8).toString('hex');
+}
+
+function serializeActivationPayload(payload: ActivationTokenPayload): string {
+	// Keep key order stable to match Rust `serde_json` struct serialization.
+	return JSON.stringify({
+		license_key: payload.license_key,
+		device_id: payload.device_id,
+		status: payload.status,
+		issued_at: payload.issued_at,
+		expires_at: payload.expires_at,
+		grace_until: payload.grace_until,
+		period_end: payload.period_end,
+	});
+}
+
+function signingKeySeed(env: Env): Uint8Array {
+	const keyB64 = env.LICENSE_SIGNING_KEY_B64?.trim();
+	if (!keyB64) {
+		throw new Error('LICENSE_SIGNING_KEY_B64 not set');
+	}
+	const seed = Buffer.from(keyB64, 'base64');
+	if (seed.length !== 32) {
+		throw new Error('LICENSE_SIGNING_KEY_B64 must be base64 for exactly 32 bytes');
+	}
+	return seed;
+}
+
+function publicKeyB64(env: Env): string {
+	const seed = signingKeySeed(env);
+	const kp = nacl.sign.keyPair.fromSeed(seed);
+	return Buffer.from(kp.publicKey).toString('base64');
+}
+
+function signActivationToken(env: Env, payload: ActivationTokenPayload): ActivationToken {
+	const seed = signingKeySeed(env);
+	const kp = nacl.sign.keyPair.fromSeed(seed);
+	const payloadJson = serializeActivationPayload(payload);
+	const sig = nacl.sign.detached(Buffer.from(payloadJson, 'utf8'), kp.secretKey);
+	return { payload, signature: Buffer.from(sig).toString('base64') };
+}
+
+function corsOrigin(request: Request, env: Env): string {
+	const origin = request.headers.get('Origin');
+	if (!origin) return '*';
+	if (env.APP_ORIGIN && origin === env.APP_ORIGIN) return origin;
+	return '*';
+}
+
+function withCors(request: Request, env: Env, response: Response): Response {
+	const headers = new Headers(response.headers);
+	headers.set('Access-Control-Allow-Origin', corsOrigin(request, env));
+	headers.set('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+	headers.set('Access-Control-Allow-Headers', 'content-type,stripe-signature,x-admin-token');
+	headers.set('Access-Control-Max-Age', '86400');
+	return new Response(response.body, { status: response.status, headers });
+}
+
+function jsonResponse(request: Request, env: Env, data: unknown, status = 200): Response {
+	return withCors(request, env, new Response(JSON.stringify(data), { status, headers: JSON_HEADERS }));
+}
+
+function errorResponse(request: Request, env: Env, message: string, status = 400): Response {
+	return jsonResponse(request, env, { error: message }, status);
 }
 
 async function readJson<T>(request: Request): Promise<T | null> {
@@ -44,21 +238,199 @@ async function readJson<T>(request: Request): Promise<T | null> {
 	}
 }
 
-function base64UrlEncode(data: Uint8Array): string {
-	return Buffer.from(data)
-		.toString('base64')
-		.replace(/=/g, '')
-		.replace(/\+/g, '-')
-		.replace(/\//g, '_');
+async function ensureSchema(env: Env): Promise<void> {
+	const db = env.DB;
+
+	if (schemaEnsured) {
+		const row = await db
+			.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='licenses'")
+			.first();
+		if (row?.name) return;
+		schemaEnsured = false;
+	}
+
+	if (schemaEnsuring) {
+		await schemaEnsuring;
+		return;
+	}
+
+	schemaEnsuring = (async () => {
+	// Base schema (mirrors migrations; safe to run multiple times).
+	await db.prepare('PRAGMA foreign_keys = ON').run();
+
+	await db
+		.prepare(
+			`CREATE TABLE IF NOT EXISTS licenses (
+          id TEXT PRIMARY KEY,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          stripe_customer_id TEXT,
+          stripe_subscription_id TEXT UNIQUE,
+          trial_end INTEGER,
+          current_period_end INTEGER,
+          max_devices INTEGER NOT NULL DEFAULT 2,
+          license_key TEXT,
+          email TEXT
+        )`,
+		)
+		.run();
+
+	await db
+		.prepare(
+			`CREATE TABLE IF NOT EXISTS activations (
+          id TEXT PRIMARY KEY,
+          license_id TEXT NOT NULL REFERENCES licenses(id) ON DELETE CASCADE,
+          device_id_hash TEXT NOT NULL,
+          device_label TEXT,
+          activated_at INTEGER NOT NULL,
+          last_seen_at INTEGER NOT NULL,
+          revoked_at INTEGER,
+          UNIQUE(license_id, device_id_hash)
+        )`,
+		)
+		.run();
+
+	await db
+		.prepare(
+			`CREATE TABLE IF NOT EXISTS checkout_sessions (
+          session_id TEXT PRIMARY KEY,
+          license_id TEXT,
+          license_key TEXT NOT NULL,
+          email TEXT,
+          created_at INTEGER NOT NULL
+        )`,
+		)
+		.run();
+
+	await db
+		.prepare(
+			`CREATE TABLE IF NOT EXISTS stripe_events (
+          id TEXT PRIMARY KEY,
+          type TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          processed_at INTEGER NOT NULL
+        )`,
+		)
+		.run();
+
+	// Legacy table retained for now (older worker versions used it).
+	await db
+		.prepare(
+			`CREATE TABLE IF NOT EXISTS license_keys (
+          license_id TEXT PRIMARY KEY REFERENCES licenses(id) ON DELETE CASCADE,
+          key_hash TEXT NOT NULL UNIQUE,
+          created_at INTEGER NOT NULL
+        )`,
+		)
+		.run();
+
+	// Schema extensions for older DBs: ignore "duplicate column name" errors.
+	const tryAddColumn = async (sql: string): Promise<void> => {
+		try {
+			await db.prepare(sql).run();
+		} catch (err) {
+			const msg = String(err);
+			if (!msg.includes('duplicate column name')) {
+				throw err;
+			}
+		}
+	};
+	await tryAddColumn('ALTER TABLE licenses ADD COLUMN license_key TEXT');
+	await tryAddColumn('ALTER TABLE licenses ADD COLUMN email TEXT');
+	await tryAddColumn('ALTER TABLE activations ADD COLUMN device_label TEXT');
+
+	await db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_licenses_license_key ON licenses(license_key)').run();
+	await db.prepare('CREATE INDEX IF NOT EXISTS idx_licenses_email ON licenses(email)').run();
+	await db.prepare('CREATE INDEX IF NOT EXISTS idx_activations_license_id ON activations(license_id)').run();
+	await db.prepare('CREATE INDEX IF NOT EXISTS idx_activations_device_id_hash ON activations(device_id_hash)').run();
+	await db.prepare('CREATE INDEX IF NOT EXISTS idx_stripe_events_type ON stripe_events(type)').run();
+	await db.prepare('CREATE INDEX IF NOT EXISTS idx_checkout_sessions_license_key ON checkout_sessions(license_key)').run();
+	await db.prepare('CREATE INDEX IF NOT EXISTS idx_checkout_sessions_email ON checkout_sessions(email)').run();
+
+	// Sanity-check: schema must exist.
+	const schemaCheck = await db
+		.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='licenses'")
+		.first();
+	if (!schemaCheck?.name) {
+		throw new Error('Schema initialization failed: licenses table missing');
+	}
+	schemaEnsured = true;
+	})();
+
+	try {
+		await schemaEnsuring;
+	} finally {
+		schemaEnsuring = null;
+	}
 }
 
-function sha256Hex(value: string): string {
-	return createHash('sha256').update(value).digest('hex');
+async function stripeRequest(
+	env: Env,
+	method: 'GET' | 'POST',
+	path: string,
+	body?: URLSearchParams,
+): Promise<any> {
+	const secretKey = env.STRIPE_SECRET_KEY?.trim();
+	if (!secretKey) throw new Error('STRIPE_SECRET_KEY not set');
+
+	const url = `${STRIPE_API_BASE}${path}`;
+	const response = await fetch(url, {
+		method,
+		headers: {
+			Authorization: `Bearer ${secretKey}`,
+			...(body ? { 'content-type': 'application/x-www-form-urlencoded' } : {}),
+		},
+		body: body ? body.toString() : undefined,
+	});
+	const data = await response.json();
+	if (!response.ok) {
+		const message = data?.error?.message ?? 'Stripe request failed';
+		throw new Error(message);
+	}
+	return data;
 }
 
-function generateLicenseKey(): string {
-	const raw = randomBytes(16).toString('hex');
-	return `TAB-${raw}`;
+function checkoutSuccessUrl(env: Env, sessionIdPlaceholder: string): string {
+	const base = env.STRIPE_SUCCESS_URL?.trim() || 'https://tabulensis.com/download/success';
+	const url = new URL(base);
+	url.searchParams.set('session_id', sessionIdPlaceholder);
+	return url.toString();
+}
+
+function checkoutCancelUrl(env: Env): string {
+	return env.STRIPE_CANCEL_URL?.trim() || 'https://tabulensis.com/download';
+}
+
+function portalReturnUrl(env: Env): string {
+	return env.STRIPE_PORTAL_RETURN_URL?.trim() || 'https://tabulensis.com/support/billing';
+}
+
+async function createCheckoutSession(env: Env, licenseKey: string, email?: string): Promise<any> {
+	const priceId = env.STRIPE_PRICE_ID?.trim();
+	if (!priceId) throw new Error('STRIPE_PRICE_ID not set');
+
+	const trialDays = envInt(env.STRIPE_TRIAL_DAYS, 30);
+
+	const params = new URLSearchParams({
+		mode: 'subscription',
+		'line_items[0][price]': priceId,
+		'line_items[0][quantity]': '1',
+		success_url: checkoutSuccessUrl(env, '{CHECKOUT_SESSION_ID}'),
+		cancel_url: checkoutCancelUrl(env),
+		'metadata[license_key]': licenseKey,
+	});
+
+	// Require card upfront even with trial.
+	params.set('payment_method_collection', 'always');
+
+	if (trialDays > 0) {
+		params.set('subscription_data[trial_period_days]', String(trialDays));
+	}
+	if (email) {
+		params.set('customer_email', email);
+	}
+	return stripeRequest(env, 'POST', '/checkout/sessions', params);
 }
 
 function parseStripeSignature(signatureHeader: string | null): { timestamp: number; signatures: string[] } | null {
@@ -83,8 +455,8 @@ function parseStripeSignature(signatureHeader: string | null): { timestamp: numb
 function verifyStripeWebhook(rawBody: string, signatureHeader: string | null, secret: string): boolean {
 	const parsed = parseStripeSignature(signatureHeader);
 	if (!parsed) return false;
-	const nowSeconds = Math.floor(Date.now() / 1000);
-	if (Math.abs(nowSeconds - parsed.timestamp) > WEBHOOK_TOLERANCE_SECONDS) return false;
+	const now = nowSeconds();
+	if (Math.abs(now - parsed.timestamp) > WEBHOOK_TOLERANCE_SECONDS) return false;
 	const signedPayload = `${parsed.timestamp}.${rawBody}`;
 	const expected = createHmac('sha256', secret).update(signedPayload, 'utf8').digest('hex');
 	const expectedBuf = Buffer.from(expected, 'hex');
@@ -97,131 +469,10 @@ function verifyStripeWebhook(rawBody: string, signatureHeader: string | null, se
 	return false;
 }
 
-async function stripeRequest(
-	env: Env,
-	method: 'GET' | 'POST',
-	path: string,
-	body?: URLSearchParams,
-): Promise<any> {
-	const url = `${STRIPE_API_BASE}${path}`;
-	const response = await fetch(url, {
-		method,
-		headers: {
-			Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
-			...(body ? { 'content-type': 'application/x-www-form-urlencoded' } : {}),
-		},
-		body: body ? body.toString() : undefined,
-	});
-	const data = await response.json();
-	if (!response.ok) {
-		const message = data?.error?.message ?? 'Stripe request failed';
-		throw new Error(message);
-	}
-	return data;
-}
-
-async function createCheckoutSession(env: Env, email?: string): Promise<any> {
-	const params = new URLSearchParams({
-		mode: 'subscription',
-		'line_items[0][price]': env.STRIPE_PRICE_ID_YEARLY,
-		'line_items[0][quantity]': '1',
-		'subscription_data[trial_period_days]': '30',
-		payment_method_collection: 'always',
-		success_url: `${env.APP_ORIGIN}/success?session_id={CHECKOUT_SESSION_ID}`,
-		cancel_url: `${env.APP_ORIGIN}/download?canceled=1`,
-	});
-	if (email) params.set('customer_email', email);
-	return stripeRequest(env, 'POST', '/checkout/sessions', params);
-}
-
-async function getCheckoutSession(env: Env, sessionId: string): Promise<any> {
-	return stripeRequest(env, 'GET', `/checkout/sessions/${encodeURIComponent(sessionId)}`);
-}
-
-async function createPortalSession(env: Env, customerId: string): Promise<any> {
-	const params = new URLSearchParams({
-		customer: customerId,
-		return_url: `${env.APP_ORIGIN}/account`,
-	});
-	return stripeRequest(env, 'POST', '/billing_portal/sessions', params);
-}
-
-async function getSubscription(env: Env, subscriptionId: string): Promise<any> {
-	return stripeRequest(env, 'GET', `/subscriptions/${encodeURIComponent(subscriptionId)}`);
-}
-
-function issueToken(env: Env, payload: Record<string, unknown>): string {
-	const key = createPrivateKey(env.LICENSE_SIGNING_PRIVATE_KEY);
-	const alg = key.asymmetricKeyType === 'ed25519' || key.asymmetricKeyType === 'ed448' ? 'EdDSA' : 'RS256';
-	const header: Record<string, string> = { alg, typ: 'JWT' };
-	if (env.LICENSE_SIGNING_KEY_ID) header.kid = env.LICENSE_SIGNING_KEY_ID;
-	const headerB64 = base64UrlEncode(Buffer.from(JSON.stringify(header)));
-	const payloadB64 = base64UrlEncode(Buffer.from(JSON.stringify(payload)));
-	const signingInput = `${headerB64}.${payloadB64}`;
-	const signature = cryptoSign(alg === 'EdDSA' ? null : 'sha256', Buffer.from(signingInput), key);
-	const signatureB64 = base64UrlEncode(signature);
-	return `${signingInput}.${signatureB64}`;
-}
-
-async function handleCheckoutStart(request: Request, env: Env): Promise<Response> {
-	const body = await readJson<{ email?: string }>(request);
-	try {
-		const session = await createCheckoutSession(env, body?.email);
-		return jsonResponse({ id: session.id, url: session.url });
-	} catch (err) {
-		return errorResponse((err as Error).message, 502);
-	}
-}
-
-async function handleCheckoutSession(request: Request, env: Env): Promise<Response> {
-	const url = new URL(request.url);
-	const sessionId = url.searchParams.get('session_id');
-	if (!sessionId) return errorResponse('session_id is required');
-	try {
-		const session = await getCheckoutSession(env, sessionId);
-		return jsonResponse({
-			id: session.id,
-			status: session.status,
-			customer: session.customer,
-			subscription: session.subscription,
-			customer_email: session.customer_details?.email ?? session.customer_email,
-		});
-	} catch (err) {
-		return errorResponse((err as Error).message, 502);
-	}
-}
-
-async function handlePortalSession(request: Request, env: Env): Promise<Response> {
-	const body = await readJson<{ customer_id?: string; license_key?: string }>(request);
-	if (!body?.customer_id && !body?.license_key) return errorResponse('customer_id or license_key is required');
-	let customerId = body.customer_id;
-	if (!customerId && body.license_key) {
-		const keyHash = sha256Hex(body.license_key);
-		const row = await env.DB.prepare(
-			`SELECT l.stripe_customer_id as stripe_customer_id
-       FROM licenses l
-       JOIN license_keys lk ON lk.license_id = l.id
-       WHERE lk.key_hash = ?`,
-		)
-			.bind(keyHash)
-			.first();
-		customerId = row?.stripe_customer_id ?? null;
-	}
-	if (!customerId) return errorResponse('customer not found', 404);
-	try {
-		const session = await createPortalSession(env, customerId);
-		return jsonResponse({ url: session.url });
-	} catch (err) {
-		return errorResponse((err as Error).message, 502);
-	}
-}
-
 async function markEventProcessed(env: Env, event: any): Promise<boolean> {
-	const now = Math.floor(Date.now() / 1000);
+	const now = nowSeconds();
 	try {
-		await env.DB.prepare(
-			'INSERT INTO stripe_events (id, type, created_at, processed_at) VALUES (?, ?, ?, ?)',
-		)
+		await env.DB.prepare('INSERT INTO stripe_events (id, type, created_at, processed_at) VALUES (?, ?, ?, ?)')
 			.bind(event.id, event.type, event.created ?? now, now)
 			.run();
 		return true;
@@ -230,212 +481,565 @@ async function markEventProcessed(env: Env, event: any): Promise<boolean> {
 	}
 }
 
-async function handleCheckoutCompleted(env: Env, session: any): Promise<void> {
-	const subscriptionId = session.subscription as string | undefined;
-	if (!subscriptionId) return;
-	const existing = await env.DB.prepare('SELECT id FROM licenses WHERE stripe_subscription_id = ?')
-		.bind(subscriptionId)
-		.first();
-	if (existing?.id) return;
+function statusAllowsActivation(status: string): boolean {
+	return status === 'trialing' || status === 'active' || status === 'past_due';
+}
 
-	const now = Math.floor(Date.now() / 1000);
+async function listActivations(env: Env, licenseId: string): Promise<ActivationInfo[]> {
+	const rows = await env.DB.prepare(
+		`SELECT device_id_hash as device_id, device_label as device_label, activated_at as activated_at, last_seen_at as last_seen_at
+     FROM activations
+     WHERE license_id = ? AND revoked_at IS NULL
+     ORDER BY activated_at DESC`,
+	)
+		.bind(licenseId)
+		.all();
+	const results = (rows.results ?? []) as any[];
+	return results.map((row) => ({
+		device_id: String(row.device_id ?? ''),
+		device_label: row.device_label !== undefined ? (row.device_label === null ? null : String(row.device_label)) : null,
+		activated_at: Number(row.activated_at ?? 0),
+		last_seen_at: row.last_seen_at !== undefined ? (row.last_seen_at === null ? null : Number(row.last_seen_at)) : null,
+	}));
+}
+
+async function handleCheckoutStart(request: Request, env: Env): Promise<Response> {
+	await ensureSchema(env);
+
+	const body = await readJson<CheckoutStartRequest>(request);
+	const email = body?.email?.trim() ? body.email.trim() : undefined;
+
+	const licenseKey = generateLicenseKey();
 	const licenseId = randomUUID();
-	let trialEnd: number | null = null;
-	let currentPeriodEnd: number | null = null;
-	try {
-		const subscription = await getSubscription(env, subscriptionId);
-		trialEnd = subscription.trial_end ?? null;
-		currentPeriodEnd = subscription.current_period_end ?? null;
-	} catch {
-		trialEnd = null;
-		currentPeriodEnd = null;
-	}
+
+	const maxDevices = envInt(env.LICENSE_MAX_DEVICES, 2);
+	const trialDays = envInt(env.STRIPE_TRIAL_DAYS, 30);
+
+	const now = nowSeconds();
+	const initialStatus: LicenseStatus = envFlag(env.LICENSE_MOCK_STRIPE) ? 'trialing' : 'pending';
+	const trialEnd = envFlag(env.LICENSE_MOCK_STRIPE) && trialDays > 0 ? now + daysToSeconds(trialDays) : null;
+	const currentPeriodEnd = envFlag(env.LICENSE_MOCK_STRIPE) && trialDays > 0 ? now + daysToSeconds(trialDays) : null;
 
 	await env.DB.prepare(
 		`INSERT INTO licenses (
-        id, created_at, updated_at, status, stripe_customer_id, stripe_subscription_id, trial_end, current_period_end, max_devices
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       id, created_at, updated_at, status, stripe_customer_id, stripe_subscription_id, trial_end, current_period_end, max_devices, license_key, email
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	)
 		.bind(
 			licenseId,
 			now,
 			now,
-			'trialing',
-			session.customer ?? null,
-			subscriptionId,
+			initialStatus,
+			null,
+			null,
 			trialEnd,
 			currentPeriodEnd,
-			2,
+			maxDevices,
+			licenseKey,
+			email ?? null,
 		)
 		.run();
 
-	const licenseKey = generateLicenseKey();
-	const keyHash = sha256Hex(licenseKey);
-	await env.DB.prepare('INSERT INTO license_keys (license_id, key_hash, created_at) VALUES (?, ?, ?)')
-		.bind(licenseId, keyHash, now)
-		.run();
+	if (envFlag(env.LICENSE_MOCK_STRIPE)) {
+		const sessionId = `mock_${generateShortId()}`;
+		await env.DB.prepare(
+			`INSERT OR REPLACE INTO checkout_sessions (session_id, license_id, license_key, email, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+		)
+			.bind(sessionId, licenseId, licenseKey, email ?? null, now)
+			.run();
+
+		const successBase = env.STRIPE_SUCCESS_URL?.trim() || 'https://tabulensis.com/download/success';
+		const successUrl = new URL(successBase);
+		successUrl.searchParams.set('license_key', licenseKey);
+		const checkoutUrl = successUrl.toString();
+
+		return jsonResponse(request, env, {
+			checkout_url: checkoutUrl,
+			session_id: sessionId,
+			license_key: licenseKey,
+		} satisfies CheckoutStartResponse);
+	}
+
+	try {
+		const session = await createCheckoutSession(env, licenseKey, email);
+		const sessionId = String(session.id ?? '');
+		const checkoutUrl = String(session.url ?? '');
+		if (!sessionId || !checkoutUrl) {
+			return errorResponse(request, env, 'Stripe response missing session id or url', 502);
+		}
+
+		await env.DB.prepare(
+			`INSERT OR REPLACE INTO checkout_sessions (session_id, license_id, license_key, email, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+		)
+			.bind(sessionId, licenseId, licenseKey, email ?? null, now)
+			.run();
+
+		return jsonResponse(request, env, {
+			checkout_url: checkoutUrl,
+			session_id: sessionId,
+			license_key: licenseKey,
+		} satisfies CheckoutStartResponse);
+	} catch (err) {
+		return errorResponse(request, env, (err as Error).message, 502);
+	}
 }
 
-async function updateLicenseStatus(
-	env: Env,
-	subscriptionId: string,
-	status: LicenseStatus,
-	trialEnd?: number | null,
-	currentPeriodEnd?: number | null,
-): Promise<void> {
-	const now = Math.floor(Date.now() / 1000);
-	await env.DB.prepare(
-		`UPDATE licenses
-       SET status = ?, updated_at = ?, trial_end = COALESCE(?, trial_end), current_period_end = COALESCE(?, current_period_end)
-       WHERE stripe_subscription_id = ?`,
-	)
-		.bind(status, now, trialEnd ?? null, currentPeriodEnd ?? null, subscriptionId)
-		.run();
+async function handleCheckoutStatus(request: Request, env: Env): Promise<Response> {
+	await ensureSchema(env);
+
+	const url = new URL(request.url);
+	const sessionId = url.searchParams.get('session_id');
+	if (!sessionId) return errorResponse(request, env, 'session_id is required');
+
+	const sessionRow = await env.DB.prepare('SELECT license_key as license_key FROM checkout_sessions WHERE session_id = ?')
+		.bind(sessionId)
+		.first();
+	const licenseKey = (sessionRow?.license_key as string | undefined) ?? null;
+
+	let status: string | null = null;
+	if (licenseKey) {
+		const licenseRow = await env.DB.prepare('SELECT status as status FROM licenses WHERE license_key = ?')
+			.bind(licenseKey)
+			.first();
+		status = (licenseRow?.status as string | undefined) ?? null;
+	}
+
+	return jsonResponse(request, env, {
+		session_id: sessionId,
+		license_key: licenseKey,
+		status,
+	} satisfies CheckoutStatusResponse);
 }
 
 async function handleWebhook(request: Request, env: Env): Promise<Response> {
+	await ensureSchema(env);
+
 	const rawBody = await request.text();
-	const signature = request.headers.get('Stripe-Signature');
-	if (!verifyStripeWebhook(rawBody, signature, env.STRIPE_WEBHOOK_SECRET)) {
-		return errorResponse('invalid signature', 400);
+
+	const secret = env.STRIPE_WEBHOOK_SECRET?.trim();
+	if (secret) {
+		const signature = request.headers.get('Stripe-Signature');
+		if (!verifyStripeWebhook(rawBody, signature, secret)) {
+			return errorResponse(request, env, 'invalid signature', 400);
+		}
 	}
 
 	let event: any;
 	try {
 		event = JSON.parse(rawBody);
 	} catch {
-		return errorResponse('invalid payload', 400);
+		return errorResponse(request, env, 'invalid payload', 400);
 	}
 
 	const inserted = await markEventProcessed(env, event);
-	if (!inserted) return jsonResponse({ received: true });
+	if (!inserted) return jsonResponse(request, env, { received: true });
 
 	const data = event.data?.object;
-	if (!data) return jsonResponse({ received: true });
+	if (!data) return jsonResponse(request, env, { received: true });
 
-	switch (event.type) {
-		case 'checkout.session.completed':
-			await handleCheckoutCompleted(env, data);
-			break;
-		case 'invoice.paid': {
-			const subscriptionId = data.subscription as string | undefined;
-			const periodEnd = data.lines?.data?.[0]?.period?.end ?? null;
-			if (subscriptionId) await updateLicenseStatus(env, subscriptionId, 'active', null, periodEnd);
-			break;
+	const eventType = String(event.type ?? '');
+
+	if (eventType === 'checkout.session.completed') {
+		const sessionId = String(data.id ?? '');
+		const customerId = data.customer ? String(data.customer) : null;
+		const subscriptionId = data.subscription ? String(data.subscription) : null;
+		const email =
+			data.customer_details?.email != null
+				? String(data.customer_details.email)
+				: data.customer_email != null
+					? String(data.customer_email)
+					: null;
+		const metadataLicenseKey =
+			data.metadata?.license_key != null ? String(data.metadata.license_key) : null;
+
+		let licenseKey: string | null = metadataLicenseKey;
+		if (!licenseKey && sessionId) {
+			const row = await env.DB.prepare('SELECT license_key as license_key FROM checkout_sessions WHERE session_id = ?')
+				.bind(sessionId)
+				.first();
+			licenseKey = (row?.license_key as string | undefined) ?? null;
 		}
-		case 'invoice.payment_failed': {
-			const subscriptionId = data.subscription as string | undefined;
-			if (subscriptionId) await updateLicenseStatus(env, subscriptionId, 'past_due');
-			break;
+		if (!licenseKey) {
+			licenseKey = generateLicenseKey();
 		}
-		case 'customer.subscription.updated': {
-			const subscriptionId = data.id as string | undefined;
-			if (subscriptionId)
-				await updateLicenseStatus(
-					env,
-					subscriptionId,
-					data.status as LicenseStatus,
-					data.trial_end ?? null,
-					data.current_period_end ?? null,
-				);
-			break;
+
+		const now = nowSeconds();
+		const existing = await env.DB.prepare('SELECT id as id FROM licenses WHERE license_key = ?')
+			.bind(licenseKey)
+			.first();
+		if (existing?.id) {
+			await env.DB.prepare(
+				`UPDATE licenses
+         SET status = ?, updated_at = ?, stripe_customer_id = COALESCE(?, stripe_customer_id),
+             stripe_subscription_id = COALESCE(?, stripe_subscription_id),
+             email = COALESCE(?, email)
+         WHERE license_key = ?`,
+			)
+				.bind('trialing', now, customerId, subscriptionId, email, licenseKey)
+				.run();
+		} else {
+			const licenseId = randomUUID();
+			await env.DB.prepare(
+				`INSERT INTO licenses (
+           id, created_at, updated_at, status, stripe_customer_id, stripe_subscription_id, trial_end, current_period_end, max_devices, license_key, email
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			)
+				.bind(licenseId, now, now, 'trialing', customerId, subscriptionId, null, null, envInt(env.LICENSE_MAX_DEVICES, 2), licenseKey, email)
+				.run();
 		}
-		case 'customer.subscription.deleted': {
-			const subscriptionId = data.id as string | undefined;
-			if (subscriptionId) await updateLicenseStatus(env, subscriptionId, 'canceled');
-			break;
-		}
-		default:
-			break;
 	}
 
-	return jsonResponse({ received: true });
+	if (eventType === 'invoice.paid') {
+		const subscriptionId = data.subscription ? String(data.subscription) : null;
+		const customerId = data.customer ? String(data.customer) : null;
+		const periodEnd = data.lines?.data?.[0]?.period?.end != null ? Number(data.lines.data[0].period.end) : null;
+		const now = nowSeconds();
+		if (subscriptionId) {
+			await env.DB.prepare(
+				`UPDATE licenses
+         SET status = ?, updated_at = ?, current_period_end = COALESCE(?, current_period_end),
+             stripe_customer_id = COALESCE(?, stripe_customer_id)
+         WHERE stripe_subscription_id = ?`,
+			)
+				.bind('active', now, periodEnd, customerId, subscriptionId)
+				.run();
+		} else if (customerId) {
+			await env.DB.prepare(
+				`UPDATE licenses
+         SET status = ?, updated_at = ?, current_period_end = COALESCE(?, current_period_end)
+         WHERE stripe_customer_id = ?`,
+			)
+				.bind('active', now, periodEnd, customerId)
+				.run();
+		}
+	}
+
+	if (eventType === 'invoice.payment_failed') {
+		const subscriptionId = data.subscription ? String(data.subscription) : null;
+		const customerId = data.customer ? String(data.customer) : null;
+		const now = nowSeconds();
+		if (subscriptionId) {
+			await env.DB.prepare('UPDATE licenses SET status = ?, updated_at = ? WHERE stripe_subscription_id = ?')
+				.bind('past_due', now, subscriptionId)
+				.run();
+		} else if (customerId) {
+			await env.DB.prepare('UPDATE licenses SET status = ?, updated_at = ? WHERE stripe_customer_id = ?')
+				.bind('past_due', now, customerId)
+				.run();
+		}
+	}
+
+	if (eventType === 'customer.subscription.updated') {
+		const subscriptionId = data.id != null ? String(data.id) : null;
+		const customerId = data.customer != null ? String(data.customer) : null;
+		const status = data.status != null ? String(data.status) : null;
+		const trialEnd = data.trial_end != null ? Number(data.trial_end) : null;
+		const periodEnd = data.current_period_end != null ? Number(data.current_period_end) : null;
+		const now = nowSeconds();
+		if (subscriptionId && status) {
+			await env.DB.prepare(
+				`UPDATE licenses
+         SET status = ?, updated_at = ?, trial_end = COALESCE(?, trial_end), current_period_end = COALESCE(?, current_period_end),
+             stripe_customer_id = COALESCE(?, stripe_customer_id)
+         WHERE stripe_subscription_id = ?`,
+			)
+				.bind(status, now, trialEnd, periodEnd, customerId, subscriptionId)
+				.run();
+		}
+	}
+
+	if (eventType === 'customer.subscription.deleted') {
+		const subscriptionId = data.id != null ? String(data.id) : null;
+		const now = nowSeconds();
+		if (subscriptionId) {
+			await env.DB.prepare('UPDATE licenses SET status = ?, updated_at = ? WHERE stripe_subscription_id = ?')
+				.bind('canceled', now, subscriptionId)
+				.run();
+		}
+	}
+
+	return jsonResponse(request, env, { received: true });
 }
 
-async function handleActivate(request: Request, env: Env): Promise<Response> {
-	const body = await readJson<{ license_key?: string; device_id?: string }>(request);
-	if (!body?.license_key || !body.device_id) return errorResponse('license_key and device_id are required');
+async function handleLicenseActivate(request: Request, env: Env): Promise<Response> {
+	await ensureSchema(env);
 
-	const keyHash = sha256Hex(body.license_key);
-	const deviceHash = sha256Hex(body.device_id);
+	const body = await readJson<LicenseActivateRequest>(request);
+	if (!body?.license_key || !body.device_id) {
+		return errorResponse(request, env, 'license_key and device_id are required');
+	}
+	const licenseKey = body.license_key.trim();
+	const deviceIdHash = body.device_id.trim();
+	const deviceLabel = body.device_label?.trim() || null;
+
 	const license = await env.DB.prepare(
-		`SELECT l.id as id, l.status as status, l.max_devices as max_devices
-       FROM licenses l
-       JOIN license_keys lk ON lk.license_id = l.id
-       WHERE lk.key_hash = ?`,
+		`SELECT id as id, status as status, max_devices as max_devices, trial_end as trial_end, current_period_end as period_end
+     FROM licenses WHERE license_key = ?`,
 	)
-		.bind(keyHash)
+		.bind(licenseKey)
 		.first();
-	if (!license) return errorResponse('license not found', 404);
-	if (license.status !== 'trialing' && license.status !== 'active') {
-		return errorResponse(`license status is ${license.status}`, 403);
+	if (!license) return errorResponse(request, env, 'License not found', 404);
+
+	const status = String(license.status ?? '');
+	if (!statusAllowsActivation(status)) {
+		return errorResponse(request, env, `License status does not allow activation: ${status}`, 403);
 	}
 
-	const now = Math.floor(Date.now() / 1000);
+	const licenseId = String(license.id ?? '');
+	const maxDevices = Number(license.max_devices ?? envInt(env.LICENSE_MAX_DEVICES, 2));
+
 	const existing = await env.DB.prepare(
-		`SELECT id FROM activations WHERE license_id = ? AND device_id_hash = ? AND revoked_at IS NULL`,
+		`SELECT id as id FROM activations WHERE license_id = ? AND device_id_hash = ? AND revoked_at IS NULL`,
 	)
-		.bind(license.id, deviceHash)
+		.bind(licenseId, deviceIdHash)
 		.first();
+
+	const now = nowSeconds();
+	const countRow = await env.DB.prepare(
+		`SELECT COUNT(1) as count FROM activations WHERE license_id = ? AND revoked_at IS NULL`,
+	)
+		.bind(licenseId)
+		.first();
+	const activeCount = Number(countRow?.count ?? 0);
+
+	if (!existing?.id && activeCount >= maxDevices) {
+		return errorResponse(request, env, 'Device limit reached', 403);
+	}
+
 	if (existing?.id) {
-		await env.DB.prepare(`UPDATE activations SET last_seen_at = ? WHERE id = ?`)
-			.bind(now, existing.id)
+		await env.DB.prepare(
+			`UPDATE activations SET last_seen_at = ?, device_label = COALESCE(?, device_label) WHERE id = ?`,
+		)
+			.bind(now, deviceLabel, existing.id)
 			.run();
 	} else {
-		const countRow = await env.DB.prepare(
-			`SELECT COUNT(*) as count FROM activations WHERE license_id = ? AND revoked_at IS NULL`,
-		)
-			.bind(license.id)
-			.first();
-		const count = Number(countRow?.count ?? 0);
-		if (count >= Number(license.max_devices)) {
-			return errorResponse('device limit reached', 409);
-		}
 		const activationId = randomUUID();
 		await env.DB.prepare(
-			`INSERT INTO activations (id, license_id, device_id_hash, activated_at, last_seen_at)
-         VALUES (?, ?, ?, ?, ?)`,
+			`INSERT INTO activations (id, license_id, device_id_hash, device_label, activated_at, last_seen_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
 		)
-			.bind(activationId, license.id, deviceHash, now, now)
+			.bind(activationId, licenseId, deviceIdHash, deviceLabel, now, now)
 			.run();
 	}
 
-	const ttl = Number(env.LICENSE_TOKEN_TTL_SECONDS ?? 1209600);
-	const token = issueToken(env, {
-		license_id: license.id,
-		device_id_hash: deviceHash,
-		status: license.status,
-		iat: now,
-		exp: now + ttl,
-	});
+	const tokenTtlDays = envInt(env.LICENSE_TOKEN_TTL_DAYS, 14);
+	const pastDueGraceDays = envInt(env.LICENSE_PAST_DUE_GRACE_DAYS, 3);
+	const expiresAt = status === 'past_due' ? now + daysToSeconds(pastDueGraceDays) : now + daysToSeconds(tokenTtlDays);
+	const periodEnd = license.period_end != null ? Number(license.period_end) : null;
 
-	return jsonResponse({ token, expires_in: ttl });
+	const payload: ActivationTokenPayload = {
+		license_key: licenseKey,
+		device_id: deviceIdHash,
+		status,
+		issued_at: now,
+		expires_at: expiresAt,
+		grace_until: expiresAt,
+		period_end: periodEnd,
+	};
+	let token: ActivationToken;
+	try {
+		token = signActivationToken(env, payload);
+	} catch (err) {
+		return errorResponse(request, env, (err as Error).message, 500);
+	}
+
+	const activations = await listActivations(env, licenseId);
+	const statusResponse: LicenseStatusResponse = {
+		license_key: licenseKey,
+		status,
+		max_devices: maxDevices,
+		trial_end: license.trial_end != null ? Number(license.trial_end) : null,
+		period_end: periodEnd,
+		activations,
+	};
+
+	return jsonResponse(request, env, { token, status: statusResponse } satisfies ActivateResult);
 }
 
-async function handleDeactivate(request: Request, env: Env): Promise<Response> {
-	const body = await readJson<{ license_key?: string; device_id?: string }>(request);
-	if (!body?.license_key || !body.device_id) return errorResponse('license_key and device_id are required');
+async function handleLicenseDeactivate(request: Request, env: Env): Promise<Response> {
+	await ensureSchema(env);
 
-	const keyHash = sha256Hex(body.license_key);
-	const deviceHash = sha256Hex(body.device_id);
-	const license = await env.DB.prepare(
-		`SELECT l.id as id
-       FROM licenses l
-       JOIN license_keys lk ON lk.license_id = l.id
-       WHERE lk.key_hash = ?`,
-	)
-		.bind(keyHash)
+	const body = await readJson<LicenseDeactivateRequest>(request);
+	if (!body?.license_key || !body.device_id) {
+		return errorResponse(request, env, 'license_key and device_id are required');
+	}
+
+	const licenseKey = body.license_key.trim();
+	const deviceIdHash = body.device_id.trim();
+
+	const license = await env.DB.prepare('SELECT id as id FROM licenses WHERE license_key = ?')
+		.bind(licenseKey)
 		.first();
-	if (!license) return errorResponse('license not found', 404);
+	if (!license) return errorResponse(request, env, 'License not found', 404);
 
-	const now = Math.floor(Date.now() / 1000);
+	const now = nowSeconds();
 	await env.DB.prepare(
 		`UPDATE activations SET revoked_at = ? WHERE license_id = ? AND device_id_hash = ? AND revoked_at IS NULL`,
 	)
-		.bind(now, license.id, deviceHash)
+		.bind(now, String(license.id), deviceIdHash)
 		.run();
 
-	return jsonResponse({ ok: true });
+	return jsonResponse(request, env, { status: 'ok' });
+}
+
+async function handleLicenseStatus(request: Request, env: Env): Promise<Response> {
+	await ensureSchema(env);
+
+	const body = await readJson<LicenseStatusRequest>(request);
+	if (!body?.license_key) {
+		return errorResponse(request, env, 'license_key is required');
+	}
+
+	const licenseKey = body.license_key.trim();
+	const deviceIdHash = body.device_id?.trim() || null;
+
+	const license = await env.DB.prepare(
+		`SELECT id as id, status as status, max_devices as max_devices, trial_end as trial_end, current_period_end as period_end
+     FROM licenses WHERE license_key = ?`,
+	)
+		.bind(licenseKey)
+		.first();
+	if (!license) return errorResponse(request, env, 'License not found', 404);
+
+	const licenseId = String(license.id ?? '');
+	const now = nowSeconds();
+
+	if (deviceIdHash) {
+		const existing = await env.DB.prepare(
+			`SELECT id as id FROM activations WHERE license_id = ? AND device_id_hash = ? AND revoked_at IS NULL`,
+		)
+			.bind(licenseId, deviceIdHash)
+			.first();
+		if (existing?.id) {
+			await env.DB.prepare('UPDATE activations SET last_seen_at = ? WHERE id = ?')
+				.bind(now, existing.id)
+				.run();
+		}
+	}
+
+	const activations = await listActivations(env, licenseId);
+	const statusResponse: LicenseStatusResponse = {
+		license_key: licenseKey,
+		status: String(license.status ?? ''),
+		max_devices: Number(license.max_devices ?? envInt(env.LICENSE_MAX_DEVICES, 2)),
+		trial_end: license.trial_end != null ? Number(license.trial_end) : null,
+		period_end: license.period_end != null ? Number(license.period_end) : null,
+		activations,
+	};
+	return jsonResponse(request, env, statusResponse);
+}
+
+async function handleLicenseResend(request: Request, env: Env): Promise<Response> {
+	await ensureSchema(env);
+
+	const body = await readJson<LicenseResendRequest>(request);
+	if (!body?.email && !body?.license_key) {
+		return errorResponse(request, env, 'email or license_key is required');
+	}
+
+	if (body.license_key) {
+		const licenseKey = body.license_key.trim();
+		const record = await env.DB.prepare('SELECT id as id FROM licenses WHERE license_key = ?')
+			.bind(licenseKey)
+			.first();
+		if (!record?.id) return errorResponse(request, env, 'License not found', 404);
+	}
+
+	if (body.email) {
+		const email = body.email.trim();
+		const record = await env.DB.prepare('SELECT id as id FROM licenses WHERE email = ? LIMIT 1')
+			.bind(email)
+			.first();
+		if (!record?.id) return errorResponse(request, env, 'License not found', 404);
+	}
+
+	// TODO: wire an email provider (e.g., Resend/Postmark) and send the license key.
+	return jsonResponse(request, env, { status: 'queued' });
+}
+
+async function handleLicenseReset(request: Request, env: Env): Promise<Response> {
+	await ensureSchema(env);
+
+	const expected = env.LICENSE_ADMIN_TOKEN?.trim();
+	if (!expected) return errorResponse(request, env, 'Admin token not configured', 403);
+
+	const provided = request.headers.get('x-admin-token');
+	if (!provided) return errorResponse(request, env, 'Missing admin token', 401);
+	if (provided !== expected) return errorResponse(request, env, 'Invalid admin token', 401);
+
+	const body = await readJson<LicenseResetRequest>(request);
+	if (!body?.license_key) return errorResponse(request, env, 'license_key is required');
+
+	const licenseKey = body.license_key.trim();
+	const license = await env.DB.prepare('SELECT id as id FROM licenses WHERE license_key = ?')
+		.bind(licenseKey)
+		.first();
+	if (!license?.id) return errorResponse(request, env, 'License not found', 404);
+
+	const now = nowSeconds();
+	await env.DB.prepare('UPDATE activations SET revoked_at = ? WHERE license_id = ? AND revoked_at IS NULL')
+		.bind(now, String(license.id))
+		.run();
+
+	return jsonResponse(request, env, { status: 'reset' });
+}
+
+async function handlePortalSession(request: Request, env: Env): Promise<Response> {
+	await ensureSchema(env);
+
+	const body = await readJson<PortalSessionRequest>(request);
+	if (!body?.license_key && !body?.email) {
+		return errorResponse(request, env, 'license_key or email is required');
+	}
+
+	if (envFlag(env.LICENSE_MOCK_STRIPE)) {
+		return jsonResponse(request, env, { url: portalReturnUrl(env) } satisfies PortalSessionResponse);
+	}
+
+	let customerId: string | null = null;
+	if (body.license_key) {
+		const row = await env.DB.prepare('SELECT stripe_customer_id as stripe_customer_id FROM licenses WHERE license_key = ?')
+			.bind(body.license_key.trim())
+			.first();
+		customerId = row?.stripe_customer_id != null ? String(row.stripe_customer_id) : null;
+	}
+	if (!customerId && body.email) {
+		const row = await env.DB.prepare('SELECT stripe_customer_id as stripe_customer_id FROM licenses WHERE email = ? LIMIT 1')
+			.bind(body.email.trim())
+			.first();
+		customerId = row?.stripe_customer_id != null ? String(row.stripe_customer_id) : null;
+	}
+	if (!customerId) return errorResponse(request, env, 'Customer not found', 404);
+
+	try {
+		const params = new URLSearchParams({ customer: customerId, return_url: portalReturnUrl(env) });
+		const session = await stripeRequest(env, 'POST', '/billing_portal/sessions', params);
+		const url = session.url != null ? String(session.url) : '';
+		if (!url) return errorResponse(request, env, 'Stripe response missing portal url', 502);
+		return jsonResponse(request, env, { url } satisfies PortalSessionResponse);
+	} catch (err) {
+		return errorResponse(request, env, (err as Error).message, 502);
+	}
+}
+
+async function handleHealth(request: Request, env: Env): Promise<Response> {
+	try {
+		await ensureSchema(env);
+		await env.DB.prepare('SELECT 1').first();
+		return jsonResponse(request, env, { status: 'ok' });
+	} catch (err) {
+		return errorResponse(request, env, String(err), 500);
+	}
+}
+
+async function handlePublicKey(request: Request, env: Env): Promise<Response> {
+	try {
+		return jsonResponse(request, env, { public_key_b64: publicKeyB64(env) });
+	} catch (err) {
+		return errorResponse(request, env, (err as Error).message, 500);
+	}
 }
 
 export default {
@@ -443,36 +1047,83 @@ export default {
 		const url = new URL(request.url);
 		const { pathname } = url;
 
-		if (pathname === '/api/stripe/checkout/start') {
-			if (request.method !== 'POST') return errorResponse('method not allowed', 405);
+		if (request.method === 'OPTIONS') {
+			return withCors(request, env as Env, new Response(null, { status: 204 }));
+		}
+
+		// Legacy + website endpoints (match `license_service`).
+		if (pathname === '/health') {
+			if (request.method !== 'GET') return errorResponse(request, env as Env, 'method not allowed', 405);
+			return handleHealth(request, env as Env);
+		}
+		if (pathname === '/public_key') {
+			if (request.method !== 'GET') return errorResponse(request, env as Env, 'method not allowed', 405);
+			return handlePublicKey(request, env as Env);
+		}
+		if (pathname === '/api/checkout/start') {
+			if (request.method !== 'POST') return errorResponse(request, env as Env, 'method not allowed', 405);
 			return handleCheckoutStart(request, env as Env);
 		}
-
-		if (pathname === '/api/stripe/checkout/session') {
-			if (request.method !== 'GET') return errorResponse('method not allowed', 405);
-			return handleCheckoutSession(request, env as Env);
+		if (pathname === '/api/checkout/status') {
+			if (request.method !== 'GET') return errorResponse(request, env as Env, 'method not allowed', 405);
+			return handleCheckoutStatus(request, env as Env);
 		}
-
-		if (pathname === '/api/stripe/customer-portal/session') {
-			if (request.method !== 'POST') return errorResponse('method not allowed', 405);
+		if (pathname === '/stripe/webhook') {
+			if (request.method !== 'POST') return errorResponse(request, env as Env, 'method not allowed', 405);
+			return handleWebhook(request, env as Env);
+		}
+		if (pathname === '/license/activate') {
+			if (request.method !== 'POST') return errorResponse(request, env as Env, 'method not allowed', 405);
+			return handleLicenseActivate(request, env as Env);
+		}
+		if (pathname === '/license/deactivate') {
+			if (request.method !== 'POST') return errorResponse(request, env as Env, 'method not allowed', 405);
+			return handleLicenseDeactivate(request, env as Env);
+		}
+		if (pathname === '/license/status') {
+			if (request.method !== 'POST') return errorResponse(request, env as Env, 'method not allowed', 405);
+			return handleLicenseStatus(request, env as Env);
+		}
+		if (pathname === '/license/resend') {
+			if (request.method !== 'POST') return errorResponse(request, env as Env, 'method not allowed', 405);
+			return handleLicenseResend(request, env as Env);
+		}
+		if (pathname === '/license/reset') {
+			if (request.method !== 'POST') return errorResponse(request, env as Env, 'method not allowed', 405);
+			return handleLicenseReset(request, env as Env);
+		}
+		if (pathname === '/portal/session') {
+			if (request.method !== 'POST') return errorResponse(request, env as Env, 'method not allowed', 405);
 			return handlePortalSession(request, env as Env);
 		}
 
+		// Compatibility aliases (older docs referenced these).
+		if (pathname === '/api/stripe/checkout/start') {
+			if (request.method !== 'POST') return errorResponse(request, env as Env, 'method not allowed', 405);
+			return handleCheckoutStart(request, env as Env);
+		}
+		if (pathname === '/api/stripe/checkout/session') {
+			// Keep as an alias to checkout status for now.
+			if (request.method !== 'GET') return errorResponse(request, env as Env, 'method not allowed', 405);
+			return handleCheckoutStatus(request, env as Env);
+		}
+		if (pathname === '/api/stripe/customer-portal/session') {
+			if (request.method !== 'POST') return errorResponse(request, env as Env, 'method not allowed', 405);
+			return handlePortalSession(request, env as Env);
+		}
 		if (pathname === '/api/stripe/webhook') {
-			if (request.method !== 'POST') return errorResponse('method not allowed', 405);
+			if (request.method !== 'POST') return errorResponse(request, env as Env, 'method not allowed', 405);
 			return handleWebhook(request, env as Env);
 		}
-
 		if (pathname === '/api/license/activate') {
-			if (request.method !== 'POST') return errorResponse('method not allowed', 405);
-			return handleActivate(request, env as Env);
+			if (request.method !== 'POST') return errorResponse(request, env as Env, 'method not allowed', 405);
+			return handleLicenseActivate(request, env as Env);
 		}
-
 		if (pathname === '/api/license/deactivate') {
-			if (request.method !== 'POST') return errorResponse('method not allowed', 405);
-			return handleDeactivate(request, env as Env);
+			if (request.method !== 'POST') return errorResponse(request, env as Env, 'method not allowed', 405);
+			return handleLicenseDeactivate(request, env as Env);
 		}
 
-		return new Response('Not Found', { status: 404 });
+		return withCors(request, env as Env, new Response('Not Found', { status: 404 }));
 	},
 } satisfies ExportedHandler<Env>;

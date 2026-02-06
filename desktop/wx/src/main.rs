@@ -10,7 +10,7 @@ use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -23,9 +23,9 @@ mod xrc_validation;
 
 use desktop_backend::{
     BackendConfig, BatchOutcome, BatchRequest, CellsRangeRequest, DesktopBackend, DiffErrorPayload,
-    DiffMode, DiffOutcome, DiffRequest, DiffRunSummary, OpsRangeRequest, ProgressRx, RangeBounds,
-    RecentComparison, SearchIndexResult, SearchIndexSummary, SearchResult, SheetMetaRequest,
-    SheetPayloadRequest,
+    DiffMode, DiffOutcome, DiffRequest, DiffRunSummary, OpsRangeRequest, ProgressEvent, ProgressRx,
+    RangeBounds, RecentComparison, SearchIndexResult, SearchIndexSummary, SearchResult,
+    SheetMetaRequest, SheetPayloadRequest,
 };
 use dev_scenario::{load_from_env as load_dev_scenario, UiScenario};
 use license_client::LicenseClient;
@@ -97,6 +97,52 @@ const GUIDED_EMPTY_SUMMARY: &str =
     "Select Old and New files, pick a preset, then click Compare (F5).\n\nTip: Use Swap to flip Old/New.";
 const GUIDED_EMPTY_DETAILS: &str =
     "After comparing, select a sheet to see details.\n\nSelect Old and New files, pick a preset, then click Compare (F5).";
+
+static PROGRESS_ANIM_GEN: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProgressStage {
+    Read,
+    Diff,
+    Snapshot,
+    Batch,
+    Other,
+}
+
+impl ProgressStage {
+    fn from_stage_name(value: &str) -> Self {
+        match value.trim().to_lowercase().as_str() {
+            "read" => Self::Read,
+            "diff" => Self::Diff,
+            "snapshot" => Self::Snapshot,
+            "batch" => Self::Batch,
+            _ => Self::Other,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Read => "Read",
+            Self::Diff => "Diff",
+            Self::Snapshot => "Snapshot",
+            Self::Batch => "Batch",
+            Self::Other => "Working",
+        }
+    }
+
+    fn gauge_bounds(self) -> (i32, i32) {
+        match self {
+            // Short, usually IO-bound.
+            Self::Read => (0, 25),
+            // Most of the runtime; keep the bar moving over most of the range.
+            Self::Diff => (25, 85),
+            // Usually quick, but make it feel "near the end".
+            Self::Snapshot => (85, 100),
+            Self::Batch => (0, 100),
+            Self::Other => (0, 100),
+        }
+    }
+}
 
 fn show_startup_error(message: &str) -> ! {
     show_startup_error_with_parent(None, message)
@@ -340,8 +386,7 @@ impl MainUi {
         let summary_text = find_xrc_child::<TextCtrl>(&compare_container, "summary_text");
         let detail_text = find_xrc_child::<TextCtrl>(&compare_container, "detail_text");
         let grid_panel = find_xrc_child::<Panel>(&compare_container, "grid_panel");
-        let run_summary_header =
-            find_xrc_child::<Panel>(&compare_container, "run_summary_header");
+        let run_summary_header = find_xrc_child::<Panel>(&compare_container, "run_summary_header");
         let run_summary_old = find_xrc_child::<StaticText>(&compare_container, "run_summary_old");
         let run_summary_new = find_xrc_child::<StaticText>(&compare_container, "run_summary_new");
         let run_summary_meta = find_xrc_child::<StaticText>(&compare_container, "run_summary_meta");
@@ -349,12 +394,10 @@ impl MainUi {
             find_xrc_child::<SearchCtrl>(&compare_container, "sheets_filter_ctrl");
         let sheets_filter_status =
             find_xrc_child::<StaticText>(&compare_container, "sheets_filter_status");
-        let sheets_empty_panel =
-            find_xrc_child::<Panel>(&compare_container, "sheets_empty_panel");
+        let sheets_empty_panel = find_xrc_child::<Panel>(&compare_container, "sheets_empty_panel");
         let sheets_empty_text =
             find_xrc_child::<StaticText>(&compare_container, "sheets_empty_text");
-        let sheets_table_host =
-            find_xrc_child::<Panel>(&compare_container, "sheets_table_host");
+        let sheets_table_host = find_xrc_child::<Panel>(&compare_container, "sheets_table_host");
 
         let recents_list = find_xrc_child::<Panel>(&recents_page, "recents_list");
         let open_recent_btn = find_xrc_child::<Button>(&recents_page, "open_recent_btn");
@@ -798,7 +841,10 @@ struct UiHandles {
 }
 
 struct ActiveRun {
+    run_id: u64,
+    stage: ProgressStage,
     cancel: Arc<AtomicBool>,
+    cancel_requested: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -811,11 +857,28 @@ struct SheetRow {
     moved: u64,
 }
 
+struct CancelRestoreSnapshot {
+    current_diff_id: Option<String>,
+    current_mode: Option<DiffMode>,
+    current_summary: Option<DiffRunSummary>,
+    current_payload: Option<ui_payload::DiffWithSheets>,
+    pending_detail_payload: Option<ui_payload::DiffWithSheets>,
+    pending_detail_sheet_name: Option<String>,
+    sheet_names: Vec<String>,
+    sheets_all: Vec<SheetRow>,
+    sheets_filter: String,
+    summary_text: String,
+    detail_text: String,
+    selected_sheet: Option<String>,
+    result_tab: usize,
+}
+
 struct AppState {
     backend: DesktopBackend,
     engine_version: String,
     run_counter: u64,
     active_run: Option<ActiveRun>,
+    cancel_restore_snapshot: Option<CancelRestoreSnapshot>,
     current_diff_id: Option<String>,
     current_mode: Option<DiffMode>,
     current_summary: Option<DiffRunSummary>,
@@ -891,8 +954,12 @@ fn update_run_summary_header_in_ctx(ctx: &mut UiContext) {
         ctx.ui.run_summary_new.set_tooltip(&new_path);
     }
 
-    let meta = if ctx.state.active_run.is_some() {
-        "Comparing...".to_string()
+    let meta = if let Some(active) = ctx.state.active_run.as_ref() {
+        if active.cancel_requested {
+            "Cancel requested (finishing current step)...".to_string()
+        } else {
+            "Comparing...".to_string()
+        }
     } else if let Some(summary) = ctx.state.current_summary.as_ref() {
         let complete = if summary.complete { "yes" } else { "no" };
         format!(
@@ -939,12 +1006,17 @@ fn sync_sheets_panel_state_in_ctx(ctx: &mut UiContext) {
     let shown = ctx.state.sheet_names.len();
     let filter = ctx.state.sheets_filter.trim();
     let has_run = ctx.state.current_summary.is_some();
-    let running = ctx.state.active_run.is_some();
 
-    if running {
+    if let Some(active) = ctx.state.active_run.as_ref() {
         ctx.ui.sheets_table_host.show(false);
         ctx.ui.sheets_empty_panel.show(true);
-        ctx.ui.sheets_empty_text.set_label("Comparing...");
+        if active.cancel_requested {
+            ctx.ui
+                .sheets_empty_text
+                .set_label("Cancel requested (finishing current step)...");
+        } else {
+            ctx.ui.sheets_empty_text.set_label("Comparing...");
+        }
         ctx.ui.sheets_filter_ctrl.enable(false);
     } else if total == 0 {
         ctx.ui.sheets_table_host.show(false);
@@ -952,7 +1024,9 @@ fn sync_sheets_panel_state_in_ctx(ctx: &mut UiContext) {
         ctx.ui.sheets_filter_ctrl.enable(false);
         if let Some(summary) = ctx.state.current_summary.as_ref() {
             if summary.op_count == 0 {
-                ctx.ui.sheets_empty_text.set_label("No differences detected.");
+                ctx.ui
+                    .sheets_empty_text
+                    .set_label("No differences detected.");
             } else {
                 ctx.ui
                     .sheets_empty_text
@@ -984,17 +1058,20 @@ fn sync_sheets_panel_state_in_ctx(ctx: &mut UiContext) {
 fn sync_compare_controls_in_ctx(ctx: &mut UiContext) {
     let old_ok = !ctx.ui.old_picker.get_path().trim().is_empty();
     let new_ok = !ctx.ui.new_picker.get_path().trim().is_empty();
-    let running = ctx.state.active_run.is_some();
+    let (running, cancel_requested) = match ctx.state.active_run.as_ref() {
+        Some(active) => (true, active.cancel_requested),
+        None => (false, false),
+    };
 
     let can_compare = old_ok && new_ok && !running;
     ctx.ui.compare_btn.enable(can_compare);
-    ctx.ui.cancel_btn.enable(running);
+    ctx.ui.cancel_btn.enable(running && !cancel_requested);
     ctx.ui.swap_btn.enable(!running && (old_ok || new_ok));
 
     // MenuItem wrappers loaded via XRC can't be enabled/disabled directly; use the MenuBar.
     if let Some(menu_bar) = ctx.ui.frame.get_menu_bar() {
         let _ = menu_bar.enable_item(ctx.ui.compare_menu.get_id(), can_compare);
-        let _ = menu_bar.enable_item(ctx.ui.cancel_menu.get_id(), running);
+        let _ = menu_bar.enable_item(ctx.ui.cancel_menu.get_id(), running && !cancel_requested);
     }
 
     let (help_label, show_help) = if running {
@@ -1047,6 +1124,78 @@ fn clear_diff_results_in_ctx(ctx: &mut UiContext) {
     ctx.ui.detail_text.set_value(GUIDED_EMPTY_DETAILS);
     render_grid_placeholder(ctx, "Run a diff to preview grid changes.");
     update_status_counts_in_ctx(ctx, None);
+    update_run_summary_header_in_ctx(ctx);
+    sync_sheets_panel_state_in_ctx(ctx);
+}
+
+fn take_cancel_restore_snapshot_in_ctx(ctx: &mut UiContext) -> CancelRestoreSnapshot {
+    let selected_sheet = ctx
+        .ui
+        .sheets_view
+        .and_then(|view| view.get_selected_row())
+        .and_then(|row| ctx.state.sheet_names.get(row).cloned());
+
+    CancelRestoreSnapshot {
+        current_diff_id: ctx.state.current_diff_id.take(),
+        current_mode: ctx.state.current_mode.take(),
+        current_summary: ctx.state.current_summary.take(),
+        current_payload: ctx.state.current_payload.take(),
+        pending_detail_payload: ctx.state.pending_detail_payload.take(),
+        pending_detail_sheet_name: ctx.state.pending_detail_sheet_name.take(),
+        sheet_names: std::mem::take(&mut ctx.state.sheet_names),
+        sheets_all: std::mem::take(&mut ctx.state.sheets_all),
+        sheets_filter: std::mem::take(&mut ctx.state.sheets_filter),
+        summary_text: ctx.ui.summary_text.get_value(),
+        detail_text: ctx.ui.detail_text.get_value(),
+        selected_sheet,
+        result_tab: usize::try_from(ctx.ui.result_tabs.selection()).unwrap_or(0),
+    }
+}
+
+fn restore_cancel_snapshot_in_ctx(ctx: &mut UiContext, snapshot: CancelRestoreSnapshot) {
+    ctx.state.current_diff_id = snapshot.current_diff_id;
+    ctx.state.current_mode = snapshot.current_mode;
+    ctx.state.current_summary = snapshot.current_summary;
+    ctx.state.current_payload = snapshot.current_payload;
+    ctx.state.pending_detail_payload = snapshot.pending_detail_payload;
+    ctx.state.pending_detail_sheet_name = snapshot.pending_detail_sheet_name;
+    ctx.state.sheet_names = snapshot.sheet_names;
+    ctx.state.sheets_all = snapshot.sheets_all;
+    ctx.state.sheets_filter = snapshot.sheets_filter;
+
+    ctx.ui.summary_text.set_value(&snapshot.summary_text);
+    ctx.ui.detail_text.set_value(&snapshot.detail_text);
+    ctx.ui
+        .sheets_filter_ctrl
+        .set_value(&ctx.state.sheets_filter);
+    ctx.ui.result_tabs.set_selection(snapshot.result_tab);
+
+    // Ensure the virtual table matches the restored sheet list.
+    rebuild_sheet_list_in_ctx(ctx);
+
+    if let Some(selected_sheet) = snapshot.selected_sheet {
+        if let Some(idx) = ctx
+            .state
+            .sheet_names
+            .iter()
+            .position(|name| name == &selected_sheet)
+        {
+            if let Some(view) = ctx.ui.sheets_view {
+                let _ = view.select_row(idx);
+            }
+        }
+    }
+
+    if ctx.ui.result_tabs.selection() == RESULT_TAB_GRID {
+        render_grid_for_current_selection(ctx);
+    }
+    if ctx.ui.result_tabs.selection() == RESULT_TAB_DETAILS {
+        render_staged_detail_payload(ctx);
+    }
+
+    // Clone to avoid holding an immutable borrow across the `&mut UiContext` call.
+    let summary_for_status = ctx.state.current_summary.clone();
+    update_status_counts_in_ctx(ctx, summary_for_status.as_ref());
     update_run_summary_header_in_ctx(ctx);
     sync_sheets_panel_state_in_ctx(ctx);
 }
@@ -1875,7 +2024,9 @@ fn send_progress_to_webview(webview: WebView, rx: ProgressRx, run_id: u64) {
                 "status",
                 json!({
                     "stage": event.stage,
+                    "phase": event.phase,
                     "detail": event.detail,
+                    "percent": event.percent,
                     "source": "desktop"
                 }),
             );
@@ -1973,7 +2124,10 @@ fn handle_webview_rpc(webview: WebView, message: String) {
                 let run_id = ctx.state.run_counter;
                 let cancel = Arc::new(AtomicBool::new(false));
                 ctx.state.active_run = Some(ActiveRun {
+                    run_id,
+                    stage: ProgressStage::Read,
                     cancel: cancel.clone(),
+                    cancel_requested: false,
                 });
 
                 let options = params.options.unwrap_or_default();
@@ -2539,11 +2693,154 @@ fn update_virtual_table(table: &mut VirtualTable, rows: Vec<Vec<String>>) {
     table.model.reset(size);
 }
 
+fn progress_animation_enabled() -> bool {
+    // Avoid non-deterministic visual diffs during headless capture.
+    env_string("EXCEL_DIFF_DEV_SCENARIO").is_none()
+        && env_string("EXCEL_DIFF_UI_READY_FILE").is_none()
+}
+
+fn stop_progress_animation() {
+    PROGRESS_ANIM_GEN.fetch_add(1, Ordering::SeqCst);
+}
+
+fn start_progress_animation() {
+    let gen = PROGRESS_ANIM_GEN
+        .fetch_add(1, Ordering::SeqCst)
+        .wrapping_add(1);
+
+    if !progress_animation_enabled() {
+        return;
+    }
+
+    thread::spawn(move || {
+        let mut tick: u64 = 0;
+        loop {
+            if PROGRESS_ANIM_GEN.load(Ordering::Relaxed) != gen {
+                break;
+            }
+
+            let tick_now = tick;
+            wxdragon::call_after(Box::new(move || {
+                if PROGRESS_ANIM_GEN.load(Ordering::Relaxed) != gen {
+                    return;
+                }
+                let _ = with_ui_context(|ctx| {
+                    let Some(active) = ctx.state.active_run.as_ref() else {
+                        return;
+                    };
+                    let (min, max) = active.stage.gauge_bounds();
+                    if max <= min {
+                        ctx.ui.progress_gauge.set_value(min);
+                        return;
+                    }
+
+                    let span = (max - min) as u64;
+                    let cycle = (tick_now % (span.saturating_mul(2))) as i32;
+                    let offset = if cycle <= span as i32 {
+                        cycle
+                    } else {
+                        (span as i32).saturating_mul(2).saturating_sub(cycle)
+                    };
+
+                    let value = min.saturating_add(offset).min(max);
+                    ctx.ui.progress_gauge.set_value(value);
+                });
+            }));
+
+            tick = tick.wrapping_add(1);
+            thread::sleep(Duration::from_millis(90));
+        }
+    });
+}
+
+fn format_progress_message(event: &ProgressEvent) -> String {
+    let stage = ProgressStage::from_stage_name(&event.stage);
+    let mut prefix = stage.label().to_string();
+
+    let phase = event
+        .phase
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(phase) = phase {
+        prefix.push_str(" (");
+        prefix.push_str(phase);
+        prefix.push(')');
+    }
+
+    let detail = event.detail.trim();
+    if detail.is_empty() {
+        prefix
+    } else {
+        format!("{prefix}: {detail}")
+    }
+}
+
+fn handle_progress_event(event: ProgressEvent) {
+    let mut ready_reason: Option<&'static str> = None;
+    let _ = with_ui_context(|ctx| {
+        // When running under the UI capture harness, freeze once we've signaled readiness so the
+        // screenshot is deterministic (important for "working" mid-run captures).
+        if ctx.state.dev_ready_file.is_some() && ctx.state.dev_ready_fired {
+            return;
+        }
+
+        if let Some(active) = ctx.state.active_run.as_mut() {
+            if active.cancel_requested {
+                // Keep cancel messaging stable; don't overwrite with late progress events.
+                return;
+            }
+
+            // Ignore stale progress updates for completed/replaced runs.
+            if event.run_id > 0 && event.run_id != active.run_id {
+                return;
+            }
+
+            if event.run_id == active.run_id {
+                active.stage = ProgressStage::from_stage_name(&event.stage);
+
+                // In capture mode (no animation), set a stable non-zero indicator for "working".
+                if !progress_animation_enabled() {
+                    let (min, max) = active.stage.gauge_bounds();
+                    let value = min.saturating_add(((max - min).max(1)) / 2);
+                    ctx.ui.progress_gauge.set_value(value);
+                }
+            }
+        } else if event.run_id > 0 {
+            // If the run is already over, ignore any straggler events from that run.
+            return;
+        }
+
+        let message = format_progress_message(&event);
+        if ctx.ui.progress_text.get_label() != message {
+            update_status_in_ctx(ctx, &message);
+        }
+
+        let wants_working_ready = ctx.state.dev_ready_file.is_some()
+            && !ctx.state.dev_ready_fired
+            && ctx
+                .state
+                .dev_scenario
+                .as_ref()
+                .and_then(|s| s.ready_on_stage.as_deref())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_some_and(|target| target.eq_ignore_ascii_case(event.stage.trim()));
+
+        if wants_working_ready {
+            ready_reason = Some("working");
+        }
+    });
+
+    if let Some(reason) = ready_reason {
+        mark_ui_ready(reason);
+    }
+}
+
 fn spawn_progress_forwarder(rx: ProgressRx) {
     thread::spawn(move || {
         for event in rx.iter() {
-            let detail = event.detail;
-            wxdragon::call_after(Box::new(move || update_status(&detail)));
+            wxdragon::call_after(Box::new(move || handle_progress_event(event)));
         }
     });
 }
@@ -2617,7 +2914,12 @@ fn rebuild_sheet_list_in_ctx(ctx: &mut UiContext) {
     // If the selected sheet was filtered away, clear selection and reset the preview.
     if let Some(view) = ctx.ui.sheets_view {
         if let Some(selected) = selected_sheet {
-            if let Some(idx) = ctx.state.sheet_names.iter().position(|name| name == &selected) {
+            if let Some(idx) = ctx
+                .state
+                .sheet_names
+                .iter()
+                .position(|name| name == &selected)
+            {
                 let _ = view.select_row(idx);
             } else {
                 view.unselect_all();
@@ -2651,9 +2953,9 @@ fn populate_sheet_list(ctx: &mut UiContext, summary: &DiffRunSummary) {
             moved: sheet.counts.moved,
         })
         .collect();
-    ctx.state.sheets_all.sort_by_key(|sheet| {
-        (Reverse(sheet.op_count), sheet.sheet_name.to_lowercase())
-    });
+    ctx.state
+        .sheets_all
+        .sort_by_key(|sheet| (Reverse(sheet.op_count), sheet.sheet_name.to_lowercase()));
     rebuild_sheet_list_in_ctx(ctx);
 }
 
@@ -2681,12 +2983,13 @@ fn populate_recents(ctx: &mut UiContext, recents: Vec<RecentComparison>) {
 fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
     let mut ready_reason: Option<&'static str> = None;
     let _ = with_ui_context(|ctx| {
-        ctx.ui.progress_gauge.set_value(100);
+        stop_progress_animation();
         ctx.state.active_run = None;
-        sync_compare_controls_in_ctx(ctx);
 
         match result {
             Ok(outcome) => {
+                ctx.state.cancel_restore_snapshot = None;
+                ctx.ui.progress_gauge.set_value(100);
                 info!(
                     "Diff complete: diff_id={} mode={} summary={} payload={}",
                     outcome.diff_id,
@@ -2750,7 +3053,10 @@ fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
                         } else if summary.op_count == 0 {
                             render_grid_placeholder(ctx, "No differences detected.");
                         } else {
-                            render_grid_placeholder(ctx, "No sheet-level grid changes were detected.");
+                            render_grid_placeholder(
+                                ctx,
+                                "No sheet-level grid changes were detected.",
+                            );
                         }
                     }
 
@@ -2785,7 +3091,32 @@ fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
                     ready_reason = Some("diff_complete");
                 }
             }
+            Err(err) if err.code == "canceled" => {
+                log::info!("Diff canceled.");
+                ctx.ui.progress_gauge.set_value(0);
+
+                if let Some(snapshot) = ctx.state.cancel_restore_snapshot.take() {
+                    restore_cancel_snapshot_in_ctx(ctx, snapshot);
+                } else {
+                    clear_diff_results_in_ctx(ctx);
+                }
+
+                update_status_in_ctx(ctx, "Canceled.");
+                theme::set_status_tone(
+                    &ctx.ui.progress_text,
+                    &ctx.ui.status_pill,
+                    &ctx.ui.progress_gauge,
+                    theme::StatusTone::Ready,
+                );
+
+                if ctx.state.dev_ready_file.is_some() && !ctx.state.dev_ready_fired {
+                    ready_reason = Some("diff_canceled");
+                }
+            }
             Err(err) => {
+                ctx.state.cancel_restore_snapshot = None;
+                ctx.ui.progress_gauge.set_value(100);
+
                 log::warn!("Diff failed: {}: {}", err.code, err.message);
                 ctx.ui
                     .detail_text
@@ -2804,6 +3135,8 @@ fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
                 }
             }
         }
+
+        sync_compare_controls_in_ctx(ctx);
     });
 
     if let Some(reason) = ready_reason {
@@ -2866,11 +3199,17 @@ fn start_compare() {
             return;
         }
 
+        // Keep the previous results intact so we can restore them on Cancel.
+        ctx.state.cancel_restore_snapshot = Some(take_cancel_restore_snapshot_in_ctx(ctx));
+
         ctx.state.run_counter = ctx.state.run_counter.saturating_add(1);
         let run_id = ctx.state.run_counter;
         let cancel = Arc::new(AtomicBool::new(false));
         ctx.state.active_run = Some(ActiveRun {
+            run_id,
+            stage: ProgressStage::Read,
             cancel: cancel.clone(),
+            cancel_requested: false,
         });
 
         // Scenario harness: allow deterministic "canceled" end-states without relying on races
@@ -2905,6 +3244,7 @@ fn start_compare() {
         ctx.ui.progress_gauge.set_value(0);
         ctx.ui.summary_text.set_value("");
         ctx.ui.detail_text.set_value("");
+        render_grid_placeholder(ctx, "Comparing...");
         update_status_in_ctx(ctx, "Starting diff...");
         theme::set_status_tone(
             &ctx.ui.progress_text,
@@ -2912,6 +3252,7 @@ fn start_compare() {
             &ctx.ui.progress_gauge,
             theme::StatusTone::Working,
         );
+        start_progress_animation();
 
         let options = DiffOptions {
             preset: Some(preset_from_choice(&ctx.ui.preset_choice)),
@@ -3348,15 +3689,22 @@ fn build_index(side: &str) {
 
 fn cancel_current() {
     let _ = with_ui_context(|ctx| {
-        if let Some(active) = ctx.state.active_run.as_ref() {
+        if let Some(active) = ctx.state.active_run.as_mut() {
+            if active.cancel_requested {
+                return;
+            }
+            active.cancel_requested = true;
             active.cancel.store(true, Ordering::Relaxed);
-            update_status_in_ctx(ctx, "Canceling...");
+            update_status_in_ctx(ctx, "Cancel requested (finishing current step)...");
             theme::set_status_tone(
                 &ctx.ui.progress_text,
                 &ctx.ui.status_pill,
                 &ctx.ui.progress_gauge,
                 theme::StatusTone::Working,
             );
+            sync_compare_controls_in_ctx(ctx);
+            update_run_summary_header_in_ctx(ctx);
+            sync_sheets_panel_state_in_ctx(ctx);
         }
     });
 }
@@ -3902,6 +4250,7 @@ fn main() {
             engine_version: env!("CARGO_PKG_VERSION").to_string(),
             run_counter: 0,
             active_run: None,
+            cancel_restore_snapshot: None,
             current_diff_id: None,
             current_mode: None,
             current_summary: None,

@@ -1,4 +1,9 @@
 
+> Status (Feb 2026): this document is background/strategy. For the current implementation and deployment checklist, see:
+> - Backend (Cloudflare Worker + D1): `tabulensis-api/`
+> - Runbook: `STRIPE_WORKER_NEXT_STEPS.md`
+> - Endpoint/env-var reference: `docs/licensing_service.md`
+
 
 # **Secure Licensing Architectures for Privacy-Sensitive B2B Software: A Comprehensive Analysis**
 

@@ -32,7 +32,7 @@
 
       <div class="checkout-row">
         <input id="checkout-email" class="input" type="email" placeholder="Email for license delivery">
-        <button id="checkout-btn" class="cta primary" data-checkout-url="/api/checkout/start">Start trial / Buy</button>
+        <button id="checkout-btn" class="cta primary" data-checkout-url="https://license.tabulensis.com/api/checkout/start">Start trial / Buy</button>
         <a class="cta" href="/docs">Docs</a>
       </div>
       <div id="checkout-status" class="note" style="display:none;"></div>
@@ -115,7 +115,9 @@
           status.textContent = "";
         }
         try {
-          const res = await fetch(btn.dataset.checkoutUrl || "/api/checkout/start", {
+          const checkoutUrl =
+            btn.dataset.checkoutUrl || "https://license.tabulensis.com/api/checkout/start";
+          const res = await fetch(checkoutUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ email: emailInput?.value || undefined }),

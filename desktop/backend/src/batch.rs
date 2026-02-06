@@ -3,16 +3,16 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+use crate::events::{ProgressEvent, ProgressTx};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use crate::events::{ProgressEvent, ProgressTx};
 use uuid::Uuid;
 use walkdir::WalkDir;
 
 use crate::diff_runner::{DiffErrorPayload, DiffRequest, DiffRunner};
-use ui_payload::DiffOptions;
 use crate::store::{OpStore, StoreError};
+use ui_payload::DiffOptions;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -139,7 +139,10 @@ pub fn run_batch_compare(
 
     let status = "complete".to_string();
     finish_batch_run(conn, &batch_id, &status, completed)?;
-    emit_batch_progress(&progress, format!("Batch complete: {completed}/{total}", total = pairs.len()));
+    emit_batch_progress(
+        &progress,
+        format!("Batch complete: {completed}/{total}", total = pairs.len()),
+    );
 
     Ok(BatchOutcome {
         batch_id,
@@ -150,7 +153,10 @@ pub fn run_batch_compare(
     })
 }
 
-pub fn load_batch_summary(store_path: &Path, batch_id: &str) -> Result<BatchOutcome, DiffErrorPayload> {
+pub fn load_batch_summary(
+    store_path: &Path,
+    batch_id: &str,
+) -> Result<BatchOutcome, DiffErrorPayload> {
     let store = OpStore::open(store_path).map_err(store_error)?;
     let conn = store.connection();
 
@@ -158,7 +164,13 @@ pub fn load_batch_summary(store_path: &Path, batch_id: &str) -> Result<BatchOutc
         .query_row(
             "SELECT status, item_count, completed_count FROM batch_runs WHERE batch_id = ?1",
             params![batch_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
         )
         .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
 
@@ -232,11 +244,14 @@ fn build_globset(globs: &Option<Vec<String>>) -> Result<GlobSet, DiffErrorPayloa
     let mut builder = GlobSetBuilder::new();
     if let Some(globs) = globs {
         for glob in globs {
-            let parsed = Glob::new(glob).map_err(|e| DiffErrorPayload::new("glob", e.to_string(), false))?;
+            let parsed =
+                Glob::new(glob).map_err(|e| DiffErrorPayload::new("glob", e.to_string(), false))?;
             builder.add(parsed);
         }
     }
-    builder.build().map_err(|e| DiffErrorPayload::new("glob", e.to_string(), false))
+    builder
+        .build()
+        .map_err(|e| DiffErrorPayload::new("glob", e.to_string(), false))
 }
 
 fn pair_files(
@@ -301,7 +316,11 @@ fn group_files(root: &Path, files: &[PathBuf], strategy: &str) -> HashMap<String
     let mut map: HashMap<String, Vec<PathBuf>> = HashMap::new();
     for path in files {
         let key = match strategy {
-            "filename" => path.file_name().and_then(|s| s.to_str()).unwrap_or_default().to_lowercase(),
+            "filename" => path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_lowercase(),
             _ => path
                 .strip_prefix(root)
                 .unwrap_or(path)
@@ -315,11 +334,23 @@ fn group_files(root: &Path, files: &[PathBuf], strategy: &str) -> HashMap<String
 }
 
 fn is_supported(path: &Path) -> bool {
-    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-    matches!(ext.as_str(), "xlsx" | "xlsm" | "xltx" | "xltm" | "xlsb" | "pbix" | "pbit")
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    matches!(
+        ext.as_str(),
+        "xlsx" | "xlsm" | "xltx" | "xltm" | "xlsb" | "pbix" | "pbit"
+    )
 }
 
-fn insert_batch_run(conn: &Connection, batch_id: &str, req: &BatchRequest, item_count: usize) -> Result<(), DiffErrorPayload> {
+fn insert_batch_run(
+    conn: &Connection,
+    batch_id: &str,
+    req: &BatchRequest,
+    item_count: usize,
+) -> Result<(), DiffErrorPayload> {
     conn.execute(
         "INSERT INTO batch_runs (batch_id, old_root, new_root, strategy, started_at, status, item_count, completed_count)\
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -338,7 +369,11 @@ fn insert_batch_run(conn: &Connection, batch_id: &str, req: &BatchRequest, item_
     Ok(())
 }
 
-fn insert_batch_item(conn: &Connection, batch_id: &str, item: &BatchItemResult) -> Result<(), DiffErrorPayload> {
+fn insert_batch_item(
+    conn: &Connection,
+    batch_id: &str,
+    item: &BatchItemResult,
+) -> Result<(), DiffErrorPayload> {
     conn.execute(
         "INSERT INTO batch_items (batch_id, item_id, old_path, new_path, status, diff_id, op_count, warnings_count, error)\
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -358,7 +393,11 @@ fn insert_batch_item(conn: &Connection, batch_id: &str, item: &BatchItemResult) 
     Ok(())
 }
 
-fn update_batch_item(conn: &Connection, batch_id: &str, item: &BatchItemResult) -> Result<(), DiffErrorPayload> {
+fn update_batch_item(
+    conn: &Connection,
+    batch_id: &str,
+    item: &BatchItemResult,
+) -> Result<(), DiffErrorPayload> {
     conn.execute(
         "UPDATE batch_items SET status = ?1, diff_id = ?2, op_count = ?3, warnings_count = ?4, error = ?5 WHERE batch_id = ?6 AND item_id = ?7",
         params![
@@ -375,7 +414,11 @@ fn update_batch_item(conn: &Connection, batch_id: &str, item: &BatchItemResult) 
     Ok(())
 }
 
-fn update_batch_progress(conn: &Connection, batch_id: &str, completed: usize) -> Result<(), DiffErrorPayload> {
+fn update_batch_progress(
+    conn: &Connection,
+    batch_id: &str,
+    completed: usize,
+) -> Result<(), DiffErrorPayload> {
     conn.execute(
         "UPDATE batch_runs SET completed_count = ?1 WHERE batch_id = ?2",
         params![completed as i64, batch_id],
@@ -384,7 +427,12 @@ fn update_batch_progress(conn: &Connection, batch_id: &str, completed: usize) ->
     Ok(())
 }
 
-fn finish_batch_run(conn: &Connection, batch_id: &str, status: &str, completed: usize) -> Result<(), DiffErrorPayload> {
+fn finish_batch_run(
+    conn: &Connection,
+    batch_id: &str,
+    status: &str,
+    completed: usize,
+) -> Result<(), DiffErrorPayload> {
     conn.execute(
         "UPDATE batch_runs SET status = ?1, completed_count = ?2, finished_at = ?3 WHERE batch_id = ?4",
         params![status, completed as i64, now_iso(), batch_id],
@@ -403,7 +451,9 @@ fn emit_batch_progress(progress: &ProgressTx, detail: impl Into<String>) {
     let _ = progress.send(ProgressEvent {
         run_id: 0,
         stage: "batch".to_string(),
+        phase: None,
         detail: detail.into(),
+        percent: None,
     });
 }
 
