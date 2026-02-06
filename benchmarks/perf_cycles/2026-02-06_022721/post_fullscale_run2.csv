@@ -1,0 +1,7 @@
+test_name,total_time_ms,parse_time_ms,diff_time_ms,move_detection_time_ms,alignment_time_ms,cell_diff_time_ms,peak_memory_bytes,rows_processed,cells_compared,anchors_found,moves_detected
+perf_50k_99_percent_blank,37,0,37,0,0,0,15761950,100000,700,0,0
+perf_50k_adversarial_repetitive,25,0,25,0,0,0,240033340,100000,350,0,0
+perf_50k_alignment_block_move,315,0,315,26,0,20,387854758,100000,0,0,1
+perf_50k_completely_different,230,0,230,0,0,201,480446842,100000,5000000,0,0
+perf_50k_dense_single_edit,42,0,42,0,0,0,480152511,100000,700,0,0
+perf_50k_identical,15,0,15,0,0,0,480152598,100000,5000000,0,0
