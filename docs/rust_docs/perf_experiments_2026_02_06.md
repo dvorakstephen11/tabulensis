@@ -147,6 +147,15 @@ Secondarily, make `custom-xml` ready to be evaluated as a default-on backend (st
 
 - Any mismatch in parsed grids (beyond known/intentional semantic fixes) blocks promotion; fix correctness first.
 
+## Outcome (2026-02-06)
+
+This iteration did **not** produce clear improvements (no high-confidence signal; results were within noise and mixed across e2e cases), so the code changes were reverted.
+
+Perf-cycle artifacts (pre/post) are recorded at:
+- `benchmarks/perf_cycles/2026-02-06_213047/`
+- Delta summary: `benchmarks/perf_cycles/2026-02-06_213047/cycle_delta.md`
+- Signal report: `benchmarks/perf_cycles/2026-02-06_213047/cycle_signal.md`
+
 ---
 
 # Experiment 2: ZIP Entry Lookup Caching (Name -> Index) in `ZipContainer`
@@ -422,4 +431,3 @@ This is a direct continuation of the "custom-json" direction in `docs/rust_docs/
 - Default perf-cycle run count is 3; parse-heavy changes require 5-run confirmation.
 - Feature flags are preferred for A/B clarity.
 - Correctness conservatism wins when uncertainty exists (especially for sharedStrings-related skipping).
-
