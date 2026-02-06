@@ -12,7 +12,11 @@ use crate::workbook::{Sheet, Workbook};
 #[cfg(feature = "perf-metrics")]
 use crate::perf::DiffMetrics;
 #[cfg(feature = "excel-open-xml")]
+use std::collections::{HashMap, HashSet};
+#[cfg(feature = "excel-open-xml")]
 use std::time::Instant;
+#[cfg(feature = "excel-open-xml")]
+use thiserror::Error;
 
 /// A parsed workbook plus optional associated content (Power Query and VBA).
 ///
@@ -54,6 +58,290 @@ fn open_profile_enabled() -> bool {
         Ok(value) => value == "1" || value.eq_ignore_ascii_case("true"),
         Err(_) => false,
     }
+}
+
+#[cfg(feature = "excel-open-xml")]
+/// Errors that can occur when diffing two Open XML workbooks without fully materializing both
+/// `WorkbookPackage`s up-front (e.g. when using part-level skip/fingerprints).
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum OpenXmlDiffError {
+    #[error("{0}")]
+    Package(#[from] crate::excel_open_xml::PackageError),
+    #[error("{0}")]
+    Diff(#[from] DiffError),
+}
+
+#[cfg(feature = "excel-open-xml")]
+impl OpenXmlDiffError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            OpenXmlDiffError::Package(err) => err.code(),
+            OpenXmlDiffError::Diff(err) => err.code(),
+        }
+    }
+}
+
+#[cfg(feature = "excel-open-xml")]
+#[derive(Debug, Clone)]
+struct SheetTargetMeta {
+    sheet_id: Option<u32>,
+    name_lower: String,
+    target: String,
+}
+
+#[cfg(feature = "excel-open-xml")]
+fn read_workbook_xml_checked(
+    container: &mut crate::container::OpcContainer,
+) -> Result<Vec<u8>, crate::excel_open_xml::PackageError> {
+    container
+        .read_file_checked("xl/workbook.xml")
+        .map_err(|e| match e {
+            crate::ContainerError::FileNotFound { .. } => {
+                if container.file_names().any(|name| name == "xl/workbook.bin") {
+                    crate::excel_open_xml::PackageError::UnsupportedFormat {
+                        message:
+                            "XLSB detected (xl/workbook.bin present); convert to .xlsx/.xlsm"
+                                .to_string(),
+                    }
+                } else {
+                    crate::excel_open_xml::PackageError::MissingPart {
+                        path: "xl/workbook.xml".to_string(),
+                    }
+                }
+            }
+            other => crate::excel_open_xml::PackageError::ReadPartFailed {
+                part: "xl/workbook.xml".to_string(),
+                message: other.to_string(),
+            },
+        })
+}
+
+#[cfg(feature = "excel-open-xml")]
+fn workbook_sheet_targets(
+    container: &mut crate::container::OpcContainer,
+) -> Result<Vec<SheetTargetMeta>, crate::excel_open_xml::PackageError> {
+    let workbook_bytes = read_workbook_xml_checked(container)?;
+    let sheets = crate::grid_parser::parse_workbook_xml(&workbook_bytes)
+        .map_err(|e| crate::excel_open_xml::wrap_grid_parse_error(e, "xl/workbook.xml"))?;
+
+    let workbook_rels_bytes = container.read_file_optional_checked("xl/_rels/workbook.xml.rels")?;
+    let relationships = match workbook_rels_bytes {
+        Some(bytes) => crate::grid_parser::parse_relationships(&bytes).map_err(|e| {
+            crate::excel_open_xml::wrap_grid_parse_error(e, "xl/_rels/workbook.xml.rels")
+        })?,
+        None => HashMap::new(),
+    };
+
+    let mut metas = Vec::with_capacity(sheets.len());
+    for (idx, sheet) in sheets.iter().enumerate() {
+        let target = crate::grid_parser::resolve_sheet_target(sheet, &relationships, idx);
+        metas.push(SheetTargetMeta {
+            sheet_id: sheet.sheet_id,
+            name_lower: sheet.name.to_lowercase(),
+            target,
+        });
+    }
+    Ok(metas)
+}
+
+#[cfg(feature = "excel-open-xml")]
+fn duplicate_sheet_ids(metas: &[SheetTargetMeta]) -> HashSet<u32> {
+    let mut counts: HashMap<u32, usize> = HashMap::new();
+    for meta in metas {
+        let Some(id) = meta.sheet_id else { continue };
+        *counts.entry(id).or_insert(0) += 1;
+    }
+    counts
+        .into_iter()
+        .filter_map(|(id, count)| if count > 1 { Some(id) } else { None })
+        .collect()
+}
+
+#[cfg(feature = "excel-open-xml")]
+fn duplicate_sheet_names(metas: &[SheetTargetMeta]) -> HashSet<String> {
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for meta in metas {
+        *counts.entry(meta.name_lower.as_str()).or_insert(0) += 1;
+    }
+    counts
+        .into_iter()
+        .filter_map(|(name, count)| if count > 1 { Some(name.to_string()) } else { None })
+        .collect()
+}
+
+#[cfg(feature = "excel-open-xml")]
+fn compute_sheet_grid_parse_targets(
+    old_container: &mut crate::container::OpcContainer,
+    new_container: &mut crate::container::OpcContainer,
+) -> Result<(HashSet<String>, HashSet<String>), crate::excel_open_xml::PackageError> {
+    let old_metas = workbook_sheet_targets(old_container)?;
+    let new_metas = workbook_sheet_targets(new_container)?;
+
+    let mut old_parse: HashSet<String> = HashSet::new();
+    let mut new_parse: HashSet<String> = HashSet::new();
+
+    let mut ambiguous_ids = duplicate_sheet_ids(&old_metas);
+    ambiguous_ids.extend(duplicate_sheet_ids(&new_metas));
+
+    let mut ambiguous_names = duplicate_sheet_names(&old_metas);
+    ambiguous_names.extend(duplicate_sheet_names(&new_metas));
+
+    for meta in &old_metas {
+        if meta
+            .sheet_id
+            .is_some_and(|id| ambiguous_ids.contains(&id))
+            || ambiguous_names.contains(&meta.name_lower)
+        {
+            old_parse.insert(meta.target.clone());
+        }
+    }
+    for meta in &new_metas {
+        if meta
+            .sheet_id
+            .is_some_and(|id| ambiguous_ids.contains(&id))
+            || ambiguous_names.contains(&meta.name_lower)
+        {
+            new_parse.insert(meta.target.clone());
+        }
+    }
+
+    let shared_old = old_container.file_fingerprint_optional_checked("xl/sharedStrings.xml")?;
+    let shared_new = new_container.file_fingerprint_optional_checked("xl/sharedStrings.xml")?;
+    let shared_same = shared_old == shared_new;
+
+    let mut old_consumed = vec![false; old_metas.len()];
+    let mut new_consumed = vec![false; new_metas.len()];
+
+    let mut old_by_id: HashMap<u32, usize> = HashMap::new();
+    for (idx, meta) in old_metas.iter().enumerate() {
+        let Some(id) = meta.sheet_id else { continue };
+        if ambiguous_ids.contains(&id) {
+            continue;
+        }
+        old_by_id.insert(id, idx);
+    }
+    let mut new_by_id: HashMap<u32, usize> = HashMap::new();
+    for (idx, meta) in new_metas.iter().enumerate() {
+        let Some(id) = meta.sheet_id else { continue };
+        if ambiguous_ids.contains(&id) {
+            continue;
+        }
+        new_by_id.insert(id, idx);
+    }
+
+    for (id, &old_idx) in &old_by_id {
+        let Some(&new_idx) = new_by_id.get(id) else {
+            continue;
+        };
+
+        old_consumed[old_idx] = true;
+        new_consumed[new_idx] = true;
+
+        let old_target = &old_metas[old_idx].target;
+        let new_target = &new_metas[new_idx].target;
+
+        if !shared_same {
+            old_parse.insert(old_target.clone());
+            new_parse.insert(new_target.clone());
+            continue;
+        }
+
+        if old_parse.contains(old_target) || new_parse.contains(new_target) {
+            continue;
+        }
+
+        let old_fp = old_container.file_fingerprint_checked(old_target)?;
+        let new_fp = new_container.file_fingerprint_checked(new_target)?;
+        if old_fp != new_fp {
+            old_parse.insert(old_target.clone());
+            new_parse.insert(new_target.clone());
+        }
+    }
+
+    let mut old_by_name: HashMap<&str, usize> = HashMap::new();
+    for (idx, meta) in old_metas.iter().enumerate() {
+        if old_consumed[idx] {
+            continue;
+        }
+        if ambiguous_names.contains(&meta.name_lower) {
+            continue;
+        }
+        old_by_name.insert(meta.name_lower.as_str(), idx);
+    }
+
+    let mut new_by_name: HashMap<&str, usize> = HashMap::new();
+    for (idx, meta) in new_metas.iter().enumerate() {
+        if new_consumed[idx] {
+            continue;
+        }
+        if ambiguous_names.contains(&meta.name_lower) {
+            continue;
+        }
+        new_by_name.insert(meta.name_lower.as_str(), idx);
+    }
+
+    for (name, &old_idx) in &old_by_name {
+        let Some(&new_idx) = new_by_name.get(name) else {
+            continue;
+        };
+
+        let old_target = &old_metas[old_idx].target;
+        let new_target = &new_metas[new_idx].target;
+
+        if !shared_same {
+            old_parse.insert(old_target.clone());
+            new_parse.insert(new_target.clone());
+            continue;
+        }
+
+        if old_parse.contains(old_target) || new_parse.contains(new_target) {
+            continue;
+        }
+
+        let old_fp = old_container.file_fingerprint_checked(old_target)?;
+        let new_fp = new_container.file_fingerprint_checked(new_target)?;
+        if old_fp != new_fp {
+            old_parse.insert(old_target.clone());
+            new_parse.insert(new_target.clone());
+        }
+    }
+
+    Ok((old_parse, new_parse))
+}
+
+#[cfg(feature = "excel-open-xml")]
+fn open_workbook_package_from_container_with_grid_filter(
+    container: &mut crate::container::OpcContainer,
+    pool: &mut StringPool,
+    grid_targets_to_parse: &HashSet<String>,
+) -> Result<WorkbookPackage, crate::excel_open_xml::PackageError> {
+    #[cfg(feature = "perf-metrics")]
+    let total_start = Instant::now();
+    let workbook = crate::excel_open_xml::open_workbook_from_container_with_grid_filter(
+        container,
+        pool,
+        Some(grid_targets_to_parse),
+    )?;
+
+    let raw = crate::excel_open_xml::open_data_mashup_from_container(container)?;
+    let data_mashup = match raw {
+        Some(raw) => Some(crate::datamashup::build_data_mashup(&raw)?),
+        None => None,
+    };
+
+    let vba_modules = crate::excel_open_xml::open_vba_modules_from_container(container, pool)?;
+
+    #[cfg(feature = "perf-metrics")]
+    let parse_time_ms = total_start.elapsed().as_millis() as u64;
+
+    Ok(WorkbookPackage {
+        workbook,
+        data_mashup,
+        vba_modules,
+        #[cfg(feature = "perf-metrics")]
+        parse_time_ms,
+    })
 }
 
 impl WorkbookPackage {
@@ -190,6 +478,125 @@ impl WorkbookPackage {
                 #[cfg(feature = "perf-metrics")]
                 parse_time_ms,
             })
+        })
+    }
+
+    #[cfg(feature = "excel-open-xml")]
+    /// Stream a workbook diff directly from two Open XML containers, skipping unchanged sheets
+    /// based on ZIP central-directory fingerprints.
+    ///
+    /// This avoids fully parsing both workbooks up-front and can be orders of magnitude faster
+    /// for mostly-identical comparisons.
+    pub fn diff_openxml_streaming_fast<S: DiffSink>(
+        old_reader: impl std::io::Read + std::io::Seek + 'static,
+        new_reader: impl std::io::Read + std::io::Seek + 'static,
+        config: &DiffConfig,
+        sink: &mut S,
+    ) -> Result<DiffSummary, OpenXmlDiffError> {
+        Self::diff_openxml_streaming_fast_with_limits_and_progress(
+            old_reader,
+            new_reader,
+            crate::ContainerLimits::default(),
+            config,
+            sink,
+            &crate::NoProgress,
+        )
+    }
+
+    #[cfg(feature = "excel-open-xml")]
+    pub fn diff_openxml_streaming_fast_with_progress<S: DiffSink>(
+        old_reader: impl std::io::Read + std::io::Seek + 'static,
+        new_reader: impl std::io::Read + std::io::Seek + 'static,
+        config: &DiffConfig,
+        sink: &mut S,
+        progress: &dyn ProgressCallback,
+    ) -> Result<DiffSummary, OpenXmlDiffError> {
+        Self::diff_openxml_streaming_fast_with_limits_and_progress(
+            old_reader,
+            new_reader,
+            crate::ContainerLimits::default(),
+            config,
+            sink,
+            progress,
+        )
+    }
+
+    #[cfg(feature = "excel-open-xml")]
+    pub fn diff_openxml_streaming_fast_with_limits<S: DiffSink>(
+        old_reader: impl std::io::Read + std::io::Seek + 'static,
+        new_reader: impl std::io::Read + std::io::Seek + 'static,
+        limits: crate::ContainerLimits,
+        config: &DiffConfig,
+        sink: &mut S,
+    ) -> Result<DiffSummary, OpenXmlDiffError> {
+        Self::diff_openxml_streaming_fast_with_limits_and_progress(
+            old_reader,
+            new_reader,
+            limits,
+            config,
+            sink,
+            &crate::NoProgress,
+        )
+    }
+
+    #[cfg(feature = "excel-open-xml")]
+    pub fn diff_openxml_streaming_fast_with_limits_and_progress<S: DiffSink>(
+        old_reader: impl std::io::Read + std::io::Seek + 'static,
+        new_reader: impl std::io::Read + std::io::Seek + 'static,
+        limits: crate::ContainerLimits,
+        config: &DiffConfig,
+        sink: &mut S,
+        progress: &dyn ProgressCallback,
+    ) -> Result<DiffSummary, OpenXmlDiffError> {
+        crate::with_default_session(|session| {
+            let mut old_container = crate::container::OpcContainer::open_from_reader_with_limits(
+                old_reader,
+                limits,
+            )
+            .map_err(crate::excel_open_xml::PackageError::from)?;
+            let mut new_container = crate::container::OpcContainer::open_from_reader_with_limits(
+                new_reader,
+                limits,
+            )
+            .map_err(crate::excel_open_xml::PackageError::from)?;
+
+            progress.on_progress("parse", 0.0);
+            #[cfg(feature = "perf-metrics")]
+            let fingerprint_started = Instant::now();
+            let (old_grid_targets, new_grid_targets) =
+                compute_sheet_grid_parse_targets(&mut old_container, &mut new_container)?;
+            #[cfg(feature = "perf-metrics")]
+            let fingerprint_ms = fingerprint_started.elapsed().as_millis() as u64;
+
+            let old_pkg = open_workbook_package_from_container_with_grid_filter(
+                &mut old_container,
+                &mut session.strings,
+                &old_grid_targets,
+            )?;
+            let new_pkg = open_workbook_package_from_container_with_grid_filter(
+                &mut new_container,
+                &mut session.strings,
+                &new_grid_targets,
+            )?;
+            progress.on_progress("parse", 1.0);
+
+            #[allow(unused_mut)]
+            let mut summary = old_pkg.diff_streaming_with_progress_with_pool(
+                &new_pkg,
+                &mut session.strings,
+                config,
+                sink,
+                progress,
+            )?;
+
+            #[cfg(feature = "perf-metrics")]
+            if let Some(metrics) = summary.metrics.as_mut() {
+                metrics.parse_time_ms = metrics.parse_time_ms.saturating_add(fingerprint_ms);
+                metrics.total_time_ms = metrics.total_time_ms.saturating_add(fingerprint_ms);
+                metrics.diff_time_ms = metrics.total_time_ms.saturating_sub(metrics.parse_time_ms);
+            }
+
+            Ok(summary)
         })
     }
 

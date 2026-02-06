@@ -11,16 +11,16 @@ use crate::datamashup_framing::{
 use crate::error_codes;
 use crate::grid_parser::{
     GridParseError, parse_defined_names, parse_relationships, parse_relationships_all,
-    parse_shared_strings, parse_sheet_xml_with_drawing_rids, parse_workbook_xml,
-    resolve_sheet_target,
+    parse_relationship_targets_by_type_contains, parse_shared_strings, parse_sheet_xml,
+    parse_workbook_xml, resolve_sheet_target,
 };
 #[cfg(feature = "vba")]
 use crate::vba::VbaModuleType;
 use crate::string_pool::StringId;
 use crate::string_pool::StringPool;
 use crate::vba::VbaModule;
-use crate::workbook::{ChartInfo, ChartObject, Sheet, SheetKind, Workbook};
-use std::collections::HashMap;
+use crate::workbook::{ChartInfo, ChartObject, Grid, Sheet, SheetKind, Workbook};
+use std::collections::{HashMap, HashSet};
 #[cfg(feature = "std-fs")]
 use std::path::Path;
 use std::time::Instant;
@@ -150,11 +150,24 @@ pub(crate) fn open_workbook_from_container(
     container: &mut OpcContainer,
     pool: &mut StringPool,
 ) -> Result<Workbook, PackageError> {
+    open_workbook_from_container_with_grid_filter(container, pool, None)
+}
+
+pub(crate) fn open_workbook_from_container_with_grid_filter(
+    container: &mut OpcContainer,
+    pool: &mut StringPool,
+    grid_targets_to_parse: Option<&HashSet<String>>,
+) -> Result<Workbook, PackageError> {
     let profile_enabled = open_profile_enabled();
     let total_start = Instant::now();
     let mut profile = OpenWorkbookProfile::default();
 
-    let shared_strings_bytes = {
+    let wants_any_grids = grid_targets_to_parse
+        .as_ref()
+        .map(|targets| !targets.is_empty())
+        .unwrap_or(true);
+
+    let shared_strings_bytes = if wants_any_grids {
         let started = Instant::now();
         let payload = container.read_file_optional_checked("xl/sharedStrings.xml")?;
         if profile_enabled {
@@ -168,20 +181,26 @@ pub(crate) fn open_workbook_from_container(
             }
         }
         payload
+    } else {
+        None
     };
-    let shared_strings = match shared_strings_bytes {
-        Some(bytes) => {
-            let started = Instant::now();
-            let parsed =
-                parse_shared_strings(&bytes, pool).map_err(|e| wrap_grid_parse_error(e, "xl/sharedStrings.xml"))?;
-            if profile_enabled {
-                profile.shared_strings_parse_ms = profile
-                    .shared_strings_parse_ms
-                    .saturating_add(started.elapsed().as_millis() as u64);
+    let shared_strings = if wants_any_grids {
+        match shared_strings_bytes {
+            Some(bytes) => {
+                let started = Instant::now();
+                let parsed = parse_shared_strings(&bytes, pool)
+                    .map_err(|e| wrap_grid_parse_error(e, "xl/sharedStrings.xml"))?;
+                if profile_enabled {
+                    profile.shared_strings_parse_ms = profile
+                        .shared_strings_parse_ms
+                        .saturating_add(started.elapsed().as_millis() as u64);
+                }
+                parsed
             }
-            parsed
+            None => Vec::new(),
         }
-        None => Vec::new(),
+    } else {
+        Vec::new()
     };
 
     let workbook_bytes = {
@@ -275,84 +294,94 @@ pub(crate) fn open_workbook_from_container(
     let mut sheet_ir = Vec::with_capacity(sheets.len());
     for (idx, sheet) in sheets.iter().enumerate() {
         let target = resolve_sheet_target(sheet, &relationships, idx);
-        let sheet_bytes = {
-            let started = Instant::now();
-            let payload = container.read_file_checked(&target).map_err(|e| match e {
-                ContainerError::FileNotFound { .. } => PackageError::MissingPart {
-                    path: target.clone(),
-                },
-                other => PackageError::ReadPartFailed {
-                    part: target.clone(),
-                    message: other.to_string(),
-                },
-            })?;
-            if profile_enabled {
-                profile.sheet_read_ms = profile
-                    .sheet_read_ms
-                    .saturating_add(started.elapsed().as_millis() as u64);
-                profile.sheet_xml_bytes = profile
-                    .sheet_xml_bytes
-                    .saturating_add(payload.len() as u64);
-            }
-            payload
-        };
+        let parse_grid = grid_targets_to_parse
+            .as_ref()
+            .map(|targets| targets.contains(&target))
+            .unwrap_or(true);
 
         let sheet_name_id = pool.intern(&sheet.name);
 
-        let parsed_sheet = {
+        let grid = if parse_grid {
+            let sheet_bytes = {
+                let started = Instant::now();
+                let payload = container.read_file_checked(&target).map_err(|e| match e {
+                    ContainerError::FileNotFound { .. } => PackageError::MissingPart {
+                        path: target.clone(),
+                    },
+                    other => PackageError::ReadPartFailed {
+                        part: target.clone(),
+                        message: other.to_string(),
+                    },
+                })?;
+                if profile_enabled {
+                    profile.sheet_read_ms = profile
+                        .sheet_read_ms
+                        .saturating_add(started.elapsed().as_millis() as u64);
+                    profile.sheet_xml_bytes = profile
+                        .sheet_xml_bytes
+                        .saturating_add(payload.len() as u64);
+                }
+                payload
+            };
+
             let started = Instant::now();
-            let parsed = parse_sheet_xml_with_drawing_rids(&sheet_bytes, &shared_strings, pool)
+            let parsed_grid = parse_sheet_xml(&sheet_bytes, &shared_strings, pool)
                 .map_err(|e| wrap_grid_parse_error(e, &target))?;
             if profile_enabled {
                 profile.sheet_parse_ms = profile
                     .sheet_parse_ms
                     .saturating_add(started.elapsed().as_millis() as u64);
             }
-            parsed
+            parsed_grid
+        } else {
+            Grid::new(0, 0)
         };
 
         sheet_ir.push(Sheet {
             name: sheet_name_id,
             workbook_sheet_id: sheet.sheet_id,
             kind: SheetKind::Worksheet,
-            grid: parsed_sheet.grid,
+            grid,
         });
 
-        for drawing_rid in parsed_sheet.drawing_rids {
-            let sheet_rels_path = rels_part_path(&target);
-            let sheet_rels_bytes = match {
-                let started = Instant::now();
-                let payload = read_optional_part(container, &sheet_rels_path)?;
-                if profile_enabled {
-                    profile.sheet_rels_read_ms = profile
-                        .sheet_rels_read_ms
-                        .saturating_add(started.elapsed().as_millis() as u64);
-                    if let Some(bytes) = payload.as_ref() {
-                        profile.sheet_rels_bytes = profile
-                            .sheet_rels_bytes
-                            .saturating_add(bytes.len() as u64);
-                    }
+        let sheet_rels_path = rels_part_path(&target);
+        let sheet_rels_bytes = match {
+            let started = Instant::now();
+            let payload = read_optional_part(container, &sheet_rels_path)?;
+            if profile_enabled {
+                profile.sheet_rels_read_ms = profile
+                    .sheet_rels_read_ms
+                    .saturating_add(started.elapsed().as_millis() as u64);
+                if let Some(bytes) = payload.as_ref() {
+                    profile.sheet_rels_bytes = profile
+                        .sheet_rels_bytes
+                        .saturating_add(bytes.len() as u64);
                 }
-                payload
-            } {
-                Some(bytes) => bytes,
-                None => continue,
-            };
-            let sheet_rels = {
-                let started = Instant::now();
-                let parsed = parse_relationships_all(&sheet_rels_bytes)
-                    .map_err(|e| wrap_grid_parse_error(e, &sheet_rels_path))?;
-                if profile_enabled {
-                    profile.sheet_rels_parse_ms = profile
-                        .sheet_rels_parse_ms
-                        .saturating_add(started.elapsed().as_millis() as u64);
-                }
-                parsed
-            };
-            let Some(drawing_target) = sheet_rels.get(&drawing_rid) else {
-                continue;
-            };
-            let drawing_part_path = resolve_target_against_part(&target, drawing_target);
+            }
+            payload
+        } {
+            Some(bytes) => bytes,
+            None => continue,
+        };
+
+        let drawing_targets = {
+            let started = Instant::now();
+            let parsed = parse_relationship_targets_by_type_contains(&sheet_rels_bytes, "drawing")
+                .map_err(|e| wrap_grid_parse_error(e, &sheet_rels_path))?;
+            if profile_enabled {
+                profile.sheet_rels_parse_ms = profile
+                    .sheet_rels_parse_ms
+                    .saturating_add(started.elapsed().as_millis() as u64);
+            }
+            parsed
+        };
+
+        if drawing_targets.is_empty() {
+            continue;
+        }
+
+        for drawing_target in drawing_targets {
+            let drawing_part_path = resolve_target_against_part(&target, &drawing_target);
 
             let drawing_bytes = match {
                 let started = Instant::now();
@@ -762,7 +791,7 @@ fn hash_xml_part(xml: &[u8]) -> u128 {
     hasher.digest128()
 }
 
-fn wrap_grid_parse_error(err: GridParseError, part: &str) -> PackageError {
+pub(crate) fn wrap_grid_parse_error(err: GridParseError, part: &str) -> PackageError {
     match err {
         GridParseError::XmlErrorAt { line, column, message } => PackageError::InvalidXml {
             part: part.to_string(),

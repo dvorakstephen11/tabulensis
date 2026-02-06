@@ -7,7 +7,7 @@ use excel_diff::perf::DiffMetrics;
 use excel_diff::{CallbackSink, ContainerLimits, DiffConfig, WorkbookPackage};
 use std::fs::File;
 
-fn open_fixture_with_size(name: &str) -> (WorkbookPackage, u64) {
+fn read_fixture_with_size(name: &str) -> (Vec<u8>, u64) {
     let path = fixture_path(name);
     let bytes = std::fs::metadata(&path)
         .map(|meta| meta.len())
@@ -22,16 +22,7 @@ fn open_fixture_with_size(name: &str) -> (WorkbookPackage, u64) {
         panic!("failed to read fixture {}: {e}", path.display());
     });
 
-    let limits = ContainerLimits {
-        max_entries: 10_000,
-        max_part_uncompressed_bytes: 512 * 1024 * 1024,
-        max_total_uncompressed_bytes: 1024 * 1024 * 1024,
-    };
-    let cursor = std::io::Cursor::new(data);
-    let pkg = WorkbookPackage::open_with_limits(cursor, limits).unwrap_or_else(|e| {
-        panic!("failed to parse fixture {}: {e}", path.display());
-    });
-    (pkg, bytes)
+    (data, bytes)
 }
 
 fn log_perf_metric(name: &str, metrics: &DiffMetrics, old_bytes: u64, new_bytes: u64) {
@@ -65,15 +56,26 @@ fn log_perf_metric(name: &str, metrics: &DiffMetrics, old_bytes: u64, new_bytes:
 }
 
 fn run_e2e_case(name: &str, old_name: &str, new_name: &str, expect_ops: bool) {
-    let (old_pkg, old_bytes) = open_fixture_with_size(old_name);
-    let (new_pkg, new_bytes) = open_fixture_with_size(new_name);
+    let (old_data, old_bytes) = read_fixture_with_size(old_name);
+    let (new_data, new_bytes) = read_fixture_with_size(new_name);
+
+    let limits = ContainerLimits {
+        max_entries: 10_000,
+        max_part_uncompressed_bytes: 512 * 1024 * 1024,
+        max_total_uncompressed_bytes: 1024 * 1024 * 1024,
+    };
 
     let mut op_count = 0usize;
     let summary = {
         let mut sink = CallbackSink::new(|_op| op_count += 1);
-        old_pkg
-            .diff_streaming(&new_pkg, &DiffConfig::default(), &mut sink)
-            .expect("diff_streaming should succeed")
+        WorkbookPackage::diff_openxml_streaming_fast_with_limits(
+            std::io::Cursor::new(old_data),
+            std::io::Cursor::new(new_data),
+            limits,
+            &DiffConfig::default(),
+            &mut sink,
+        )
+        .expect("diff_openxml_streaming_fast_with_limits should succeed")
     };
 
     assert!(summary.complete, "expected streaming diff to complete");
@@ -89,10 +91,14 @@ fn run_e2e_case(name: &str, old_name: &str, new_name: &str, expect_ops: bool) {
     }
 
     let metrics = summary.metrics.expect("expected perf metrics");
-    assert!(
-        metrics.parse_time_ms > 0,
-        "parse_time_ms should be non-zero for e2e fixtures"
-    );
+    // With the OpenXML "fast diff" path, identical workbooks can legitimately skip parsing sheet XML
+    // entirely and (after ms rounding) report a zero parse time.
+    if expect_ops {
+        assert!(
+            metrics.parse_time_ms > 0,
+            "parse_time_ms should be non-zero for non-identical e2e fixtures"
+        );
+    }
     assert!(
         metrics.total_time_ms >= metrics.parse_time_ms,
         "total_time_ms should include parse_time_ms"

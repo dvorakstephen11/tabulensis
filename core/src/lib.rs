@@ -259,7 +259,7 @@ pub mod advanced {
 pub use addressing::{AddressParseError, address_to_index, index_to_address};
 pub use capabilities::{EngineFeatures, engine_features};
 pub use config::{DiffConfig, DiffConfigBuilder, LimitBehavior, SemanticNoisePolicy};
-pub use container::{ContainerError, ContainerLimits, OpcContainer, ZipContainer};
+pub use container::{ContainerError, ContainerLimits, OpcContainer, ZipContainer, ZipEntryFingerprint};
 #[doc(hidden)]
 pub use datamashup::parse_metadata;
 pub use datamashup::{
@@ -335,7 +335,7 @@ pub use output::json::diff_report_to_cell_diffs;
 pub use output::json::diff_workbooks_to_json;
 pub use output::json::{CellDiff, serialize_cell_diffs, serialize_diff_report};
 pub use output::json_lines::JsonLinesSink;
-pub use package::{PbixPackage, WorkbookPackage};
+pub use package::{OpenXmlDiffError, PbixPackage, WorkbookPackage};
 pub use progress::{NoProgress, ProgressCallback};
 pub use policy::{AUTO_STREAM_CELL_THRESHOLD, should_use_large_mode};
 pub use session::DiffSession;

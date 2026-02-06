@@ -1,5 +1,3 @@
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
 use std::fs::File;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -15,6 +13,11 @@ use excel_diff::{
 use serde::Serialize;
 
 use crate::events::{ProgressEvent, ProgressTx};
+
+#[cfg(test)]
+use std::collections::hash_map::Entry;
+#[cfg(test)]
+use std::collections::HashMap;
 
 #[cfg(all(not(feature = "custom-lru"), not(feature = "lru-crate")))]
 compile_error!("Enable feature `lru-crate` or `custom-lru` for desktop_backend.");
@@ -33,6 +36,7 @@ use ui_payload::{build_payload_from_pbix_report, limits_from_config, DiffOptions
 const WORKBOOK_CACHE_CAPACITY: usize = 4;
 const PBIX_CACHE_CAPACITY: usize = 2;
 const DIFF_KEY_CACHE_CAPACITY: usize = 16;
+const AUTO_STREAM_BYTES_THRESHOLD: u64 = 2_000_000;
 
 #[cfg(feature = "arc-cache")]
 type WorkbookHandle = Arc<WorkbookPackage>;
@@ -508,11 +512,11 @@ impl EngineState {
 
         match old_kind {
             ui_payload::HostKind::Workbook => {
-                let (old_key, old_pkg) = self.open_workbook_cached_with_key(&old_path, trusted)?;
-                let (new_key, new_pkg) = self.open_workbook_cached_with_key(&new_path, trusted)?;
+                let old_key = cache_key(&old_path, trusted)?;
+                let new_key = cache_key(&new_path, trusted)?;
 
-                let estimated_cells = estimate_diff_cell_volume(&old_pkg.workbook, &new_pkg.workbook);
-                let mode = if should_use_large_mode(estimated_cells, &config) {
+                // Avoid paying full workbook parse cost just to decide mode.
+                let mode = if old_key.size.max(new_key.size) >= AUTO_STREAM_BYTES_THRESHOLD {
                     DiffMode::Large
                 } else {
                     DiffMode::Payload
@@ -529,10 +533,13 @@ impl EngineState {
                         trusted,
                     )
                     .map_err(map_store_error)?;
-                self.store_diff_keys(&diff_id, DiffCacheKind::Workbook, old_key, new_key);
+                self.store_diff_keys(&diff_id, DiffCacheKind::Workbook, old_key.clone(), new_key.clone());
 
                 match mode {
                     DiffMode::Payload => {
+                        let old_pkg = self.get_or_open_workbook_by_key(&old_key, &old_path, trusted)?;
+                        let new_pkg = self.get_or_open_workbook_by_key(&new_key, &new_path, trusted)?;
+
                         emit_progress(&request.progress, request.run_id, "diff", "Diffing workbooks...");
                         let progress = EngineProgress::new(request.progress.clone(), request.run_id, request.cancel.clone());
                         let report = match run_diff_with_progress(
@@ -574,11 +581,33 @@ impl EngineState {
                         let mut sink = OpStoreSink::new(conn, diff_id.clone())
                             .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
 
+                        let old_file = File::open(&old_path).map_err(|e| DiffErrorPayload::new("io", e.to_string(), false))?;
+                        let new_file = File::open(&new_path).map_err(|e| DiffErrorPayload::new("io", e.to_string(), false))?;
+
                         let summary = match run_diff_with_progress(
-                            || old_pkg.diff_streaming_with_progress(&new_pkg, &config, &mut sink, &progress),
+                            || {
+                                if trusted {
+                                    WorkbookPackage::diff_openxml_streaming_fast_with_limits_and_progress(
+                                        old_file,
+                                        new_file,
+                                        trusted_limits(),
+                                        &config,
+                                        &mut sink,
+                                        &progress,
+                                    )
+                                } else {
+                                    WorkbookPackage::diff_openxml_streaming_fast_with_progress(
+                                        old_file,
+                                        new_file,
+                                        &config,
+                                        &mut sink,
+                                        &progress,
+                                    )
+                                }
+                            },
                             &request.cancel,
                         ) {
-                            Ok(result) => result.map_err(diff_error_from_diff),
+                            Ok(result) => result.map_err(diff_error_from_openxml),
                             Err(err) => Err(err),
                         };
 
@@ -1093,6 +1122,7 @@ fn render_sheet_cell(
     ui_payload::SheetCell { row, col, value, formula }
 }
 
+#[cfg(test)]
 fn estimate_diff_cell_volume(old: &excel_diff::Workbook, new: &excel_diff::Workbook) -> u64 {
     excel_diff::with_default_session(|session| {
         let mut max_counts: HashMap<(String, excel_diff::SheetKind), u64> = HashMap::new();
@@ -1131,6 +1161,14 @@ fn map_package_error(err: excel_diff::PackageError) -> DiffErrorPayload {
             | excel_diff::PackageError::Container(ContainerError::TotalTooLarge { .. })
     );
     DiffErrorPayload::new(err.code(), err.to_string(), trusted_retry)
+}
+
+fn diff_error_from_openxml(err: excel_diff::OpenXmlDiffError) -> DiffErrorPayload {
+    match err {
+        excel_diff::OpenXmlDiffError::Package(err) => map_package_error(err),
+        excel_diff::OpenXmlDiffError::Diff(err) => diff_error_from_diff(err),
+        other => DiffErrorPayload::new("openxml", other.to_string(), false),
+    }
 }
 
 fn run_diff_with_progress<F, T>(f: F, cancel: &AtomicBool) -> Result<T, DiffErrorPayload>

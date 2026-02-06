@@ -57,6 +57,7 @@ pub struct SheetDescriptor {
 #[derive(Debug)]
 pub struct ParsedSheetXml {
     pub grid: Grid,
+    #[allow(dead_code)]
     pub drawing_rids: Vec<String>,
 }
 
@@ -692,6 +693,57 @@ pub fn parse_relationships_all(xml: &[u8]) -> Result<HashMap<String, String>, Gr
     Ok(map)
 }
 
+pub fn parse_relationship_targets_by_type_contains(
+    xml: &[u8],
+    needle: &str,
+) -> Result<Vec<String>, GridParseError> {
+    let mut reader = Reader::from_reader(xml);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    let mut targets = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == b"Relationship" => {
+                let mut target = None;
+                let mut rel_type = None;
+                for attr in e.attributes() {
+                    let attr = attr.map_err(|e| xml_msg_err(&reader, xml, e.to_string()))?;
+                    match attr.key.as_ref() {
+                        b"Target" => {
+                            target = Some(
+                                attr.unescape_value()
+                                    .map_err(|e| xml_err(&reader, xml, e))?
+                                    .into_owned(),
+                            )
+                        }
+                        b"Type" => {
+                            rel_type = Some(
+                                attr.unescape_value()
+                                    .map_err(|e| xml_err(&reader, xml, e))?
+                                    .into_owned(),
+                            )
+                        }
+                        _ => {}
+                    }
+                }
+
+                if let (Some(target), Some(rel_type)) = (target, rel_type)
+                    && rel_type.contains(needle)
+                {
+                    targets.push(target);
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(xml_err(&reader, xml, e)),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(targets)
+}
+
 pub fn resolve_sheet_target(
     sheet: &SheetDescriptor,
     relationships: &HashMap<String, String>,
@@ -719,6 +771,7 @@ fn normalize_target(target: &str) -> String {
     }
 }
 
+#[allow(dead_code)]
 pub fn parse_sheet_xml_with_drawing_rids(
     xml: &[u8],
     shared_strings: &[StringId],
@@ -731,6 +784,21 @@ pub fn parse_sheet_xml_with_drawing_rids(
     #[cfg(not(feature = "custom-xml"))]
     {
         parse_sheet_xml_internal_quick_xml(xml, shared_strings, pool, true)
+    }
+}
+
+pub fn parse_sheet_xml(
+    xml: &[u8],
+    shared_strings: &[StringId],
+    pool: &mut StringPool,
+) -> Result<Grid, GridParseError> {
+    #[cfg(feature = "custom-xml")]
+    {
+        Ok(parse_sheet_xml_internal_custom(xml, shared_strings, pool, false)?.grid)
+    }
+    #[cfg(not(feature = "custom-xml"))]
+    {
+        Ok(parse_sheet_xml_internal_quick_xml(xml, shared_strings, pool, false)?.grid)
     }
 }
 
@@ -2285,6 +2353,7 @@ fn parse_cell_type_tag_str(raw: &str) -> Option<CellTypeTag> {
     }
 }
 
+#[cfg(test)]
 fn trim_cell_text(raw: &str) -> &str {
     let bytes = raw.as_bytes();
     if bytes.is_empty() {
@@ -2315,6 +2384,7 @@ fn trim_cell_text(raw: &str) -> &str {
     unsafe { std::str::from_utf8_unchecked(&bytes[start..end]) }
 }
 
+#[cfg(test)]
 fn convert_value(
     value_text: Option<&str>,
     cell_type: Option<CellTypeTag>,

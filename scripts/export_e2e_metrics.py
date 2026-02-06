@@ -36,7 +36,9 @@ E2E_THRESHOLDS = {
         "max_total_time_s": 20,
         "max_parse_time_s": 15,
         "max_diff_time_s": 10,
-        "max_peak_memory_bytes": 66_108_831,
+        # End-to-end OpenXML streaming diff now includes the parsing phase, so peak memory can
+        # legitimately include temporary sheet XML buffers (especially on "noise" fixtures).
+        "max_peak_memory_bytes": 85_000_000,
     },
     "e2e_p3_repetitive": {
         "max_total_time_s": 30,

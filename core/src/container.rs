@@ -17,6 +17,16 @@ pub struct ContainerLimits {
     pub max_total_uncompressed_bytes: u64,
 }
 
+/// ZIP central-directory fingerprint for an entry (uncompressed data).
+///
+/// This can be used to cheaply detect identical parts across two OPC packages without
+/// reading/decompressing the part contents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ZipEntryFingerprint {
+    pub crc32: u32,
+    pub size: u64,
+}
+
 impl Default for ContainerLimits {
     fn default() -> Self {
         Self {
@@ -140,6 +150,55 @@ impl ZipContainer {
         let mut buf = Vec::new();
         file.read_to_end(&mut buf)?;
         Ok(buf)
+    }
+
+    pub fn file_fingerprint(&mut self, name: &str) -> Result<ZipEntryFingerprint, ZipError> {
+        let file = self.archive.by_name(name)?;
+        Ok(ZipEntryFingerprint {
+            crc32: file.crc32(),
+            size: file.size(),
+        })
+    }
+
+    pub fn file_fingerprint_checked(&mut self, name: &str) -> Result<ZipEntryFingerprint, ContainerError> {
+        let file = self.archive.by_name(name).map_err(|e| match e {
+            ZipError::FileNotFound => ContainerError::FileNotFound {
+                path: name.to_string(),
+            },
+            ZipError::Io(io_err) => ContainerError::ZipRead {
+                path: name.to_string(),
+                reason: io_err.to_string(),
+            },
+            other => ContainerError::ZipRead {
+                path: name.to_string(),
+                reason: other.to_string(),
+            },
+        })?;
+
+        let size = file.size();
+        if size > self.limits.max_part_uncompressed_bytes {
+            return Err(ContainerError::PartTooLarge {
+                path: name.to_string(),
+                size,
+                limit: self.limits.max_part_uncompressed_bytes,
+            });
+        }
+
+        Ok(ZipEntryFingerprint {
+            crc32: file.crc32(),
+            size,
+        })
+    }
+
+    pub fn file_fingerprint_optional_checked(
+        &mut self,
+        name: &str,
+    ) -> Result<Option<ZipEntryFingerprint>, ContainerError> {
+        match self.file_fingerprint_checked(name) {
+            Ok(fp) => Ok(Some(fp)),
+            Err(ContainerError::FileNotFound { .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     pub fn read_file_checked(&mut self, name: &str) -> Result<Vec<u8>, ContainerError> {
@@ -289,6 +348,21 @@ impl OpcContainer {
 
     pub fn read_file(&mut self, name: &str) -> Result<Vec<u8>, ZipError> {
         self.inner.read_file(name)
+    }
+
+    pub fn file_fingerprint(&mut self, name: &str) -> Result<ZipEntryFingerprint, ZipError> {
+        self.inner.file_fingerprint(name)
+    }
+
+    pub fn file_fingerprint_checked(&mut self, name: &str) -> Result<ZipEntryFingerprint, ContainerError> {
+        self.inner.file_fingerprint_checked(name)
+    }
+
+    pub fn file_fingerprint_optional_checked(
+        &mut self,
+        name: &str,
+    ) -> Result<Option<ZipEntryFingerprint>, ContainerError> {
+        self.inner.file_fingerprint_optional_checked(name)
     }
 
     pub fn read_file_checked(&mut self, name: &str) -> Result<Vec<u8>, ContainerError> {
