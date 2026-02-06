@@ -1,0 +1,182 @@
+{
+  "cycle": "2026-02-05_224626",
+  "config": {
+    "runs": 5,
+    "aggregation": "median",
+    "parallel": true,
+    "skip_fixtures": true
+  },
+  "pre": {
+    "timestamp": "2026-02-05T22:49:05.956605+00:00",
+    "git_commit": "a3a19be67121",
+    "git_branch": "20260203_perf_improvement",
+    "fullscale_json": "benchmarks/perf_cycles/2026-02-05_224626/pre_fullscale.json",
+    "e2e_json": "benchmarks/perf_cycles/2026-02-05_224626/pre_e2e.json",
+    "fullscale_run_json": [
+      "benchmarks/perf_cycles/2026-02-05_224626/pre_fullscale_run1.json",
+      "benchmarks/perf_cycles/2026-02-05_224626/pre_fullscale_run2.json",
+      "benchmarks/perf_cycles/2026-02-05_224626/pre_fullscale_run3.json",
+      "benchmarks/perf_cycles/2026-02-05_224626/pre_fullscale_run4.json",
+      "benchmarks/perf_cycles/2026-02-05_224626/pre_fullscale_run5.json"
+    ],
+    "e2e_run_json": [
+      "benchmarks/perf_cycles/2026-02-05_224626/pre_e2e_run1.json",
+      "benchmarks/perf_cycles/2026-02-05_224626/pre_e2e_run2.json",
+      "benchmarks/perf_cycles/2026-02-05_224626/pre_e2e_run3.json",
+      "benchmarks/perf_cycles/2026-02-05_224626/pre_e2e_run4.json",
+      "benchmarks/perf_cycles/2026-02-05_224626/pre_e2e_run5.json"
+    ],
+    "runs": 5,
+    "aggregation": "median",
+    "parallel": true,
+    "skip_fixtures": true,
+    "dirty_worktree": true,
+    "dirty_paths_count": 4,
+    "dirty_paths_sample": [
+      "benchmarks/perf_cycles/2026-02-05_205312/",
+      "benchmarks/perf_cycles/2026-02-05_213657/",
+      "benchmarks/perf_cycles/2026-02-05_223828/",
+      "core/src/engine/move_mask.rs"
+    ],
+    "dirty_rust_paths": [
+      "core/src/engine/move_mask.rs"
+    ]
+  },
+  "post": {
+    "timestamp": "2026-02-05T22:53:40.028168+00:00",
+    "git_commit": "a3a19be67121",
+    "git_branch": "20260203_perf_improvement",
+    "fullscale_json": "benchmarks/perf_cycles/2026-02-05_224626/post_fullscale.json",
+    "e2e_json": "benchmarks/perf_cycles/2026-02-05_224626/post_e2e.json",
+    "fullscale_run_json": [
+      "benchmarks/perf_cycles/2026-02-05_224626/post_fullscale_run1.json",
+      "benchmarks/perf_cycles/2026-02-05_224626/post_fullscale_run2.json",
+      "benchmarks/perf_cycles/2026-02-05_224626/post_fullscale_run3.json",
+      "benchmarks/perf_cycles/2026-02-05_224626/post_fullscale_run4.json",
+      "benchmarks/perf_cycles/2026-02-05_224626/post_fullscale_run5.json"
+    ],
+    "e2e_run_json": [
+      "benchmarks/perf_cycles/2026-02-05_224626/post_e2e_run1.json",
+      "benchmarks/perf_cycles/2026-02-05_224626/post_e2e_run2.json",
+      "benchmarks/perf_cycles/2026-02-05_224626/post_e2e_run3.json",
+      "benchmarks/perf_cycles/2026-02-05_224626/post_e2e_run4.json",
+      "benchmarks/perf_cycles/2026-02-05_224626/post_e2e_run5.json"
+    ],
+    "runs": 5,
+    "aggregation": "median",
+    "parallel": true,
+    "skip_fixtures": true,
+    "dirty_worktree": true,
+    "dirty_paths_count": 5,
+    "dirty_paths_sample": [
+      "benchmarks/perf_cycles/2026-02-05_205312/",
+      "benchmarks/perf_cycles/2026-02-05_213657/",
+      "benchmarks/perf_cycles/2026-02-05_223828/",
+      "benchmarks/perf_cycles/2026-02-05_224626/",
+      "core/src/engine/move_mask.rs"
+    ],
+    "dirty_rust_paths": [
+      "core/src/engine/move_mask.rs"
+    ]
+  },
+  "fullscale": [
+    [
+      "`perf_50k_99_percent_blank`",
+      "31",
+      "30",
+      "-1 ms (-3.2%)"
+    ],
+    [
+      "`perf_50k_adversarial_repetitive`",
+      "20",
+      "22",
+      "+2 ms (+10.0%)"
+    ],
+    [
+      "`perf_50k_alignment_block_move`",
+      "260",
+      "264",
+      "+4 ms (+1.5%)"
+    ],
+    [
+      "`perf_50k_completely_different`",
+      "213",
+      "222",
+      "+9 ms (+4.2%)"
+    ],
+    [
+      "`perf_50k_dense_single_edit`",
+      "40",
+      "39",
+      "-1 ms (-2.5%)"
+    ],
+    [
+      "`perf_50k_identical`",
+      "14",
+      "12",
+      "-2 ms (-14.3%)"
+    ]
+  ],
+  "e2e": [
+    [
+      "`e2e_p1_dense`",
+      "2268",
+      "2253",
+      "-15 ms (-0.7%)",
+      "2260",
+      "2245",
+      "-15 ms (-0.7%)",
+      "9",
+      "9",
+      "+0 ms (+0.0%)"
+    ],
+    [
+      "`e2e_p2_noise`",
+      "911",
+      "924",
+      "+13 ms (+1.4%)",
+      "902",
+      "915",
+      "+13 ms (+1.4%)",
+      "9",
+      "9",
+      "+0 ms (+0.0%)"
+    ],
+    [
+      "`e2e_p3_repetitive`",
+      "2152",
+      "2322",
+      "+170 ms (+7.9%)",
+      "2132",
+      "2302",
+      "+170 ms (+8.0%)",
+      "20",
+      "19",
+      "-1 ms (-5.0%)"
+    ],
+    [
+      "`e2e_p4_sparse`",
+      "89",
+      "88",
+      "-1 ms (-1.1%)",
+      "64",
+      "64",
+      "+0 ms (+0.0%)",
+      "25",
+      "26",
+      "+1 ms (+4.0%)"
+    ],
+    [
+      "`e2e_p5_identical`",
+      "13113",
+      "13535",
+      "+422 ms (+3.2%)",
+      "13095",
+      "13517",
+      "+422 ms (+3.2%)",
+      "17",
+      "15",
+      "-2 ms (-11.8%)"
+    ]
+  ]
+}

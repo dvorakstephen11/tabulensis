@@ -1,0 +1,86 @@
+{
+  "cycle": "2026-02-05_213657",
+  "config": {
+    "runs": 1,
+    "aggregation": "median",
+    "parallel": true,
+    "skip_fixtures": true
+  },
+  "pre": {
+    "timestamp": "2026-02-05T21:37:30.954315+00:00",
+    "git_commit": "3c90b94aec14",
+    "git_branch": "20260203_perf_improvement",
+    "fullscale_json": "benchmarks/perf_cycles/2026-02-05_213657/pre_fullscale.json",
+    "e2e_json": "benchmarks/perf_cycles/2026-02-05_213657/pre_e2e.json",
+    "fullscale_run_json": [
+      "benchmarks/perf_cycles/2026-02-05_213657/pre_fullscale_run1.json"
+    ],
+    "e2e_run_json": [
+      "benchmarks/perf_cycles/2026-02-05_213657/pre_e2e_run1.json"
+    ],
+    "runs": 1,
+    "aggregation": "median",
+    "parallel": true,
+    "skip_fixtures": true,
+    "dirty_worktree": true,
+    "dirty_paths_count": 16,
+    "dirty_paths_sample": [
+      ".gitattributes",
+      ".github/workflows/ci.yml",
+      "AGENTS.md",
+      "README.md",
+      "benchmarks/README.md",
+      "benchmarks/perf_cycles/2026-02-05_205008/",
+      "benchmarks/perf_cycles/2026-02-05_205312/",
+      "benchmarks/perf_cycles/2026-02-05_211014/",
+      "benchmarks/perf_cycles/2026-02-05_211352/",
+      "docs/commands.txt",
+      "docs/perf_playbook.md",
+      "scripts/check_change_scope.py",
+      "scripts/check_perf_thresholds.py",
+      "scripts/export_e2e_metrics.py",
+      "scripts/perf_cycle.py",
+      "scripts/safe_rustfmt.py"
+    ],
+    "dirty_rust_paths": []
+  },
+  "post": {
+    "timestamp": "2026-02-05T21:38:09.408747+00:00",
+    "git_commit": "3c90b94aec14",
+    "git_branch": "20260203_perf_improvement",
+    "fullscale_json": "benchmarks/perf_cycles/2026-02-05_213657/post_fullscale.json",
+    "e2e_json": "benchmarks/perf_cycles/2026-02-05_213657/post_e2e.json",
+    "fullscale_run_json": [
+      "benchmarks/perf_cycles/2026-02-05_213657/post_fullscale_run1.json"
+    ],
+    "e2e_run_json": [
+      "benchmarks/perf_cycles/2026-02-05_213657/post_e2e_run1.json"
+    ],
+    "runs": 1,
+    "aggregation": "median",
+    "parallel": true,
+    "skip_fixtures": true,
+    "dirty_worktree": true,
+    "dirty_paths_count": 17,
+    "dirty_paths_sample": [
+      ".gitattributes",
+      ".github/workflows/ci.yml",
+      "AGENTS.md",
+      "README.md",
+      "benchmarks/README.md",
+      "benchmarks/perf_cycles/2026-02-05_205008/",
+      "benchmarks/perf_cycles/2026-02-05_205312/",
+      "benchmarks/perf_cycles/2026-02-05_211014/",
+      "benchmarks/perf_cycles/2026-02-05_211352/",
+      "benchmarks/perf_cycles/2026-02-05_213657/",
+      "docs/commands.txt",
+      "docs/perf_playbook.md",
+      "scripts/check_change_scope.py",
+      "scripts/check_perf_thresholds.py",
+      "scripts/export_e2e_metrics.py",
+      "scripts/perf_cycle.py",
+      "scripts/safe_rustfmt.py"
+    ],
+    "dirty_rust_paths": []
+  }
+}
