@@ -5,11 +5,10 @@
 
 use std::io::{Read, Seek};
 use thiserror::Error;
-use zip::result::ZipError;
 use zip::ZipArchive;
+use zip::result::ZipError;
 
 use crate::error_codes;
-use rustc_hash::FxHashMap;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ContainerLimits {
@@ -82,13 +81,14 @@ impl<T: Read + Seek> ReadSeek for T {}
 
 pub struct ZipContainer {
     archive: ZipArchive<Box<dyn ReadSeek>>,
-    name_to_index: FxHashMap<String, usize>,
     limits: ContainerLimits,
     total_read: u64,
 }
 
 impl ZipContainer {
-    pub fn open_from_reader<R: Read + Seek + 'static>(reader: R) -> Result<Self, ContainerError> {
+    pub fn open_from_reader<R: Read + Seek + 'static>(
+        reader: R,
+    ) -> Result<Self, ContainerError> {
         Self::open_from_reader_with_limits(reader, ContainerLimits::default())
     }
 
@@ -97,7 +97,7 @@ impl ZipContainer {
         limits: ContainerLimits,
     ) -> Result<Self, ContainerError> {
         let reader: Box<dyn ReadSeek> = Box::new(reader);
-        let mut archive = ZipArchive::new(reader).map_err(|err| match err {
+        let archive = ZipArchive::new(reader).map_err(|err| match err {
             ZipError::InvalidArchive(_) | ZipError::UnsupportedArchive(_) => {
                 ContainerError::NotZipContainer
             }
@@ -117,32 +117,17 @@ impl ZipContainer {
             });
         }
 
-        let mut name_to_index = FxHashMap::default();
-        name_to_index.reserve(archive.len());
-        for idx in 0..archive.len() {
-            // `zip` 0.6's `ZipArchive::file_names()` iterates HashMap keys in arbitrary order, so we
-            // must use `by_index` to obtain correct/stable indices.
-            let name = {
-                let file = archive
-                    .by_index(idx)
-                    .map_err(|e| ContainerError::Zip(e.to_string()))?;
-                file.name().to_string()
-            };
-
-            // Preserve the first occurrence to match ZipArchive::by_name as closely as possible.
-            name_to_index.entry(name).or_insert(idx);
-        }
-
         Ok(Self {
             archive,
-            name_to_index,
             limits,
             total_read: 0,
         })
     }
 
     #[cfg(feature = "std-fs")]
-    pub fn open_from_path(path: impl AsRef<std::path::Path>) -> Result<Self, ContainerError> {
+    pub fn open_from_path(
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<Self, ContainerError> {
         Self::open_from_path_with_limits(path, ContainerLimits::default())
     }
 
@@ -160,10 +145,6 @@ impl ZipContainer {
         Self::open_from_path(path)
     }
 
-    fn index_of(&self, name: &str) -> Option<usize> {
-        self.name_to_index.get(name).copied()
-    }
-
     pub fn read_file(&mut self, name: &str) -> Result<Vec<u8>, ZipError> {
         let mut file = self.archive.by_name(name)?;
         let mut buf = Vec::new();
@@ -179,17 +160,8 @@ impl ZipContainer {
         })
     }
 
-    pub fn file_fingerprint_checked(
-        &mut self,
-        name: &str,
-    ) -> Result<ZipEntryFingerprint, ContainerError> {
-        let idx = self
-            .index_of(name)
-            .ok_or_else(|| ContainerError::FileNotFound {
-                path: name.to_string(),
-            })?;
-
-        let file = self.archive.by_index(idx).map_err(|e| match e {
+    pub fn file_fingerprint_checked(&mut self, name: &str) -> Result<ZipEntryFingerprint, ContainerError> {
+        let file = self.archive.by_name(name).map_err(|e| match e {
             ZipError::FileNotFound => ContainerError::FileNotFound {
                 path: name.to_string(),
             },
@@ -230,27 +202,22 @@ impl ZipContainer {
     }
 
     pub fn read_file_checked(&mut self, name: &str) -> Result<Vec<u8>, ContainerError> {
-        let idx = self
-            .index_of(name)
-            .ok_or_else(|| ContainerError::FileNotFound {
-                path: name.to_string(),
+        let size = {
+            let file = self.archive.by_name(name).map_err(|e| match e {
+                ZipError::FileNotFound => ContainerError::FileNotFound {
+                    path: name.to_string(),
+                },
+                ZipError::Io(io_err) => ContainerError::ZipRead {
+                    path: name.to_string(),
+                    reason: io_err.to_string(),
+                },
+                other => ContainerError::ZipRead {
+                    path: name.to_string(),
+                    reason: other.to_string(),
+                },
             })?;
-
-        let mut file = self.archive.by_index(idx).map_err(|e| match e {
-            ZipError::FileNotFound => ContainerError::FileNotFound {
-                path: name.to_string(),
-            },
-            ZipError::Io(io_err) => ContainerError::ZipRead {
-                path: name.to_string(),
-                reason: io_err.to_string(),
-            },
-            other => ContainerError::ZipRead {
-                path: name.to_string(),
-                reason: other.to_string(),
-            },
-        })?;
-
-        let size = file.size();
+            file.size()
+        };
 
         if size > self.limits.max_part_uncompressed_bytes {
             return Err(ContainerError::PartTooLarge {
@@ -267,12 +234,16 @@ impl ZipContainer {
             });
         }
 
+        let mut file = self.archive.by_name(name).map_err(|e| ContainerError::ZipRead {
+            path: name.to_string(),
+            reason: e.to_string(),
+        })?;
+
         let mut buf = Vec::new();
-        file.read_to_end(&mut buf)
-            .map_err(|e| ContainerError::ZipRead {
-                path: name.to_string(),
-                reason: e.to_string(),
-            })?;
+        file.read_to_end(&mut buf).map_err(|e| ContainerError::ZipRead {
+            path: name.to_string(),
+            reason: e.to_string(),
+        })?;
 
         self.total_read = new_total;
         Ok(buf)
@@ -335,24 +306,20 @@ impl OpcContainer {
     ) -> Result<OpcContainer, ContainerError> {
         let mut inner = ZipContainer::open_from_reader_with_limits(reader, limits)?;
 
-        let idx = inner
-            .index_of("[Content_Types].xml")
-            .ok_or(ContainerError::NotOpcPackage)?;
-        {
-            let file = inner.archive.by_index(idx).map_err(|e| match e {
-                ZipError::FileNotFound => ContainerError::NotOpcPackage,
-                ZipError::Io(io_err) => ContainerError::Io(io_err),
-                other => ContainerError::Zip(other.to_string()),
-            })?;
-
-            let size = file.size();
-            if size > inner.limits.max_part_uncompressed_bytes {
-                return Err(ContainerError::PartTooLarge {
-                    path: "[Content_Types].xml".to_string(),
-                    size,
-                    limit: inner.limits.max_part_uncompressed_bytes,
-                });
+        match inner.archive.by_name("[Content_Types].xml") {
+            Ok(file) => {
+                let size = file.size();
+                if size > inner.limits.max_part_uncompressed_bytes {
+                    return Err(ContainerError::PartTooLarge {
+                        path: "[Content_Types].xml".to_string(),
+                        size,
+                        limit: inner.limits.max_part_uncompressed_bytes,
+                    });
+                }
             }
+            Err(ZipError::FileNotFound) => return Err(ContainerError::NotOpcPackage),
+            Err(ZipError::Io(e)) => return Err(ContainerError::Io(e)),
+            Err(other) => return Err(ContainerError::Zip(other.to_string())),
         }
 
         Ok(Self { inner })
@@ -387,10 +354,7 @@ impl OpcContainer {
         self.inner.file_fingerprint(name)
     }
 
-    pub fn file_fingerprint_checked(
-        &mut self,
-        name: &str,
-    ) -> Result<ZipEntryFingerprint, ContainerError> {
+    pub fn file_fingerprint_checked(&mut self, name: &str) -> Result<ZipEntryFingerprint, ContainerError> {
         self.inner.file_fingerprint_checked(name)
     }
 
@@ -437,8 +401,8 @@ impl OpcContainer {
 mod tests {
     use super::ZipContainer;
     use std::io::{Cursor, Write};
-    use zip::write::FileOptions;
     use zip::CompressionMethod;
+    use zip::write::FileOptions;
     use zip::ZipWriter;
 
     fn make_zip(entries: &[(&str, &str)]) -> Vec<u8> {
