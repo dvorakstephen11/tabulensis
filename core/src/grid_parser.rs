@@ -69,6 +69,21 @@ pub fn parse_shared_strings(
     xml: &[u8],
     pool: &mut StringPool,
 ) -> Result<Vec<StringId>, GridParseError> {
+    #[cfg(feature = "custom-xml")]
+    {
+        parse_shared_strings_custom(xml, pool)
+    }
+    #[cfg(not(feature = "custom-xml"))]
+    {
+        parse_shared_strings_quick_xml(xml, pool)
+    }
+}
+
+#[cfg_attr(feature = "custom-xml", allow(dead_code))]
+fn parse_shared_strings_quick_xml(
+    xml: &[u8],
+    pool: &mut StringPool,
+) -> Result<Vec<StringId>, GridParseError> {
     let mut reader = Reader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
@@ -99,6 +114,248 @@ pub fn parse_shared_strings(
             _ => {}
         }
         buf.clear();
+    }
+
+    Ok(strings)
+}
+
+#[cfg(feature = "custom-xml")]
+fn parse_shared_strings_custom(
+    xml: &[u8],
+    pool: &mut StringPool,
+) -> Result<Vec<StringId>, GridParseError> {
+    fn find_bytes(haystack: &[u8], needle: &[u8], start: usize) -> Option<usize> {
+        if needle.is_empty() || start >= haystack.len() || needle.len() > haystack.len() {
+            return None;
+        }
+        haystack[start..]
+            .windows(needle.len())
+            .position(|window| window == needle)
+            .map(|idx| start + idx)
+    }
+
+    fn find_tag_end(xml: &[u8], mut cursor: usize) -> Option<usize> {
+        let mut quote: Option<u8> = None;
+        while cursor < xml.len() {
+            let b = xml[cursor];
+            if let Some(q) = quote {
+                if b == q {
+                    quote = None;
+                }
+            } else if b == b'"' || b == b'\'' {
+                quote = Some(b);
+            } else if b == b'>' {
+                return Some(cursor);
+            }
+            cursor += 1;
+        }
+        None
+    }
+
+    fn xml_offset_err(xml: &[u8], offset: usize, message: impl Into<String>) -> GridParseError {
+        let (line, column) = compute_line_col(xml, offset);
+        GridParseError::XmlErrorAt {
+            line,
+            column,
+            message: message.into(),
+        }
+    }
+
+    fn push_utf8_text(raw: &[u8], out: &mut String) -> Result<(), String> {
+        if raw.is_empty() {
+            return Ok(());
+        }
+        let text = std::str::from_utf8(raw)
+            .map_err(|e| format!("invalid UTF-8 in shared string text: {e}"))?;
+        out.push_str(text);
+        Ok(())
+    }
+
+    let mut strings = Vec::new();
+    let mut current = String::new();
+    let mut in_si = false;
+    let mut cursor = 0usize;
+
+    while cursor < xml.len() {
+        if xml[cursor] != b'<' {
+            cursor += 1;
+            continue;
+        }
+
+        if xml[cursor..].starts_with(b"<!--") {
+            let end = find_bytes(xml, b"-->", cursor + 4).ok_or_else(|| {
+                xml_offset_err(xml, cursor, "unterminated XML comment in sharedStrings")
+            })?;
+            cursor = end + 3;
+            continue;
+        }
+
+        if xml[cursor..].starts_with(b"<?") {
+            let end = find_bytes(xml, b"?>", cursor + 2).ok_or_else(|| {
+                xml_offset_err(
+                    xml,
+                    cursor,
+                    "unterminated XML processing instruction in sharedStrings",
+                )
+            })?;
+            cursor = end + 2;
+            continue;
+        }
+
+        if xml[cursor..].starts_with(b"<![CDATA[") {
+            let end = find_bytes(xml, b"]]>", cursor + 9).ok_or_else(|| {
+                xml_offset_err(xml, cursor, "unterminated CDATA section in sharedStrings")
+            })?;
+            cursor = end + 3;
+            continue;
+        }
+
+        if xml[cursor..].starts_with(b"<!") {
+            let end = find_tag_end(xml, cursor + 2).ok_or_else(|| {
+                xml_offset_err(xml, cursor, "unterminated declaration in sharedStrings")
+            })?;
+            cursor = end + 1;
+            continue;
+        }
+
+        let mut name_cursor = cursor + 1;
+        let is_end_tag = if name_cursor < xml.len() && xml[name_cursor] == b'/' {
+            name_cursor += 1;
+            true
+        } else {
+            false
+        };
+
+        while name_cursor < xml.len() && xml[name_cursor].is_ascii_whitespace() {
+            name_cursor += 1;
+        }
+        let name_start = name_cursor;
+        while name_cursor < xml.len() {
+            let b = xml[name_cursor];
+            if b.is_ascii_whitespace() || b == b'/' || b == b'>' {
+                break;
+            }
+            name_cursor += 1;
+        }
+        if name_start == name_cursor {
+            return Err(xml_offset_err(
+                xml,
+                cursor,
+                "malformed XML tag in sharedStrings",
+            ));
+        }
+
+        let tag_end = find_tag_end(xml, name_cursor)
+            .ok_or_else(|| xml_offset_err(xml, cursor, "unterminated XML tag in sharedStrings"))?;
+        let local = local_tag_name(&xml[name_start..name_cursor]);
+        let self_closing = if is_end_tag {
+            false
+        } else {
+            let mut probe = tag_end;
+            while probe > cursor && xml[probe - 1].is_ascii_whitespace() {
+                probe -= 1;
+            }
+            probe > cursor && xml[probe - 1] == b'/'
+        };
+
+        if !is_end_tag && !self_closing && local == b"t" && in_si {
+            let content_start = tag_end + 1;
+            let mut text_cursor = tag_end + 1;
+            loop {
+                if text_cursor >= xml.len() {
+                    return Err(xml_offset_err(
+                        xml,
+                        text_cursor,
+                        "unexpected EOF while reading <t> text",
+                    ));
+                }
+
+                if xml[text_cursor] != b'<' {
+                    while text_cursor < xml.len() && xml[text_cursor] != b'<' {
+                        text_cursor += 1;
+                    }
+                    continue;
+                }
+
+                if xml[text_cursor..].starts_with(b"<![CDATA[") {
+                    let cdata_end = find_bytes(xml, b"]]>", text_cursor + 9).ok_or_else(|| {
+                        xml_offset_err(xml, text_cursor, "unterminated CDATA in <t> text")
+                    })?;
+                    text_cursor = cdata_end + 3;
+                    continue;
+                }
+
+                if xml[text_cursor..].starts_with(b"</") {
+                    let mut end_name_cursor = text_cursor + 2;
+                    while end_name_cursor < xml.len() && xml[end_name_cursor].is_ascii_whitespace()
+                    {
+                        end_name_cursor += 1;
+                    }
+                    let end_name_start = end_name_cursor;
+                    while end_name_cursor < xml.len() {
+                        let b = xml[end_name_cursor];
+                        if b.is_ascii_whitespace() || b == b'>' {
+                            break;
+                        }
+                        end_name_cursor += 1;
+                    }
+                    if end_name_start == end_name_cursor {
+                        return Err(xml_offset_err(
+                            xml,
+                            text_cursor,
+                            "malformed closing tag in <t> text",
+                        ));
+                    }
+                    let end_tag = local_tag_name(&xml[end_name_start..end_name_cursor]);
+                    let close_end = find_tag_end(xml, end_name_cursor).ok_or_else(|| {
+                        xml_offset_err(xml, text_cursor, "unterminated closing tag in <t> text")
+                    })?;
+                    if end_tag == b"t" {
+                        push_utf8_text(&xml[content_start..text_cursor], &mut current)
+                            .map_err(|e| xml_offset_err(xml, content_start, e))?;
+                        cursor = close_end + 1;
+                        break;
+                    }
+                    return Err(xml_offset_err(
+                        xml,
+                        text_cursor,
+                        format!(
+                            "unexpected closing tag '</{}>' inside <t>",
+                            String::from_utf8_lossy(end_tag)
+                        ),
+                    ));
+                }
+
+                return Err(xml_offset_err(
+                    xml,
+                    text_cursor,
+                    "unexpected nested markup inside <t> text",
+                ));
+            }
+            continue;
+        }
+
+        if local == b"si" {
+            if is_end_tag {
+                if in_si {
+                    strings.push(pool.intern(&current));
+                    in_si = false;
+                }
+            } else if !self_closing {
+                current.clear();
+                in_si = true;
+            }
+        }
+
+        cursor = tag_end + 1;
+    }
+
+    if in_si {
+        return Err(xml_offset_err(
+            xml,
+            xml.len(),
+            "unexpected EOF while reading <si>",
+        ));
     }
 
     Ok(strings)
@@ -467,10 +724,18 @@ pub fn parse_sheet_xml_with_drawing_rids(
     shared_strings: &[StringId],
     pool: &mut StringPool,
 ) -> Result<ParsedSheetXml, GridParseError> {
-    parse_sheet_xml_internal(xml, shared_strings, pool, true)
+    #[cfg(feature = "custom-xml")]
+    {
+        parse_sheet_xml_internal_custom(xml, shared_strings, pool, true)
+    }
+    #[cfg(not(feature = "custom-xml"))]
+    {
+        parse_sheet_xml_internal_quick_xml(xml, shared_strings, pool, true)
+    }
 }
 
-fn parse_sheet_xml_internal(
+#[cfg_attr(feature = "custom-xml", allow(dead_code))]
+fn parse_sheet_xml_internal_quick_xml(
     xml: &[u8],
     shared_strings: &[StringId],
     pool: &mut StringPool,
@@ -612,6 +877,1134 @@ fn parse_sheet_xml_internal(
             _ => {}
         }
         buf.clear();
+    }
+
+    if let Some(mut grid) = grid {
+        if !parsed_cells.is_empty() {
+            let (nrows, ncols) = grid_bounds_from_hint(dimension_hint, max_row, max_col);
+            if nrows > grid.nrows || ncols > grid.ncols {
+                grid = rebuild_grid(grid, nrows, ncols, observed_bounds(max_row, max_col));
+            }
+            for cell in parsed_cells {
+                grid.cells.insert(
+                    cell.row,
+                    cell.col,
+                    CellContent {
+                        value: cell.value,
+                        formula: cell.formula,
+                    },
+                );
+            }
+            if matches!(grid.cells, GridStorage::Sparse(_))
+                && prefer_dense_storage(
+                    grid.nrows,
+                    grid.ncols,
+                    grid.cell_count(),
+                    observed_bounds(max_row, max_col),
+                )
+            {
+                let nrows = grid.nrows;
+                let ncols = grid.ncols;
+                grid = rebuild_grid(grid, nrows, ncols, observed_bounds(max_row, max_col));
+            }
+        } else {
+            let (nrows, ncols) = grid_bounds_from_hint(dimension_hint, max_row, max_col);
+            if nrows > grid.nrows || ncols > grid.ncols {
+                grid = rebuild_grid(grid, nrows, ncols, observed_bounds(max_row, max_col));
+            }
+        }
+        return Ok(ParsedSheetXml { grid, drawing_rids });
+    }
+
+    if parsed_cells.is_empty() {
+        return Ok(ParsedSheetXml {
+            grid: Grid::new(0, 0),
+            drawing_rids,
+        });
+    }
+
+    let (nrows, ncols) = grid_bounds_from_hint(dimension_hint, max_row, max_col);
+    Ok(ParsedSheetXml {
+        grid: build_grid(
+            nrows,
+            ncols,
+            parsed_cells,
+            observed_bounds(max_row, max_col),
+        )?,
+        drawing_rids,
+    })
+}
+
+#[cfg(feature = "custom-xml")]
+fn parse_sheet_xml_internal_custom(
+    xml: &[u8],
+    shared_strings: &[StringId],
+    pool: &mut StringPool,
+    collect_drawing_rids: bool,
+) -> Result<ParsedSheetXml, GridParseError> {
+    fn find_bytes(haystack: &[u8], needle: &[u8], start: usize) -> Option<usize> {
+        if needle.is_empty() || start >= haystack.len() || needle.len() > haystack.len() {
+            return None;
+        }
+        haystack[start..]
+            .windows(needle.len())
+            .position(|window| window == needle)
+            .map(|idx| start + idx)
+    }
+
+    fn find_tag_end(xml: &[u8], mut cursor: usize) -> Option<usize> {
+        let mut quote: Option<u8> = None;
+        while cursor < xml.len() {
+            let b = xml[cursor];
+            if let Some(q) = quote {
+                if b == q {
+                    quote = None;
+                }
+            } else if b == b'"' || b == b'\'' {
+                quote = Some(b);
+            } else if b == b'>' {
+                return Some(cursor);
+            }
+            cursor += 1;
+        }
+        None
+    }
+
+    fn xml_offset_err(xml: &[u8], offset: usize, message: impl Into<String>) -> GridParseError {
+        let (line, column) = compute_line_col(xml, offset);
+        GridParseError::XmlErrorAt {
+            line,
+            column,
+            message: message.into(),
+        }
+    }
+
+    fn find_attr_value<'a>(
+        xml: &'a [u8],
+        mut cursor: usize,
+        end: usize,
+        attr_name: &[u8],
+    ) -> Option<&'a [u8]> {
+        while cursor < end {
+            while cursor < end && xml[cursor].is_ascii_whitespace() {
+                cursor += 1;
+            }
+            if cursor >= end {
+                break;
+            }
+
+            let key_start = cursor;
+            while cursor < end {
+                let b = xml[cursor];
+                if b.is_ascii_whitespace() || b == b'=' || b == b'/' || b == b'>' {
+                    break;
+                }
+                cursor += 1;
+            }
+            if key_start == cursor {
+                break;
+            }
+            let key = &xml[key_start..cursor];
+
+            while cursor < end && xml[cursor].is_ascii_whitespace() {
+                cursor += 1;
+            }
+            if cursor >= end || xml[cursor] != b'=' {
+                continue;
+            }
+            cursor += 1;
+
+            while cursor < end && xml[cursor].is_ascii_whitespace() {
+                cursor += 1;
+            }
+            if cursor >= end {
+                break;
+            }
+
+            let quote = xml[cursor];
+            if quote != b'"' && quote != b'\'' {
+                break;
+            }
+            cursor += 1;
+            let value_start = cursor;
+            while cursor < end && xml[cursor] != quote {
+                cursor += 1;
+            }
+            if cursor >= end {
+                break;
+            }
+            let value = &xml[value_start..cursor];
+            cursor += 1;
+
+            if key == attr_name {
+                return Some(value);
+            }
+        }
+        None
+    }
+
+    fn push_utf8_text(
+        xml: &[u8],
+        offset: usize,
+        raw: &[u8],
+        out: &mut String,
+    ) -> Result<(), GridParseError> {
+        if raw.is_empty() {
+            return Ok(());
+        }
+        let text = std::str::from_utf8(raw).map_err(|e| {
+            xml_offset_err(
+                xml,
+                offset,
+                format!("invalid UTF-8 in inline string text: {e}"),
+            )
+        })?;
+        out.push_str(text);
+        Ok(())
+    }
+
+    fn convert_value_bytes_custom(
+        value_bytes: Option<&[u8]>,
+        cell_type: Option<CellTypeTag>,
+        shared_strings: &[StringId],
+        pool: &mut StringPool,
+        xml: &[u8],
+        offset: usize,
+    ) -> Result<Option<CellValue>, GridParseError> {
+        fn parse_usize_decimal_bytes(raw: &[u8]) -> Option<usize> {
+            if raw.is_empty() {
+                return None;
+            }
+            let mut n: usize = 0;
+            for &b in raw {
+                if !b.is_ascii_digit() {
+                    return None;
+                }
+                let d = (b - b'0') as usize;
+                n = n.checked_mul(10)?.checked_add(d)?;
+            }
+            Some(n)
+        }
+
+        fn parse_f64_fast_bytes(raw: &[u8]) -> Option<f64> {
+            if raw.is_empty() {
+                return None;
+            }
+            let mut i = 0usize;
+            let mut neg = false;
+            match raw[0] {
+                b'-' => {
+                    neg = true;
+                    i = 1;
+                }
+                b'+' => {
+                    i = 1;
+                }
+                _ => {}
+            }
+            if i >= raw.len() {
+                return None;
+            }
+
+            let mut int: u64 = 0;
+            let mut saw_digit = false;
+            while i < raw.len() {
+                let b = raw[i];
+                if b.is_ascii_digit() {
+                    saw_digit = true;
+                    let d = (b - b'0') as u64;
+                    if int > (u64::MAX - d) / 10 {
+                        let s = std::str::from_utf8(raw).ok()?;
+                        return s.parse::<f64>().ok();
+                    }
+                    int = int * 10 + d;
+                    i += 1;
+                    continue;
+                }
+                break;
+            }
+            if !saw_digit {
+                return None;
+            }
+            if i == raw.len() {
+                let v = int as f64;
+                return Some(if neg { -v } else { v });
+            }
+            match raw[i] {
+                b'.' | b'e' | b'E' => {
+                    let s = std::str::from_utf8(raw).ok()?;
+                    s.parse::<f64>().ok()
+                }
+                _ => None,
+            }
+        }
+
+        fn trim_ascii_bytes(raw: &[u8]) -> &[u8] {
+            if raw.is_empty() {
+                return raw;
+            }
+            let first = raw[0];
+            let last = raw[raw.len() - 1];
+            if !first.is_ascii_whitespace() && !last.is_ascii_whitespace() {
+                return raw;
+            }
+            let mut start = 0usize;
+            let mut end = raw.len();
+            while start < end && raw[start].is_ascii_whitespace() {
+                start += 1;
+            }
+            while end > start && raw[end - 1].is_ascii_whitespace() {
+                end -= 1;
+            }
+            &raw[start..end]
+        }
+
+        fn utf8<'a>(raw: &'a [u8], xml: &[u8], offset: usize) -> Result<&'a str, GridParseError> {
+            std::str::from_utf8(raw).map_err(|e| {
+                xml_offset_err(xml, offset, format!("invalid UTF-8 in cell value: {e}"))
+            })
+        }
+
+        let Some(raw_bytes) = value_bytes else {
+            return Ok(None);
+        };
+
+        if raw_bytes.is_empty() {
+            return Ok(Some(CellValue::Text(pool.intern(""))));
+        }
+
+        let trimmed_bytes = trim_ascii_bytes(raw_bytes);
+        if trimmed_bytes.is_empty() {
+            return Ok(Some(CellValue::Text(pool.intern(""))));
+        }
+
+        match cell_type {
+            Some(CellTypeTag::SharedString) => {
+                let idx = match parse_usize_decimal_bytes(trimmed_bytes) {
+                    Some(v) => v,
+                    None => {
+                        let trimmed = utf8(trimmed_bytes, xml, offset)?;
+                        trimmed
+                            .parse::<usize>()
+                            .map_err(|e| xml_offset_err(xml, offset, e.to_string()))?
+                    }
+                };
+                let text_id = *shared_strings
+                    .get(idx)
+                    .ok_or(GridParseError::SharedStringOutOfBounds(idx))?;
+                Ok(Some(CellValue::Text(text_id)))
+            }
+            Some(CellTypeTag::Bool) => Ok(match trimmed_bytes {
+                b"1" => Some(CellValue::Bool(true)),
+                b"0" => Some(CellValue::Bool(false)),
+                _ => None,
+            }),
+            Some(CellTypeTag::Error) => {
+                if trimmed_bytes.contains(&b'&') {
+                    let raw = utf8(trimmed_bytes, xml, offset)?;
+                    let unescaped = quick_xml::escape::unescape(raw)
+                        .map_err(|e| xml_offset_err(xml, offset, e.to_string()))?;
+                    Ok(Some(CellValue::Error(pool.intern(unescaped.as_ref()))))
+                } else {
+                    let raw = utf8(trimmed_bytes, xml, offset)?;
+                    Ok(Some(CellValue::Error(pool.intern(raw))))
+                }
+            }
+            Some(CellTypeTag::FormulaString) | Some(CellTypeTag::InlineString) => {
+                if raw_bytes.contains(&b'&') {
+                    let raw = utf8(raw_bytes, xml, offset)?;
+                    let unescaped = quick_xml::escape::unescape(raw)
+                        .map_err(|e| xml_offset_err(xml, offset, e.to_string()))?;
+                    Ok(Some(CellValue::Text(pool.intern(unescaped.as_ref()))))
+                } else {
+                    let raw = utf8(raw_bytes, xml, offset)?;
+                    Ok(Some(CellValue::Text(pool.intern(raw))))
+                }
+            }
+            _ => {
+                if let Some(n) = parse_f64_fast_bytes(trimmed_bytes) {
+                    Ok(Some(CellValue::Number(n)))
+                } else if trimmed_bytes.contains(&b'&') {
+                    let raw = utf8(trimmed_bytes, xml, offset)?;
+                    let unescaped = quick_xml::escape::unescape(raw)
+                        .map_err(|e| xml_offset_err(xml, offset, e.to_string()))?;
+                    Ok(Some(CellValue::Text(pool.intern(unescaped.as_ref()))))
+                } else {
+                    let raw = utf8(trimmed_bytes, xml, offset)?;
+                    Ok(Some(CellValue::Text(pool.intern(raw))))
+                }
+            }
+        }
+    }
+
+    fn read_element_text_bytes_custom<'a>(
+        xml: &[u8],
+        mut cursor: usize,
+        end_tag: &[u8],
+        scratch: &'a mut Vec<u8>,
+    ) -> Result<(Option<&'a [u8]>, usize), GridParseError> {
+        scratch.clear();
+        let mut depth: usize = 0;
+
+        loop {
+            if cursor >= xml.len() {
+                return Err(xml_offset_err(
+                    xml,
+                    xml.len(),
+                    "unexpected EOF while reading element text",
+                ));
+            }
+
+            let mut lt = cursor;
+            while lt < xml.len() && xml[lt] != b'<' {
+                lt += 1;
+            }
+            if lt >= xml.len() {
+                return Err(xml_offset_err(
+                    xml,
+                    xml.len(),
+                    "unexpected EOF while reading element text",
+                ));
+            }
+
+            if lt > cursor {
+                scratch.extend_from_slice(&xml[cursor..lt]);
+            }
+
+            if xml[lt..].starts_with(b"<![CDATA[") {
+                let end = find_bytes(xml, b"]]>", lt + 9).ok_or_else(|| {
+                    xml_offset_err(
+                        xml,
+                        lt,
+                        "unterminated CDATA section while reading element text",
+                    )
+                })?;
+                scratch.extend_from_slice(&xml[lt + 9..end]);
+                cursor = end + 3;
+                continue;
+            }
+
+            if xml[lt..].starts_with(b"<!--") {
+                let end = find_bytes(xml, b"-->", lt + 4).ok_or_else(|| {
+                    xml_offset_err(
+                        xml,
+                        lt,
+                        "unterminated XML comment while reading element text",
+                    )
+                })?;
+                cursor = end + 3;
+                continue;
+            }
+
+            if xml[lt..].starts_with(b"<?") {
+                let end = find_bytes(xml, b"?>", lt + 2).ok_or_else(|| {
+                    xml_offset_err(
+                        xml,
+                        lt,
+                        "unterminated XML processing instruction while reading element text",
+                    )
+                })?;
+                cursor = end + 2;
+                continue;
+            }
+
+            if xml[lt..].starts_with(b"<!") {
+                let end = find_tag_end(xml, lt + 2).ok_or_else(|| {
+                    xml_offset_err(
+                        xml,
+                        lt,
+                        "unterminated declaration while reading element text",
+                    )
+                })?;
+                cursor = end + 1;
+                continue;
+            }
+
+            let mut name_cursor = lt + 1;
+            let is_end_tag = if name_cursor < xml.len() && xml[name_cursor] == b'/' {
+                name_cursor += 1;
+                true
+            } else {
+                false
+            };
+
+            while name_cursor < xml.len() && xml[name_cursor].is_ascii_whitespace() {
+                name_cursor += 1;
+            }
+            let name_start = name_cursor;
+            while name_cursor < xml.len() {
+                let b = xml[name_cursor];
+                if b.is_ascii_whitespace() || b == b'/' || b == b'>' {
+                    break;
+                }
+                name_cursor += 1;
+            }
+            if name_start == name_cursor {
+                return Err(xml_offset_err(
+                    xml,
+                    lt,
+                    "malformed XML tag while reading element text",
+                ));
+            }
+
+            let tag_end_offset = find_tag_end(xml, name_cursor).ok_or_else(|| {
+                xml_offset_err(xml, lt, "unterminated XML tag while reading element text")
+            })?;
+            let raw_name = &xml[name_start..name_cursor];
+            let local = local_tag_name(raw_name);
+            let self_closing = if is_end_tag {
+                false
+            } else {
+                let mut probe = tag_end_offset;
+                while probe > lt && xml[probe - 1].is_ascii_whitespace() {
+                    probe -= 1;
+                }
+                probe > lt && xml[probe - 1] == b'/'
+            };
+
+            cursor = tag_end_offset + 1;
+
+            if is_end_tag {
+                if depth == 0 && local == end_tag && local == raw_name {
+                    break;
+                }
+                if depth > 0 {
+                    depth -= 1;
+                } else {
+                    return Err(xml_offset_err(
+                        xml,
+                        lt,
+                        format!(
+                            "unexpected closing tag '</{}>' while reading element text",
+                            String::from_utf8_lossy(local)
+                        ),
+                    ));
+                }
+                continue;
+            }
+
+            if !self_closing {
+                depth += 1;
+            }
+        }
+
+        Ok((Some(scratch.as_slice()), cursor))
+    }
+
+    fn read_inline_string_custom(
+        xml: &[u8],
+        mut cursor: usize,
+        value: &mut String,
+    ) -> Result<usize, GridParseError> {
+        value.clear();
+
+        while cursor < xml.len() {
+            if xml[cursor] != b'<' {
+                cursor += 1;
+                continue;
+            }
+
+            if xml[cursor..].starts_with(b"<!--") {
+                let end = find_bytes(xml, b"-->", cursor + 4).ok_or_else(|| {
+                    xml_offset_err(xml, cursor, "unterminated XML comment in inline string")
+                })?;
+                cursor = end + 3;
+                continue;
+            }
+
+            if xml[cursor..].starts_with(b"<?") {
+                let end = find_bytes(xml, b"?>", cursor + 2).ok_or_else(|| {
+                    xml_offset_err(
+                        xml,
+                        cursor,
+                        "unterminated XML processing instruction in inline string",
+                    )
+                })?;
+                cursor = end + 2;
+                continue;
+            }
+
+            if xml[cursor..].starts_with(b"<![CDATA[") {
+                let end = find_bytes(xml, b"]]>", cursor + 9).ok_or_else(|| {
+                    xml_offset_err(xml, cursor, "unterminated CDATA section in inline string")
+                })?;
+                cursor = end + 3;
+                continue;
+            }
+
+            if xml[cursor..].starts_with(b"<!") {
+                let end = find_tag_end(xml, cursor + 2).ok_or_else(|| {
+                    xml_offset_err(xml, cursor, "unterminated declaration in inline string")
+                })?;
+                cursor = end + 1;
+                continue;
+            }
+
+            let mut name_cursor = cursor + 1;
+            let is_end_tag = if name_cursor < xml.len() && xml[name_cursor] == b'/' {
+                name_cursor += 1;
+                true
+            } else {
+                false
+            };
+
+            while name_cursor < xml.len() && xml[name_cursor].is_ascii_whitespace() {
+                name_cursor += 1;
+            }
+            let name_start = name_cursor;
+            while name_cursor < xml.len() {
+                let b = xml[name_cursor];
+                if b.is_ascii_whitespace() || b == b'/' || b == b'>' {
+                    break;
+                }
+                name_cursor += 1;
+            }
+            if name_start == name_cursor {
+                return Err(xml_offset_err(
+                    xml,
+                    cursor,
+                    "malformed XML tag in inline string",
+                ));
+            }
+
+            let tag_end_offset = find_tag_end(xml, name_cursor).ok_or_else(|| {
+                xml_offset_err(xml, cursor, "unterminated XML tag in inline string")
+            })?;
+            let raw_name = &xml[name_start..name_cursor];
+            let local = local_tag_name(raw_name);
+            let self_closing = if is_end_tag {
+                false
+            } else {
+                let mut probe = tag_end_offset;
+                while probe > cursor && xml[probe - 1].is_ascii_whitespace() {
+                    probe -= 1;
+                }
+                probe > cursor && xml[probe - 1] == b'/'
+            };
+
+            if is_end_tag && local == b"is" && local == raw_name {
+                return Ok(tag_end_offset + 1);
+            }
+
+            if !is_end_tag && !self_closing && local == b"t" && local == raw_name {
+                let content_start = tag_end_offset + 1;
+                let mut text_cursor = tag_end_offset + 1;
+                loop {
+                    if text_cursor >= xml.len() {
+                        return Err(xml_offset_err(
+                            xml,
+                            text_cursor,
+                            "unexpected EOF while reading <t> text",
+                        ));
+                    }
+
+                    if xml[text_cursor] != b'<' {
+                        while text_cursor < xml.len() && xml[text_cursor] != b'<' {
+                            text_cursor += 1;
+                        }
+                        continue;
+                    }
+
+                    if xml[text_cursor..].starts_with(b"<![CDATA[") {
+                        let cdata_end =
+                            find_bytes(xml, b"]]>", text_cursor + 9).ok_or_else(|| {
+                                xml_offset_err(xml, text_cursor, "unterminated CDATA in <t> text")
+                            })?;
+                        text_cursor = cdata_end + 3;
+                        continue;
+                    }
+
+                    if xml[text_cursor..].starts_with(b"</") {
+                        let mut end_name_cursor = text_cursor + 2;
+                        while end_name_cursor < xml.len()
+                            && xml[end_name_cursor].is_ascii_whitespace()
+                        {
+                            end_name_cursor += 1;
+                        }
+                        let end_name_start = end_name_cursor;
+                        while end_name_cursor < xml.len() {
+                            let b = xml[end_name_cursor];
+                            if b.is_ascii_whitespace() || b == b'>' {
+                                break;
+                            }
+                            end_name_cursor += 1;
+                        }
+                        if end_name_start == end_name_cursor {
+                            return Err(xml_offset_err(
+                                xml,
+                                text_cursor,
+                                "malformed closing tag in <t> text",
+                            ));
+                        }
+                        let end_raw = &xml[end_name_start..end_name_cursor];
+                        let end_local = local_tag_name(end_raw);
+                        let close_end = find_tag_end(xml, end_name_cursor).ok_or_else(|| {
+                            xml_offset_err(xml, text_cursor, "unterminated closing tag in <t> text")
+                        })?;
+                        if end_local == b"t" && end_local == end_raw {
+                            push_utf8_text(
+                                xml,
+                                content_start,
+                                &xml[content_start..text_cursor],
+                                value,
+                            )?;
+                            cursor = close_end + 1;
+                            break;
+                        }
+                        return Err(xml_offset_err(
+                            xml,
+                            text_cursor,
+                            format!(
+                                "unexpected closing tag '</{}>' inside <t>",
+                                String::from_utf8_lossy(end_local)
+                            ),
+                        ));
+                    }
+
+                    return Err(xml_offset_err(
+                        xml,
+                        text_cursor,
+                        "unexpected nested markup inside <t> text",
+                    ));
+                }
+                continue;
+            }
+
+            cursor = tag_end_offset + 1;
+        }
+
+        Err(xml_offset_err(
+            xml,
+            xml.len(),
+            "unexpected EOF inside inline string",
+        ))
+    }
+
+    fn parse_cell_custom(
+        xml: &[u8],
+        cell_tag_start: usize,
+        name_end: usize,
+        tag_end: usize,
+        shared_strings: &[StringId],
+        pool: &mut StringPool,
+        value_text_scratch: &mut Vec<u8>,
+        inline_string_scratch: &mut String,
+    ) -> Result<(ParsedCell, usize), GridParseError> {
+        let mut address: Option<(u32, u32)> = None;
+        let mut cell_type: Option<CellTypeTag> = None;
+
+        if let Some(raw) = find_attr_value(xml, name_end, tag_end, b"r") {
+            if raw.contains(&b'&') {
+                let raw_str = std::str::from_utf8(raw).map_err(|e| {
+                    xml_offset_err(
+                        xml,
+                        cell_tag_start,
+                        format!("invalid UTF-8 in cell address: {e}"),
+                    )
+                })?;
+                let unescaped = quick_xml::escape::unescape(raw_str)
+                    .map_err(|e| xml_offset_err(xml, cell_tag_start, e.to_string()))?;
+                address = address_to_index(unescaped.as_ref());
+                if address.is_none() {
+                    return Err(GridParseError::InvalidAddress(unescaped.into_owned()));
+                }
+            } else {
+                address = address_to_index_ascii_bytes(raw);
+                if address.is_none() {
+                    return Err(GridParseError::InvalidAddress(
+                        String::from_utf8_lossy(raw).into_owned(),
+                    ));
+                }
+            }
+        }
+
+        if let Some(raw) = find_attr_value(xml, name_end, tag_end, b"t") {
+            cell_type = parse_cell_type_tag_bytes(raw);
+            if cell_type.is_none() && raw.contains(&b'&') {
+                let raw_str = std::str::from_utf8(raw).map_err(|e| {
+                    xml_offset_err(
+                        xml,
+                        cell_tag_start,
+                        format!("invalid UTF-8 in cell type: {e}"),
+                    )
+                })?;
+                let unescaped = quick_xml::escape::unescape(raw_str)
+                    .map_err(|e| xml_offset_err(xml, cell_tag_start, e.to_string()))?;
+                cell_type = parse_cell_type_tag_str(unescaped.as_ref());
+            }
+        }
+
+        let (row, col) =
+            address.ok_or_else(|| xml_offset_err(xml, cell_tag_start, "cell missing address"))?;
+
+        let mut value: Option<CellValue> = None;
+        let mut formula: Option<StringId> = None;
+        let mut cursor = tag_end + 1;
+
+        loop {
+            if cursor >= xml.len() {
+                return Err(xml_offset_err(xml, xml.len(), "unexpected EOF inside cell"));
+            }
+
+            if xml[cursor] != b'<' {
+                cursor += 1;
+                continue;
+            }
+
+            if xml[cursor..].starts_with(b"<!--") {
+                let end = find_bytes(xml, b"-->", cursor + 4).ok_or_else(|| {
+                    xml_offset_err(xml, cursor, "unterminated XML comment inside cell")
+                })?;
+                cursor = end + 3;
+                continue;
+            }
+
+            if xml[cursor..].starts_with(b"<?") {
+                let end = find_bytes(xml, b"?>", cursor + 2).ok_or_else(|| {
+                    xml_offset_err(
+                        xml,
+                        cursor,
+                        "unterminated XML processing instruction inside cell",
+                    )
+                })?;
+                cursor = end + 2;
+                continue;
+            }
+
+            if xml[cursor..].starts_with(b"<![CDATA[") {
+                let end = find_bytes(xml, b"]]>", cursor + 9)
+                    .ok_or_else(|| xml_offset_err(xml, cursor, "unterminated CDATA inside cell"))?;
+                cursor = end + 3;
+                continue;
+            }
+
+            if xml[cursor..].starts_with(b"<!") {
+                let end = find_tag_end(xml, cursor + 2).ok_or_else(|| {
+                    xml_offset_err(xml, cursor, "unterminated declaration inside cell")
+                })?;
+                cursor = end + 1;
+                continue;
+            }
+
+            let mut name_cursor = cursor + 1;
+            let is_end_tag = if name_cursor < xml.len() && xml[name_cursor] == b'/' {
+                name_cursor += 1;
+                true
+            } else {
+                false
+            };
+
+            while name_cursor < xml.len() && xml[name_cursor].is_ascii_whitespace() {
+                name_cursor += 1;
+            }
+            let name_start = name_cursor;
+            while name_cursor < xml.len() {
+                let b = xml[name_cursor];
+                if b.is_ascii_whitespace() || b == b'/' || b == b'>' {
+                    break;
+                }
+                name_cursor += 1;
+            }
+            if name_start == name_cursor {
+                return Err(xml_offset_err(xml, cursor, "malformed XML tag inside cell"));
+            }
+
+            let tag_end_offset = find_tag_end(xml, name_cursor)
+                .ok_or_else(|| xml_offset_err(xml, cursor, "unterminated XML tag inside cell"))?;
+            let raw_name = &xml[name_start..name_cursor];
+            let local = local_tag_name(raw_name);
+            let self_closing = if is_end_tag {
+                false
+            } else {
+                let mut probe = tag_end_offset;
+                while probe > cursor && xml[probe - 1].is_ascii_whitespace() {
+                    probe -= 1;
+                }
+                probe > cursor && xml[probe - 1] == b'/'
+            };
+
+            if is_end_tag && local == b"c" && local == raw_name {
+                cursor = tag_end_offset + 1;
+                break;
+            }
+
+            if !is_end_tag && !self_closing && local == b"v" && local == raw_name {
+                let content_start = tag_end_offset + 1;
+                let (raw_opt, next) =
+                    read_element_text_bytes_custom(xml, content_start, b"v", value_text_scratch)?;
+                value = convert_value_bytes_custom(
+                    raw_opt,
+                    cell_type,
+                    shared_strings,
+                    pool,
+                    xml,
+                    content_start,
+                )?;
+                cursor = next;
+                continue;
+            }
+
+            if !is_end_tag && !self_closing && local == b"f" && local == raw_name {
+                let content_start = tag_end_offset + 1;
+                let (raw_opt, next) =
+                    read_element_text_bytes_custom(xml, content_start, b"f", value_text_scratch)?;
+                let raw_bytes = raw_opt.unwrap_or(&[]);
+                let raw_str = std::str::from_utf8(raw_bytes).map_err(|e| {
+                    xml_offset_err(xml, content_start, format!("invalid UTF-8 in formula: {e}"))
+                })?;
+                let unescaped = quick_xml::escape::unescape(raw_str)
+                    .map_err(|e| xml_offset_err(xml, content_start, e.to_string()))?;
+                formula = Some(pool.intern(unescaped.as_ref()));
+                cursor = next;
+                continue;
+            }
+
+            if !is_end_tag && !self_closing && local == b"is" && local == raw_name {
+                let content_start = tag_end_offset + 1;
+                let next = read_inline_string_custom(xml, content_start, inline_string_scratch)?;
+                value = Some(CellValue::Text(pool.intern(inline_string_scratch.as_str())));
+                cursor = next;
+                continue;
+            }
+
+            cursor = tag_end_offset + 1;
+        }
+
+        Ok((
+            ParsedCell {
+                row,
+                col,
+                value,
+                formula,
+            },
+            cursor,
+        ))
+    }
+
+    let mut value_text_scratch = Vec::new();
+    let mut inline_string_scratch = String::new();
+
+    let mut dimension_hint: Option<(u32, u32)> = None;
+    let mut parsed_cells: Vec<ParsedCell> = Vec::new();
+    let mut grid: Option<Grid> = None;
+    let mut max_row: Option<u32> = None;
+    let mut max_col: Option<u32> = None;
+    let mut drawing_rids = Vec::new();
+    let mut stream_dense_recheck = 0usize;
+
+    let mut cursor = 0usize;
+    while cursor < xml.len() {
+        if xml[cursor] != b'<' {
+            cursor += 1;
+            continue;
+        }
+
+        if xml[cursor..].starts_with(b"<!--") {
+            let end = find_bytes(xml, b"-->", cursor + 4)
+                .ok_or_else(|| xml_offset_err(xml, cursor, "unterminated XML comment"))?;
+            cursor = end + 3;
+            continue;
+        }
+
+        if xml[cursor..].starts_with(b"<?") {
+            let end = find_bytes(xml, b"?>", cursor + 2).ok_or_else(|| {
+                xml_offset_err(xml, cursor, "unterminated XML processing instruction")
+            })?;
+            cursor = end + 2;
+            continue;
+        }
+
+        if xml[cursor..].starts_with(b"<![CDATA[") {
+            let end = find_bytes(xml, b"]]>", cursor + 9)
+                .ok_or_else(|| xml_offset_err(xml, cursor, "unterminated CDATA section"))?;
+            cursor = end + 3;
+            continue;
+        }
+
+        if xml[cursor..].starts_with(b"<!") {
+            let end = find_tag_end(xml, cursor + 2)
+                .ok_or_else(|| xml_offset_err(xml, cursor, "unterminated declaration"))?;
+            cursor = end + 1;
+            continue;
+        }
+
+        let mut name_cursor = cursor + 1;
+        let is_end_tag = if name_cursor < xml.len() && xml[name_cursor] == b'/' {
+            name_cursor += 1;
+            true
+        } else {
+            false
+        };
+
+        while name_cursor < xml.len() && xml[name_cursor].is_ascii_whitespace() {
+            name_cursor += 1;
+        }
+        let name_start = name_cursor;
+        while name_cursor < xml.len() {
+            let b = xml[name_cursor];
+            if b.is_ascii_whitespace() || b == b'/' || b == b'>' {
+                break;
+            }
+            name_cursor += 1;
+        }
+        if name_start == name_cursor {
+            return Err(xml_offset_err(xml, cursor, "malformed XML tag"));
+        }
+
+        let tag_end_offset = find_tag_end(xml, name_cursor)
+            .ok_or_else(|| xml_offset_err(xml, cursor, "unterminated XML tag"))?;
+        let raw_name = &xml[name_start..name_cursor];
+        let local = local_tag_name(raw_name);
+        let self_closing = if is_end_tag {
+            false
+        } else {
+            let mut probe = tag_end_offset;
+            while probe > cursor && xml[probe - 1].is_ascii_whitespace() {
+                probe -= 1;
+            }
+            probe > cursor && xml[probe - 1] == b'/'
+        };
+
+        if !is_end_tag && local == b"dimension" && local == raw_name {
+            if let Some(raw) = find_attr_value(xml, name_cursor, tag_end_offset, b"ref") {
+                let raw_str = std::str::from_utf8(raw).map_err(|e| {
+                    xml_offset_err(xml, cursor, format!("invalid UTF-8 in dimension: {e}"))
+                })?;
+                let reference = if raw.contains(&b'&') {
+                    let unescaped = quick_xml::escape::unescape(raw_str)
+                        .map_err(|e| xml_offset_err(xml, cursor, e.to_string()))?;
+                    unescaped.into_owned()
+                } else {
+                    raw_str.to_string()
+                };
+
+                dimension_hint = dimension_from_ref(reference.as_str());
+                if grid.is_none()
+                    && dimension_hint.is_some()
+                    && parsed_cells.len() >= STREAM_CELL_BUFFER_LIMIT
+                {
+                    let (nrows, ncols) = grid_bounds_from_hint(dimension_hint, max_row, max_col);
+                    let new_grid = build_grid(
+                        nrows,
+                        ncols,
+                        std::mem::take(&mut parsed_cells),
+                        observed_bounds(max_row, max_col),
+                    )?;
+                    grid = Some(new_grid);
+                }
+            }
+
+            cursor = tag_end_offset + 1;
+            continue;
+        }
+
+        if !is_end_tag && collect_drawing_rids && local == b"drawing" {
+            if let Some(raw) = find_attr_value(xml, name_cursor, tag_end_offset, b"r:id") {
+                let raw_str = std::str::from_utf8(raw).map_err(|e| {
+                    xml_offset_err(xml, cursor, format!("invalid UTF-8 in r:id: {e}"))
+                })?;
+                let rid = if raw.contains(&b'&') {
+                    let unescaped = quick_xml::escape::unescape(raw_str)
+                        .map_err(|e| xml_offset_err(xml, cursor, e.to_string()))?;
+                    unescaped.into_owned()
+                } else {
+                    raw_str.to_string()
+                };
+                drawing_rids.push(rid);
+            }
+
+            cursor = tag_end_offset + 1;
+            continue;
+        }
+
+        if !is_end_tag && !self_closing && local == b"c" && local == raw_name {
+            let (cell, next_cursor) = parse_cell_custom(
+                xml,
+                cursor,
+                name_cursor,
+                tag_end_offset,
+                shared_strings,
+                pool,
+                &mut value_text_scratch,
+                &mut inline_string_scratch,
+            )?;
+
+            max_row = Some(max_row.map_or(cell.row, |r| r.max(cell.row)));
+            max_col = Some(max_col.map_or(cell.col, |c| c.max(cell.col)));
+            if grid.is_some() {
+                let needs_resize = grid
+                    .as_ref()
+                    .map(|existing| cell.row >= existing.nrows || cell.col >= existing.ncols)
+                    .unwrap_or(false);
+                if needs_resize {
+                    let (mut nrows, mut ncols) =
+                        grid_bounds_from_hint(dimension_hint, max_row, max_col);
+                    nrows = nrows.max(cell.row.saturating_add(1));
+                    ncols = ncols.max(cell.col.saturating_add(1));
+                    let rebuilt = rebuild_grid(
+                        grid.take().unwrap(),
+                        nrows,
+                        ncols,
+                        observed_bounds(max_row, max_col),
+                    );
+                    grid = Some(rebuilt);
+                }
+                {
+                    let existing = grid.as_mut().expect("grid should be initialized");
+                    existing.cells.insert(
+                        cell.row,
+                        cell.col,
+                        CellContent {
+                            value: cell.value,
+                            formula: cell.formula,
+                        },
+                    );
+                }
+
+                stream_dense_recheck = stream_dense_recheck.saturating_add(1);
+                if stream_dense_recheck >= STREAM_DENSE_REEVAL_INTERVAL {
+                    stream_dense_recheck = 0;
+                    let should_promote = {
+                        let existing = grid.as_ref().expect("grid should be initialized");
+                        matches!(existing.cells, GridStorage::Sparse(_))
+                            && prefer_dense_storage(
+                                existing.nrows,
+                                existing.ncols,
+                                existing.cell_count(),
+                                observed_bounds(max_row, max_col),
+                            )
+                    };
+                    if should_promote {
+                        let (nrows, ncols) =
+                            grid_bounds_from_hint(dimension_hint, max_row, max_col);
+                        let rebuilt = rebuild_grid(
+                            grid.take().unwrap(),
+                            nrows,
+                            ncols,
+                            observed_bounds(max_row, max_col),
+                        );
+                        grid = Some(rebuilt);
+                    }
+                }
+            } else {
+                parsed_cells.push(cell);
+                if dimension_hint.is_some() && parsed_cells.len() >= STREAM_CELL_BUFFER_LIMIT {
+                    let (nrows, ncols) = grid_bounds_from_hint(dimension_hint, max_row, max_col);
+                    let new_grid = build_grid(
+                        nrows,
+                        ncols,
+                        std::mem::take(&mut parsed_cells),
+                        observed_bounds(max_row, max_col),
+                    )?;
+                    grid = Some(new_grid);
+                }
+            }
+
+            cursor = next_cursor;
+            continue;
+        }
+
+        cursor = tag_end_offset + 1;
     }
 
     if let Some(mut grid) = grid {
@@ -818,11 +2211,7 @@ fn read_element_text_bytes<'a>(
         buf.clear();
     }
 
-    if scratch.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(scratch.as_slice()))
-    }
+    Ok(Some(scratch.as_slice()))
 }
 
 fn address_to_index_ascii_bytes(a1: &[u8]) -> Option<(u32, u32)> {
@@ -1426,6 +2815,11 @@ mod tests {
         parse_sheet_xml_with_drawing_rids, prefer_dense_storage, read_inline_string, CellTypeTag,
         GridParseError,
     };
+    #[cfg(feature = "custom-xml")]
+    use super::{
+        parse_shared_strings_custom, parse_shared_strings_quick_xml,
+        parse_sheet_xml_internal_custom, parse_sheet_xml_internal_quick_xml,
+    };
     use crate::string_pool::StringPool;
     use crate::workbook::CellValue;
     use quick_xml::Reader;
@@ -1443,6 +2837,69 @@ mod tests {
         let strings = parse_shared_strings(xml, &mut pool).expect("shared strings should parse");
         let first = strings.first().copied().unwrap();
         assert_eq!(pool.resolve(first), "Hello World");
+    }
+
+    #[cfg(feature = "custom-xml")]
+    #[test]
+    fn parse_shared_strings_custom_matches_quick_xml_for_entities_and_cdata() {
+        let xml = br#"<?xml version="1.0"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <si><t>plain</t></si>
+  <si>
+    <r><t>A&amp;B</t></r>
+    <r><t>&#x20;C</t></r>
+  </si>
+  <si><t><![CDATA[<raw>]]></t></si>
+</sst>"#;
+
+        let mut quick_pool = StringPool::new();
+        let quick = parse_shared_strings_quick_xml(xml, &mut quick_pool).expect("quick xml parser");
+        let quick_values: Vec<String> = quick
+            .iter()
+            .map(|&id| quick_pool.resolve(id).to_string())
+            .collect();
+
+        let mut custom_pool = StringPool::new();
+        let custom = parse_shared_strings_custom(xml, &mut custom_pool).expect("custom xml parser");
+        let custom_values: Vec<String> = custom
+            .iter()
+            .map(|&id| custom_pool.resolve(id).to_string())
+            .collect();
+
+        assert_eq!(custom_values, quick_values);
+    }
+
+    #[cfg(feature = "custom-xml")]
+    #[test]
+    fn parse_shared_strings_custom_matches_quick_xml_on_invalid_entity_text() {
+        let xml = br#"<sst><si><t>bad &bogus; entity</t></si></sst>"#;
+        let mut quick_pool = StringPool::new();
+        let quick = parse_shared_strings_quick_xml(xml, &mut quick_pool);
+
+        let mut custom_pool = StringPool::new();
+        let custom = parse_shared_strings_custom(xml, &mut custom_pool);
+
+        match (quick, custom) {
+            (Ok(quick_ids), Ok(custom_ids)) => {
+                let quick_values: Vec<String> = quick_ids
+                    .iter()
+                    .map(|&id| quick_pool.resolve(id).to_string())
+                    .collect();
+                let custom_values: Vec<String> = custom_ids
+                    .iter()
+                    .map(|&id| custom_pool.resolve(id).to_string())
+                    .collect();
+                assert_eq!(custom_values, quick_values);
+            }
+            (Err(quick_err), Err(custom_err)) => {
+                assert_eq!(quick_err.code(), custom_err.code());
+            }
+            (quick_state, custom_state) => {
+                panic!(
+                    "custom and quick parsers diverged on invalid entity input: quick={quick_state:?}, custom={custom_state:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1612,6 +3069,104 @@ mod tests {
             .and_then(CellValue::as_text_id)
             .expect("A1 text value should be present");
         assert_eq!(pool.resolve(text_id), "hello");
+    }
+
+    #[cfg(feature = "custom-xml")]
+    #[test]
+    fn parse_sheet_xml_custom_matches_quick_xml_for_common_cell_types() {
+        use std::collections::BTreeSet;
+
+        #[derive(Debug, PartialEq)]
+        enum NormVal {
+            Blank,
+            Number(u64),
+            Bool(bool),
+            Text(String),
+            Error(String),
+        }
+
+        fn norm_value(value: &Option<CellValue>, pool: &StringPool) -> Option<NormVal> {
+            match value {
+                None => None,
+                Some(CellValue::Blank) => Some(NormVal::Blank),
+                Some(CellValue::Number(n)) => Some(NormVal::Number(n.to_bits())),
+                Some(CellValue::Bool(b)) => Some(NormVal::Bool(*b)),
+                Some(CellValue::Text(id)) => Some(NormVal::Text(pool.resolve(*id).to_string())),
+                Some(CellValue::Error(id)) => Some(NormVal::Error(pool.resolve(*id).to_string())),
+            }
+        }
+
+        fn norm_formula(
+            formula: &Option<crate::string_pool::StringId>,
+            pool: &StringPool,
+        ) -> Option<String> {
+            formula.map(|id| pool.resolve(id).to_string())
+        }
+
+        let xml = br#"<?xml version="1.0"?>
+<worksheet xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+          xmlns:x="http://example.com">
+  <dimension ref="A1:H1"/>
+  <x:drawing r:id="rId9"/>
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="s"><v>0</v></c>
+      <c r="B1"><v><![CDATA[42]]></v></c>
+      <c r="C1" t="b"><v>1</v></c>
+      <c r="D1" t="e"><v>#DIV/0!</v></c>
+      <c r="E1" t="inlineStr"><is><t xml:space="preserve"> hi</t></is></c>
+      <c r="F1"><f>"foo"&amp;"bar"</f><v>5</v></c>
+      <c r="G1" t="inlineStr"><is><t><![CDATA[<raw>]]></t></is></c>
+      <c r="H1"><v>A&amp;B</v></c>
+    </row>
+  </sheetData>
+  <drawing r:id="rId1"/>
+</worksheet>"#;
+
+        let mut quick_pool = StringPool::new();
+        let quick_shared_strings = vec![quick_pool.intern("Hello")];
+        let quick =
+            parse_sheet_xml_internal_quick_xml(xml, &quick_shared_strings, &mut quick_pool, true)
+                .expect("quick sheet parser should succeed");
+
+        let mut custom_pool = StringPool::new();
+        let custom_shared_strings = vec![custom_pool.intern("Hello")];
+        let custom =
+            parse_sheet_xml_internal_custom(xml, &custom_shared_strings, &mut custom_pool, true)
+                .expect("custom sheet parser should succeed");
+
+        assert_eq!(custom.drawing_rids, quick.drawing_rids);
+        assert_eq!(custom.grid.nrows, quick.grid.nrows);
+        assert_eq!(custom.grid.ncols, quick.grid.ncols);
+
+        let mut coords = BTreeSet::new();
+        for ((row, col), _) in quick.grid.iter_cells() {
+            coords.insert((row, col));
+        }
+        for ((row, col), _) in custom.grid.iter_cells() {
+            coords.insert((row, col));
+        }
+
+        for (row, col) in coords {
+            let quick_cell = quick.grid.get(row, col);
+            let custom_cell = custom.grid.get(row, col);
+
+            let quick_val = quick_cell.and_then(|cell| norm_value(&cell.value, &quick_pool));
+            let custom_val = custom_cell.and_then(|cell| norm_value(&cell.value, &custom_pool));
+            assert_eq!(
+                custom_val, quick_val,
+                "value mismatch at ({row},{col}): quick={quick_val:?} custom={custom_val:?}"
+            );
+
+            let quick_formula =
+                quick_cell.and_then(|cell| norm_formula(&cell.formula, &quick_pool));
+            let custom_formula =
+                custom_cell.and_then(|cell| norm_formula(&cell.formula, &custom_pool));
+            assert_eq!(
+                custom_formula, quick_formula,
+                "formula mismatch at ({row},{col}): quick={quick_formula:?} custom={custom_formula:?}"
+            );
+        }
     }
 
     #[test]

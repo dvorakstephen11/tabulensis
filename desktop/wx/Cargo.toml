@@ -21,5 +21,6 @@ libc = "0.2"
 default = ["backend-lru-crate", "backend-arc-cache"]
 backend-lru-crate = ["desktop_backend/model-diff", "desktop_backend/lru-crate"]
 backend-custom-lru = ["desktop_backend/model-diff", "desktop_backend/custom-lru"]
+backend-custom-xml = ["desktop_backend/custom-xml"]
 backend-arc-cache = ["desktop_backend/arc-cache"]
 perf-metrics = ["desktop_backend/perf-metrics"]

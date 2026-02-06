@@ -25,6 +25,7 @@ directories = "5.0"
 default = ["model-diff", "lru-crate"]
 lru-crate = ["dep:lru"]
 custom-lru = []
+custom-xml = ["excel_diff/custom-xml"]
 arc-cache = []
 model-diff = ["excel_diff/model-diff"]
 perf-metrics = ["excel_diff/perf-metrics"]
