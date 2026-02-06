@@ -3,9 +3,9 @@ use std::ffi::CString;
 use std::fs::OpenOptions;
 use std::io::Write;
 #[cfg(target_os = "linux")]
-use std::os::unix::io::AsRawFd;
-#[cfg(target_os = "linux")]
 use std::os::raw::{c_char, c_void};
+#[cfg(target_os = "linux")]
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
@@ -14,18 +14,22 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-mod logic;
 mod dev_scenario;
+mod grid_preview;
+mod logic;
+mod theme;
 mod xrc_validation;
 
 use desktop_backend::{
-    BatchOutcome, BatchRequest, BackendConfig, DesktopBackend, DiffErrorPayload, DiffMode, DiffOutcome, DiffRequest,
-    DiffRunSummary, ProgressRx, RecentComparison, SearchIndexResult, SearchIndexSummary, SearchResult, SheetPayloadRequest,
-    SheetMetaRequest, OpsRangeRequest, CellsRangeRequest, RangeBounds,
+    BackendConfig, BatchOutcome, BatchRequest, CellsRangeRequest, DesktopBackend, DiffErrorPayload,
+    DiffMode, DiffOutcome, DiffRequest, DiffRunSummary, OpsRangeRequest, ProgressRx, RangeBounds,
+    RecentComparison, SearchIndexResult, SearchIndexSummary, SearchResult, SheetMetaRequest,
+    SheetPayloadRequest,
 };
+use dev_scenario::{load_from_env as load_dev_scenario, UiScenario};
 use license_client::LicenseClient;
-use logic::{base_name, parse_globs, preset_from_selection};
 use log::{debug, info, LevelFilter, Metadata, Record};
+use logic::{base_name, parse_globs, preset_from_selection};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use ui_payload::{DiffOptions, DiffPreset};
@@ -36,7 +40,6 @@ use wxdragon::widgets::{WebView, WebViewBackend, WebViewUserScriptInjectionTime}
 use wxdragon::xrc::{FromXrcPtr, XmlResource};
 use wxdragon_sys as ffi;
 use xrc_validation::validate_xrc;
-use dev_scenario::{load_from_env as load_dev_scenario, UiScenario};
 
 #[cfg(target_os = "linux")]
 use libc;
@@ -45,17 +48,13 @@ const SHEETS_COLUMNS: [(&str, i32); 6] = [
     ("Sheet", 200),
     ("Ops", 70),
     ("Added", 70),
-    ("Removed", 80),
+    ("Removed", 92),
     ("Modified", 80),
     ("Moved", 70),
 ];
 
-const RECENTS_COLUMNS: [(&str, i32); 4] = [
-    ("Old", 220),
-    ("New", 220),
-    ("Last Run", 160),
-    ("Mode", 80),
-];
+const RECENTS_COLUMNS: [(&str, i32); 4] =
+    [("Old", 220), ("New", 220), ("Last Run", 160), ("Mode", 80)];
 
 const BATCH_COLUMNS: [(&str, i32); 6] = [
     ("Old", 200),
@@ -91,6 +90,8 @@ const MIN_SASH_POSITION: i32 = 260;
 // wxWidgets key codes for F6/F8 (WXK_F1=340).
 const WXK_F6: i32 = 345;
 const WXK_F8: i32 = 347;
+const RESULT_TAB_DETAILS: i32 = 1;
+const RESULT_TAB_GRID: i32 = 2;
 
 fn show_startup_error(message: &str) -> ! {
     show_startup_error_with_parent(None, message)
@@ -119,6 +120,7 @@ fn show_startup_error_with_parent(parent: Option<&dyn WxWidget>, message: &str) 
 struct MainUi {
     main_frame: Frame,
     main_panel: Panel,
+    status_pill: Panel,
     open_pair_menu: MenuItem,
     open_old_menu: MenuItem,
     open_new_menu: MenuItem,
@@ -133,6 +135,8 @@ struct MainUi {
     find_menu: MenuItem,
     toggle_sheets_menu: MenuItem,
     reset_layout_menu: MenuItem,
+    minimize_window_menu: MenuItem,
+    toggle_maximize_window_menu: MenuItem,
     license_menu: MenuItem,
     docs_menu: MenuItem,
     about_menu: MenuItem,
@@ -153,6 +157,7 @@ struct MainUi {
     result_tabs: Notebook,
     summary_text: TextCtrl,
     detail_text: TextCtrl,
+    grid_panel: Panel,
     recents_list: Panel,
     open_recent_btn: Button,
     batch_old_dir: DirPickerCtrl,
@@ -220,7 +225,10 @@ impl MainUi {
             main_frame.set_size(default_window_size());
         }
         main_frame.add_style(
-            WindowStyle::MaximizeBox | WindowStyle::MinimizeBox | WindowStyle::ThickFrame | WindowStyle::SysMenu,
+            WindowStyle::MaximizeBox
+                | WindowStyle::MinimizeBox
+                | WindowStyle::ThickFrame
+                | WindowStyle::SysMenu,
         );
         let _menu_bar = main_frame
             .get_menu_bar()
@@ -232,16 +240,18 @@ impl MainUi {
             .unwrap_or_else(|| panic!("Failed to find menu item: open_old_menu"));
         let open_new_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "open_new_menu")
             .unwrap_or_else(|| panic!("Failed to find menu item: open_new_menu"));
-        let open_recent_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "open_recent_menu")
-            .unwrap_or_else(|| panic!("Failed to find menu item: open_recent_menu"));
+        let open_recent_menu =
+            MenuItem::from_xrc_name(main_frame.window_handle(), "open_recent_menu")
+                .unwrap_or_else(|| panic!("Failed to find menu item: open_recent_menu"));
         let exit_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "exit_menu")
             .unwrap_or_else(|| panic!("Failed to find menu item: exit_menu"));
         let compare_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "compare_menu")
             .unwrap_or_else(|| panic!("Failed to find menu item: compare_menu"));
         let cancel_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "cancel_menu")
             .unwrap_or_else(|| panic!("Failed to find menu item: cancel_menu"));
-        let export_audit_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "export_audit_menu")
-            .unwrap_or_else(|| panic!("Failed to find menu item: export_audit_menu"));
+        let export_audit_menu =
+            MenuItem::from_xrc_name(main_frame.window_handle(), "export_audit_menu")
+                .unwrap_or_else(|| panic!("Failed to find menu item: export_audit_menu"));
         let next_diff_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "next_diff_menu")
             .unwrap_or_else(|| panic!("Failed to find menu item: next_diff_menu"));
         let prev_diff_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "prev_diff_menu")
@@ -250,10 +260,18 @@ impl MainUi {
             .unwrap_or_else(|| panic!("Failed to find menu item: copy_menu"));
         let find_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "find_menu")
             .unwrap_or_else(|| panic!("Failed to find menu item: find_menu"));
-        let toggle_sheets_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "toggle_sheets_menu")
-            .unwrap_or_else(|| panic!("Failed to find menu item: toggle_sheets_menu"));
-        let reset_layout_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "reset_layout_menu")
-            .unwrap_or_else(|| panic!("Failed to find menu item: reset_layout_menu"));
+        let toggle_sheets_menu =
+            MenuItem::from_xrc_name(main_frame.window_handle(), "toggle_sheets_menu")
+                .unwrap_or_else(|| panic!("Failed to find menu item: toggle_sheets_menu"));
+        let reset_layout_menu =
+            MenuItem::from_xrc_name(main_frame.window_handle(), "reset_layout_menu")
+                .unwrap_or_else(|| panic!("Failed to find menu item: reset_layout_menu"));
+        let minimize_window_menu =
+            MenuItem::from_xrc_name(main_frame.window_handle(), "minimize_window_menu")
+                .unwrap_or_else(|| panic!("Failed to find menu item: minimize_window_menu"));
+        let toggle_maximize_window_menu =
+            MenuItem::from_xrc_name(main_frame.window_handle(), "toggle_maximize_window_menu")
+                .unwrap_or_else(|| panic!("Failed to find menu item: toggle_maximize_window_menu"));
         let license_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "license_menu")
             .unwrap_or_else(|| panic!("Failed to find menu item: license_menu"));
         let docs_menu = MenuItem::from_xrc_name(main_frame.window_handle(), "docs_menu")
@@ -284,8 +302,10 @@ impl MainUi {
         let compare_container = find_xrc_child::<Panel>(&compare_page, "compare_container");
         let sheets_list = find_xrc_child::<Panel>(&compare_container, "sheets_list");
         let result_tabs = find_xrc_child::<Notebook>(&compare_container, "result_tabs");
-        let compare_splitter = find_xrc_child::<SplitterWindow>(&compare_container, "compare_splitter");
-        let compare_right_panel = find_xrc_child::<Panel>(&compare_container, "compare_right_panel");
+        let compare_splitter =
+            find_xrc_child::<SplitterWindow>(&compare_container, "compare_splitter");
+        let compare_right_panel =
+            find_xrc_child::<Panel>(&compare_container, "compare_right_panel");
         sheets_list.set_min_size(Size::new(MIN_SASH_POSITION, 240));
         compare_right_panel.set_min_size(Size::new(320, 240));
         let old_picker = find_xrc_child::<FilePickerCtrl>(&compare_container, "old_picker");
@@ -296,8 +316,10 @@ impl MainUi {
         let trusted_checkbox = find_xrc_child::<CheckBox>(&compare_container, "trusted_checkbox");
         let progress_gauge = find_xrc_child::<Gauge>(&compare_container, "progress_gauge");
         let progress_text = find_xrc_child::<StaticText>(&compare_container, "progress_text");
+        let status_pill = find_xrc_child::<Panel>(&compare_container, "status_pill");
         let summary_text = find_xrc_child::<TextCtrl>(&compare_container, "summary_text");
         let detail_text = find_xrc_child::<TextCtrl>(&compare_container, "detail_text");
+        let grid_panel = find_xrc_child::<Panel>(&compare_container, "grid_panel");
 
         let recents_list = find_xrc_child::<Panel>(&recents_page, "recents_list");
         let open_recent_btn = find_xrc_child::<Button>(&recents_page, "open_recent_btn");
@@ -308,6 +330,8 @@ impl MainUi {
         let include_glob_text = find_xrc_child::<TextCtrl>(&batch_page, "include_glob_text");
         let exclude_glob_text = find_xrc_child::<TextCtrl>(&batch_page, "exclude_glob_text");
         let batch_results_list = find_xrc_child::<Panel>(&batch_page, "batch_results_list");
+        let include_glob_label = find_xrc_child::<StaticText>(&batch_page, "include_glob_label");
+        let exclude_glob_label = find_xrc_child::<StaticText>(&batch_page, "exclude_glob_label");
 
         let search_ctrl = find_xrc_child::<SearchCtrl>(&search_page, "search_ctrl");
         let search_scope_choice = find_xrc_child::<Choice>(&search_page, "search_scope_choice");
@@ -317,9 +341,51 @@ impl MainUi {
         let search_results_list = find_xrc_child::<Panel>(&search_page, "search_results_list");
         debug!("XRC widgets loaded successfully.");
 
+        let top_trim_bar = find_xrc_child::<Panel>(&main_panel, "top_trim_bar");
+        let trim_accent_green = find_xrc_child::<Panel>(&top_trim_bar, "trim_accent_green");
+        let trim_accent_yellow = find_xrc_child::<Panel>(&top_trim_bar, "trim_accent_yellow");
+
+        trim_accent_green.set_background_color(theme::Palette::ACCENT_GREEN);
+        trim_accent_green.set_background_style(BackgroundStyle::Colour);
+        trim_accent_yellow.set_background_color(theme::Palette::ACCENT_YELLOW);
+        trim_accent_yellow.set_background_style(BackgroundStyle::Colour);
+
+        // Mostly-light theme, with dark gray trim and visible green/yellow status accents.
+        theme::apply_surface(&main_panel);
+        theme::apply_surface(&root_tabs);
+        theme::apply_surface(&compare_page);
+        theme::apply_surface(&recents_page);
+        theme::apply_surface(&batch_page);
+        theme::apply_surface(&search_page);
+        theme::apply_surface(&compare_container);
+        theme::apply_surface(&sheets_list);
+        theme::apply_surface(&compare_right_panel);
+        theme::apply_surface(&grid_panel);
+        theme::apply_surface(&recents_list);
+        theme::apply_surface(&batch_results_list);
+        theme::apply_surface(&search_results_list);
+
+        theme::apply_trim(&top_trim_bar);
+        theme::apply_trim(&status_bar);
+
+        theme::apply_content_text(&summary_text, false);
+        theme::apply_content_text(&detail_text, true);
+
+        trusted_checkbox.set_foreground_color(theme::Palette::TEXT_PRIMARY);
+        include_glob_label.set_foreground_color(theme::Palette::TEXT_SECONDARY);
+        exclude_glob_label.set_foreground_color(theme::Palette::TEXT_SECONDARY);
+
+        theme::set_status_tone(
+            &progress_text,
+            &status_pill,
+            &progress_gauge,
+            theme::StatusTone::Ready,
+        );
+
         Self {
             main_frame,
             main_panel,
+            status_pill,
             open_pair_menu,
             open_old_menu,
             open_new_menu,
@@ -334,6 +400,8 @@ impl MainUi {
             find_menu,
             toggle_sheets_menu,
             reset_layout_menu,
+            minimize_window_menu,
+            toggle_maximize_window_menu,
             license_menu,
             docs_menu,
             about_menu,
@@ -354,6 +422,7 @@ impl MainUi {
             result_tabs,
             summary_text,
             detail_text,
+            grid_panel,
             recents_list,
             open_recent_btn,
             batch_old_dir,
@@ -430,7 +499,12 @@ fn save_ui_state(path: &Path, state: &UiState) {
     let Ok(payload) = serde_json::to_string_pretty(state) else {
         return;
     };
-    let Ok(mut file) = OpenOptions::new().create(true).truncate(true).write(true).open(path) else {
+    let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(path)
+    else {
         return;
     };
     let _ = file.write_all(payload.as_bytes());
@@ -453,11 +527,23 @@ fn capture_ui_state(ctx: &UiContext) -> UiState {
         window_width: Some(size.width),
         window_height: Some(size.height),
         window_maximized: Some(ctx.ui.frame.is_maximized()),
-        root_tab: if selection >= 0 { Some(selection as usize) } else { None },
+        root_tab: if selection >= 0 {
+            Some(selection as usize)
+        } else {
+            None
+        },
         compare_sash: Some(ctx.state.sheets_sash_position),
         sheets_panel_visible: Some(ctx.state.sheets_panel_visible),
-        last_old_path: if old_path.trim().is_empty() { None } else { Some(old_path) },
-        last_new_path: if new_path.trim().is_empty() { None } else { Some(new_path) },
+        last_old_path: if old_path.trim().is_empty() {
+            None
+        } else {
+            Some(old_path)
+        },
+        last_new_path: if new_path.trim().is_empty() {
+            None
+        } else {
+            Some(new_path)
+        },
         preset_choice: ctx.ui.preset_choice.get_selection(),
         trusted_files: Some(ctx.ui.trusted_checkbox.is_checked()),
     }
@@ -515,25 +601,36 @@ fn apply_ui_state(ctx: &mut UiContext, ui_state: &UiState) {
         }
     }
 
-    ctx.ui.compare_splitter.set_minimum_pane_size(MIN_SASH_POSITION);
+    ctx.ui
+        .compare_splitter
+        .set_minimum_pane_size(MIN_SASH_POSITION);
+    // XRC may create the splitter in a horizontal split mode (top/bottom). Force the
+    // legacy UI into a stable vertical split: sheets list on the left, results on the right.
+    let _ = ctx.ui.compare_splitter.unsplit(None::<&Panel>);
+    ctx.ui
+        .compare_splitter
+        .initialize(&ctx.ui.compare_right_panel);
     let visible = ui_state
         .sheets_panel_visible
         .unwrap_or(ctx.state.sheets_panel_visible);
-    let mut sash = ui_state.compare_sash.unwrap_or(ctx.state.sheets_sash_position);
+    let mut sash = ui_state
+        .compare_sash
+        .unwrap_or(ctx.state.sheets_sash_position);
     if sash < MIN_SASH_POSITION {
         sash = DEFAULT_SASH_POSITION;
     }
     ctx.state.sheets_panel_visible = visible;
     ctx.state.sheets_sash_position = sash;
     if visible {
-        if !ctx
-            .ui
-            .compare_splitter
-            .split_vertically(&ctx.ui.sheets_list_panel, &ctx.ui.compare_right_panel, sash)
-        {
+        if !ctx.ui.compare_splitter.split_vertically(
+            &ctx.ui.sheets_list_panel,
+            &ctx.ui.compare_right_panel,
+            sash,
+        ) {
             ctx.ui.compare_splitter.set_sash_position(sash, false);
         }
     } else {
+        // `initialize(compare_right_panel)` above ensures the right panel is the visible one.
         let _ = ctx
             .ui
             .compare_splitter
@@ -559,12 +656,15 @@ struct UiHandles {
     find_menu: MenuItem,
     toggle_sheets_menu: MenuItem,
     reset_layout_menu: MenuItem,
+    minimize_window_menu: MenuItem,
+    toggle_maximize_window_menu: MenuItem,
     license_menu: MenuItem,
     docs_menu: MenuItem,
     about_menu: MenuItem,
     status_bar: StatusBar,
     progress_text: StaticText,
     progress_gauge: Gauge,
+    status_pill: Panel,
     compare_btn: Button,
     cancel_btn: Button,
     old_picker: FilePickerCtrl,
@@ -573,6 +673,7 @@ struct UiHandles {
     trusted_checkbox: CheckBox,
     summary_text: TextCtrl,
     detail_text: TextCtrl,
+    grid_panel: Panel,
     root_tabs: Notebook,
     compare_container: Panel,
     result_tabs: Notebook,
@@ -598,6 +699,8 @@ struct UiHandles {
     batch_view: Option<DataViewCtrl>,
     search_view: Option<DataViewCtrl>,
     webview: Option<WebView>,
+    grid_webview: Option<WebView>,
+    grid_fallback: Option<TextCtrl>,
 }
 
 struct ActiveRun {
@@ -714,14 +817,21 @@ fn format_summary_text(summary: &DiffRunSummary) -> String {
             lines.push(format!("- {warning}"));
         }
         if summary.warnings.len() > 10 {
-            lines.push(format!("... {} more warning(s)", summary.warnings.len() - 10));
+            lines.push(format!(
+                "... {} more warning(s)",
+                summary.warnings.len() - 10
+            ));
         }
     }
 
     lines.join("\n")
 }
 
-fn stage_detail_payload(ctx: &mut UiContext, sheet_name: String, payload: ui_payload::DiffWithSheets) {
+fn stage_detail_payload(
+    ctx: &mut UiContext,
+    sheet_name: String,
+    payload: ui_payload::DiffWithSheets,
+) {
     ctx.state.pending_detail_sheet_name = Some(sheet_name.clone());
     ctx.state.pending_detail_payload = Some(payload);
     if ctx.ui.result_tabs.selection() == 1 {
@@ -730,23 +840,203 @@ fn stage_detail_payload(ctx: &mut UiContext, sheet_name: String, payload: ui_pay
     }
 
     ctx.ui.detail_text.set_value(&format!(
-        "Sheet payload ready for '{sheet_name}'.\nOpen the Details tab to render full JSON."
+        "Sheet payload ready for '{sheet_name}'.\nOpen Details for JSON, or Grid for a visual preview."
     ));
-    update_status_in_ctx(ctx, "Sheet payload ready (deferred until Details tab).");
+    update_status_in_ctx(ctx, "Sheet payload ready (deferred until tab open).");
 }
 
 fn render_staged_detail_payload(ctx: &mut UiContext) {
-    let Some(payload) = ctx.state.pending_detail_payload.take() else {
+    let Some(payload) = ctx.state.pending_detail_payload.as_ref() else {
         return;
     };
     let sheet_name = ctx
         .state
         .pending_detail_sheet_name
-        .take()
+        .clone()
         .unwrap_or_else(|| "sheet".to_string());
-    let text = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string());
+    let text = serde_json::to_string_pretty(payload).unwrap_or_else(|_| "{}".to_string());
     ctx.ui.detail_text.set_value(&text);
     update_status_in_ctx(ctx, &format!("Sheet payload loaded: {sheet_name}."));
+}
+
+fn ensure_grid_preview_ready(ctx: &mut UiContext) {
+    if ctx.state.webview_enabled {
+        return;
+    }
+    if ctx.ui.grid_webview.is_some() || ctx.ui.grid_fallback.is_some() {
+        return;
+    }
+
+    // The legacy UI runs without the full web UI, but we still want a visual grid preview.
+    // Use the simplest possible HTML (no external assets) to maximize backend compatibility.
+    let backend = if cfg!(target_os = "windows") {
+        // Prefer Edge when present, otherwise fall back to the default backend (often IE).
+        if WebView::is_backend_available(WebViewBackend::Edge) {
+            WebViewBackend::Edge
+        } else {
+            WebViewBackend::Default
+        }
+    } else if WebView::is_backend_available(WebViewBackend::WebKit) {
+        WebViewBackend::WebKit
+    } else {
+        WebViewBackend::Default
+    };
+
+    if !WebView::is_backend_available(backend) {
+        let fallback = TextCtrl::builder(&ctx.ui.grid_panel)
+            .with_style(
+                wxdragon::widgets::textctrl::TextCtrlStyle::MultiLine
+                    | wxdragon::widgets::textctrl::TextCtrlStyle::ReadOnly,
+            )
+            .build();
+        theme::apply_content_text(&fallback, true);
+        let sizer = BoxSizer::builder(Orientation::Vertical).build();
+        sizer.add(&fallback, 1, SizerFlag::Expand | SizerFlag::All, 0);
+        ctx.ui.grid_panel.set_sizer(sizer, true);
+        ctx.ui.grid_panel.layout();
+        fallback.set_value("Grid preview unavailable: WebView backend not available.");
+        ctx.ui.grid_fallback = Some(fallback);
+        return;
+    }
+
+    let webview = WebView::builder(&ctx.ui.grid_panel)
+        .with_backend(backend)
+        .build();
+    let sizer = BoxSizer::builder(Orientation::Vertical).build();
+    sizer.add(&webview, 1, SizerFlag::Expand, 0);
+    ctx.ui.grid_panel.set_sizer(sizer, true);
+    ctx.ui.grid_panel.layout();
+
+    ctx.ui.grid_webview = Some(webview);
+    render_grid_placeholder(ctx, "Select a sheet to preview grid changes.");
+}
+
+fn render_grid_placeholder(ctx: &mut UiContext, message: &str) {
+    ensure_grid_preview_ready(ctx);
+    if let Some(text) = ctx.ui.grid_fallback {
+        text.set_value(message);
+        return;
+    }
+    let Some(webview) = ctx.ui.grid_webview else {
+        return;
+    };
+    let html = grid_placeholder_html(message);
+    webview.set_page(&html, "about:blank");
+}
+
+fn grid_placeholder_html(message: &str) -> String {
+    let message = grid_preview::escape_html(message);
+    format!(
+        r#"<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <style>
+      :root {{
+        --bg: #0d1117;
+        --panel: #161b22;
+        --border: #30363d;
+        --text: #e6edf3;
+        --muted: #8b949e;
+        --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+        --sans: system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+      }}
+      body {{
+        margin: 0;
+        font-family: var(--sans);
+        background: var(--bg);
+        color: var(--text);
+      }}
+      .wrap {{
+        padding: 14px;
+      }}
+      .card {{
+        border: 1px solid var(--border);
+        background: var(--panel);
+        border-radius: 12px;
+        padding: 14px 16px;
+      }}
+      .msg {{
+        font-size: 13px;
+        color: var(--muted);
+      }}
+      .hint {{
+        margin-top: 10px;
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--muted);
+      }}
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <div class="msg">{message}</div>
+        <div class="hint">Tip: select a sheet in the sheet list (View -&gt; Show Sheets if hidden).</div>
+      </div>
+    </div>
+  </body>
+</html>"#
+    )
+}
+
+fn render_grid_for_current_selection(ctx: &mut UiContext) {
+    if ctx.state.webview_enabled {
+        return;
+    }
+    let sheet_name = ctx
+        .ui
+        .sheets_view
+        .and_then(|view| view.get_selected_row())
+        .and_then(|row| ctx.state.sheet_names.get(row).cloned());
+    let Some(sheet_name) = sheet_name else {
+        render_grid_placeholder(ctx, "Select a sheet to preview grid changes.");
+        return;
+    };
+
+    let html: Option<String> = {
+        if let (Some(payload), Some(pending_name)) = (
+            ctx.state.pending_detail_payload.as_ref(),
+            ctx.state.pending_detail_sheet_name.as_deref(),
+        ) {
+            if pending_name.eq_ignore_ascii_case(&sheet_name) {
+                Some(grid_preview::build_sheet_grid_preview_html(
+                    &sheet_name,
+                    payload,
+                ))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+    .or_else(|| {
+        ctx.state
+            .current_payload
+            .as_ref()
+            .map(|payload| grid_preview::build_sheet_grid_preview_html(&sheet_name, payload))
+    });
+
+    let Some(html) = html else {
+        render_grid_placeholder(ctx, "Grid preview unavailable: no payload loaded.");
+        return;
+    };
+
+    render_grid_html(ctx, &html);
+}
+
+fn render_grid_html(ctx: &mut UiContext, html: &str) {
+    ensure_grid_preview_ready(ctx);
+    if ctx.ui.grid_fallback.is_some() {
+        // If we're running without a webview backend, keep the fallback message.
+        return;
+    }
+    let Some(webview) = ctx.ui.grid_webview else {
+        return;
+    };
+    webview.set_page(html, "about:blank");
 }
 
 fn license_check_disabled() -> bool {
@@ -763,7 +1053,8 @@ fn ensure_license_ready(action: &str) -> bool {
     if license_check_disabled() {
         static SKIP_NOTED: AtomicBool = AtomicBool::new(false);
         if !SKIP_NOTED.swap(true, Ordering::Relaxed) {
-            let _ = with_ui_context(|ctx| update_status_in_ctx(ctx, "License check skipped (dev)."));
+            let _ =
+                with_ui_context(|ctx| update_status_in_ctx(ctx, "License check skipped (dev)."));
         }
         return true;
     }
@@ -792,13 +1083,14 @@ fn ensure_license_ready(action: &str) -> bool {
 
 fn show_license_dialog() {
     let _ = with_ui_context(|ctx| {
-        let actions = [
-            "Activate license",
-            "Check status",
-            "Deactivate this device",
-        ];
-        let dialog = SingleChoiceDialog::builder(&ctx.ui.frame, "Choose a license action:", "License", &actions)
-            .build();
+        let actions = ["Activate license", "Check status", "Deactivate this device"];
+        let dialog = SingleChoiceDialog::builder(
+            &ctx.ui.frame,
+            "Choose a license action:",
+            "License",
+            &actions,
+        )
+        .build();
         if dialog.show_modal() != ID_OK {
             return;
         }
@@ -835,7 +1127,9 @@ fn show_license_dialog() {
                             result.status.status, result.status.max_devices
                         );
                         let info = MessageDialog::builder(&ctx.ui.frame, &message, "License")
-                            .with_style(MessageDialogStyle::IconInformation | MessageDialogStyle::OK)
+                            .with_style(
+                                MessageDialogStyle::IconInformation | MessageDialogStyle::OK,
+                            )
                             .build();
                         let _ = info.show_modal();
                     }
@@ -1131,9 +1425,7 @@ fn open_path(path: &Path, reveal: bool) -> Result<(), String> {
         if reveal {
             cmd.arg("-R");
         }
-        cmd.arg(path)
-            .spawn()
-            .map_err(|e| e.to_string())?;
+        cmd.arg(path).spawn().map_err(|e| e.to_string())?;
         return Ok(());
     }
 
@@ -1230,10 +1522,15 @@ fn setup_webview(ctx: &mut UiContext) -> bool {
         .with_backend(backend)
         .build();
     let _ = webview.add_script_message_handler(WEBVIEW_HANDLER_NAME);
-    let _ = webview.add_user_script(WEBVIEW_BRIDGE_SCRIPT, WebViewUserScriptInjectionTime::AtDocumentStart);
+    let _ = webview.add_user_script(
+        WEBVIEW_BRIDGE_SCRIPT,
+        WebViewUserScriptInjectionTime::AtDocumentStart,
+    );
 
     webview.on_script_message_received(move |event| {
-        let Some(message) = event.get_string() else { return; };
+        let Some(message) = event.get_string() else {
+            return;
+        };
         wxdragon::call_after(Box::new(move || handle_webview_rpc(webview, message)));
     });
 
@@ -1293,12 +1590,15 @@ fn handle_webview_rpc(webview: WebView, message: String) {
 
     match request.method.as_str() {
         "ready" => {
-            let version = with_ui_context(|ctx| ctx.state.engine_version.clone()).unwrap_or_default();
+            let version =
+                with_ui_context(|ctx| ctx.state.engine_version.clone()).unwrap_or_default();
             send_rpc_payload_async(webview, rpc_ok(request.id, json!(version)));
         }
         "getCapabilities" => {
-            let caps = with_ui_context(|ctx| ui_payload::HostCapabilities::new(ctx.state.engine_version.clone()))
-                .unwrap_or_else(|| ui_payload::HostCapabilities::new(String::new()));
+            let caps = with_ui_context(|ctx| {
+                ui_payload::HostCapabilities::new(ctx.state.engine_version.clone())
+            })
+            .unwrap_or_else(|| ui_payload::HostCapabilities::new(String::new()));
             send_rpc_payload_async(webview, rpc_ok(request.id, json!(caps)));
         }
         "openFileDialog" => {
@@ -1365,11 +1665,20 @@ fn handle_webview_rpc(webview: WebView, message: String) {
                 ctx.state.run_counter = ctx.state.run_counter.saturating_add(1);
                 let run_id = ctx.state.run_counter;
                 let cancel = Arc::new(AtomicBool::new(false));
-                ctx.state.active_run = Some(ActiveRun { cancel: cancel.clone() });
+                ctx.state.active_run = Some(ActiveRun {
+                    cancel: cancel.clone(),
+                });
 
                 let options = params.options.unwrap_or_default();
                 let backend = ctx.state.backend.clone();
-                args = Some((backend, run_id, cancel, params.old_path, params.new_path, options));
+                args = Some((
+                    backend,
+                    run_id,
+                    cancel,
+                    params.old_path,
+                    params.new_path,
+                    options,
+                ));
             });
 
             let Some((backend, run_id, cancel, old_path, new_path, options)) = args else {
@@ -1388,7 +1697,9 @@ fn handle_webview_rpc(webview: WebView, message: String) {
                     cancel,
                     progress: progress_tx,
                 });
-                wxdragon::call_after(Box::new(move || handle_webview_diff_result(webview, request.id, result)));
+                wxdragon::call_after(Box::new(move || {
+                    handle_webview_diff_result(webview, request.id, result)
+                }));
             });
         }
         "cancel" => {
@@ -1398,7 +1709,9 @@ fn handle_webview_rpc(webview: WebView, message: String) {
         "loadRecents" => {
             let result = with_ui_context(|ctx| ctx.state.backend.load_recents());
             match result {
-                Some(Ok(recents)) => send_rpc_payload_async(webview, rpc_ok(request.id, json!(recents))),
+                Some(Ok(recents)) => {
+                    send_rpc_payload_async(webview, rpc_ok(request.id, json!(recents)))
+                }
                 Some(Err(err)) => send_rpc_payload_async(webview, rpc_err(request.id, json!(err))),
                 None => send_rpc_payload_async(
                     webview,
@@ -1421,7 +1734,9 @@ fn handle_webview_rpc(webview: WebView, message: String) {
             };
             let result = with_ui_context(|ctx| ctx.state.backend.save_recent(entry));
             match result {
-                Some(Ok(recents)) => send_rpc_payload_async(webview, rpc_ok(request.id, json!(recents))),
+                Some(Ok(recents)) => {
+                    send_rpc_payload_async(webview, rpc_ok(request.id, json!(recents)))
+                }
                 Some(Err(err)) => send_rpc_payload_async(webview, rpc_err(request.id, json!(err))),
                 None => send_rpc_payload_async(
                     webview,
@@ -1693,7 +2008,9 @@ fn handle_webview_rpc(webview: WebView, message: String) {
             let result = open_path(&path, reveal);
             match result {
                 Ok(()) => send_rpc_payload_async(webview, rpc_ok(request.id, json!(true))),
-                Err(err) => send_rpc_payload_async(webview, rpc_err(request.id, json!({ "message": err }))),
+                Err(err) => {
+                    send_rpc_payload_async(webview, rpc_err(request.id, json!({ "message": err })))
+                }
             }
         }
         "runBatchCompare" => {
@@ -1868,6 +2185,7 @@ fn create_dataview(parent: &Panel, columns: &[(&str, i32)]) -> DataViewCtrl {
     let ctrl = DataViewCtrl::builder(parent)
         .with_style(DataViewStyle::RowLines | DataViewStyle::VerticalRules)
         .build();
+    theme::apply_content_dataview(&ctrl);
 
     for (idx, (label, width)) in columns.iter().enumerate() {
         let _ = ctrl.append_text_column(
@@ -1972,15 +2290,15 @@ fn populate_recents(ctx: &mut UiContext, recents: Vec<RecentComparison>) {
                 entry.last_run_iso.clone(),
                 entry.mode.clone().unwrap_or_else(|| "".to_string()),
             ]
-    })
-    .collect::<Vec<_>>();
+        })
+        .collect::<Vec<_>>();
 
     ctx.state.recents = recents;
     update_virtual_table(table, rows);
 }
 
 fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
-    let mut ready_signal: Option<(u64, &'static str)> = None;
+    let mut ready_reason: Option<&'static str> = None;
     let _ = with_ui_context(|ctx| {
         ctx.ui.compare_btn.enable(true);
         ctx.ui.cancel_btn.enable(false);
@@ -1989,18 +2307,61 @@ fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
 
         match result {
             Ok(outcome) => {
+                info!(
+                    "Diff complete: diff_id={} mode={} summary={} payload={}",
+                    outcome.diff_id,
+                    outcome.mode.as_str(),
+                    if outcome.summary.is_some() {
+                        "yes"
+                    } else {
+                        "no"
+                    },
+                    if outcome.payload.is_some() {
+                        "yes"
+                    } else {
+                        "no"
+                    }
+                );
                 ctx.state.current_diff_id = Some(outcome.diff_id.clone());
                 ctx.state.current_mode = Some(outcome.mode);
                 ctx.state.current_payload = outcome.payload;
                 ctx.state.current_summary = outcome.summary.clone();
                 ctx.state.pending_detail_payload = None;
                 ctx.state.pending_detail_sheet_name = None;
+                render_grid_placeholder(ctx, "Select a sheet to preview grid changes.");
 
                 if let Some(summary) = outcome.summary {
-                    ctx.ui.summary_text.set_value(&format_summary_text(&summary));
+                    ctx.ui
+                        .summary_text
+                        .set_value(&format_summary_text(&summary));
                     ctx.ui.detail_text.set_value("");
                     populate_sheet_list(ctx, &summary);
                     update_status_counts_in_ctx(ctx, Some(&summary));
+
+                    // Dev scenarios can ask to focus the Grid tab; once we have a summary, select
+                    // the first sheet so the preview actually renders.
+                    let wants_grid_focus = ctx
+                        .state
+                        .dev_scenario
+                        .as_ref()
+                        .and_then(|s| s.focus_panel.as_deref())
+                        .map(|value| value.trim().eq_ignore_ascii_case("grid"))
+                        .unwrap_or(false);
+                    if wants_grid_focus {
+                        ctx.ui.root_tabs.set_selection(0);
+                        ctx.ui.result_tabs.set_selection(RESULT_TAB_GRID as usize);
+                        if !ctx.state.sheet_names.is_empty() {
+                            if let Some(view) = ctx.ui.sheets_view {
+                                let _ = view.select_row(0);
+                            }
+                            render_grid_for_current_selection(ctx);
+                        } else {
+                            render_grid_placeholder(
+                                ctx,
+                                "No sheet-level grid changes were detected.",
+                            );
+                        }
+                    }
 
                     let recent = RecentComparison {
                         old_path: summary.old_path.clone(),
@@ -2023,37 +2384,41 @@ fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
                 }
 
                 update_status_in_ctx(ctx, "Diff complete.");
+                theme::set_status_tone(
+                    &ctx.ui.progress_text,
+                    &ctx.ui.status_pill,
+                    &ctx.ui.progress_gauge,
+                    theme::StatusTone::Ready,
+                );
                 if ctx.state.dev_ready_file.is_some() && !ctx.state.dev_ready_fired {
-                    let delay = ctx
-                        .state
-                        .dev_scenario
-                        .as_ref()
-                        .map(|s| s.stable_wait_ms)
-                        .unwrap_or(0);
-                    ready_signal = Some((delay, "diff_complete"));
+                    ready_reason = Some("diff_complete");
                 }
             }
             Err(err) => {
+                log::warn!("Diff failed: {}: {}", err.code, err.message);
                 ctx.ui
                     .detail_text
                     .set_value(&format!("{}: {}", err.code, err.message));
                 update_status_in_ctx(ctx, &format!("Diff failed: {}", err.message));
+                render_grid_placeholder(ctx, "Run a diff to preview grid changes.");
+                theme::set_status_tone(
+                    &ctx.ui.progress_text,
+                    &ctx.ui.status_pill,
+                    &ctx.ui.progress_gauge,
+                    theme::StatusTone::Error,
+                );
                 update_status_counts_in_ctx(ctx, None);
                 if ctx.state.dev_ready_file.is_some() && !ctx.state.dev_ready_fired {
-                    let delay = ctx
-                        .state
-                        .dev_scenario
-                        .as_ref()
-                        .map(|s| s.stable_wait_ms)
-                        .unwrap_or(0);
-                    ready_signal = Some((delay, "diff_failed"));
+                    ready_reason = Some("diff_failed");
                 }
             }
         }
     });
 
-    if let Some((delay, reason)) = ready_signal {
-        schedule_ready_signal(delay, reason);
+    if let Some(reason) = ready_reason {
+        // For capture/dev scenarios, write the ready file immediately when the UI reaches a stable
+        // end-of-run state. The capture script can add a delay if it needs extra settling time.
+        mark_ui_ready(reason);
     }
 }
 
@@ -2091,7 +2456,16 @@ fn start_compare() {
         let old_path = ctx.ui.old_picker.get_path();
         let new_path = ctx.ui.new_picker.get_path();
 
+        debug!(
+            "start_compare: old_path='{}' new_path='{}'",
+            old_path, new_path
+        );
         if old_path.trim().is_empty() || new_path.trim().is_empty() {
+            log::warn!(
+                "start_compare: missing old/new path (old_empty={}, new_empty={})",
+                old_path.trim().is_empty(),
+                new_path.trim().is_empty()
+            );
             update_status_in_ctx(ctx, "Select both old and new files.");
             return;
         }
@@ -2104,7 +2478,22 @@ fn start_compare() {
         ctx.state.run_counter = ctx.state.run_counter.saturating_add(1);
         let run_id = ctx.state.run_counter;
         let cancel = Arc::new(AtomicBool::new(false));
-        ctx.state.active_run = Some(ActiveRun { cancel: cancel.clone() });
+        ctx.state.active_run = Some(ActiveRun {
+            cancel: cancel.clone(),
+        });
+
+        // Scenario harness: allow deterministic "canceled" end-states without relying on races
+        // between a fast diff completion and a scheduled cancel event.
+        let cancel_immediately = ctx
+            .state
+            .dev_scenario
+            .as_ref()
+            .and_then(|s| s.cancel_after_ms)
+            .unwrap_or(u64::MAX)
+            == 0;
+        if cancel_immediately {
+            cancel.store(true, Ordering::Relaxed);
+        }
         ctx.state.current_payload = None;
         ctx.state.current_summary = None;
         ctx.state.pending_detail_payload = None;
@@ -2118,6 +2507,12 @@ fn start_compare() {
         ctx.ui.summary_text.set_value("");
         ctx.ui.detail_text.set_value("");
         update_status_in_ctx(ctx, "Starting diff...");
+        theme::set_status_tone(
+            &ctx.ui.progress_text,
+            &ctx.ui.status_pill,
+            &ctx.ui.progress_gauge,
+            theme::StatusTone::Working,
+        );
 
         let options = DiffOptions {
             preset: Some(preset_from_choice(&ctx.ui.preset_choice)),
@@ -2157,8 +2552,13 @@ fn handle_sheet_selection(row: usize) {
 
         match mode {
             Some(DiffMode::Payload) => {
-                if let (Some(summary), Some(sheet_name)) = (&ctx.state.current_summary, sheet_name) {
-                    if let Some(sheet) = summary.sheets.iter().find(|sheet| sheet.sheet_name == sheet_name) {
+                if let (Some(summary), Some(sheet_name)) = (&ctx.state.current_summary, sheet_name)
+                {
+                    if let Some(sheet) = summary
+                        .sheets
+                        .iter()
+                        .find(|sheet| sheet.sheet_name == sheet_name)
+                    {
                         let text = format!(
                             "Sheet: {}\nOps: {}\nAdded: {}\nRemoved: {}\nModified: {}\nMoved: {}",
                             sheet.sheet_name,
@@ -2171,6 +2571,17 @@ fn handle_sheet_selection(row: usize) {
                         ctx.ui.detail_text.set_value(&text);
                         ctx.state.pending_detail_payload = None;
                         ctx.state.pending_detail_sheet_name = None;
+                        let html = ctx.state.current_payload.as_ref().map(|payload| {
+                            grid_preview::build_sheet_grid_preview_html(&sheet_name, payload)
+                        });
+                        if let Some(html) = html {
+                            render_grid_html(ctx, &html);
+                        } else {
+                            render_grid_placeholder(
+                                ctx,
+                                "Grid preview unavailable: payload not loaded.",
+                            );
+                        }
                     }
                 }
             }
@@ -2185,6 +2596,9 @@ fn handle_sheet_selection(row: usize) {
                 let backend = ctx.state.backend.clone();
                 request = Some((backend, diff_id, sheet_name));
                 update_status_in_ctx(ctx, "Loading sheet payload...");
+                ctx.state.pending_detail_payload = None;
+                ctx.state.pending_detail_sheet_name = None;
+                render_grid_placeholder(ctx, "Loading grid preview...");
             }
             _ => {}
         }
@@ -2210,6 +2624,12 @@ fn handle_sheet_selection(row: usize) {
             Ok(payload) => {
                 let _ = with_ui_context(|ctx| {
                     stage_detail_payload(ctx, requested_sheet.clone(), payload);
+                    let html = ctx.state.pending_detail_payload.as_ref().map(|payload| {
+                        grid_preview::build_sheet_grid_preview_html(&requested_sheet, payload)
+                    });
+                    if let Some(html) = html {
+                        render_grid_html(ctx, &html);
+                    }
                 });
             }
             Err(err) => {
@@ -2237,8 +2657,11 @@ fn load_diff_summary_into_ui(diff_id: String) {
                     ctx.state.pending_detail_payload = None;
                     ctx.state.pending_detail_sheet_name = None;
 
-                    ctx.ui.summary_text.set_value(&format_summary_text(&summary));
+                    ctx.ui
+                        .summary_text
+                        .set_value(&format_summary_text(&summary));
                     ctx.ui.detail_text.set_value("");
+                    render_grid_placeholder(ctx, "Select a sheet to preview grid changes.");
                     populate_sheet_list(ctx, &summary);
                     update_status_counts_in_ctx(ctx, Some(&summary));
                     ctx.ui.root_tabs.set_selection(0);
@@ -2312,7 +2735,9 @@ fn handle_batch_result(result: Result<BatchOutcome, DiffErrorPayload>) {
                             item.old_path.clone().unwrap_or_else(|| "".to_string()),
                             item.new_path.clone().unwrap_or_else(|| "".to_string()),
                             item.status.clone(),
-                            item.op_count.map(|v| v.to_string()).unwrap_or_else(|| "".to_string()),
+                            item.op_count
+                                .map(|v| v.to_string())
+                                .unwrap_or_else(|| "".to_string()),
                             item.warnings_count
                                 .map(|v| v.to_string())
                                 .unwrap_or_else(|| "".to_string()),
@@ -2347,7 +2772,11 @@ fn handle_search() {
                     update_status_in_ctx(ctx, "Run a diff before searching changes.");
                     return;
                 };
-                request = Some(SearchRequest::DiffOps { backend, diff_id, query });
+                request = Some(SearchRequest::DiffOps {
+                    backend,
+                    diff_id,
+                    query,
+                });
             }
             1 => {
                 let Some(index) = ctx.state.search_old_index.clone() else {
@@ -2380,7 +2809,11 @@ fn handle_search() {
     };
 
     thread::spawn(move || match request {
-        SearchRequest::DiffOps { backend, diff_id, query } => {
+        SearchRequest::DiffOps {
+            backend,
+            diff_id,
+            query,
+        } => {
             let result = backend.search_diff_ops(&diff_id, &query, 100);
             wxdragon::call_after(Box::new(move || match result {
                 Ok(results) => apply_search_results(results),
@@ -2508,6 +2941,12 @@ fn cancel_current() {
         if let Some(active) = ctx.state.active_run.as_ref() {
             active.cancel.store(true, Ordering::Relaxed);
             update_status_in_ctx(ctx, "Canceling...");
+            theme::set_status_tone(
+                &ctx.ui.progress_text,
+                &ctx.ui.status_pill,
+                &ctx.ui.progress_gauge,
+                theme::StatusTone::Working,
+            );
         }
     });
 }
@@ -2588,11 +3027,21 @@ fn copy_current_text() {
     let _ = with_ui_context(|ctx| {
         let selected_tab = ctx.ui.result_tabs.selection();
         let (selected, full) = if selected_tab == 1 {
-            (ctx.ui.detail_text.get_string_selection(), ctx.ui.detail_text.get_value())
+            (
+                ctx.ui.detail_text.get_string_selection(),
+                ctx.ui.detail_text.get_value(),
+            )
         } else {
-            (ctx.ui.summary_text.get_string_selection(), ctx.ui.summary_text.get_value())
+            (
+                ctx.ui.summary_text.get_string_selection(),
+                ctx.ui.summary_text.get_value(),
+            )
         };
-        let text = if selected.trim().is_empty() { full } else { selected };
+        let text = if selected.trim().is_empty() {
+            full
+        } else {
+            selected
+        };
         if text.trim().is_empty() {
             update_status_in_ctx(ctx, "Nothing to copy.");
             return;
@@ -2650,16 +3099,18 @@ fn toggle_sheets_panel() {
             ctx.state.sheets_panel_visible = false;
         } else {
             let sash = ctx.state.sheets_sash_position.max(MIN_SASH_POSITION);
-            if !ctx
-                .ui
-                .compare_splitter
-                .split_vertically(&ctx.ui.sheets_list_panel, &ctx.ui.compare_right_panel, sash)
-            {
+            if !ctx.ui.compare_splitter.split_vertically(
+                &ctx.ui.sheets_list_panel,
+                &ctx.ui.compare_right_panel,
+                sash,
+            ) {
                 ctx.ui.compare_splitter.set_sash_position(sash, false);
             }
             ctx.state.sheets_panel_visible = true;
         }
-        ctx.ui.toggle_sheets_menu.check(ctx.state.sheets_panel_visible);
+        ctx.ui
+            .toggle_sheets_menu
+            .check(ctx.state.sheets_panel_visible);
         ctx.ui.compare_container.layout();
         ctx.ui.frame.layout();
     });
@@ -2673,12 +3124,14 @@ fn reset_layout() {
         ctx.state.sheets_panel_visible = true;
         ctx.state.sheets_sash_position = DEFAULT_SASH_POSITION;
         let _ = ctx.ui.compare_splitter.unsplit(None::<&Panel>);
-        if !ctx
-            .ui
-            .compare_splitter
-            .split_vertically(&ctx.ui.sheets_list_panel, &ctx.ui.compare_right_panel, DEFAULT_SASH_POSITION)
-        {
-            ctx.ui.compare_splitter.set_sash_position(DEFAULT_SASH_POSITION, false);
+        if !ctx.ui.compare_splitter.split_vertically(
+            &ctx.ui.sheets_list_panel,
+            &ctx.ui.compare_right_panel,
+            DEFAULT_SASH_POSITION,
+        ) {
+            ctx.ui
+                .compare_splitter
+                .set_sash_position(DEFAULT_SASH_POSITION, false);
         }
         ctx.ui.toggle_sheets_menu.check(true);
         ctx.ui.frame.set_size(default_window_size());
@@ -2691,9 +3144,23 @@ fn reset_layout() {
     });
 }
 
+fn minimize_window() {
+    let _ = with_ui_context(|ctx| {
+        ctx.ui.frame.iconize(true);
+    });
+}
+
+fn toggle_maximize_window() {
+    let _ = with_ui_context(|ctx| {
+        if ctx.ui.frame.is_iconized() {
+            ctx.ui.frame.iconize(false);
+        }
+        ctx.ui.frame.maximize(!ctx.ui.frame.is_maximized());
+    });
+}
+
 fn open_docs() {
-    let docs_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/desktop.md");
+    let docs_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/desktop.md");
     if !docs_path.exists() {
         let _ = with_ui_context(|ctx| {
             let dialog = MessageDialog::builder(
@@ -2749,6 +3216,8 @@ fn setup_menu_handlers(ids: MenuIds) {
         find_id,
         toggle_sheets_id,
         reset_layout_id,
+        minimize_window_id,
+        toggle_maximize_window_id,
         license_id,
         docs_id,
         about_id,
@@ -2804,6 +3273,8 @@ fn setup_menu_handlers(ids: MenuIds) {
             id if id == find_id => focus_search(),
             id if id == toggle_sheets_id => toggle_sheets_panel(),
             id if id == reset_layout_id => reset_layout(),
+            id if id == minimize_window_id => minimize_window(),
+            id if id == toggle_maximize_window_id => toggle_maximize_window(),
             id if id == license_id => show_license_dialog(),
             id if id == docs_id => open_docs(),
             id if id == about_id => {
@@ -2881,6 +3352,8 @@ struct MenuIds {
     find_id: i32,
     toggle_sheets_id: i32,
     reset_layout_id: i32,
+    minimize_window_id: i32,
+    toggle_maximize_window_id: i32,
     license_id: i32,
     docs_id: i32,
     about_id: i32,
@@ -2928,12 +3401,15 @@ fn main() {
             find_menu: ui.find_menu,
             toggle_sheets_menu: ui.toggle_sheets_menu,
             reset_layout_menu: ui.reset_layout_menu,
+            minimize_window_menu: ui.minimize_window_menu,
+            toggle_maximize_window_menu: ui.toggle_maximize_window_menu,
             license_menu: ui.license_menu,
             docs_menu: ui.docs_menu,
             about_menu: ui.about_menu,
             status_bar: ui.status_bar,
             progress_text: ui.progress_text,
             progress_gauge: ui.progress_gauge,
+            status_pill: ui.status_pill,
             compare_btn: ui.compare_btn,
             cancel_btn: ui.cancel_btn,
             old_picker: ui.old_picker,
@@ -2942,6 +3418,7 @@ fn main() {
             trusted_checkbox: ui.trusted_checkbox,
             summary_text: ui.summary_text,
             detail_text: ui.detail_text,
+            grid_panel: ui.grid_panel,
             root_tabs: ui.root_tabs,
             compare_container: ui.compare_container,
             result_tabs: ui.result_tabs,
@@ -2967,6 +3444,8 @@ fn main() {
             batch_view: None,
             search_view: None,
             webview: None,
+            grid_webview: None,
+            grid_fallback: None,
         };
 
         let ui_state_path = backend.paths.app_data_dir.join("ui_state.json");
@@ -3026,6 +3505,8 @@ fn main() {
             find_id: ctx.ui.find_menu.get_id(),
             toggle_sheets_id: ctx.ui.toggle_sheets_menu.get_id(),
             reset_layout_id: ctx.ui.reset_layout_menu.get_id(),
+            minimize_window_id: ctx.ui.minimize_window_menu.get_id(),
+            toggle_maximize_window_id: ctx.ui.toggle_maximize_window_menu.get_id(),
             license_id: ctx.ui.license_menu.get_id(),
             docs_id: ctx.ui.docs_menu.get_id(),
             about_id: ctx.ui.about_menu.get_id(),
@@ -3045,7 +3526,8 @@ fn main() {
 
         let ui_state_for_init = ui_state.clone();
         let should_maximize = should_start_maximized(&ui_state_for_init);
-        let should_center = (ui_state_for_init.window_x.is_none() || ui_state_for_init.window_y.is_none())
+        let should_center = (ui_state_for_init.window_x.is_none()
+            || ui_state_for_init.window_y.is_none())
             && !should_maximize;
         let _ = with_ui_context(|ctx| {
             ctx.ui.frame.on_close(|event| {
@@ -3060,9 +3542,7 @@ fn main() {
 
             if !ctx.state.webview_enabled {
                 ctx.ui.status_bar.set_fields_count(3);
-                ctx.ui
-                    .status_bar
-                    .set_status_widths(&[-1, 220, 180]);
+                ctx.ui.status_bar.set_status_widths(&[-1, 220, 180]);
                 update_status_counts_in_ctx(ctx, None);
 
                 ctx.ui.cancel_btn.enable(false);
@@ -3086,8 +3566,10 @@ fn main() {
                 ctx.ui.build_old_index_btn.on_click(|_| build_index("old"));
                 ctx.ui.build_new_index_btn.on_click(|_| build_index("new"));
                 ctx.ui.result_tabs.on_page_changed(|event| {
-                    if event.get_selection() == Some(1) {
+                    if event.get_selection() == Some(RESULT_TAB_DETAILS) {
                         let _ = with_ui_context(|ctx| render_staged_detail_payload(ctx));
+                    } else if event.get_selection() == Some(RESULT_TAB_GRID) {
+                        let _ = with_ui_context(|ctx| render_grid_for_current_selection(ctx));
                     }
                 });
                 ctx.ui.frame.on_key_down(|event| {
@@ -3148,7 +3630,8 @@ fn main() {
                 let sheets_view = create_dataview(&ctx.ui.sheets_list_panel, &SHEETS_COLUMNS);
                 let recents_view = create_dataview(&ctx.ui.recents_list_panel, &RECENTS_COLUMNS);
                 let batch_view = create_dataview(&ctx.ui.batch_results_list_panel, &BATCH_COLUMNS);
-                let search_view = create_dataview(&ctx.ui.search_results_list_panel, &SEARCH_COLUMNS);
+                let search_view =
+                    create_dataview(&ctx.ui.search_results_list_panel, &SEARCH_COLUMNS);
 
                 ctx.state.sheets_table = Some(create_virtual_table(&sheets_view));
                 ctx.state.recents_table = Some(create_virtual_table(&recents_view));
@@ -3159,6 +3642,7 @@ fn main() {
                 ctx.ui.recents_view = Some(recents_view);
                 ctx.ui.batch_view = Some(batch_view);
                 ctx.ui.search_view = Some(search_view);
+                render_grid_placeholder(ctx, "Select a sheet to preview grid changes.");
 
                 if let Ok(recents) = ctx.state.backend.load_recents() {
                     populate_recents(ctx, recents);
@@ -3211,8 +3695,21 @@ fn main() {
             if let Some(scenario) = scenario_to_run {
                 if scenario.auto_run_diff {
                     start_compare();
+                    if let Some(delay_ms) = scenario.cancel_after_ms {
+                        if delay_ms > 0 {
+                            // For deterministic capture, prefer a simple blocking delay on the UI
+                            // thread over cross-thread scheduling (which can be flaky under some
+                            // headless/Xvfb setups).
+                            thread::sleep(Duration::from_millis(delay_ms));
+                        }
+                        cancel_current();
+                    }
                 } else {
-                    schedule_ready_signal(scenario.stable_wait_ms, "idle_ready");
+                    if scenario.stable_wait_ms > 0 {
+                        // See note above: deterministic, headless-friendly readiness.
+                        thread::sleep(Duration::from_millis(scenario.stable_wait_ms));
+                    }
+                    mark_ui_ready("idle_ready");
                 }
             }
         }));
@@ -3228,8 +3725,12 @@ fn init_logging() {
 
 fn env_flag(name: &str) -> Option<bool> {
     match std::env::var(name).as_deref() {
-        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES") | Ok("on") | Ok("ON") => Some(true),
-        Ok("0") | Ok("false") | Ok("FALSE") | Ok("no") | Ok("NO") | Ok("off") | Ok("OFF") => Some(false),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES") | Ok("on") | Ok("ON") => {
+            Some(true)
+        }
+        Ok("0") | Ok("false") | Ok("FALSE") | Ok("no") | Ok("NO") | Ok("off") | Ok("OFF") => {
+            Some(false)
+        }
         _ => None,
     }
 }
@@ -3242,11 +3743,16 @@ fn env_string(name: &str) -> Option<String> {
 }
 
 fn ui_state_disabled() -> bool {
-    env_flag("EXCEL_DIFF_UI_DISABLE_STATE").unwrap_or(false) || env_string("EXCEL_DIFF_DEV_SCENARIO").is_some()
+    env_flag("EXCEL_DIFF_UI_DISABLE_STATE").unwrap_or(false)
+        || env_string("EXCEL_DIFF_DEV_SCENARIO").is_some()
 }
 
 fn parse_window_size(value: &str) -> Option<Size> {
-    let clean = value.trim().replace('x', " ").replace('X', " ").replace(',', " ");
+    let clean = value
+        .trim()
+        .replace('x', " ")
+        .replace('X', " ")
+        .replace(',', " ");
     let mut parts = clean.split_whitespace();
     let width = parts.next()?.parse::<i32>().ok()?;
     let height = parts.next()?.parse::<i32>().ok()?;
@@ -3311,6 +3817,11 @@ fn apply_focus_panel(ctx: &mut UiContext, focus: Option<&str>) {
             ctx.ui.result_tabs.set_selection(1);
             render_staged_detail_payload(ctx);
         }
+        "grid" => {
+            ctx.ui.root_tabs.set_selection(0);
+            ctx.ui.result_tabs.set_selection(RESULT_TAB_GRID as usize);
+            render_grid_for_current_selection(ctx);
+        }
         _ => {}
     }
 }
@@ -3320,18 +3831,35 @@ fn apply_dev_scenario(ctx: &mut UiContext, scenario: &UiScenario) {
     ctx.state.dev_ready_file = dev_ready_file_path();
     ctx.state.dev_ready_fired = false;
 
-    ctx.ui
-        .old_picker
-        .set_path(&scenario.old_path.to_string_lossy());
-    ctx.ui
-        .new_picker
-        .set_path(&scenario.new_path.to_string_lossy());
+    info!(
+        "Applying UI scenario '{}' (auto_run_diff={}, expect_mode={:?}, focus_panel={:?})",
+        scenario.name, scenario.auto_run_diff, scenario.expect_mode, scenario.focus_panel
+    );
+    debug!(
+        "Scenario paths: old={:?} new={:?} ready_file={:?} cancel_after_ms={:?}",
+        scenario.old_path, scenario.new_path, ctx.state.dev_ready_file, scenario.cancel_after_ms
+    );
+    if let Some(old_path) = scenario.old_path.as_ref() {
+        ctx.ui.old_picker.set_path(&old_path.to_string_lossy());
+    } else {
+        // Ensure deterministic "empty state" captures (do not retain any previous path).
+        ctx.ui.old_picker.set_path("");
+    }
+    if let Some(new_path) = scenario.new_path.as_ref() {
+        ctx.ui.new_picker.set_path(&new_path.to_string_lossy());
+    } else {
+        ctx.ui.new_picker.set_path("");
+    }
 
     if let Some(trusted) = scenario.trusted_files {
         ctx.ui.trusted_checkbox.set_value(trusted);
     }
 
-    if let Some(preset) = scenario.preset.as_ref().and_then(|value| preset_index_from_name(value)) {
+    if let Some(preset) = scenario
+        .preset
+        .as_ref()
+        .and_then(|value| preset_index_from_name(value))
+    {
         let max = ctx.ui.preset_choice.get_count().saturating_sub(1);
         let choice = preset.min(max);
         ctx.ui.preset_choice.set_selection(choice);
@@ -3348,33 +3876,35 @@ fn apply_dev_scenario(ctx: &mut UiContext, scenario: &UiScenario) {
     update_status_in_ctx(ctx, &status);
 }
 
-fn schedule_ready_signal(delay_ms: u64, reason: &str) {
-    let reason = reason.to_string();
-    thread::spawn(move || {
-        if delay_ms > 0 {
-            thread::sleep(Duration::from_millis(delay_ms));
-        }
-        wxdragon::call_after(Box::new(move || mark_ui_ready(&reason)));
-    });
-}
-
-
 fn mark_ui_ready(reason: &str) {
     let reason = reason.to_string();
-    let _ = with_ui_context(|ctx| {
+    debug!("mark_ui_ready invoked: reason={reason}");
+    let did_run = with_ui_context(|ctx| {
         if ctx.state.dev_ready_fired {
-            return;
+            return false;
         }
         let Some(path) = ctx.state.dev_ready_file.clone() else {
-            return;
+            return false;
         };
         ctx.state.dev_ready_fired = true;
 
+        let status_text = ctx.ui.progress_text.get_label();
+        let root_tab = ctx.ui.root_tabs.selection();
+        let result_tab = ctx.ui.result_tabs.selection();
+        let selected_sheet = ctx
+            .ui
+            .sheets_view
+            .and_then(|view| view.get_selected_row())
+            .and_then(|row| ctx.state.sheet_names.get(row).cloned());
         let scenario = ctx.state.dev_scenario.as_ref();
         let expected_mode = scenario
             .and_then(|s| s.expect_mode.as_ref())
             .map(|value| value.to_lowercase());
-        let actual_mode = ctx.state.current_mode.as_ref().map(|mode| mode.as_str().to_string());
+        let actual_mode = ctx
+            .state
+            .current_mode
+            .as_ref()
+            .map(|mode| mode.as_str().to_string());
 
         let status = match (&expected_mode, &actual_mode) {
             (Some(expected), Some(actual)) if expected != actual => "mode_mismatch",
@@ -3394,12 +3924,26 @@ fn mark_ui_ready(reason: &str) {
             "expected_mode": expected_mode,
             "actual_mode": actual_mode,
             "diff_id": ctx.state.current_diff_id,
+            "status_text": status_text,
+            "sheet_count": ctx.state.sheet_names.len(),
+            "root_tab": root_tab,
+            "result_tab": result_tab,
+            "selected_sheet": selected_sheet,
         });
 
+        debug!(
+            "UI ready: status={} reason={} path={:?}",
+            status, reason, path
+        );
         if let Ok(body) = serde_json::to_string_pretty(&payload) {
             let _ = std::fs::write(path, body);
         }
-    });
+        true
+    })
+    .unwrap_or(false);
+    if !did_run {
+        debug!("mark_ui_ready: no UI context (or no ready file configured).");
+    }
 }
 
 fn configure_linux_environment() {
@@ -3449,7 +3993,13 @@ extern "C" {
 }
 
 #[cfg(target_os = "linux")]
-extern "C" fn ignore_glib_log(_domain: *const c_char, _level: i32, _message: *const c_char, _data: *mut c_void) {}
+extern "C" fn ignore_glib_log(
+    _domain: *const c_char,
+    _level: i32,
+    _message: *const c_char,
+    _data: *mut c_void,
+) {
+}
 
 #[cfg(target_os = "linux")]
 fn install_glib_log_suppression() {
@@ -3459,7 +4009,12 @@ fn install_glib_log_suppression() {
     let levels = 0xFF;
     unsafe {
         g_log_set_default_handler(Some(ignore_glib_log), std::ptr::null_mut());
-        g_log_set_handler(std::ptr::null(), levels, Some(ignore_glib_log), std::ptr::null_mut());
+        g_log_set_handler(
+            std::ptr::null(),
+            levels,
+            Some(ignore_glib_log),
+            std::ptr::null_mut(),
+        );
     }
     for domain in ["Gdk", "Gtk", "GLib", "GLib-GObject", "GdkPixbuf", "Pango"] {
         let Ok(cstr) = CString::new(domain) else {
@@ -3467,7 +4022,12 @@ fn install_glib_log_suppression() {
         };
         let leaked = Box::leak(cstr.into_boxed_c_str());
         unsafe {
-            g_log_set_handler(leaked.as_ptr(), levels, Some(ignore_glib_log), std::ptr::null_mut());
+            g_log_set_handler(
+                leaked.as_ptr(),
+                levels,
+                Some(ignore_glib_log),
+                std::ptr::null_mut(),
+            );
         }
     }
 }
@@ -3477,6 +4037,14 @@ fn install_glib_log_suppression() {}
 
 #[cfg(target_os = "linux")]
 fn maybe_redirect_stdio_to_null() {
+    // When driving the UI via dev scenarios / capture scripts, we rely on stdout/stderr for logs.
+    // Don't redirect them away even if we're suppressing GTK warnings.
+    if env_string("EXCEL_DIFF_LOG").is_some()
+        || env_string("EXCEL_DIFF_UI_READY_FILE").is_some()
+        || env_string("EXCEL_DIFF_DEV_SCENARIO").is_some()
+    {
+        return;
+    }
     if !env_flag("EXCEL_DIFF_SUPPRESS_GTK_WARNINGS").unwrap_or(cfg!(debug_assertions)) {
         return;
     }

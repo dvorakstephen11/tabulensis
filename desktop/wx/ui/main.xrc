@@ -2,7 +2,7 @@
 <resource>
   <object class="wxFrame" name="main_frame">
     <title>Tabulensis</title>
-    <style>wxDEFAULT_FRAME_STYLE</style>
+    <style>wxCAPTION|wxRESIZE_BORDER|wxSYSTEM_MENU|wxMINIMIZE_BOX|wxMAXIMIZE_BOX|wxCLOSE_BOX|wxCLIP_CHILDREN</style>
     <size>1280,900</size>
     <minsize>960,640</minsize>
     <object class="wxMenuBar" name="menu_bar">
@@ -62,6 +62,13 @@
         <object class="wxMenuItem" name="reset_layout_menu">
           <label>Reset Layout</label>
         </object>
+        <object class="separator"></object>
+        <object class="wxMenuItem" name="minimize_window_menu">
+          <label>Minimize Window\tCtrl+M</label>
+        </object>
+        <object class="wxMenuItem" name="toggle_maximize_window_menu">
+          <label>Toggle Maximize\tCtrl+Shift+M</label>
+        </object>
       </object>
       <object class="wxMenu" name="help_menu">
         <label>&amp;Help</label>
@@ -80,6 +87,37 @@
     <object class="wxPanel" name="main_panel">
       <object class="wxBoxSizer">
         <orient>wxVERTICAL</orient>
+        <object class="sizeritem">
+          <object class="wxPanel" name="top_trim_bar">
+            <minsize>10,12</minsize>
+            <object class="wxBoxSizer">
+              <orient>wxHORIZONTAL</orient>
+              <object class="sizeritem">
+                <object class="wxPanel" name="trim_accent_green">
+                  <minsize>10,12</minsize>
+                </object>
+                <flag>wxEXPAND</flag>
+                <option>0</option>
+              </object>
+              <object class="sizeritem">
+                <object class="wxPanel" name="trim_accent_yellow">
+                  <minsize>10,12</minsize>
+                </object>
+                <flag>wxEXPAND</flag>
+                <option>0</option>
+              </object>
+              <object class="sizeritem">
+                <object class="wxBoxSizer">
+                  <orient>wxHORIZONTAL</orient>
+                </object>
+                <flag>wxEXPAND</flag>
+                <option>1</option>
+              </object>
+            </object>
+          </object>
+          <flag>wxEXPAND</flag>
+          <option>0</option>
+        </object>
         <object class="sizeritem">
           <object class="wxNotebook" name="root_tabs">
             <object class="notebookpage">
@@ -170,6 +208,13 @@
                         <flag>wxALIGN_CENTER_VERTICAL|wxALL</flag>
                         <border>4</border>
                       </object>
+                      <object class="sizeritem">
+                        <object class="wxPanel" name="status_pill">
+                          <minsize>12,12</minsize>
+                        </object>
+                        <flag>wxALIGN_CENTER_VERTICAL|wxALL</flag>
+                        <border>4</border>
+                      </object>
                     </object>
                     <flag>wxEXPAND</flag>
                     <option>0</option>
@@ -207,6 +252,20 @@
                                       <object class="wxTextCtrl" name="detail_text">
                                         <style>wxTE_MULTILINE|wxTE_READONLY</style>
                                       </object>
+                                      <flag>wxEXPAND|wxALL</flag>
+                                      <option>1</option>
+                                      <border>4</border>
+                                    </object>
+                                  </object>
+                                </object>
+                              </object>
+                              <object class="notebookpage">
+                                <label>Grid</label>
+                                <object class="wxPanel" name="grid_tab">
+                                  <object class="wxBoxSizer">
+                                    <orient>wxVERTICAL</orient>
+                                    <object class="sizeritem">
+                                      <object class="wxPanel" name="grid_panel"></object>
                                       <flag>wxEXPAND|wxALL</flag>
                                       <option>1</option>
                                       <border>4</border>

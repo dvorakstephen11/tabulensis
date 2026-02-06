@@ -1,12 +1,12 @@
 {
   "name": "Compare Large Mode",
-  "description": "Large dense workbook to exercise large-mode UI behavior.",
-  "oldPath": "../../../fixtures/generated/e2e_p1_dense_a.xlsx",
-  "newPath": "../../../fixtures/generated/e2e_p1_dense_b.xlsx",
+  "description": "Synthetic large-mode trigger (fast parse) to validate large-mode UI + sheet payload loading.",
+  "oldPath": "../../../fixtures/generated/large_mode_trigger_a.xlsx",
+  "newPath": "../../../fixtures/generated/large_mode_trigger_b.xlsx",
   "autoRunDiff": true,
-  "stableWaitMs": 1500,
+  "stableWaitMs": 1200,
   "expectMode": "large",
-  "focusPanel": "summary",
+  "focusPanel": "grid",
   "preset": "balanced",
   "trustedFiles": true
 }

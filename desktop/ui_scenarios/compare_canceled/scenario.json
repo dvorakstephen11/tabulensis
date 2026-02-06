@@ -1,0 +1,13 @@
+{
+  "name": "Compare Canceled",
+  "description": "Immediate cancel to validate cancel UX and end-state messaging.",
+  "oldPath": "../../../fixtures/generated/single_cell_value_a.xlsx",
+  "newPath": "../../../fixtures/generated/single_cell_value_b.xlsx",
+  "autoRunDiff": true,
+  "cancelAfterMs": 0,
+  "stableWaitMs": 800,
+  "expectMode": "payload",
+  "focusPanel": "details",
+  "preset": "balanced",
+  "trustedFiles": true
+}

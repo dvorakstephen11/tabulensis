@@ -1,0 +1,12 @@
+{
+  "name": "Compare Unsupported",
+  "description": "Unsupported file extension to validate error UX and messaging.",
+  "oldPath": "unsupported_old.txt",
+  "newPath": "unsupported_new.txt",
+  "autoRunDiff": true,
+  "stableWaitMs": 800,
+  "focusPanel": "details",
+  "preset": "balanced",
+  "trustedFiles": true
+}
+

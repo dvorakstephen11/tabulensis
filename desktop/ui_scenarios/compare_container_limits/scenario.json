@@ -1,0 +1,12 @@
+{
+  "name": "Compare Container Limits",
+  "description": "ZIP entry count exceeds default container limits to validate safety-limit error UX.",
+  "oldPath": "too_many_entries.xlsx",
+  "newPath": "too_many_entries.xlsx",
+  "autoRunDiff": true,
+  "stableWaitMs": 800,
+  "focusPanel": "details",
+  "preset": "balanced",
+  "trustedFiles": false
+}
+

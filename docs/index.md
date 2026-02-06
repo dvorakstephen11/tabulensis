@@ -22,6 +22,7 @@
 - [Custom-crate agentic playbook](rust_docs/custom_crates/agentic_experiment_playbook.md)
 - [Migration guide (from legacy APIs)](migration.md)
 - [Desktop app](desktop.md)
+- [Native desktop UI/UX roadmap (XRC)](desktop_native_ui_ux_roadmap.md)
 - [UI visual regression](ui_visual_regression.md)
 - [UI visual regression manual](ui_visual_regression_manual.md)
 

@@ -1,0 +1,13 @@
+{
+  "name": "Compare Grid Basic",
+  "description": "Single-cell change to validate grid preview rendering.",
+  "oldPath": "../../../fixtures/generated/single_cell_value_a.xlsx",
+  "newPath": "../../../fixtures/generated/single_cell_value_b.xlsx",
+  "autoRunDiff": true,
+  "stableWaitMs": 800,
+  "expectMode": "payload",
+  "focusPanel": "grid",
+  "preset": "balanced",
+  "trustedFiles": true
+}
+

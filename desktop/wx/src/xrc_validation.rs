@@ -21,6 +21,7 @@ const REQUIRED_WIDGETS: &[&str] = &[
     "result_tabs",
     "summary_text",
     "detail_text",
+    "grid_panel",
     "recents_list",
     "open_recent_btn",
     "batch_old_dir",
@@ -38,7 +39,7 @@ const REQUIRED_WIDGETS: &[&str] = &[
 ];
 
 const ROOT_TAB_LABELS: &[&str] = &["Compare", "Recents", "Batch", "Search"];
-const RESULT_TAB_LABELS: &[&str] = &["Summary", "Details"];
+const RESULT_TAB_LABELS: &[&str] = &["Summary", "Details", "Grid"];
 
 pub fn validate_xrc(xrc: &str) -> Result<(), String> {
     let mut reader = Reader::from_str(xrc);
@@ -63,8 +64,12 @@ pub fn validate_xrc(xrc: &str) -> Result<(), String> {
                     let mut name = None;
                     for attr in event.attributes().flatten() {
                         match attr.key.as_ref() {
-                            b"class" => class = Some(String::from_utf8_lossy(&attr.value).to_string()),
-                            b"name" => name = Some(String::from_utf8_lossy(&attr.value).to_string()),
+                            b"class" => {
+                                class = Some(String::from_utf8_lossy(&attr.value).to_string())
+                            }
+                            b"name" => {
+                                name = Some(String::from_utf8_lossy(&attr.value).to_string())
+                            }
                             _ => {}
                         }
                     }
@@ -90,7 +95,9 @@ pub fn validate_xrc(xrc: &str) -> Result<(), String> {
 
                     stack.push(frame);
                     if let Some(sizer_frame) = sizer_stack.last_mut() {
-                        if !sizer_frame.saw_object && !matches!(stack.last().map(|f| f.class.as_str()), Some("sizeritem")) {
+                        if !sizer_frame.saw_object
+                            && !matches!(stack.last().map(|f| f.class.as_str()), Some("sizeritem"))
+                        {
                             sizer_frame.saw_object = true;
                             if frame_name.is_some() {
                                 sizer_frame.child_name = frame_name;
@@ -335,29 +342,31 @@ struct SizerItemInfo {
 }
 
 fn nearest_boxsizer_index(stack: &[ObjectFrame]) -> Option<usize> {
-    stack
-        .iter()
-        .rposition(|frame| frame.class == "wxBoxSizer")
+    stack.iter().rposition(|frame| frame.class == "wxBoxSizer")
 }
 
 fn nearest_notebook_mut(stack: &mut [ObjectFrame]) -> Option<&mut ObjectFrame> {
-    stack
-        .iter_mut()
-        .rev()
-        .find(|frame| frame.is_notebook)
+    stack.iter_mut().rev().find(|frame| frame.is_notebook)
 }
 
 fn nearest_notebookpage_mut(stack: &mut [ObjectFrame]) -> Option<&mut ObjectFrame> {
-    stack
-        .iter_mut()
-        .rev()
-        .find(|frame| frame.is_notebookpage)
+    stack.iter_mut().rev().find(|frame| frame.is_notebookpage)
 }
 
 fn expected_labels_for(name: &str) -> Option<Vec<String>> {
     match name {
-        "root_tabs" => Some(ROOT_TAB_LABELS.iter().map(|label| label.to_string()).collect()),
-        "result_tabs" => Some(RESULT_TAB_LABELS.iter().map(|label| label.to_string()).collect()),
+        "root_tabs" => Some(
+            ROOT_TAB_LABELS
+                .iter()
+                .map(|label| label.to_string())
+                .collect(),
+        ),
+        "result_tabs" => Some(
+            RESULT_TAB_LABELS
+                .iter()
+                .map(|label| label.to_string())
+                .collect(),
+        ),
         _ => None,
     }
 }
@@ -372,16 +381,17 @@ fn expand_requirements() -> Vec<(&'static str, i32, bool)> {
     ]
 }
 
-fn sizer_item_ok(items: &HashMap<String, Vec<SizerItemInfo>>, name: &str, min_prop: i32, needs_expand: bool) -> bool {
-    items
-        .get(name)
-        .into_iter()
-        .flatten()
-        .any(|info| {
-            let prop_ok = info.proportion >= min_prop;
-            let expand_ok = !needs_expand || info.flags.contains("wxEXPAND");
-            prop_ok && expand_ok
-        })
+fn sizer_item_ok(
+    items: &HashMap<String, Vec<SizerItemInfo>>,
+    name: &str,
+    min_prop: i32,
+    needs_expand: bool,
+) -> bool {
+    items.get(name).into_iter().flatten().any(|info| {
+        let prop_ok = info.proportion >= min_prop;
+        let expand_ok = !needs_expand || info.flags.contains("wxEXPAND");
+        prop_ok && expand_ok
+    })
 }
 
 #[cfg(test)]

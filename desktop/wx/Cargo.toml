@@ -10,6 +10,7 @@ wxdragon = { version = "0.9.7", features = ["xrc", "webview"] }
 wxdragon-sys = { version = "0.9.7", features = ["webview"] }
 desktop_backend = { path = "../backend", default-features = false }
 ui_payload = { path = "../../ui_payload" }
+excel_diff = { path = "../../core", default-features = false }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"

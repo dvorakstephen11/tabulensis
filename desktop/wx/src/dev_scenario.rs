@@ -7,10 +7,11 @@ use std::path::{Path, PathBuf};
 struct UiScenarioFile {
     name: Option<String>,
     description: Option<String>,
-    old_path: String,
-    new_path: String,
+    old_path: Option<String>,
+    new_path: Option<String>,
     auto_run_diff: Option<bool>,
     stable_wait_ms: Option<u64>,
+    cancel_after_ms: Option<u64>,
     expect_mode: Option<String>,
     focus_panel: Option<String>,
     preset: Option<String>,
@@ -21,10 +22,11 @@ struct UiScenarioFile {
 pub struct UiScenario {
     pub name: String,
     pub description: Option<String>,
-    pub old_path: PathBuf,
-    pub new_path: PathBuf,
+    pub old_path: Option<PathBuf>,
+    pub new_path: Option<PathBuf>,
     pub auto_run_diff: bool,
     pub stable_wait_ms: u64,
+    pub cancel_after_ms: Option<u64>,
     pub expect_mode: Option<String>,
     pub focus_panel: Option<String>,
     pub preset: Option<String>,
@@ -50,21 +52,46 @@ fn load_by_name(name: &str) -> Result<UiScenario, String> {
         )
     })?;
     let path = dir.join("scenario.json");
-    let contents = std::fs::read_to_string(&path)
-        .map_err(|err| format!("Failed to read {path:?}: {err}"))?;
+    let contents =
+        std::fs::read_to_string(&path).map_err(|err| format!("Failed to read {path:?}: {err}"))?;
     let file: UiScenarioFile = serde_json::from_str(&contents)
         .map_err(|err| format!("Failed to parse {path:?}: {err}"))?;
 
-    let old_path = resolve_scenario_path(&dir, &file.old_path)
-        .ok_or_else(|| format!("Scenario '{name}' old_path missing: {}", file.old_path))?;
-    let new_path = resolve_scenario_path(&dir, &file.new_path)
-        .ok_or_else(|| format!("Scenario '{name}' new_path missing: {}", file.new_path))?;
+    let auto_run_diff = file.auto_run_diff.unwrap_or(true);
+    let old_path = file
+        .old_path
+        .as_deref()
+        .and_then(|value| resolve_scenario_path(&dir, value));
+    let new_path = file
+        .new_path
+        .as_deref()
+        .and_then(|value| resolve_scenario_path(&dir, value));
 
-    if !old_path.exists() {
-        return Err(format!("Scenario '{name}' old_path not found: {old_path:?}"));
-    }
-    if !new_path.exists() {
-        return Err(format!("Scenario '{name}' new_path not found: {new_path:?}"));
+    if auto_run_diff {
+        let old_path = old_path.as_ref().ok_or_else(|| {
+            format!("Scenario '{name}' oldPath missing (required when autoRunDiff=true).")
+        })?;
+        let new_path = new_path.as_ref().ok_or_else(|| {
+            format!("Scenario '{name}' newPath missing (required when autoRunDiff=true).")
+        })?;
+
+        if !old_path.exists() {
+            return Err(format!("Scenario '{name}' oldPath not found: {old_path:?}"));
+        }
+        if !new_path.exists() {
+            return Err(format!("Scenario '{name}' newPath not found: {new_path:?}"));
+        }
+    } else {
+        if let Some(old_path) = old_path.as_ref() {
+            if !old_path.exists() {
+                return Err(format!("Scenario '{name}' oldPath not found: {old_path:?}"));
+            }
+        }
+        if let Some(new_path) = new_path.as_ref() {
+            if !new_path.exists() {
+                return Err(format!("Scenario '{name}' newPath not found: {new_path:?}"));
+            }
+        }
     }
 
     Ok(UiScenario {
@@ -72,8 +99,9 @@ fn load_by_name(name: &str) -> Result<UiScenario, String> {
         description: file.description,
         old_path,
         new_path,
-        auto_run_diff: file.auto_run_diff.unwrap_or(true),
+        auto_run_diff,
         stable_wait_ms: file.stable_wait_ms.unwrap_or(800),
+        cancel_after_ms: file.cancel_after_ms,
         expect_mode: file.expect_mode,
         focus_panel: file.focus_panel,
         preset: file.preset,

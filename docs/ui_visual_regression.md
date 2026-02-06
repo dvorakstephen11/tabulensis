@@ -38,12 +38,24 @@ The app will load `desktop/ui_scenarios/<scenario>/scenario.json`, open the file
 - `EXCEL_DIFF_UI_DISABLE_STATE`: disable `ui_state.json` load/save.
 - `EXCEL_DIFF_START_MAXIMIZED`: should be `0` for captures.
 - `EXCEL_DIFF_UI_WINDOW_TITLE`: window title for capture (default `Tabulensis`).
+- `EXCEL_DIFF_SKIP_LICENSE`: set to `1` to bypass licensing checks during capture (use `EXCEL_DIFF_REQUIRE_LICENSE=1` to explicitly test licensing flows).
 
 ## Dependencies
 - `xvfb-run`, `xdotool`, `imagemagick` for screenshot capture.
 - `node` if using `scripts/ui_diff.js`.
 - `python3` for report generation.
 `scripts/ui_diff.js` prefers `pixelmatch` + `pngjs` if installed, and falls back to ImageMagick otherwise.
+
+## Fixtures
+Most scenarios reference inputs under `fixtures/generated/`.
+
+If those files are missing locally, generate them first:
+
+```bash
+python3 fixtures/src/generate.py --manifest fixtures/manifest_cli_tests.yaml --force
+```
+
+See `fixtures/README.md` for details and other manifests.
 
 ## Baselines
 - Baselines live at `desktop/ui_snapshots/<scenario>/baseline.png`.

@@ -1,0 +1,13 @@
+{
+  "name": "Compare Charts",
+  "description": "Chart changes fixture to validate sheets panel and empty-sheet handling.",
+  "oldPath": "../../../fixtures/generated/charts_a.xlsx",
+  "newPath": "../../../fixtures/generated/charts_b.xlsx",
+  "autoRunDiff": true,
+  "stableWaitMs": 800,
+  "expectMode": "payload",
+  "focusPanel": "grid",
+  "preset": "balanced",
+  "trustedFiles": true
+}
+

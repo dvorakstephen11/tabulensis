@@ -169,6 +169,14 @@
       "hash": "sha256:ef5d9531c879a579e9e3712ce9b2759bb010d9eec333fbfd278d1f698ab55992",
       "mode": "zip-entries-v1"
     },
+    "large_mode_trigger_a.xlsx": {
+      "hash": "sha256:b16916082dcdf853ed622a36d661e2e5fbaf2eb78d9b7dc007fc0de9e6f04ec0",
+      "mode": "zip-entries-v1"
+    },
+    "large_mode_trigger_b.xlsx": {
+      "hash": "sha256:2988cbd5696f7de7a6112aa719e8d3ea194ab80f69d270adce78a957c4390276",
+      "mode": "zip-entries-v1"
+    },
     "m_add_query_a.xlsx": {
       "hash": "sha256:8c5b47b9cc5701e591e7911edd1093cf7bcc705a2f0e197430b3cea67f205061",
       "mode": "zip-entries-v1"

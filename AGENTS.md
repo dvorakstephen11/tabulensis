@@ -5,6 +5,13 @@
 - **Command to open the desktop app (from source):** `cargo run -p desktop_wx`
 - **Optimized build:** `cargo run -p desktop_wx --profile release-desktop`
 - **More detail:** see `docs/desktop.md` and the “Desktop App (from source)” section in `README.md`.
+- **Capture + sanity-check legacy UI screenshots (headless, deterministic):**
+  - Capture: `./scripts/ui_capture.sh compare_grid_basic --tag <tag>`
+  - Summarize/validate run metadata: `python3 scripts/ui_snapshot_summary.py desktop/ui_snapshots/compare_grid_basic/runs/<tag>.json`
+  - Artifacts:
+    - Screenshot: `desktop/ui_snapshots/<scenario>/runs/<tag>.png` (plus `current.png`)
+    - Ready metadata: `desktop/ui_snapshots/<scenario>/runs/<tag>.ready.json` (plus `current_ready.json`)
+    - Log: `desktop/ui_snapshots/<scenario>/runs/<tag>.log`
 
 ## Perf Validation Policy (Major vs Minor Changes)
 

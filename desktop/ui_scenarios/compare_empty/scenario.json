@@ -1,0 +1,10 @@
+{
+  "name": "Compare Empty",
+  "description": "Empty state (no files selected) to validate first-run guidance and control states.",
+  "autoRunDiff": false,
+  "stableWaitMs": 800,
+  "focusPanel": "compare",
+  "preset": "balanced",
+  "trustedFiles": false
+}
+

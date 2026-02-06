@@ -112,6 +112,24 @@ Disable auto-maximize:
 EXCEL_DIFF_START_MAXIMIZED=0
 ```
 
+### Missing minimize/maximize buttons (Linux)
+
+Some Linux desktop environments (notably GNOME) may hide minimize/maximize titlebar buttons due to system settings, even if the app requests them via window style flags.
+
+- Check current setting:
+
+```bash
+gsettings get org.gnome.desktop.wm.preferences button-layout
+```
+
+- Enable minimize/maximize (example layout putting buttons on the right):
+
+```bash
+gsettings set org.gnome.desktop.wm.preferences button-layout ':minimize,maximize,close'
+```
+
+As an in-app fallback, use `View -> Minimize Window` and `View -> Toggle Maximize`.
+
 ## Local state
 
 - UI layout + last selections are stored at `ui_state.json` in the app data directory.

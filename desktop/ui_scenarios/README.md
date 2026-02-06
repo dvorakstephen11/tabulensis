@@ -3,15 +3,33 @@
 UI scenarios define deterministic states for screenshot capture and visual regression.
 
 Each scenario lives under `desktop/ui_scenarios/<name>/scenario.json` and should include:
-- `oldPath` + `newPath`: paths to input files (relative to the scenario directory or absolute).
+- `oldPath` + `newPath`: paths to input files (relative to the scenario directory or absolute). Required when `autoRunDiff=true`.
 - `autoRunDiff`: whether the app should run a diff automatically.
-- `stableWaitMs`: how long to wait after diff completion before signaling readiness.
-- `focusPanel`: which UI panel to focus (compare/recents/batch/search/summary/details).
+- `stableWaitMs`: how long to wait before signaling readiness when `autoRunDiff` is false.
+- `cancelAfterMs`: optional; when set (and `autoRunDiff=true`), the scenario will trigger Cancel after the given delay.
+- `focusPanel`: which UI panel to focus (compare/recents/batch/search/summary/details/grid).
 - `expectMode`: `payload` or `large` (optional, used for readiness metadata).
 
 ## Included scenarios
-- `compare_basic`: uses committed templates (`fixtures/templates/`) so it works out of the box.
-- `compare_large_mode`: uses generated fixtures (`fixtures/generated/`) and may require fixture generation.
-- `pbix_no_mashup`: uses generated PBIX fixtures (`fixtures/generated/`) and may require fixture generation.
+- `compare_empty`: empty state (no paths selected). Validates first-run UX and control states.
+- `compare_basic`: small diff using committed templates (`fixtures/templates/`) so it works out of the box.
+- `compare_multi_sheet`: sheet + grid changes to validate sheets list density and Grid preview behavior.
+- `compare_grid_basic`: single-cell change to exercise the Grid preview tab.
+- `compare_large_mode`: large workbook to exercise large-mode UI behavior.
+- `compare_canceled`: cancels a long-running diff to validate cancel UX and end-state messaging.
+- `compare_unsupported`: unsupported extension to validate error UX and messaging.
+- `compare_container_limits`: ZIP entry count exceeds default container limits to validate safety-limit error UX.
+- `pbix_no_mashup`: PBIX fixture to validate error and messaging UI state.
+
+## Native UX checklist (use during review)
+
+These checks are intentionally small and stable. If a scenario capture regresses, look here first.
+
+- Status: top status text and bottom status bar should be coherent and match the scenario intent.
+- Focus: the scenario `focusPanel` should be selected (root tab and result tab where applicable).
+- Control states: Compare/Cancel enabled/disabled should match the current run state.
+- Sheets list: for scenarios with diffs, sheet rows should be visible (not clipped) and column headers readable.
+- Grid preview: when focused on `grid`, the preview should render (or a clear placeholder should explain why).
+- Errors: error code + message should be visible in Details, with no silent failure or blank screen.
 
 Use `EXCEL_DIFF_DEV_SCENARIO=<name>` to load a scenario.

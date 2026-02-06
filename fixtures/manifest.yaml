@@ -83,6 +83,25 @@ scenarios:
       - "single_cell_value_a.xlsx"
       - "single_cell_value_b.xlsx"
 
+  # --- Desktop UI: trigger large mode by file size without heavy parse cost ---
+  - id: "ui_large_mode_trigger_a"
+    generator: "zip_pad"
+    args:
+      base_file: "generated/single_cell_value_a.xlsx"
+      pad_bytes: 2100000
+      entry_name: "xl/_tabulensis_padding.bin"
+      seed: "large_mode_trigger_a"
+    output: "large_mode_trigger_a.xlsx"
+
+  - id: "ui_large_mode_trigger_b"
+    generator: "zip_pad"
+    args:
+      base_file: "generated/single_cell_value_b.xlsx"
+      pad_bytes: 2100000
+      entry_name: "xl/_tabulensis_padding.bin"
+      seed: "large_mode_trigger_b"
+    output: "large_mode_trigger_b.xlsx"
+
   # --- Phase 3: Spreadsheet-mode G5-G7 ---
 
   - id: "g5_multi_cell_edits"

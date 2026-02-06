@@ -1,0 +1,13 @@
+{
+  "name": "Compare Multi Sheet",
+  "description": "Sheet + grid changes to validate sheet list density and grid preview behavior.",
+  "oldPath": "../../../fixtures/generated/pg6_sheet_and_grid_change_a.xlsx",
+  "newPath": "../../../fixtures/generated/pg6_sheet_and_grid_change_b.xlsx",
+  "autoRunDiff": true,
+  "stableWaitMs": 800,
+  "expectMode": "payload",
+  "focusPanel": "grid",
+  "preset": "balanced",
+  "trustedFiles": true
+}
+

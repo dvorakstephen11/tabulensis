@@ -45,6 +45,7 @@ try:
     )
     from .generators.pbix import PbixGenerator
     from .generators.objects import ChartsGenerator, CopyTemplateGenerator, NamedRangesGenerator
+    from .generators.zip_pad import ZipPadGenerator
     from .generators.perf import LargeGridGenerator
     from .generators.xlsb import XlsbStubGenerator
 except ImportError:
@@ -81,6 +82,7 @@ except ImportError:
     )
     from generators.pbix import PbixGenerator
     from generators.objects import ChartsGenerator, CopyTemplateGenerator, NamedRangesGenerator
+    from generators.zip_pad import ZipPadGenerator
     from generators.perf import LargeGridGenerator
     from generators.xlsb import XlsbStubGenerator
 
@@ -118,6 +120,7 @@ GENERATORS: Dict[str, Any] = {
     "named_ranges": NamedRangesGenerator,
     "charts": ChartsGenerator,
     "copy_template": CopyTemplateGenerator,
+    "zip_pad": ZipPadGenerator,
     "xlsb_stub": XlsbStubGenerator,
 }
 
