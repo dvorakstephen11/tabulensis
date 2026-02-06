@@ -284,3 +284,45 @@ Run a 5-run confirmation A/B for Slice 2 using the same command matrix and only 
 - aggregate total and parse medians remain improved,
 - per-test regressions stay bounded and explainable,
 - variance is acceptable across runs.
+
+## Fast-Diff World A/B (Median-of-5, February 6, 2026)
+
+Context:
+- The e2e harness now measures the OpenXML **fast streaming diff** path (ZIP fingerprint short-circuit) via `WorkbookPackage::diff_openxml_streaming_fast_with_limits(...)`.
+- This makes `e2e_p5_identical` effectively `0ms` because we can skip parsing unchanged worksheets entirely.
+
+Commit:
+- `55bf699a5da6`
+
+Commands:
+
+Baseline (quick-xml):
+- `cargo test -p excel_diff --release --features perf-metrics --test e2e_perf_workbook_open e2e_ -- --ignored --nocapture --test-threads=1`
+
+Custom (`custom-xml`):
+- `cargo test -p excel_diff --release --features "perf-metrics custom-xml" --test e2e_perf_workbook_open e2e_ -- --ignored --nocapture --test-threads=1`
+
+Run protocol:
+- Alternating A/B pairs, 5 pairs total.
+- Reported numbers are **median-of-5** per test.
+
+Results (total_time_ms / parse_time_ms):
+
+| Test | Baseline Total (ms) | Custom Total (ms) | Delta | Baseline Parse (ms) | Custom Parse (ms) | Delta |
+| --- | ---:| ---:| ---:| ---:| ---:| ---:|
+| `e2e_p1_dense` | 2296 | 1864 | -18.8% | 2287 | 1855 | -18.9% |
+| `e2e_p2_noise` | 927 | 679 | -26.8% | 917 | 670 | -26.9% |
+| `e2e_p3_repetitive` | 2275 | 1435 | -36.9% | 2252 | 1417 | -37.1% |
+| `e2e_p4_sparse` | 93 | 67 | -28.0% | 65 | 42 | -35.4% |
+| `e2e_p5_identical` | 0 | 0 | n/a | 0 | 0 | n/a |
+
+Aggregate (sum across the 5 tests per run, then median-of-5):
+- Total: `5597 -> 4009 ms` (`-28.4%`)
+- Parse: `5533 -> 3951 ms` (`-28.6%`)
+
+Peak memory:
+- No median change observed in this A/B: aggregate `peak_memory_bytes` median stayed the same.
+
+Decision:
+- **Enable `custom-xml` by default for the desktop app** (large win on the non-identical cases; identical case is already dominated by the fast-diff short-circuit).
+- Keep `custom-xml` non-default for the core crate until broader real-world corpus / fuzz coverage is in place.

@@ -18,7 +18,7 @@ license_client = { path = "../../license_client" }
 libc = "0.2"
 
 [features]
-default = ["backend-lru-crate", "backend-arc-cache"]
+default = ["backend-lru-crate", "backend-arc-cache", "backend-custom-xml"]
 backend-lru-crate = ["desktop_backend/model-diff", "desktop_backend/lru-crate"]
 backend-custom-lru = ["desktop_backend/model-diff", "desktop_backend/custom-lru"]
 backend-custom-xml = ["desktop_backend/custom-xml"]

@@ -29,7 +29,8 @@ Status (February 6, 2026):
 1. Slice 1 (shared strings) is implemented behind `custom-xml` and has a 5-run confirmation win.
 2. Slice 2 (worksheet cell/value scan loop) is implemented behind `custom-xml`.
 3. Slice 2 has a 5-run confirmation win (see the log doc for exact numbers).
-4. Next gate is wider fixture/suite coverage before considering default-on or a Slice 3 expansion.
+4. With the OpenXML fast-diff path in place, `custom-xml` still shows a large median win on non-identical e2e cases (see the log doc).
+5. Next gate is wider fixture/suite coverage before considering core default-on or a Slice 3 expansion.
 
 Suggested first slice:
 1. Keep `quick-xml` baseline as default.
