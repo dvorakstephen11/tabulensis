@@ -5,20 +5,20 @@
 
 use crate::container::{ContainerError, OpcContainer};
 use crate::datamashup_framing::{
-    decode_datamashup_base64, parse_data_mashup, read_datamashup_text, DataMashupError,
-    RawDataMashup,
+    DataMashupError, RawDataMashup, decode_datamashup_base64, parse_data_mashup,
+    read_datamashup_text,
 };
 use crate::error_codes;
 use crate::grid_parser::{
-    parse_defined_names, parse_relationship_targets_by_type_contains, parse_relationships,
-    parse_relationships_all, parse_shared_strings, parse_sheet_xml, parse_workbook_xml,
-    resolve_sheet_target, GridParseError,
+    GridParseError, parse_defined_names, parse_relationships, parse_relationships_all,
+    parse_relationship_targets_by_type_contains, parse_shared_strings, parse_sheet_xml,
+    parse_workbook_xml, resolve_sheet_target,
 };
+#[cfg(feature = "vba")]
+use crate::vba::VbaModuleType;
 use crate::string_pool::StringId;
 use crate::string_pool::StringPool;
 use crate::vba::VbaModule;
-#[cfg(feature = "vba")]
-use crate::vba::VbaModuleType;
 use crate::workbook::{ChartInfo, ChartObject, Grid, Sheet, SheetKind, Workbook};
 use std::collections::{HashMap, HashSet};
 #[cfg(feature = "std-fs")]
@@ -67,10 +67,7 @@ pub enum PackageError {
     ReadPartFailed { part: String, message: String },
 
     #[error("{source} (in part '{part}')")]
-    DataMashupPartError {
-        part: String,
-        source: DataMashupError,
-    },
+    DataMashupPartError { part: String, source: DataMashupError },
 
     #[error("[{path}] {source}")]
     WithPath {
@@ -208,27 +205,24 @@ pub(crate) fn open_workbook_from_container_with_grid_filter(
 
     let workbook_bytes = {
         let started = Instant::now();
-        let payload = container
-            .read_file_checked("xl/workbook.xml")
-            .map_err(|e| match e {
-                ContainerError::FileNotFound { .. } => {
-                    if container.file_names().any(|name| name == "xl/workbook.bin") {
-                        PackageError::UnsupportedFormat {
-                            message:
-                                "XLSB detected (xl/workbook.bin present); convert to .xlsx/.xlsm"
-                                    .to_string(),
-                        }
-                    } else {
-                        PackageError::MissingPart {
-                            path: "xl/workbook.xml".to_string(),
-                        }
+        let payload = container.read_file_checked("xl/workbook.xml").map_err(|e| match e {
+            ContainerError::FileNotFound { .. } => {
+                if container.file_names().any(|name| name == "xl/workbook.bin") {
+                    PackageError::UnsupportedFormat {
+                        message: "XLSB detected (xl/workbook.bin present); convert to .xlsx/.xlsm"
+                            .to_string(),
+                    }
+                } else {
+                    PackageError::MissingPart {
+                        path: "xl/workbook.xml".to_string(),
                     }
                 }
-                other => PackageError::ReadPartFailed {
-                    part: "xl/workbook.xml".to_string(),
-                    message: other.to_string(),
-                },
-            })?;
+            }
+            other => PackageError::ReadPartFailed {
+                part: "xl/workbook.xml".to_string(),
+                message: other.to_string(),
+            },
+        })?;
         if profile_enabled {
             profile.workbook_xml_read_ms = profile
                 .workbook_xml_read_ms
@@ -242,8 +236,8 @@ pub(crate) fn open_workbook_from_container_with_grid_filter(
 
     let sheets = {
         let started = Instant::now();
-        let parsed = parse_workbook_xml(&workbook_bytes)
-            .map_err(|e| wrap_grid_parse_error(e, "xl/workbook.xml"))?;
+        let parsed =
+            parse_workbook_xml(&workbook_bytes).map_err(|e| wrap_grid_parse_error(e, "xl/workbook.xml"))?;
         if profile_enabled {
             profile.workbook_xml_parse_ms = profile
                 .workbook_xml_parse_ms
@@ -297,11 +291,6 @@ pub(crate) fn open_workbook_from_container_with_grid_filter(
     let mut charts: Vec<ChartObject> = Vec::new();
     let mut chart_parts: HashMap<String, ChartPartCacheEntry> = HashMap::new();
 
-    let mut sheet_buf = Vec::<u8>::new();
-    let mut rels_buf = Vec::<u8>::new();
-    let mut drawing_buf = Vec::<u8>::new();
-    let mut chart_buf = Vec::<u8>::new();
-
     let mut sheet_ir = Vec::with_capacity(sheets.len());
     for (idx, sheet) in sheets.iter().enumerate() {
         let target = resolve_sheet_target(sheet, &relationships, idx);
@@ -313,31 +302,30 @@ pub(crate) fn open_workbook_from_container_with_grid_filter(
         let sheet_name_id = pool.intern(&sheet.name);
 
         let grid = if parse_grid {
-            {
+            let sheet_bytes = {
                 let started = Instant::now();
-                container
-                    .read_file_checked_into(&target, &mut sheet_buf)
-                    .map_err(|e| match e {
-                        ContainerError::FileNotFound { .. } => PackageError::MissingPart {
-                            path: target.clone(),
-                        },
-                        other => PackageError::ReadPartFailed {
-                            part: target.clone(),
-                            message: other.to_string(),
-                        },
-                    })?;
+                let payload = container.read_file_checked(&target).map_err(|e| match e {
+                    ContainerError::FileNotFound { .. } => PackageError::MissingPart {
+                        path: target.clone(),
+                    },
+                    other => PackageError::ReadPartFailed {
+                        part: target.clone(),
+                        message: other.to_string(),
+                    },
+                })?;
                 if profile_enabled {
                     profile.sheet_read_ms = profile
                         .sheet_read_ms
                         .saturating_add(started.elapsed().as_millis() as u64);
                     profile.sheet_xml_bytes = profile
                         .sheet_xml_bytes
-                        .saturating_add(sheet_buf.len() as u64);
+                        .saturating_add(payload.len() as u64);
                 }
-            }
+                payload
+            };
 
             let started = Instant::now();
-            let parsed_grid = parse_sheet_xml(&sheet_buf, &shared_strings, pool)
+            let parsed_grid = parse_sheet_xml(&sheet_bytes, &shared_strings, pool)
                 .map_err(|e| wrap_grid_parse_error(e, &target))?;
             if profile_enabled {
                 profile.sheet_parse_ms = profile
@@ -357,33 +345,28 @@ pub(crate) fn open_workbook_from_container_with_grid_filter(
         });
 
         let sheet_rels_path = rels_part_path(&target);
-        let has_sheet_rels = {
+        let sheet_rels_bytes = match {
             let started = Instant::now();
-            let present = container
-                .read_file_optional_checked_into(&sheet_rels_path, &mut rels_buf)
-                .map_err(|e| PackageError::ReadPartFailed {
-                    part: sheet_rels_path.clone(),
-                    message: e.to_string(),
-                })?;
+            let payload = read_optional_part(container, &sheet_rels_path)?;
             if profile_enabled {
                 profile.sheet_rels_read_ms = profile
                     .sheet_rels_read_ms
                     .saturating_add(started.elapsed().as_millis() as u64);
-                if present {
+                if let Some(bytes) = payload.as_ref() {
                     profile.sheet_rels_bytes = profile
                         .sheet_rels_bytes
-                        .saturating_add(rels_buf.len() as u64);
+                        .saturating_add(bytes.len() as u64);
                 }
             }
-            present
+            payload
+        } {
+            Some(bytes) => bytes,
+            None => continue,
         };
-        if !has_sheet_rels {
-            continue;
-        }
 
         let drawing_targets = {
             let started = Instant::now();
-            let parsed = parse_relationship_targets_by_type_contains(&rels_buf, "drawing")
+            let parsed = parse_relationship_targets_by_type_contains(&sheet_rels_bytes, "drawing")
                 .map_err(|e| wrap_grid_parse_error(e, &sheet_rels_path))?;
             if profile_enabled {
                 profile.sheet_rels_parse_ms = profile
@@ -400,33 +383,27 @@ pub(crate) fn open_workbook_from_container_with_grid_filter(
         for drawing_target in drawing_targets {
             let drawing_part_path = resolve_target_against_part(&target, &drawing_target);
 
-            let has_drawing_part = {
+            let drawing_bytes = match {
                 let started = Instant::now();
-                let present = container
-                    .read_file_optional_checked_into(&drawing_part_path, &mut drawing_buf)
-                    .map_err(|e| PackageError::ReadPartFailed {
-                        part: drawing_part_path.clone(),
-                        message: e.to_string(),
-                    })?;
+                let payload = read_optional_part(container, &drawing_part_path)?;
                 if profile_enabled {
                     profile.drawing_read_ms = profile
                         .drawing_read_ms
                         .saturating_add(started.elapsed().as_millis() as u64);
-                    if present {
+                    if let Some(bytes) = payload.as_ref() {
                         profile.drawing_xml_bytes = profile
                             .drawing_xml_bytes
-                            .saturating_add(drawing_buf.len() as u64);
+                            .saturating_add(bytes.len() as u64);
                     }
                 }
-                present
+                payload
+            } {
+                Some(bytes) => bytes,
+                None => continue,
             };
-            if !has_drawing_part {
-                continue;
-            }
-
             let drawing_chart_refs = {
                 let started = Instant::now();
-                let parsed = parse_drawing_chart_refs(&drawing_buf)
+                let parsed = parse_drawing_chart_refs(&drawing_bytes)
                     .map_err(|e| wrap_grid_parse_error(e, &drawing_part_path))?;
                 if profile_enabled {
                     profile.drawing_parse_ms = profile
@@ -440,33 +417,27 @@ pub(crate) fn open_workbook_from_container_with_grid_filter(
             }
 
             let drawing_rels_path = rels_part_path(&drawing_part_path);
-            let has_drawing_rels = {
+            let drawing_rels_bytes = match {
                 let started = Instant::now();
-                let present = container
-                    .read_file_optional_checked_into(&drawing_rels_path, &mut rels_buf)
-                    .map_err(|e| PackageError::ReadPartFailed {
-                        part: drawing_rels_path.clone(),
-                        message: e.to_string(),
-                    })?;
+                let payload = read_optional_part(container, &drawing_rels_path)?;
                 if profile_enabled {
                     profile.drawing_rels_read_ms = profile
                         .drawing_rels_read_ms
                         .saturating_add(started.elapsed().as_millis() as u64);
-                    if present {
+                    if let Some(bytes) = payload.as_ref() {
                         profile.drawing_rels_bytes = profile
                             .drawing_rels_bytes
-                            .saturating_add(rels_buf.len() as u64);
+                            .saturating_add(bytes.len() as u64);
                     }
                 }
-                present
+                payload
+            } {
+                Some(bytes) => bytes,
+                None => continue,
             };
-            if !has_drawing_rels {
-                continue;
-            }
-
             let drawing_rels = {
                 let started = Instant::now();
-                let parsed = parse_relationships_all(&rels_buf)
+                let parsed = parse_relationships_all(&drawing_rels_bytes)
                     .map_err(|e| wrap_grid_parse_error(e, &drawing_rels_path))?;
                 if profile_enabled {
                     profile.drawing_rels_parse_ms = profile
@@ -481,37 +452,32 @@ pub(crate) fn open_workbook_from_container_with_grid_filter(
                     continue;
                 };
                 let chart_part_path = resolve_target_against_part(&drawing_part_path, chart_target);
-                let has_chart_part = {
+                let chart_bytes = match {
                     let started = Instant::now();
-                    let present = container
-                        .read_file_optional_checked_into(&chart_part_path, &mut chart_buf)
-                        .map_err(|e| PackageError::ReadPartFailed {
-                            part: chart_part_path.clone(),
-                            message: e.to_string(),
-                        })?;
+                    let payload = read_optional_part(container, &chart_part_path)?;
                     if profile_enabled {
                         profile.chart_read_ms = profile
                             .chart_read_ms
                             .saturating_add(started.elapsed().as_millis() as u64);
-                        if present {
+                        if let Some(bytes) = payload.as_ref() {
                             profile.chart_xml_bytes = profile
                                 .chart_xml_bytes
-                                .saturating_add(chart_buf.len() as u64);
+                                .saturating_add(bytes.len() as u64);
                         }
                     }
-                    present
+                    payload
+                } {
+                    Some(bytes) => bytes,
+                    None => continue,
                 };
-                if !has_chart_part {
-                    continue;
-                }
 
                 let entry = match chart_parts.get(&chart_part_path) {
                     Some(entry) => entry.clone(),
                     None => {
-                        let xml_hash = hash_xml_part(&chart_buf);
+                        let xml_hash = hash_xml_part(&chart_bytes);
                         let (chart_type, data_range) = {
                             let started = Instant::now();
-                            let parsed = parse_chart_part_metadata(&chart_buf, pool)
+                            let parsed = parse_chart_part_metadata(&chart_bytes, pool)
                                 .map_err(|e| wrap_grid_parse_error(e, &chart_part_path))?;
                             if profile_enabled {
                                 profile.chart_parse_ms = profile
@@ -651,6 +617,18 @@ struct DrawingChartRef {
     name: Option<String>,
 }
 
+fn read_optional_part(
+    container: &mut OpcContainer,
+    path: &str,
+) -> Result<Option<Vec<u8>>, PackageError> {
+    container
+        .read_file_optional_checked(path)
+        .map_err(|e| PackageError::ReadPartFailed {
+            part: path.to_string(),
+            message: e.to_string(),
+        })
+}
+
 fn rels_part_path(part_path: &str) -> String {
     let part_path = part_path.trim_start_matches('/');
     let (dir, file) = match part_path.rsplit_once('/') {
@@ -710,7 +688,8 @@ fn parse_drawing_chart_refs(drawing_xml: &[u8]) -> Result<Vec<DrawingChartRef>, 
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(quick_xml::events::Event::Start(e)) | Ok(quick_xml::events::Event::Empty(e)) => {
+            Ok(quick_xml::events::Event::Start(e))
+            | Ok(quick_xml::events::Event::Empty(e)) => {
                 let name = e.name();
                 let tag = local_name(name.as_ref());
                 if tag == b"cNvPr" {
@@ -814,11 +793,7 @@ fn hash_xml_part(xml: &[u8]) -> u128 {
 
 pub(crate) fn wrap_grid_parse_error(err: GridParseError, part: &str) -> PackageError {
     match err {
-        GridParseError::XmlErrorAt {
-            line,
-            column,
-            message,
-        } => PackageError::InvalidXml {
+        GridParseError::XmlErrorAt { line, column, message } => PackageError::InvalidXml {
             part: part.to_string(),
             line,
             column,
@@ -851,7 +826,8 @@ pub fn open_workbook(
     let path_str = path.as_ref().display().to_string();
     let mut container = OpcContainer::open_from_path(path.as_ref())
         .map_err(|e| PackageError::from(e).with_path(&path_str))?;
-    open_workbook_from_container(&mut container, pool).map_err(|e| e.with_path(&path_str))
+    open_workbook_from_container(&mut container, pool)
+        .map_err(|e| e.with_path(&path_str))
 }
 
 #[cfg(feature = "std-fs")]
@@ -877,13 +853,12 @@ pub(crate) fn open_data_mashup_from_container(
             continue;
         }
 
-        let bytes =
-            container
-                .read_file_checked(&name)
-                .map_err(|e| PackageError::ReadPartFailed {
-                    part: name.clone(),
-                    message: e.to_string(),
-                })?;
+        let bytes = container
+            .read_file_checked(&name)
+            .map_err(|e| PackageError::ReadPartFailed {
+                part: name.clone(),
+                message: e.to_string(),
+            })?;
 
         match read_datamashup_text(&bytes) {
             Ok(Some(text)) => {
@@ -893,11 +868,12 @@ pub(crate) fn open_data_mashup_from_container(
                         source: e,
                     }
                 })?;
-                let parsed =
-                    parse_data_mashup(&decoded).map_err(|e| PackageError::DataMashupPartError {
+                let parsed = parse_data_mashup(&decoded).map_err(|e| {
+                    PackageError::DataMashupPartError {
                         part: name.clone(),
                         source: e,
-                    })?;
+                    }
+                })?;
                 if found.is_some() {
                     return Err(PackageError::DataMashupPartError {
                         part: name,
@@ -925,5 +901,6 @@ pub fn open_data_mashup(path: impl AsRef<Path>) -> Result<Option<RawDataMashup>,
     let path_str = path.as_ref().display().to_string();
     let mut container = OpcContainer::open_from_path(path.as_ref())
         .map_err(|e| PackageError::from(e).with_path(&path_str))?;
-    open_data_mashup_from_container(&mut container).map_err(|e| e.with_path(&path_str))
+    open_data_mashup_from_container(&mut container)
+        .map_err(|e| e.with_path(&path_str))
 }
