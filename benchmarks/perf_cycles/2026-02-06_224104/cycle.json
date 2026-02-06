@@ -1,0 +1,61 @@
+{
+  "cycle": "2026-02-06_224104",
+  "config": {
+    "runs": 3,
+    "aggregation": "median",
+    "parallel": true,
+    "skip_fixtures": false
+  },
+  "pre": {
+    "timestamp": "2026-02-06T22:45:06.966804+00:00",
+    "git_commit": "55dc8616ae6c",
+    "git_branch": "20260206_ui_improvements_milestone_3",
+    "fullscale_json": "benchmarks/perf_cycles/2026-02-06_224104/pre_fullscale.json",
+    "e2e_json": "benchmarks/perf_cycles/2026-02-06_224104/pre_e2e.json",
+    "fullscale_run_json": [
+      "benchmarks/perf_cycles/2026-02-06_224104/pre_fullscale_run1.json",
+      "benchmarks/perf_cycles/2026-02-06_224104/pre_fullscale_run2.json",
+      "benchmarks/perf_cycles/2026-02-06_224104/pre_fullscale_run3.json"
+    ],
+    "e2e_run_json": [
+      "benchmarks/perf_cycles/2026-02-06_224104/pre_e2e_run1.json",
+      "benchmarks/perf_cycles/2026-02-06_224104/pre_e2e_run2.json",
+      "benchmarks/perf_cycles/2026-02-06_224104/pre_e2e_run3.json"
+    ],
+    "runs": 3,
+    "aggregation": "median",
+    "parallel": true,
+    "skip_fixtures": false,
+    "dirty_worktree": false,
+    "dirty_paths_count": 0,
+    "dirty_paths_sample": [],
+    "dirty_rust_paths": []
+  },
+  "post": {
+    "timestamp": "2026-02-06T22:54:10.950480+00:00",
+    "git_commit": "9e292f59ca04",
+    "git_branch": "20260206_ui_improvements_milestone_3",
+    "fullscale_json": "benchmarks/perf_cycles/2026-02-06_224104/post_fullscale.json",
+    "e2e_json": "benchmarks/perf_cycles/2026-02-06_224104/post_e2e.json",
+    "fullscale_run_json": [
+      "benchmarks/perf_cycles/2026-02-06_224104/post_fullscale_run1.json",
+      "benchmarks/perf_cycles/2026-02-06_224104/post_fullscale_run2.json",
+      "benchmarks/perf_cycles/2026-02-06_224104/post_fullscale_run3.json"
+    ],
+    "e2e_run_json": [
+      "benchmarks/perf_cycles/2026-02-06_224104/post_e2e_run1.json",
+      "benchmarks/perf_cycles/2026-02-06_224104/post_e2e_run2.json",
+      "benchmarks/perf_cycles/2026-02-06_224104/post_e2e_run3.json"
+    ],
+    "runs": 3,
+    "aggregation": "median",
+    "parallel": true,
+    "skip_fixtures": false,
+    "dirty_worktree": true,
+    "dirty_paths_count": 1,
+    "dirty_paths_sample": [
+      "benchmarks/perf_cycles/2026-02-06_224104/"
+    ],
+    "dirty_rust_paths": []
+  }
+}

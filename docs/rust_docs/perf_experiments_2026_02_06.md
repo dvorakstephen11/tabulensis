@@ -278,6 +278,15 @@ This is an intentionally low-risk stepping stone toward true streaming parse.
 
 - If buffer reuse introduces lifetime/aliasing mistakes, do not proceed; keep changes minimal and obviously correct.
 
+## Outcome (2026-02-06)
+
+This iteration did **not** produce a clear win (all deltas were low-confidence and within noise, with no meaningful change in peak memory), so the code changes were reverted.
+
+Perf-cycle artifacts (pre/post) are recorded at:
+- `benchmarks/perf_cycles/2026-02-06_224104/`
+- Delta summary: `benchmarks/perf_cycles/2026-02-06_224104/cycle_delta.md`
+- Signal report: `benchmarks/perf_cycles/2026-02-06_224104/cycle_signal.md`
+
 ---
 
 # Experiment 4: SharedStrings-Aware Sheet Skipping When `sharedStrings.xml` Changes
