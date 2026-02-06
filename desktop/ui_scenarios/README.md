@@ -12,7 +12,9 @@ Each scenario lives under `desktop/ui_scenarios/<name>/scenario.json` and should
 
 ## Included scenarios
 - `compare_empty`: empty state (no paths selected). Validates first-run UX and control states.
+- `compare_no_diffs`: identical workbooks. Validates the first-class “No differences” state and empty sheets panel UX.
 - `compare_basic`: small diff using committed templates (`fixtures/templates/`) so it works out of the box.
+- `compare_many_sheets`: multi-sheet diff to validate default sorting and the sheets filter box.
 - `compare_multi_sheet`: sheet + grid changes to validate sheets list density and Grid preview behavior.
 - `compare_grid_basic`: single-cell change to exercise the Grid preview tab.
 - `compare_large_mode`: large workbook to exercise large-mode UI behavior.
