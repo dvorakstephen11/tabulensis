@@ -67,6 +67,21 @@ Escalation rule: if quick/gate fails or results are noisy/suspicious, run the fu
 - Use `--clean` only when intentionally resetting to one manifest set (typically `manifest_cli_tests.yaml` for CI-like local runs).
 - If you used `--clean` on a narrow manifest, regenerate required fixture sets before running other tests.
 
+## Custom Crate Experiments (Agentic Guide)
+
+Location:
+- Canonical folder: `docs/rust_docs/custom_crates/`
+- Index: `docs/rust_docs/custom_crates/README.md`
+- Workflow guide: `docs/rust_docs/custom_crates/agentic_experiment_playbook.md`
+
+Required guardrails for future custom-crate experiments:
+- Keep one experiment doc per candidate under `docs/rust_docs/custom_crates/`; do not create new root-level experiment docs.
+- Always run candidate-specific benchmarks for the crate you changed, in addition to any shared suites.
+- Keep pre/post sampling symmetric (`--runs` and aggregation must match exactly).
+- Do not claim a win from a single noisy run; use median over multiple runs (5+ for small deltas).
+- Record command lines, commit SHA, feature flags, fixture manifest, and raw metrics in the experiment doc.
+- Update `docs/rust_docs/custom_crates/README.md` with experiment status and next-step recommendation after each iteration.
+
 ## Continuous Agent Improvement
 
 When you find a repeatable way to improve speed, correctness, or operator clarity, proactively document it in the same change when practical.

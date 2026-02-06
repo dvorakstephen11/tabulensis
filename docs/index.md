@@ -18,6 +18,8 @@
 - [FAQ](faq.md)
 - [Architecture overview](architecture.md)
 - [Perf playbook](perf_playbook.md)
+- [Rust custom-crate experiments](rust_docs/custom_crates/README.md)
+- [Custom-crate agentic playbook](rust_docs/custom_crates/agentic_experiment_playbook.md)
 - [Migration guide (from legacy APIs)](migration.md)
 - [Desktop app](desktop.md)
 - [UI visual regression](ui_visual_regression.md)

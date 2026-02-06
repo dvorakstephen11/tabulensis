@@ -1,5 +1,9 @@
 # Custom crate code experiment candidates (Rust)
 
+See also:
+- `docs/rust_docs/custom_crates/README.md` for experiment index and status.
+- `docs/rust_docs/custom_crates/agentic_experiment_playbook.md` for execution guardrails.
+
 ## Scope and method
 - Scanned Rust workspace crates: `core`, `cli`, `wasm`, `ui_payload`, `desktop/backend`, `desktop/wx`, `license_client`, `license_service`.
 - Focused on hot-path parsing/serialization and widely-used dependencies where a custom, narrower implementation could be faster or smaller.

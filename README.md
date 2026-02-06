@@ -207,6 +207,7 @@ For large workbooks, prefer streaming output (`diff_streaming`) and consider set
 - Release readiness: [docs/release_readiness.md](docs/release_readiness.md)
 - Licensing service: [docs/licensing_service.md](docs/licensing_service.md)
 - Ops: [docs/operations.md](docs/operations.md)
+- Rust custom-crate experiments: [docs/rust_docs/custom_crates/README.md](docs/rust_docs/custom_crates/README.md)
 
 Agent note: if you discover a repeatable workflow optimization or failure trap, proactively update `AGENTS.md`, relevant `SKILL.md`, and/or this README in the same PR when practical.
 
