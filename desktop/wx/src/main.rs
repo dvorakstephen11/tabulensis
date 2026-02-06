@@ -92,6 +92,10 @@ const WXK_F6: i32 = 345;
 const WXK_F8: i32 = 347;
 const RESULT_TAB_DETAILS: i32 = 1;
 const RESULT_TAB_GRID: i32 = 2;
+const GUIDED_EMPTY_SUMMARY: &str =
+    "Select Old and New files, pick a preset, then click Compare (F5).\n\nTip: Use Swap to flip Old/New.";
+const GUIDED_EMPTY_DETAILS: &str =
+    "After comparing, select a sheet to see details.\n\nSelect Old and New files, pick a preset, then click Compare (F5).";
 
 fn show_startup_error(message: &str) -> ! {
     show_startup_error_with_parent(None, message)
@@ -148,8 +152,10 @@ struct MainUi {
     compare_right_panel: Panel,
     old_picker: FilePickerCtrl,
     new_picker: FilePickerCtrl,
+    swap_btn: Button,
     compare_btn: Button,
     cancel_btn: Button,
+    compare_help_text: StaticText,
     preset_choice: Choice,
     trusted_checkbox: CheckBox,
     progress_gauge: Gauge,
@@ -308,10 +314,15 @@ impl MainUi {
             find_xrc_child::<Panel>(&compare_container, "compare_right_panel");
         sheets_list.set_min_size(Size::new(MIN_SASH_POSITION, 240));
         compare_right_panel.set_min_size(Size::new(320, 240));
+        let old_label = find_xrc_child::<StaticText>(&compare_container, "old_label");
         let old_picker = find_xrc_child::<FilePickerCtrl>(&compare_container, "old_picker");
+        let swap_btn = find_xrc_child::<Button>(&compare_container, "swap_btn");
+        let new_label = find_xrc_child::<StaticText>(&compare_container, "new_label");
         let new_picker = find_xrc_child::<FilePickerCtrl>(&compare_container, "new_picker");
         let compare_btn = find_xrc_child::<Button>(&compare_container, "compare_btn");
         let cancel_btn = find_xrc_child::<Button>(&compare_container, "cancel_btn");
+        let compare_help_text =
+            find_xrc_child::<StaticText>(&compare_container, "compare_help_text");
         let preset_choice = find_xrc_child::<Choice>(&compare_container, "preset_choice");
         let trusted_checkbox = find_xrc_child::<CheckBox>(&compare_container, "trusted_checkbox");
         let progress_gauge = find_xrc_child::<Gauge>(&compare_container, "progress_gauge");
@@ -371,6 +382,22 @@ impl MainUi {
         theme::apply_content_text(&summary_text, false);
         theme::apply_content_text(&detail_text, true);
 
+        if let Some(font) = FontBuilder::default().with_weight(FontWeight::Bold).build() {
+            old_label.set_font(&font);
+            new_label.set_font(&font);
+        }
+        old_label.set_foreground_color(theme::Palette::TEXT_PRIMARY);
+        new_label.set_foreground_color(theme::Palette::TEXT_PRIMARY);
+        compare_help_text.set_foreground_color(theme::Palette::TEXT_SECONDARY);
+
+        let old_tip = "Old: baseline workbook (before).";
+        let new_tip = "New: updated workbook (after).";
+        old_label.set_tooltip(old_tip);
+        old_picker.set_tooltip(old_tip);
+        new_label.set_tooltip(new_tip);
+        new_picker.set_tooltip(new_tip);
+        swap_btn.set_tooltip("Swap Old and New paths.");
+
         trusted_checkbox.set_foreground_color(theme::Palette::TEXT_PRIMARY);
         include_glob_label.set_foreground_color(theme::Palette::TEXT_SECONDARY);
         exclude_glob_label.set_foreground_color(theme::Palette::TEXT_SECONDARY);
@@ -413,8 +440,10 @@ impl MainUi {
             compare_right_panel,
             old_picker,
             new_picker,
+            swap_btn,
             compare_btn,
             cancel_btn,
+            compare_help_text,
             preset_choice,
             trusted_checkbox,
             progress_gauge,
@@ -637,6 +666,7 @@ fn apply_ui_state(ctx: &mut UiContext, ui_state: &UiState) {
             .unsplit(Some(&ctx.ui.sheets_list_panel));
     }
     ctx.ui.toggle_sheets_menu.check(visible);
+    sync_compare_controls_in_ctx(ctx);
 }
 
 struct UiHandles {
@@ -669,6 +699,8 @@ struct UiHandles {
     cancel_btn: Button,
     old_picker: FilePickerCtrl,
     new_picker: FilePickerCtrl,
+    swap_btn: Button,
+    compare_help_text: StaticText,
     preset_choice: Choice,
     trusted_checkbox: CheckBox,
     summary_text: TextCtrl,
@@ -759,6 +791,49 @@ where
 fn update_status_in_ctx(ctx: &mut UiContext, message: &str) {
     ctx.ui.progress_text.set_label(message);
     ctx.ui.status_bar.set_status_text(message, 0);
+}
+
+fn sync_compare_controls_in_ctx(ctx: &mut UiContext) {
+    let old_ok = !ctx.ui.old_picker.get_path().trim().is_empty();
+    let new_ok = !ctx.ui.new_picker.get_path().trim().is_empty();
+    let running = ctx.state.active_run.is_some();
+
+    let can_compare = old_ok && new_ok && !running;
+    ctx.ui.compare_btn.enable(can_compare);
+    ctx.ui.cancel_btn.enable(running);
+    ctx.ui.swap_btn.enable(!running && (old_ok || new_ok));
+
+    // MenuItem wrappers loaded via XRC can't be enabled/disabled directly; use the MenuBar.
+    if let Some(menu_bar) = ctx.ui.frame.get_menu_bar() {
+        let _ = menu_bar.enable_item(ctx.ui.compare_menu.get_id(), can_compare);
+        let _ = menu_bar.enable_item(ctx.ui.cancel_menu.get_id(), running);
+    }
+
+    let (help_label, show_help) = if running {
+        ("", false)
+    } else if !old_ok && !new_ok {
+        ("Select Old and New files to enable Compare.", true)
+    } else if !old_ok {
+        ("Select an Old file to enable Compare.", true)
+    } else if !new_ok {
+        ("Select a New file to enable Compare.", true)
+    } else {
+        ("", false)
+    };
+
+    let was_shown = ctx.ui.compare_help_text.is_shown();
+    if show_help {
+        ctx.ui.compare_help_text.set_label(help_label);
+    }
+    ctx.ui.compare_help_text.show(show_help);
+    if was_shown != show_help {
+        ctx.ui.compare_container.layout();
+        ctx.ui.frame.layout();
+    }
+}
+
+fn sync_compare_controls() {
+    let _ = with_ui_context(|ctx| sync_compare_controls_in_ctx(ctx));
 }
 
 fn update_status_counts_in_ctx(ctx: &mut UiContext, summary: Option<&DiffRunSummary>) {
@@ -2300,10 +2375,9 @@ fn populate_recents(ctx: &mut UiContext, recents: Vec<RecentComparison>) {
 fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
     let mut ready_reason: Option<&'static str> = None;
     let _ = with_ui_context(|ctx| {
-        ctx.ui.compare_btn.enable(true);
-        ctx.ui.cancel_btn.enable(false);
         ctx.ui.progress_gauge.set_value(100);
         ctx.state.active_run = None;
+        sync_compare_controls_in_ctx(ctx);
 
         match result {
             Ok(outcome) => {
@@ -2501,8 +2575,7 @@ fn start_compare() {
         ctx.state.sheet_names.clear();
         update_status_counts_in_ctx(ctx, None);
 
-        ctx.ui.compare_btn.enable(false);
-        ctx.ui.cancel_btn.enable(true);
+        sync_compare_controls_in_ctx(ctx);
         ctx.ui.progress_gauge.set_value(0);
         ctx.ui.summary_text.set_value("");
         ctx.ui.detail_text.set_value("");
@@ -2970,6 +3043,7 @@ fn open_recent() {
 
         ctx.ui.old_picker.set_path(&entry.old_path);
         ctx.ui.new_picker.set_path(&entry.new_path);
+        sync_compare_controls_in_ctx(ctx);
         request = entry.diff_id.clone();
 
         if request.is_none() {
@@ -3012,7 +3086,27 @@ fn open_pair_dialog() {
 
         ctx.ui.old_picker.set_path(&old_path);
         ctx.ui.new_picker.set_path(&new_path);
+        sync_compare_controls_in_ctx(ctx);
         ctx.ui.root_tabs.set_selection(0);
+    });
+}
+
+fn swap_old_new_paths() {
+    let _ = with_ui_context(|ctx| {
+        if ctx.state.active_run.is_some() {
+            return;
+        }
+
+        let old_path = ctx.ui.old_picker.get_path();
+        let new_path = ctx.ui.new_picker.get_path();
+        if old_path.trim().is_empty() && new_path.trim().is_empty() {
+            return;
+        }
+
+        ctx.ui.old_picker.set_path(&new_path);
+        ctx.ui.new_picker.set_path(&old_path);
+        sync_compare_controls_in_ctx(ctx);
+        update_status_in_ctx(ctx, "Swapped Old and New.");
     });
 }
 
@@ -3236,6 +3330,7 @@ fn setup_menu_handlers(ids: MenuIds) {
                     if dialog.show_modal() == ID_OK {
                         if let Some(path) = dialog.get_path() {
                             ctx.ui.old_picker.set_path(&path);
+                            sync_compare_controls_in_ctx(ctx);
                         }
                     }
                 });
@@ -3250,6 +3345,7 @@ fn setup_menu_handlers(ids: MenuIds) {
                     if dialog.show_modal() == ID_OK {
                         if let Some(path) = dialog.get_path() {
                             ctx.ui.new_picker.set_path(&path);
+                            sync_compare_controls_in_ctx(ctx);
                         }
                     }
                 });
@@ -3414,6 +3510,8 @@ fn main() {
             cancel_btn: ui.cancel_btn,
             old_picker: ui.old_picker,
             new_picker: ui.new_picker,
+            swap_btn: ui.swap_btn,
+            compare_help_text: ui.compare_help_text,
             preset_choice: ui.preset_choice,
             trusted_checkbox: ui.trusted_checkbox,
             summary_text: ui.summary_text,
@@ -3553,6 +3651,9 @@ fn main() {
                 ctx.ui.preset_choice.append("Most precise");
                 ctx.ui.preset_choice.set_selection(0);
 
+                ctx.ui.summary_text.set_value(GUIDED_EMPTY_SUMMARY);
+                ctx.ui.detail_text.set_value(GUIDED_EMPTY_DETAILS);
+
                 ctx.ui.search_scope_choice.append("Changes");
                 ctx.ui.search_scope_choice.append("Old workbook");
                 ctx.ui.search_scope_choice.append("New workbook");
@@ -3560,11 +3661,18 @@ fn main() {
 
                 ctx.ui.compare_btn.on_click(|_| start_compare());
                 ctx.ui.cancel_btn.on_click(|_| cancel_current());
+                ctx.ui.swap_btn.on_click(|_| swap_old_new_paths());
                 ctx.ui.open_recent_btn.on_click(|_| open_recent());
                 ctx.ui.run_batch_btn.on_click(|_| run_batch());
                 ctx.ui.search_btn.on_click(|_| handle_search());
                 ctx.ui.build_old_index_btn.on_click(|_| build_index("old"));
                 ctx.ui.build_new_index_btn.on_click(|_| build_index("new"));
+                ctx.ui
+                    .old_picker
+                    .on_file_changed(|_| sync_compare_controls());
+                ctx.ui
+                    .new_picker
+                    .on_file_changed(|_| sync_compare_controls());
                 ctx.ui.result_tabs.on_page_changed(|event| {
                     if event.get_selection() == Some(RESULT_TAB_DETAILS) {
                         let _ = with_ui_context(|ctx| render_staged_detail_payload(ctx));
@@ -3865,6 +3973,7 @@ fn apply_dev_scenario(ctx: &mut UiContext, scenario: &UiScenario) {
         ctx.ui.preset_choice.set_selection(choice);
     }
 
+    sync_compare_controls_in_ctx(ctx);
     apply_focus_panel(ctx, scenario.focus_panel.as_deref());
     let status = scenario
         .description

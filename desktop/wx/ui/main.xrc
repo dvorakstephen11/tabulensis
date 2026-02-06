@@ -38,10 +38,10 @@
         </object>
         <object class="separator"></object>
         <object class="wxMenuItem" name="next_diff_menu">
-          <label>Next Difference\tF8</label>
+          <label>Next Sheet\tF8</label>
         </object>
         <object class="wxMenuItem" name="prev_diff_menu">
-          <label>Previous Difference\tShift+F8</label>
+          <label>Previous Sheet\tShift+F8</label>
         </object>
       </object>
       <object class="wxMenu" name="edit_menu">
@@ -129,40 +129,82 @@
                     <object class="wxBoxSizer">
                       <orient>wxHORIZONTAL</orient>
                       <object class="sizeritem">
-                        <object class="wxFilePickerCtrl" name="old_picker">
-                          <style>wxFLP_OPEN|wxFLP_FILE_MUST_EXIST|wxFLP_USE_TEXTCTRL</style>
-                          <wildcard>Excel/PBIX files (*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit)|*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit|All files (*.*)|*.*</wildcard>
+                        <object class="wxBoxSizer">
+                          <orient>wxVERTICAL</orient>
+                          <object class="sizeritem">
+                            <object class="wxStaticText" name="old_label">
+                              <label>Old</label>
+                            </object>
+                            <flag>wxLEFT|wxRIGHT|wxTOP</flag>
+                            <border>4</border>
+                          </object>
+                          <object class="sizeritem">
+                            <object class="wxFilePickerCtrl" name="old_picker">
+                              <style>wxFLP_OPEN|wxFLP_FILE_MUST_EXIST|wxFLP_USE_TEXTCTRL</style>
+                              <wildcard>Excel/PBIX files (*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit)|*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit|All files (*.*)|*.*</wildcard>
+                            </object>
+                            <flag>wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM</flag>
+                            <option>1</option>
+                            <border>4</border>
+                          </object>
                         </object>
-                        <flag>wxEXPAND|wxALL</flag>
+                        <flag>wxEXPAND</flag>
                         <option>1</option>
+                      </object>
+                      <object class="sizeritem">
+                        <object class="wxButton" name="swap_btn">
+                          <label>Swap</label>
+                        </object>
+                        <flag>wxALL|wxALIGN_BOTTOM</flag>
                         <border>4</border>
                       </object>
                       <object class="sizeritem">
-                        <object class="wxFilePickerCtrl" name="new_picker">
-                          <style>wxFLP_OPEN|wxFLP_FILE_MUST_EXIST|wxFLP_USE_TEXTCTRL</style>
-                          <wildcard>Excel/PBIX files (*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit)|*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit|All files (*.*)|*.*</wildcard>
+                        <object class="wxBoxSizer">
+                          <orient>wxVERTICAL</orient>
+                          <object class="sizeritem">
+                            <object class="wxStaticText" name="new_label">
+                              <label>New</label>
+                            </object>
+                            <flag>wxLEFT|wxRIGHT|wxTOP</flag>
+                            <border>4</border>
+                          </object>
+                          <object class="sizeritem">
+                            <object class="wxFilePickerCtrl" name="new_picker">
+                              <style>wxFLP_OPEN|wxFLP_FILE_MUST_EXIST|wxFLP_USE_TEXTCTRL</style>
+                              <wildcard>Excel/PBIX files (*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit)|*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit|All files (*.*)|*.*</wildcard>
+                            </object>
+                            <flag>wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM</flag>
+                            <option>1</option>
+                            <border>4</border>
+                          </object>
                         </object>
-                        <flag>wxEXPAND|wxALL</flag>
+                        <flag>wxEXPAND</flag>
                         <option>1</option>
-                        <border>4</border>
                       </object>
                       <object class="sizeritem">
                         <object class="wxButton" name="compare_btn">
                           <label>Compare</label>
                         </object>
-                        <flag>wxALL|wxALIGN_CENTER_VERTICAL</flag>
+                        <flag>wxALL|wxALIGN_BOTTOM</flag>
                         <border>4</border>
                       </object>
                       <object class="sizeritem">
                         <object class="wxButton" name="cancel_btn">
                           <label>Cancel</label>
                         </object>
-                        <flag>wxALL|wxALIGN_CENTER_VERTICAL</flag>
+                        <flag>wxALL|wxALIGN_BOTTOM</flag>
                         <border>4</border>
                       </object>
                     </object>
                     <flag>wxEXPAND</flag>
                     <option>0</option>
+                  </object>
+                  <object class="sizeritem">
+                    <object class="wxStaticText" name="compare_help_text">
+                      <label>Select Old and New files to enable Compare.</label>
+                    </object>
+                    <flag>wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM</flag>
+                    <border>8</border>
                   </object>
                   <object class="sizeritem">
                     <object class="wxBoxSizer">
