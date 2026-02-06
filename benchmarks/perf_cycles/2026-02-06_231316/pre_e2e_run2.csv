@@ -1,0 +1,7 @@
+test_name,total_time_ms,parse_time_ms,diff_time_ms,signature_build_time_ms,move_detection_time_ms,alignment_time_ms,cell_diff_time_ms,op_emit_time_ms,report_serialize_time_ms,peak_memory_bytes,grid_storage_bytes,string_pool_bytes,op_buffer_bytes,alignment_buffer_bytes,rows_processed,cells_compared,anchors_found,moves_detected,hash_lookups_est,allocations_est,old_bytes,new_bytes,total_input_bytes
+e2e_p1_dense,2069,2061,8,6,0,0,0,0,0,157291151,48000960,92214090,0,40426248,100002,140,0,0,0,0,3280972,3280996,6561968
+e2e_p2_noise,866,859,7,6,0,0,0,0,0,73409675,48000960,1786,0,40426248,100002,140,0,0,0,0,12684056,12684052,25368108
+e2e_p3_repetitive,2047,2028,19,14,0,0,0,0,0,136668360,120002400,454894,0,88465368,100002,350,0,0,0,0,8065707,8065733,16131440
+e2e_p4_sparse,83,60,23,23,0,0,0,0,0,16691069,3670016,3844713,0,10133944,99994,700,0,0,0,0,533077,533089,1066166
+e2e_p5_identical,0,0,0,0,0,0,0,0,0,32851339,0,203,0,0,0,0,0,0,0,0,16406389,16406392,32812781
+e2e_p6_sharedstrings_changed_numeric_only,879,876,3,0,0,0,0,0,0,73408137,48000192,456,0,40425440,100002,1000001,1,0,2,4,12682803,12682804,25365607

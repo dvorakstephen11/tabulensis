@@ -360,6 +360,19 @@ This must be conservative:
 
 - Any uncertainty about the detector's conservatism: keep behavior conservative (parse) and refine later.
 
+## Outcome (2026-02-06)
+
+This iteration produced a clear win on the intended scenario (when `sharedStrings.xml` differs but the matched sheet is numeric-only and does not use shared strings). We are keeping this change.
+
+Perf-cycle artifacts (pre/post) are recorded at:
+- `benchmarks/perf_cycles/2026-02-06_231316/`
+- Delta summary: `benchmarks/perf_cycles/2026-02-06_231316/cycle_delta.md`
+- Signal report: `benchmarks/perf_cycles/2026-02-06_231316/cycle_signal.md`
+
+Key deltas (median of 3):
+- `e2e_p6_sharedstrings_changed_numeric_only`: total 879 -> 152 ms (-82.7%); parse 876 -> 152 ms (-82.6%); peak memory ~73.4 MB -> ~25.4 MB.
+- Other e2e/full-scale deltas were low-confidence and within noise; no high-confidence regressions were detected.
+
 ---
 
 # Experiment 5: Custom JSON Lines Writer for `JsonLinesSink` (Avoid `serde_json::to_writer` Per Op)
