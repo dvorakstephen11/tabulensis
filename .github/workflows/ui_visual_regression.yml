@@ -4,17 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       scenario:
-        description: "Scenario name"
+        description: "Scenario name (or 'canonical')"
         required: false
-        default: "compare_basic"
+        default: "canonical"
       update_baseline:
         description: "Update baseline"
         required: false
         default: "false"
   pull_request:
     types: [opened, synchronize, labeled]
-  push:
-    branches: [main, master]
 
 jobs:
   ui-visual:
@@ -45,6 +43,15 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Install fixture generator deps
+        run: python -m pip install -r fixtures/requirements.txt
+
+      - name: Install fixture generator
+        run: python -m pip install -e fixtures --no-deps
+
+      - name: Generate UI scenario fixtures
+        run: generate-fixtures --manifest fixtures/manifest_cli_tests.yaml --force --clean
+
       - name: Run UI visual regression
         env:
           EXCEL_DIFF_UI_HEADLESS: "1"
@@ -52,13 +59,24 @@ jobs:
           EXCEL_DIFF_START_MAXIMIZED: "0"
           EXCEL_DIFF_UI_DISABLE_STATE: "1"
         run: |
-          SCENARIO="${{ github.event.inputs.scenario || 'compare_basic' }}"
           UPDATE_BASELINE="${{ github.event.inputs.update_baseline || 'false' }}"
-          if [ "$UPDATE_BASELINE" = "true" ]; then
-            scripts/ui_pipeline.sh "$SCENARIO" --update-baseline
+          INPUT_SCENARIO="${{ github.event.inputs.scenario || '' }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "$INPUT_SCENARIO" ] && [ "$INPUT_SCENARIO" != "canonical" ]; then
+            SCENARIOS="$INPUT_SCENARIO"
           else
-            scripts/ui_pipeline.sh "$SCENARIO"
+            SCENARIOS="compare_grid_basic compare_large_mode pbix_no_mashup"
           fi
+
+          EXIT=0
+          for SCENARIO in $SCENARIOS; do
+            echo "Running UI scenario: $SCENARIO"
+            if [ "$UPDATE_BASELINE" = "true" ]; then
+              scripts/ui_pipeline.sh "$SCENARIO" --update-baseline || EXIT=1
+            else
+              scripts/ui_pipeline.sh "$SCENARIO" || EXIT=1
+            fi
+          done
+          exit $EXIT
 
       - name: Upload UI artifacts
         if: always()

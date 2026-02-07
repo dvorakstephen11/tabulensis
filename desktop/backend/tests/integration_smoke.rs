@@ -212,7 +212,7 @@ fn search_index_finds_power_query_text() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "perf-ish cache hit loop smoke; run manually when investigating backend cache behavior"]
 fn cache_hit_loop_smoke() {
     let temp = TempDir::new("backend-cache-hit");
     let backend = build_backend(&temp);

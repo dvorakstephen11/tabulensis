@@ -19,12 +19,7 @@ license_service/data/
 .env
 
 # Shared Generated Data
-fixtures/generated/*.xlsx
-fixtures/generated/*.pbix
-fixtures/generated/*.zip
-fixtures/generated/*.csv
-fixtures/generated/*.xlsm
-fixtures/generated/*.xlsb
+fixtures/generated/
 
 
 # Docs

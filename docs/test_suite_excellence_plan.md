@@ -151,10 +151,14 @@ Exit criteria:
 Deliverables:
 - Continue using `docs/m_parser_coverage.md` + audit tests as the pattern:
   - When a new M construct becomes semantic, update the doc and add/extend tests.
+  - Current audit: `core/tests/m8_m_parser_coverage_audit_tests.rs`
 - Add analogous “coverage audit” patterns for:
   - OpenXML part/element support (what we parse vs ignore)
   - Formula handling (canonicalization/diff constructs)
   - Diff-op categories (adds/removes/updates/moves, formatting policies)
+  - OpenXML audit: `docs/openxml_coverage.md` + `core/tests/openxml_coverage_audit_tests.rs`
+  - Formula audit: `docs/formula_coverage.md` + `core/tests/formula_coverage_audit_tests.rs`
+  - Diff-op audit: `docs/diff_op_coverage.md` + `core/tests/diff_op_coverage_audit_tests.rs`
 
 Exit criteria:
 - Each audit area has:

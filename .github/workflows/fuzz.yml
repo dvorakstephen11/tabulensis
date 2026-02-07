@@ -2,7 +2,8 @@ name: Fuzzing
 
 on:
   schedule:
-    - cron: "0 4 * * 0"
+    # Nightly (timeboxed) fuzz campaigns.
+    - cron: "0 4 * * *"
   workflow_dispatch: {}
 
 jobs:

@@ -25,6 +25,17 @@ Each scenario lives under `desktop/ui_scenarios/<name>/scenario.json` and should
 - `compare_container_limits`: ZIP entry count exceeds default container limits to validate safety-limit error UX.
 - `pbix_no_mashup`: PBIX fixture to validate error and messaging UI state.
 
+## Canonical CI scenario set
+
+The opt-in CI visual regression job (PR label: `ui-visual`) runs a small canonical set:
+
+- `compare_grid_basic`
+- `compare_large_mode`
+- `pbix_no_mashup`
+
+Keep this set small and stable. Adding scenarios should be an explicit, reviewed change (and should
+include baseline PNGs).
+
 ## Native UX checklist (use during review)
 
 These checks are intentionally small and stable. If a scenario capture regresses, look here first.
