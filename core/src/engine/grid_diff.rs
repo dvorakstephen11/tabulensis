@@ -1,22 +1,21 @@
 use crate::config::{DiffConfig, LimitBehavior};
 use crate::diff::{DiffError, DiffOp, DiffReport, DiffSummary};
 use crate::grid_view::GridView;
+use crate::hashing::hash_row_content_128;
 #[cfg(feature = "perf-metrics")]
 use crate::perf::{DiffMetrics, Phase};
 use crate::progress::ProgressCallback;
 use crate::sink::{DiffSink, SinkFinishGuard, VecSink};
 use crate::string_pool::StringPool;
-use crate::hashing::hash_row_content_128;
 use crate::workbook::{CellAddress, CellContent, CellValue, Grid, GridStorage, RowSignature};
 use std::collections::{HashMap, HashSet};
 
-use crate::diff::SheetId;
 use super::context::{DiffContext, EmitCtx};
 use super::grid_primitives::{
-    cells_content_equal, emit_cell_edit, positional_diff_for_rows,
-    run_positional_diff_with_metrics,
+    cells_content_equal, emit_cell_edit, positional_diff_for_rows, run_positional_diff_with_metrics,
 };
 use super::move_mask::SheetGridDiffer;
+use crate::diff::SheetId;
 
 use crate::database_alignment::diff_table_by_key;
 use crate::matching::hungarian;
@@ -407,10 +406,7 @@ fn diff_grids_core<'p, S: DiffSink>(
     #[cfg(feature = "perf-metrics")]
     if let Some(m) = metrics.as_mut() {
         let lookups = old.cell_count() as u64 + new.cell_count() as u64;
-        let allocations = old.nrows as u64
-            + old.ncols as u64
-            + new.nrows as u64
-            + new.ncols as u64;
+        let allocations = old.nrows as u64 + old.ncols as u64 + new.nrows as u64 + new.ncols as u64;
         m.add_hash_lookups_est(lookups);
         m.add_allocations_est(allocations);
         m.end_phase(Phase::SignatureBuild);
@@ -429,13 +425,7 @@ fn diff_grids_core<'p, S: DiffSink>(
         metrics.as_deref_mut(),
     );
 
-    let mut differ = SheetGridDiffer::from_views(
-        emit_ctx,
-        old,
-        new,
-        old_view,
-        new_view,
-    );
+    let mut differ = SheetGridDiffer::from_views(emit_ctx, old, new, old_view, new_view);
 
     #[cfg(feature = "perf-metrics")]
     if let Some(m) = differ.emit_ctx.metrics.as_deref_mut() {
@@ -443,7 +433,11 @@ fn diff_grids_core<'p, S: DiffSink>(
     }
 
     differ.emit_ctx.hardening.progress("move_detection", 0.0);
-    if differ.emit_ctx.hardening.check_timeout(differ.emit_ctx.warnings) {
+    if differ
+        .emit_ctx
+        .hardening
+        .check_timeout(differ.emit_ctx.warnings)
+    {
         return Ok(());
     }
     differ.detect_moves()?;
@@ -478,7 +472,11 @@ fn diff_grids_core<'p, S: DiffSink>(
     }
 
     differ.emit_ctx.hardening.progress("alignment", 0.0);
-    if differ.emit_ctx.hardening.check_timeout(differ.emit_ctx.warnings) {
+    if differ
+        .emit_ctx
+        .hardening
+        .check_timeout(differ.emit_ctx.warnings)
+    {
         return Ok(());
     }
     if differ.try_amr()? {
@@ -590,8 +588,7 @@ pub fn try_diff_grids_database_mode_streaming<S: DiffSink>(
 
     if key_columns.is_empty() {
         ctx.warnings.push(
-            "database-mode: no key columns provided; falling back to spreadsheet mode"
-                .to_string(),
+            "database-mode: no key columns provided; falling back to spreadsheet mode".to_string(),
         );
         try_diff_grids_internal(
             sheet_id,
@@ -650,8 +647,7 @@ pub fn try_diff_grids_database_mode_streaming<S: DiffSink>(
 
     let Some(table_scope) = build_table_scope(old, new, key_columns) else {
         ctx.warnings.push(
-            "database-mode: no non-empty keys found; falling back to spreadsheet mode"
-                .to_string(),
+            "database-mode: no non-empty keys found; falling back to spreadsheet mode".to_string(),
         );
         try_diff_grids_internal(
             sheet_id,
@@ -677,8 +673,7 @@ pub fn try_diff_grids_database_mode_streaming<S: DiffSink>(
         });
     };
 
-    let table_rows =
-        table_scope.rows_old.len().max(table_scope.rows_new.len()) as u32;
+    let table_rows = table_scope.rows_old.len().max(table_scope.rows_new.len()) as u32;
     let table_cols = table_scope.cols_union.len() as u32;
     let exceeds_limits = table_rows > config.alignment.max_align_rows
         || table_cols > config.alignment.max_align_cols;
@@ -1190,7 +1185,13 @@ fn match_duplicate_cluster(
     for &left_row in left_rows {
         let mut row_costs = Vec::with_capacity(right_rows.len());
         for &right_row in right_rows {
-            row_costs.push(duplicate_pair_cost(old, new, left_row, right_row, compare_cols));
+            row_costs.push(duplicate_pair_cost(
+                old,
+                new,
+                left_row,
+                right_row,
+                compare_cols,
+            ));
         }
         costs.push(row_costs);
     }
@@ -1284,8 +1285,7 @@ fn duplicate_unmatched_cost(compare_cols_len: usize) -> i64 {
         return 1;
     }
     let threshold = DUPLICATE_MATCH_THRESHOLD.clamp(0.0, 1.0);
-    let max_mismatches =
-        ((compare_cols_len as f64) * (1.0 - threshold)).floor() as i64;
+    let max_mismatches = ((compare_cols_len as f64) * (1.0 - threshold)).floor() as i64;
     (max_mismatches + 1).max(1)
 }
 
@@ -1345,11 +1345,7 @@ struct PreflightLite {
     mismatched_rows: Vec<u32>,
 }
 
-fn preflight_decision_from_grids(
-    old: &Grid,
-    new: &Grid,
-    config: &DiffConfig,
-) -> PreflightLite {
+fn preflight_decision_from_grids(old: &Grid, new: &Grid, config: &DiffConfig) -> PreflightLite {
     let nrows_old = old.nrows as usize;
     let nrows_new = new.nrows as usize;
     let ncols_old = old.ncols as usize;
@@ -1637,9 +1633,86 @@ fn row_signatures_for_grid(grid: &Grid) -> Vec<RowSignature> {
         }
         GridStorage::Sparse(map) => {
             let nrows = grid.nrows as usize;
+            if nrows == 0 {
+                return Vec::new();
+            }
+
+            // Heuristic: for very sparse grids (avg <= ~2 cells/row), avoid per-row heap
+            // allocations by storing rows as Empty/One/Many and only allocating on the 2nd cell.
+            //
+            // This matters for fixtures like e2e_p4_sparse_* (50k rows with ~1 cell/row), where
+            // Vec::with_capacity(1) per-row can cause tens of thousands of allocations.
+            let very_sparse = map.len() <= nrows.saturating_mul(2);
+            if very_sparse {
+                enum RowCells<'a> {
+                    Empty,
+                    One((u32, &'a CellContent)),
+                    Many(Vec<(u32, &'a CellContent)>),
+                }
+
+                let mut rows: Vec<RowCells<'_>> = std::iter::repeat_with(|| RowCells::Empty)
+                    .take(nrows)
+                    .collect();
+
+                for (&(row, col), cell) in map.iter() {
+                    let idx = row as usize;
+                    if idx >= nrows {
+                        continue;
+                    }
+
+                    match &mut rows[idx] {
+                        RowCells::Empty => {
+                            rows[idx] = RowCells::One((col, cell));
+                        }
+                        RowCells::One(_) => {
+                            // Upgrade to a Vec only once we know the row has multiple cells.
+                            let prev = std::mem::replace(&mut rows[idx], RowCells::Empty);
+                            let RowCells::One((c0, cell0)) = prev else {
+                                unreachable!("row entry was checked as One")
+                            };
+                            let mut v = Vec::with_capacity(2);
+                            v.push((c0, cell0));
+                            v.push((col, cell));
+                            rows[idx] = RowCells::Many(v);
+                        }
+                        RowCells::Many(v) => {
+                            v.push((col, cell));
+                        }
+                    }
+                }
+
+                let empty_sig = RowSignature {
+                    hash: hash_row_content_128(&[]),
+                };
+
+                let mut out = Vec::with_capacity(nrows);
+                for row in rows {
+                    let sig = match row {
+                        RowCells::Empty => empty_sig,
+                        RowCells::One((col, cell)) => {
+                            let tmp = [(col, cell)];
+                            RowSignature {
+                                hash: hash_row_content_128(&tmp),
+                            }
+                        }
+                        RowCells::Many(mut cells) => {
+                            if cells.len() > 1 {
+                                cells.sort_unstable_by_key(|(col, _)| *col);
+                            }
+                            RowSignature {
+                                hash: hash_row_content_128(&cells),
+                            }
+                        }
+                    };
+                    out.push(sig);
+                }
+
+                return out;
+            }
+
             let mut row_counts = vec![0usize; nrows];
-            for ((row, _col), _cell) in map.iter() {
-                let idx = *row as usize;
+            for (&(row, _col), _cell) in map.iter() {
+                let idx = row as usize;
                 if idx < nrows {
                     row_counts[idx] = row_counts[idx].saturating_add(1);
                 }
@@ -1650,15 +1723,17 @@ fn row_signatures_for_grid(grid: &Grid) -> Vec<RowSignature> {
                 .map(|count| Vec::with_capacity(*count))
                 .collect();
 
-            for ((row, col), cell) in map.iter() {
-                let idx = *row as usize;
+            for (&(row, col), cell) in map.iter() {
+                let idx = row as usize;
                 if idx < nrows {
-                    row_cells[idx].push((*col, cell));
+                    row_cells[idx].push((col, cell));
                 }
             }
 
             for row in row_cells.iter_mut() {
-                row.sort_unstable_by_key(|(col, _)| *col);
+                if row.len() > 1 {
+                    row.sort_unstable_by_key(|(col, _)| *col);
+                }
             }
 
             row_cells
@@ -1840,8 +1915,18 @@ mod tests {
         let row_1_cells: Vec<_> = (0..10u32).map(|c| 1000.0 + c as f64).collect();
 
         for col in 0..10u32 {
-            grid_b.insert_cell(0, col, Some(CellValue::Number(row_1_cells[col as usize])), None);
-            grid_b.insert_cell(1, col, Some(CellValue::Number(row_0_cells[col as usize])), None);
+            grid_b.insert_cell(
+                0,
+                col,
+                Some(CellValue::Number(row_1_cells[col as usize])),
+                None,
+            );
+            grid_b.insert_cell(
+                1,
+                col,
+                Some(CellValue::Number(row_0_cells[col as usize])),
+                None,
+            );
         }
 
         grid_b.insert_cell(2999, 5, Some(CellValue::Number(999999.0)), None);
@@ -1933,13 +2018,23 @@ mod tests {
 
         for row in 0..10u32 {
             for col in 0..5u32 {
-                grid_a.insert_cell(row, col, Some(CellValue::Number((row * 100 + col) as f64)), None);
+                grid_a.insert_cell(
+                    row,
+                    col,
+                    Some(CellValue::Number((row * 100 + col) as f64)),
+                    None,
+                );
             }
         }
 
         for row in 0..10u32 {
             for col in 0..5u32 {
-                grid_b.insert_cell(row, col, Some(CellValue::Number((row * 100 + col) as f64)), None);
+                grid_b.insert_cell(
+                    row,
+                    col,
+                    Some(CellValue::Number((row * 100 + col) as f64)),
+                    None,
+                );
             }
         }
 
@@ -1960,5 +2055,29 @@ mod tests {
             multiset_equal_and_edit_distance(&old_signatures, &new_signatures_edited);
         assert!(!equal2);
         assert_eq!(edit_distance2, 1);
+    }
+
+    #[test]
+    fn row_signatures_for_grid_matches_compute_row_signature_on_sparse() {
+        let mut grid = Grid::new(128, 64);
+
+        // Single-cell rows.
+        grid.insert_cell(0, 5, Some(CellValue::Number(1.0)), None);
+        grid.insert_cell(1, 10, Some(CellValue::Number(2.0)), None);
+
+        // Multi-cell row (inserted out of column order to validate sorting).
+        grid.insert_cell(50, 20, Some(CellValue::Number(3.0)), None);
+        grid.insert_cell(50, 2, Some(CellValue::Number(4.0)), None);
+
+        let sigs = row_signatures_for_grid(&grid);
+        assert_eq!(sigs.len(), grid.nrows as usize);
+
+        for row in 0..grid.nrows {
+            assert_eq!(
+                sigs[row as usize],
+                grid.compute_row_signature(row),
+                "signature mismatch at row {row}"
+            );
+        }
     }
 }
