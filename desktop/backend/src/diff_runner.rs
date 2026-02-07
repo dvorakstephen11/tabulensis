@@ -568,8 +568,24 @@ impl EngineState {
 
                 match mode {
                     DiffMode::Payload => {
+                        emit_progress(
+                            &request.progress,
+                            request.run_id,
+                            "parse",
+                            Some("old"),
+                            "Opening old workbook...",
+                            None,
+                        );
                         let old_pkg =
                             self.get_or_open_workbook_by_key(&old_key, &old_path, trusted)?;
+                        emit_progress(
+                            &request.progress,
+                            request.run_id,
+                            "parse",
+                            Some("new"),
+                            "Opening new workbook...",
+                            None,
+                        );
                         let new_pkg =
                             self.get_or_open_workbook_by_key(&new_key, &new_path, trusted)?;
 
@@ -726,7 +742,23 @@ impl EngineState {
                 }
             }
             ui_payload::HostKind::Pbix => {
+                emit_progress(
+                    &request.progress,
+                    request.run_id,
+                    "parse",
+                    Some("old"),
+                    "Opening old PBIX...",
+                    None,
+                );
                 let (old_key, old_pkg) = self.open_pbix_cached_with_key(&old_path, trusted)?;
+                emit_progress(
+                    &request.progress,
+                    request.run_id,
+                    "parse",
+                    Some("new"),
+                    "Opening new PBIX...",
+                    None,
+                );
                 let (new_key, new_pkg) = self.open_pbix_cached_with_key(&new_path, trusted)?;
 
                 let diff_id = store

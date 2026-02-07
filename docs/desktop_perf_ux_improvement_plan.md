@@ -70,26 +70,23 @@ Per-case open totals (old+new workbook in each e2e):
 
 ### P0.1 Eliminate extra worksheet XML pass for drawing refs
 
-Current behavior in `open_workbook_from_container`:
-- Parse sheet XML to build grid.
-- Parse same sheet XML again for drawing references (`parse_worksheet_drawing_rids`).
-
-Plan:
-- Collect drawing relationship ids during main sheet parse, or return them from parsing pipeline.
-- Avoid re-reading/re-parsing same XML bytes for drawing lookup.
+Implemented (2026-02-07):
+- Collect worksheet `<drawing r:id="...">` relationship ids during the main sheet parse (`parse_sheet_xml_with_drawing_rids`).
+- Resolve only the referenced drawing targets from `sheet*.xml.rels` (skip unreferenced drawing relationships).
+- Regression coverage: `core/tests/drawing_relationship_filter_tests.rs`.
 
 Targets:
 - `core/src/excel_open_xml.rs`
 - `core/src/grid_parser.rs`
 
 Expected impact:
-- Cut most of `drawing_parse_ms` (~14% of open path in sampled run).
+- Avoids extra sheet-level XML scans and prevents unnecessary drawing parse work in workbooks with unused drawing relationships.
 
 ### P0.2 UX stage clarity + progress quality
 
-Plan:
-- Expose parse sub-stages in desktop progress text (old open, new open, diff, snapshot).
-- Keep status updates stable and monotonic to reduce perceived jitter.
+Implemented (2026-02-07):
+- Exposed parse sub-stages in desktop progress text (`Parse (old)`, `Parse (new)`, `Diff`, `Snapshot`).
+- Kept updates stable (deduped message updates; no UI-thread JSON serialization on tab focus).
 
 Targets:
 - `desktop/backend/src/diff_runner.rs`
@@ -100,12 +97,9 @@ Expected impact:
 
 ### P0.3 Stop eagerly writing huge JSON blobs into text controls
 
-Current behavior:
-- Large summary/detail payloads are serialized and written to `TextCtrl` immediately.
-
-Plan:
+Implemented (2026-02-07):
 - Render concise summaries by default.
-- Load full JSON/details lazily (on tab focus or explicit action).
+- Load full JSON lazily on Details tab focus, and serialize off the UI thread (cached for repeat views).
 
 Targets:
 - `desktop/wx/src/main.rs`
@@ -134,11 +128,8 @@ Expected impact:
 
 ### P1.2 Capacity-aware ZIP reads
 
-Current behavior:
-- `Vec::new()` + `read_to_end` in container path.
-
-Plan:
-- Reserve using known uncompressed entry size before reading.
+Implemented (2026-02-07):
+- Reserve using known uncompressed entry size before `read_to_end` for ZIP entries.
 
 Targets:
 - `core/src/container.rs`

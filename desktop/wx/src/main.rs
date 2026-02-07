@@ -103,6 +103,7 @@ static PROGRESS_ANIM_GEN: AtomicU64 = AtomicU64::new(0);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProgressStage {
     Read,
+    Parse,
     Diff,
     Snapshot,
     Batch,
@@ -113,6 +114,7 @@ impl ProgressStage {
     fn from_stage_name(value: &str) -> Self {
         match value.trim().to_lowercase().as_str() {
             "read" => Self::Read,
+            "parse" => Self::Parse,
             "diff" => Self::Diff,
             "snapshot" => Self::Snapshot,
             "batch" => Self::Batch,
@@ -123,6 +125,7 @@ impl ProgressStage {
     fn label(self) -> &'static str {
         match self {
             Self::Read => "Read",
+            Self::Parse => "Parse",
             Self::Diff => "Diff",
             Self::Snapshot => "Snapshot",
             Self::Batch => "Batch",
@@ -134,6 +137,8 @@ impl ProgressStage {
         match self {
             // Short, usually IO-bound.
             Self::Read => (0, 25),
+            // Most of the runtime for OpenXML workbooks; give it most of the bar range.
+            Self::Parse => (25, 85),
             // Most of the runtime; keep the bar moving over most of the range.
             Self::Diff => (25, 85),
             // Usually quick, but make it feel "near the end".
@@ -861,9 +866,12 @@ struct CancelRestoreSnapshot {
     current_diff_id: Option<String>,
     current_mode: Option<DiffMode>,
     current_summary: Option<DiffRunSummary>,
-    current_payload: Option<ui_payload::DiffWithSheets>,
-    pending_detail_payload: Option<ui_payload::DiffWithSheets>,
+    current_payload: Option<Arc<ui_payload::DiffWithSheets>>,
+    pending_detail_payload: Option<Arc<ui_payload::DiffWithSheets>>,
     pending_detail_sheet_name: Option<String>,
+    pending_detail_payload_gen: u64,
+    pending_detail_json: Option<String>,
+    pending_detail_json_gen: Option<u64>,
     sheet_names: Vec<String>,
     sheets_all: Vec<SheetRow>,
     sheets_filter: String,
@@ -882,9 +890,14 @@ struct AppState {
     current_diff_id: Option<String>,
     current_mode: Option<DiffMode>,
     current_summary: Option<DiffRunSummary>,
-    current_payload: Option<ui_payload::DiffWithSheets>,
-    pending_detail_payload: Option<ui_payload::DiffWithSheets>,
+    current_payload: Option<Arc<ui_payload::DiffWithSheets>>,
+    pending_detail_payload: Option<Arc<ui_payload::DiffWithSheets>>,
     pending_detail_sheet_name: Option<String>,
+    pending_detail_payload_gen: u64,
+    pending_detail_render_epoch: u64,
+    pending_detail_json: Option<String>,
+    pending_detail_json_gen: Option<u64>,
+    pending_detail_json_inflight_gen: Option<u64>,
     sheet_names: Vec<String>,
     sheets_all: Vec<SheetRow>,
     sheets_filter: String,
@@ -1107,6 +1120,11 @@ fn clear_diff_results_in_ctx(ctx: &mut UiContext) {
     ctx.state.current_payload = None;
     ctx.state.pending_detail_payload = None;
     ctx.state.pending_detail_sheet_name = None;
+    ctx.state.pending_detail_payload_gen = ctx.state.pending_detail_payload_gen.wrapping_add(1);
+    ctx.state.pending_detail_render_epoch = ctx.state.pending_detail_render_epoch.wrapping_add(1);
+    ctx.state.pending_detail_json = None;
+    ctx.state.pending_detail_json_gen = None;
+    ctx.state.pending_detail_json_inflight_gen = None;
 
     ctx.state.sheets_all.clear();
     ctx.state.sheet_names.clear();
@@ -1142,6 +1160,9 @@ fn take_cancel_restore_snapshot_in_ctx(ctx: &mut UiContext) -> CancelRestoreSnap
         current_payload: ctx.state.current_payload.take(),
         pending_detail_payload: ctx.state.pending_detail_payload.take(),
         pending_detail_sheet_name: ctx.state.pending_detail_sheet_name.take(),
+        pending_detail_payload_gen: ctx.state.pending_detail_payload_gen,
+        pending_detail_json: ctx.state.pending_detail_json.take(),
+        pending_detail_json_gen: ctx.state.pending_detail_json_gen.take(),
         sheet_names: std::mem::take(&mut ctx.state.sheet_names),
         sheets_all: std::mem::take(&mut ctx.state.sheets_all),
         sheets_filter: std::mem::take(&mut ctx.state.sheets_filter),
@@ -1159,6 +1180,10 @@ fn restore_cancel_snapshot_in_ctx(ctx: &mut UiContext, snapshot: CancelRestoreSn
     ctx.state.current_payload = snapshot.current_payload;
     ctx.state.pending_detail_payload = snapshot.pending_detail_payload;
     ctx.state.pending_detail_sheet_name = snapshot.pending_detail_sheet_name;
+    ctx.state.pending_detail_payload_gen = snapshot.pending_detail_payload_gen;
+    ctx.state.pending_detail_json = snapshot.pending_detail_json;
+    ctx.state.pending_detail_json_gen = snapshot.pending_detail_json_gen;
+    ctx.state.pending_detail_json_inflight_gen = None;
     ctx.state.sheet_names = snapshot.sheet_names;
     ctx.state.sheets_all = snapshot.sheets_all;
     ctx.state.sheets_filter = snapshot.sheets_filter;
@@ -1289,8 +1314,13 @@ fn stage_detail_payload(
     payload: ui_payload::DiffWithSheets,
 ) {
     ctx.state.pending_detail_sheet_name = Some(sheet_name.clone());
-    ctx.state.pending_detail_payload = Some(payload);
-    if ctx.ui.result_tabs.selection() == 1 {
+    ctx.state.pending_detail_payload = Some(Arc::new(payload));
+    ctx.state.pending_detail_payload_gen = ctx.state.pending_detail_payload_gen.wrapping_add(1);
+    ctx.state.pending_detail_json = None;
+    ctx.state.pending_detail_json_gen = None;
+    ctx.state.pending_detail_json_inflight_gen = None;
+
+    if ctx.ui.result_tabs.selection() == RESULT_TAB_DETAILS {
         render_staged_detail_payload(ctx);
         return;
     }
@@ -1302,7 +1332,7 @@ fn stage_detail_payload(
 }
 
 fn render_staged_detail_payload(ctx: &mut UiContext) {
-    let Some(payload) = ctx.state.pending_detail_payload.as_ref() else {
+    let Some(payload) = ctx.state.pending_detail_payload.as_ref().cloned() else {
         return;
     };
     let sheet_name = ctx
@@ -1310,9 +1340,60 @@ fn render_staged_detail_payload(ctx: &mut UiContext) {
         .pending_detail_sheet_name
         .clone()
         .unwrap_or_else(|| "sheet".to_string());
-    let text = serde_json::to_string_pretty(payload).unwrap_or_else(|_| "{}".to_string());
-    ctx.ui.detail_text.set_value(&text);
-    update_status_in_ctx(ctx, &format!("Sheet payload loaded: {sheet_name}."));
+
+    let gen = ctx.state.pending_detail_payload_gen;
+    let epoch = ctx.state.pending_detail_render_epoch;
+    if ctx.state.pending_detail_json_gen == Some(gen) {
+        if let Some(rendered) = ctx.state.pending_detail_json.as_ref() {
+            if ctx.ui.detail_text.get_value() != rendered.as_str() {
+                ctx.ui.detail_text.set_value(rendered);
+            }
+            update_status_in_ctx(ctx, &format!("Sheet payload loaded: {sheet_name}."));
+        }
+        return;
+    }
+
+    if ctx.state.pending_detail_json_inflight_gen == Some(gen) {
+        if ctx.ui.detail_text.get_value().trim() != "Rendering JSON..." {
+            ctx.ui.detail_text.set_value("Rendering JSON...");
+        }
+        update_status_in_ctx(ctx, &format!("Rendering JSON: {sheet_name}..."));
+        return;
+    }
+
+    ctx.state.pending_detail_json_inflight_gen = Some(gen);
+    ctx.ui.detail_text.set_value("Rendering JSON...");
+    update_status_in_ctx(ctx, &format!("Rendering JSON: {sheet_name}..."));
+
+    let sheet_name_render = sheet_name.clone();
+    thread::spawn(move || {
+        let text = serde_json::to_string_pretty(payload.as_ref())
+            .unwrap_or_else(|_| "{\"error\":\"failed to serialize payload\"}".to_string());
+        wxdragon::call_after(Box::new(move || {
+            let _ = with_ui_context(|ctx| {
+                if ctx.state.pending_detail_render_epoch != epoch {
+                    return;
+                }
+                if ctx.state.pending_detail_payload_gen != gen {
+                    return;
+                }
+                if ctx.state.pending_detail_sheet_name.as_deref()
+                    != Some(sheet_name_render.as_str())
+                {
+                    return;
+                }
+                ctx.state.pending_detail_json = Some(text);
+                ctx.state.pending_detail_json_gen = Some(gen);
+                if ctx.state.pending_detail_json_inflight_gen == Some(gen) {
+                    ctx.state.pending_detail_json_inflight_gen = None;
+                }
+                if let Some(rendered) = ctx.state.pending_detail_json.as_ref() {
+                    ctx.ui.detail_text.set_value(rendered);
+                }
+                update_status_in_ctx(ctx, &format!("Sheet payload loaded: {sheet_name_render}."));
+            });
+        }));
+    });
 }
 
 fn ensure_grid_preview_ready(ctx: &mut UiContext) {
@@ -3007,10 +3088,17 @@ fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
                 );
                 ctx.state.current_diff_id = Some(outcome.diff_id.clone());
                 ctx.state.current_mode = Some(outcome.mode);
-                ctx.state.current_payload = outcome.payload;
+                ctx.state.current_payload = outcome.payload.map(Arc::new);
                 ctx.state.current_summary = outcome.summary.clone();
                 ctx.state.pending_detail_payload = None;
                 ctx.state.pending_detail_sheet_name = None;
+                ctx.state.pending_detail_payload_gen =
+                    ctx.state.pending_detail_payload_gen.wrapping_add(1);
+                ctx.state.pending_detail_render_epoch =
+                    ctx.state.pending_detail_render_epoch.wrapping_add(1);
+                ctx.state.pending_detail_json = None;
+                ctx.state.pending_detail_json_gen = None;
+                ctx.state.pending_detail_json_inflight_gen = None;
                 render_grid_placeholder(ctx, "Select a sheet to preview grid changes.");
 
                 if let Some(summary) = outcome.summary {
@@ -3228,6 +3316,12 @@ fn start_compare() {
         ctx.state.current_summary = None;
         ctx.state.pending_detail_payload = None;
         ctx.state.pending_detail_sheet_name = None;
+        ctx.state.pending_detail_payload_gen = ctx.state.pending_detail_payload_gen.wrapping_add(1);
+        ctx.state.pending_detail_render_epoch =
+            ctx.state.pending_detail_render_epoch.wrapping_add(1);
+        ctx.state.pending_detail_json = None;
+        ctx.state.pending_detail_json_gen = None;
+        ctx.state.pending_detail_json_inflight_gen = None;
         ctx.state.sheets_all.clear();
         ctx.state.sheet_names.clear();
         ctx.state.sheets_filter.clear();
@@ -3311,6 +3405,13 @@ fn handle_sheet_selection(row: usize) {
                         ctx.ui.detail_text.set_value(&text);
                         ctx.state.pending_detail_payload = None;
                         ctx.state.pending_detail_sheet_name = None;
+                        ctx.state.pending_detail_payload_gen =
+                            ctx.state.pending_detail_payload_gen.wrapping_add(1);
+                        ctx.state.pending_detail_render_epoch =
+                            ctx.state.pending_detail_render_epoch.wrapping_add(1);
+                        ctx.state.pending_detail_json = None;
+                        ctx.state.pending_detail_json_gen = None;
+                        ctx.state.pending_detail_json_inflight_gen = None;
                         let html = ctx.state.current_payload.as_ref().map(|payload| {
                             grid_preview::build_sheet_grid_preview_html(&sheet_name, payload)
                         });
@@ -3338,6 +3439,13 @@ fn handle_sheet_selection(row: usize) {
                 update_status_in_ctx(ctx, "Loading sheet payload...");
                 ctx.state.pending_detail_payload = None;
                 ctx.state.pending_detail_sheet_name = None;
+                ctx.state.pending_detail_payload_gen =
+                    ctx.state.pending_detail_payload_gen.wrapping_add(1);
+                ctx.state.pending_detail_render_epoch =
+                    ctx.state.pending_detail_render_epoch.wrapping_add(1);
+                ctx.state.pending_detail_json = None;
+                ctx.state.pending_detail_json_gen = None;
+                ctx.state.pending_detail_json_inflight_gen = None;
                 render_grid_placeholder(ctx, "Loading grid preview...");
             }
             _ => {}
@@ -3396,6 +3504,13 @@ fn load_diff_summary_into_ui(diff_id: String) {
                     ctx.state.current_payload = None;
                     ctx.state.pending_detail_payload = None;
                     ctx.state.pending_detail_sheet_name = None;
+                    ctx.state.pending_detail_payload_gen =
+                        ctx.state.pending_detail_payload_gen.wrapping_add(1);
+                    ctx.state.pending_detail_render_epoch =
+                        ctx.state.pending_detail_render_epoch.wrapping_add(1);
+                    ctx.state.pending_detail_json = None;
+                    ctx.state.pending_detail_json_gen = None;
+                    ctx.state.pending_detail_json_inflight_gen = None;
                     ctx.state.sheets_filter.clear();
                     ctx.ui.sheets_filter_ctrl.set_value("");
                     if let Some(view) = ctx.ui.sheets_view {
@@ -4257,6 +4372,11 @@ fn main() {
             current_payload: None,
             pending_detail_payload: None,
             pending_detail_sheet_name: None,
+            pending_detail_payload_gen: 0,
+            pending_detail_render_epoch: 0,
+            pending_detail_json: None,
+            pending_detail_json_gen: None,
+            pending_detail_json_inflight_gen: None,
             sheet_names: Vec::new(),
             sheets_all: Vec::new(),
             sheets_filter: String::new(),
