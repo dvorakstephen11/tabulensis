@@ -148,3 +148,53 @@ Sanity check / interpretation:
 
 Conclusion:
 - Not a performance win; treat as a failed experiment (no improvement, possible small regression). Code change was reverted after the experiment.
+
+---
+
+# Experiment 3: Faster Decimal Float Parsing (`convert_value_bytes` via `lexical-core`)
+
+## Objective
+
+Reduce OpenXML worksheet parse time by speeding up numeric cell value parsing for the common “decimal/exponent” forms (values containing `.` / `e` / `E`).
+
+Primary target metrics:
+- `parse_time_ms` in `core/tests/e2e_perf_workbook_open.rs` (notably `e2e_p2_noise`, `e2e_p1_dense`, `e2e_p3_repetitive`)
+
+## Motivation / Evidence
+
+`core/src/grid_parser.rs:convert_value_bytes` parses most numbers via a fast integer-only path, but falls back to `std::str::from_utf8(..)` + `str::parse::<f64>()` when a number includes `.` or an exponent.
+
+The perf e2e fixtures are parse-dominated, and contain many numeric values that are not pure integers (especially in the “noise” fixtures), so this fallback is likely a hotspot.
+
+## Hypothesis
+
+If we replace the fallback float parse with `lexical_core::parse::<f64>(bytes)`, we should reduce `parse_time_ms` measurably (without changing numeric correctness).
+
+## Scope / Touchpoints
+
+- `core/Cargo.toml`: add dependency on `lexical-core`
+- `core/src/grid_parser.rs`:
+  - Update the float fallback in `convert_value_bytes` (and test-only `convert_value`) to use `lexical-core`
+
+Correctness guard:
+- Add a unit test ensuring `convert_value_bytes` parses decimal/exponent numeric strings identically to Rust’s `str::parse::<f64>()` (bitwise equality).
+
+## Measurement Plan (Perf Cycle Anchoring)
+
+Use the full perf cycle anchored for this experiment:
+
+1. Pre (already captured): `python3 scripts/perf_cycle.py pre --cycle 2026-02-07_213724`
+2. Post: `python3 scripts/perf_cycle.py post --cycle 2026-02-07_213724`
+
+Key metrics to evaluate:
+- `e2e_p2_noise.parse_time_ms` (primary)
+- `e2e_p1_dense.parse_time_ms`, `e2e_p3_repetitive.parse_time_ms`
+- No regressions in `total_time_ms` across the e2e suite
+
+## Success Criteria
+
+- `e2e_p2_noise.parse_time_ms` median improves by >= 1%.
+- No significant regressions (> ~2-3%) in aggregate `total_time_ms` across the e2e suite.
+- All tests pass.
+
+## Outcome (TBD)

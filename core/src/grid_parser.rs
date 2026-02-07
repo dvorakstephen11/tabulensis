@@ -2440,7 +2440,7 @@ fn convert_value(
                 saw_digit = true;
                 let d = (b - b'0') as u64;
                 if int > (u64::MAX - d) / 10 {
-                    return s.parse::<f64>().ok();
+                    return lexical_core::parse::<f64>(s.as_bytes()).ok();
                 }
                 int = int * 10 + d;
                 i += 1;
@@ -2459,7 +2459,7 @@ fn convert_value(
         }
 
         match bytes[i] {
-            b'.' | b'e' | b'E' => s.parse::<f64>().ok(),
+            b'.' | b'e' | b'E' => lexical_core::parse::<f64>(s.as_bytes()).ok(),
             _ => None,
         }
     }
@@ -2557,8 +2557,7 @@ fn convert_value_bytes(
                 saw_digit = true;
                 let d = (b - b'0') as u64;
                 if int > (u64::MAX - d) / 10 {
-                    let s = std::str::from_utf8(raw).ok()?;
-                    return s.parse::<f64>().ok();
+                    return lexical_core::parse::<f64>(raw).ok();
                 }
                 int = int * 10 + d;
                 i += 1;
@@ -2575,8 +2574,7 @@ fn convert_value_bytes(
         }
         match raw[i] {
             b'.' | b'e' | b'E' => {
-                let s = std::str::from_utf8(raw).ok()?;
-                s.parse::<f64>().ok()
+                lexical_core::parse::<f64>(raw).ok()
             }
             _ => None,
         }
@@ -2880,9 +2878,9 @@ struct ParsedCell {
 #[cfg(test)]
 mod tests {
     use super::{
-        address_to_index_ascii_bytes, convert_value, dense_coverage_required, parse_shared_strings,
-        parse_sheet_xml_with_drawing_rids, prefer_dense_storage, read_inline_string, CellTypeTag,
-        GridParseError,
+        address_to_index_ascii_bytes, convert_value, convert_value_bytes, dense_coverage_required,
+        parse_shared_strings, parse_sheet_xml_with_drawing_rids, prefer_dense_storage,
+        read_inline_string, CellTypeTag, GridParseError,
     };
     #[cfg(feature = "custom-xml")]
     use super::{
@@ -3106,6 +3104,51 @@ mod tests {
             })
             .expect("error id");
         assert_eq!(pool.resolve(err_id), "#DIV/0!");
+    }
+
+    #[test]
+    fn convert_value_bytes_parses_decimal_and_exponent_numbers() {
+        let dummy_xml: &[u8] = b"";
+        let dummy_reader = Reader::from_reader(dummy_xml);
+
+        let cases: [&[u8]; 6] = [
+            b"42",
+            b"3.14159",
+            b"-0.125",
+            b"1e3",
+            b"1.23e-4",
+            // Triggers the integer fast-path overflow fallback.
+            b"18446744073709551616",
+        ];
+
+        let mut pool = StringPool::new();
+        for raw in cases {
+            let raw_str = std::str::from_utf8(raw).expect("test cases should be UTF-8");
+            let expected = raw_str
+                .parse::<f64>()
+                .expect("test cases should be valid f64");
+            let value = convert_value_bytes(
+                Some(raw),
+                None,
+                &[],
+                &mut pool,
+                &dummy_reader,
+                dummy_xml,
+            )
+            .expect("conversion should succeed")
+            .expect("value should be present");
+
+            match value {
+                CellValue::Number(actual) => {
+                    assert_eq!(
+                        actual.to_bits(),
+                        expected.to_bits(),
+                        "float parse mismatch for {raw_str}"
+                    );
+                }
+                other => panic!("expected number for {raw_str}, got {other:?}"),
+            }
+        }
     }
 
     #[test]
