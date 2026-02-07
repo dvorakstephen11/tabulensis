@@ -1,9 +1,15 @@
 use crate::diff::{DiffError, DiffOp};
 use crate::sink::DiffSink;
 use crate::string_pool::StringPool;
-use serde::Serialize;
 use std::io::Write;
 
+#[cfg(feature = "custom-jsonl")]
+use crate::output::json_write;
+
+#[cfg(not(feature = "custom-jsonl"))]
+use serde::Serialize;
+
+#[cfg(not(feature = "custom-jsonl"))]
 #[derive(Serialize)]
 struct JsonLinesHeader<'a> {
     kind: &'static str,
@@ -22,6 +28,8 @@ pub struct JsonLinesSink<W: Write> {
     w: W,
     wrote_header: bool,
     version: &'static str,
+    #[cfg(feature = "custom-jsonl")]
+    scratch: Vec<u8>,
 }
 
 impl<W: Write> JsonLinesSink<W> {
@@ -38,6 +46,8 @@ impl<W: Write> JsonLinesSink<W> {
             w,
             wrote_header: false,
             version: crate::diff::DiffReport::SCHEMA_VERSION,
+            #[cfg(feature = "custom-jsonl")]
+            scratch: Vec::new(),
         }
     }
 
@@ -47,18 +57,36 @@ impl<W: Write> JsonLinesSink<W> {
             return Ok(());
         }
 
-        let header = JsonLinesHeader {
-            kind: "Header",
-            version: self.version,
-            strings: pool.strings(),
-        };
+        #[cfg(feature = "custom-jsonl")]
+        {
+            self.scratch.clear();
+            json_write::write_jsonl_header(&mut self.scratch, self.version, pool.strings())
+                .map_err(|e| DiffError::SinkError {
+                    message: e.to_string(),
+                })?;
+            self.scratch.push(b'\n');
+            self.w
+                .write_all(&self.scratch)
+                .map_err(|e| DiffError::SinkError {
+                    message: e.to_string(),
+                })?;
+        }
 
-        serde_json::to_writer(&mut self.w, &header).map_err(|e| DiffError::SinkError {
-            message: e.to_string(),
-        })?;
-        self.w.write_all(b"\n").map_err(|e| DiffError::SinkError {
-            message: e.to_string(),
-        })?;
+        #[cfg(not(feature = "custom-jsonl"))]
+        {
+            let header = JsonLinesHeader {
+                kind: "Header",
+                version: self.version,
+                strings: pool.strings(),
+            };
+
+            serde_json::to_writer(&mut self.w, &header).map_err(|e| DiffError::SinkError {
+                message: e.to_string(),
+            })?;
+            self.w.write_all(b"\n").map_err(|e| DiffError::SinkError {
+                message: e.to_string(),
+            })?;
+        }
 
         self.wrote_header = true;
         Ok(())
@@ -71,13 +99,33 @@ impl<W: Write> DiffSink for JsonLinesSink<W> {
     }
 
     fn emit(&mut self, op: DiffOp) -> Result<(), DiffError> {
-        serde_json::to_writer(&mut self.w, &op).map_err(|e| DiffError::SinkError {
-            message: e.to_string(),
-        })?;
-        self.w.write_all(b"\n").map_err(|e| DiffError::SinkError {
-            message: e.to_string(),
-        })?;
-        Ok(())
+        #[cfg(feature = "custom-jsonl")]
+        {
+            self.scratch.clear();
+            json_write::write_diff_op(&mut self.scratch, &op).map_err(|e| {
+                DiffError::SinkError {
+                    message: e.to_string(),
+                }
+            })?;
+            self.scratch.push(b'\n');
+            self.w
+                .write_all(&self.scratch)
+                .map_err(|e| DiffError::SinkError {
+                    message: e.to_string(),
+                })?;
+            return Ok(());
+        }
+
+        #[cfg(not(feature = "custom-jsonl"))]
+        {
+            serde_json::to_writer(&mut self.w, &op).map_err(|e| DiffError::SinkError {
+                message: e.to_string(),
+            })?;
+            self.w.write_all(b"\n").map_err(|e| DiffError::SinkError {
+                message: e.to_string(),
+            })?;
+            return Ok(());
+        }
     }
 
     fn finish(&mut self) -> Result<(), DiffError> {

@@ -447,6 +447,20 @@ This is a direct continuation of the "custom-json" direction in `docs/rust_docs/
 
 - If parity is hard due to schema drift or variant complexity, keep it feature-gated and do not promote; do not ship a partially-correct writer.
 
+## Outcome (2026-02-07)
+
+This produced a clear win on synthetic JSONL emission throughput (writing to `std::io::sink()`), and the implementation remains feature-gated (`custom-jsonl`) for now.
+
+Correctness:
+- Added parity tests that compare custom-writer output vs `serde_json` as `serde_json::Value` on a corpus covering representative `DiffOp` shapes.
+
+Performance (median of 3):
+- `perf_jsonl_emit` (200k `CellEdited` ops): 61 ms -> 32 ms (-47.5%).
+
+Repro commands:
+- Baseline: `cargo test -p excel_diff --release --features perf-metrics --test perf_jsonl_emit perf_jsonl_emit -- --ignored --nocapture --test-threads=1`
+- Custom: `cargo test -p excel_diff --release --features "perf-metrics custom-jsonl" --test perf_jsonl_emit perf_jsonl_emit -- --ignored --nocapture --test-threads=1`
+
 ---
 
 ## Suggested Execution Order
