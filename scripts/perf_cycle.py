@@ -427,7 +427,8 @@ def run_cli_jsonl(
             "--test-threads=1",
         ]
         result = run_capture(cmd, root, timeout_s=600)
-        metrics = parse_perf_metrics(result.stdout)
+        # Cargo writes build noise to stderr, and test output can land in either stream.
+        metrics = parse_perf_metrics(result.stdout + "\n" + result.stderr)
         if not metrics:
             print("ERROR: No PERF_METRIC lines found in cli perf output.")
             raise SystemExit(2)
