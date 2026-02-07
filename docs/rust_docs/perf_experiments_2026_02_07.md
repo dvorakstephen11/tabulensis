@@ -80,3 +80,60 @@ Notes:
 
 Conclusion:
 - This was a small but real improvement to the targeted sparse-signature metric, but not a large end-to-end win on the full suite.
+
+---
+
+# Experiment 2: Faster A1 Address Parsing (`address_to_index_ascii_bytes`)
+
+## Objective
+
+Reduce OpenXML worksheet parse time by speeding up A1 cell-reference parsing in the hot path.
+
+Primary target metrics:
+- `parse_time_ms` in `core/tests/e2e_perf_workbook_open.rs` (notably `e2e_p2_noise`, `e2e_p1_dense`, `e2e_p3_repetitive`)
+
+## Motivation / Evidence
+
+`core/src/grid_parser.rs:address_to_index_ascii_bytes` is called for every `<c r="A1">` cell in worksheet XML. For the perf e2e fixtures, that is on the order of millions of calls per workbook open.
+
+The prior implementation used `checked_mul`/`checked_add` for both column and row accumulation, which adds overflow checks in a path where values are expected to be within Excel bounds.
+
+## Hypothesis
+
+If we replace checked arithmetic with plain arithmetic plus explicit Excel-bound checks, `parse_time_ms` should improve measurably (especially on `e2e_p2_noise`, which is parse-heavy but does less string interning work per cell).
+
+## Scope / Touchpoints
+
+- `core/src/grid_parser.rs`:
+  - `address_to_index_ascii_bytes(a1: &[u8]) -> Option<(u32, u32)>`
+
+## Implementation Plan (Decision Complete)
+
+1. Parse ASCII letters without calling `to_ascii_uppercase`:
+   - map `A..Z` and `a..z` into a single branch.
+2. Use plain `col = col * 26 + ...` and `row = row * 10 + ...`.
+3. Enforce Excel bounds during parse:
+   - reject `col > 16_384` (XFD)
+   - reject `row > 1_048_576`
+4. Keep existing behavior for malformed inputs:
+   - reject missing row/col, non-digits after row start, `row == 0`, etc.
+
+## Measurement Plan (Perf Cycle Anchoring)
+
+Use a full perf cycle anchored around this experiment:
+
+1. Pre: `python3 scripts/perf_cycle.py pre` (completed as `benchmarks/perf_cycles/2026-02-07_210651/`)
+2. Post: `python3 scripts/perf_cycle.py post --cycle 2026-02-07_210651`
+
+## Success Criteria
+
+- `e2e_p2_noise.parse_time_ms` median improves by >= 1%.
+- No regressions > ~2% on `e2e_p1_dense` / `e2e_p3_repetitive` parse totals.
+- All tests pass.
+
+## Outcome (2026-02-07)
+
+Perf-cycle artifacts (pre/post) will be recorded at:
+- `benchmarks/perf_cycles/2026-02-07_210651/`
+
+Result: _pending (to be filled after post-run)_.
