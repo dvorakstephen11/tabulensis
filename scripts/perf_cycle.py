@@ -74,7 +74,7 @@ CLI_JSONL_CSV_FIELDS = [
     "op_count",
 ]
 
-PERF_METRIC_PATTERN = re.compile(r"PERF_METRIC\\s+(\\S+)\\s+(.*)")
+PERF_METRIC_PATTERN = re.compile(r"PERF_METRIC\s+(\S+)\s+(.*)")
 
 
 def repo_root() -> Path:
@@ -197,7 +197,7 @@ def parse_perf_metrics(stdout: str) -> dict[str, dict[str, int]]:
         rest = match.group(2)
         data = {
             key: int(val)
-            for key, val in re.findall(r"(\\w+)=([0-9]+)", rest)
+            for key, val in re.findall(r"(\w+)=([0-9]+)", rest)
         }
 
         data.setdefault("total_time_ms", 0)
