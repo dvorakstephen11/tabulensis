@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import statistics
 import subprocess
 import shutil
@@ -66,6 +67,15 @@ E2E_CSV_FIELDS = [
     "total_input_bytes",
 ]
 
+CLI_JSONL_CSV_FIELDS = [
+    "total_time_ms",
+    "op_emit_time_ms",
+    "diff_time_ms",
+    "op_count",
+]
+
+PERF_METRIC_PATTERN = re.compile(r"PERF_METRIC\\s+(\\S+)\\s+(.*)")
+
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
@@ -76,6 +86,24 @@ def run(cmd: list[str], cwd: Path) -> None:
     result = subprocess.run(cmd, cwd=cwd)
     if result.returncode != 0:
         raise SystemExit(result.returncode)
+
+def run_capture(cmd: list[str], cwd: Path, timeout_s: int) -> subprocess.CompletedProcess:
+    print(f"Running: {' '.join(cmd)}")
+    result = subprocess.run(
+        cmd,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=timeout_s,
+    )
+    if result.returncode != 0:
+        # Surface failing output to help diagnose flaky perf runs.
+        if result.stdout:
+            print(result.stdout)
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
+        raise SystemExit(result.returncode)
+    return result
 
 
 def run_optional(cmd: list[str], cwd: Path) -> bool:
@@ -157,6 +185,28 @@ def median_int(values: list[int]) -> int:
     if not values:
         return 0
     return int(round(statistics.median(values)))
+
+def parse_perf_metrics(stdout: str) -> dict[str, dict[str, int]]:
+    metrics: dict[str, dict[str, int]] = {}
+    for line in stdout.splitlines():
+        match = PERF_METRIC_PATTERN.search(line)
+        if not match:
+            continue
+
+        test_name = match.group(1)
+        rest = match.group(2)
+        data = {
+            key: int(val)
+            for key, val in re.findall(r"(\\w+)=([0-9]+)", rest)
+        }
+
+        data.setdefault("total_time_ms", 0)
+        data.setdefault("rows_processed", 0)
+        data.setdefault("cells_compared", 0)
+
+        metrics[test_name] = data
+
+    return metrics
 
 
 def aggregate_run_payloads(
@@ -347,6 +397,95 @@ def run_e2e(
     return output_json, run_json_paths
 
 
+def run_cli_jsonl(
+    root: Path,
+    cycle_dir: Path,
+    label: str,
+    runs: int,
+) -> tuple[Path, list[Path]]:
+    output_json = cycle_dir / f"{label}_cli_jsonl.json"
+    output_csv = cycle_dir / f"{label}_cli_jsonl.csv"
+
+    run_json_paths: list[Path] = []
+    for idx in range(1, runs + 1):
+        run_json = cycle_dir / f"{label}_cli_jsonl_run{idx}.json"
+        run_csv = cycle_dir / f"{label}_cli_jsonl_run{idx}.csv"
+
+        cmd = [
+            "cargo",
+            "test",
+            "-p",
+            "tabulensis-cli",
+            "--release",
+            "--features",
+            "perf-metrics",
+            "--test",
+            "perf_cli_jsonl_emit",
+            "--",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ]
+        result = run_capture(cmd, root, timeout_s=600)
+        metrics = parse_perf_metrics(result.stdout)
+        if not metrics:
+            print("ERROR: No PERF_METRIC lines found in cli perf output.")
+            raise SystemExit(2)
+
+        payload = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "git_commit": git_cmd(root, ["rev-parse", "HEAD"])[:12],
+            "git_branch": git_cmd(root, ["rev-parse", "--abbrev-ref", "HEAD"]),
+            "suite": "cli-jsonl",
+            "full_scale": False,
+            "parallel": False,
+            "tests": metrics,
+            "summary": {
+                "total_tests": len(metrics),
+                "total_time_ms": sum(m.get("total_time_ms", 0) for m in metrics.values()),
+            },
+        }
+        write_json(run_json, payload)
+
+        # For quick inspection and to keep parity with the other suites, also write per-run CSV.
+        all_metric_fields = sorted(
+            {
+                field
+                for data in metrics.values()
+                for field, value in data.items()
+                if isinstance(value, (int, float))
+            }
+        )
+        ordered_metric_fields = [
+            field for field in CLI_JSONL_CSV_FIELDS if field in all_metric_fields
+        ] + [field for field in all_metric_fields if field not in CLI_JSONL_CSV_FIELDS]
+
+        run_csv.parent.mkdir(parents=True, exist_ok=True)
+        with open(run_csv, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=["test_name"] + ordered_metric_fields)
+            writer.writeheader()
+            for test_name, data in sorted(metrics.items()):
+                row = {"test_name": test_name}
+                for field in ordered_metric_fields:
+                    row[field] = data.get(field, 0)
+                writer.writerow(row)
+
+        run_json_paths.append(run_json)
+
+    aggregate_run_payloads(
+        root,
+        run_json_paths,
+        output_json,
+        output_csv,
+        suite_name="cli-jsonl",
+        full_scale=False,
+        parallel=False,
+        csv_fields_hint=CLI_JSONL_CSV_FIELDS,
+    )
+
+    return output_json, run_json_paths
+
+
 def format_delta(pre: int | None, post: int | None) -> str:
     if pre is None or post is None:
         return "n/a"
@@ -380,6 +519,7 @@ def render_markdown_summary(
     post_meta: dict,
     full_rows: list[list[str]],
     e2e_rows: list[list[str]],
+    cli_jsonl_rows: list[list[str]],
 ) -> str:
     config = meta.get("config", {})
     runs = config.get("runs", 1)
@@ -412,6 +552,18 @@ def render_markdown_summary(
             f"| {row[0]} | {row[1]} | {row[2]} | {row[3]} | {row[4]} | {row[5]} | {row[6]} | {row[7]} | {row[8]} | {row[9]} |"
         )
     lines.append("")
+    lines.extend(
+        [
+            "## CLI JSONL Emit (total/op_emit time)",
+            "| Test | Pre Total | Post Total | Delta | Pre Op Emit | Post Op Emit | Delta |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for row in cli_jsonl_rows:
+        lines.append(
+            f"| {row[0]} | {row[1]} | {row[2]} | {row[3]} | {row[4]} | {row[5]} | {row[6]} |"
+        )
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -420,8 +572,10 @@ def stage_meta(
     timestamp: str,
     full_json: Path,
     e2e_json: Path,
+    cli_jsonl_json: Path,
     full_run_jsons: list[Path],
     e2e_run_jsons: list[Path],
+    cli_jsonl_run_jsons: list[Path],
     parallel: bool,
     skip_fixtures: bool,
     runs: int,
@@ -434,8 +588,10 @@ def stage_meta(
         "git_branch": git_cmd(root, ["rev-parse", "--abbrev-ref", "HEAD"]),
         "fullscale_json": str(full_json.relative_to(root)),
         "e2e_json": str(e2e_json.relative_to(root)),
+        "cli_jsonl_json": str(cli_jsonl_json.relative_to(root)),
         "fullscale_run_json": [str(p.relative_to(root)) for p in full_run_jsons],
         "e2e_run_json": [str(p.relative_to(root)) for p in e2e_run_jsons],
+        "cli_jsonl_run_json": [str(p.relative_to(root)) for p in cli_jsonl_run_jsons],
         "runs": runs,
         "aggregation": "median",
         "parallel": parallel,
@@ -525,6 +681,12 @@ def main() -> int:
             skip_fixtures=args.skip_fixtures,
             runs=args.runs,
         )
+        pre_cli_jsonl, pre_cli_jsonl_runs = run_cli_jsonl(
+            root,
+            cycle_dir,
+            "pre",
+            runs=args.runs,
+        )
 
         timestamp = datetime.now(timezone.utc).isoformat()
         meta = {
@@ -540,8 +702,10 @@ def main() -> int:
                 timestamp,
                 pre_full,
                 pre_e2e,
+                pre_cli_jsonl,
                 pre_full_runs,
                 pre_e2e_runs,
+                pre_cli_jsonl_runs,
                 parallel=parallel,
                 skip_fixtures=args.skip_fixtures,
                 runs=args.runs,
@@ -555,7 +719,8 @@ def main() -> int:
 
     pre_full_path = cycle_dir / "pre_fullscale.json"
     pre_e2e_path = cycle_dir / "pre_e2e.json"
-    if not pre_full_path.exists() or not pre_e2e_path.exists():
+    pre_cli_jsonl_path = cycle_dir / "pre_cli_jsonl.json"
+    if not pre_full_path.exists() or not pre_e2e_path.exists() or not pre_cli_jsonl_path.exists():
         print("ERROR: Missing pre-cycle results. Run: python3 scripts/perf_cycle.py pre")
         return 2
 
@@ -567,6 +732,12 @@ def main() -> int:
         cycle_dir,
         "post",
         skip_fixtures=args.skip_fixtures,
+        runs=args.runs,
+    )
+    post_cli_jsonl, post_cli_jsonl_runs = run_cli_jsonl(
+        root,
+        cycle_dir,
+        "post",
         runs=args.runs,
     )
 
@@ -602,8 +773,10 @@ def main() -> int:
         timestamp,
         post_full,
         post_e2e,
+        post_cli_jsonl,
         post_full_runs,
         post_e2e_runs,
+        post_cli_jsonl_runs,
         parallel=parallel,
         skip_fixtures=args.skip_fixtures,
         runs=args.runs,
@@ -616,6 +789,8 @@ def main() -> int:
     post_full_data = load_json(post_full)
     pre_e2e = load_json(pre_e2e_path)
     post_e2e_data = load_json(post_e2e)
+    pre_cli_jsonl = load_json(pre_cli_jsonl_path)
+    post_cli_jsonl_data = load_json(post_cli_jsonl)
 
     full_keys = sorted(
         set(pre_full.get("tests", {}).keys())
@@ -624,6 +799,10 @@ def main() -> int:
     e2e_keys = sorted(
         set(pre_e2e.get("tests", {}).keys())
         | set(post_e2e_data.get("tests", {}).keys())
+    )
+    cli_jsonl_keys = sorted(
+        set(pre_cli_jsonl.get("tests", {}).keys())
+        | set(post_cli_jsonl_data.get("tests", {}).keys())
     )
 
     full_rows = delta_table(
@@ -638,6 +817,12 @@ def main() -> int:
         e2e_keys,
         ["total_time_ms", "parse_time_ms", "diff_time_ms"],
     )
+    cli_jsonl_rows = delta_table(
+        pre_cli_jsonl.get("tests", {}),
+        post_cli_jsonl_data.get("tests", {}),
+        cli_jsonl_keys,
+        ["total_time_ms", "op_emit_time_ms"],
+    )
 
     summary_md = render_markdown_summary(
         cycle,
@@ -646,6 +831,7 @@ def main() -> int:
         meta.get("post", {}),
         full_rows,
         e2e_rows,
+        cli_jsonl_rows,
     )
     summary_path = cycle_dir / "cycle_delta.md"
     write_text(summary_path, summary_md)
@@ -657,6 +843,7 @@ def main() -> int:
         "post": meta.get("post", {}),
         "fullscale": full_rows,
         "e2e": e2e_rows,
+        "cli_jsonl": cli_jsonl_rows,
     }
     write_json(cycle_dir / "cycle_delta.json", summary_json)
 

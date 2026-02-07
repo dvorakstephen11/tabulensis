@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_METRICS: dict[str, list[str]] = {
     "full-scale": ["total_time_ms"],
     "e2e": ["total_time_ms", "parse_time_ms", "diff_time_ms"],
+    "cli-jsonl": ["total_time_ms", "op_emit_time_ms"],
 }
 
 
@@ -109,9 +110,14 @@ def run_json_paths(meta: dict[str, Any], stage_key: str, suite: str) -> list[Pat
     if suite == "full-scale":
         run_list_key = "fullscale_run_json"
         fallback_key = "fullscale_json"
-    else:
+    elif suite == "e2e":
         run_list_key = "e2e_run_json"
         fallback_key = "e2e_json"
+    elif suite == "cli-jsonl":
+        run_list_key = "cli_jsonl_run_json"
+        fallback_key = "cli_jsonl_json"
+    else:
+        return []
 
     rels = stage.get(run_list_key)
     out: list[Path] = []
