@@ -3,10 +3,10 @@
 #![allow(dead_code)]
 
 use excel_diff::{
-    CellSnapshot, CellValue, DiffConfig, DiffOp, DiffReport, DiffSession, DiffSummary,
-    ExtractedColumnTypeChanges, ExtractedRenamePairs, ExtractedString, ExtractedStringList, Grid,
-    QuerySemanticDetail, RenamePair, Sheet, SheetKind, StepChange, StepDiff, StepParams,
-    StepSnapshot, StringId, Workbook, WorkbookPackage, with_default_session,
+    with_default_session, CellSnapshot, CellValue, DiffConfig, DiffOp, DiffReport, DiffSession,
+    DiffSummary, ExtractedColumnTypeChanges, ExtractedRenamePairs, ExtractedString,
+    ExtractedStringList, Grid, QuerySemanticDetail, RenamePair, Sheet, SheetKind, StepChange,
+    StepDiff, StepParams, StepSnapshot, StringId, Workbook, WorkbookPackage,
 };
 use serde::Deserialize;
 use std::fs::File;
@@ -226,7 +226,9 @@ pub fn collect_string_ids(op: &DiffOp) -> Vec<StringId> {
     fn collect_step_params(ids: &mut Vec<StringId>, params: &StepParams) {
         match params {
             StepParams::TableSelectRows { .. } => {}
-            StepParams::TableRemoveColumns { columns } => collect_extracted_string_list(ids, columns),
+            StepParams::TableRemoveColumns { columns } => {
+                collect_extracted_string_list(ids, columns)
+            }
             StepParams::TableRenameColumns { renames } => collect_rename_pairs(ids, renames),
             StepParams::TableTransformColumnTypes { transforms } => {
                 collect_column_type_changes(ids, transforms);
@@ -267,7 +269,11 @@ pub fn collect_string_ids(op: &DiffOp) -> Vec<StringId> {
                 collect_step_snapshot(ids, step);
             }
             StepDiff::StepReordered { name, .. } => ids.push(*name),
-            StepDiff::StepModified { before, after, changes } => {
+            StepDiff::StepModified {
+                before,
+                after,
+                changes,
+            } => {
                 collect_step_snapshot(ids, before);
                 collect_step_snapshot(ids, after);
                 for change in changes {
@@ -323,7 +329,11 @@ pub fn collect_string_ids(op: &DiffOp) -> Vec<StringId> {
         | DiffOp::VbaModuleRemoved { name }
         | DiffOp::VbaModuleChanged { name } => ids.push(*name),
         DiffOp::NamedRangeAdded { name } | DiffOp::NamedRangeRemoved { name } => ids.push(*name),
-        DiffOp::NamedRangeChanged { name, old_ref, new_ref } => {
+        DiffOp::NamedRangeChanged {
+            name,
+            old_ref,
+            new_ref,
+        } => {
             ids.push(*name);
             ids.push(*old_ref);
             ids.push(*new_ref);
@@ -453,7 +463,10 @@ pub fn collect_string_ids(op: &DiffOp) -> Vec<StringId> {
         _ => {}
     }
 
-    if let DiffOp::QueryDefinitionChanged { semantic_detail, .. } = op {
+    if let DiffOp::QueryDefinitionChanged {
+        semantic_detail, ..
+    } = op
+    {
         if let Some(detail) = semantic_detail {
             collect_semantic_detail(&mut ids, detail);
         }

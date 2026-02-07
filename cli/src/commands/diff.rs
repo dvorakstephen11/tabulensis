@@ -1,11 +1,12 @@
 use crate::commands::host::{host_kind_from_path, open_host, Host, HostKind};
 use crate::output::{git_diff, json, text};
 use crate::{DiffPresetArg, OutputFormat};
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use excel_diff::{
-    DiffConfig, DiffReport, DiffSummary, Grid, JsonLinesSink, ProgressCallback, SheetKind,
-    Workbook, WorkbookPackage, index_to_address, suggest_key_columns, with_default_session,
+    index_to_address, suggest_key_columns, with_default_session, DiffConfig, DiffReport,
+    DiffSummary, Grid, JsonLinesSink, ProgressCallback, SheetKind, Workbook, WorkbookPackage,
 };
+use license_client::LicenseClient;
 use std::collections::HashMap;
 #[cfg(feature = "perf-metrics")]
 use std::fs::File;
@@ -14,10 +15,9 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Mutex;
 use ui_payload::{
-    DiffOutcome, DiffOutcomeConfig, DiffOutcomeMode, DiffPreset, SummaryMeta, SummarySink,
-    limits_from_config, summarize_report,
+    limits_from_config, summarize_report, DiffOutcome, DiffOutcomeConfig, DiffOutcomeMode,
+    DiffPreset, SummaryMeta, SummarySink,
 };
-use license_client::LicenseClient;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Verbosity {
@@ -31,8 +31,6 @@ struct SheetKey {
     name_lower: String,
     kind: SheetKind,
 }
-
- 
 
 #[allow(clippy::too_many_arguments)]
 pub fn run(
@@ -56,7 +54,8 @@ pub fn run(
     max_ops: Option<usize>,
     metrics_json: Option<String>,
 ) -> Result<ExitCode> {
-    let license_client = LicenseClient::from_env().context("Failed to initialize license client")?;
+    let license_client =
+        LicenseClient::from_env().context("Failed to initialize license client")?;
     license_client
         .ensure_valid_or_refresh()
         .context("License check failed. Run `tabulensis license activate <KEY>`.")?;
@@ -71,7 +70,10 @@ pub fn run(
     if git_diff_mode
         && matches!(
             format,
-            OutputFormat::Json | OutputFormat::Jsonl | OutputFormat::Payload | OutputFormat::Outcome
+            OutputFormat::Json
+                | OutputFormat::Jsonl
+                | OutputFormat::Payload
+                | OutputFormat::Outcome
         )
     {
         bail!("Cannot use --git-diff with --format json/jsonl/payload/outcome");
@@ -131,9 +133,10 @@ pub fn run(
     let mut estimated_cells: Option<u64> = None;
     if !database {
         estimated_cells = match (&old_host, &new_host) {
-            (Host::Workbook(old_pkg), Host::Workbook(new_pkg)) => {
-                Some(estimate_diff_cell_volume(&old_pkg.workbook, &new_pkg.workbook))
-            }
+            (Host::Workbook(old_pkg), Host::Workbook(new_pkg)) => Some(estimate_diff_cell_volume(
+                &old_pkg.workbook,
+                &new_pkg.workbook,
+            )),
             _ => None,
         };
         let (new_format, switched_cells) =
@@ -304,7 +307,13 @@ pub fn run(
     }
 
     if format == OutputFormat::Jsonl && !git_diff_mode {
-        return run_streaming_host(&old_host, &new_host, &config, progress.as_ref(), metrics_json.as_deref());
+        return run_streaming_host(
+            &old_host,
+            &new_host,
+            &config,
+            progress.as_ref(),
+            metrics_json.as_deref(),
+        );
     }
 
     let report = match (&old_host, &new_host) {
@@ -470,7 +479,8 @@ impl ProgressCallback for CliProgress {
         } else {
             let phase_changed = state.last_phase != phase;
             let pct = percent.clamp(0.0, 1.0);
-            let emit = phase_changed || pct == 0.0 || pct == 1.0 || (pct - state.last_percent) >= 0.25;
+            let emit =
+                phase_changed || pct == 0.0 || pct == 1.0 || (pct - state.last_percent) >= 0.25;
             if emit {
                 eprintln!("Progress: {} {:.0}%", phase, pct * 100.0);
                 state.last_phase = phase.to_string();
@@ -501,8 +511,13 @@ fn run_database_mode(
 
     let mut format = format;
     let estimated_cells = estimate_sheet_cell_volume(old_pkg, new_pkg, &sheet_name)?;
-    let (new_format, switched_cells) =
-        maybe_auto_switch_jsonl(format, force_json, git_diff_mode, Some(estimated_cells), config);
+    let (new_format, switched_cells) = maybe_auto_switch_jsonl(
+        format,
+        force_json,
+        git_diff_mode,
+        Some(estimated_cells),
+        config,
+    );
     if let Some(cells) = switched_cells {
         eprintln!(
             "Warning: estimated {} cells in sheet '{}'; switching to JSONL output. Use --force-json to keep JSON.",
@@ -511,23 +526,21 @@ fn run_database_mode(
         );
     }
     format = new_format;
-    
+
     let key_columns = if let Some(keys_str) = keys {
         parse_key_columns(&keys_str)?
     } else if auto_keys {
         let grid = find_sheet_grid(&old_pkg.workbook, &sheet_name)?;
-        let suggested = with_default_session(|session| {
-            suggest_key_columns(grid, &session.strings)
-        });
+        let suggested = with_default_session(|session| suggest_key_columns(grid, &session.strings));
         if suggested.is_empty() {
             eprintln!(
                 "Warning: Could not auto-detect key columns for sheet '{}'; falling back to spreadsheet mode.",
                 sheet_name
             );
             Vec::new()
-        }
-        else {
-            let col_letters: Vec<String> = suggested.iter().map(|&c| col_index_to_letters(c)).collect();
+        } else {
+            let col_letters: Vec<String> =
+                suggested.iter().map(|&c| col_index_to_letters(c)).collect();
             eprintln!("Auto-detected key columns: {}", col_letters.join(","));
             suggested
         }
@@ -722,9 +735,9 @@ fn determine_sheet_name(
 
     let has_data_sheet = |wb: &excel_diff::Workbook| -> bool {
         with_default_session(|session| {
-            wb.sheets.iter().any(|s| {
-                session.strings.resolve(s.name).to_lowercase() == "data"
-            })
+            wb.sheets
+                .iter()
+                .any(|s| session.strings.resolve(s.name).to_lowercase() == "data")
         })
     };
 
@@ -810,7 +823,8 @@ fn col_letters_to_index(letters: &str) -> Result<u32> {
 
 fn col_index_to_letters(col: u32) -> String {
     let addr = index_to_address(0, col);
-    addr.trim_end_matches(|c: char| c.is_ascii_digit()).to_string()
+    addr.trim_end_matches(|c: char| c.is_ascii_digit())
+        .to_string()
 }
 
 fn print_fallback_suggestions(
@@ -826,12 +840,15 @@ fn print_fallback_suggestions(
 
     if has_fallback_warning && !auto_keys {
         if let Ok(grid) = find_sheet_grid(&old_pkg.workbook, sheet_name) {
-            let suggested = with_default_session(|session| {
-                suggest_key_columns(grid, &session.strings)
-            });
+            let suggested =
+                with_default_session(|session| suggest_key_columns(grid, &session.strings));
             if !suggested.is_empty() {
-                let col_letters: Vec<String> = suggested.iter().map(|&c| col_index_to_letters(c)).collect();
-                eprintln!("Hint: try --keys={} for unique key columns", col_letters.join(","));
+                let col_letters: Vec<String> =
+                    suggested.iter().map(|&c| col_index_to_letters(c)).collect();
+                eprintln!(
+                    "Hint: try --keys={} for unique key columns",
+                    col_letters.join(",")
+                );
             }
         }
     }
@@ -840,11 +857,7 @@ fn print_fallback_suggestions(
     }
 }
 
-fn resolve_preset(
-    preset: Option<DiffPresetArg>,
-    fast: bool,
-    precise: bool,
-) -> Result<DiffPreset> {
+fn resolve_preset(preset: Option<DiffPresetArg>, fast: bool, precise: bool) -> Result<DiffPreset> {
     if fast {
         return Ok(DiffPreset::Fastest);
     }
@@ -959,10 +972,7 @@ fn write_metrics_json_summary(path: &Path, summary: &DiffSummary) -> Result<()> 
 }
 
 #[cfg(feature = "perf-metrics")]
-fn write_metrics_json(
-    path: &Path,
-    metrics: &excel_diff::perf::DiffMetrics,
-) -> Result<()> {
+fn write_metrics_json(path: &Path, metrics: &excel_diff::perf::DiffMetrics) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create metrics directory: {}", parent.display()))?;
@@ -1006,4 +1016,3 @@ mod tests {
         assert_eq!(switched, Some(cells));
     }
 }
-

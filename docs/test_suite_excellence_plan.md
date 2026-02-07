@@ -1,6 +1,6 @@
 # Test Suite Excellence Plan
 
-**Last updated:** 2026-02-06
+**Last updated:** 2026-02-07
 
 ## Goal
 Maximize confidence in Tabulensis by systematically expanding test coverage while keeping the suite:
@@ -53,7 +53,7 @@ These should remain the standard PR bar:
 - Build examples: `cargo build --workspace --examples`
 
 Conditional PR gate (recommended when touching perf-sensitive paths in core/desktop backend/payload shaping):
-- Quick perf suite: `python3 scripts/check_perf_thresholds.py --suite quick --parallel --baseline benchmarks/baselines/quick.json ...`
+- Quick perf suite: `python3 scripts/check_perf_thresholds.py --suite quick --parallel --baseline benchmarks/baselines/quick.json --export-json benchmarks/latest_quick.json --export-csv benchmarks/latest_quick.csv`
 
 ### Tier B: PR “Opt-In Heavy” (workflow_dispatch / label / manual)
 Run on demand for changes that increase risk:
@@ -70,6 +70,38 @@ Nightly should run validations that are too slow/noisy for PRs:
 - Robustness regression sweep and corpus checks
 - Optional: code coverage reporting (see Phase 6)
 
+## Change-Based Run Guide ("When You Change X, Run Y")
+Use this as a fast decision table. Default baseline is **Tier A** (PR “Fast Gates”).
+
+| If you changed... | Minimum | Also run (risk-based) | Notes |
+| --- | --- | --- | --- |
+| Core parse/diff/alignment (`core/src/**`, `core/tests/**`) | Tier A | Perf quick; escalate to gate/full perf cycle as appropriate | High risk for perf regressions and semantic correctness changes. |
+| Desktop backend/payload shaping (`desktop/backend/src/**`, `ui_payload/src/**`) | Tier A | Perf quick; consider UI opt-in scenarios | Changes often affect performance + UI behavior. |
+| Desktop UI / XRC wiring (`desktop/**` UI code, XRC, scenario defs) | Tier A | UI opt-in scenarios (`scripts/ui_pipeline.sh <scenario>`) | Prefer capturing a focused canonical scenario set. |
+| Fixture generator + manifests (`fixtures/src/**`, `fixtures/*.yaml`, `fixtures/*.lock.json`) | Tier A | If fixture outputs intentionally changed: update lock(s) intentionally | See `fixtures/README.md` for `--write-lock` and `--verify-lock`. |
+
+Notes:
+- “Tier A” means: `python3 scripts/dev_test.py` + `python3 scripts/arch_guard.py` + clippy + build examples (see Tier A section above).
+- Perf policy: risk-based escalation lives in `AGENTS.md` and `docs/perf_playbook.md`.
+
+## Where Tests Live
+
+| Area | Path(s) | Notes |
+| --- | --- | --- |
+| Core (Rust) | `core/tests/**`, `core/src/**` | Integration tests + unit tests for parse/diff/alignment. |
+| CLI | `cli/tests/**`, `cli/src/**` | CLI integration tests + output stability checks. |
+| Desktop backend | `desktop/backend/tests/**`, `desktop/backend/src/**` | Orchestration/storage + UI payload shaping tests. |
+| Fixtures generator | `fixtures/src/**`, `fixtures/*.yaml`, `fixtures/*.lock.json` | Deterministic generator + manifests/locks. |
+| Fuzz | `core/fuzz/fuzz_targets/**`, `core/fuzz/**` | Fuzz targets, seed configs, and corpus maintenance. |
+| UI regression | `desktop/ui_scenarios/**`, `desktop/ui_snapshots/**`, `scripts/ui_*.{sh,js,py}` | Deterministic scenarios + capture/diff/review pipeline. |
+| Perf thresholds + baselines | `benchmarks/**`, `scripts/check_perf_thresholds.py`, `scripts/perf_cycle.py` | Suites, baselines, and perf-cycle workflow. |
+
+## Tier A Troubleshooting (Common Failures)
+
+- Fixture reference check fails (`scripts/check_fixture_references.py`): a test referenced a fixture output that is not present in the selected manifest. Fix by adding the scenario/output to the manifest (preferred) or updating the test. See `docs/maintainers/fixtures.md`.
+- Fixture lock verify fails (`--verify-lock`): fixture bytes changed. If intentional, re-generate and update the lock file(s) intentionally (see `fixtures/README.md`). If not intentional, fix the generator/scenario so outputs are stable.
+- Fixture generator deps missing: `scripts/dev_test.py` will print a short setup hint (recommended: `cd fixtures && uv sync`).
+
 ## Phased Roadmap
 Each phase has deliverables and exit criteria. Phases are intended to be incremental and independently valuable.
 
@@ -78,17 +110,8 @@ Each phase has deliverables and exit criteria. Phases are intended to be increme
 
 Deliverables:
 - This doc exists (and stays current) as the test-suite “front door”.
-- A short “when you change X, run Y” table exists in this doc:
-  - Core parse/diff/alignment: run Tier A + perf quick; escalate to gate/full perf cycle as appropriate.
-  - Desktop backend/payload shaping: run Tier A + perf quick; consider UI opt-in.
-  - UI/XRC wiring changes: run Tier A + UI opt-in scenarios.
-  - Fixture generator changes: run Tier A and verify lock behavior.
-- A clear map of where tests live:
-  - Core: `core/tests/**`
-  - CLI: `cli/tests/**`
-  - Desktop backend: `desktop/backend/tests/**`
-  - Fuzz: `core/fuzz/fuzz_targets/**`
-  - UI regression: `desktop/ui_scenarios/**`, `desktop/ui_snapshots/**`, `scripts/ui_*.{sh,js,py}`
+- A short “when you change X, run Y” table exists in this doc (see `## Change-Based Run Guide`).
+- A clear map of where tests live exists in this doc (see `## Where Tests Live`).
 
 Exit criteria:
 - A new contributor can run Tier A locally and interpret failures without guesswork.
@@ -106,8 +129,21 @@ Deliverables:
   - Update manifest outputs when adding fixture references (enforced by `scripts/check_fixture_references.py`).
   - Update lock files only when fixture definitions change (see `docs/maintainers/fixtures.md`).
 
+#### Feature-to-Test Matrix (Phase 1 Exit Criteria)
+
+| Capability | Fixtures (examples) | Tests |
+| --- | --- | --- |
+| Open workbook + basic sheet/grid sanity | `minimal.xlsx` (`smoke_minimal`) | `core/tests/excel_open_xml_tests.rs` |
+| CLI `info` prints sheet list | `pg1_basic_two_sheets.xlsx` (`pg1_basic_two_sheets`) | `cli/tests/integration_tests.rs` |
+| CLI diff exit codes (0 identical, 1 changed) | `equal_sheet_a.xlsx`/`equal_sheet_b.xlsx` (`g1_equal_sheet`), `single_cell_value_a.xlsx`/`single_cell_value_b.xlsx` (`g2_single_cell_value`) | `cli/tests/integration_tests.rs` |
+| JSON / JSONL / payload export schema basics | `single_cell_value_a.xlsx`/`single_cell_value_b.xlsx` (`g2_single_cell_value`) | `cli/tests/integration_tests.rs`, `cli/tests/determinism_cli_json.rs` |
+| PBIX open + query diff smoke | `pbix_legacy_one_query_a.pbix` (`branch1_pbix_legacy_one_query_a`), `pbix_legacy_multi_query_a.pbix`/`pbix_legacy_multi_query_b.pbix` (`branch1_pbix_legacy_multi_query_a`/`_b`) | `core/tests/pbix_host_support_tests.rs`, `cli/tests/integration_tests.rs` |
+| Error handling (bad paths, unsupported extensions, parse failures) | `random_zip.zip` (`container_random_zip`), `no_content_types.xlsx` (`container_no_content_types`), `not_a_zip.txt` (`container_not_zip_text`), `xlsb_stub.xlsb` (`xlsb_stub`) | `core/tests/excel_open_xml_tests.rs`, `cli/tests/integration_tests.rs` |
+| Desktop backend: diff, audit export, search changes | `single_cell_value_a.xlsx`/`single_cell_value_b.xlsx` (`g2_single_cell_value`) | `desktop/backend/tests/integration_smoke.rs` |
+| Desktop backend: build + query workbook search index (values/formulas/queries) | `minimal.xlsx` (`smoke_minimal`), `pg3_value_and_formula_cells.xlsx` (`pg3_types`), `m_embedded_change_a.xlsx` (`m_embedded_change_a`) | `desktop/backend/tests/integration_smoke.rs` |
+
 Exit criteria:
-- There is a feature-to-test matrix in this doc (or a linked doc) mapping each major capability to a fixture scenario + test file(s).
+- Feature-to-test matrix exists (table above) and is kept up to date as user-visible surfaces expand.
 
 ### Phase 2: Construct Coverage Audits (Beyond Line Coverage)
 **Intent:** For each “language inside the file,” we explicitly track semantic support and assert it.
@@ -218,9 +254,27 @@ CI-like local run:
 python3 scripts/dev_test.py
 ```
 
-Core + CLI smoke (mirrors smoke matrix shape):
+Architecture guard:
 ```bash
-generate-fixtures --manifest fixtures/manifest_cli_tests.yaml --force --clean
+python3 scripts/arch_guard.py
+```
+
+Clippy (deny unwrap/expect):
+```bash
+cargo clippy --workspace -- -D clippy::unwrap_used -D clippy::expect_used
+```
+
+Build workspace examples:
+```bash
+cargo build --workspace --examples
+```
+
+Core + CLI smoke (mirrors smoke matrix shape):
+
+Note: fixture generation requires the Python deps described in `fixtures/README.md` (and `scripts/dev_test.py` will print a short setup hint if they are missing).
+```bash
+python3 fixtures/src/generate.py --manifest fixtures/manifest_cli_tests.yaml --force --clean
+python3 fixtures/src/generate.py --manifest fixtures/manifest_cli_tests.yaml --verify-lock fixtures/manifest_cli_tests.lock.json
 TABULENSIS_LICENSE_SKIP=1 cargo test -p excel_diff
 TABULENSIS_LICENSE_SKIP=1 cargo test -p excel_diff_cli
 ```
@@ -255,4 +309,3 @@ Seed + maintain fuzz corpora:
 python3 scripts/seed_fuzz_corpus.py --config core/fuzz/seed_fixtures.yaml
 python3 scripts/fuzz_corpus_maint.py --dry-run
 ```
-

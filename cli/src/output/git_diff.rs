@@ -1,8 +1,8 @@
 use anyhow::Result;
 use excel_diff::{
-    CellValue, DiffOp, DiffReport, ExpressionChangeKind, ModelColumnProperty, QueryChangeKind,
-    QueryMetadataField, RelationshipProperty, StepChange, StepDiff, StepType, StringId,
-    index_to_address,
+    index_to_address, CellValue, DiffOp, DiffReport, ExpressionChangeKind, ModelColumnProperty,
+    QueryChangeKind, QueryMetadataField, RelationshipProperty, StepChange, StepDiff, StepType,
+    StringId,
 };
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -74,10 +74,7 @@ fn partition_ops(
         } else if op.is_model_op() {
             model_ops.push(op);
         } else if let Some(sheet_id) = get_sheet_id(op) {
-            let sheet_name = report
-                .resolve(sheet_id)
-                .unwrap_or("<unknown>")
-                .to_string();
+            let sheet_name = report.resolve(sheet_id).unwrap_or("<unknown>").to_string();
             sheet_ops.entry(sheet_name).or_default().push(op);
         } else {
             workbook_ops.push(op);
@@ -239,9 +236,7 @@ fn write_op_diff_lines<W: Write>(w: &mut W, report: &DiffReport, op: &DiffOp) ->
             let range = format_range(*start_row, *start_col, *row_count, *col_count);
             writeln!(w, "~ Rect replaced: {}", range)?;
         }
-        DiffOp::CellEdited {
-            addr, from, to, ..
-        } => {
+        DiffOp::CellEdited { addr, from, to, .. } => {
             let old_str = format_cell_value(&from.value, report);
             let new_str = format_cell_value(&to.value, report);
             writeln!(w, "- Cell {}: {}", addr, old_str)?;
@@ -307,18 +302,18 @@ fn write_op_diff_lines<W: Write>(w: &mut W, report: &DiffReport, op: &DiffOp) ->
                         }
                     }
 
-                    writeln!(w, "~   steps: +{} -{} ~{} r{}", added, removed, modified, reordered)?;
+                    writeln!(
+                        w,
+                        "~   steps: +{} -{} ~{} r{}",
+                        added, removed, modified, reordered
+                    )?;
 
                     let max_lines = 3;
                     for d in detail.step_diffs.iter().take(max_lines) {
                         writeln!(w, "~   {}", format_step_diff(report, d))?;
                     }
                     if detail.step_diffs.len() > max_lines {
-                        writeln!(
-                            w,
-                            "~   ... ({} more)",
-                            detail.step_diffs.len() - max_lines
-                        )?;
+                        writeln!(w, "~   ... ({} more)", detail.step_diffs.len() - max_lines)?;
                     }
                 } else if let Some(ast) = &detail.ast_summary {
                     writeln!(
@@ -493,12 +488,8 @@ fn write_op_diff_lines<W: Write>(w: &mut W, report: &DiffReport, op: &DiffOp) ->
             new,
         } => {
             let label = format_column_ref(report, *table, *name);
-            let old_str = old
-                .and_then(|id| report.resolve(id))
-                .unwrap_or("<none>");
-            let new_str = new
-                .and_then(|id| report.resolve(id))
-                .unwrap_or("<none>");
+            let old_str = old.and_then(|id| report.resolve(id)).unwrap_or("<none>");
+            let new_str = new.and_then(|id| report.resolve(id)).unwrap_or("<none>");
             let field_name = column_field_name(*field);
             writeln!(w, "- Column \"{}\": {}: {}", label, field_name, old_str)?;
             writeln!(w, "+ Column \"{}\": {}: {}", label, field_name, new_str)?;
@@ -551,12 +542,8 @@ fn write_op_diff_lines<W: Write>(w: &mut W, report: &DiffReport, op: &DiffOp) ->
         } => {
             let label =
                 format_relationship_ref(report, *from_table, *from_column, *to_table, *to_column);
-            let old_str = old
-                .and_then(|id| report.resolve(id))
-                .unwrap_or("<none>");
-            let new_str = new
-                .and_then(|id| report.resolve(id))
-                .unwrap_or("<none>");
+            let old_str = old.and_then(|id| report.resolve(id)).unwrap_or("<none>");
+            let new_str = new.and_then(|id| report.resolve(id)).unwrap_or("<none>");
             let field_name = relationship_field_name(*field);
             writeln!(w, "- Relationship {}: {}: {}", label, field_name, old_str)?;
             writeln!(w, "+ Relationship {}: {}: {}", label, field_name, new_str)?;
@@ -575,7 +562,9 @@ fn write_op_diff_lines<W: Write>(w: &mut W, report: &DiffReport, op: &DiffOp) ->
                 report.resolve(*name).unwrap_or("<unknown>")
             )?;
         }
-        DiffOp::MeasureDefinitionChanged { name, change_kind, .. } => {
+        DiffOp::MeasureDefinitionChanged {
+            name, change_kind, ..
+        } => {
             writeln!(
                 w,
                 "~ Measure \"{}\": definition changed ({})",
@@ -689,11 +678,9 @@ fn format_step_diff(report: &DiffReport, d: &StepDiff) -> String {
                             report.resolve(*from).unwrap_or("<unknown>"),
                             report.resolve(*to).unwrap_or("<unknown>")
                         )),
-                        StepChange::SourceRefsChanged { removed, added } => parts.push(format!(
-                            "refs -{} +{}",
-                            removed.len(),
-                            added.len()
-                        )),
+                        StepChange::SourceRefsChanged { removed, added } => {
+                            parts.push(format!("refs -{} +{}", removed.len(), added.len()))
+                        }
                         StepChange::ParamsChanged => parts.push("params".to_string()),
                     }
                 }
@@ -733,7 +720,10 @@ fn format_relationship_ref(
     let from_column = report.resolve(from_column).unwrap_or("<unknown>");
     let to_table = report.resolve(to_table).unwrap_or("<unknown>");
     let to_column = report.resolve(to_column).unwrap_or("<unknown>");
-    format!("{}[{}] -> {}[{}]", from_table, from_column, to_table, to_column)
+    format!(
+        "{}[{}] -> {}[{}]",
+        from_table, from_column, to_table, to_column
+    )
 }
 
 fn column_field_name(field: ModelColumnProperty) -> &'static str {
@@ -760,4 +750,3 @@ fn expression_change_label(kind: ExpressionChangeKind) -> &'static str {
         ExpressionChangeKind::Unknown => "unknown",
     }
 }
-

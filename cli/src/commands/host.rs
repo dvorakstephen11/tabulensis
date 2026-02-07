@@ -27,16 +27,17 @@ pub(crate) fn open_host(path: &Path, kind: HostKind, label: &str) -> Result<Host
     let file = File::open(path)
         .with_context(|| format!("Failed to open {} file: {}", label, path.display()))?;
 
-    let host = match kind {
-        HostKind::Workbook => Host::Workbook(
-            WorkbookPackage::open(file)
-                .with_context(|| format!("Failed to parse {} workbook: {}", label, path.display()))?,
-        ),
-        HostKind::Pbix => Host::Pbix(
-            PbixPackage::open(file)
-                .with_context(|| format!("Failed to parse {} PBIX/PBIT: {}", label, path.display()))?,
-        ),
-    };
+    let host =
+        match kind {
+            HostKind::Workbook => {
+                Host::Workbook(WorkbookPackage::open(file).with_context(|| {
+                    format!("Failed to parse {} workbook: {}", label, path.display())
+                })?)
+            }
+            HostKind::Pbix => Host::Pbix(PbixPackage::open(file).with_context(|| {
+                format!("Failed to parse {} PBIX/PBIT: {}", label, path.display())
+            })?),
+        };
 
     Ok(host)
 }

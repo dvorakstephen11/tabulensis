@@ -26,8 +26,9 @@ pub fn run(path: &str, show_queries: bool) -> Result<ExitCode> {
             writeln!(handle, "Workbook: {}", filename)?;
             writeln!(handle, "Sheets: {}", pkg.workbook.sheets.len())?;
             for sheet in &pkg.workbook.sheets {
-                let sheet_name =
-                    excel_diff::with_default_session(|session| session.strings.resolve(sheet.name).to_string());
+                let sheet_name = excel_diff::with_default_session(|session| {
+                    session.strings.resolve(sheet.name).to_string()
+                });
                 let kind_str = match sheet.kind {
                     SheetKind::Worksheet => "worksheet",
                     SheetKind::Chart => "chart",
@@ -97,7 +98,11 @@ fn write_query_line<W: Write>(w: &mut W, q: &excel_diff::Query) -> Result<()> {
     if load_flags.is_empty() {
         writeln!(w, "  - {}  [group={}]", q.name, group_path)?;
     } else {
-        writeln!(w, "  - {}  [{}]  [group={}]", q.name, load_flags, group_path)?;
+        writeln!(
+            w,
+            "  - {}  [{}]  [group={}]",
+            q.name, load_flags, group_path
+        )?;
     }
 
     Ok(())

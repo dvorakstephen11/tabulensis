@@ -9,9 +9,7 @@ pub fn run(command: LicenseCommands) -> Result<ExitCode> {
     match command {
         LicenseCommands::Activate { key } => {
             let key = key.trim();
-            let result = client
-                .activate(key)
-                .context("Activation failed")?;
+            let result = client.activate(key).context("Activation failed")?;
             println!("License activated: {}", result.status.license_key);
             println!("Status: {}", result.status.status);
             println!("Device slots: {}", result.status.max_devices);
@@ -21,7 +19,10 @@ pub fn run(command: LicenseCommands) -> Result<ExitCode> {
             Ok(ExitCode::from(0))
         }
         LicenseCommands::Status { key, refresh } => {
-            let key = key.as_deref().map(|value| value.trim()).filter(|value| !value.is_empty());
+            let key = key
+                .as_deref()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty());
             let status = if refresh {
                 client.status_remote(key).context("Status request failed")?
             } else {
@@ -40,7 +41,11 @@ pub fn run(command: LicenseCommands) -> Result<ExitCode> {
             };
             println!("License: {}", status.license_key);
             println!("Status: {}", status.status);
-            println!("Devices: {} / {}", status.activations.len(), status.max_devices);
+            println!(
+                "Devices: {} / {}",
+                status.activations.len(),
+                status.max_devices
+            );
             if let Some(trial_end) = status.trial_end {
                 println!("Trial end (unix): {}", trial_end);
             }
@@ -50,10 +55,11 @@ pub fn run(command: LicenseCommands) -> Result<ExitCode> {
             Ok(ExitCode::from(0))
         }
         LicenseCommands::Deactivate { key } => {
-            let key = key.as_deref().map(|value| value.trim()).filter(|value| !value.is_empty());
-            client
-                .deactivate(key)
-                .context("Deactivation failed")?;
+            let key = key
+                .as_deref()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty());
+            client.deactivate(key).context("Deactivation failed")?;
             println!("License deactivated for this device.");
             Ok(ExitCode::from(0))
         }

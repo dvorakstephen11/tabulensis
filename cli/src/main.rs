@@ -2,13 +2,15 @@ mod commands;
 mod output;
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
-use excel_diff::{
-    ContainerError, DataMashupError, DiffError, GridParseError, PackageError, SectionParseError,
-};
+use excel_diff::DiffError;
 use std::process::ExitCode;
 
 #[derive(Parser)]
-#[command(name = "tabulensis", disable_version_flag = true, arg_required_else_help = true)]
+#[command(
+    name = "tabulensis",
+    disable_version_flag = true,
+    arg_required_else_help = true
+)]
 #[command(about = "Compare Excel workbooks and show differences")]
 pub struct Cli {
     #[arg(long, action = clap::ArgAction::SetTrue, help = "Show version and exit")]
@@ -23,13 +25,26 @@ pub struct Cli {
 pub enum Commands {
     #[command(about = "Compare two Excel workbooks or PBIX/PBIT packages")]
     Diff {
-        #[arg(help = "Path to the old/base file (.xlsx, .xlsm, .xltx, .xltm, .xlsb, .pbix, .pbit)")]
+        #[arg(
+            help = "Path to the old/base file (.xlsx, .xlsm, .xltx, .xltm, .xlsb, .pbix, .pbit)"
+        )]
         old: String,
-        #[arg(help = "Path to the new/changed file (.xlsx, .xlsm, .xltx, .xltm, .xlsb, .pbix, .pbit)")]
+        #[arg(
+            help = "Path to the new/changed file (.xlsx, .xlsm, .xltx, .xltm, .xlsb, .pbix, .pbit)"
+        )]
         new: String,
-        #[arg(long, short, value_enum, default_value = "text", help = "Output format")]
+        #[arg(
+            long,
+            short,
+            value_enum,
+            default_value = "text",
+            help = "Output format"
+        )]
         format: OutputFormat,
-        #[arg(long, help = "Force JSON output even for large diffs (disable auto-switch to JSONL)")]
+        #[arg(
+            long,
+            help = "Force JSON output even for large diffs (disable auto-switch to JSONL)"
+        )]
         force_json: bool,
         #[arg(long, help = "Produce unified diff-style output for Git")]
         git_diff: bool,
@@ -45,19 +60,38 @@ pub enum Commands {
         database: bool,
         #[arg(long, help = "Sheet name to diff in database mode")]
         sheet: Option<String>,
-        #[arg(long, help = "Key columns for database mode (comma-separated column letters, e.g. A,B,C)")]
+        #[arg(
+            long,
+            help = "Key columns for database mode (comma-separated column letters, e.g. A,B,C)"
+        )]
         keys: Option<String>,
         #[arg(long, help = "Auto-detect key columns for database mode")]
         auto_keys: bool,
         #[arg(long, help = "Show a progress bar on stderr")]
         progress: bool,
-        #[arg(long, value_name = "MB", help = "Soft memory budget (MB) for advanced strategies")]
+        #[arg(
+            long,
+            value_name = "MB",
+            help = "Soft memory budget (MB) for advanced strategies"
+        )]
         max_memory: Option<u32>,
-        #[arg(long, value_name = "SECONDS", help = "Abort diff after this many seconds")]
+        #[arg(
+            long,
+            value_name = "SECONDS",
+            help = "Abort diff after this many seconds"
+        )]
         timeout: Option<u32>,
-        #[arg(long, value_name = "COUNT", help = "Maximum number of ops to emit before stopping")]
+        #[arg(
+            long,
+            value_name = "COUNT",
+            help = "Maximum number of ops to emit before stopping"
+        )]
         max_ops: Option<usize>,
-        #[arg(long, value_name = "PATH", help = "Write perf metrics JSON to this path")]
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Write perf metrics JSON to this path"
+        )]
         metrics_json: Option<String>,
     },
     #[command(about = "Show information about a workbook or PBIX/PBIT package")]
@@ -205,15 +239,11 @@ fn exit_code_for_error(err: &anyhow::Error) -> ExitCode {
 }
 
 fn is_internal_error(err: &anyhow::Error) -> bool {
+    // "Internal" errors should be rare and actionable: they indicate a bug rather than bad input.
+    // Parse/IO failures are user-facing and should exit 2 (documented in `docs/cli.md`).
     err.chain().any(|cause| {
-        if let Some(diff_err) = cause.downcast_ref::<DiffError>() {
-            return !matches!(diff_err, DiffError::SheetNotFound { .. });
-        }
-        cause.is::<PackageError>()
-            || cause.is::<ContainerError>()
-            || cause.is::<GridParseError>()
-            || cause.is::<DataMashupError>()
-            || cause.is::<SectionParseError>()
+        cause
+            .downcast_ref::<DiffError>()
+            .is_some_and(|e| matches!(e, DiffError::InternalError { .. }))
     })
 }
-

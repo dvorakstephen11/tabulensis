@@ -12,4 +12,3 @@ pub fn write_json_value<W: Write, T: Serialize>(w: &mut W, value: &T) -> Result<
     writeln!(w)?;
     Ok(())
 }
-

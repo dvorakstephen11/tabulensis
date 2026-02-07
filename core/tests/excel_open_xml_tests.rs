@@ -2,8 +2,8 @@ mod common;
 
 use common::{fixture_path, open_fixture_workbook, sid};
 use excel_diff::{
-    CellAddress, ContainerError, ContainerLimits, DataMashupError, OpcContainer, PackageError,
-    SheetKind, WorkbookPackage, open_data_mashup,
+    open_data_mashup, CellAddress, ContainerError, ContainerLimits, DataMashupError, OpcContainer,
+    PackageError, SheetKind, WorkbookPackage,
 };
 use std::fs;
 use std::io::{Cursor, ErrorKind, Write};
@@ -86,15 +86,13 @@ fn no_content_types_is_not_excel() {
 
 #[test]
 fn not_zip_container_returns_error() {
-    let path = std::env::temp_dir().join("excel_diff_not_zip.txt");
-    fs::write(&path, "this is not a zip container").expect("write temp file");
-    let file = std::fs::File::open(&path).expect("not zip file exists");
+    let path = fixture_path("not_a_zip.txt");
+    let file = std::fs::File::open(&path).expect("fixture should exist");
     let err = WorkbookPackage::open(file).expect_err("non-zip should fail");
     assert!(matches!(
         err,
         PackageError::Container(ContainerError::NotZipContainer)
     ));
-    let _ = fs::remove_file(&path);
 }
 
 #[test]
@@ -187,7 +185,11 @@ fn truncated_zip_never_panics() {
         let truncated = &valid_zip_bytes[..truncate_at.min(valid_zip_bytes.len())];
         let cursor = Cursor::new(truncated.to_vec());
         let result = std::panic::catch_unwind(|| OpcContainer::open_from_reader(cursor));
-        assert!(result.is_ok(), "truncated ZIP at byte {} should not panic", truncate_at);
+        assert!(
+            result.is_ok(),
+            "truncated ZIP at byte {} should not panic",
+            truncate_at
+        );
         let inner = result.unwrap();
         assert!(inner.is_err(), "truncated ZIP should return error, not Ok");
     }
@@ -220,7 +222,8 @@ fn zip_bomb_defense_rejects_oversized_part() {
     let mut container = OpcContainer::open_from_reader_with_limits(file, limits)
         .expect("container should open (content_types is small)");
 
-    let err = container.read_file_checked("large_file.xml")
+    let err = container
+        .read_file_checked("large_file.xml")
         .expect_err("oversized part should be rejected");
     assert!(
         matches!(err, ContainerError::PartTooLarge { .. }),
@@ -281,16 +284,16 @@ fn invalid_xml_in_workbook_does_not_panic() {
 
     let file = std::fs::File::open(&path).expect("temp file exists");
     let result = std::panic::catch_unwind(|| WorkbookPackage::open(file));
-    assert!(result.is_ok(), "malformed XML should not panic (catch_unwind succeeded)");
+    assert!(
+        result.is_ok(),
+        "malformed XML should not panic (catch_unwind succeeded)"
+    );
     let err = result
         .unwrap()
         .expect_err("malformed XML should return error, not Ok");
     match err {
         PackageError::InvalidXml {
-            part,
-            line,
-            column,
-            ..
+            part, line, column, ..
         } => {
             assert_eq!(part, "xl/workbook.xml");
             assert!(line > 0, "expected line > 0, got {line}");
@@ -334,14 +337,16 @@ fn invalid_xml_in_relationships_includes_part_and_position() {
 
     let file = std::fs::File::open(&path).expect("temp file exists");
     let result = std::panic::catch_unwind(|| WorkbookPackage::open(file));
-    assert!(result.is_ok(), "malformed relationships XML should not panic");
-    let err = result.unwrap().expect_err("malformed relationships XML should error");
+    assert!(
+        result.is_ok(),
+        "malformed relationships XML should not panic"
+    );
+    let err = result
+        .unwrap()
+        .expect_err("malformed relationships XML should error");
     match err {
         PackageError::InvalidXml {
-            part,
-            line,
-            column,
-            ..
+            part, line, column, ..
         } => {
             assert_eq!(part, "xl/_rels/workbook.xml.rels");
             assert!(line > 0, "expected line > 0, got {line}");
@@ -399,13 +404,12 @@ fn invalid_xml_in_worksheet_includes_part_and_position() {
     let file = std::fs::File::open(&path).expect("temp file exists");
     let result = std::panic::catch_unwind(|| WorkbookPackage::open(file));
     assert!(result.is_ok(), "malformed worksheet XML should not panic");
-    let err = result.unwrap().expect_err("malformed worksheet XML should error");
+    let err = result
+        .unwrap()
+        .expect_err("malformed worksheet XML should error");
     match err {
         PackageError::InvalidXml {
-            part,
-            line,
-            column,
-            ..
+            part, line, column, ..
         } => {
             assert_eq!(part, "xl/worksheets/sheet1.xml");
             assert!(line > 0, "expected line > 0, got {line}");
@@ -461,16 +465,15 @@ fn corrupt_inputs_never_panic() {
         ("empty", vec![]),
         ("garbage", vec![0xFF, 0xFE, 0x00, 0x01, 0x02, 0x03]),
         ("partial_zip_header", vec![0x50, 0x4B, 0x03, 0x04]),
-        ("random_bytes", (0..100).map(|i| (i * 17 + 31) as u8).collect()),
+        (
+            "random_bytes",
+            (0..100).map(|i| (i * 17 + 31) as u8).collect(),
+        ),
     ];
 
     for (name, bytes) in test_cases {
         let cursor = Cursor::new(bytes);
         let result = std::panic::catch_unwind(|| WorkbookPackage::open(cursor));
-        assert!(
-            result.is_ok(),
-            "corrupt input '{}' should not panic",
-            name
-        );
+        assert!(result.is_ok(), "corrupt input '{}' should not panic", name);
     }
 }

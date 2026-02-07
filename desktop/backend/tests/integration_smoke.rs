@@ -10,6 +10,8 @@ use desktop_backend::{
 };
 use ui_payload::{DiffOptions, DiffPreset};
 
+use excel_diff::{CellValue, WorkbookPackage};
+
 struct TempDir {
     path: PathBuf,
 }
@@ -42,7 +44,11 @@ fn build_backend(temp: &TempDir) -> DesktopBackend {
         store_db_path: temp.path.join("diff_store.sqlite"),
         recents_json_path: temp.path.join("recents.json"),
     };
-    let runner = DiffRunner::new(paths.store_db_path.clone(), "test".to_string(), "test".to_string());
+    let runner = DiffRunner::new(
+        paths.store_db_path.clone(),
+        "test".to_string(),
+        "test".to_string(),
+    );
     DesktopBackend { paths, runner }
 }
 
@@ -89,9 +95,61 @@ fn diff_export_and_search_smoke() {
         .unwrap_or_else(|err| panic!("export failed: {}", err.message));
     assert!(export_path.is_file());
 
-    let _ = backend
-        .search_diff_ops(&diff_id, "sheet", 5)
+    // Export is a user-visible artifact: validate schema shape, not byte-for-byte determinism.
+    let export_pkg = WorkbookPackage::open(fs::File::open(&export_path).expect("open export"))
+        .expect("audit export should be a valid workbook");
+    let sheet_names = excel_diff::with_default_session(|session| {
+        export_pkg
+            .workbook
+            .sheets
+            .iter()
+            .map(|sheet| session.strings.resolve(sheet.name).to_string())
+            .collect::<Vec<_>>()
+    });
+    for expected in [
+        "Summary",
+        "Warnings",
+        "Cells",
+        "Structure",
+        "PowerQuery",
+        "Model",
+        "OtherOps",
+    ] {
+        assert!(
+            sheet_names.iter().any(|name| name == expected),
+            "export should include sheet '{expected}', got {sheet_names:?}"
+        );
+    }
+
+    excel_diff::with_default_session(|session| {
+        let cells_sheet = export_pkg
+            .workbook
+            .sheets
+            .iter()
+            .find(|sheet| session.strings.resolve(sheet.name) == "Cells")
+            .expect("Cells sheet should exist");
+        let a1 = cells_sheet
+            .grid
+            .get(0, 0)
+            .and_then(|cell| cell.value.as_ref())
+            .expect("Cells!A1 should exist");
+        match a1 {
+            CellValue::Text(id) => assert_eq!(session.strings.resolve(*id), "Sheet"),
+            other => panic!("expected Cells!A1 to be text 'Sheet', got {other:?}"),
+        }
+    });
+
+    let results = backend
+        .search_diff_ops(&diff_id, "2", 20)
         .unwrap_or_else(|err| panic!("search diff ops failed: {}", err.message));
+    assert!(
+        results.iter().any(|r| {
+            r.kind == "cell"
+                && r.sheet.as_deref() == Some("Sheet1")
+                && r.address.as_deref() == Some("C3")
+        }),
+        "expected to find the C3 cell change in search results; got {results:?}"
+    );
 }
 
 #[test]
@@ -99,15 +157,58 @@ fn build_and_search_index_smoke() {
     let temp = TempDir::new("backend-index");
     let backend = build_backend(&temp);
     let fixtures = fixtures_dir();
-    let workbook = fixtures.join("single_cell_value_a.xlsx");
+    let workbook = fixtures.join("minimal.xlsx");
 
     let index = backend
         .build_search_index(&workbook, "old")
         .unwrap_or_else(|err| panic!("build index failed: {}", err.message));
     let results = backend
-        .search_workbook_index(&index.index_id, "A1", 5)
+        .search_workbook_index(&index.index_id, "R1C1", 20)
         .unwrap_or_else(|err| panic!("search index failed: {}", err.message));
-    assert!(results.len() <= 5);
+    assert!(
+        results
+            .iter()
+            .any(|r| r.kind == "value" && r.sheet == "Sheet1" && r.address == "A1"),
+        "expected to find Sheet1!A1 value hit for R1C1; got {results:?}"
+    );
+}
+
+#[test]
+fn search_index_finds_formulas() {
+    let temp = TempDir::new("backend-index-formula");
+    let backend = build_backend(&temp);
+    let fixtures = fixtures_dir();
+    let workbook = fixtures.join("pg3_value_and_formula_cells.xlsx");
+
+    let index = backend
+        .build_search_index(&workbook, "old")
+        .unwrap_or_else(|err| panic!("build index failed: {}", err.message));
+    let results = backend
+        .search_workbook_index(&index.index_id, "world", 50)
+        .unwrap_or_else(|err| panic!("search index failed: {}", err.message));
+    assert!(
+        results.iter().any(|r| r.kind == "formula"),
+        "expected at least one formula hit for pg3 workbook; got {results:?}"
+    );
+}
+
+#[test]
+fn search_index_finds_power_query_text() {
+    let temp = TempDir::new("backend-index-query");
+    let backend = build_backend(&temp);
+    let fixtures = fixtures_dir();
+    let workbook = fixtures.join("m_embedded_change_a.xlsx");
+
+    let index = backend
+        .build_search_index(&workbook, "old")
+        .unwrap_or_else(|err| panic!("build index failed: {}", err.message));
+    let results = backend
+        .search_workbook_index(&index.index_id, "EmbeddedQuery", 50)
+        .unwrap_or_else(|err| panic!("search index failed: {}", err.message));
+    assert!(
+        results.iter().any(|r| r.kind == "query"),
+        "expected at least one query hit; got {results:?}"
+    );
 }
 
 #[test]

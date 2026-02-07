@@ -145,6 +145,74 @@ fn nonexistent_file_exit_2() {
 }
 
 #[test]
+fn unsupported_extension_exit_2() {
+    for name in ["random_zip.zip", "not_a_zip.txt"] {
+        let output = tabulensis_cmd()
+            .args(["diff", &fixture_path(name), &fixture_path(name)])
+            .output()
+            .expect("failed to run tabulensis");
+
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "unsupported input extension should exit 2: name={name} stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("unsupported input extension"),
+            "stderr should mention unsupported extension: name={name} stderr={stderr}",
+        );
+    }
+}
+
+#[test]
+fn parse_failure_missing_content_types_exit_2_and_prints_error_code() {
+    let path = fixture_path("no_content_types.xlsx");
+    let output = tabulensis_cmd()
+        .args(["diff", &path, &path])
+        .output()
+        .expect("failed to run tabulensis");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "parse failures should exit 2: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("EXDIFF_CTR_004"),
+        "stderr should contain a stable error code: stderr={stderr}"
+    );
+}
+
+#[test]
+fn xlsb_is_unsupported_exit_2_and_has_convert_hint() {
+    let path = fixture_path("xlsb_stub.xlsb");
+    let output = tabulensis_cmd()
+        .args(["diff", &path, &path])
+        .output()
+        .expect("failed to run tabulensis");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "xlsb should exit 2 (unsupported): stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("EXDIFF_PKG_009"),
+        "stderr should contain error code for unsupported format: stderr={stderr}"
+    );
+    assert!(
+        stderr.to_lowercase().contains("convert to .xlsx"),
+        "stderr should include a convert hint: stderr={stderr}"
+    );
+}
+
+#[test]
 fn json_output_is_valid_json() {
     let output = tabulensis_cmd()
         .args([
@@ -183,8 +251,14 @@ fn payload_output_contains_report_and_sheets() {
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("payload output should be valid JSON");
 
-    assert!(parsed.get("report").is_some(), "payload should include report");
-    assert!(parsed.get("sheets").is_some(), "payload should include sheets");
+    assert!(
+        parsed.get("report").is_some(),
+        "payload should include report"
+    );
+    assert!(
+        parsed.get("sheets").is_some(),
+        "payload should include sheets"
+    );
     assert!(
         parsed.get("alignments").is_some(),
         "payload should include alignments"
@@ -208,12 +282,12 @@ fn outcome_output_contains_mode_and_payload() {
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("outcome output should be valid JSON");
 
-    assert_eq!(
-        parsed.get("mode").and_then(|v| v.as_str()),
-        Some("payload")
-    );
+    assert_eq!(parsed.get("mode").and_then(|v| v.as_str()), Some("payload"));
     let payload = parsed.get("payload").expect("payload should exist");
-    assert!(payload.get("report").is_some(), "payload should include report");
+    assert!(
+        payload.get("report").is_some(),
+        "payload should include report"
+    );
 }
 
 #[test]
@@ -230,7 +304,10 @@ fn jsonl_first_line_is_header() {
         .expect("failed to run tabulensis");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let first_line = stdout.lines().next().expect("should have at least one line");
+    let first_line = stdout
+        .lines()
+        .next()
+        .expect("should have at least one line");
     let header: serde_json::Value =
         serde_json::from_str(first_line).expect("first line should be valid JSON");
 
@@ -536,7 +613,10 @@ fn diff_pbix_jsonl_writes_header_and_ops() {
         .get("strings")
         .and_then(|v| v.as_array())
         .expect("header should include string table");
-    assert!(!strings.is_empty(), "header string table should be non-empty");
+    assert!(
+        !strings.is_empty(),
+        "header string table should be non-empty"
+    );
 
     let mut has_query_op = false;
     for line in lines {
@@ -556,7 +636,10 @@ fn diff_pbix_jsonl_writes_header_and_ops() {
         }
     }
 
-    assert!(has_query_op, "expected at least one Query op in jsonl output");
+    assert!(
+        has_query_op,
+        "expected at least one Query op in jsonl output"
+    );
 }
 
 #[test]
@@ -598,7 +681,10 @@ fn diff_pbix_composed_reports_query_and_metadata_changes() {
             .is_some_and(|k| k == "QueryMetadataChanged")
     });
 
-    assert!(has_def_change, "expected QueryDefinitionChanged in pbix composed diff");
+    assert!(
+        has_def_change,
+        "expected QueryDefinitionChanged in pbix composed diff"
+    );
     assert!(
         has_metadata_change,
         "expected QueryMetadataChanged in pbix composed diff"
@@ -637,7 +723,9 @@ fn collect_string_ids(op: &excel_diff::DiffOp) -> Vec<excel_diff::StringId> {
     fn collect_cell_value(ids: &mut Vec<excel_diff::StringId>, value: &excel_diff::CellValue) {
         match value {
             excel_diff::CellValue::Text(id) | excel_diff::CellValue::Error(id) => ids.push(*id),
-            excel_diff::CellValue::Number(_) | excel_diff::CellValue::Bool(_) | excel_diff::CellValue::Blank => {}
+            excel_diff::CellValue::Number(_)
+            | excel_diff::CellValue::Bool(_)
+            | excel_diff::CellValue::Blank => {}
         }
     }
 
@@ -650,7 +738,10 @@ fn collect_string_ids(op: &excel_diff::DiffOp) -> Vec<excel_diff::StringId> {
         }
     }
 
-    fn collect_extracted_string(ids: &mut Vec<excel_diff::StringId>, value: &excel_diff::ExtractedString) {
+    fn collect_extracted_string(
+        ids: &mut Vec<excel_diff::StringId>,
+        value: &excel_diff::ExtractedString,
+    ) {
         if let excel_diff::ExtractedString::Known { value } = value {
             ids.push(*value);
         }
@@ -691,8 +782,12 @@ fn collect_string_ids(op: &excel_diff::DiffOp) -> Vec<excel_diff::StringId> {
     fn collect_step_params(ids: &mut Vec<excel_diff::StringId>, params: &excel_diff::StepParams) {
         match params {
             excel_diff::StepParams::TableSelectRows { .. } => {}
-            excel_diff::StepParams::TableRemoveColumns { columns } => collect_extracted_string_list(ids, columns),
-            excel_diff::StepParams::TableRenameColumns { renames } => collect_rename_pairs(ids, renames),
+            excel_diff::StepParams::TableRemoveColumns { columns } => {
+                collect_extracted_string_list(ids, columns)
+            }
+            excel_diff::StepParams::TableRenameColumns { renames } => {
+                collect_rename_pairs(ids, renames)
+            }
             excel_diff::StepParams::TableTransformColumnTypes { transforms } => {
                 collect_column_type_changes(ids, transforms);
             }
@@ -718,7 +813,10 @@ fn collect_string_ids(op: &excel_diff::DiffOp) -> Vec<excel_diff::StringId> {
         }
     }
 
-    fn collect_step_snapshot(ids: &mut Vec<excel_diff::StringId>, snapshot: &excel_diff::StepSnapshot) {
+    fn collect_step_snapshot(
+        ids: &mut Vec<excel_diff::StringId>,
+        snapshot: &excel_diff::StepSnapshot,
+    ) {
         ids.push(snapshot.name);
         ids.extend(snapshot.source_refs.iter().copied());
         if let Some(params) = &snapshot.params {
@@ -728,11 +826,16 @@ fn collect_string_ids(op: &excel_diff::DiffOp) -> Vec<excel_diff::StringId> {
 
     fn collect_step_diff(ids: &mut Vec<excel_diff::StringId>, diff: &excel_diff::StepDiff) {
         match diff {
-            excel_diff::StepDiff::StepAdded { step } | excel_diff::StepDiff::StepRemoved { step } => {
+            excel_diff::StepDiff::StepAdded { step }
+            | excel_diff::StepDiff::StepRemoved { step } => {
                 collect_step_snapshot(ids, step);
             }
             excel_diff::StepDiff::StepReordered { name, .. } => ids.push(*name),
-            excel_diff::StepDiff::StepModified { before, after, changes } => {
+            excel_diff::StepDiff::StepModified {
+                before,
+                after,
+                changes,
+            } => {
                 collect_step_snapshot(ids, before);
                 collect_step_snapshot(ids, after);
                 for change in changes {
@@ -749,7 +852,10 @@ fn collect_string_ids(op: &excel_diff::DiffOp) -> Vec<excel_diff::StringId> {
         }
     }
 
-    fn collect_semantic_detail(ids: &mut Vec<excel_diff::StringId>, detail: &excel_diff::QuerySemanticDetail) {
+    fn collect_semantic_detail(
+        ids: &mut Vec<excel_diff::StringId>,
+        detail: &excel_diff::QuerySemanticDetail,
+    ) {
         for diff in &detail.step_diffs {
             collect_step_diff(ids, diff);
         }
@@ -757,7 +863,9 @@ fn collect_string_ids(op: &excel_diff::DiffOp) -> Vec<excel_diff::StringId> {
 
     let mut ids = Vec::new();
     match op {
-        excel_diff::DiffOp::SheetAdded { sheet } | excel_diff::DiffOp::SheetRemoved { sheet } => ids.push(*sheet),
+        excel_diff::DiffOp::SheetAdded { sheet } | excel_diff::DiffOp::SheetRemoved { sheet } => {
+            ids.push(*sheet)
+        }
         excel_diff::DiffOp::SheetRenamed { sheet, from, to } => {
             ids.push(*sheet);
             ids.push(*from);
@@ -772,12 +880,15 @@ fn collect_string_ids(op: &excel_diff::DiffOp) -> Vec<excel_diff::StringId> {
                 collect_cell_value(&mut ids, value);
             }
         }
-        excel_diff::DiffOp::ColumnAdded { sheet, .. } | excel_diff::DiffOp::ColumnRemoved { sheet, .. } => ids.push(*sheet),
+        excel_diff::DiffOp::ColumnAdded { sheet, .. }
+        | excel_diff::DiffOp::ColumnRemoved { sheet, .. } => ids.push(*sheet),
         excel_diff::DiffOp::BlockMovedRows { sheet, .. }
         | excel_diff::DiffOp::BlockMovedColumns { sheet, .. }
         | excel_diff::DiffOp::BlockMovedRect { sheet, .. }
         | excel_diff::DiffOp::RectReplaced { sheet, .. } => ids.push(*sheet),
-        excel_diff::DiffOp::CellEdited { sheet, from, to, .. } => {
+        excel_diff::DiffOp::CellEdited {
+            sheet, from, to, ..
+        } => {
             ids.push(*sheet);
             collect_snapshot(&mut ids, from);
             collect_snapshot(&mut ids, to);
@@ -785,8 +896,13 @@ fn collect_string_ids(op: &excel_diff::DiffOp) -> Vec<excel_diff::StringId> {
         excel_diff::DiffOp::VbaModuleAdded { name }
         | excel_diff::DiffOp::VbaModuleRemoved { name }
         | excel_diff::DiffOp::VbaModuleChanged { name } => ids.push(*name),
-        excel_diff::DiffOp::NamedRangeAdded { name } | excel_diff::DiffOp::NamedRangeRemoved { name } => ids.push(*name),
-        excel_diff::DiffOp::NamedRangeChanged { name, old_ref, new_ref } => {
+        excel_diff::DiffOp::NamedRangeAdded { name }
+        | excel_diff::DiffOp::NamedRangeRemoved { name } => ids.push(*name),
+        excel_diff::DiffOp::NamedRangeChanged {
+            name,
+            old_ref,
+            new_ref,
+        } => {
             ids.push(*name);
             ids.push(*old_ref);
             ids.push(*new_ref);
@@ -909,7 +1025,10 @@ fn collect_string_ids(op: &excel_diff::DiffOp) -> Vec<excel_diff::StringId> {
         _ => {}
     }
 
-    if let excel_diff::DiffOp::QueryDefinitionChanged { semantic_detail, .. } = op {
+    if let excel_diff::DiffOp::QueryDefinitionChanged {
+        semantic_detail, ..
+    } = op
+    {
         if let Some(detail) = semantic_detail {
             collect_semantic_detail(&mut ids, detail);
         }
@@ -966,10 +1085,22 @@ fn diff_pbit_model_changes_detected() {
     }
 
     assert!(has_table_op, "expected at least one Table op in pbit diff");
-    assert!(has_column_op, "expected at least one ModelColumn op in pbit diff");
-    assert!(has_relationship_op, "expected at least one Relationship op in pbit diff");
-    assert!(has_calc_column_op, "expected at least one CalculatedColumn op in pbit diff");
-    assert!(has_measure_op, "expected at least one Measure op in pbit diff");
+    assert!(
+        has_column_op,
+        "expected at least one ModelColumn op in pbit diff"
+    );
+    assert!(
+        has_relationship_op,
+        "expected at least one Relationship op in pbit diff"
+    );
+    assert!(
+        has_calc_column_op,
+        "expected at least one CalculatedColumn op in pbit diff"
+    );
+    assert!(
+        has_measure_op,
+        "expected at least one Measure op in pbit diff"
+    );
 }
 
 #[test]
@@ -1041,19 +1172,15 @@ fn d2_database_row_added() {
         .output()
         .expect("failed to run tabulensis");
 
-    assert_eq!(
-        output.status.code(),
-        Some(1),
-        "D2 row added should exit 1"
-    );
+    assert_eq!(output.status.code(), Some(1), "D2 row added should exit 1");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("output should be valid JSON");
     let ops = parsed.get("ops").and_then(|v| v.as_array()).unwrap();
-    let has_row_added = ops.iter().any(|op| {
-        op.get("kind").and_then(|k| k.as_str()) == Some("RowAdded")
-    });
+    let has_row_added = ops
+        .iter()
+        .any(|op| op.get("kind").and_then(|k| k.as_str()) == Some("RowAdded"));
     assert!(has_row_added, "D2 should contain RowAdded op");
 }
 
@@ -1075,19 +1202,15 @@ fn d3_database_row_updated() {
         .output()
         .expect("failed to run tabulensis");
 
-    assert_eq!(
-        output.status.code(),
-        Some(1),
-        "D3 row update should exit 1"
-    );
+    assert_eq!(output.status.code(), Some(1), "D3 row update should exit 1");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("output should be valid JSON");
     let ops = parsed.get("ops").and_then(|v| v.as_array()).unwrap();
-    let has_cell_edited = ops.iter().any(|op| {
-        op.get("kind").and_then(|k| k.as_str()) == Some("CellEdited")
-    });
+    let has_cell_edited = ops
+        .iter()
+        .any(|op| op.get("kind").and_then(|k| k.as_str()) == Some("CellEdited"));
     assert!(has_cell_edited, "D3 should contain CellEdited op");
 }
 
@@ -1119,12 +1242,12 @@ fn d4_database_reorder_and_change() {
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("output should be valid JSON");
     let ops = parsed.get("ops").and_then(|v| v.as_array()).unwrap();
-    
-    let has_cell_edited = ops.iter().any(|op| {
-        op.get("kind").and_then(|k| k.as_str()) == Some("CellEdited")
-    });
+
+    let has_cell_edited = ops
+        .iter()
+        .any(|op| op.get("kind").and_then(|k| k.as_str()) == Some("CellEdited"));
     assert!(has_cell_edited, "D4 should contain CellEdited op");
-    
+
     assert!(
         ops.len() < 10,
         "D4 should have few ops (reorder ignored, only changes): got {} ops",
@@ -1233,7 +1356,7 @@ fn database_auto_keys() {
         "Auto-keys should work: stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
-    
+
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("Auto-detected") || stderr.is_empty(),

@@ -2,24 +2,32 @@
 
 This checklist covers setting up transactional license emails for Tabulensis using **Resend**, wired into the Cloudflare Worker licensing backend in `tabulensis-api/`.
 
+## 0) Create Your Resend Account (One-Time)
+
+- [x] Create a Resend account: `https://resend.com`
+- [x] Verify your login email address.
+- [ ] Recommended: enable 2FA on your Resend account.
+- [ ] (Optional) Create an Organization/Team for Tabulensis and invite the other admins/operators.
+- [ ] Confirm your plan/billing is sufficient for production sending (you'll also need a verified sending domain below).
+
 ## 1) Decide Your Sending Identity
 
-- [ ] Pick a sending subdomain (recommended), e.g. `mail.tabulensis.com`.
+- [x] Pick a sending subdomain (recommended), e.g. `mail.tabulensis.com`.
 - [ ] Pick a From address, e.g. `Tabulensis <licenses@mail.tabulensis.com>`.
 - [ ] Pick a Reply-To, e.g. `support@tabulensis.com`.
 
 ## 2) Verify Domain In Resend
 
-- [ ] Resend dashboard: Domains -> add your domain/subdomain.
-- [ ] In Cloudflare DNS, add the Resend-provided records:
-- [ ] SPF (TXT)
-- [ ] DKIM (Resend-provided value)
+- [x] Resend dashboard: Domains -> add your domain/subdomain.
+- [x] In Cloudflare DNS, add the Resend-provided records:
+- [x] SPF (TXT)
+- [x] DKIM (Resend-provided value)
 - [ ] Recommended: add a DMARC record once SPF/DKIM are in place.
-- [ ] Wait until the domain shows as verified in Resend.
+- [x] Wait until the domain shows as verified in Resend.
 
 ## 3) Create A Resend API Key
 
-- [ ] Create an API key with sending access.
+- [x] Create an API key with sending access.
 - [ ] Store it in a password manager (do not commit, do not paste into logs).
 
 ## 4) Add Worker Secret (Cloudflare)
@@ -43,7 +51,7 @@ Optional non-secret vars (set via Cloudflare dashboard or Wrangler vars):
 - [ ] `RESEND_API_KEY` (secret)
 - [ ] `RESEND_FROM` (var, or hardcode)
 - [ ] Implement `sendLicenseEmail(to, licenseKey, ...)` using Resend send-email API (HTML + text).
-- [ ] Add an **Idempotency-Key** so retries don’t double-send.
+- [ ] Add an **Idempotency-Key** so retries don't double-send.
 - [ ] Recommended key: `license-email/stripe-event/<event.id>` for webhook sends.
 
 Wire email sending into:
@@ -84,4 +92,3 @@ XDG_CONFIG_HOME=/tmp npx wrangler deploy --domain license.tabulensis.com
 - [ ] `https://tabulensis.com/download/success?session_id=...` displays a license key
 - [ ] The license email arrives and matches the displayed key
 - [ ] `https://tabulensis.com/support/resend` successfully resends the key
-
