@@ -31,22 +31,21 @@ This checklist covers setting up transactional license emails for Tabulensis usi
 - [ ] Store it in a password manager (do not commit, do not paste into logs).
 
 ## 4) Add Worker Secret (Cloudflare)
-
+[x] Run this command:
 From `tabulensis-api/`:
-
 ```bash
 XDG_CONFIG_HOME=/tmp npx wrangler secret put RESEND_API_KEY
 ```
 
 Optional non-secret vars (set via Cloudflare dashboard or Wrangler vars):
 
-- [ ] `RESEND_FROM` (e.g. `Tabulensis <licenses@mail.tabulensis.com>`)
-- [ ] `RESEND_REPLY_TO` (e.g. `support@tabulensis.com`)
+- [x] `RESEND_FROM` (e.g. `Tabulensis <licenses@mail.tabulensis.com>`)
+- [x] `RESEND_REPLY_TO` (e.g. `support@tabulensis.com`)
 
 ## 5) Implement Email Sending In `tabulensis-api/`
 
 - [ ] Add dependency (recommended):
-- [ ] `npm install resend`
+- [x] `npm install resend`
 - [ ] Add Worker env support:
 - [ ] `RESEND_API_KEY` (secret)
 - [ ] `RESEND_FROM` (var, or hardcode)

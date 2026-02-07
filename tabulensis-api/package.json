@@ -16,6 +16,7 @@
 		"wrangler": "^4.61.1"
 	},
 	"dependencies": {
+		"resend": "^6.9.1",
 		"tweetnacl": "^1.0.3"
 	}
 }

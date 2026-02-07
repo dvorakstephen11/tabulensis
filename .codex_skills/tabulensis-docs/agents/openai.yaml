@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tabulensis Docs"
+  short_description: "Navigate and maintain repo documentation"
+  default_prompt: "Use $tabulensis-docs to find/update Tabulensis repo operating docs and checklists."
