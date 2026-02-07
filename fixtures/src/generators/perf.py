@@ -1,8 +1,68 @@
 import openpyxl
 import random
+import zipfile
 from pathlib import Path
 from typing import Union, List
 from .base import BaseGenerator
+
+def _escape_xml_text(value: str) -> str:
+    return (
+        value.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&apos;")
+    )
+
+
+def _inject_shared_strings(path: Path, salt: str) -> None:
+    """
+    openpyxl WriteOnly tends to emit inline strings (no xl/sharedStrings.xml).
+
+    For Experiment 4 (sharedStrings-aware sheet skipping), we want a workbook where:
+    - sheet1.xml is a large numeric-only grid (no shared string usage)
+    - sheet2.xml references shared strings (t="s")
+    - xl/sharedStrings.xml exists and differs across A/B while sheet XML stays identical
+
+    This post-processes the generated XLSX zip to force that layout.
+    """
+    shared_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'count="1" uniqueCount="1">'
+        f"<si><t>{_escape_xml_text(salt)}</t></si>"
+        "</sst>"
+    ).encode("utf-8")
+
+    # Deterministic sheet XML: always references sharedStrings[0].
+    sheet2_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        "<sheetData><row r=\"1\"><c r=\"A1\" t=\"s\"><v>0</v></c></row></sheetData>"
+        "</worksheet>"
+    ).encode("utf-8")
+
+    with zipfile.ZipFile(path, "r") as zf:
+        entries = [(info.filename, zf.read(info.filename)) for info in zf.infolist()]
+
+    out_path = path.with_suffix(path.suffix + ".tmp")
+    with zipfile.ZipFile(out_path, "w", compression=zipfile.ZIP_DEFLATED) as out:
+        for filename, data in entries:
+            if filename == "xl/worksheets/sheet2.xml":
+                out.writestr(filename, sheet2_xml)
+                continue
+            if filename == "xl/sharedStrings.xml":
+                # Always overwrite to ensure consistent presence/contents.
+                out.writestr(filename, shared_xml)
+                continue
+            out.writestr(filename, data)
+
+        # Add sharedStrings.xml if it wasn't present in the original archive.
+        if not any(name == "xl/sharedStrings.xml" for name, _ in entries):
+            out.writestr("xl/sharedStrings.xml", shared_xml)
+
+    out_path.replace(path)
+
 
 class LargeGridGenerator(BaseGenerator):
     """
@@ -19,6 +79,8 @@ class LargeGridGenerator(BaseGenerator):
         seed = self.args.get('seed', 0)
         pattern_length = self.args.get('pattern_length', 100)
         fill_percent = self.args.get('fill_percent', 100)
+        include_header = self.args.get('include_header', True)
+        sharedstrings_salt = self.args.get('sharedstrings_salt')
         edit_row = self.args.get('edit_row')
         edit_col = self.args.get('edit_col')
         edit_value = self.args.get('edit_value')
@@ -34,8 +96,9 @@ class LargeGridGenerator(BaseGenerator):
             ws = wb.create_sheet()
             ws.title = "Performance"
 
-            header = [f"Col_{c}" for c in range(1, cols + 1)]
-            ws.append(header)
+            if include_header:
+                header = [f"Col_{c}" for c in range(1, cols + 1)]
+                ws.append(header)
 
             for r in range(1, rows + 1):
                 row_data = []
@@ -63,5 +126,15 @@ class LargeGridGenerator(BaseGenerator):
 
                 ws.append(row_data)
 
+            if sharedstrings_salt is not None:
+                # Add a tiny second sheet so we can force sharedStrings.xml to exist/change
+                # without introducing shared-string usage in the large numeric-only sheet.
+                salt_ws = wb.create_sheet()
+                salt_ws.title = "SharedStringsSalt"
+                salt_ws.append([str(sharedstrings_salt)])
+
             wb.save(output_dir / name)
+
+            if sharedstrings_salt is not None:
+                _inject_shared_strings(output_dir / name, str(sharedstrings_salt))
 

@@ -1,0 +1,13 @@
+{
+  "name": "Compare No Diffs",
+  "description": "Identical workbooks to validate the first-class 'No differences' state and empty sheets panel messaging.",
+  "oldPath": "../../../fixtures/generated/e2e_p5_identical_a.xlsx",
+  "newPath": "../../../fixtures/generated/e2e_p5_identical_b.xlsx",
+  "autoRunDiff": true,
+  "stableWaitMs": 800,
+  "expectMode": "payload",
+  "focusPanel": "summary",
+  "preset": "balanced",
+  "trustedFiles": true
+}
+

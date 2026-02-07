@@ -17,6 +17,7 @@ const DEFAULT_APP: &str = "tabulensis";
 const DEFAULT_BASE_URL: &str = "https://license.tabulensis.com";
 const DEVICE_ID_FILENAME: &str = "device_id.txt";
 const TOKEN_FILENAME: &str = "license_token.json";
+const PUBLIC_KEY_FILENAME: &str = "license_public_key_b64.txt";
 
 #[derive(Debug, Error)]
 pub enum LicenseError {
@@ -45,9 +46,12 @@ pub struct LicenseConfig {
 
 impl LicenseConfig {
     pub fn from_env() -> Self {
-        let base_url = std::env::var("TABULENSIS_LICENSE_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
-        let vendor = std::env::var("TABULENSIS_LICENSE_VENDOR").unwrap_or_else(|_| DEFAULT_VENDOR.to_string());
-        let app_name = std::env::var("TABULENSIS_LICENSE_APP").unwrap_or_else(|_| DEFAULT_APP.to_string());
+        let base_url = std::env::var("TABULENSIS_LICENSE_BASE_URL")
+            .unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
+        let vendor = std::env::var("TABULENSIS_LICENSE_VENDOR")
+            .unwrap_or_else(|_| DEFAULT_VENDOR.to_string());
+        let app_name =
+            std::env::var("TABULENSIS_LICENSE_APP").unwrap_or_else(|_| DEFAULT_APP.to_string());
         let public_key_b64 = std::env::var("TABULENSIS_LICENSE_PUBLIC_KEY").ok();
         let timeout = std::env::var("TABULENSIS_LICENSE_TIMEOUT_SECS")
             .ok()
@@ -69,6 +73,7 @@ pub struct LicensePaths {
     pub root: PathBuf,
     pub device_id_path: PathBuf,
     pub token_path: PathBuf,
+    pub public_key_path: PathBuf,
 }
 
 pub fn resolve_paths(cfg: &LicenseConfig) -> Result<LicensePaths, LicenseError> {
@@ -78,6 +83,7 @@ pub fn resolve_paths(cfg: &LicenseConfig) -> Result<LicensePaths, LicenseError> 
         return Ok(LicensePaths {
             device_id_path: root.join(DEVICE_ID_FILENAME),
             token_path: root.join(TOKEN_FILENAME),
+            public_key_path: root.join(PUBLIC_KEY_FILENAME),
             root,
         });
     }
@@ -91,6 +97,7 @@ pub fn resolve_paths(cfg: &LicenseConfig) -> Result<LicensePaths, LicenseError> 
         root: root.clone(),
         device_id_path: root.join(DEVICE_ID_FILENAME),
         token_path: root.join(TOKEN_FILENAME),
+        public_key_path: root.join(PUBLIC_KEY_FILENAME),
     })
 }
 
@@ -148,8 +155,8 @@ pub struct TokenVerifier {
 }
 
 impl TokenVerifier {
-    pub fn from_config(cfg: &LicenseConfig) -> Result<Self, LicenseError> {
-        let verifying_key = if let Some(key_b64) = cfg.public_key_b64.as_ref() {
+    pub fn from_public_key_b64(public_key_b64: Option<&str>) -> Result<Self, LicenseError> {
+        let verifying_key = if let Some(key_b64) = public_key_b64 {
             let key_bytes = B64
                 .decode(key_b64.trim())
                 .map_err(|err| LicenseError::Signature(format!("Invalid public key: {err}")))?;
@@ -179,7 +186,9 @@ impl TokenVerifier {
         let payload_bytes = serde_json::to_vec(&token.payload)?;
         verifying_key
             .verify_strict(&payload_bytes, &signature)
-            .map_err(|err| LicenseError::Signature(format!("Signature verification failed: {err}")))?;
+            .map_err(|err| {
+                LicenseError::Signature(format!("Signature verification failed: {err}"))
+            })?;
         Ok(VerificationStatus::Verified)
     }
 }
@@ -200,12 +209,17 @@ impl LicenseClient {
 
     pub fn new(config: LicenseConfig) -> Result<Self, LicenseError> {
         let paths = resolve_paths(&config)?;
-        let verifier = TokenVerifier::from_config(&config)?;
         let http = ureq::AgentBuilder::new()
             .timeout_read(config.timeout)
             .timeout_write(config.timeout)
             .timeout_connect(config.timeout)
             .build();
+
+        let public_key_b64 = resolve_public_key_b64(&config, &paths, &http)?;
+        let verifier = TokenVerifier::from_public_key_b64(public_key_b64.as_deref())?;
+
+        let mut config = config;
+        config.public_key_b64 = public_key_b64;
         Ok(Self {
             config,
             paths,
@@ -247,7 +261,7 @@ impl LicenseClient {
 
         let local = self.load_local_state()?;
         if let Some(state) = &local {
-            if !state.expired {
+            if state.verified && !state.expired {
                 return Ok(LicenseStatus {
                     license_key: state.token.payload.license_key.clone(),
                     status: state.token.payload.status.clone(),
@@ -261,7 +275,8 @@ impl LicenseClient {
 
         if std::env::var("TABULENSIS_LICENSE_OFFLINE").ok().as_deref() == Some("1") {
             return Err(LicenseError::License(
-                "License token expired and offline mode is enabled".to_string(),
+                "License token is missing/expired/unverified and offline mode is enabled"
+                    .to_string(),
             ));
         }
 
@@ -278,7 +293,10 @@ impl LicenseClient {
         let device_hash = hash_device_id(&device_id);
         let device_label = default_device_label();
 
-        let url = format!("{}/license/activate", self.config.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/license/activate",
+            self.config.base_url.trim_end_matches('/')
+        );
         let response = self
             .http
             .post(&url)
@@ -316,7 +334,10 @@ impl LicenseClient {
                 .ok_or_else(|| LicenseError::License("No local license found".to_string()))?,
         };
 
-        let url = format!("{}/license/deactivate", self.config.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/license/deactivate",
+            self.config.base_url.trim_end_matches('/')
+        );
         let response = self
             .http
             .post(&url)
@@ -352,7 +373,10 @@ impl LicenseClient {
                 .ok_or_else(|| LicenseError::License("No local license found".to_string()))?,
         };
 
-        let url = format!("{}/license/status", self.config.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/license/status",
+            self.config.base_url.trim_end_matches('/')
+        );
         let response = self
             .http
             .post(&url)
@@ -436,6 +460,8 @@ impl fmt::Display for LicenseStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::SigningKey;
+    use ed25519_dalek::Signer;
 
     #[test]
     fn device_hash_is_stable() {
@@ -444,4 +470,107 @@ mod tests {
         let hash2 = hash_device_id(id);
         assert_eq!(hash1, hash2);
     }
+
+    #[test]
+    fn activation_token_signature_verifies_and_json_is_stable() {
+        let seed = [0u8; 32];
+        let signing_key = SigningKey::from_bytes(&seed);
+        let verifying_key = signing_key.verifying_key();
+
+        let payload = ActivationTokenPayload {
+            license_key: "TABU-AAAA-BBBB-CCCC".to_string(),
+            device_id: "device-hash-1".to_string(),
+            status: "trialing".to_string(),
+            issued_at: 1,
+            expires_at: 2,
+            grace_until: Some(2),
+            period_end: None,
+        };
+
+        let payload_bytes = serde_json::to_vec(&payload).unwrap();
+        assert_eq!(
+            String::from_utf8(payload_bytes.clone()).unwrap(),
+            r#"{"license_key":"TABU-AAAA-BBBB-CCCC","device_id":"device-hash-1","status":"trialing","issued_at":1,"expires_at":2,"grace_until":2,"period_end":null}"#
+        );
+
+        let signature = signing_key.sign(&payload_bytes);
+        let token = ActivationToken {
+            payload: payload.clone(),
+            signature: B64.encode(signature.to_bytes()),
+        };
+
+        let verifier =
+            TokenVerifier::from_public_key_b64(Some(&B64.encode(verifying_key.to_bytes())))
+                .unwrap();
+        let status = verifier.verify(&token).unwrap();
+        assert!(matches!(status, VerificationStatus::Verified));
+    }
+}
+
+fn resolve_public_key_b64(
+    cfg: &LicenseConfig,
+    paths: &LicensePaths,
+    http: &Agent,
+) -> Result<Option<String>, LicenseError> {
+    // Dev/test bypass: if license checks are skipped, don't require public key discovery.
+    if std::env::var("TABULENSIS_LICENSE_SKIP").ok().as_deref() == Some("1") {
+        return Ok(None);
+    }
+
+    // Explicit env var wins.
+    if let Some(value) = cfg.public_key_b64.as_ref() {
+        return Ok(Some(value.clone()));
+    }
+
+    // Cached public key (persisted after a successful online run).
+    if let Ok(contents) = fs::read_to_string(&paths.public_key_path) {
+        let trimmed = contents.trim();
+        if !trimmed.is_empty() {
+            return Ok(Some(trimmed.to_string()));
+        }
+    }
+
+    // Dev-only escape hatch: allow running unverified in debug builds.
+    if cfg!(debug_assertions)
+        && std::env::var("TABULENSIS_LICENSE_ALLOW_UNVERIFIED")
+            .ok()
+            .as_deref()
+            == Some("1")
+    {
+        return Ok(None);
+    }
+
+    // Fetch from server.
+    #[derive(Debug, Deserialize)]
+    struct PublicKeyResponse {
+        public_key_b64: Option<String>,
+    }
+
+    let url = format!("{}/public_key", cfg.base_url.trim_end_matches('/'));
+    let response = http
+        .get(&url)
+        .call()
+        .map_err(|err| LicenseError::Http(err.to_string()))?;
+    if response.status() >= 400 {
+        let text = response.into_string().unwrap_or_else(|_| "".to_string());
+        return Err(LicenseError::Http(format!(
+            "Failed to fetch public key: {}",
+            text.trim()
+        )));
+    }
+
+    let pk: PublicKeyResponse = response
+        .into_json()
+        .map_err(|err| LicenseError::Http(err.to_string()))?;
+    let Some(public_key_b64) = pk.public_key_b64 else {
+        return Err(LicenseError::Http(
+            "Public key response missing public_key_b64".to_string(),
+        ));
+    };
+
+    if let Some(parent) = paths.public_key_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&paths.public_key_path, public_key_b64.trim())?;
+    Ok(Some(public_key_b64))
 }

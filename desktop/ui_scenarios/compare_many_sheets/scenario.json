@@ -1,0 +1,13 @@
+{
+  "name": "Compare Many Sheets",
+  "description": "Multi-sheet diff to validate default sorting and the sheets filter box.",
+  "oldPath": "../../../fixtures/generated/pg6_sheet_and_grid_change_a.xlsx",
+  "newPath": "../../../fixtures/generated/pg6_sheet_and_grid_change_b.xlsx",
+  "autoRunDiff": true,
+  "stableWaitMs": 800,
+  "expectMode": "payload",
+  "focusPanel": "summary",
+  "preset": "balanced",
+  "trustedFiles": true
+}
+

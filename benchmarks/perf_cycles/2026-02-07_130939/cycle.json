@@ -1,0 +1,73 @@
+{
+  "cycle": "2026-02-07_130939",
+  "config": {
+    "runs": 3,
+    "aggregation": "median",
+    "parallel": true,
+    "skip_fixtures": true
+  },
+  "pre": {
+    "timestamp": "2026-02-07T13:10:10.428078+00:00",
+    "git_commit": "87ea95ea9fd9",
+    "git_branch": "20260206_ui_improvements_milestone_3",
+    "fullscale_json": "benchmarks/perf_cycles/2026-02-07_130939/pre_fullscale.json",
+    "e2e_json": "benchmarks/perf_cycles/2026-02-07_130939/pre_e2e.json",
+    "cli_jsonl_json": "benchmarks/perf_cycles/2026-02-07_130939/pre_cli_jsonl.json",
+    "fullscale_run_json": [
+      "benchmarks/perf_cycles/2026-02-07_130939/pre_fullscale_run1.json",
+      "benchmarks/perf_cycles/2026-02-07_130939/pre_fullscale_run2.json",
+      "benchmarks/perf_cycles/2026-02-07_130939/pre_fullscale_run3.json"
+    ],
+    "e2e_run_json": [
+      "benchmarks/perf_cycles/2026-02-07_130939/pre_e2e_run1.json",
+      "benchmarks/perf_cycles/2026-02-07_130939/pre_e2e_run2.json",
+      "benchmarks/perf_cycles/2026-02-07_130939/pre_e2e_run3.json"
+    ],
+    "cli_jsonl_run_json": [
+      "benchmarks/perf_cycles/2026-02-07_130939/pre_cli_jsonl_run1.json",
+      "benchmarks/perf_cycles/2026-02-07_130939/pre_cli_jsonl_run2.json",
+      "benchmarks/perf_cycles/2026-02-07_130939/pre_cli_jsonl_run3.json"
+    ],
+    "runs": 3,
+    "aggregation": "median",
+    "parallel": true,
+    "skip_fixtures": true,
+    "dirty_worktree": false,
+    "dirty_paths_count": 0,
+    "dirty_paths_sample": [],
+    "dirty_rust_paths": []
+  },
+  "post": {
+    "timestamp": "2026-02-07T13:12:08.299622+00:00",
+    "git_commit": "2d255a0365ab",
+    "git_branch": "20260206_ui_improvements_milestone_3",
+    "fullscale_json": "benchmarks/perf_cycles/2026-02-07_130939/post_fullscale.json",
+    "e2e_json": "benchmarks/perf_cycles/2026-02-07_130939/post_e2e.json",
+    "cli_jsonl_json": "benchmarks/perf_cycles/2026-02-07_130939/post_cli_jsonl.json",
+    "fullscale_run_json": [
+      "benchmarks/perf_cycles/2026-02-07_130939/post_fullscale_run1.json",
+      "benchmarks/perf_cycles/2026-02-07_130939/post_fullscale_run2.json",
+      "benchmarks/perf_cycles/2026-02-07_130939/post_fullscale_run3.json"
+    ],
+    "e2e_run_json": [
+      "benchmarks/perf_cycles/2026-02-07_130939/post_e2e_run1.json",
+      "benchmarks/perf_cycles/2026-02-07_130939/post_e2e_run2.json",
+      "benchmarks/perf_cycles/2026-02-07_130939/post_e2e_run3.json"
+    ],
+    "cli_jsonl_run_json": [
+      "benchmarks/perf_cycles/2026-02-07_130939/post_cli_jsonl_run1.json",
+      "benchmarks/perf_cycles/2026-02-07_130939/post_cli_jsonl_run2.json",
+      "benchmarks/perf_cycles/2026-02-07_130939/post_cli_jsonl_run3.json"
+    ],
+    "runs": 3,
+    "aggregation": "median",
+    "parallel": true,
+    "skip_fixtures": true,
+    "dirty_worktree": true,
+    "dirty_paths_count": 1,
+    "dirty_paths_sample": [
+      "benchmarks/perf_cycles/2026-02-07_130939/"
+    ],
+    "dirty_rust_paths": []
+  }
+}

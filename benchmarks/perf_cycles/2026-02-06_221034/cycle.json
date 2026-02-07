@@ -1,0 +1,63 @@
+{
+  "cycle": "2026-02-06_221034",
+  "config": {
+    "runs": 3,
+    "aggregation": "median",
+    "parallel": true,
+    "skip_fixtures": false
+  },
+  "pre": {
+    "timestamp": "2026-02-06T22:14:27.232906+00:00",
+    "git_commit": "86cd17e8c016",
+    "git_branch": "20260206_ui_improvements_milestone_3",
+    "fullscale_json": "benchmarks/perf_cycles/2026-02-06_221034/pre_fullscale.json",
+    "e2e_json": "benchmarks/perf_cycles/2026-02-06_221034/pre_e2e.json",
+    "fullscale_run_json": [
+      "benchmarks/perf_cycles/2026-02-06_221034/pre_fullscale_run1.json",
+      "benchmarks/perf_cycles/2026-02-06_221034/pre_fullscale_run2.json",
+      "benchmarks/perf_cycles/2026-02-06_221034/pre_fullscale_run3.json"
+    ],
+    "e2e_run_json": [
+      "benchmarks/perf_cycles/2026-02-06_221034/pre_e2e_run1.json",
+      "benchmarks/perf_cycles/2026-02-06_221034/pre_e2e_run2.json",
+      "benchmarks/perf_cycles/2026-02-06_221034/pre_e2e_run3.json"
+    ],
+    "runs": 3,
+    "aggregation": "median",
+    "parallel": true,
+    "skip_fixtures": false,
+    "dirty_worktree": false,
+    "dirty_paths_count": 0,
+    "dirty_paths_sample": [],
+    "dirty_rust_paths": []
+  },
+  "post": {
+    "timestamp": "2026-02-06T22:35:45.010050+00:00",
+    "git_commit": "5d6cf6101a9d",
+    "git_branch": "20260206_ui_improvements_milestone_3",
+    "fullscale_json": "benchmarks/perf_cycles/2026-02-06_221034/post_fullscale.json",
+    "e2e_json": "benchmarks/perf_cycles/2026-02-06_221034/post_e2e.json",
+    "fullscale_run_json": [
+      "benchmarks/perf_cycles/2026-02-06_221034/post_fullscale_run1.json",
+      "benchmarks/perf_cycles/2026-02-06_221034/post_fullscale_run2.json",
+      "benchmarks/perf_cycles/2026-02-06_221034/post_fullscale_run3.json"
+    ],
+    "e2e_run_json": [
+      "benchmarks/perf_cycles/2026-02-06_221034/post_e2e_run1.json",
+      "benchmarks/perf_cycles/2026-02-06_221034/post_e2e_run2.json",
+      "benchmarks/perf_cycles/2026-02-06_221034/post_e2e_run3.json"
+    ],
+    "runs": 3,
+    "aggregation": "median",
+    "parallel": true,
+    "skip_fixtures": false,
+    "dirty_worktree": true,
+    "dirty_paths_count": 3,
+    "dirty_paths_sample": [
+      ".pip-user/lib/python3.10/site-packages/excel_fixtures-0.1.0.dist-info/METADATA",
+      ".pip-user/lib/python3.10/site-packages/excel_fixtures-0.1.0.dist-info/RECORD",
+      "benchmarks/perf_cycles/2026-02-06_221034/"
+    ],
+    "dirty_rust_paths": []
+  }
+}

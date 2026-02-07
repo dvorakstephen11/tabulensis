@@ -15,6 +15,7 @@ path = "src/lib.rs"
 default = ["excel-open-xml", "std-fs", "vba", "dpapi", "base64-crate"]
 excel-open-xml = []
 custom-xml = []
+custom-jsonl = ["dep:ryu"]
 vba = ["dep:ovba"]
 std-fs = []
 perf-metrics = []
@@ -33,6 +34,7 @@ zip = { version = "0.6", default-features = false, features = ["deflate"] }
 base64 = { version = "0.22", optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+ryu = { version = "1.0", optional = true }
 xxhash-rust = { version = "0.8", features = ["xxh64", "xxh3"] }
 rustc-hash = "1.1"
 ovba = { version = "0.7.1", optional = true }

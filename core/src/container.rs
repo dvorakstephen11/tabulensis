@@ -5,8 +5,8 @@
 
 use std::io::{Read, Seek};
 use thiserror::Error;
-use zip::ZipArchive;
 use zip::result::ZipError;
+use zip::ZipArchive;
 
 use crate::error_codes;
 
@@ -86,9 +86,7 @@ pub struct ZipContainer {
 }
 
 impl ZipContainer {
-    pub fn open_from_reader<R: Read + Seek + 'static>(
-        reader: R,
-    ) -> Result<Self, ContainerError> {
+    pub fn open_from_reader<R: Read + Seek + 'static>(reader: R) -> Result<Self, ContainerError> {
         Self::open_from_reader_with_limits(reader, ContainerLimits::default())
     }
 
@@ -125,9 +123,7 @@ impl ZipContainer {
     }
 
     #[cfg(feature = "std-fs")]
-    pub fn open_from_path(
-        path: impl AsRef<std::path::Path>,
-    ) -> Result<Self, ContainerError> {
+    pub fn open_from_path(path: impl AsRef<std::path::Path>) -> Result<Self, ContainerError> {
         Self::open_from_path_with_limits(path, ContainerLimits::default())
     }
 
@@ -147,7 +143,7 @@ impl ZipContainer {
 
     pub fn read_file(&mut self, name: &str) -> Result<Vec<u8>, ZipError> {
         let mut file = self.archive.by_name(name)?;
-        let mut buf = Vec::new();
+        let mut buf = Vec::with_capacity(usize::try_from(file.size()).unwrap_or(0));
         file.read_to_end(&mut buf)?;
         Ok(buf)
     }
@@ -160,7 +156,10 @@ impl ZipContainer {
         })
     }
 
-    pub fn file_fingerprint_checked(&mut self, name: &str) -> Result<ZipEntryFingerprint, ContainerError> {
+    pub fn file_fingerprint_checked(
+        &mut self,
+        name: &str,
+    ) -> Result<ZipEntryFingerprint, ContainerError> {
         let file = self.archive.by_name(name).map_err(|e| match e {
             ZipError::FileNotFound => ContainerError::FileNotFound {
                 path: name.to_string(),
@@ -202,22 +201,20 @@ impl ZipContainer {
     }
 
     pub fn read_file_checked(&mut self, name: &str) -> Result<Vec<u8>, ContainerError> {
-        let size = {
-            let file = self.archive.by_name(name).map_err(|e| match e {
-                ZipError::FileNotFound => ContainerError::FileNotFound {
-                    path: name.to_string(),
-                },
-                ZipError::Io(io_err) => ContainerError::ZipRead {
-                    path: name.to_string(),
-                    reason: io_err.to_string(),
-                },
-                other => ContainerError::ZipRead {
-                    path: name.to_string(),
-                    reason: other.to_string(),
-                },
-            })?;
-            file.size()
-        };
+        let mut file = self.archive.by_name(name).map_err(|e| match e {
+            ZipError::FileNotFound => ContainerError::FileNotFound {
+                path: name.to_string(),
+            },
+            ZipError::Io(io_err) => ContainerError::ZipRead {
+                path: name.to_string(),
+                reason: io_err.to_string(),
+            },
+            other => ContainerError::ZipRead {
+                path: name.to_string(),
+                reason: other.to_string(),
+            },
+        })?;
+        let size = file.size();
 
         if size > self.limits.max_part_uncompressed_bytes {
             return Err(ContainerError::PartTooLarge {
@@ -234,16 +231,12 @@ impl ZipContainer {
             });
         }
 
-        let mut file = self.archive.by_name(name).map_err(|e| ContainerError::ZipRead {
-            path: name.to_string(),
-            reason: e.to_string(),
-        })?;
-
-        let mut buf = Vec::new();
-        file.read_to_end(&mut buf).map_err(|e| ContainerError::ZipRead {
-            path: name.to_string(),
-            reason: e.to_string(),
-        })?;
+        let mut buf = Vec::with_capacity(usize::try_from(size).unwrap_or(0));
+        file.read_to_end(&mut buf)
+            .map_err(|e| ContainerError::ZipRead {
+                path: name.to_string(),
+                reason: e.to_string(),
+            })?;
 
         self.total_read = new_total;
         Ok(buf)
@@ -354,7 +347,10 @@ impl OpcContainer {
         self.inner.file_fingerprint(name)
     }
 
-    pub fn file_fingerprint_checked(&mut self, name: &str) -> Result<ZipEntryFingerprint, ContainerError> {
+    pub fn file_fingerprint_checked(
+        &mut self,
+        name: &str,
+    ) -> Result<ZipEntryFingerprint, ContainerError> {
         self.inner.file_fingerprint_checked(name)
     }
 
@@ -401,8 +397,8 @@ impl OpcContainer {
 mod tests {
     use super::ZipContainer;
     use std::io::{Cursor, Write};
-    use zip::CompressionMethod;
     use zip::write::FileOptions;
+    use zip::CompressionMethod;
     use zip::ZipWriter;
 
     fn make_zip(entries: &[(&str, &str)]) -> Vec<u8> {

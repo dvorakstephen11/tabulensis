@@ -67,7 +67,7 @@
           status.textContent = "";
         }
         try {
-          const res = await fetch("/portal/session", {
+          const res = await fetch("https://license.tabulensis.com/portal/session", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({

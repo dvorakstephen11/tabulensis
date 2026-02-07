@@ -1,0 +1,13 @@
+{
+  "name": "Compare Working",
+  "description": "Captures a mid-run progress state to validate stage labels + progress gauge behavior.",
+  "oldPath": "../../../fixtures/generated/e2e_p2_noise_a.xlsx",
+  "newPath": "../../../fixtures/generated/e2e_p2_noise_b.xlsx",
+  "autoRunDiff": true,
+  "readyOnStage": "diff",
+  "stableWaitMs": 400,
+  "expectMode": "large",
+  "focusPanel": "summary",
+  "preset": "balanced",
+  "trustedFiles": true
+}

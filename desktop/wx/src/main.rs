@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::cmp::Reverse;
 use std::ffi::CString;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -9,7 +10,7 @@ use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -22,9 +23,9 @@ mod xrc_validation;
 
 use desktop_backend::{
     BackendConfig, BatchOutcome, BatchRequest, CellsRangeRequest, DesktopBackend, DiffErrorPayload,
-    DiffMode, DiffOutcome, DiffRequest, DiffRunSummary, OpsRangeRequest, ProgressRx, RangeBounds,
-    RecentComparison, SearchIndexResult, SearchIndexSummary, SearchResult, SheetMetaRequest,
-    SheetPayloadRequest,
+    DiffMode, DiffOutcome, DiffRequest, DiffRunSummary, OpsRangeRequest, ProgressEvent, ProgressRx,
+    RangeBounds, RecentComparison, SearchIndexResult, SearchIndexSummary, SearchResult,
+    SheetMetaRequest, SheetPayloadRequest,
 };
 use dev_scenario::{load_from_env as load_dev_scenario, UiScenario};
 use license_client::LicenseClient;
@@ -33,7 +34,7 @@ use logic::{base_name, parse_globs, preset_from_selection};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use ui_payload::{DiffOptions, DiffPreset};
-use wxdragon::event::WebViewEvents;
+use wxdragon::event::{TextEvents, WebViewEvents};
 use wxdragon::prelude::*;
 use wxdragon::widgets::dataview::{CustomDataViewVirtualListModel, DataViewItemAttr, Variant};
 use wxdragon::widgets::{WebView, WebViewBackend, WebViewUserScriptInjectionTime};
@@ -96,6 +97,57 @@ const GUIDED_EMPTY_SUMMARY: &str =
     "Select Old and New files, pick a preset, then click Compare (F5).\n\nTip: Use Swap to flip Old/New.";
 const GUIDED_EMPTY_DETAILS: &str =
     "After comparing, select a sheet to see details.\n\nSelect Old and New files, pick a preset, then click Compare (F5).";
+
+static PROGRESS_ANIM_GEN: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProgressStage {
+    Read,
+    Parse,
+    Diff,
+    Snapshot,
+    Batch,
+    Other,
+}
+
+impl ProgressStage {
+    fn from_stage_name(value: &str) -> Self {
+        match value.trim().to_lowercase().as_str() {
+            "read" => Self::Read,
+            "parse" => Self::Parse,
+            "diff" => Self::Diff,
+            "snapshot" => Self::Snapshot,
+            "batch" => Self::Batch,
+            _ => Self::Other,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Read => "Read",
+            Self::Parse => "Parse",
+            Self::Diff => "Diff",
+            Self::Snapshot => "Snapshot",
+            Self::Batch => "Batch",
+            Self::Other => "Working",
+        }
+    }
+
+    fn gauge_bounds(self) -> (i32, i32) {
+        match self {
+            // Short, usually IO-bound.
+            Self::Read => (0, 25),
+            // Most of the runtime for OpenXML workbooks; give it most of the bar range.
+            Self::Parse => (25, 85),
+            // Most of the runtime; keep the bar moving over most of the range.
+            Self::Diff => (25, 85),
+            // Usually quick, but make it feel "near the end".
+            Self::Snapshot => (85, 100),
+            Self::Batch => (0, 100),
+            Self::Other => (0, 100),
+        }
+    }
+}
 
 fn show_startup_error(message: &str) -> ! {
     show_startup_error_with_parent(None, message)
@@ -160,6 +212,14 @@ struct MainUi {
     trusted_checkbox: CheckBox,
     progress_gauge: Gauge,
     progress_text: StaticText,
+    run_summary_old: StaticText,
+    run_summary_new: StaticText,
+    run_summary_meta: StaticText,
+    sheets_filter_ctrl: SearchCtrl,
+    sheets_filter_status: StaticText,
+    sheets_empty_panel: Panel,
+    sheets_empty_text: StaticText,
+    sheets_table_host: Panel,
     result_tabs: Notebook,
     summary_text: TextCtrl,
     detail_text: TextCtrl,
@@ -331,6 +391,18 @@ impl MainUi {
         let summary_text = find_xrc_child::<TextCtrl>(&compare_container, "summary_text");
         let detail_text = find_xrc_child::<TextCtrl>(&compare_container, "detail_text");
         let grid_panel = find_xrc_child::<Panel>(&compare_container, "grid_panel");
+        let run_summary_header = find_xrc_child::<Panel>(&compare_container, "run_summary_header");
+        let run_summary_old = find_xrc_child::<StaticText>(&compare_container, "run_summary_old");
+        let run_summary_new = find_xrc_child::<StaticText>(&compare_container, "run_summary_new");
+        let run_summary_meta = find_xrc_child::<StaticText>(&compare_container, "run_summary_meta");
+        let sheets_filter_ctrl =
+            find_xrc_child::<SearchCtrl>(&compare_container, "sheets_filter_ctrl");
+        let sheets_filter_status =
+            find_xrc_child::<StaticText>(&compare_container, "sheets_filter_status");
+        let sheets_empty_panel = find_xrc_child::<Panel>(&compare_container, "sheets_empty_panel");
+        let sheets_empty_text =
+            find_xrc_child::<StaticText>(&compare_container, "sheets_empty_text");
+        let sheets_table_host = find_xrc_child::<Panel>(&compare_container, "sheets_table_host");
 
         let recents_list = find_xrc_child::<Panel>(&recents_page, "recents_list");
         let open_recent_btn = find_xrc_child::<Button>(&recents_page, "open_recent_btn");
@@ -369,6 +441,7 @@ impl MainUi {
         theme::apply_surface(&batch_page);
         theme::apply_surface(&search_page);
         theme::apply_surface(&compare_container);
+        theme::apply_surface(&run_summary_header);
         theme::apply_surface(&sheets_list);
         theme::apply_surface(&compare_right_panel);
         theme::apply_surface(&grid_panel);
@@ -385,10 +458,15 @@ impl MainUi {
         if let Some(font) = FontBuilder::default().with_weight(FontWeight::Bold).build() {
             old_label.set_font(&font);
             new_label.set_font(&font);
+            run_summary_old.set_font(&font);
+            run_summary_new.set_font(&font);
         }
         old_label.set_foreground_color(theme::Palette::TEXT_PRIMARY);
         new_label.set_foreground_color(theme::Palette::TEXT_PRIMARY);
         compare_help_text.set_foreground_color(theme::Palette::TEXT_SECONDARY);
+        run_summary_old.set_foreground_color(theme::Palette::TEXT_PRIMARY);
+        run_summary_new.set_foreground_color(theme::Palette::TEXT_PRIMARY);
+        run_summary_meta.set_foreground_color(theme::Palette::TEXT_SECONDARY);
 
         let old_tip = "Old: baseline workbook (before).";
         let new_tip = "New: updated workbook (after).";
@@ -397,6 +475,22 @@ impl MainUi {
         new_label.set_tooltip(new_tip);
         new_picker.set_tooltip(new_tip);
         swap_btn.set_tooltip("Swap Old and New paths.");
+
+        sheets_filter_ctrl.set_tooltip("Filter sheets by name or counts (e.g., Pivot or 12).");
+        sheets_filter_ctrl.show_search_button(false);
+        sheets_filter_ctrl.show_cancel_button(true);
+        sheets_filter_ctrl.set_background_color(theme::Palette::CONTENT_BG);
+        sheets_filter_ctrl.set_background_style(BackgroundStyle::Colour);
+        sheets_filter_ctrl.set_foreground_color(theme::Palette::TEXT_PRIMARY);
+        sheets_filter_status.set_foreground_color(theme::Palette::TEXT_SECONDARY);
+        sheets_empty_text.set_foreground_color(theme::Palette::TEXT_SECONDARY);
+
+        // Make the empty + table areas read as a single content surface (white), like the other
+        // DataView-backed panels.
+        sheets_table_host.set_background_color(theme::Palette::CONTENT_BG);
+        sheets_table_host.set_background_style(BackgroundStyle::Colour);
+        sheets_empty_panel.set_background_color(theme::Palette::CONTENT_BG);
+        sheets_empty_panel.set_background_style(BackgroundStyle::Colour);
 
         trusted_checkbox.set_foreground_color(theme::Palette::TEXT_PRIMARY);
         include_glob_label.set_foreground_color(theme::Palette::TEXT_SECONDARY);
@@ -448,6 +542,14 @@ impl MainUi {
             trusted_checkbox,
             progress_gauge,
             progress_text,
+            run_summary_old,
+            run_summary_new,
+            run_summary_meta,
+            sheets_filter_ctrl,
+            sheets_filter_status,
+            sheets_empty_panel,
+            sheets_empty_text,
+            sheets_table_host,
             result_tabs,
             summary_text,
             detail_text,
@@ -703,6 +805,9 @@ struct UiHandles {
     compare_help_text: StaticText,
     preset_choice: Choice,
     trusted_checkbox: CheckBox,
+    run_summary_old: StaticText,
+    run_summary_new: StaticText,
+    run_summary_meta: StaticText,
     summary_text: TextCtrl,
     detail_text: TextCtrl,
     grid_panel: Panel,
@@ -710,6 +815,11 @@ struct UiHandles {
     compare_container: Panel,
     result_tabs: Notebook,
     sheets_list_panel: Panel,
+    sheets_table_host: Panel,
+    sheets_filter_ctrl: SearchCtrl,
+    sheets_filter_status: StaticText,
+    sheets_empty_panel: Panel,
+    sheets_empty_text: StaticText,
     recents_list_panel: Panel,
     batch_results_list_panel: Panel,
     search_results_list_panel: Panel,
@@ -736,7 +846,39 @@ struct UiHandles {
 }
 
 struct ActiveRun {
+    run_id: u64,
+    stage: ProgressStage,
     cancel: Arc<AtomicBool>,
+    cancel_requested: bool,
+}
+
+#[derive(Debug, Clone)]
+struct SheetRow {
+    sheet_name: String,
+    op_count: u64,
+    added: u64,
+    removed: u64,
+    modified: u64,
+    moved: u64,
+}
+
+struct CancelRestoreSnapshot {
+    current_diff_id: Option<String>,
+    current_mode: Option<DiffMode>,
+    current_summary: Option<DiffRunSummary>,
+    current_payload: Option<Arc<ui_payload::DiffWithSheets>>,
+    pending_detail_payload: Option<Arc<ui_payload::DiffWithSheets>>,
+    pending_detail_sheet_name: Option<String>,
+    pending_detail_payload_gen: u64,
+    pending_detail_json: Option<String>,
+    pending_detail_json_gen: Option<u64>,
+    sheet_names: Vec<String>,
+    sheets_all: Vec<SheetRow>,
+    sheets_filter: String,
+    summary_text: String,
+    detail_text: String,
+    selected_sheet: Option<String>,
+    result_tab: usize,
 }
 
 struct AppState {
@@ -744,13 +886,21 @@ struct AppState {
     engine_version: String,
     run_counter: u64,
     active_run: Option<ActiveRun>,
+    cancel_restore_snapshot: Option<CancelRestoreSnapshot>,
     current_diff_id: Option<String>,
     current_mode: Option<DiffMode>,
     current_summary: Option<DiffRunSummary>,
-    current_payload: Option<ui_payload::DiffWithSheets>,
-    pending_detail_payload: Option<ui_payload::DiffWithSheets>,
+    current_payload: Option<Arc<ui_payload::DiffWithSheets>>,
+    pending_detail_payload: Option<Arc<ui_payload::DiffWithSheets>>,
     pending_detail_sheet_name: Option<String>,
+    pending_detail_payload_gen: u64,
+    pending_detail_render_epoch: u64,
+    pending_detail_json: Option<String>,
+    pending_detail_json_gen: Option<u64>,
+    pending_detail_json_inflight_gen: Option<u64>,
     sheet_names: Vec<String>,
+    sheets_all: Vec<SheetRow>,
+    sheets_filter: String,
     recents: Vec<RecentComparison>,
     search_old_index: Option<SearchIndexSummary>,
     search_new_index: Option<SearchIndexSummary>,
@@ -793,20 +943,148 @@ fn update_status_in_ctx(ctx: &mut UiContext, message: &str) {
     ctx.ui.status_bar.set_status_text(message, 0);
 }
 
+fn update_run_summary_header_in_ctx(ctx: &mut UiContext) {
+    let old_path = ctx.ui.old_picker.get_path();
+    let new_path = ctx.ui.new_picker.get_path();
+
+    if old_path.trim().is_empty() {
+        ctx.ui.run_summary_old.set_label("Old: -");
+        ctx.ui.run_summary_old.set_tooltip("");
+    } else {
+        ctx.ui
+            .run_summary_old
+            .set_label(&format!("Old: {}", base_name(&old_path)));
+        ctx.ui.run_summary_old.set_tooltip(&old_path);
+    }
+
+    if new_path.trim().is_empty() {
+        ctx.ui.run_summary_new.set_label("New: -");
+        ctx.ui.run_summary_new.set_tooltip("");
+    } else {
+        ctx.ui
+            .run_summary_new
+            .set_label(&format!("New: {}", base_name(&new_path)));
+        ctx.ui.run_summary_new.set_tooltip(&new_path);
+    }
+
+    let meta = if let Some(active) = ctx.state.active_run.as_ref() {
+        if active.cancel_requested {
+            "Cancel requested (finishing current step)...".to_string()
+        } else {
+            "Comparing...".to_string()
+        }
+    } else if let Some(summary) = ctx.state.current_summary.as_ref() {
+        let complete = if summary.complete { "yes" } else { "no" };
+        format!(
+            "Mode: {} | {} ops | +{} -{} ~{} ↔{} | Warnings: {} | Complete: {}",
+            summary.mode.as_str(),
+            summary.op_count,
+            summary.counts.added,
+            summary.counts.removed,
+            summary.counts.modified,
+            summary.counts.moved,
+            summary.warnings.len(),
+            complete
+        )
+    } else {
+        "Mode: - | Ops: - | Warnings: - | Complete: -".to_string()
+    };
+    ctx.ui.run_summary_meta.set_label(&meta);
+}
+
+fn sync_sheets_filter_status_in_ctx(ctx: &mut UiContext) {
+    let total = ctx.state.sheets_all.len();
+    let shown = ctx.state.sheet_names.len();
+    let filter = ctx.state.sheets_filter.trim();
+
+    let status = if total == 0 {
+        "Sheets: none".to_string()
+    } else if filter.is_empty() {
+        format!("Sheets: {total} (sorted by ops)")
+    } else {
+        format!("Sheets: {shown} of {total}")
+    };
+    ctx.ui.sheets_filter_status.set_label(&status);
+
+    let filter_status = if filter.is_empty() {
+        "Filter: none".to_string()
+    } else {
+        format!("Filter: {filter}")
+    };
+    ctx.ui.status_bar.set_status_text(&filter_status, 2);
+}
+
+fn sync_sheets_panel_state_in_ctx(ctx: &mut UiContext) {
+    let total = ctx.state.sheets_all.len();
+    let shown = ctx.state.sheet_names.len();
+    let filter = ctx.state.sheets_filter.trim();
+    let has_run = ctx.state.current_summary.is_some();
+
+    if let Some(active) = ctx.state.active_run.as_ref() {
+        ctx.ui.sheets_table_host.show(false);
+        ctx.ui.sheets_empty_panel.show(true);
+        if active.cancel_requested {
+            ctx.ui
+                .sheets_empty_text
+                .set_label("Cancel requested (finishing current step)...");
+        } else {
+            ctx.ui.sheets_empty_text.set_label("Comparing...");
+        }
+        ctx.ui.sheets_filter_ctrl.enable(false);
+    } else if total == 0 {
+        ctx.ui.sheets_table_host.show(false);
+        ctx.ui.sheets_empty_panel.show(true);
+        ctx.ui.sheets_filter_ctrl.enable(false);
+        if let Some(summary) = ctx.state.current_summary.as_ref() {
+            if summary.op_count == 0 {
+                ctx.ui
+                    .sheets_empty_text
+                    .set_label("No differences detected.");
+            } else {
+                ctx.ui
+                    .sheets_empty_text
+                    .set_label("No sheet-level changes were detected.");
+            }
+        } else if !has_run {
+            ctx.ui
+                .sheets_empty_text
+                .set_label("Run Compare to list changed sheets.");
+        }
+    } else if shown == 0 && !filter.is_empty() {
+        ctx.ui.sheets_table_host.show(false);
+        ctx.ui.sheets_empty_panel.show(true);
+        ctx.ui.sheets_filter_ctrl.enable(true);
+        ctx.ui
+            .sheets_empty_text
+            .set_label("No sheets match the current filter.");
+    } else {
+        ctx.ui.sheets_table_host.show(true);
+        ctx.ui.sheets_empty_panel.show(false);
+        ctx.ui.sheets_filter_ctrl.enable(true);
+    }
+
+    sync_sheets_filter_status_in_ctx(ctx);
+    ctx.ui.sheets_list_panel.layout();
+    ctx.ui.compare_container.layout();
+}
+
 fn sync_compare_controls_in_ctx(ctx: &mut UiContext) {
     let old_ok = !ctx.ui.old_picker.get_path().trim().is_empty();
     let new_ok = !ctx.ui.new_picker.get_path().trim().is_empty();
-    let running = ctx.state.active_run.is_some();
+    let (running, cancel_requested) = match ctx.state.active_run.as_ref() {
+        Some(active) => (true, active.cancel_requested),
+        None => (false, false),
+    };
 
     let can_compare = old_ok && new_ok && !running;
     ctx.ui.compare_btn.enable(can_compare);
-    ctx.ui.cancel_btn.enable(running);
+    ctx.ui.cancel_btn.enable(running && !cancel_requested);
     ctx.ui.swap_btn.enable(!running && (old_ok || new_ok));
 
     // MenuItem wrappers loaded via XRC can't be enabled/disabled directly; use the MenuBar.
     if let Some(menu_bar) = ctx.ui.frame.get_menu_bar() {
         let _ = menu_bar.enable_item(ctx.ui.compare_menu.get_id(), can_compare);
-        let _ = menu_bar.enable_item(ctx.ui.cancel_menu.get_id(), running);
+        let _ = menu_bar.enable_item(ctx.ui.cancel_menu.get_id(), running && !cancel_requested);
     }
 
     let (help_label, show_help) = if running {
@@ -830,10 +1108,134 @@ fn sync_compare_controls_in_ctx(ctx: &mut UiContext) {
         ctx.ui.compare_container.layout();
         ctx.ui.frame.layout();
     }
+
+    update_run_summary_header_in_ctx(ctx);
+    sync_sheets_panel_state_in_ctx(ctx);
 }
 
-fn sync_compare_controls() {
-    let _ = with_ui_context(|ctx| sync_compare_controls_in_ctx(ctx));
+fn clear_diff_results_in_ctx(ctx: &mut UiContext) {
+    ctx.state.current_diff_id = None;
+    ctx.state.current_mode = None;
+    ctx.state.current_summary = None;
+    ctx.state.current_payload = None;
+    ctx.state.pending_detail_payload = None;
+    ctx.state.pending_detail_sheet_name = None;
+    ctx.state.pending_detail_payload_gen = ctx.state.pending_detail_payload_gen.wrapping_add(1);
+    ctx.state.pending_detail_render_epoch = ctx.state.pending_detail_render_epoch.wrapping_add(1);
+    ctx.state.pending_detail_json = None;
+    ctx.state.pending_detail_json_gen = None;
+    ctx.state.pending_detail_json_inflight_gen = None;
+
+    ctx.state.sheets_all.clear();
+    ctx.state.sheet_names.clear();
+    ctx.state.sheets_filter.clear();
+    ctx.ui.sheets_filter_ctrl.set_value("");
+
+    if let Some(view) = ctx.ui.sheets_view {
+        view.unselect_all();
+    }
+    if let Some(table) = ctx.state.sheets_table.as_mut() {
+        update_virtual_table(table, Vec::new());
+    }
+
+    ctx.ui.summary_text.set_value(GUIDED_EMPTY_SUMMARY);
+    ctx.ui.detail_text.set_value(GUIDED_EMPTY_DETAILS);
+    render_grid_placeholder(ctx, "Run a diff to preview grid changes.");
+    update_status_counts_in_ctx(ctx, None);
+    update_run_summary_header_in_ctx(ctx);
+    sync_sheets_panel_state_in_ctx(ctx);
+}
+
+fn take_cancel_restore_snapshot_in_ctx(ctx: &mut UiContext) -> CancelRestoreSnapshot {
+    let selected_sheet = ctx
+        .ui
+        .sheets_view
+        .and_then(|view| view.get_selected_row())
+        .and_then(|row| ctx.state.sheet_names.get(row).cloned());
+
+    CancelRestoreSnapshot {
+        current_diff_id: ctx.state.current_diff_id.take(),
+        current_mode: ctx.state.current_mode.take(),
+        current_summary: ctx.state.current_summary.take(),
+        current_payload: ctx.state.current_payload.take(),
+        pending_detail_payload: ctx.state.pending_detail_payload.take(),
+        pending_detail_sheet_name: ctx.state.pending_detail_sheet_name.take(),
+        pending_detail_payload_gen: ctx.state.pending_detail_payload_gen,
+        pending_detail_json: ctx.state.pending_detail_json.take(),
+        pending_detail_json_gen: ctx.state.pending_detail_json_gen.take(),
+        sheet_names: std::mem::take(&mut ctx.state.sheet_names),
+        sheets_all: std::mem::take(&mut ctx.state.sheets_all),
+        sheets_filter: std::mem::take(&mut ctx.state.sheets_filter),
+        summary_text: ctx.ui.summary_text.get_value(),
+        detail_text: ctx.ui.detail_text.get_value(),
+        selected_sheet,
+        result_tab: usize::try_from(ctx.ui.result_tabs.selection()).unwrap_or(0),
+    }
+}
+
+fn restore_cancel_snapshot_in_ctx(ctx: &mut UiContext, snapshot: CancelRestoreSnapshot) {
+    ctx.state.current_diff_id = snapshot.current_diff_id;
+    ctx.state.current_mode = snapshot.current_mode;
+    ctx.state.current_summary = snapshot.current_summary;
+    ctx.state.current_payload = snapshot.current_payload;
+    ctx.state.pending_detail_payload = snapshot.pending_detail_payload;
+    ctx.state.pending_detail_sheet_name = snapshot.pending_detail_sheet_name;
+    ctx.state.pending_detail_payload_gen = snapshot.pending_detail_payload_gen;
+    ctx.state.pending_detail_json = snapshot.pending_detail_json;
+    ctx.state.pending_detail_json_gen = snapshot.pending_detail_json_gen;
+    ctx.state.pending_detail_json_inflight_gen = None;
+    ctx.state.sheet_names = snapshot.sheet_names;
+    ctx.state.sheets_all = snapshot.sheets_all;
+    ctx.state.sheets_filter = snapshot.sheets_filter;
+
+    ctx.ui.summary_text.set_value(&snapshot.summary_text);
+    ctx.ui.detail_text.set_value(&snapshot.detail_text);
+    ctx.ui
+        .sheets_filter_ctrl
+        .set_value(&ctx.state.sheets_filter);
+    ctx.ui.result_tabs.set_selection(snapshot.result_tab);
+
+    // Ensure the virtual table matches the restored sheet list.
+    rebuild_sheet_list_in_ctx(ctx);
+
+    if let Some(selected_sheet) = snapshot.selected_sheet {
+        if let Some(idx) = ctx
+            .state
+            .sheet_names
+            .iter()
+            .position(|name| name == &selected_sheet)
+        {
+            if let Some(view) = ctx.ui.sheets_view {
+                let _ = view.select_row(idx);
+            }
+        }
+    }
+
+    if ctx.ui.result_tabs.selection() == RESULT_TAB_GRID {
+        render_grid_for_current_selection(ctx);
+    }
+    if ctx.ui.result_tabs.selection() == RESULT_TAB_DETAILS {
+        render_staged_detail_payload(ctx);
+    }
+
+    // Clone to avoid holding an immutable borrow across the `&mut UiContext` call.
+    let summary_for_status = ctx.state.current_summary.clone();
+    update_status_counts_in_ctx(ctx, summary_for_status.as_ref());
+    update_run_summary_header_in_ctx(ctx);
+    sync_sheets_panel_state_in_ctx(ctx);
+}
+
+fn handle_compare_inputs_changed() {
+    // Some controls emit change events synchronously when their value is set programmatically.
+    // Always defer to avoid re-entrant `with_ui_context()` borrows.
+    wxdragon::call_after(Box::new(|| {
+        let _ = with_ui_context(|ctx| {
+            if ctx.state.active_run.is_none() {
+                clear_diff_results_in_ctx(ctx);
+            }
+            sync_compare_controls_in_ctx(ctx);
+        });
+    }));
 }
 
 fn update_status_counts_in_ctx(ctx: &mut UiContext, summary: Option<&DiffRunSummary>) {
@@ -850,7 +1252,7 @@ fn update_status_counts_in_ctx(ctx: &mut UiContext, summary: Option<&DiffRunSumm
     } else {
         ctx.ui.status_bar.set_status_text("", 1);
     }
-    ctx.ui.status_bar.set_status_text("Filters: none", 2);
+    sync_sheets_filter_status_in_ctx(ctx);
 }
 
 fn update_status(message: &str) {
@@ -860,6 +1262,10 @@ fn update_status(message: &str) {
 
 fn format_summary_text(summary: &DiffRunSummary) -> String {
     let mut lines = Vec::new();
+    if summary.op_count == 0 {
+        lines.push("No differences detected.".to_string());
+        lines.push(String::new());
+    }
     lines.push(format!("Diff ID: {}", summary.diff_id));
     lines.push(format!("Mode: {}", summary.mode.as_str()));
     lines.push(format!("Status: {:?}", summary.status));
@@ -908,8 +1314,13 @@ fn stage_detail_payload(
     payload: ui_payload::DiffWithSheets,
 ) {
     ctx.state.pending_detail_sheet_name = Some(sheet_name.clone());
-    ctx.state.pending_detail_payload = Some(payload);
-    if ctx.ui.result_tabs.selection() == 1 {
+    ctx.state.pending_detail_payload = Some(Arc::new(payload));
+    ctx.state.pending_detail_payload_gen = ctx.state.pending_detail_payload_gen.wrapping_add(1);
+    ctx.state.pending_detail_json = None;
+    ctx.state.pending_detail_json_gen = None;
+    ctx.state.pending_detail_json_inflight_gen = None;
+
+    if ctx.ui.result_tabs.selection() == RESULT_TAB_DETAILS {
         render_staged_detail_payload(ctx);
         return;
     }
@@ -921,7 +1332,7 @@ fn stage_detail_payload(
 }
 
 fn render_staged_detail_payload(ctx: &mut UiContext) {
-    let Some(payload) = ctx.state.pending_detail_payload.as_ref() else {
+    let Some(payload) = ctx.state.pending_detail_payload.as_ref().cloned() else {
         return;
     };
     let sheet_name = ctx
@@ -929,9 +1340,60 @@ fn render_staged_detail_payload(ctx: &mut UiContext) {
         .pending_detail_sheet_name
         .clone()
         .unwrap_or_else(|| "sheet".to_string());
-    let text = serde_json::to_string_pretty(payload).unwrap_or_else(|_| "{}".to_string());
-    ctx.ui.detail_text.set_value(&text);
-    update_status_in_ctx(ctx, &format!("Sheet payload loaded: {sheet_name}."));
+
+    let gen = ctx.state.pending_detail_payload_gen;
+    let epoch = ctx.state.pending_detail_render_epoch;
+    if ctx.state.pending_detail_json_gen == Some(gen) {
+        if let Some(rendered) = ctx.state.pending_detail_json.as_ref() {
+            if ctx.ui.detail_text.get_value() != rendered.as_str() {
+                ctx.ui.detail_text.set_value(rendered);
+            }
+            update_status_in_ctx(ctx, &format!("Sheet payload loaded: {sheet_name}."));
+        }
+        return;
+    }
+
+    if ctx.state.pending_detail_json_inflight_gen == Some(gen) {
+        if ctx.ui.detail_text.get_value().trim() != "Rendering JSON..." {
+            ctx.ui.detail_text.set_value("Rendering JSON...");
+        }
+        update_status_in_ctx(ctx, &format!("Rendering JSON: {sheet_name}..."));
+        return;
+    }
+
+    ctx.state.pending_detail_json_inflight_gen = Some(gen);
+    ctx.ui.detail_text.set_value("Rendering JSON...");
+    update_status_in_ctx(ctx, &format!("Rendering JSON: {sheet_name}..."));
+
+    let sheet_name_render = sheet_name.clone();
+    thread::spawn(move || {
+        let text = serde_json::to_string_pretty(payload.as_ref())
+            .unwrap_or_else(|_| "{\"error\":\"failed to serialize payload\"}".to_string());
+        wxdragon::call_after(Box::new(move || {
+            let _ = with_ui_context(|ctx| {
+                if ctx.state.pending_detail_render_epoch != epoch {
+                    return;
+                }
+                if ctx.state.pending_detail_payload_gen != gen {
+                    return;
+                }
+                if ctx.state.pending_detail_sheet_name.as_deref()
+                    != Some(sheet_name_render.as_str())
+                {
+                    return;
+                }
+                ctx.state.pending_detail_json = Some(text);
+                ctx.state.pending_detail_json_gen = Some(gen);
+                if ctx.state.pending_detail_json_inflight_gen == Some(gen) {
+                    ctx.state.pending_detail_json_inflight_gen = None;
+                }
+                if let Some(rendered) = ctx.state.pending_detail_json.as_ref() {
+                    ctx.ui.detail_text.set_value(rendered);
+                }
+                update_status_in_ctx(ctx, &format!("Sheet payload loaded: {sheet_name_render}."));
+            });
+        }));
+    });
 }
 
 fn ensure_grid_preview_ready(ctx: &mut UiContext) {
@@ -1643,7 +2105,9 @@ fn send_progress_to_webview(webview: WebView, rx: ProgressRx, run_id: u64) {
                 "status",
                 json!({
                     "stage": event.stage,
+                    "phase": event.phase,
                     "detail": event.detail,
+                    "percent": event.percent,
                     "source": "desktop"
                 }),
             );
@@ -1741,7 +2205,10 @@ fn handle_webview_rpc(webview: WebView, message: String) {
                 let run_id = ctx.state.run_counter;
                 let cancel = Arc::new(AtomicBool::new(false));
                 ctx.state.active_run = Some(ActiveRun {
+                    run_id,
+                    stage: ProgressStage::Read,
                     cancel: cancel.clone(),
+                    cancel_requested: false,
                 });
 
                 let options = params.options.unwrap_or_default();
@@ -2307,11 +2774,154 @@ fn update_virtual_table(table: &mut VirtualTable, rows: Vec<Vec<String>>) {
     table.model.reset(size);
 }
 
+fn progress_animation_enabled() -> bool {
+    // Avoid non-deterministic visual diffs during headless capture.
+    env_string("EXCEL_DIFF_DEV_SCENARIO").is_none()
+        && env_string("EXCEL_DIFF_UI_READY_FILE").is_none()
+}
+
+fn stop_progress_animation() {
+    PROGRESS_ANIM_GEN.fetch_add(1, Ordering::SeqCst);
+}
+
+fn start_progress_animation() {
+    let gen = PROGRESS_ANIM_GEN
+        .fetch_add(1, Ordering::SeqCst)
+        .wrapping_add(1);
+
+    if !progress_animation_enabled() {
+        return;
+    }
+
+    thread::spawn(move || {
+        let mut tick: u64 = 0;
+        loop {
+            if PROGRESS_ANIM_GEN.load(Ordering::Relaxed) != gen {
+                break;
+            }
+
+            let tick_now = tick;
+            wxdragon::call_after(Box::new(move || {
+                if PROGRESS_ANIM_GEN.load(Ordering::Relaxed) != gen {
+                    return;
+                }
+                let _ = with_ui_context(|ctx| {
+                    let Some(active) = ctx.state.active_run.as_ref() else {
+                        return;
+                    };
+                    let (min, max) = active.stage.gauge_bounds();
+                    if max <= min {
+                        ctx.ui.progress_gauge.set_value(min);
+                        return;
+                    }
+
+                    let span = (max - min) as u64;
+                    let cycle = (tick_now % (span.saturating_mul(2))) as i32;
+                    let offset = if cycle <= span as i32 {
+                        cycle
+                    } else {
+                        (span as i32).saturating_mul(2).saturating_sub(cycle)
+                    };
+
+                    let value = min.saturating_add(offset).min(max);
+                    ctx.ui.progress_gauge.set_value(value);
+                });
+            }));
+
+            tick = tick.wrapping_add(1);
+            thread::sleep(Duration::from_millis(90));
+        }
+    });
+}
+
+fn format_progress_message(event: &ProgressEvent) -> String {
+    let stage = ProgressStage::from_stage_name(&event.stage);
+    let mut prefix = stage.label().to_string();
+
+    let phase = event
+        .phase
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(phase) = phase {
+        prefix.push_str(" (");
+        prefix.push_str(phase);
+        prefix.push(')');
+    }
+
+    let detail = event.detail.trim();
+    if detail.is_empty() {
+        prefix
+    } else {
+        format!("{prefix}: {detail}")
+    }
+}
+
+fn handle_progress_event(event: ProgressEvent) {
+    let mut ready_reason: Option<&'static str> = None;
+    let _ = with_ui_context(|ctx| {
+        // When running under the UI capture harness, freeze once we've signaled readiness so the
+        // screenshot is deterministic (important for "working" mid-run captures).
+        if ctx.state.dev_ready_file.is_some() && ctx.state.dev_ready_fired {
+            return;
+        }
+
+        if let Some(active) = ctx.state.active_run.as_mut() {
+            if active.cancel_requested {
+                // Keep cancel messaging stable; don't overwrite with late progress events.
+                return;
+            }
+
+            // Ignore stale progress updates for completed/replaced runs.
+            if event.run_id > 0 && event.run_id != active.run_id {
+                return;
+            }
+
+            if event.run_id == active.run_id {
+                active.stage = ProgressStage::from_stage_name(&event.stage);
+
+                // In capture mode (no animation), set a stable non-zero indicator for "working".
+                if !progress_animation_enabled() {
+                    let (min, max) = active.stage.gauge_bounds();
+                    let value = min.saturating_add(((max - min).max(1)) / 2);
+                    ctx.ui.progress_gauge.set_value(value);
+                }
+            }
+        } else if event.run_id > 0 {
+            // If the run is already over, ignore any straggler events from that run.
+            return;
+        }
+
+        let message = format_progress_message(&event);
+        if ctx.ui.progress_text.get_label() != message {
+            update_status_in_ctx(ctx, &message);
+        }
+
+        let wants_working_ready = ctx.state.dev_ready_file.is_some()
+            && !ctx.state.dev_ready_fired
+            && ctx
+                .state
+                .dev_scenario
+                .as_ref()
+                .and_then(|s| s.ready_on_stage.as_deref())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_some_and(|target| target.eq_ignore_ascii_case(event.stage.trim()));
+
+        if wants_working_ready {
+            ready_reason = Some("working");
+        }
+    });
+
+    if let Some(reason) = ready_reason {
+        mark_ui_ready(reason);
+    }
+}
+
 fn spawn_progress_forwarder(rx: ProgressRx) {
     thread::spawn(move || {
         for event in rx.iter() {
-            let detail = event.detail;
-            wxdragon::call_after(Box::new(move || update_status(&detail)));
+            wxdragon::call_after(Box::new(move || handle_progress_event(event)));
         }
     });
 }
@@ -2322,33 +2932,112 @@ fn preset_from_choice(choice: &Choice) -> DiffPreset {
     preset_from_selection(selection)
 }
 
-fn populate_sheet_list(ctx: &mut UiContext, summary: &DiffRunSummary) {
-    let Some(table) = ctx.state.sheets_table.as_mut() else {
-        debug!("Sheets view not initialized yet.");
+fn sheet_filter_tokens(query: &str) -> Vec<String> {
+    query
+        .split_whitespace()
+        .map(|token| token.trim().to_lowercase())
+        .filter(|token| !token.is_empty())
+        .collect()
+}
+
+fn sheet_matches_filter(sheet: &SheetRow, tokens: &[String]) -> bool {
+    if tokens.is_empty() {
+        return true;
+    }
+
+    // Filter across the full row (name + counts), so users can search by either.
+    let mut haystack = sheet.sheet_name.to_lowercase();
+    haystack.push(' ');
+    haystack.push_str(&sheet.op_count.to_string());
+    haystack.push(' ');
+    haystack.push_str(&sheet.added.to_string());
+    haystack.push(' ');
+    haystack.push_str(&sheet.removed.to_string());
+    haystack.push(' ');
+    haystack.push_str(&sheet.modified.to_string());
+    haystack.push(' ');
+    haystack.push_str(&sheet.moved.to_string());
+
+    tokens.iter().all(|token| haystack.contains(token))
+}
+
+fn rebuild_sheet_list_in_ctx(ctx: &mut UiContext) {
+    let selected_sheet = ctx
+        .ui
+        .sheets_view
+        .and_then(|view| view.get_selected_row())
+        .and_then(|row| ctx.state.sheet_names.get(row).cloned());
+
+    let tokens = sheet_filter_tokens(&ctx.state.sheets_filter);
+
+    let mut sheet_names = Vec::new();
+    let mut rows = Vec::new();
+    for sheet in ctx.state.sheets_all.iter() {
+        if !sheet_matches_filter(sheet, &tokens) {
+            continue;
+        }
+        sheet_names.push(sheet.sheet_name.clone());
+        rows.push(vec![
+            sheet.sheet_name.clone(),
+            sheet.op_count.to_string(),
+            sheet.added.to_string(),
+            sheet.removed.to_string(),
+            sheet.modified.to_string(),
+            sheet.moved.to_string(),
+        ]);
+    }
+
+    ctx.state.sheet_names = sheet_names;
+    if let Some(table) = ctx.state.sheets_table.as_mut() {
+        update_virtual_table(table, rows);
+    }
+
+    // If the selected sheet was filtered away, clear selection and reset the preview.
+    if let Some(view) = ctx.ui.sheets_view {
+        if let Some(selected) = selected_sheet {
+            if let Some(idx) = ctx
+                .state
+                .sheet_names
+                .iter()
+                .position(|name| name == &selected)
+            {
+                let _ = view.select_row(idx);
+            } else {
+                view.unselect_all();
+                render_grid_placeholder(ctx, "Select a sheet to preview grid changes.");
+            }
+        }
+    }
+
+    sync_sheets_panel_state_in_ctx(ctx);
+}
+
+fn set_sheets_filter_query_in_ctx(ctx: &mut UiContext, query: String) {
+    let query = query.trim().to_string();
+    if ctx.state.sheets_filter == query {
         return;
-    };
-    ctx.state.sheet_names = summary
-        .sheets
-        .iter()
-        .map(|sheet| sheet.sheet_name.clone())
-        .collect();
+    }
+    ctx.state.sheets_filter = query;
+    rebuild_sheet_list_in_ctx(ctx);
+}
 
-    let rows = summary
+fn populate_sheet_list(ctx: &mut UiContext, summary: &DiffRunSummary) {
+    ctx.state.sheets_all = summary
         .sheets
         .iter()
-        .map(|sheet| {
-            vec![
-                sheet.sheet_name.clone(),
-                sheet.op_count.to_string(),
-                sheet.counts.added.to_string(),
-                sheet.counts.removed.to_string(),
-                sheet.counts.modified.to_string(),
-                sheet.counts.moved.to_string(),
-            ]
+        .map(|sheet| SheetRow {
+            sheet_name: sheet.sheet_name.clone(),
+            op_count: sheet.op_count,
+            added: sheet.counts.added,
+            removed: sheet.counts.removed,
+            modified: sheet.counts.modified,
+            moved: sheet.counts.moved,
         })
-        .collect::<Vec<_>>();
-
-    update_virtual_table(table, rows);
+        .collect();
+    ctx.state
+        .sheets_all
+        .sort_by_key(|sheet| (Reverse(sheet.op_count), sheet.sheet_name.to_lowercase()));
+    rebuild_sheet_list_in_ctx(ctx);
 }
 
 fn populate_recents(ctx: &mut UiContext, recents: Vec<RecentComparison>) {
@@ -2375,12 +3064,13 @@ fn populate_recents(ctx: &mut UiContext, recents: Vec<RecentComparison>) {
 fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
     let mut ready_reason: Option<&'static str> = None;
     let _ = with_ui_context(|ctx| {
-        ctx.ui.progress_gauge.set_value(100);
+        stop_progress_animation();
         ctx.state.active_run = None;
-        sync_compare_controls_in_ctx(ctx);
 
         match result {
             Ok(outcome) => {
+                ctx.state.cancel_restore_snapshot = None;
+                ctx.ui.progress_gauge.set_value(100);
                 info!(
                     "Diff complete: diff_id={} mode={} summary={} payload={}",
                     outcome.diff_id,
@@ -2398,10 +3088,17 @@ fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
                 );
                 ctx.state.current_diff_id = Some(outcome.diff_id.clone());
                 ctx.state.current_mode = Some(outcome.mode);
-                ctx.state.current_payload = outcome.payload;
+                ctx.state.current_payload = outcome.payload.map(Arc::new);
                 ctx.state.current_summary = outcome.summary.clone();
                 ctx.state.pending_detail_payload = None;
                 ctx.state.pending_detail_sheet_name = None;
+                ctx.state.pending_detail_payload_gen =
+                    ctx.state.pending_detail_payload_gen.wrapping_add(1);
+                ctx.state.pending_detail_render_epoch =
+                    ctx.state.pending_detail_render_epoch.wrapping_add(1);
+                ctx.state.pending_detail_json = None;
+                ctx.state.pending_detail_json_gen = None;
+                ctx.state.pending_detail_json_inflight_gen = None;
                 render_grid_placeholder(ctx, "Select a sheet to preview grid changes.");
 
                 if let Some(summary) = outcome.summary {
@@ -2409,8 +3106,20 @@ fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
                         .summary_text
                         .set_value(&format_summary_text(&summary));
                     ctx.ui.detail_text.set_value("");
+                    ctx.state.sheets_filter.clear();
+                    ctx.ui.sheets_filter_ctrl.set_value("");
+                    if let Some(view) = ctx.ui.sheets_view {
+                        view.unselect_all();
+                    }
                     populate_sheet_list(ctx, &summary);
                     update_status_counts_in_ctx(ctx, Some(&summary));
+                    update_run_summary_header_in_ctx(ctx);
+
+                    if summary.op_count == 0 {
+                        render_grid_placeholder(ctx, "No differences detected.");
+                    } else if ctx.state.sheet_names.is_empty() {
+                        render_grid_placeholder(ctx, "No sheet-level changes were detected.");
+                    }
 
                     // Dev scenarios can ask to focus the Grid tab; once we have a summary, select
                     // the first sheet so the preview actually renders.
@@ -2429,6 +3138,8 @@ fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
                                 let _ = view.select_row(0);
                             }
                             render_grid_for_current_selection(ctx);
+                        } else if summary.op_count == 0 {
+                            render_grid_placeholder(ctx, "No differences detected.");
                         } else {
                             render_grid_placeholder(
                                 ctx,
@@ -2468,7 +3179,32 @@ fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
                     ready_reason = Some("diff_complete");
                 }
             }
+            Err(err) if err.code == "canceled" => {
+                log::info!("Diff canceled.");
+                ctx.ui.progress_gauge.set_value(0);
+
+                if let Some(snapshot) = ctx.state.cancel_restore_snapshot.take() {
+                    restore_cancel_snapshot_in_ctx(ctx, snapshot);
+                } else {
+                    clear_diff_results_in_ctx(ctx);
+                }
+
+                update_status_in_ctx(ctx, "Canceled.");
+                theme::set_status_tone(
+                    &ctx.ui.progress_text,
+                    &ctx.ui.status_pill,
+                    &ctx.ui.progress_gauge,
+                    theme::StatusTone::Ready,
+                );
+
+                if ctx.state.dev_ready_file.is_some() && !ctx.state.dev_ready_fired {
+                    ready_reason = Some("diff_canceled");
+                }
+            }
             Err(err) => {
+                ctx.state.cancel_restore_snapshot = None;
+                ctx.ui.progress_gauge.set_value(100);
+
                 log::warn!("Diff failed: {}: {}", err.code, err.message);
                 ctx.ui
                     .detail_text
@@ -2487,6 +3223,8 @@ fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
                 }
             }
         }
+
+        sync_compare_controls_in_ctx(ctx);
     });
 
     if let Some(reason) = ready_reason {
@@ -2549,11 +3287,17 @@ fn start_compare() {
             return;
         }
 
+        // Keep the previous results intact so we can restore them on Cancel.
+        ctx.state.cancel_restore_snapshot = Some(take_cancel_restore_snapshot_in_ctx(ctx));
+
         ctx.state.run_counter = ctx.state.run_counter.saturating_add(1);
         let run_id = ctx.state.run_counter;
         let cancel = Arc::new(AtomicBool::new(false));
         ctx.state.active_run = Some(ActiveRun {
+            run_id,
+            stage: ProgressStage::Read,
             cancel: cancel.clone(),
+            cancel_requested: false,
         });
 
         // Scenario harness: allow deterministic "canceled" end-states without relying on races
@@ -2572,13 +3316,29 @@ fn start_compare() {
         ctx.state.current_summary = None;
         ctx.state.pending_detail_payload = None;
         ctx.state.pending_detail_sheet_name = None;
+        ctx.state.pending_detail_payload_gen = ctx.state.pending_detail_payload_gen.wrapping_add(1);
+        ctx.state.pending_detail_render_epoch =
+            ctx.state.pending_detail_render_epoch.wrapping_add(1);
+        ctx.state.pending_detail_json = None;
+        ctx.state.pending_detail_json_gen = None;
+        ctx.state.pending_detail_json_inflight_gen = None;
+        ctx.state.sheets_all.clear();
         ctx.state.sheet_names.clear();
+        ctx.state.sheets_filter.clear();
+        ctx.ui.sheets_filter_ctrl.set_value("");
+        if let Some(view) = ctx.ui.sheets_view {
+            view.unselect_all();
+        }
+        if let Some(table) = ctx.state.sheets_table.as_mut() {
+            update_virtual_table(table, Vec::new());
+        }
         update_status_counts_in_ctx(ctx, None);
 
         sync_compare_controls_in_ctx(ctx);
         ctx.ui.progress_gauge.set_value(0);
         ctx.ui.summary_text.set_value("");
         ctx.ui.detail_text.set_value("");
+        render_grid_placeholder(ctx, "Comparing...");
         update_status_in_ctx(ctx, "Starting diff...");
         theme::set_status_tone(
             &ctx.ui.progress_text,
@@ -2586,6 +3346,7 @@ fn start_compare() {
             &ctx.ui.progress_gauge,
             theme::StatusTone::Working,
         );
+        start_progress_animation();
 
         let options = DiffOptions {
             preset: Some(preset_from_choice(&ctx.ui.preset_choice)),
@@ -2644,6 +3405,13 @@ fn handle_sheet_selection(row: usize) {
                         ctx.ui.detail_text.set_value(&text);
                         ctx.state.pending_detail_payload = None;
                         ctx.state.pending_detail_sheet_name = None;
+                        ctx.state.pending_detail_payload_gen =
+                            ctx.state.pending_detail_payload_gen.wrapping_add(1);
+                        ctx.state.pending_detail_render_epoch =
+                            ctx.state.pending_detail_render_epoch.wrapping_add(1);
+                        ctx.state.pending_detail_json = None;
+                        ctx.state.pending_detail_json_gen = None;
+                        ctx.state.pending_detail_json_inflight_gen = None;
                         let html = ctx.state.current_payload.as_ref().map(|payload| {
                             grid_preview::build_sheet_grid_preview_html(&sheet_name, payload)
                         });
@@ -2671,6 +3439,13 @@ fn handle_sheet_selection(row: usize) {
                 update_status_in_ctx(ctx, "Loading sheet payload...");
                 ctx.state.pending_detail_payload = None;
                 ctx.state.pending_detail_sheet_name = None;
+                ctx.state.pending_detail_payload_gen =
+                    ctx.state.pending_detail_payload_gen.wrapping_add(1);
+                ctx.state.pending_detail_render_epoch =
+                    ctx.state.pending_detail_render_epoch.wrapping_add(1);
+                ctx.state.pending_detail_json = None;
+                ctx.state.pending_detail_json_gen = None;
+                ctx.state.pending_detail_json_inflight_gen = None;
                 render_grid_placeholder(ctx, "Loading grid preview...");
             }
             _ => {}
@@ -2729,6 +3504,18 @@ fn load_diff_summary_into_ui(diff_id: String) {
                     ctx.state.current_payload = None;
                     ctx.state.pending_detail_payload = None;
                     ctx.state.pending_detail_sheet_name = None;
+                    ctx.state.pending_detail_payload_gen =
+                        ctx.state.pending_detail_payload_gen.wrapping_add(1);
+                    ctx.state.pending_detail_render_epoch =
+                        ctx.state.pending_detail_render_epoch.wrapping_add(1);
+                    ctx.state.pending_detail_json = None;
+                    ctx.state.pending_detail_json_gen = None;
+                    ctx.state.pending_detail_json_inflight_gen = None;
+                    ctx.state.sheets_filter.clear();
+                    ctx.ui.sheets_filter_ctrl.set_value("");
+                    if let Some(view) = ctx.ui.sheets_view {
+                        view.unselect_all();
+                    }
 
                     ctx.ui
                         .summary_text
@@ -2737,6 +3524,12 @@ fn load_diff_summary_into_ui(diff_id: String) {
                     render_grid_placeholder(ctx, "Select a sheet to preview grid changes.");
                     populate_sheet_list(ctx, &summary);
                     update_status_counts_in_ctx(ctx, Some(&summary));
+                    update_run_summary_header_in_ctx(ctx);
+                    if summary.op_count == 0 {
+                        render_grid_placeholder(ctx, "No differences detected.");
+                    } else if ctx.state.sheet_names.is_empty() {
+                        render_grid_placeholder(ctx, "No sheet-level changes were detected.");
+                    }
                     ctx.ui.root_tabs.set_selection(0);
                     update_status_in_ctx(ctx, "Summary loaded.");
                 });
@@ -3011,15 +3804,22 @@ fn build_index(side: &str) {
 
 fn cancel_current() {
     let _ = with_ui_context(|ctx| {
-        if let Some(active) = ctx.state.active_run.as_ref() {
+        if let Some(active) = ctx.state.active_run.as_mut() {
+            if active.cancel_requested {
+                return;
+            }
+            active.cancel_requested = true;
             active.cancel.store(true, Ordering::Relaxed);
-            update_status_in_ctx(ctx, "Canceling...");
+            update_status_in_ctx(ctx, "Cancel requested (finishing current step)...");
             theme::set_status_tone(
                 &ctx.ui.progress_text,
                 &ctx.ui.status_pill,
                 &ctx.ui.progress_gauge,
                 theme::StatusTone::Working,
             );
+            sync_compare_controls_in_ctx(ctx);
+            update_run_summary_header_in_ctx(ctx);
+            sync_sheets_panel_state_in_ctx(ctx);
         }
     });
 }
@@ -3514,6 +4314,9 @@ fn main() {
             compare_help_text: ui.compare_help_text,
             preset_choice: ui.preset_choice,
             trusted_checkbox: ui.trusted_checkbox,
+            run_summary_old: ui.run_summary_old,
+            run_summary_new: ui.run_summary_new,
+            run_summary_meta: ui.run_summary_meta,
             summary_text: ui.summary_text,
             detail_text: ui.detail_text,
             grid_panel: ui.grid_panel,
@@ -3521,6 +4324,11 @@ fn main() {
             compare_container: ui.compare_container,
             result_tabs: ui.result_tabs,
             sheets_list_panel: ui.sheets_list,
+            sheets_table_host: ui.sheets_table_host,
+            sheets_filter_ctrl: ui.sheets_filter_ctrl,
+            sheets_filter_status: ui.sheets_filter_status,
+            sheets_empty_panel: ui.sheets_empty_panel,
+            sheets_empty_text: ui.sheets_empty_text,
             recents_list_panel: ui.recents_list,
             batch_results_list_panel: ui.batch_results_list,
             search_results_list_panel: ui.search_results_list,
@@ -3557,13 +4365,21 @@ fn main() {
             engine_version: env!("CARGO_PKG_VERSION").to_string(),
             run_counter: 0,
             active_run: None,
+            cancel_restore_snapshot: None,
             current_diff_id: None,
             current_mode: None,
             current_summary: None,
             current_payload: None,
             pending_detail_payload: None,
             pending_detail_sheet_name: None,
+            pending_detail_payload_gen: 0,
+            pending_detail_render_epoch: 0,
+            pending_detail_json: None,
+            pending_detail_json_gen: None,
+            pending_detail_json_inflight_gen: None,
             sheet_names: Vec::new(),
+            sheets_all: Vec::new(),
+            sheets_filter: String::new(),
             recents: Vec::new(),
             search_old_index: None,
             search_new_index: None,
@@ -3669,10 +4485,27 @@ fn main() {
                 ctx.ui.build_new_index_btn.on_click(|_| build_index("new"));
                 ctx.ui
                     .old_picker
-                    .on_file_changed(|_| sync_compare_controls());
+                    .on_file_changed(|_| handle_compare_inputs_changed());
                 ctx.ui
                     .new_picker
-                    .on_file_changed(|_| sync_compare_controls());
+                    .on_file_changed(|_| handle_compare_inputs_changed());
+                ctx.ui.sheets_filter_ctrl.on_text_updated(|event| {
+                    let query = event.get_string().unwrap_or_default();
+                    // SearchCtrl may emit text events synchronously while we're already in
+                    // a `with_ui_context()` borrow (e.g., when we clear it after a run).
+                    wxdragon::call_after(Box::new(move || {
+                        let _ = with_ui_context(|ctx| set_sheets_filter_query_in_ctx(ctx, query));
+                    }));
+                });
+                ctx.ui.sheets_filter_ctrl.on_cancel_button_clicked(|_| {
+                    wxdragon::call_after(Box::new(|| {
+                        let _ = with_ui_context(|ctx| {
+                            ctx.state.sheets_filter.clear();
+                            ctx.ui.sheets_filter_ctrl.set_value("");
+                            rebuild_sheet_list_in_ctx(ctx);
+                        });
+                    }));
+                });
                 ctx.ui.result_tabs.on_page_changed(|event| {
                     if event.get_selection() == Some(RESULT_TAB_DETAILS) {
                         let _ = with_ui_context(|ctx| render_staged_detail_payload(ctx));
@@ -3735,7 +4568,7 @@ fn main() {
                 if ctx.state.webview_enabled {
                     return;
                 }
-                let sheets_view = create_dataview(&ctx.ui.sheets_list_panel, &SHEETS_COLUMNS);
+                let sheets_view = create_dataview(&ctx.ui.sheets_table_host, &SHEETS_COLUMNS);
                 let recents_view = create_dataview(&ctx.ui.recents_list_panel, &RECENTS_COLUMNS);
                 let batch_view = create_dataview(&ctx.ui.batch_results_list_panel, &BATCH_COLUMNS);
                 let search_view =
@@ -3759,7 +4592,8 @@ fn main() {
                 if let Some(view) = ctx.ui.sheets_view {
                     view.bind_dataview_event(DataViewEventType::SelectionChanged, |event| {
                         if let Some(row) = event.get_row() {
-                            handle_sheet_selection(row as usize);
+                            let row = row as usize;
+                            wxdragon::call_after(Box::new(move || handle_sheet_selection(row)));
                         }
                     });
                 }

@@ -67,19 +67,37 @@
       const licenseKey = params.get("license_key");
       const sessionId = params.get("session_id");
 
+      function sleep(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+      }
+
+      function statusReady(status) {
+        return status === "trialing" || status === "active" || status === "past_due";
+      }
+
       async function loadBySession() {
         if (!sessionId) return;
-        try {
-          const res = await fetch(`/api/checkout/status?session_id=${encodeURIComponent(sessionId)}`);
-          const data = await res.json();
-          if (data?.license_key) {
-            output.textContent = data.license_key;
-          } else {
-            output.textContent = "Check your email for the license key.";
+        output.textContent = "Finalizing checkout...";
+        for (let i = 0; i < 20; i += 1) {
+          try {
+            const res = await fetch(
+              `https://license.tabulensis.com/api/checkout/status?session_id=${encodeURIComponent(sessionId)}`,
+            );
+            const data = await res.json();
+            if (data?.license_key && statusReady(data?.status)) {
+              output.textContent = data.license_key;
+              return;
+            }
+            if (data?.license_key) {
+              output.textContent = `${data.license_key} (finalizing...)`;
+            }
+          } catch (err) {
+            // Retry; webhooks can take a moment to land.
           }
-        } catch (err) {
-          output.textContent = "Check your email for the license key.";
+          await sleep(1000);
         }
+        output.textContent =
+          "Check your email for the license key. If activation fails, wait a moment and retry.";
       }
 
       if (output) {

@@ -754,6 +754,7 @@ dependencies = [
  "quick-xml 0.32.0",
  "rayon",
  "rustc-hash 1.1.0",
+ "ryu",
  "serde",
  "serde_json",
  "serde_yaml",

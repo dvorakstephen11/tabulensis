@@ -262,8 +262,96 @@
                     <option>0</option>
                   </object>
                   <object class="sizeritem">
+                    <object class="wxPanel" name="run_summary_header">
+                      <object class="wxBoxSizer">
+                        <orient>wxVERTICAL</orient>
+                        <object class="sizeritem">
+                          <object class="wxBoxSizer">
+                            <orient>wxHORIZONTAL</orient>
+                            <object class="sizeritem">
+                              <object class="wxStaticText" name="run_summary_old">
+                                <label>Old: -</label>
+                              </object>
+                              <flag>wxLEFT|wxRIGHT|wxTOP|wxBOTTOM|wxALIGN_CENTER_VERTICAL</flag>
+                              <border>4</border>
+                            </object>
+                            <object class="sizeritem">
+                              <object class="wxStaticText" name="run_summary_new">
+                                <label>New: -</label>
+                              </object>
+                              <flag>wxLEFT|wxRIGHT|wxTOP|wxBOTTOM|wxALIGN_CENTER_VERTICAL</flag>
+                              <border>4</border>
+                            </object>
+                            <object class="sizeritem">
+                              <object class="wxBoxSizer">
+                                <orient>wxHORIZONTAL</orient>
+                              </object>
+                              <flag>wxEXPAND</flag>
+                              <option>1</option>
+                            </object>
+                          </object>
+                          <flag>wxEXPAND</flag>
+                          <option>0</option>
+                        </object>
+                        <object class="sizeritem">
+                          <object class="wxStaticText" name="run_summary_meta">
+                            <label>Mode: - | Ops: - | Warnings: - | Complete: -</label>
+                          </object>
+                          <flag>wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM</flag>
+                          <option>0</option>
+                          <border>4</border>
+                        </object>
+                      </object>
+                    </object>
+                    <flag>wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM</flag>
+                    <option>0</option>
+                    <border>6</border>
+                  </object>
+                  <object class="sizeritem">
                     <object class="wxSplitterWindow" name="compare_splitter">
-                      <object class="wxPanel" name="sheets_list"></object>
+                      <object class="wxPanel" name="sheets_list">
+                        <object class="wxBoxSizer">
+                          <orient>wxVERTICAL</orient>
+                          <object class="sizeritem">
+                            <object class="wxSearchCtrl" name="sheets_filter_ctrl"></object>
+                            <flag>wxEXPAND|wxALL</flag>
+                            <option>0</option>
+                            <border>4</border>
+                          </object>
+                          <object class="sizeritem">
+                            <object class="wxStaticText" name="sheets_filter_status">
+                              <label>Sheets: none</label>
+                            </object>
+                            <flag>wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM</flag>
+                            <option>0</option>
+                            <border>4</border>
+                          </object>
+                          <object class="sizeritem">
+                            <object class="wxPanel" name="sheets_empty_panel">
+                              <object class="wxBoxSizer">
+                                <orient>wxVERTICAL</orient>
+                                <object class="sizeritem">
+                                  <object class="wxStaticText" name="sheets_empty_text">
+                                    <label>Run Compare to list changed sheets.</label>
+                                  </object>
+                                  <flag>wxALL|wxALIGN_CENTER</flag>
+                                  <option>1</option>
+                                  <border>12</border>
+                                </object>
+                              </object>
+                            </object>
+                            <flag>wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM</flag>
+                            <option>1</option>
+                            <border>4</border>
+                          </object>
+                          <object class="sizeritem">
+                            <object class="wxPanel" name="sheets_table_host"></object>
+                            <flag>wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM</flag>
+                            <option>1</option>
+                            <border>4</border>
+                          </object>
+                        </object>
+                      </object>
                       <object class="wxPanel" name="compare_right_panel">
                         <object class="wxBoxSizer">
                           <orient>wxVERTICAL</orient>

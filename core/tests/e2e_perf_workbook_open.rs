@@ -165,3 +165,14 @@ fn e2e_p5_identical() {
         false,
     );
 }
+
+#[test]
+#[ignore = "Long-running test: run with `cargo test --features perf-metrics -- --ignored` to execute"]
+fn e2e_p6_sharedstrings_changed_numeric_only() {
+    run_e2e_case(
+        "e2e_p6_sharedstrings_changed_numeric_only",
+        "e2e_p6_sharedstrings_changed_numeric_only_a.xlsx",
+        "e2e_p6_sharedstrings_changed_numeric_only_b.xlsx",
+        true,
+    );
+}

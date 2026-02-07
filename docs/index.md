@@ -18,6 +18,7 @@
 - [FAQ](faq.md)
 - [Architecture overview](architecture.md)
 - [Perf playbook](perf_playbook.md)
+- [Test suite excellence plan](test_suite_excellence_plan.md)
 - [Rust custom-crate experiments](rust_docs/custom_crates/README.md)
 - [Custom-crate agentic playbook](rust_docs/custom_crates/agentic_experiment_playbook.md)
 - [Migration guide (from legacy APIs)](migration.md)

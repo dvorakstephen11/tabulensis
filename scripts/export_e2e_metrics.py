@@ -58,6 +58,12 @@ E2E_THRESHOLDS = {
         "max_diff_time_s": 10,
         "max_peak_memory_bytes": 966_180_894,
     },
+    "e2e_p6_sharedstrings_changed_numeric_only": {
+        "max_total_time_s": 25,
+        "max_parse_time_s": 20,
+        "max_diff_time_s": 10,
+        "max_peak_memory_bytes": 100_000_000,
+    },
 }
 
 

@@ -7,16 +7,20 @@ Each scenario lives under `desktop/ui_scenarios/<name>/scenario.json` and should
 - `autoRunDiff`: whether the app should run a diff automatically.
 - `stableWaitMs`: how long to wait before signaling readiness when `autoRunDiff` is false.
 - `cancelAfterMs`: optional; when set (and `autoRunDiff=true`), the scenario will trigger Cancel after the given delay.
+- `readyOnStage`: optional; when set (and `autoRunDiff=true`), signal UI readiness on the first matching progress stage (e.g. `diff`) to capture "working" mid-run states.
 - `focusPanel`: which UI panel to focus (compare/recents/batch/search/summary/details/grid).
 - `expectMode`: `payload` or `large` (optional, used for readiness metadata).
 
 ## Included scenarios
 - `compare_empty`: empty state (no paths selected). Validates first-run UX and control states.
+- `compare_no_diffs`: identical workbooks. Validates the first-class “No differences” state and empty sheets panel UX.
 - `compare_basic`: small diff using committed templates (`fixtures/templates/`) so it works out of the box.
+- `compare_many_sheets`: multi-sheet diff to validate default sorting and the sheets filter box.
 - `compare_multi_sheet`: sheet + grid changes to validate sheets list density and Grid preview behavior.
 - `compare_grid_basic`: single-cell change to exercise the Grid preview tab.
 - `compare_large_mode`: large workbook to exercise large-mode UI behavior.
 - `compare_canceled`: cancels a long-running diff to validate cancel UX and end-state messaging.
+- `compare_working`: captures a mid-run progress state to validate stage labels + progress gauge behavior.
 - `compare_unsupported`: unsupported extension to validate error UX and messaging.
 - `compare_container_limits`: ZIP entry count exceeds default container limits to validate safety-limit error UX.
 - `pbix_no_mashup`: PBIX fixture to validate error and messaging UI state.

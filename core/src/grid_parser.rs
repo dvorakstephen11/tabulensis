@@ -57,7 +57,6 @@ pub struct SheetDescriptor {
 #[derive(Debug)]
 pub struct ParsedSheetXml {
     pub grid: Grid,
-    #[allow(dead_code)]
     pub drawing_rids: Vec<String>,
 }
 
@@ -771,7 +770,6 @@ fn normalize_target(target: &str) -> String {
     }
 }
 
-#[allow(dead_code)]
 pub fn parse_sheet_xml_with_drawing_rids(
     xml: &[u8],
     shared_strings: &[StringId],

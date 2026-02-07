@@ -1,8 +1,31 @@
-# Licensing Service
+# Licensing Backend
 
-This repo includes a minimal licensing backend in `license_service/`.
+This repo includes two licensing backends:
+- **Cloudflare Worker + D1 (recommended for production):** `tabulensis-api/`
+- **Rust reference/local server (useful for local dev):** `license_service/`
 
-## Quick start (mock mode)
+## Cloudflare Worker (tabulensis-api)
+
+Environment variables (set via Wrangler secrets/vars):
+- `STRIPE_SECRET_KEY`
+- `STRIPE_WEBHOOK_SECRET`
+- `STRIPE_PRICE_ID`
+- `STRIPE_SUCCESS_URL`
+- `STRIPE_CANCEL_URL`
+- `STRIPE_PORTAL_RETURN_URL`
+- `STRIPE_TRIAL_DAYS` (default: 30)
+- `LICENSE_SIGNING_KEY_B64` (32-byte Ed25519 private key seed, base64 encoded)
+- `LICENSE_TOKEN_TTL_DAYS` (default: 14)
+- `LICENSE_PAST_DUE_GRACE_DAYS` (default: 3)
+- `LICENSE_MAX_DEVICES` (default: 2)
+- `LICENSE_ADMIN_TOKEN` (optional; enables `/license/reset`)
+
+Development helper:
+- `LICENSE_MOCK_STRIPE=1` simulates checkout completion without calling Stripe.
+
+## Rust Service (license_service)
+
+### Quick start (mock mode)
 
 ```bash
 export LICENSE_MOCK_STRIPE=1
@@ -25,7 +48,7 @@ A starter template lives at `license_service/.env.example`.
 
 Admin helpers:
 - `LICENSE_ADMIN_TOKEN` enables the `/license/reset` endpoint.
-- Clients should set `TABULENSIS_LICENSE_PUBLIC_KEY` to the value returned by `GET /public_key`.
+- `TABULENSIS_LICENSE_PUBLIC_KEY` can override public key discovery (otherwise the client fetches `GET /public_key` and caches it).
 
 ## Endpoints
 

@@ -3,14 +3,14 @@ use crate::container::ZipContainer;
 use crate::datamashup::DataMashup;
 use crate::diff::{DiffError, DiffReport, DiffSummary, SheetId};
 use crate::diffable::{DiffContext, Diffable};
-use crate::permission_bindings::{PermissionBindingsStatus, permission_bindings_warning};
+#[cfg(feature = "perf-metrics")]
+use crate::perf::DiffMetrics;
+use crate::permission_bindings::{permission_bindings_warning, PermissionBindingsStatus};
 use crate::progress::ProgressCallback;
 use crate::sink::{DiffSink, NoFinishSink, SinkFinishGuard, VecSink};
 use crate::string_pool::StringPool;
 use crate::vba::VbaModule;
 use crate::workbook::{Sheet, Workbook};
-#[cfg(feature = "perf-metrics")]
-use crate::perf::DiffMetrics;
 #[cfg(feature = "excel-open-xml")]
 use std::collections::{HashMap, HashSet};
 #[cfg(feature = "excel-open-xml")]
@@ -100,9 +100,8 @@ fn read_workbook_xml_checked(
             crate::ContainerError::FileNotFound { .. } => {
                 if container.file_names().any(|name| name == "xl/workbook.bin") {
                     crate::excel_open_xml::PackageError::UnsupportedFormat {
-                        message:
-                            "XLSB detected (xl/workbook.bin present); convert to .xlsx/.xlsm"
-                                .to_string(),
+                        message: "XLSB detected (xl/workbook.bin present); convert to .xlsx/.xlsm"
+                            .to_string(),
                     }
                 } else {
                     crate::excel_open_xml::PackageError::MissingPart {
@@ -166,8 +165,20 @@ fn duplicate_sheet_names(metas: &[SheetTargetMeta]) -> HashSet<String> {
     }
     counts
         .into_iter()
-        .filter_map(|(name, count)| if count > 1 { Some(name.to_string()) } else { None })
+        .filter_map(|(name, count)| {
+            if count > 1 {
+                Some(name.to_string())
+            } else {
+                None
+            }
+        })
         .collect()
+}
+
+#[cfg(feature = "excel-open-xml")]
+fn sheet_uses_shared_strings(xml: &[u8]) -> bool {
+    // Conservative detector: shared-string cells are marked with `t="s"` (or single-quoted).
+    xml.windows(5).any(|w| w == br#"t="s""# || w == b"t='s'")
 }
 
 #[cfg(feature = "excel-open-xml")]
@@ -188,18 +199,14 @@ fn compute_sheet_grid_parse_targets(
     ambiguous_names.extend(duplicate_sheet_names(&new_metas));
 
     for meta in &old_metas {
-        if meta
-            .sheet_id
-            .is_some_and(|id| ambiguous_ids.contains(&id))
+        if meta.sheet_id.is_some_and(|id| ambiguous_ids.contains(&id))
             || ambiguous_names.contains(&meta.name_lower)
         {
             old_parse.insert(meta.target.clone());
         }
     }
     for meta in &new_metas {
-        if meta
-            .sheet_id
-            .is_some_and(|id| ambiguous_ids.contains(&id))
+        if meta.sheet_id.is_some_and(|id| ambiguous_ids.contains(&id))
             || ambiguous_names.contains(&meta.name_lower)
         {
             new_parse.insert(meta.target.clone());
@@ -241,12 +248,6 @@ fn compute_sheet_grid_parse_targets(
         let old_target = &old_metas[old_idx].target;
         let new_target = &new_metas[new_idx].target;
 
-        if !shared_same {
-            old_parse.insert(old_target.clone());
-            new_parse.insert(new_target.clone());
-            continue;
-        }
-
         if old_parse.contains(old_target) || new_parse.contains(new_target) {
             continue;
         }
@@ -256,6 +257,15 @@ fn compute_sheet_grid_parse_targets(
         if old_fp != new_fp {
             old_parse.insert(old_target.clone());
             new_parse.insert(new_target.clone());
+            continue;
+        }
+
+        if !shared_same {
+            let bytes = old_container.read_file_checked(old_target)?;
+            if sheet_uses_shared_strings(&bytes) {
+                old_parse.insert(old_target.clone());
+                new_parse.insert(new_target.clone());
+            }
         }
     }
 
@@ -289,12 +299,6 @@ fn compute_sheet_grid_parse_targets(
         let old_target = &old_metas[old_idx].target;
         let new_target = &new_metas[new_idx].target;
 
-        if !shared_same {
-            old_parse.insert(old_target.clone());
-            new_parse.insert(new_target.clone());
-            continue;
-        }
-
         if old_parse.contains(old_target) || new_parse.contains(new_target) {
             continue;
         }
@@ -304,6 +308,15 @@ fn compute_sheet_grid_parse_targets(
         if old_fp != new_fp {
             old_parse.insert(old_target.clone());
             new_parse.insert(new_target.clone());
+            continue;
+        }
+
+        if !shared_same {
+            let bytes = old_container.read_file_checked(old_target)?;
+            if sheet_uses_shared_strings(&bytes) {
+                old_parse.insert(old_target.clone());
+                new_parse.insert(new_target.clone());
+            }
         }
     }
 
@@ -370,8 +383,10 @@ impl WorkbookPackage {
             let mut container = crate::container::OpcContainer::open_from_reader(reader)?;
 
             let workbook_start = Instant::now();
-            let workbook =
-                crate::excel_open_xml::open_workbook_from_container(&mut container, &mut session.strings)?;
+            let workbook = crate::excel_open_xml::open_workbook_from_container(
+                &mut container,
+                &mut session.strings,
+            )?;
             let workbook_ms = workbook_start.elapsed().as_millis() as u64;
 
             let data_mashup_start = Instant::now();
@@ -432,8 +447,10 @@ impl WorkbookPackage {
                 crate::container::OpcContainer::open_from_reader_with_limits(reader, limits)?;
 
             let workbook_start = Instant::now();
-            let workbook =
-                crate::excel_open_xml::open_workbook_from_container(&mut container, &mut session.strings)?;
+            let workbook = crate::excel_open_xml::open_workbook_from_container(
+                &mut container,
+                &mut session.strings,
+            )?;
             let workbook_ms = workbook_start.elapsed().as_millis() as u64;
 
             let data_mashup_start = Instant::now();
@@ -549,16 +566,12 @@ impl WorkbookPackage {
         progress: &dyn ProgressCallback,
     ) -> Result<DiffSummary, OpenXmlDiffError> {
         crate::with_default_session(|session| {
-            let mut old_container = crate::container::OpcContainer::open_from_reader_with_limits(
-                old_reader,
-                limits,
-            )
-            .map_err(crate::excel_open_xml::PackageError::from)?;
-            let mut new_container = crate::container::OpcContainer::open_from_reader_with_limits(
-                new_reader,
-                limits,
-            )
-            .map_err(crate::excel_open_xml::PackageError::from)?;
+            let mut old_container =
+                crate::container::OpcContainer::open_from_reader_with_limits(old_reader, limits)
+                    .map_err(crate::excel_open_xml::PackageError::from)?;
+            let mut new_container =
+                crate::container::OpcContainer::open_from_reader_with_limits(new_reader, limits)
+                    .map_err(crate::excel_open_xml::PackageError::from)?;
 
             progress.on_progress("parse", 0.0);
             #[cfg(feature = "perf-metrics")]
@@ -836,7 +849,11 @@ impl WorkbookPackage {
         #[cfg(feature = "perf-metrics")]
         apply_parse_metrics(self, other, &mut summary.metrics);
 
-        append_permission_bindings_warnings_summary(&mut summary, &self.data_mashup, &other.data_mashup);
+        append_permission_bindings_warnings_summary(
+            &mut summary,
+            &self.data_mashup,
+            &other.data_mashup,
+        );
         Ok(summary)
     }
 
@@ -909,7 +926,11 @@ impl WorkbookPackage {
         #[cfg(feature = "perf-metrics")]
         apply_parse_metrics(self, other, &mut summary.metrics);
 
-        append_permission_bindings_warnings_summary(&mut summary, &self.data_mashup, &other.data_mashup);
+        append_permission_bindings_warnings_summary(
+            &mut summary,
+            &self.data_mashup,
+            &other.data_mashup,
+        );
         Ok(summary)
     }
 
@@ -1104,7 +1125,11 @@ impl WorkbookPackage {
 
         sink.finish()?;
 
-        append_permission_bindings_warnings_summary(&mut summary, &self.data_mashup, &other.data_mashup);
+        append_permission_bindings_warnings_summary(
+            &mut summary,
+            &self.data_mashup,
+            &other.data_mashup,
+        );
         Ok(summary)
     }
 }
@@ -1305,7 +1330,9 @@ impl PbixPackage {
                     .map(|r| crate::tabular_schema::build_model(r, pool))
                     .unwrap_or_default();
 
-                Some(crate::model_diff::diff_models(&old_model, &new_model, pool, config))
+                Some(crate::model_diff::diff_models(
+                    &old_model, &new_model, pool, config,
+                ))
             } else {
                 None
             }
@@ -1346,7 +1373,11 @@ impl PbixPackage {
             #[cfg(feature = "perf-metrics")]
             metrics: None,
         };
-        append_permission_bindings_warnings_summary(&mut summary, &self.data_mashup, &other.data_mashup);
+        append_permission_bindings_warnings_summary(
+            &mut summary,
+            &self.data_mashup,
+            &other.data_mashup,
+        );
         Ok(summary)
     }
 
@@ -1374,9 +1405,7 @@ fn apply_parse_metrics(
         return;
     };
 
-    let added = old_pkg
-        .parse_time_ms
-        .saturating_add(new_pkg.parse_time_ms);
+    let added = old_pkg.parse_time_ms.saturating_add(new_pkg.parse_time_ms);
     m.parse_time_ms = m.parse_time_ms.saturating_add(added);
     m.total_time_ms = m.total_time_ms.saturating_add(added);
     m.diff_time_ms = m.total_time_ms.saturating_sub(m.parse_time_ms);
@@ -1425,7 +1454,10 @@ fn find_sheets_case_insensitive<'a>(
                 .collect();
             for s in &new_wb.sheets {
                 let name = pool.resolve(s.name).to_string();
-                if !available.iter().any(|n| n.to_lowercase() == name.to_lowercase()) {
+                if !available
+                    .iter()
+                    .any(|n| n.to_lowercase() == name.to_lowercase())
+                {
                     available.push(name);
                 }
             }
@@ -1485,9 +1517,7 @@ fn collect_permission_bindings_warnings(
         }
     }
     if warn_unverifiable {
-        if let Some(warning) =
-            permission_bindings_warning(PermissionBindingsStatus::Unverifiable)
-        {
+        if let Some(warning) = permission_bindings_warning(PermissionBindingsStatus::Unverifiable) {
             warnings.push(warning);
         }
     }
@@ -1507,6 +1537,122 @@ mod tests {
     #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
     use crate::tabular_schema::{RawMeasure, RawTabularModel};
 
+    #[cfg(feature = "excel-open-xml")]
+    use std::io::{Cursor, Write};
+    #[cfg(feature = "excel-open-xml")]
+    use zip::write::FileOptions;
+    #[cfg(feature = "excel-open-xml")]
+    use zip::{CompressionMethod, ZipWriter};
+
+    #[cfg(feature = "excel-open-xml")]
+    fn make_minimal_xlsx_with_shared_strings(shared_string: &str) -> Vec<u8> {
+        const WORKBOOK_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Numeric" sheetId="1"/><sheet name="Salt" sheetId="2"/></sheets></workbook>"#;
+
+        const SHEET1_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>"#;
+
+        const SHEET2_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>"#;
+
+        let shared_xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="1" uniqueCount="1"><si><t>{}</t></si></sst>"#,
+            shared_string
+        );
+
+        let mut buf = Vec::new();
+        {
+            let cursor = Cursor::new(&mut buf);
+            let mut writer = ZipWriter::new(cursor);
+            let options = FileOptions::default().compression_method(CompressionMethod::Stored);
+
+            writer
+                .start_file("[Content_Types].xml", options)
+                .expect("start [Content_Types].xml");
+            writer
+                .write_all(b"content-types")
+                .expect("write [Content_Types].xml");
+
+            writer
+                .start_file("xl/workbook.xml", options)
+                .expect("start xl/workbook.xml");
+            writer
+                .write_all(WORKBOOK_XML.as_bytes())
+                .expect("write xl/workbook.xml");
+
+            writer
+                .start_file("xl/worksheets/sheet1.xml", options)
+                .expect("start sheet1.xml");
+            writer
+                .write_all(SHEET1_XML.as_bytes())
+                .expect("write sheet1.xml");
+
+            writer
+                .start_file("xl/worksheets/sheet2.xml", options)
+                .expect("start sheet2.xml");
+            writer
+                .write_all(SHEET2_XML.as_bytes())
+                .expect("write sheet2.xml");
+
+            writer
+                .start_file("xl/sharedStrings.xml", options)
+                .expect("start xl/sharedStrings.xml");
+            writer
+                .write_all(shared_xml.as_bytes())
+                .expect("write xl/sharedStrings.xml");
+
+            writer.finish().expect("finish xlsx zip");
+        }
+        buf
+    }
+
+    #[cfg(feature = "excel-open-xml")]
+    #[test]
+    fn sheet_uses_shared_strings_detects_t_s() {
+        assert!(super::sheet_uses_shared_strings(
+            br#"<c r="A1" t="s"><v>0</v></c>"#
+        ));
+        assert!(super::sheet_uses_shared_strings(
+            b"<c r='A1' t='s'><v>0</v></c>"
+        ));
+        assert!(!super::sheet_uses_shared_strings(b"<c r='A1'><v>1</v></c>"));
+        assert!(!super::sheet_uses_shared_strings(
+            br#"<c r="A1" t="inlineStr"><is><t>Hello</t></is></c>"#
+        ));
+    }
+
+    #[cfg(feature = "excel-open-xml")]
+    #[test]
+    fn shared_strings_change_only_forces_parse_for_sheets_that_use_it() {
+        // Old/new differ only in sharedStrings.xml, while both sheet XML parts are identical.
+        let old_bytes = make_minimal_xlsx_with_shared_strings("SALT_A");
+        let new_bytes = make_minimal_xlsx_with_shared_strings("SALT_B");
+
+        let mut old_container =
+            crate::container::OpcContainer::open_from_reader(Cursor::new(old_bytes)).unwrap();
+        let mut new_container =
+            crate::container::OpcContainer::open_from_reader(Cursor::new(new_bytes)).unwrap();
+
+        let (old_parse, new_parse) =
+            super::compute_sheet_grid_parse_targets(&mut old_container, &mut new_container)
+                .unwrap();
+
+        assert!(
+            !old_parse.contains("xl/worksheets/sheet1.xml"),
+            "numeric-only sheet should not be forced to parse due to sharedStrings changes"
+        );
+        assert!(
+            !new_parse.contains("xl/worksheets/sheet1.xml"),
+            "numeric-only sheet should not be forced to parse due to sharedStrings changes"
+        );
+
+        assert!(
+            old_parse.contains("xl/worksheets/sheet2.xml"),
+            "shared-string sheet must be parsed when sharedStrings changes"
+        );
+        assert!(
+            new_parse.contains("xl/worksheets/sheet2.xml"),
+            "shared-string sheet must be parsed when sharedStrings changes"
+        );
+    }
+
     #[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
     fn make_dm(section_source: &str) -> DataMashup {
         DataMashup {
@@ -1521,7 +1667,9 @@ mod tests {
                 embedded_contents: Vec::new(),
             },
             permissions: Permissions::default(),
-            metadata: Metadata { formulas: Vec::new() },
+            metadata: Metadata {
+                formulas: Vec::new(),
+            },
             permission_bindings_raw: Vec::new(),
             permission_bindings_status: PermissionBindingsStatus::Missing,
         }
@@ -1567,10 +1715,7 @@ mod tests {
         let ops = sink.into_ops();
 
         assert!(ops.iter().any(DiffOp::is_m_op), "expected query ops");
-        assert!(
-            ops.iter().any(DiffOp::is_model_op),
-            "expected model ops"
-        );
+        assert!(ops.iter().any(DiffOp::is_model_op), "expected model ops");
 
         let mut seen_model = false;
         for op in ops {
