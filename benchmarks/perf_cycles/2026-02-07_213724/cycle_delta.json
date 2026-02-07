@@ -1,0 +1,214 @@
+{
+  "cycle": "2026-02-07_213724",
+  "config": {
+    "runs": 3,
+    "aggregation": "median",
+    "parallel": true,
+    "skip_fixtures": false
+  },
+  "pre": {
+    "timestamp": "2026-02-07T21:47:15.927304+00:00",
+    "git_commit": "66ae09f5f6e2",
+    "git_branch": "main",
+    "fullscale_json": "benchmarks/perf_cycles/2026-02-07_213724/pre_fullscale.json",
+    "e2e_json": "benchmarks/perf_cycles/2026-02-07_213724/pre_e2e.json",
+    "cli_jsonl_json": "benchmarks/perf_cycles/2026-02-07_213724/pre_cli_jsonl.json",
+    "fullscale_run_json": [
+      "benchmarks/perf_cycles/2026-02-07_213724/pre_fullscale_run1.json",
+      "benchmarks/perf_cycles/2026-02-07_213724/pre_fullscale_run2.json",
+      "benchmarks/perf_cycles/2026-02-07_213724/pre_fullscale_run3.json"
+    ],
+    "e2e_run_json": [
+      "benchmarks/perf_cycles/2026-02-07_213724/pre_e2e_run1.json",
+      "benchmarks/perf_cycles/2026-02-07_213724/pre_e2e_run2.json",
+      "benchmarks/perf_cycles/2026-02-07_213724/pre_e2e_run3.json"
+    ],
+    "cli_jsonl_run_json": [
+      "benchmarks/perf_cycles/2026-02-07_213724/pre_cli_jsonl_run1.json",
+      "benchmarks/perf_cycles/2026-02-07_213724/pre_cli_jsonl_run2.json",
+      "benchmarks/perf_cycles/2026-02-07_213724/pre_cli_jsonl_run3.json"
+    ],
+    "runs": 3,
+    "aggregation": "median",
+    "parallel": true,
+    "skip_fixtures": false,
+    "dirty_worktree": true,
+    "dirty_paths_count": 5,
+    "dirty_paths_sample": [
+      "\"Daily Tabulensis Efforts.md\"",
+      "\"Daily Tabulensis Efforts.md:Zone.Identifier\"",
+      ".codex_skills/",
+      "benchmarks/perf_cycles/2026-02-07_213724/",
+      "scripts/update_docs_index_checklists.py"
+    ],
+    "dirty_rust_paths": []
+  },
+  "post": {
+    "timestamp": "2026-02-07T21:55:47.338378+00:00",
+    "git_commit": "186561630fcb",
+    "git_branch": "main",
+    "fullscale_json": "benchmarks/perf_cycles/2026-02-07_213724/post_fullscale.json",
+    "e2e_json": "benchmarks/perf_cycles/2026-02-07_213724/post_e2e.json",
+    "cli_jsonl_json": "benchmarks/perf_cycles/2026-02-07_213724/post_cli_jsonl.json",
+    "fullscale_run_json": [
+      "benchmarks/perf_cycles/2026-02-07_213724/post_fullscale_run1.json",
+      "benchmarks/perf_cycles/2026-02-07_213724/post_fullscale_run2.json",
+      "benchmarks/perf_cycles/2026-02-07_213724/post_fullscale_run3.json"
+    ],
+    "e2e_run_json": [
+      "benchmarks/perf_cycles/2026-02-07_213724/post_e2e_run1.json",
+      "benchmarks/perf_cycles/2026-02-07_213724/post_e2e_run2.json",
+      "benchmarks/perf_cycles/2026-02-07_213724/post_e2e_run3.json"
+    ],
+    "cli_jsonl_run_json": [
+      "benchmarks/perf_cycles/2026-02-07_213724/post_cli_jsonl_run1.json",
+      "benchmarks/perf_cycles/2026-02-07_213724/post_cli_jsonl_run2.json",
+      "benchmarks/perf_cycles/2026-02-07_213724/post_cli_jsonl_run3.json"
+    ],
+    "runs": 3,
+    "aggregation": "median",
+    "parallel": true,
+    "skip_fixtures": false,
+    "dirty_worktree": true,
+    "dirty_paths_count": 13,
+    "dirty_paths_sample": [
+      "\"Daily Tabulensis Efforts.md:Zone.Identifier\"",
+      ".codex_skills/",
+      ".pip-user/lib/python3.10/site-packages/excel_fixtures-0.1.0.dist-info/METADATA",
+      ".pip-user/lib/python3.10/site-packages/excel_fixtures-0.1.0.dist-info/RECORD",
+      "AGENTS.md",
+      "RESEND_SETUP_CHECKLIST.md",
+      "benchmarks/perf_cycles/2026-02-07_213724/",
+      "docs/index.md",
+      "meta_methodology.md",
+      "scripts/update_docs_index_checklists.py",
+      "tabulensis-api/package-lock.json",
+      "tabulensis-api/package.json",
+      "tabulensis-api/wrangler.jsonc"
+    ],
+    "dirty_rust_paths": []
+  },
+  "fullscale": [
+    [
+      "`perf_50k_99_percent_blank`",
+      "43",
+      "38",
+      "-5 ms (-11.6%)"
+    ],
+    [
+      "`perf_50k_adversarial_repetitive`",
+      "27",
+      "25",
+      "-2 ms (-7.4%)"
+    ],
+    [
+      "`perf_50k_alignment_block_move`",
+      "379",
+      "302",
+      "-77 ms (-20.3%)"
+    ],
+    [
+      "`perf_50k_completely_different`",
+      "260",
+      "241",
+      "-19 ms (-7.3%)"
+    ],
+    [
+      "`perf_50k_dense_single_edit`",
+      "49",
+      "51",
+      "+2 ms (+4.1%)"
+    ],
+    [
+      "`perf_50k_identical`",
+      "21",
+      "18",
+      "-3 ms (-14.3%)"
+    ]
+  ],
+  "e2e": [
+    [
+      "`e2e_p1_dense`",
+      "2696",
+      "2693",
+      "-3 ms (-0.1%)",
+      "2685",
+      "2680",
+      "-5 ms (-0.2%)",
+      "11",
+      "12",
+      "+1 ms (+9.1%)"
+    ],
+    [
+      "`e2e_p2_noise`",
+      "1145",
+      "962",
+      "-183 ms (-16.0%)",
+      "1119",
+      "953",
+      "-166 ms (-14.8%)",
+      "13",
+      "9",
+      "-4 ms (-30.8%)"
+    ],
+    [
+      "`e2e_p3_repetitive`",
+      "2728",
+      "2414",
+      "-314 ms (-11.5%)",
+      "2703",
+      "2393",
+      "-310 ms (-11.5%)",
+      "27",
+      "21",
+      "-6 ms (-22.2%)"
+    ],
+    [
+      "`e2e_p4_sparse`",
+      "110",
+      "91",
+      "-19 ms (-17.3%)",
+      "79",
+      "66",
+      "-13 ms (-16.5%)",
+      "31",
+      "27",
+      "-4 ms (-12.9%)"
+    ],
+    [
+      "`e2e_p5_identical`",
+      "0",
+      "0",
+      "+0 ms",
+      "0",
+      "0",
+      "+0 ms",
+      "0",
+      "0",
+      "+0 ms"
+    ],
+    [
+      "`e2e_p6_sharedstrings_changed_numeric_only`",
+      "197",
+      "172",
+      "-25 ms (-12.7%)",
+      "197",
+      "172",
+      "-25 ms (-12.7%)",
+      "0",
+      "0",
+      "+0 ms"
+    ]
+  ],
+  "cli_jsonl": [
+    [
+      "`cli_perf_jsonl_emit`",
+      "43",
+      "39",
+      "-4 ms (-9.3%)",
+      "43",
+      "39",
+      "-4 ms (-9.3%)"
+    ]
+  ]
+}

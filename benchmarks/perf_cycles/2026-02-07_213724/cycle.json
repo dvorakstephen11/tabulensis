@@ -1,0 +1,91 @@
+{
+  "cycle": "2026-02-07_213724",
+  "config": {
+    "runs": 3,
+    "aggregation": "median",
+    "parallel": true,
+    "skip_fixtures": false
+  },
+  "pre": {
+    "timestamp": "2026-02-07T21:47:15.927304+00:00",
+    "git_commit": "66ae09f5f6e2",
+    "git_branch": "main",
+    "fullscale_json": "benchmarks/perf_cycles/2026-02-07_213724/pre_fullscale.json",
+    "e2e_json": "benchmarks/perf_cycles/2026-02-07_213724/pre_e2e.json",
+    "cli_jsonl_json": "benchmarks/perf_cycles/2026-02-07_213724/pre_cli_jsonl.json",
+    "fullscale_run_json": [
+      "benchmarks/perf_cycles/2026-02-07_213724/pre_fullscale_run1.json",
+      "benchmarks/perf_cycles/2026-02-07_213724/pre_fullscale_run2.json",
+      "benchmarks/perf_cycles/2026-02-07_213724/pre_fullscale_run3.json"
+    ],
+    "e2e_run_json": [
+      "benchmarks/perf_cycles/2026-02-07_213724/pre_e2e_run1.json",
+      "benchmarks/perf_cycles/2026-02-07_213724/pre_e2e_run2.json",
+      "benchmarks/perf_cycles/2026-02-07_213724/pre_e2e_run3.json"
+    ],
+    "cli_jsonl_run_json": [
+      "benchmarks/perf_cycles/2026-02-07_213724/pre_cli_jsonl_run1.json",
+      "benchmarks/perf_cycles/2026-02-07_213724/pre_cli_jsonl_run2.json",
+      "benchmarks/perf_cycles/2026-02-07_213724/pre_cli_jsonl_run3.json"
+    ],
+    "runs": 3,
+    "aggregation": "median",
+    "parallel": true,
+    "skip_fixtures": false,
+    "dirty_worktree": true,
+    "dirty_paths_count": 5,
+    "dirty_paths_sample": [
+      "\"Daily Tabulensis Efforts.md\"",
+      "\"Daily Tabulensis Efforts.md:Zone.Identifier\"",
+      ".codex_skills/",
+      "benchmarks/perf_cycles/2026-02-07_213724/",
+      "scripts/update_docs_index_checklists.py"
+    ],
+    "dirty_rust_paths": []
+  },
+  "post": {
+    "timestamp": "2026-02-07T21:55:47.338378+00:00",
+    "git_commit": "186561630fcb",
+    "git_branch": "main",
+    "fullscale_json": "benchmarks/perf_cycles/2026-02-07_213724/post_fullscale.json",
+    "e2e_json": "benchmarks/perf_cycles/2026-02-07_213724/post_e2e.json",
+    "cli_jsonl_json": "benchmarks/perf_cycles/2026-02-07_213724/post_cli_jsonl.json",
+    "fullscale_run_json": [
+      "benchmarks/perf_cycles/2026-02-07_213724/post_fullscale_run1.json",
+      "benchmarks/perf_cycles/2026-02-07_213724/post_fullscale_run2.json",
+      "benchmarks/perf_cycles/2026-02-07_213724/post_fullscale_run3.json"
+    ],
+    "e2e_run_json": [
+      "benchmarks/perf_cycles/2026-02-07_213724/post_e2e_run1.json",
+      "benchmarks/perf_cycles/2026-02-07_213724/post_e2e_run2.json",
+      "benchmarks/perf_cycles/2026-02-07_213724/post_e2e_run3.json"
+    ],
+    "cli_jsonl_run_json": [
+      "benchmarks/perf_cycles/2026-02-07_213724/post_cli_jsonl_run1.json",
+      "benchmarks/perf_cycles/2026-02-07_213724/post_cli_jsonl_run2.json",
+      "benchmarks/perf_cycles/2026-02-07_213724/post_cli_jsonl_run3.json"
+    ],
+    "runs": 3,
+    "aggregation": "median",
+    "parallel": true,
+    "skip_fixtures": false,
+    "dirty_worktree": true,
+    "dirty_paths_count": 13,
+    "dirty_paths_sample": [
+      "\"Daily Tabulensis Efforts.md:Zone.Identifier\"",
+      ".codex_skills/",
+      ".pip-user/lib/python3.10/site-packages/excel_fixtures-0.1.0.dist-info/METADATA",
+      ".pip-user/lib/python3.10/site-packages/excel_fixtures-0.1.0.dist-info/RECORD",
+      "AGENTS.md",
+      "RESEND_SETUP_CHECKLIST.md",
+      "benchmarks/perf_cycles/2026-02-07_213724/",
+      "docs/index.md",
+      "meta_methodology.md",
+      "scripts/update_docs_index_checklists.py",
+      "tabulensis-api/package-lock.json",
+      "tabulensis-api/package.json",
+      "tabulensis-api/wrangler.jsonc"
+    ],
+    "dirty_rust_paths": []
+  }
+}

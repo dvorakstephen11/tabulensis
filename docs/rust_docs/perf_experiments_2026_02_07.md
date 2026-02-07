@@ -198,3 +198,17 @@ Key metrics to evaluate:
 - All tests pass.
 
 ## Outcome (TBD)
+
+Perf-cycle artifacts (pre/post) recorded at:
+- `benchmarks/perf_cycles/2026-02-07_213724/`
+- Delta summary: `benchmarks/perf_cycles/2026-02-07_213724/cycle_delta.md`
+- Signal report: `benchmarks/perf_cycles/2026-02-07_213724/cycle_signal.md`
+
+Key deltas (median-of-3, from the anchored cycle):
+- `e2e_p2_noise.parse_time_ms`: `1119 -> 953` (-166ms, -14.8%) (medium confidence)
+- `e2e_p3_repetitive.parse_time_ms`: `2703 -> 2393` (-310ms, -11.5%) (low confidence due to high pre-run IQR)
+- `e2e_p4_sparse.parse_time_ms`: `79 -> 66` (-13ms, -16.5%) (medium confidence)
+- `e2e_p1_dense.parse_time_ms`: `2685 -> 2680` (-5ms, -0.2%)
+
+Conclusion:
+- This looks like a real parse-path win on the “noise” fixture (and likely helps other parse-heavy sheets), with no obvious regressions. Keep the change.
