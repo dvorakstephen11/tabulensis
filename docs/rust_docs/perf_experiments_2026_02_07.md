@@ -133,7 +133,18 @@ Use a full perf cycle anchored around this experiment:
 
 ## Outcome (2026-02-07)
 
-Perf-cycle artifacts (pre/post) will be recorded at:
+Perf-cycle artifacts (pre/post) recorded at:
 - `benchmarks/perf_cycles/2026-02-07_210651/`
+- Delta summary: `benchmarks/perf_cycles/2026-02-07_210651/cycle_delta.md`
+- Signal report: `benchmarks/perf_cycles/2026-02-07_210651/cycle_signal.md`
 
-Result: _pending (to be filled after post-run)_.
+Key deltas from the anchored perf cycle (median-of-3):
+- `e2e_p1_dense.parse_time_ms`: `2820 -> 3310` (+490ms, +17.4%)
+- `e2e_p2_noise.parse_time_ms`: `1092 -> 1377` (+285ms, +26.1%)
+
+Sanity check / interpretation:
+- The post cycle included cold compilation work (notably `post_fullscale_run1` was much slower than the other runs), which likely altered CPU/system state for the subsequent e2e runs.
+- A small A/B spot-check (3 runs each, compiled at each commit) showed no win and a tiny regression for `e2e_p2_noise` (median parse `988ms -> 1010ms`, ~+2%).
+
+Conclusion:
+- Not a performance win; treat as a failed experiment (no improvement, possible small regression). Code change was reverted after the experiment.

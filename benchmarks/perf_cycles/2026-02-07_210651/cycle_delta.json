@@ -1,0 +1,196 @@
+{
+  "cycle": "2026-02-07_210651",
+  "config": {
+    "runs": 3,
+    "aggregation": "median",
+    "parallel": true,
+    "skip_fixtures": false
+  },
+  "pre": {
+    "timestamp": "2026-02-07T21:10:22.549237+00:00",
+    "git_commit": "c4d57470f97c",
+    "git_branch": "main",
+    "fullscale_json": "benchmarks/perf_cycles/2026-02-07_210651/pre_fullscale.json",
+    "e2e_json": "benchmarks/perf_cycles/2026-02-07_210651/pre_e2e.json",
+    "cli_jsonl_json": "benchmarks/perf_cycles/2026-02-07_210651/pre_cli_jsonl.json",
+    "fullscale_run_json": [
+      "benchmarks/perf_cycles/2026-02-07_210651/pre_fullscale_run1.json",
+      "benchmarks/perf_cycles/2026-02-07_210651/pre_fullscale_run2.json",
+      "benchmarks/perf_cycles/2026-02-07_210651/pre_fullscale_run3.json"
+    ],
+    "e2e_run_json": [
+      "benchmarks/perf_cycles/2026-02-07_210651/pre_e2e_run1.json",
+      "benchmarks/perf_cycles/2026-02-07_210651/pre_e2e_run2.json",
+      "benchmarks/perf_cycles/2026-02-07_210651/pre_e2e_run3.json"
+    ],
+    "cli_jsonl_run_json": [
+      "benchmarks/perf_cycles/2026-02-07_210651/pre_cli_jsonl_run1.json",
+      "benchmarks/perf_cycles/2026-02-07_210651/pre_cli_jsonl_run2.json",
+      "benchmarks/perf_cycles/2026-02-07_210651/pre_cli_jsonl_run3.json"
+    ],
+    "runs": 3,
+    "aggregation": "median",
+    "parallel": true,
+    "skip_fixtures": false,
+    "dirty_worktree": false,
+    "dirty_paths_count": 0,
+    "dirty_paths_sample": [],
+    "dirty_rust_paths": []
+  },
+  "post": {
+    "timestamp": "2026-02-07T21:17:43.254438+00:00",
+    "git_commit": "7444a8c52fa7",
+    "git_branch": "main",
+    "fullscale_json": "benchmarks/perf_cycles/2026-02-07_210651/post_fullscale.json",
+    "e2e_json": "benchmarks/perf_cycles/2026-02-07_210651/post_e2e.json",
+    "cli_jsonl_json": "benchmarks/perf_cycles/2026-02-07_210651/post_cli_jsonl.json",
+    "fullscale_run_json": [
+      "benchmarks/perf_cycles/2026-02-07_210651/post_fullscale_run1.json",
+      "benchmarks/perf_cycles/2026-02-07_210651/post_fullscale_run2.json",
+      "benchmarks/perf_cycles/2026-02-07_210651/post_fullscale_run3.json"
+    ],
+    "e2e_run_json": [
+      "benchmarks/perf_cycles/2026-02-07_210651/post_e2e_run1.json",
+      "benchmarks/perf_cycles/2026-02-07_210651/post_e2e_run2.json",
+      "benchmarks/perf_cycles/2026-02-07_210651/post_e2e_run3.json"
+    ],
+    "cli_jsonl_run_json": [
+      "benchmarks/perf_cycles/2026-02-07_210651/post_cli_jsonl_run1.json",
+      "benchmarks/perf_cycles/2026-02-07_210651/post_cli_jsonl_run2.json",
+      "benchmarks/perf_cycles/2026-02-07_210651/post_cli_jsonl_run3.json"
+    ],
+    "runs": 3,
+    "aggregation": "median",
+    "parallel": true,
+    "skip_fixtures": false,
+    "dirty_worktree": true,
+    "dirty_paths_count": 1,
+    "dirty_paths_sample": [
+      "benchmarks/perf_cycles/2026-02-07_210651/"
+    ],
+    "dirty_rust_paths": []
+  },
+  "fullscale": [
+    [
+      "`perf_50k_99_percent_blank`",
+      "37",
+      "30",
+      "-7 ms (-18.9%)"
+    ],
+    [
+      "`perf_50k_adversarial_repetitive`",
+      "22",
+      "31",
+      "+9 ms (+40.9%)"
+    ],
+    [
+      "`perf_50k_alignment_block_move`",
+      "351",
+      "374",
+      "+23 ms (+6.6%)"
+    ],
+    [
+      "`perf_50k_completely_different`",
+      "252",
+      "269",
+      "+17 ms (+6.7%)"
+    ],
+    [
+      "`perf_50k_dense_single_edit`",
+      "48",
+      "51",
+      "+3 ms (+6.2%)"
+    ],
+    [
+      "`perf_50k_identical`",
+      "20",
+      "17",
+      "-3 ms (-15.0%)"
+    ]
+  ],
+  "e2e": [
+    [
+      "`e2e_p1_dense`",
+      "2828",
+      "3321",
+      "+493 ms (+17.4%)",
+      "2820",
+      "3310",
+      "+490 ms (+17.4%)",
+      "13",
+      "12",
+      "-1 ms (-7.7%)"
+    ],
+    [
+      "`e2e_p2_noise`",
+      "1110",
+      "1392",
+      "+282 ms (+25.4%)",
+      "1092",
+      "1377",
+      "+285 ms (+26.1%)",
+      "15",
+      "13",
+      "-2 ms (-13.3%)"
+    ],
+    [
+      "`e2e_p3_repetitive`",
+      "2691",
+      "3221",
+      "+530 ms (+19.7%)",
+      "2665",
+      "3188",
+      "+523 ms (+19.6%)",
+      "26",
+      "33",
+      "+7 ms (+26.9%)"
+    ],
+    [
+      "`e2e_p4_sparse`",
+      "102",
+      "130",
+      "+28 ms (+27.5%)",
+      "73",
+      "93",
+      "+20 ms (+27.4%)",
+      "33",
+      "45",
+      "+12 ms (+36.4%)"
+    ],
+    [
+      "`e2e_p5_identical`",
+      "0",
+      "0",
+      "+0 ms",
+      "0",
+      "0",
+      "+0 ms",
+      "0",
+      "0",
+      "+0 ms"
+    ],
+    [
+      "`e2e_p6_sharedstrings_changed_numeric_only`",
+      "202",
+      "233",
+      "+31 ms (+15.3%)",
+      "202",
+      "233",
+      "+31 ms (+15.3%)",
+      "0",
+      "0",
+      "+0 ms"
+    ]
+  ],
+  "cli_jsonl": [
+    [
+      "`cli_perf_jsonl_emit`",
+      "47",
+      "44",
+      "-3 ms (-6.4%)",
+      "47",
+      "44",
+      "-3 ms (-6.4%)"
+    ]
+  ]
+}
