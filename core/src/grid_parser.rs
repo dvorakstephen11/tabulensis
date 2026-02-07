@@ -2289,17 +2289,13 @@ fn address_to_index_ascii_bytes(a1: &[u8]) -> Option<(u32, u32)> {
     let mut col: u32 = 0;
     while i < a1.len() {
         let b = a1[i];
-        let upper = match b {
-            b'A'..=b'Z' => b,
-            b'a'..=b'z' => b - 32,
-            _ => break,
-        };
-
-        col = col * 26 + (upper - b'A' + 1) as u32;
-        // Excel max column is 16,384 (XFD). Reject out-of-range early.
-        if col > 16_384 {
-            return None;
+        if !b.is_ascii_alphabetic() {
+            break;
         }
+        let upper = b.to_ascii_uppercase();
+        col = col
+            .checked_mul(26)?
+            .checked_add((upper - b'A' + 1) as u32)?;
 
         i += 1;
     }
@@ -2314,11 +2310,7 @@ fn address_to_index_ascii_bytes(a1: &[u8]) -> Option<(u32, u32)> {
         if !b.is_ascii_digit() {
             return None;
         }
-        row = row * 10 + (b - b'0') as u32;
-        // Excel max row is 1,048,576. Reject out-of-range early.
-        if row > 1_048_576 {
-            return None;
-        }
+        row = row.checked_mul(10)?.checked_add((b - b'0') as u32)?;
         i += 1;
     }
 
