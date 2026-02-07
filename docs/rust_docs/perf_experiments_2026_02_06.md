@@ -457,6 +457,18 @@ Correctness:
 Performance (median of 3):
 - `perf_jsonl_emit` (200k `CellEdited` ops): 61 ms -> 32 ms (-47.5%).
 
+Promotion (2026-02-07):
+- Enabled `custom-jsonl` by default for the CLI (`tabulensis-cli`) so streaming `--format jsonl` benefits without requiring feature flags.
+
+Perf-cycle artifacts (pre/post) are recorded at:
+- `benchmarks/perf_cycles/2026-02-07_130939/`
+- Delta summary: `benchmarks/perf_cycles/2026-02-07_130939/cycle_delta.md`
+- Signal report: `benchmarks/perf_cycles/2026-02-07_130939/cycle_signal.md`
+
+Key delta (median of 3):
+- `cli_perf_jsonl_emit`: 74 -> 32 ms (-56.8%).
+- No high-confidence regressions were detected in full-scale or e2e benches.
+
 Repro commands:
 - Baseline: `cargo test -p excel_diff --release --features perf-metrics --test perf_jsonl_emit perf_jsonl_emit -- --ignored --nocapture --test-threads=1`
 - Custom: `cargo test -p excel_diff --release --features "perf-metrics custom-jsonl" --test perf_jsonl_emit perf_jsonl_emit -- --ignored --nocapture --test-threads=1`
