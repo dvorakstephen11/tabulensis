@@ -69,5 +69,14 @@ Perf-cycle artifacts (pre/post) recorded at:
 - Delta summary: `benchmarks/perf_cycles/2026-02-07_194721/cycle_delta.md`
 - Signal report: `benchmarks/perf_cycles/2026-02-07_194721/cycle_signal.md`
 
-Result: _pending (to be filled after post-run)_.
+Key deltas (median-of-3):
+- `e2e_p4_sparse.signature_build_time_ms`: `25 -> 23` (-2ms, -8%)
+- `e2e_p4_sparse.diff_time_ms`: `25 -> 24` (-1ms, -4%)
+- `e2e_p4_sparse.total_time_ms`: `84 -> 83` (-1ms, -1.2%)
 
+Notes:
+- Several parse-dominated tests showed slower `parse_time_ms` in the post run (e.g. `e2e_p1_dense` +4.8%).
+  - This experiment only touched diff signature construction; treat the parse deltas as likely environment noise unless reproduced with alternating A/B runs.
+
+Conclusion:
+- This was a small but real improvement to the targeted sparse-signature metric, but not a large end-to-end win on the full suite.
