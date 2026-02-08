@@ -23,6 +23,10 @@
 	],
 	"env": {
 		"dev": {
+			"vars": {
+				"RESEND_FROM": "Tabulensis <licenses@mail.tabulensis.com>",
+				"RESEND_REPLY_TO": "support@tabulensis.com"
+			},
 			"d1_databases": [
 				{
 					"binding": "DB",

@@ -1,5 +1,6 @@
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import nacl from 'tweetnacl';
+import { Resend } from 'resend';
 
 type LicenseStatus = 'pending' | 'trialing' | 'active' | 'past_due' | 'canceled' | 'revoked';
 
@@ -22,6 +23,11 @@ type Env = {
 	LICENSE_MAX_DEVICES?: string; // default 2
 	LICENSE_ADMIN_TOKEN?: string;
 	LICENSE_MOCK_STRIPE?: string;
+
+	// Resend (transactional email)
+	RESEND_API_KEY?: string; // secret
+	RESEND_FROM?: string; // var
+	RESEND_REPLY_TO?: string; // var
 
 	// CORS allowlist for browser requests (CORS never applies to CLI/desktop).
 	APP_ORIGIN?: string;
@@ -120,6 +126,11 @@ const JSON_HEADERS = {
 	'content-type': 'application/json',
 };
 
+const TABULENSIS_DOWNLOAD_URL = 'https://tabulensis.com/download';
+const TABULENSIS_BILLING_URL = 'https://tabulensis.com/support/billing';
+const TABULENSIS_SUPPORT_EMAIL = 'support@tabulensis.com';
+const LICENSE_EMAIL_SUBJECT = 'Your Tabulensis license key';
+
 let schemaEnsured = false;
 let schemaEnsuring: Promise<void> | null = null;
 
@@ -138,6 +149,94 @@ function nowSeconds(): number {
 
 function daysToSeconds(days: number): number {
 	return Math.max(0, Math.trunc(days)) * 86400;
+}
+
+function resendFrom(env: Env): string {
+	return env.RESEND_FROM?.trim() || 'Tabulensis <licenses@mail.tabulensis.com>';
+}
+
+function resendReplyTo(env: Env): string | undefined {
+	const value = env.RESEND_REPLY_TO?.trim();
+	return value ? value : undefined;
+}
+
+function escapeHtml(value: string): string {
+	return value
+		.replaceAll('&', '&amp;')
+		.replaceAll('<', '&lt;')
+		.replaceAll('>', '&gt;')
+		.replaceAll('"', '&quot;')
+		.replaceAll("'", '&#39;');
+}
+
+function licenseEmailText(licenseKey: string): string {
+	return [
+		'Your Tabulensis license key',
+		'',
+		'License key:',
+		licenseKey,
+		'',
+		'Activate:',
+		`tabulensis license activate ${licenseKey}`,
+		'',
+		'Download:',
+		TABULENSIS_DOWNLOAD_URL,
+		'',
+		'Billing:',
+		TABULENSIS_BILLING_URL,
+		'',
+		'Support:',
+		TABULENSIS_SUPPORT_EMAIL,
+		'',
+	].join('\n');
+}
+
+function licenseEmailHtml(licenseKey: string): string {
+	// Keep this dependency-free and deterministic.
+	const key = escapeHtml(licenseKey);
+	return `
+<div style="font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; line-height: 1.4">
+  <h1 style="margin: 0 0 16px 0; font-size: 20px;">Your Tabulensis license key</h1>
+  <p style="margin: 0 0 12px 0;"><strong>License key:</strong> <code style="font-size: 14px;">${key}</code></p>
+  <p style="margin: 0 0 12px 0;"><strong>Activate:</strong> <code style="font-size: 14px;">tabulensis license activate ${key}</code></p>
+  <p style="margin: 0 0 12px 0;"><strong>Download:</strong> <a href="${TABULENSIS_DOWNLOAD_URL}">${TABULENSIS_DOWNLOAD_URL}</a></p>
+  <p style="margin: 0 0 12px 0;"><strong>Billing:</strong> <a href="${TABULENSIS_BILLING_URL}">${TABULENSIS_BILLING_URL}</a></p>
+  <p style="margin: 0;"><strong>Support:</strong> <a href="mailto:${TABULENSIS_SUPPORT_EMAIL}">${TABULENSIS_SUPPORT_EMAIL}</a></p>
+</div>
+`.trim();
+}
+
+type SendLicenseEmailParams = {
+	to: string;
+	licenseKey: string;
+	idempotencyKey?: string;
+};
+
+async function sendLicenseEmail(env: Env, params: SendLicenseEmailParams): Promise<string> {
+	const apiKey = env.RESEND_API_KEY?.trim();
+	if (!apiKey) throw new Error('RESEND_API_KEY not set');
+
+	const resend = new Resend(apiKey);
+	const { data, error } = await resend.emails.send(
+		{
+			from: resendFrom(env),
+			to: params.to.trim(),
+			replyTo: resendReplyTo(env),
+			subject: LICENSE_EMAIL_SUBJECT,
+			text: licenseEmailText(params.licenseKey.trim()),
+			html: licenseEmailHtml(params.licenseKey.trim()),
+		},
+		params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : undefined,
+	);
+
+	if (error) {
+		const message = (error as any)?.message ? String((error as any).message) : JSON.stringify(error);
+		throw new Error(`Resend send failed: ${message}`);
+	}
+
+	const id = (data as any)?.id != null ? String((data as any).id) : '';
+	if (!id) throw new Error('Resend send failed: response missing id');
+	return id;
 }
 
 function base32NoPad(bytes: Uint8Array): string {
@@ -613,7 +712,7 @@ async function handleCheckoutStatus(request: Request, env: Env): Promise<Respons
 	} satisfies CheckoutStatusResponse);
 }
 
-async function handleWebhook(request: Request, env: Env): Promise<Response> {
+async function handleWebhook(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
 	await ensureSchema(env);
 
 	const rawBody = await request.text();
@@ -679,17 +778,31 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 			)
 				.bind('trialing', now, customerId, subscriptionId, email, licenseKey)
 				.run();
-		} else {
-			const licenseId = randomUUID();
-			await env.DB.prepare(
-				`INSERT INTO licenses (
-           id, created_at, updated_at, status, stripe_customer_id, stripe_subscription_id, trial_end, current_period_end, max_devices, license_key, email
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			)
-				.bind(licenseId, now, now, 'trialing', customerId, subscriptionId, null, null, envInt(env.LICENSE_MAX_DEVICES, 2), licenseKey, email)
-				.run();
+			} else {
+				const licenseId = randomUUID();
+				await env.DB.prepare(
+					`INSERT INTO licenses (
+	           id, created_at, updated_at, status, stripe_customer_id, stripe_subscription_id, trial_end, current_period_end, max_devices, license_key, email
+	         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				)
+					.bind(licenseId, now, now, 'trialing', customerId, subscriptionId, null, null, envInt(env.LICENSE_MAX_DEVICES, 2), licenseKey, email)
+					.run();
+			}
+
+			// Best-effort email send: webhook should still succeed even if email delivery fails.
+			const apiKey = env.RESEND_API_KEY?.trim();
+			if (apiKey && email) {
+				const idempotencyKey = event.id != null ? `license-email/stripe-event/${String(event.id)}` : undefined;
+				const send = sendLicenseEmail(env, { to: email, licenseKey, idempotencyKey }).catch((err) => {
+					console.error('license email send failed', err);
+				});
+				if (ctx) {
+					ctx.waitUntil(send);
+				} else {
+					await send;
+				}
+			}
 		}
-	}
 
 	if (eventType === 'invoice.paid') {
 		const subscriptionId = data.subscription ? String(data.subscription) : null;
@@ -939,24 +1052,47 @@ async function handleLicenseResend(request: Request, env: Env): Promise<Response
 		return errorResponse(request, env, 'email or license_key is required');
 	}
 
+	let licenseKey: string | null = null;
+	let email: string | null = null;
+
 	if (body.license_key) {
-		const licenseKey = body.license_key.trim();
-		const record = await env.DB.prepare('SELECT id as id FROM licenses WHERE license_key = ?')
-			.bind(licenseKey)
+		const key = body.license_key.trim();
+		const row = await env.DB.prepare('SELECT license_key as license_key, email as email FROM licenses WHERE license_key = ?')
+			.bind(key)
 			.first();
-		if (!record?.id) return errorResponse(request, env, 'License not found', 404);
+		licenseKey = row?.license_key != null ? String(row.license_key) : null;
+		email = row?.email != null ? String(row.email) : null;
+	} else if (body.email) {
+		const addr = body.email.trim();
+		const row = await env.DB.prepare(
+			`SELECT license_key as license_key, email as email
+	     FROM licenses
+	     WHERE email = ?
+	     ORDER BY updated_at DESC
+	     LIMIT 1`,
+		)
+			.bind(addr)
+			.first();
+		licenseKey = row?.license_key != null ? String(row.license_key) : null;
+		email = row?.email != null ? String(row.email) : null;
 	}
 
-	if (body.email) {
-		const email = body.email.trim();
-		const record = await env.DB.prepare('SELECT id as id FROM licenses WHERE email = ? LIMIT 1')
-			.bind(email)
-			.first();
-		if (!record?.id) return errorResponse(request, env, 'License not found', 404);
+	if (!licenseKey) return errorResponse(request, env, 'License not found', 404);
+	if (!email) {
+		return errorResponse(
+			request,
+			env,
+			'Email is missing for this license. Contact support for help.',
+			400,
+		);
 	}
 
-	// TODO: wire an email provider (e.g., Resend/Postmark) and send the license key.
-	return jsonResponse(request, env, { status: 'queued' });
+	try {
+		const id = await sendLicenseEmail(env, { to: email, licenseKey });
+		return jsonResponse(request, env, { status: 'sent', id });
+	} catch (err) {
+		return errorResponse(request, env, (err as Error).message, 502);
+	}
 }
 
 async function handleLicenseReset(request: Request, env: Env): Promise<Response> {
@@ -1043,7 +1179,7 @@ async function handlePublicKey(request: Request, env: Env): Promise<Response> {
 }
 
 export default {
-	async fetch(request, env): Promise<Response> {
+	async fetch(request, env, ctx): Promise<Response> {
 		const url = new URL(request.url);
 		const { pathname } = url;
 
@@ -1068,10 +1204,10 @@ export default {
 			if (request.method !== 'GET') return errorResponse(request, env as Env, 'method not allowed', 405);
 			return handleCheckoutStatus(request, env as Env);
 		}
-		if (pathname === '/stripe/webhook') {
-			if (request.method !== 'POST') return errorResponse(request, env as Env, 'method not allowed', 405);
-			return handleWebhook(request, env as Env);
-		}
+			if (pathname === '/stripe/webhook') {
+				if (request.method !== 'POST') return errorResponse(request, env as Env, 'method not allowed', 405);
+				return handleWebhook(request, env as Env, ctx);
+			}
 		if (pathname === '/license/activate') {
 			if (request.method !== 'POST') return errorResponse(request, env as Env, 'method not allowed', 405);
 			return handleLicenseActivate(request, env as Env);
@@ -1111,10 +1247,10 @@ export default {
 			if (request.method !== 'POST') return errorResponse(request, env as Env, 'method not allowed', 405);
 			return handlePortalSession(request, env as Env);
 		}
-		if (pathname === '/api/stripe/webhook') {
-			if (request.method !== 'POST') return errorResponse(request, env as Env, 'method not allowed', 405);
-			return handleWebhook(request, env as Env);
-		}
+			if (pathname === '/api/stripe/webhook') {
+				if (request.method !== 'POST') return errorResponse(request, env as Env, 'method not allowed', 405);
+				return handleWebhook(request, env as Env, ctx);
+			}
 		if (pathname === '/api/license/activate') {
 			if (request.method !== 'POST') return errorResponse(request, env as Env, 'method not allowed', 405);
 			return handleLicenseActivate(request, env as Env);

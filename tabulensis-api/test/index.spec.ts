@@ -15,6 +15,9 @@ describe('tabulensis-api licensing worker', () => {
 			LICENSE_MOCK_STRIPE: '1',
 			LICENSE_SIGNING_KEY_B64: SEED_B64,
 			LICENSE_MAX_DEVICES: '2',
+			RESEND_API_KEY: 're_test_key_123',
+			RESEND_FROM: 'Tabulensis <licenses@mail.tabulensis.com>',
+			RESEND_REPLY_TO: 'support@tabulensis.com',
 			STRIPE_TRIAL_DAYS: '30',
 			STRIPE_SUCCESS_URL: 'https://tabulensis.com/download/success',
 			STRIPE_CANCEL_URL: 'https://tabulensis.com/download',
@@ -88,7 +91,7 @@ describe('tabulensis-api licensing worker', () => {
 		await waitOnExecutionContext(ctx);
 	});
 
-	it('enforces device limit and allows reuse after deactivation', async () => {
+		it('enforces device limit and allows reuse after deactivation', async () => {
 		const ctx = createExecutionContext();
 		const startReq = new IncomingRequest('http://example.com/api/checkout/start', {
 			method: 'POST',
@@ -144,6 +147,117 @@ describe('tabulensis-api licensing worker', () => {
 		);
 		expect(after.status).toBe(200);
 
-		await waitOnExecutionContext(ctx);
+			await waitOnExecutionContext(ctx);
+		});
+
+		it('license resend sends email (by license_key)', async () => {
+			const realFetch = globalThis.fetch;
+			const calls: Array<{ url: string; init?: RequestInit }> = [];
+			(globalThis as any).fetch = async (input: any, init?: any) => {
+				const url = typeof input === 'string' ? input : String(input?.url ?? '');
+				if (url === 'https://api.resend.com/emails') {
+					calls.push({ url, init });
+					return new Response(JSON.stringify({ id: 'email_test_123' }), {
+						status: 200,
+						headers: { 'content-type': 'application/json' },
+					});
+				}
+				return realFetch(input, init);
+			};
+
+			try {
+				const ctx = createExecutionContext();
+				const startReq = new IncomingRequest('http://example.com/api/checkout/start', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ email: 'user3@example.com' }),
+				});
+				const startRes = await worker.fetch(startReq, testEnv(), ctx);
+				expect(startRes.status).toBe(200);
+				const startData = (await startRes.json()) as any;
+
+				const resendReq = new IncomingRequest('http://example.com/license/resend', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ license_key: startData.license_key }),
+				});
+				const resendRes = await worker.fetch(resendReq, testEnv(), ctx);
+				expect(resendRes.status).toBe(200);
+				const resendData = (await resendRes.json()) as any;
+				expect(resendData.status).toBe('sent');
+				expect(resendData.id).toBe('email_test_123');
+
+				await waitOnExecutionContext(ctx);
+				expect(calls.length).toBe(1);
+
+				const sent = calls[0];
+				const headers = new Headers(sent.init?.headers);
+				expect(headers.get('Authorization')).toBe('Bearer re_test_key_123');
+				expect(headers.get('Idempotency-Key')).toBe(null);
+
+				const payload = JSON.parse(String(sent.init?.body ?? '')) as any;
+				expect(payload.to).toBe('user3@example.com');
+				expect(payload.from).toBe('Tabulensis <licenses@mail.tabulensis.com>');
+				expect(payload.reply_to).toBe('support@tabulensis.com');
+				expect(payload.subject).toBe('Your Tabulensis license key');
+				expect(payload.text).toContain(String(startData.license_key));
+				expect(payload.html).toContain(String(startData.license_key));
+			} finally {
+				(globalThis as any).fetch = realFetch;
+			}
+		});
+
+		it('checkout.session.completed webhook triggers a license email with an idempotency key', async () => {
+			const realFetch = globalThis.fetch;
+			const calls: Array<{ url: string; init?: RequestInit }> = [];
+			(globalThis as any).fetch = async (input: any, init?: any) => {
+				const url = typeof input === 'string' ? input : String(input?.url ?? '');
+				if (url === 'https://api.resend.com/emails') {
+					calls.push({ url, init });
+					return new Response(JSON.stringify({ id: 'email_webhook_1' }), {
+						status: 200,
+						headers: { 'content-type': 'application/json' },
+					});
+				}
+				return realFetch(input, init);
+			};
+
+			try {
+				const ctx = createExecutionContext();
+				const eventId = 'evt_test_123';
+				const licenseKey = 'TABU-AAAA-BBBB-CCCC';
+				const webhookReq = new IncomingRequest('http://example.com/stripe/webhook', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({
+						id: eventId,
+						type: 'checkout.session.completed',
+						created: 123,
+						data: {
+							object: {
+								id: 'cs_test_123',
+								customer: 'cus_test_123',
+								subscription: 'sub_test_123',
+								customer_details: { email: 'buyer@example.com' },
+								metadata: { license_key: licenseKey },
+							},
+						},
+					}),
+				});
+
+				const webhookRes = await worker.fetch(webhookReq, testEnv(), ctx);
+				expect(webhookRes.status).toBe(200);
+				await waitOnExecutionContext(ctx);
+
+				expect(calls.length).toBe(1);
+				const headers = new Headers(calls[0].init?.headers);
+				expect(headers.get('Idempotency-Key')).toBe(`license-email/stripe-event/${eventId}`);
+
+				const payload = JSON.parse(String(calls[0].init?.body ?? '')) as any;
+				expect(payload.to).toBe('buyer@example.com');
+				expect(payload.text).toContain(licenseKey);
+			} finally {
+				(globalThis as any).fetch = realFetch;
+			}
+		});
 	});
-});
