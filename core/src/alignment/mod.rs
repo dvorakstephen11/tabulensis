@@ -43,7 +43,7 @@ pub(crate) mod move_extraction;
 pub(crate) mod runs;
 
 pub(crate) use crate::alignment_types::RowBlockMove;
-pub(crate) use assembly::align_rows_amr_with_signatures_from_views;
 pub(crate) use assembly::align_meta_with_amr;
+pub(crate) use assembly::align_rows_amr_with_signatures_from_views;
 #[cfg(feature = "perf-metrics")]
 pub(crate) use assembly::align_rows_amr_with_signatures_from_views_with_metrics;

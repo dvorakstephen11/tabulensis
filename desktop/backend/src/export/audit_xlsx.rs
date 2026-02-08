@@ -98,18 +98,30 @@ fn sheet_mut<'a>(
         .map_err(|e| StoreError::InvalidData(e.to_string()))
 }
 
-fn write_summary_sheet(sheet: &mut rust_xlsxwriter::Worksheet, summary: &DiffRunSummary, header: &Format) {
+fn write_summary_sheet(
+    sheet: &mut rust_xlsxwriter::Worksheet,
+    summary: &DiffRunSummary,
+    header: &Format,
+) {
     let mut row = 0;
-    sheet.write_string_with_format(row, 0, "Old path", header).ok();
+    sheet
+        .write_string_with_format(row, 0, "Old path", header)
+        .ok();
     sheet.write_string(row, 1, &summary.old_path).ok();
     row += 1;
-    sheet.write_string_with_format(row, 0, "New path", header).ok();
+    sheet
+        .write_string_with_format(row, 0, "New path", header)
+        .ok();
     sheet.write_string(row, 1, &summary.new_path).ok();
     row += 1;
-    sheet.write_string_with_format(row, 0, "Started", header).ok();
+    sheet
+        .write_string_with_format(row, 0, "Started", header)
+        .ok();
     sheet.write_string(row, 1, &summary.started_at).ok();
     row += 1;
-    sheet.write_string_with_format(row, 0, "Finished", header).ok();
+    sheet
+        .write_string_with_format(row, 0, "Finished", header)
+        .ok();
     if let Some(finished) = &summary.finished_at {
         sheet.write_string(row, 1, finished).ok();
     }
@@ -117,45 +129,79 @@ fn write_summary_sheet(sheet: &mut rust_xlsxwriter::Worksheet, summary: &DiffRun
     sheet.write_string_with_format(row, 0, "Mode", header).ok();
     sheet.write_string(row, 1, summary.mode.as_str()).ok();
     row += 1;
-    sheet.write_string_with_format(row, 0, "Status", header).ok();
+    sheet
+        .write_string_with_format(row, 0, "Status", header)
+        .ok();
     sheet.write_string(row, 1, summary.status.as_str()).ok();
     row += 1;
-    sheet.write_string_with_format(row, 0, "Complete", header).ok();
-    sheet.write_string(row, 1, if summary.complete { "true" } else { "false" }).ok();
+    sheet
+        .write_string_with_format(row, 0, "Complete", header)
+        .ok();
+    sheet
+        .write_string(row, 1, if summary.complete { "true" } else { "false" })
+        .ok();
     row += 1;
-    sheet.write_string_with_format(row, 0, "Op count", header).ok();
+    sheet
+        .write_string_with_format(row, 0, "Op count", header)
+        .ok();
     sheet.write_number(row, 1, summary.op_count as f64).ok();
     row += 1;
-    sheet.write_string_with_format(row, 0, "Warnings", header).ok();
-    sheet.write_number(row, 1, summary.warnings.len() as f64).ok();
+    sheet
+        .write_string_with_format(row, 0, "Warnings", header)
+        .ok();
+    sheet
+        .write_number(row, 1, summary.warnings.len() as f64)
+        .ok();
     row += 1;
-    sheet.write_string_with_format(row, 0, "Engine version", header).ok();
+    sheet
+        .write_string_with_format(row, 0, "Engine version", header)
+        .ok();
     sheet.write_string(row, 1, &summary.engine_version).ok();
     row += 1;
-    sheet.write_string_with_format(row, 0, "App version", header).ok();
+    sheet
+        .write_string_with_format(row, 0, "App version", header)
+        .ok();
     sheet.write_string(row, 1, &summary.app_version).ok();
     row += 2;
 
     sheet.write_string_with_format(row, 0, "Sheet", header).ok();
     sheet.write_string_with_format(row, 1, "Ops", header).ok();
     sheet.write_string_with_format(row, 2, "Added", header).ok();
-    sheet.write_string_with_format(row, 3, "Removed", header).ok();
-    sheet.write_string_with_format(row, 4, "Modified", header).ok();
+    sheet
+        .write_string_with_format(row, 3, "Removed", header)
+        .ok();
+    sheet
+        .write_string_with_format(row, 4, "Modified", header)
+        .ok();
     sheet.write_string_with_format(row, 5, "Moved", header).ok();
     row += 1;
 
     for sheet_summary in &summary.sheets {
         sheet.write_string(row, 0, &sheet_summary.sheet_name).ok();
-        sheet.write_number(row, 1, sheet_summary.op_count as f64).ok();
-        sheet.write_number(row, 2, sheet_summary.counts.added as f64).ok();
-        sheet.write_number(row, 3, sheet_summary.counts.removed as f64).ok();
-        sheet.write_number(row, 4, sheet_summary.counts.modified as f64).ok();
-        sheet.write_number(row, 5, sheet_summary.counts.moved as f64).ok();
+        sheet
+            .write_number(row, 1, sheet_summary.op_count as f64)
+            .ok();
+        sheet
+            .write_number(row, 2, sheet_summary.counts.added as f64)
+            .ok();
+        sheet
+            .write_number(row, 3, sheet_summary.counts.removed as f64)
+            .ok();
+        sheet
+            .write_number(row, 4, sheet_summary.counts.modified as f64)
+            .ok();
+        sheet
+            .write_number(row, 5, sheet_summary.counts.moved as f64)
+            .ok();
         row += 1;
     }
 }
 
-fn write_warnings_sheet(sheet: &mut rust_xlsxwriter::Worksheet, summary: &DiffRunSummary, header: &Format) {
+fn write_warnings_sheet(
+    sheet: &mut rust_xlsxwriter::Worksheet,
+    summary: &DiffRunSummary,
+    header: &Format,
+) {
     sheet.write_string_with_format(0, 0, "Warning", header).ok();
     let mut row = 1;
     for warning in &summary.warnings {
@@ -175,35 +221,45 @@ fn write_cells_header(sheet: &mut rust_xlsxwriter::Worksheet, header: &Format) {
         "Classification",
     ];
     for (idx, title) in headers.iter().enumerate() {
-        sheet.write_string_with_format(0, idx as u16, *title, header).ok();
+        sheet
+            .write_string_with_format(0, idx as u16, *title, header)
+            .ok();
     }
 }
 
 fn write_structure_header(sheet: &mut rust_xlsxwriter::Worksheet, header: &Format) {
     let headers = ["Kind", "Sheet", "Detail"];
     for (idx, title) in headers.iter().enumerate() {
-        sheet.write_string_with_format(0, idx as u16, *title, header).ok();
+        sheet
+            .write_string_with_format(0, idx as u16, *title, header)
+            .ok();
     }
 }
 
 fn write_query_header(sheet: &mut rust_xlsxwriter::Worksheet, header: &Format) {
     let headers = ["Kind", "Name", "Detail"];
     for (idx, title) in headers.iter().enumerate() {
-        sheet.write_string_with_format(0, idx as u16, *title, header).ok();
+        sheet
+            .write_string_with_format(0, idx as u16, *title, header)
+            .ok();
     }
 }
 
 fn write_model_header(sheet: &mut rust_xlsxwriter::Worksheet, header: &Format) {
     let headers = ["Kind", "Name", "Detail"];
     for (idx, title) in headers.iter().enumerate() {
-        sheet.write_string_with_format(0, idx as u16, *title, header).ok();
+        sheet
+            .write_string_with_format(0, idx as u16, *title, header)
+            .ok();
     }
 }
 
 fn write_other_header(sheet: &mut rust_xlsxwriter::Worksheet, header: &Format) {
     let headers = ["Kind", "Payload"];
     for (idx, title) in headers.iter().enumerate() {
-        sheet.write_string_with_format(0, idx as u16, *title, header).ok();
+        sheet
+            .write_string_with_format(0, idx as u16, *title, header)
+            .ok();
     }
 }
 
@@ -214,7 +270,13 @@ fn write_op(
     rows: &mut ExportRows,
 ) -> Result<(), StoreError> {
     match op {
-        DiffOp::CellEdited { sheet, addr, from, to, .. } => {
+        DiffOp::CellEdited {
+            sheet,
+            addr,
+            from,
+            to,
+            ..
+        } => {
             let row = rows.cells + 1;
             rows.cells += 1;
             let sheet_name = resolve_string(strings, *sheet);
@@ -223,7 +285,8 @@ fn write_op(
             let new_value = render_cell_value(strings, &to.value);
             let old_formula = render_formula(strings, from.formula);
             let new_formula = render_formula(strings, to.formula);
-            let classification = classify_cell_change(&old_value, &new_value, &old_formula, &new_formula);
+            let classification =
+                classify_cell_change(&old_value, &new_value, &old_formula, &new_formula);
 
             let cells_sheet = sheet_mut(workbook, "Cells")?;
             cells_sheet.write_string(row, 0, sheet_name).ok();
@@ -236,17 +299,43 @@ fn write_op(
         }
         DiffOp::RowAdded { sheet, row_idx, .. } => {
             let structure_sheet = sheet_mut(workbook, "Structure")?;
-            write_structure(structure_sheet, rows, "RowAdded", strings, *sheet, format!("Row {} added", row_idx + 1));
+            write_structure(
+                structure_sheet,
+                rows,
+                "RowAdded",
+                strings,
+                *sheet,
+                format!("Row {} added", row_idx + 1),
+            );
         }
         DiffOp::RowRemoved { sheet, row_idx, .. } => {
             let structure_sheet = sheet_mut(workbook, "Structure")?;
-            write_structure(structure_sheet, rows, "RowRemoved", strings, *sheet, format!("Row {} removed", row_idx + 1));
+            write_structure(
+                structure_sheet,
+                rows,
+                "RowRemoved",
+                strings,
+                *sheet,
+                format!("Row {} removed", row_idx + 1),
+            );
         }
         DiffOp::RowReplaced { sheet, row_idx } => {
             let structure_sheet = sheet_mut(workbook, "Structure")?;
-            write_structure(structure_sheet, rows, "RowReplaced", strings, *sheet, format!("Row {} replaced", row_idx + 1));
+            write_structure(
+                structure_sheet,
+                rows,
+                "RowReplaced",
+                strings,
+                *sheet,
+                format!("Row {} replaced", row_idx + 1),
+            );
         }
-        DiffOp::DuplicateKeyCluster { sheet, key, left_rows, right_rows } => {
+        DiffOp::DuplicateKeyCluster {
+            sheet,
+            key,
+            left_rows,
+            right_rows,
+        } => {
             let structure_sheet = sheet_mut(workbook, "Structure")?;
             let detail = format!(
                 "Duplicate key [{}]: left rows [{}], right rows [{}]",
@@ -254,44 +343,155 @@ fn write_op(
                 format_row_list(left_rows),
                 format_row_list(right_rows)
             );
-            write_structure(structure_sheet, rows, "DuplicateKeyCluster", strings, *sheet, detail);
+            write_structure(
+                structure_sheet,
+                rows,
+                "DuplicateKeyCluster",
+                strings,
+                *sheet,
+                detail,
+            );
         }
         DiffOp::ColumnAdded { sheet, col_idx, .. } => {
             let structure_sheet = sheet_mut(workbook, "Structure")?;
-            write_structure(structure_sheet, rows, "ColumnAdded", strings, *sheet, format!("Column {} added", col_idx + 1));
+            write_structure(
+                structure_sheet,
+                rows,
+                "ColumnAdded",
+                strings,
+                *sheet,
+                format!("Column {} added", col_idx + 1),
+            );
         }
         DiffOp::ColumnRemoved { sheet, col_idx, .. } => {
             let structure_sheet = sheet_mut(workbook, "Structure")?;
-            write_structure(structure_sheet, rows, "ColumnRemoved", strings, *sheet, format!("Column {} removed", col_idx + 1));
+            write_structure(
+                structure_sheet,
+                rows,
+                "ColumnRemoved",
+                strings,
+                *sheet,
+                format!("Column {} removed", col_idx + 1),
+            );
         }
-        DiffOp::BlockMovedRows { sheet, src_start_row, row_count, dst_start_row, .. } => {
+        DiffOp::BlockMovedRows {
+            sheet,
+            src_start_row,
+            row_count,
+            dst_start_row,
+            ..
+        } => {
             let structure_sheet = sheet_mut(workbook, "Structure")?;
-            write_structure(structure_sheet, rows, "BlockMovedRows", strings, *sheet, format!("Rows {}-{} moved to {}", src_start_row + 1, src_start_row + row_count, dst_start_row + 1));
+            write_structure(
+                structure_sheet,
+                rows,
+                "BlockMovedRows",
+                strings,
+                *sheet,
+                format!(
+                    "Rows {}-{} moved to {}",
+                    src_start_row + 1,
+                    src_start_row + row_count,
+                    dst_start_row + 1
+                ),
+            );
         }
-        DiffOp::BlockMovedColumns { sheet, src_start_col, col_count, dst_start_col, .. } => {
+        DiffOp::BlockMovedColumns {
+            sheet,
+            src_start_col,
+            col_count,
+            dst_start_col,
+            ..
+        } => {
             let structure_sheet = sheet_mut(workbook, "Structure")?;
-            write_structure(structure_sheet, rows, "BlockMovedColumns", strings, *sheet, format!("Columns {}-{} moved to {}", src_start_col + 1, src_start_col + col_count, dst_start_col + 1));
+            write_structure(
+                structure_sheet,
+                rows,
+                "BlockMovedColumns",
+                strings,
+                *sheet,
+                format!(
+                    "Columns {}-{} moved to {}",
+                    src_start_col + 1,
+                    src_start_col + col_count,
+                    dst_start_col + 1
+                ),
+            );
         }
-        DiffOp::BlockMovedRect { sheet, src_start_row, src_row_count, src_start_col, src_col_count, dst_start_row, dst_start_col, .. } => {
-            let src_end = CellAddress::from_coords(src_start_row + src_row_count.saturating_sub(1), src_start_col + src_col_count.saturating_sub(1));
+        DiffOp::BlockMovedRect {
+            sheet,
+            src_start_row,
+            src_row_count,
+            src_start_col,
+            src_col_count,
+            dst_start_row,
+            dst_start_col,
+            ..
+        } => {
+            let src_end = CellAddress::from_coords(
+                src_start_row + src_row_count.saturating_sub(1),
+                src_start_col + src_col_count.saturating_sub(1),
+            );
             let dst_start = CellAddress::from_coords(*dst_start_row, *dst_start_col);
             let src_start = CellAddress::from_coords(*src_start_row, *src_start_col);
             let structure_sheet = sheet_mut(workbook, "Structure")?;
-            write_structure(structure_sheet, rows, "BlockMovedRect", strings, *sheet, format!("{}:{} moved to {}", src_start.to_a1(), src_end.to_a1(), dst_start.to_a1()));
+            write_structure(
+                structure_sheet,
+                rows,
+                "BlockMovedRect",
+                strings,
+                *sheet,
+                format!(
+                    "{}:{} moved to {}",
+                    src_start.to_a1(),
+                    src_end.to_a1(),
+                    dst_start.to_a1()
+                ),
+            );
         }
-        DiffOp::RectReplaced { sheet, start_row, row_count, start_col, col_count } => {
+        DiffOp::RectReplaced {
+            sheet,
+            start_row,
+            row_count,
+            start_col,
+            col_count,
+        } => {
             let start = CellAddress::from_coords(*start_row, *start_col);
-            let end = CellAddress::from_coords(start_row + row_count.saturating_sub(1), start_col + col_count.saturating_sub(1));
+            let end = CellAddress::from_coords(
+                start_row + row_count.saturating_sub(1),
+                start_col + col_count.saturating_sub(1),
+            );
             let structure_sheet = sheet_mut(workbook, "Structure")?;
-            write_structure(structure_sheet, rows, "RectReplaced", strings, *sheet, format!("{}:{} replaced", start.to_a1(), end.to_a1()));
+            write_structure(
+                structure_sheet,
+                rows,
+                "RectReplaced",
+                strings,
+                *sheet,
+                format!("{}:{} replaced", start.to_a1(), end.to_a1()),
+            );
         }
         DiffOp::SheetAdded { sheet } => {
             let structure_sheet = sheet_mut(workbook, "Structure")?;
-            write_structure(structure_sheet, rows, "SheetAdded", strings, *sheet, "Sheet added".to_string());
+            write_structure(
+                structure_sheet,
+                rows,
+                "SheetAdded",
+                strings,
+                *sheet,
+                "Sheet added".to_string(),
+            );
         }
         DiffOp::SheetRemoved { sheet } => {
             let structure_sheet = sheet_mut(workbook, "Structure")?;
-            write_structure(structure_sheet, rows, "SheetRemoved", strings, *sheet, "Sheet removed".to_string());
+            write_structure(
+                structure_sheet,
+                rows,
+                "SheetRemoved",
+                strings,
+                *sheet,
+                "Sheet removed".to_string(),
+            );
         }
         DiffOp::SheetRenamed { sheet, from, to } => {
             let structure_sheet = sheet_mut(workbook, "Structure")?;
@@ -300,43 +500,94 @@ fn write_op(
                 resolve_string(strings, *from),
                 resolve_string(strings, *to)
             );
-            write_structure(structure_sheet, rows, "SheetRenamed", strings, *sheet, detail);
+            write_structure(
+                structure_sheet,
+                rows,
+                "SheetRenamed",
+                strings,
+                *sheet,
+                detail,
+            );
         }
         DiffOp::QueryAdded { name } => {
             let query_sheet = sheet_mut(workbook, "PowerQuery")?;
-            write_query(query_sheet, rows, "QueryAdded", resolve_string(strings, *name), "");
+            write_query(
+                query_sheet,
+                rows,
+                "QueryAdded",
+                resolve_string(strings, *name),
+                "",
+            );
         }
         DiffOp::QueryRemoved { name } => {
             let query_sheet = sheet_mut(workbook, "PowerQuery")?;
-            write_query(query_sheet, rows, "QueryRemoved", resolve_string(strings, *name), "");
+            write_query(
+                query_sheet,
+                rows,
+                "QueryRemoved",
+                resolve_string(strings, *name),
+                "",
+            );
         }
         DiffOp::QueryRenamed { from, to } => {
             let detail = format!("Renamed to {}", resolve_string(strings, *to));
             let query_sheet = sheet_mut(workbook, "PowerQuery")?;
-            write_query(query_sheet, rows, "QueryRenamed", resolve_string(strings, *from), &detail);
+            write_query(
+                query_sheet,
+                rows,
+                "QueryRenamed",
+                resolve_string(strings, *from),
+                &detail,
+            );
         }
-        DiffOp::QueryDefinitionChanged { name, change_kind, .. } => {
+        DiffOp::QueryDefinitionChanged {
+            name, change_kind, ..
+        } => {
             let detail = match change_kind {
                 QueryChangeKind::Semantic => "Semantic change",
                 QueryChangeKind::FormattingOnly => "Formatting only",
                 QueryChangeKind::Renamed => "Renamed",
             };
             let query_sheet = sheet_mut(workbook, "PowerQuery")?;
-            write_query(query_sheet, rows, "QueryDefinitionChanged", resolve_string(strings, *name), detail);
+            write_query(
+                query_sheet,
+                rows,
+                "QueryDefinitionChanged",
+                resolve_string(strings, *name),
+                detail,
+            );
         }
         DiffOp::QueryMetadataChanged { name, field, .. } => {
             let query_sheet = sheet_mut(workbook, "PowerQuery")?;
-            write_query(query_sheet, rows, "QueryMetadataChanged", resolve_string(strings, *name), &format!("{field:?}"));
+            write_query(
+                query_sheet,
+                rows,
+                "QueryMetadataChanged",
+                resolve_string(strings, *name),
+                &format!("{field:?}"),
+            );
         }
         #[cfg(feature = "model-diff")]
         DiffOp::TableAdded { name } => {
             let model_sheet = sheet_mut(workbook, "Model")?;
-            write_model(model_sheet, rows, "TableAdded", resolve_string(strings, *name), "");
+            write_model(
+                model_sheet,
+                rows,
+                "TableAdded",
+                resolve_string(strings, *name),
+                "",
+            );
         }
         #[cfg(feature = "model-diff")]
         DiffOp::TableRemoved { name } => {
             let model_sheet = sheet_mut(workbook, "Model")?;
-            write_model(model_sheet, rows, "TableRemoved", resolve_string(strings, *name), "");
+            write_model(
+                model_sheet,
+                rows,
+                "TableRemoved",
+                resolve_string(strings, *name),
+                "",
+            );
         }
         #[cfg(feature = "model-diff")]
         DiffOp::ModelColumnAdded {
@@ -404,12 +655,7 @@ fn write_op(
             let new_str = new
                 .map(|id| resolve_string(strings, id))
                 .unwrap_or("<none>");
-            let detail = format!(
-                "{}: {} -> {}",
-                column_field_name(*field),
-                old_str,
-                new_str
-            );
+            let detail = format!("{}: {} -> {}", column_field_name(*field), old_str, new_str);
             let model_sheet = sheet_mut(workbook, "Model")?;
             write_model(
                 model_sheet,
@@ -426,7 +672,10 @@ fn write_op(
             change_kind,
             ..
         } => {
-            let detail = format!("definition changed ({})", expression_change_label(*change_kind));
+            let detail = format!(
+                "definition changed ({})",
+                expression_change_label(*change_kind)
+            );
             let model_sheet = sheet_mut(workbook, "Model")?;
             write_model(
                 model_sheet,
@@ -502,16 +751,33 @@ fn write_op(
         #[cfg(feature = "model-diff")]
         DiffOp::MeasureAdded { name } => {
             let model_sheet = sheet_mut(workbook, "Model")?;
-            write_model(model_sheet, rows, "MeasureAdded", resolve_string(strings, *name), "");
+            write_model(
+                model_sheet,
+                rows,
+                "MeasureAdded",
+                resolve_string(strings, *name),
+                "",
+            );
         }
         #[cfg(feature = "model-diff")]
         DiffOp::MeasureRemoved { name } => {
             let model_sheet = sheet_mut(workbook, "Model")?;
-            write_model(model_sheet, rows, "MeasureRemoved", resolve_string(strings, *name), "");
+            write_model(
+                model_sheet,
+                rows,
+                "MeasureRemoved",
+                resolve_string(strings, *name),
+                "",
+            );
         }
         #[cfg(feature = "model-diff")]
-        DiffOp::MeasureDefinitionChanged { name, change_kind, .. } => {
-            let detail = format!("definition changed ({})", expression_change_label(*change_kind));
+        DiffOp::MeasureDefinitionChanged {
+            name, change_kind, ..
+        } => {
+            let detail = format!(
+                "definition changed ({})",
+                expression_change_label(*change_kind)
+            );
             let model_sheet = sheet_mut(workbook, "Model")?;
             write_model(
                 model_sheet,
@@ -524,7 +790,8 @@ fn write_op(
         _ => {
             let row = rows.other + 1;
             rows.other += 1;
-            let payload = serde_json::to_string(op).unwrap_or_else(|_| "<unserializable>".to_string());
+            let payload =
+                serde_json::to_string(op).unwrap_or_else(|_| "<unserializable>".to_string());
             let other_sheet = sheet_mut(workbook, "OtherOps")?;
             other_sheet.write_string(row, 0, op_kind_label(op)).ok();
             other_sheet.write_string(row, 1, &payload).ok();
@@ -545,7 +812,9 @@ fn write_structure(
     let row = rows.structure + 1;
     rows.structure += 1;
     sheet.write_string(row, 0, kind).ok();
-    sheet.write_string(row, 1, resolve_string(strings, sheet_id)).ok();
+    sheet
+        .write_string(row, 1, resolve_string(strings, sheet_id))
+        .ok();
     sheet.write_string(row, 2, &detail).ok();
 }
 
@@ -582,7 +851,10 @@ fn write_model(
 }
 
 fn resolve_string(strings: &[String], id: excel_diff::StringId) -> &str {
-    strings.get(id.0 as usize).map(String::as_str).unwrap_or("<unknown>")
+    strings
+        .get(id.0 as usize)
+        .map(String::as_str)
+        .unwrap_or("<unknown>")
 }
 
 #[cfg(feature = "model-diff")]
@@ -591,7 +863,11 @@ fn format_column_ref(
     table: excel_diff::StringId,
     column: excel_diff::StringId,
 ) -> String {
-    format!("{}.{}", resolve_string(strings, table), resolve_string(strings, column))
+    format!(
+        "{}.{}",
+        resolve_string(strings, table),
+        resolve_string(strings, column)
+    )
 }
 
 #[cfg(feature = "model-diff")]

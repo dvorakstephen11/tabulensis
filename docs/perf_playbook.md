@@ -79,6 +79,18 @@ python scripts/export_e2e_metrics.py --baseline benchmarks/baselines/e2e.json
 Note:
 - Avoid `--clean` when generating `manifest_perf_e2e.yaml` unless you intentionally want only that subset in `fixtures/generated/`.
 
+## Real-world metrics (pinned public datasets)
+
+See: `docs/real_world_datasets_perf_plan.md`
+
+```bash
+python3 scripts/export_real_world_metrics.py --export-csv benchmarks/latest_real_world.csv
+```
+
+Notes:
+- This suite uses `datasets/real_world/registry.yaml` + `datasets/real_world/cases.yaml` and downloads pinned public datasets into `corpus_public/` (gitignored).
+- It is intended for nightly/deep validation and local investigations, not PR-fast gates.
+
 ## Baseline updates
 
 Update baselines only when an algorithm change or dependency shift consistently moves results.

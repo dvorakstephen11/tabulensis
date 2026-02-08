@@ -1,0 +1,13 @@
+{
+  "bytes": 10085898,
+  "dataset_id": "rw_ons_lms_v141",
+  "path": "corpus_public/sha256_bd01866794477febd9377da877b79e2570ec11b1ba8c79877720f1146af1245f.xlsx",
+  "scan": {
+    "counts": {},
+    "counts_disallowed": {},
+    "findings": [],
+    "total_scanned_bytes": 68161413
+  },
+  "sha256": "bd01866794477febd9377da877b79e2570ec11b1ba8c79877720f1146af1245f",
+  "timestamp": "2026-02-08T16:50:04.481333+00:00"
+}

@@ -46,8 +46,12 @@ pub struct QuerySemanticDetail {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StepDiff {
-    StepAdded { step: StepSnapshot },
-    StepRemoved { step: StepSnapshot },
+    StepAdded {
+        step: StepSnapshot,
+    },
+    StepRemoved {
+        step: StepSnapshot,
+    },
     StepReordered {
         name: StringId,
         from_index: u32,
@@ -89,10 +93,18 @@ pub enum StepType {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StepParams {
-    TableSelectRows { predicate_hash: u64 },
-    TableRemoveColumns { columns: ExtractedStringList },
-    TableRenameColumns { renames: ExtractedRenamePairs },
-    TableTransformColumnTypes { transforms: ExtractedColumnTypeChanges },
+    TableSelectRows {
+        predicate_hash: u64,
+    },
+    TableRemoveColumns {
+        columns: ExtractedStringList,
+    },
+    TableRenameColumns {
+        renames: ExtractedRenamePairs,
+    },
+    TableTransformColumnTypes {
+        transforms: ExtractedColumnTypeChanges,
+    },
     TableNestedJoin {
         left_keys: ExtractedStringList,
         right_keys: ExtractedStringList,
@@ -154,7 +166,10 @@ pub struct ColumnTypeChange {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StepChange {
-    Renamed { from: StringId, to: StringId },
+    Renamed {
+        from: StringId,
+        to: StringId,
+    },
     SourceRefsChanged {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         removed: Vec<StringId>,

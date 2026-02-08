@@ -1,0 +1,45 @@
+{
+  "bytes": 10085898,
+  "dataset_id": "rw_ons_lms_v141",
+  "inspection": {
+    "kind": "openxml",
+    "shared_strings": {
+      "compressed_bytes": 120,
+      "path": "xl/sharedStrings.xml",
+      "present": true,
+      "uncompressed_bytes": 137
+    },
+    "styles": {
+      "compressed_bytes": 323,
+      "path": "xl/styles.xml",
+      "present": true,
+      "uncompressed_bytes": 674
+    },
+    "workbook": {
+      "path": "xl/workbook.xml",
+      "present": true,
+      "sheet_count_estimate": 1,
+      "uncompressed_bytes_prefix": 347
+    },
+    "worksheet_dimensions": {
+      "xl/worksheets/sheet1.xml": "A1"
+    },
+    "worksheets": [
+      {
+        "compressed_bytes": 10082907,
+        "path": "xl/worksheets/sheet1.xml",
+        "uncompressed_bytes": 125605104
+      }
+    ],
+    "zip": {
+      "entry_count": 9,
+      "max_compression_ratio": 12.457231233016431,
+      "max_compression_ratio_entry": "xl/worksheets/sheet1.xml",
+      "max_entry_uncompressed_bytes": 125605104,
+      "total_uncompressed_bytes": 125609077
+    }
+  },
+  "path": "corpus_public/sha256_bd01866794477febd9377da877b79e2570ec11b1ba8c79877720f1146af1245f.xlsx",
+  "sha256": "bd01866794477febd9377da877b79e2570ec11b1ba8c79877720f1146af1245f",
+  "timestamp": "2026-02-08T16:47:59.000681+00:00"
+}

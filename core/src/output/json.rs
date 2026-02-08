@@ -6,13 +6,13 @@ use crate::diff::DiffReport;
 #[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 use crate::diff::DiffSummary;
 #[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
-use crate::excel_open_xml::{PackageError, open_data_mashup, open_vba_modules, open_workbook};
+use crate::excel_open_xml::{open_data_mashup, open_vba_modules, open_workbook, PackageError};
 #[allow(unused_imports)]
 use crate::session::DiffSession;
 #[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 use crate::sink::VecSink;
-use serde::Serialize;
 use serde::ser::Error as SerdeError;
+use serde::Serialize;
 #[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 use std::path::Path;
 

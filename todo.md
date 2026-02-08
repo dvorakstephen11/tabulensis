@@ -51,6 +51,8 @@
             * Chris Edwards
             * Spence?
             * Jeffery Vernon
+            * John Taylor
+            * 
         * Potential Business Clients:
             * Sourcewell
             * LBMC

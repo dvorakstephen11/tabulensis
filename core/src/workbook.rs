@@ -6,7 +6,7 @@
 //! - [`Grid`]: A sparse 2D grid of cell content with optional row/column signatures
 //! - [`CellContent`]: Value + formula for a single cell (coordinates stored in the grid key)
 
-use crate::addressing::{AddressParseError, address_to_index, index_to_address};
+use crate::addressing::{address_to_index, index_to_address, AddressParseError};
 use crate::hashing::normalize_float_for_hash;
 use crate::string_pool::{StringId, StringPool};
 use rustc_hash::FxHashMap;
@@ -556,8 +556,7 @@ impl Grid {
             self.row_signatures = None;
             self.col_signatures = None;
         }
-        self.cells
-            .insert(row, col, CellContent { value, formula });
+        self.cells.insert(row, col, CellContent { value, formula });
         self.maybe_upgrade_to_dense();
     }
 

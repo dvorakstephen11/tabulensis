@@ -1,0 +1,50 @@
+{
+  "timestamp": "2026-02-08T12:35:59.685240+00:00",
+  "git_commit": "d06024b3bee2",
+  "git_branch": "main",
+  "suite": "cli-jsonl",
+  "full_scale": false,
+  "parallel": false,
+  "aggregation": {
+    "method": "median",
+    "runs": 3,
+    "source_run_json": [
+      "benchmarks/perf_cycles/2026-02-08_123202/pre_cli_jsonl_run1.json",
+      "benchmarks/perf_cycles/2026-02-08_123202/pre_cli_jsonl_run2.json",
+      "benchmarks/perf_cycles/2026-02-08_123202/pre_cli_jsonl_run3.json"
+    ]
+  },
+  "tests": {
+    "cli_perf_jsonl_emit": {
+      "alignment_buffer_bytes": 0,
+      "alignment_time_ms": 0,
+      "allocations_est": 0,
+      "anchors_found": 0,
+      "cell_diff_time_ms": 0,
+      "cells_compared": 0,
+      "diff_time_ms": 32,
+      "grid_storage_bytes": 0,
+      "hash_lookups_est": 0,
+      "move_detection_time_ms": 0,
+      "moves_detected": 0,
+      "ncols": 50,
+      "nrows": 4000,
+      "op_buffer_bytes": 0,
+      "op_count": 200000,
+      "op_emit_time_ms": 32,
+      "parse_time_ms": 0,
+      "peak_memory_bytes": 0,
+      "report_serialize_time_ms": 0,
+      "rows_processed": 0,
+      "signature_build_time_ms": 0,
+      "string_pool_bytes": 0,
+      "total_time_ms": 32
+    }
+  },
+  "summary": {
+    "total_tests": 1,
+    "total_time_ms": 32,
+    "total_rows_processed": 0,
+    "total_cells_compared": 0
+  }
+}

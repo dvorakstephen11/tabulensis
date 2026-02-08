@@ -31,7 +31,8 @@ use crate::workbook::Grid;
 
 pub(crate) use crate::alignment_types::{RowAlignment, RowBlockMove};
 
-const _HASH_COLLISION_NOTE: &str = "128-bit xxHash3 collision probability ~10^-29 at 50K rows (birthday bound); \
+const _HASH_COLLISION_NOTE: &str =
+    "128-bit xxHash3 collision probability ~10^-29 at 50K rows (birthday bound); \
      secondary verification not required; see hashing.rs for detailed rationale.";
 
 pub(crate) fn detect_exact_row_block_move(

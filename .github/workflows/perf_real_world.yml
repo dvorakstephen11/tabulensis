@@ -1,0 +1,36 @@
+name: Performance Real-World
+
+on:
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  perf-real-world:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python deps (PyYAML)
+        run: python -m pip install -r fixtures/requirements.txt
+
+      - name: Export real-world metrics
+        run: python3 scripts/export_real_world_metrics.py --export-csv benchmarks/latest_real_world.csv
+
+      - name: Upload perf artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-real-world
+          path: |
+            benchmarks/latest_real_world.json
+            benchmarks/latest_real_world.csv
+            benchmarks/results_real_world/*.json
+

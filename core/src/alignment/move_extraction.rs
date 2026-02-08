@@ -16,9 +16,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::alignment::RowBlockMove;
 use crate::alignment::anchor_discovery::Anchor;
 use crate::alignment::lap;
+use crate::alignment::RowBlockMove;
 use crate::config::DiffConfig;
 use crate::grid_metadata::{FrequencyClass, RowMeta};
 use crate::workbook::RowSignature;
@@ -237,7 +237,10 @@ fn collect_unanchored_by_signature(
         if meta.is_low_info() {
             continue;
         }
-        if !matches!(meta.frequency_class, FrequencyClass::Unique | FrequencyClass::Rare) {
+        if !matches!(
+            meta.frequency_class,
+            FrequencyClass::Unique | FrequencyClass::Rare
+        ) {
             continue;
         }
         if config.moves.move_extraction_max_candidates_per_sig == 0 {
@@ -288,28 +291,14 @@ fn build_candidate_blocks(
             continue;
         }
 
-        push_candidate_seed(
-            start,
-            prev,
-            min_len,
-            max_len,
-            &mut seeds,
-            &mut seen,
-        );
+        push_candidate_seed(start, prev, min_len, max_len, &mut seeds, &mut seen);
 
         start = *pair;
         prev = *pair;
         offset = pair.offset;
     }
 
-    push_candidate_seed(
-        start,
-        prev,
-        min_len,
-        max_len,
-        &mut seeds,
-        &mut seen,
-    );
+    push_candidate_seed(start, prev, min_len, max_len, &mut seeds, &mut seen);
 
     let mut candidates = score_candidates(old_meta, new_meta, threshold, &seeds);
     candidates.sort_by(|a, b| {

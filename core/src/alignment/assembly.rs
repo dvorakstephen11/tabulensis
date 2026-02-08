@@ -15,22 +15,22 @@ use std::ops::Range;
 
 use crate::alignment::anchor_chain::build_anchor_chain;
 use crate::alignment::anchor_discovery::{
-    Anchor, discover_anchors_from_meta, discover_context_anchors, discover_local_anchors,
+    discover_anchors_from_meta, discover_context_anchors, discover_local_anchors, Anchor,
 };
-use crate::alignment::gap_strategy::{GapStrategy, select_gap_strategy};
+use crate::alignment::gap_strategy::{select_gap_strategy, GapStrategy};
 use crate::alignment::move_extraction::{
     extract_global_moves, find_block_move, moves_from_matched_pairs,
 };
-use crate::alignment::runs::{RowRun, compress_to_runs};
+use crate::alignment::runs::{compress_to_runs, RowRun};
 use crate::alignment_types::{RowAlignment, RowBlockMove};
 use crate::config::DiffConfig;
 use crate::grid_metadata::RowMeta;
 use crate::grid_view::GridView;
+#[cfg(feature = "perf-metrics")]
+use crate::perf::{DiffMetrics, Phase};
 #[cfg(any(test, feature = "dev-apis"))]
 use crate::workbook::Grid;
 use crate::workbook::RowSignature;
-#[cfg(feature = "perf-metrics")]
-use crate::perf::{DiffMetrics, Phase};
 
 #[derive(Default)]
 struct GapAlignmentResult {
@@ -343,13 +343,9 @@ fn fill_gap(
         GapStrategy::SmallEdit => align_gap_default(ctx.old_slice, ctx.new_slice, config),
         GapStrategy::HashFallback => align_gap_hash(ctx.old_slice, ctx.new_slice),
         GapStrategy::MoveCandidate => align_gap_with_moves(ctx.old_slice, ctx.new_slice, config),
-        GapStrategy::ConsumeGlobalMoves => align_gap_with_global_moves(
-            ctx.old_slice,
-            ctx.new_slice,
-            &moves_in_gap,
-            config,
-            depth,
-        ),
+        GapStrategy::ConsumeGlobalMoves => {
+            align_gap_with_global_moves(ctx.old_slice, ctx.new_slice, &moves_in_gap, config, depth)
+        }
         GapStrategy::RecursiveAlign => {
             align_gap_recursive(ctx.old_slice, ctx.new_slice, config, depth, global_moves)
         }
@@ -402,7 +398,9 @@ fn align_gap_without_global(
         GapStrategy::HashFallback => align_gap_hash(old_slice, new_slice),
         GapStrategy::MoveCandidate => align_gap_with_moves(old_slice, new_slice, config),
         GapStrategy::ConsumeGlobalMoves => align_gap_default(old_slice, new_slice, config),
-        GapStrategy::RecursiveAlign => align_gap_recursive(old_slice, new_slice, config, depth, &[]),
+        GapStrategy::RecursiveAlign => {
+            align_gap_recursive(old_slice, new_slice, config, depth, &[])
+        }
     }
 }
 
@@ -494,13 +492,12 @@ fn align_gap_with_moves(
             .any(|(a, b)| (*b as i64 - *a as i64) != 0);
 
         if has_nonzero_offset
-            && let Some(mv) =
-                find_block_move(
-                    old_slice,
-                    new_slice,
-                    config.moves.min_block_size_for_move,
-                    config,
-                )
+            && let Some(mv) = find_block_move(
+                old_slice,
+                new_slice,
+                config.moves.min_block_size_for_move,
+                config,
+            )
         {
             detected_moves.push(mv);
         }
@@ -664,8 +661,7 @@ fn align_small_gap(
         return GapAlignmentResult::default();
     }
 
-    if m as u32 > config.alignment.max_lcs_gap_size
-        || n as u32 > config.alignment.max_lcs_gap_size
+    if m as u32 > config.alignment.max_lcs_gap_size || n as u32 > config.alignment.max_lcs_gap_size
     {
         return align_gap_via_hash(old_slice, new_slice);
     }

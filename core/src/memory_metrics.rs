@@ -17,12 +17,7 @@ impl<A> CountingAllocator<A> {
 fn update_peak(new_current: u64) {
     let mut peak = PEAK.load(Ordering::Relaxed);
     while new_current > peak {
-        match PEAK.compare_exchange_weak(
-            peak,
-            new_current,
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-        ) {
+        match PEAK.compare_exchange_weak(peak, new_current, Ordering::Relaxed, Ordering::Relaxed) {
             Ok(_) => return,
             Err(p) => peak = p,
         }
@@ -34,7 +29,9 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for CountingAllocator<A> {
         let ptr = unsafe { self.inner.alloc(layout) };
         if !ptr.is_null() {
             let size = layout.size() as u64;
-            let new_current = CURRENT.fetch_add(size, Ordering::Relaxed).saturating_add(size);
+            let new_current = CURRENT
+                .fetch_add(size, Ordering::Relaxed)
+                .saturating_add(size);
             update_peak(new_current);
         }
         ptr
@@ -60,8 +57,9 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for CountingAllocator<A> {
             let new_size_u = new_size as u64;
             if new_size_u >= old_size {
                 let delta = new_size_u - old_size;
-                let new_current =
-                    CURRENT.fetch_add(delta, Ordering::Relaxed).saturating_add(delta);
+                let new_current = CURRENT
+                    .fetch_add(delta, Ordering::Relaxed)
+                    .saturating_add(delta);
                 update_peak(new_current);
             } else {
                 let delta = old_size - new_size_u;

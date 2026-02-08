@@ -1,12 +1,12 @@
 use crate::alignment_types::RowBlockMove;
 use crate::column_alignment::{
-    ColumnBlockMove, detect_exact_column_block_move, detect_exact_column_block_move_from_views,
+    detect_exact_column_block_move, detect_exact_column_block_move_from_views, ColumnBlockMove,
 };
 use crate::config::DiffConfig;
 use crate::diff::DiffError;
 use crate::grid_view::GridView;
 use crate::rect_block_move::{
-    RectBlockMove, detect_exact_rect_block_move, detect_exact_rect_block_move_from_views,
+    detect_exact_rect_block_move, detect_exact_rect_block_move_from_views, RectBlockMove,
 };
 use crate::region_mask::RegionMask;
 use crate::row_alignment::{
@@ -60,7 +60,8 @@ impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
 
     fn move_detection_enabled(&self) -> bool {
         self.old.nrows.max(self.new.nrows) <= self.emit_ctx.config.moves.max_move_detection_rows
-            && self.old.ncols.max(self.new.ncols) <= self.emit_ctx.config.moves.max_move_detection_cols
+            && self.old.ncols.max(self.new.ncols)
+                <= self.emit_ctx.config.moves.max_move_detection_cols
     }
 
     pub(super) fn detect_moves(&mut self) -> Result<u32, DiffError> {
@@ -112,7 +113,11 @@ impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
             if !found_move {
                 let col_move = if !self.old_mask.has_exclusions() && !self.new_mask.has_exclusions()
                 {
-                    detect_exact_column_block_move_from_views(&self.old_view, &self.new_view, config)
+                    detect_exact_column_block_move_from_views(
+                        &self.old_view,
+                        &self.new_view,
+                        config,
+                    )
                 } else {
                     detect_exact_column_block_move_masked(
                         self.old,
@@ -181,22 +186,19 @@ impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
             }
 
             if !found_move && config.moves.enable_fuzzy_moves {
-                let fuzzy_move =
-                    if !self.old_mask.has_exclusions() && !self.new_mask.has_exclusions() {
-                        detect_fuzzy_row_block_move_from_views(
-                            &self.old_view,
-                            &self.new_view,
-                            config,
-                        )
-                    } else {
-                        detect_fuzzy_row_block_move_masked(
-                            self.old,
-                            self.new,
-                            &self.old_mask,
-                            &self.new_mask,
-                            config,
-                        )
-                    };
+                let fuzzy_move = if !self.old_mask.has_exclusions()
+                    && !self.new_mask.has_exclusions()
+                {
+                    detect_fuzzy_row_block_move_from_views(&self.old_view, &self.new_view, config)
+                } else {
+                    detect_fuzzy_row_block_move_masked(
+                        self.old,
+                        self.new,
+                        &self.old_mask,
+                        &self.new_mask,
+                        config,
+                    )
+                };
 
                 if let Some(mv) = fuzzy_move {
                     emit_row_block_move(&mut self.emit_ctx, mv)?;
@@ -332,8 +334,13 @@ impl<'a, 'p, 'b, S: DiffSink> SheetGridDiffer<'a, 'p, 'b, S> {
     }
 
     pub(super) fn try_amr(&mut self) -> Result<bool, DiffError> {
-        let handled =
-            try_diff_with_amr(&mut self.emit_ctx, self.old, self.new, &self.old_view, &self.new_view)?;
+        let handled = try_diff_with_amr(
+            &mut self.emit_ctx,
+            self.old,
+            self.new,
+            &self.old_view,
+            &self.new_view,
+        )?;
         Ok(handled)
     }
 
@@ -700,7 +707,9 @@ fn detect_exact_rect_block_move_masked_impl(
     if !old_mask.has_exclusions() && !new_mask.has_exclusions() {
         if old.nrows == new.nrows && old.ncols == new.ncols {
             if let Some((old_view, new_view)) = views {
-                if let Some(mv) = detect_exact_rect_block_move_from_views(old_view, new_view, config) {
+                if let Some(mv) =
+                    detect_exact_rect_block_move_from_views(old_view, new_view, config)
+                {
                     return Some(mv);
                 }
             } else if let Some(mv) = detect_exact_rect_block_move(old, new, config) {

@@ -1,0 +1,11 @@
+{
+  "name": "Compare Power Query",
+  "description": "Power Query (M) diffs to validate summary categories + noise controls.",
+  "oldPath": "../../../fixtures/generated/m_def_and_metadata_change_a.xlsx",
+  "newPath": "../../../fixtures/generated/m_def_and_metadata_change_b.xlsx",
+  "autoRunDiff": true,
+  "stableWaitMs": 900,
+  "expectMode": "payload",
+  "focusPanel": "summary",
+  "profileId": "builtin_default_balanced"
+}

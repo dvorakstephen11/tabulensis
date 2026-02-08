@@ -84,11 +84,7 @@ mod tests {
 
     #[test]
     fn solves_small_assignment() {
-        let costs = vec![
-            vec![4, 1, 3],
-            vec![2, 0, 5],
-            vec![3, 2, 2],
-        ];
+        let costs = vec![vec![4, 1, 3], vec![2, 0, 5], vec![3, 2, 2]];
 
         let assignment = solve(&costs);
         assert_eq!(assignment.len(), 3);

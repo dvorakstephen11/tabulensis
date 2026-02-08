@@ -3,7 +3,5 @@ mod op_store;
 mod types;
 
 pub use op_sink::OpStoreSink;
-pub use op_store::{
-    DiffMode, DiffRunSummary, OpStore, RunStatus, StoreError, resolve_sheet_stats,
-};
+pub use op_store::{resolve_sheet_stats, DiffMode, DiffRunSummary, OpStore, RunStatus, StoreError};
 pub use types::SheetStats;

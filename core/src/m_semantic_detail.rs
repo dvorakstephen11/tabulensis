@@ -1,13 +1,13 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
+#[cfg(test)]
+use crate::diff::AstDiffMode;
 use crate::diff::{
     ColumnTypeChange, ExtractedColumnTypeChanges, ExtractedRenamePairs, ExtractedString,
     ExtractedStringList, QuerySemanticDetail, RenamePair, StepChange, StepDiff, StepParams,
     StepSnapshot, StepType,
 };
-#[cfg(test)]
-use crate::diff::AstDiffMode;
 use crate::m_ast::{
     canonicalize_m_ast, extract_steps, parse_m_expression, MStep, StepColumnTypeChange,
     StepExtracted, StepKind, StepRenamePair,
@@ -663,7 +663,10 @@ mod tests {
         let mut has_rename = false;
         for diff in &detail.step_diffs {
             if let StepDiff::StepModified { changes, .. } = diff {
-                if changes.iter().any(|c| matches!(c, StepChange::Renamed { .. })) {
+                if changes
+                    .iter()
+                    .any(|c| matches!(c, StepChange::Renamed { .. }))
+                {
                     has_rename = true;
                 }
             }
@@ -755,7 +758,9 @@ mod tests {
         match &detail.step_diffs[0] {
             StepDiff::StepModified { after, changes, .. } => {
                 assert_eq!(after.step_type, StepType::TableSelectRows);
-                assert!(changes.iter().any(|c| matches!(c, StepChange::ParamsChanged)));
+                assert!(changes
+                    .iter()
+                    .any(|c| matches!(c, StepChange::ParamsChanged)));
             }
             other => panic!("expected StepModified, got {:?}", other),
         }
@@ -783,7 +788,9 @@ mod tests {
         match &detail.step_diffs[0] {
             StepDiff::StepModified { after, changes, .. } => {
                 assert_eq!(after.step_type, StepType::TableJoin);
-                assert!(changes.iter().any(|c| matches!(c, StepChange::ParamsChanged)));
+                assert!(changes
+                    .iter()
+                    .any(|c| matches!(c, StepChange::ParamsChanged)));
             }
             other => panic!("expected StepModified, got {:?}", other),
         }

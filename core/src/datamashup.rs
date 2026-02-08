@@ -6,14 +6,14 @@
 use std::collections::HashMap;
 
 use crate::datamashup_framing::{DataMashupError, RawDataMashup};
-use crate::datamashup_package::{PackageParts, parse_package_parts};
-use crate::m_section::{SectionParseError, parse_section_members};
+use crate::datamashup_package::{parse_package_parts, PackageParts};
+use crate::m_section::{parse_section_members, SectionParseError};
 use crate::permission_bindings::{
-    DpapiDecryptor, PermissionBindingsStatus, default_dpapi_decryptor, effective_permissions,
-    validate_permission_bindings,
+    default_dpapi_decryptor, effective_permissions, validate_permission_bindings, DpapiDecryptor,
+    PermissionBindingsStatus,
 };
-use quick_xml::Reader;
 use quick_xml::events::Event;
+use quick_xml::Reader;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]

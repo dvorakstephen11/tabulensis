@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use excel_diff::{DiffError, DiffOp, DiffSink};
 use rusqlite::{params, Connection};
 
-use super::types::{ChangeCounts, OpIndexFields, accumulate_sheet_stats, classify_op, op_index_fields, SheetStats};
+use super::types::{
+    accumulate_sheet_stats, classify_op, op_index_fields, ChangeCounts, OpIndexFields, SheetStats,
+};
 
 pub struct OpStoreSink {
     conn: Connection,
@@ -17,7 +19,9 @@ pub struct OpStoreSink {
 impl OpStoreSink {
     pub fn new(conn: Connection, diff_id: String) -> Result<Self, DiffError> {
         conn.execute_batch("BEGIN IMMEDIATE")
-            .map_err(|e| DiffError::SinkError { message: e.to_string() })?;
+            .map_err(|e| DiffError::SinkError {
+                message: e.to_string(),
+            })?;
         Ok(Self {
             conn,
             diff_id,
@@ -67,8 +71,9 @@ impl DiffSink for OpStoreSink {
         accumulate_sheet_stats(&mut self.sheet_stats, &op);
 
         let fields = op_index_fields(&op);
-        let payload_json = serde_json::to_string(&op)
-            .map_err(|e| DiffError::SinkError { message: e.to_string() })?;
+        let payload_json = serde_json::to_string(&op).map_err(|e| DiffError::SinkError {
+            message: e.to_string(),
+        })?;
         self.insert_op(fields, &payload_json)?;
 
         self.op_idx = self.op_idx.saturating_add(1);
@@ -81,7 +86,9 @@ impl DiffSink for OpStoreSink {
         }
         self.conn
             .execute_batch("COMMIT")
-            .map_err(|e| DiffError::SinkError { message: e.to_string() })?;
+            .map_err(|e| DiffError::SinkError {
+                message: e.to_string(),
+            })?;
         self.committed = true;
         Ok(())
     }

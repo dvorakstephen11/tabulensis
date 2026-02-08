@@ -1,10 +1,10 @@
 use crate::alignment_types::{RowAlignment, RowBlockMove};
 use crate::column_alignment::{
-    ColumnAlignment, ColumnBlockMove, align_single_column_change_from_views,
+    align_single_column_change_from_views, ColumnAlignment, ColumnBlockMove,
 };
 use crate::config::DiffConfig;
 use crate::diff::{DiffError, DiffOp, FormulaDiffResult};
-use crate::formula_diff::{FormulaParseCache, diff_cell_formulas_ids};
+use crate::formula_diff::{diff_cell_formulas_ids, FormulaParseCache};
 use crate::grid_view::GridView;
 #[cfg(feature = "perf-metrics")]
 use crate::perf::Phase;
@@ -226,8 +226,7 @@ pub(super) fn emit_moved_row_block_edits<S: DiffSink>(
             break;
         }
 
-        let chunk_len = cell_diff_chunk_len(overlap_cols)
-            .min((mv.row_count - offset) as usize);
+        let chunk_len = cell_diff_chunk_len(overlap_cols).min((mv.row_count - offset) as usize);
         let mut pairs: Vec<(u32, u32)> = Vec::with_capacity(chunk_len);
         for idx in 0..chunk_len {
             let row_a = mv.src_start_row + offset + idx as u32;
@@ -547,12 +546,7 @@ fn plan_one_row_pair<'a>(
         }
     }
 
-    let r = diff_row_pair_sparse_plan(
-        config,
-        overlap_cols,
-        &row_view_a.cells,
-        &row_view_b.cells,
-    );
+    let r = diff_row_pair_sparse_plan(config, overlap_cols, &row_view_a.cells, &row_view_b.cells);
 
     RowPairPlan {
         row_a,
@@ -835,14 +829,7 @@ pub(super) fn positional_diff_from_views<S: DiffSink>(
             .map(|r| r.cells.as_slice())
             .unwrap_or(&[]);
 
-        let result = diff_row_pair_sparse(
-            ctx,
-            row,
-            row,
-            overlap_cols,
-            old_cells,
-            new_cells,
-        )?;
+        let result = diff_row_pair_sparse(ctx, row, row, overlap_cols, old_cells, new_cells)?;
         compared = compared.saturating_add(result.compared);
         if result.replaced {
             if let Some(existing) = pending_rect.as_mut() {

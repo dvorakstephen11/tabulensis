@@ -1,0 +1,117 @@
+{
+  "bytes": 368891,
+  "dataset_id": "rw_ons_lx_v5",
+  "inspection": {
+    "kind": "openxml",
+    "shared_strings": {
+      "compressed_bytes": 3451,
+      "path": "xl/sharedStrings.xml",
+      "present": true,
+      "uncompressed_bytes": 10449
+    },
+    "styles": {
+      "compressed_bytes": 3845,
+      "path": "xl/styles.xml",
+      "present": true,
+      "uncompressed_bytes": 151936
+    },
+    "workbook": {
+      "path": "xl/workbook.xml",
+      "present": true,
+      "sheet_count_estimate": 13,
+      "uncompressed_bytes_prefix": 2616
+    },
+    "worksheet_dimensions": {
+      "xl/worksheets/sheet1.xml": "A1:B45",
+      "xl/worksheets/sheet10.xml": "A1:AQ106",
+      "xl/worksheets/sheet11.xml": "A1:AQ106",
+      "xl/worksheets/sheet12.xml": "A1:AQ106",
+      "xl/worksheets/sheet13.xml": "A1:AQ106",
+      "xl/worksheets/sheet2.xml": "A1:F14",
+      "xl/worksheets/sheet3.xml": "A1:A4",
+      "xl/worksheets/sheet4.xml": "A1:AQ106",
+      "xl/worksheets/sheet5.xml": "A1:AQ106",
+      "xl/worksheets/sheet6.xml": "A1:AQ106",
+      "xl/worksheets/sheet7.xml": "A1:AQ106",
+      "xl/worksheets/sheet8.xml": "A1:AQ106",
+      "xl/worksheets/sheet9.xml": "A1:AQ106"
+    },
+    "worksheets": [
+      {
+        "compressed_bytes": 2521,
+        "path": "xl/worksheets/sheet1.xml",
+        "uncompressed_bytes": 9127
+      },
+      {
+        "compressed_bytes": 30799,
+        "path": "xl/worksheets/sheet10.xml",
+        "uncompressed_bytes": 170588
+      },
+      {
+        "compressed_bytes": 30828,
+        "path": "xl/worksheets/sheet11.xml",
+        "uncompressed_bytes": 171087
+      },
+      {
+        "compressed_bytes": 30885,
+        "path": "xl/worksheets/sheet12.xml",
+        "uncompressed_bytes": 170923
+      },
+      {
+        "compressed_bytes": 31049,
+        "path": "xl/worksheets/sheet13.xml",
+        "uncompressed_bytes": 170565
+      },
+      {
+        "compressed_bytes": 1251,
+        "path": "xl/worksheets/sheet2.xml",
+        "uncompressed_bytes": 3682
+      },
+      {
+        "compressed_bytes": 757,
+        "path": "xl/worksheets/sheet3.xml",
+        "uncompressed_bytes": 1513
+      },
+      {
+        "compressed_bytes": 31397,
+        "path": "xl/worksheets/sheet4.xml",
+        "uncompressed_bytes": 170906
+      },
+      {
+        "compressed_bytes": 31245,
+        "path": "xl/worksheets/sheet5.xml",
+        "uncompressed_bytes": 170890
+      },
+      {
+        "compressed_bytes": 31181,
+        "path": "xl/worksheets/sheet6.xml",
+        "uncompressed_bytes": 171026
+      },
+      {
+        "compressed_bytes": 31243,
+        "path": "xl/worksheets/sheet7.xml",
+        "uncompressed_bytes": 170845
+      },
+      {
+        "compressed_bytes": 31479,
+        "path": "xl/worksheets/sheet8.xml",
+        "uncompressed_bytes": 170360
+      },
+      {
+        "compressed_bytes": 30797,
+        "path": "xl/worksheets/sheet9.xml",
+        "uncompressed_bytes": 170714
+      }
+    ],
+    "zip": {
+      "entry_count": 69,
+      "max_compression_ratio": 39.51521456436931,
+      "max_compression_ratio_entry": "xl/styles.xml",
+      "max_entry_uncompressed_bytes": 171087,
+      "total_uncompressed_bytes": 1987418
+    }
+  },
+  "path": "corpus_public/sha256_3a3c2b40e4c9d8d73ff7523fdcbcd6ccec1f11ba289b7c5a8c8d6292959dfb86.xlsx",
+  "sha256": "3a3c2b40e4c9d8d73ff7523fdcbcd6ccec1f11ba289b7c5a8c8d6292959dfb86",
+  "timestamp": "2026-02-08T16:47:58.993751+00:00"
+}

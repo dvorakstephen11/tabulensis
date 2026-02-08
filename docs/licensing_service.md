@@ -19,6 +19,10 @@ Environment variables (set via Wrangler secrets/vars):
 - `LICENSE_PAST_DUE_GRACE_DAYS` (default: 3)
 - `LICENSE_MAX_DEVICES` (default: 2)
 - `LICENSE_ADMIN_TOKEN` (optional; enables `/license/reset`)
+- Resend (license delivery email):
+  - `RESEND_API_KEY` (secret)
+  - `RESEND_FROM` (var; example: `Tabulensis <licenses@mail.tabulensis.com>`)
+  - `RESEND_REPLY_TO` (var; example: `support@tabulensis.com`)
 
 Development helper:
 - `LICENSE_MOCK_STRIPE=1` simulates checkout completion without calling Stripe.

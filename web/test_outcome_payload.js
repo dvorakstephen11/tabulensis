@@ -20,6 +20,7 @@ const payloadVm = buildWorkbookViewModel(payload);
 assert.ok(payloadVm.sheets.length > 0, "payload should include at least one sheet");
 const payloadHtml = renderReportHtml(payload);
 assert.ok(payloadHtml.includes("summary-cards"), "payload render should include summary cards");
+assert.ok(payloadHtml.includes("summary-breakdowns"), "payload render should include summary breakdowns");
 
 assert.equal(outcome.mode, "payload", "outcome fixture should be payload mode");
 assert.ok(outcome.payload, "outcome fixture should include payload");
@@ -27,5 +28,6 @@ const outcomeVm = buildWorkbookViewModel(outcome.payload);
 assert.ok(outcomeVm.sheets.length > 0, "outcome payload should include sheets");
 const outcomeHtml = renderReportHtml(outcome.payload);
 assert.ok(outcomeHtml.includes("summary-cards"), "outcome render should include summary cards");
+assert.ok(outcomeHtml.includes("summary-breakdowns"), "outcome render should include summary breakdowns");
 
 console.log("ok");

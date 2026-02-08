@@ -345,6 +345,135 @@ function testSheetRenameMapping() {
   assert.equal(cell.new.cell.value, "B");
 }
 
+function testHideFormulaFormattingOnly() {
+  const report = {
+    strings: ["", "Sheet1"],
+    ops: [
+      {
+        kind: "CellEdited",
+        sheet: 1,
+        addr: { row: 0, col: 0 },
+        from: { value: { Number: 1 } },
+        to: { value: { Number: 1 } },
+        formula_diff: "formatting_only"
+      }
+    ],
+    warnings: []
+  };
+  const oldSheet = { name: "Sheet1", nrows: 1, ncols: 1, cells: [] };
+  const newSheet = { name: "Sheet1", nrows: 1, ncols: 1, cells: [] };
+  const alignment = {
+    sheet: "Sheet1",
+    rows: [{ old: 0, new: 0, kind: "match" }],
+    cols: [{ old: 0, new: 0, kind: "match" }],
+    moves: [],
+    skipped: false
+  };
+  const payload = {
+    report,
+    sheets: { old: { sheets: [oldSheet] }, new: { sheets: [newSheet] } },
+    alignments: [alignment]
+  };
+
+  const vm = buildWorkbookViewModel(payload, { noiseFilters: { hideFormulaFormattingOnly: true } });
+  assert.equal(vm.counts.modified, 0);
+  assert.equal(vm.sheets.length, 0);
+}
+
+function testHideMFormattingOnly() {
+  const report = {
+    strings: ["Query1"],
+    ops: [
+      { kind: "QueryDefinitionChanged", name: 0, change_kind: "formatting_only", old_hash: 1, new_hash: 1 }
+    ],
+    warnings: []
+  };
+  const vmNoFilter = buildWorkbookViewModel(report);
+  assert.equal(vmNoFilter.other.queries.length, 1);
+
+  const vmFilter = buildWorkbookViewModel(report, { noiseFilters: { hideMFormattingOnly: true } });
+  assert.equal(vmFilter.other.queries.length, 0);
+  assert.equal(vmFilter.counts.modified, 0);
+}
+
+function testCollapseMovesFilter() {
+  const report = {
+    strings: ["MoveSheet"],
+    ops: [
+      { kind: "BlockMovedRows", sheet: 0, src_start_row: 0, dst_start_row: 1, row_count: 1 },
+      { kind: "BlockMovedRows", sheet: 0, src_start_row: 0, dst_start_row: 1, row_count: 1 }
+    ],
+    warnings: []
+  };
+  const oldSheet = { name: "MoveSheet", nrows: 2, ncols: 1, cells: [] };
+  const newSheet = { name: "MoveSheet", nrows: 2, ncols: 1, cells: [] };
+  const alignment = {
+    sheet: "MoveSheet",
+    rows: [{ old: 0, new: 0, kind: "match" }, { old: 1, new: 1, kind: "match" }],
+    cols: [{ old: 0, new: 0, kind: "match" }],
+    moves: [],
+    skipped: false
+  };
+  const payload = {
+    report,
+    sheets: { old: { sheets: [oldSheet] }, new: { sheets: [newSheet] } },
+    alignments: [alignment]
+  };
+
+  const vmNoCollapse = buildWorkbookViewModel(payload, { noiseFilters: { collapseMoves: false } });
+  assert.equal(vmNoCollapse.counts.moved, 2);
+
+  const vmCollapse = buildWorkbookViewModel(payload, { noiseFilters: { collapseMoves: true } });
+  assert.equal(vmCollapse.counts.moved, 1);
+  assert.equal(vmCollapse.sheets[0].opCount, 1);
+}
+
+function testAnalysisSeverityAndCategories() {
+  const report = {
+    strings: ["", "Sheet1", "Query1", "Measure1", "Module1"],
+    ops: [
+      {
+        kind: "CellEdited",
+        sheet: 1,
+        addr: { row: 0, col: 0 },
+        from: { value: { Number: 1 } },
+        to: { value: { Number: 2 } },
+        formula_diff: "semantic_change"
+      },
+      { kind: "QueryDefinitionChanged", name: 2, change_kind: "semantic", old_hash: 1, new_hash: 2 },
+      { kind: "MeasureDefinitionChanged", name: 3, change_kind: "unknown", old_hash: 1, new_hash: 2 },
+      { kind: "VbaModuleChanged", name: 4 }
+    ],
+    warnings: []
+  };
+  const oldSheet = { name: "Sheet1", nrows: 1, ncols: 1, cells: [] };
+  const newSheet = { name: "Sheet1", nrows: 1, ncols: 1, cells: [] };
+  const alignment = {
+    sheet: "Sheet1",
+    rows: [{ old: 0, new: 0, kind: "match" }],
+    cols: [{ old: 0, new: 0, kind: "match" }],
+    moves: [],
+    skipped: false
+  };
+  const payload = {
+    report,
+    sheets: { old: { sheets: [oldSheet] }, new: { sheets: [newSheet] } },
+    alignments: [alignment]
+  };
+
+  const vm = buildWorkbookViewModel(payload);
+  assert.ok(vm.analysis, "expected analysis block");
+  assert.equal(vm.analysis.severity.high, 3);
+  assert.equal(vm.analysis.severity.medium, 1);
+  assert.equal(vm.analysis.severity.low, 0);
+
+  const byCategory = new Map(vm.analysis.categories.map(row => [row.category, row]));
+  assert.equal(byCategory.get("Grid").opCount, 1);
+  assert.equal(byCategory.get("Power Query").opCount, 1);
+  assert.equal(byCategory.get("Model").opCount, 1);
+  assert.equal(byCategory.get("Objects").opCount, 1);
+}
+
 testRowInsertionMapping();
 testMoveIdentity();
 testRowGrouping();
@@ -353,5 +482,9 @@ testRegionMaxCells();
 testAnchorsForRowChanges();
 testIgnoreBlankToBlank();
 testSheetRenameMapping();
+testHideFormulaFormattingOnly();
+testHideMFormattingOnly();
+testCollapseMovesFilter();
+testAnalysisSeverityAndCategories();
 
 console.log("ok");

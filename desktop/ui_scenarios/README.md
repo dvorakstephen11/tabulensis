@@ -18,6 +18,8 @@ Each scenario lives under `desktop/ui_scenarios/<name>/scenario.json` and should
 - `compare_many_sheets`: multi-sheet diff to validate default sorting and the sheets filter box.
 - `compare_multi_sheet`: sheet + grid changes to validate sheets list density and Grid preview behavior.
 - `compare_grid_basic`: single-cell change to exercise the Grid preview tab.
+- `compare_power_query`: Power Query (M) diffs to validate category summary + noise filters.
+- `compare_formula_semantic`: formula semantic diff fixture to validate formula_diff classification + Explain v1 wiring.
 - `compare_large_mode`: large workbook to exercise large-mode UI behavior.
 - `compare_canceled`: cancels a long-running diff to validate cancel UX and end-state messaging.
 - `compare_working`: captures a mid-run progress state to validate stage labels + progress gauge behavior.

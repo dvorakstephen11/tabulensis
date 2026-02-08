@@ -5,8 +5,8 @@ compile_error!("No Base64 backend selected. Enable feature \"base64-crate\" (def
 use base64::engine::general_purpose::STANDARD;
 #[cfg(feature = "base64-crate")]
 use base64::Engine;
-use quick_xml::Reader;
 use quick_xml::events::Event;
+use quick_xml::Reader;
 use thiserror::Error;
 
 use crate::error_codes;
@@ -283,8 +283,8 @@ fn take_segment(bytes: &[u8], offset: &mut usize, len: usize) -> Result<Vec<u8>,
 #[cfg(test)]
 mod tests {
     use super::{
-        DataMashupError, RawDataMashup, decode_datamashup_base64, parse_data_mashup,
-        read_datamashup_text,
+        decode_datamashup_base64, parse_data_mashup, read_datamashup_text, DataMashupError,
+        RawDataMashup,
     };
 
     fn build_dm_bytes(

@@ -18,21 +18,39 @@ pub struct MModuleAst {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MAstKind {
-    Let { binding_count: usize },
-    Record { field_count: usize },
-    List { item_count: usize },
-    FunctionCall { name: String, arg_count: usize },
-    FunctionLiteral { param_count: usize },
+    Let {
+        binding_count: usize,
+    },
+    Record {
+        field_count: usize,
+    },
+    List {
+        item_count: usize,
+    },
+    FunctionCall {
+        name: String,
+        arg_count: usize,
+    },
+    FunctionLiteral {
+        param_count: usize,
+    },
     UnaryOp,
     BinaryOp,
     TypeAscription,
     TryOtherwise,
     Primitive,
-    Ident { name: String },
+    Ident {
+        name: String,
+    },
     If,
     Each,
-    Access { kind: MAstAccessKind, chain_len: usize },
-    Opaque { token_count: usize },
+    Access {
+        kind: MAstAccessKind,
+        chain_len: usize,
+    },
+    Opaque {
+        token_count: usize,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1261,10 +1279,7 @@ fn parse_param(tokens: &[MToken]) -> Option<MParam> {
             let name = token_as_name(&tokens[0])?;
             let ty_tokens = &tokens[i + 1..];
             let ty = parse_type_ref(ty_tokens)?;
-            return Some(MParam {
-                name,
-                ty: Some(ty),
-            });
+            return Some(MParam { name, ty: Some(ty) });
         }
     }
 

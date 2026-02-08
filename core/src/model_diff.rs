@@ -241,12 +241,7 @@ fn diff_column_properties(
     }
 }
 
-fn diff_relationships(
-    old: &Model,
-    new: &Model,
-    pool: &mut StringPool,
-    emitter: &mut OpEmitter,
-) {
+fn diff_relationships(old: &Model, new: &Model, pool: &mut StringPool, emitter: &mut OpEmitter) {
     let old_rels = map_relationships(&old.relationships, pool);
     let new_rels = map_relationships(&new.relationships, pool);
     let mut keys: BTreeSet<RelationshipKey> = BTreeSet::new();
@@ -401,14 +396,18 @@ fn expression_change(
     }
 
     if config.semantic.enable_dax_semantic_diff {
-        if let (Ok(old_h), Ok(new_h)) = (dax::semantic_hash(old_expr), dax::semantic_hash(new_expr)) {
+        if let (Ok(old_h), Ok(new_h)) = (dax::semantic_hash(old_expr), dax::semantic_hash(new_expr))
+        {
             let kind = if old_h == new_h {
                 ExpressionChangeKind::FormattingOnly
             } else {
                 ExpressionChangeKind::Semantic
             };
             if kind == ExpressionChangeKind::FormattingOnly
-                && matches!(config.semantic.semantic_noise_policy, SemanticNoisePolicy::SuppressFormattingOnly)
+                && matches!(
+                    config.semantic.semantic_noise_policy,
+                    SemanticNoisePolicy::SuppressFormattingOnly
+                )
             {
                 return None;
             }
@@ -442,10 +441,7 @@ fn map_columns<'a>(
     out
 }
 
-fn map_measures<'a>(
-    measures: &'a [Measure],
-    pool: &StringPool,
-) -> BTreeMap<String, &'a Measure> {
+fn map_measures<'a>(measures: &'a [Measure], pool: &StringPool) -> BTreeMap<String, &'a Measure> {
     let mut out = BTreeMap::new();
     for measure in measures {
         let key = pool.resolve(measure.name).to_lowercase();
@@ -537,7 +533,10 @@ mod tests {
         config.semantic.semantic_noise_policy = SemanticNoisePolicy::SuppressFormattingOnly;
 
         let result = diff_models(&old_model, &new_model, &mut pool, &config);
-        assert!(result.ops.is_empty(), "formatting-only change should be suppressed");
+        assert!(
+            result.ops.is_empty(),
+            "formatting-only change should be suppressed"
+        );
         assert!(result.complete);
     }
 

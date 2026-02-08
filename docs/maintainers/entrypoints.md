@@ -22,7 +22,12 @@ This document maps the main entry points across the codebase so new changes can 
 
 ## Desktop (wxDragon)
 
-- `desktop/wx/src/main.rs`: wxDragon UI wiring + interaction flow.
+- `desktop/wx/src/main.rs`: desktop app orchestration + event handlers + UI state and rendering flow.
+- `desktop/wx/src/ui.rs`: XRC load + widget binding + theming (builds `UiHandles`).
+- `desktop/wx/src/ui_constants.rs`: shared desktop UI constants (column layouts, sizes, guided-empty strings).
+- `desktop/wx/src/profiles.rs`: profile persistence + built-in profiles.
+- `desktop/wx/src/profiles_dialog.rs`: profiles actions (save/rename/delete/import/export).
+- `desktop/wx/src/explain.rs`: "Explain" text builder for selected cells (best-effort, deterministic).
 - `desktop/backend/src/diff_runner.rs`: diff orchestration, store integration, and progress events.
 - `desktop/backend/src/store`: persisted op storage + diff summaries.
 - Run from source: `cargo run -p desktop_wx --bin desktop_wx` (use `--profile release-desktop` for optimized builds).

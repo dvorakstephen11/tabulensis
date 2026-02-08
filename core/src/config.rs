@@ -284,10 +284,19 @@ impl DiffConfig {
         )?;
         ensure_non_zero_u32(self.alignment.context_anchor_k1, "context_anchor_k1")?;
         ensure_non_zero_u32(self.alignment.context_anchor_k2, "context_anchor_k2")?;
-        ensure_non_zero_u32(self.moves.max_move_detection_rows, "max_move_detection_rows")?;
-        ensure_non_zero_u32(self.moves.max_move_detection_cols, "max_move_detection_cols")?;
+        ensure_non_zero_u32(
+            self.moves.max_move_detection_rows,
+            "max_move_detection_rows",
+        )?;
+        ensure_non_zero_u32(
+            self.moves.max_move_detection_cols,
+            "max_move_detection_cols",
+        )?;
         ensure_non_zero_u32(self.preflight.max_context_rows, "max_context_rows")?;
-        ensure_non_zero_u32(self.moves.min_block_size_for_move, "min_block_size_for_move")?;
+        ensure_non_zero_u32(
+            self.moves.min_block_size_for_move,
+            "min_block_size_for_move",
+        )?;
 
         if self.alignment.lcs_dp_work_limit == 0 {
             return Err(ConfigError::NonPositiveLimit {
@@ -296,7 +305,10 @@ impl DiffConfig {
             });
         }
 
-        if !self.preflight.preflight_in_order_match_ratio_min.is_finite()
+        if !self
+            .preflight
+            .preflight_in_order_match_ratio_min
+            .is_finite()
             || self.preflight.preflight_in_order_match_ratio_min < 0.0
             || self.preflight.preflight_in_order_match_ratio_min > 1.0
         {
@@ -725,7 +737,10 @@ mod tests {
             .dense_row_replace_ratio(-0.5)
             .build()
             .expect_err("builder should reject negative dense row replace ratio");
-        assert!(matches!(err, ConfigError::InvalidDenseRowReplaceRatio { .. }));
+        assert!(matches!(
+            err,
+            ConfigError::InvalidDenseRowReplaceRatio { .. }
+        ));
     }
 
     #[test]

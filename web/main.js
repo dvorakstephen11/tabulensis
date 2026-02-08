@@ -57,6 +57,284 @@ function buildDesktopSelection(path, name) {
   };
 }
 
+const BUILTIN_PROFILES = [
+  {
+    id: "builtin_default_balanced",
+    name: "Default (Balanced)",
+    builtIn: true,
+    preset: "balanced",
+    trusted: false,
+    noiseFilters: {
+      hideMFormattingOnly: false,
+      hideDaxFormattingOnly: false,
+      hideFormulaFormattingOnly: false,
+      collapseMoves: false
+    },
+    enableMSemanticDiff: true,
+    enableFormulaSemanticDiff: false,
+    enableDaxSemanticDiff: false,
+    semanticNoisePolicy: "report_formatting_only",
+    limits: null
+  },
+  {
+    id: "builtin_finance_model_review",
+    name: "Finance model review",
+    builtIn: true,
+    preset: "most_precise",
+    trusted: false,
+    noiseFilters: {
+      hideMFormattingOnly: true,
+      hideDaxFormattingOnly: true,
+      hideFormulaFormattingOnly: true,
+      collapseMoves: true
+    },
+    enableMSemanticDiff: true,
+    enableFormulaSemanticDiff: true,
+    enableDaxSemanticDiff: true,
+    semanticNoisePolicy: "suppress_formatting_only",
+    limits: null
+  },
+  {
+    id: "builtin_data_pipeline_workbook",
+    name: "Data pipeline workbook",
+    builtIn: true,
+    preset: "balanced",
+    trusted: false,
+    noiseFilters: {
+      hideMFormattingOnly: true,
+      hideDaxFormattingOnly: false,
+      hideFormulaFormattingOnly: false,
+      collapseMoves: true
+    },
+    enableMSemanticDiff: true,
+    enableFormulaSemanticDiff: false,
+    enableDaxSemanticDiff: false,
+    semanticNoisePolicy: "suppress_formatting_only",
+    limits: {
+      maxMemoryMb: 512,
+      timeoutMs: 60_000,
+      maxOps: 200_000,
+      onLimitExceeded: "return_partial_result"
+    }
+  },
+  {
+    id: "builtin_power_bi_model_review",
+    name: "Power BI model review",
+    builtIn: true,
+    preset: "most_precise",
+    trusted: false,
+    noiseFilters: {
+      hideMFormattingOnly: true,
+      hideDaxFormattingOnly: true,
+      hideFormulaFormattingOnly: false,
+      collapseMoves: false
+    },
+    enableMSemanticDiff: true,
+    enableFormulaSemanticDiff: false,
+    enableDaxSemanticDiff: true,
+    semanticNoisePolicy: "suppress_formatting_only",
+    limits: null
+  }
+];
+
+function safeLocalStorageGet(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch (_) {
+    return null;
+  }
+}
+
+function safeLocalStorageSet(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch (_) {}
+}
+
+function loadUserProfilesFromStorage() {
+  const raw = safeLocalStorageGet(PROFILE_STORAGE_KEY);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && typeof parsed === "object" && Array.isArray(parsed.profiles)) {
+      return parsed.profiles;
+    }
+  } catch (_) {}
+  return [];
+}
+
+function saveUserProfilesToStorage(profiles) {
+  const payload = { version: 1, profiles: Array.isArray(profiles) ? profiles : [] };
+  safeLocalStorageSet(PROFILE_STORAGE_KEY, JSON.stringify(payload));
+}
+
+function allProfiles() {
+  return [...BUILTIN_PROFILES, ...(userProfiles || [])];
+}
+
+function getProfileById(id) {
+  if (!id) return null;
+  return allProfiles().find(p => p && p.id === id) || null;
+}
+
+function ensureSelectedProfile() {
+  if (selectedProfileId && getProfileById(selectedProfileId)) return;
+  selectedProfileId = safeLocalStorageGet(PROFILE_SELECTED_KEY) || "builtin_default_balanced";
+  if (!getProfileById(selectedProfileId)) {
+    selectedProfileId = "builtin_default_balanced";
+  }
+}
+
+function makeProfileId(name) {
+  const now = Date.now();
+  const slug = String(name || "profile")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40) || "profile";
+  return `user_${now}_${slug}`;
+}
+
+function rebuildProfileSelectOptions() {
+  if (!profileSelect) return;
+  profileSelect.innerHTML = "";
+  for (const profile of allProfiles()) {
+    const opt = document.createElement("option");
+    opt.value = profile.id;
+    opt.textContent = profile.name;
+    profileSelect.append(opt);
+  }
+  profileSelect.value = selectedProfileId || "builtin_default_balanced";
+  updateProfileActionButtons();
+}
+
+function updateProfileActionButtons() {
+  const profile = getProfileById(selectedProfileId);
+  const isBuiltin = Boolean(profile && profile.builtIn);
+  if (profileRenameBtn) profileRenameBtn.disabled = isBuiltin;
+  if (profileDeleteBtn) profileDeleteBtn.disabled = isBuiltin;
+}
+
+function currentProfile() {
+  return getProfileById(selectedProfileId) || BUILTIN_PROFILES[0];
+}
+
+function engineOptionsFromProfile(profile) {
+  const p = profile || {};
+  const out = {};
+  if (p.preset) out.preset = p.preset;
+  if (p.limits) out.limits = p.limits;
+  if (p.trusted !== undefined) out.trusted = Boolean(p.trusted);
+  if (p.enableMSemanticDiff !== undefined) out.enableMSemanticDiff = Boolean(p.enableMSemanticDiff);
+  if (p.enableFormulaSemanticDiff !== undefined) out.enableFormulaSemanticDiff = Boolean(p.enableFormulaSemanticDiff);
+  if (p.enableDaxSemanticDiff !== undefined) out.enableDaxSemanticDiff = Boolean(p.enableDaxSemanticDiff);
+  if (p.semanticNoisePolicy) out.semanticNoisePolicy = p.semanticNoisePolicy;
+  return out;
+}
+
+function viewOptionsFromProfile(profile, { ignoreBlankToBlank = true } = {}) {
+  const p = profile || {};
+  const noiseFilters = p.noiseFilters && typeof p.noiseFilters === "object" ? p.noiseFilters : {};
+  return { ignoreBlankToBlank, noiseFilters };
+}
+
+function persistSelectedProfileId() {
+  if (selectedProfileId) {
+    safeLocalStorageSet(PROFILE_SELECTED_KEY, selectedProfileId);
+  }
+}
+
+function applySelectedProfileToView({ rerender = true } = {}) {
+  const profile = currentProfile();
+  const ignoreBlank = lastViewOptions ? lastViewOptions.ignoreBlankToBlank !== false : true;
+  const nextView = viewOptionsFromProfile(profile, { ignoreBlankToBlank: ignoreBlank });
+  if (rerender && lastPayload) {
+    const snapshot = reviewController?.captureState ? reviewController.captureState() : {};
+    renderResults(lastPayload, nextView, snapshot);
+  }
+}
+
+function initProfilesUi() {
+  userProfiles = loadUserProfilesFromStorage()
+    .filter(p => p && !p.builtIn && typeof p.id === "string" && typeof p.name === "string")
+    .map(p => ({ ...p, builtIn: false }));
+  ensureSelectedProfile();
+  rebuildProfileSelectOptions();
+  persistSelectedProfileId();
+
+  if (profileSelect) {
+    profileSelect.addEventListener("change", () => {
+      selectedProfileId = profileSelect.value;
+      ensureSelectedProfile();
+      persistSelectedProfileId();
+      rebuildProfileSelectOptions();
+      applySelectedProfileToView({ rerender: true });
+    });
+  }
+
+  if (profileSaveBtn) {
+    profileSaveBtn.addEventListener("click", () => {
+      const base = currentProfile();
+      const name = window.prompt("Name the new profile:", base?.name ? `${base.name} copy` : "New profile");
+      const trimmed = String(name || "").trim();
+      if (!trimmed) return;
+      const noiseFilters = lastViewOptions?.noiseFilters || base.noiseFilters || {};
+      const next = {
+        ...base,
+        id: makeProfileId(trimmed),
+        name: trimmed,
+        builtIn: false,
+        noiseFilters: { ...noiseFilters }
+      };
+      userProfiles = [...userProfiles, next];
+      saveUserProfilesToStorage(userProfiles);
+      selectedProfileId = next.id;
+      persistSelectedProfileId();
+      rebuildProfileSelectOptions();
+      applySelectedProfileToView({ rerender: true });
+      setStatus(`Profile saved: ${trimmed}`, "");
+    });
+  }
+
+  if (profileRenameBtn) {
+    profileRenameBtn.addEventListener("click", () => {
+      const profile = getProfileById(selectedProfileId);
+      if (!profile || profile.builtIn) {
+        setStatus("Built-in profiles cannot be renamed.", "error");
+        return;
+      }
+      const name = window.prompt("Rename profile:", profile.name || "");
+      const trimmed = String(name || "").trim();
+      if (!trimmed) return;
+      userProfiles = userProfiles.map(p => (p.id === profile.id ? { ...p, name: trimmed } : p));
+      saveUserProfilesToStorage(userProfiles);
+      rebuildProfileSelectOptions();
+      setStatus(`Profile renamed: ${trimmed}`, "");
+    });
+  }
+
+  if (profileDeleteBtn) {
+    profileDeleteBtn.addEventListener("click", () => {
+      const profile = getProfileById(selectedProfileId);
+      if (!profile || profile.builtIn) {
+        setStatus("Built-in profiles cannot be deleted.", "error");
+        return;
+      }
+      const ok = window.confirm(`Delete profile '${profile.name}'?`);
+      if (!ok) return;
+      userProfiles = userProfiles.filter(p => p.id !== profile.id);
+      saveUserProfilesToStorage(userProfiles);
+      selectedProfileId = "builtin_default_balanced";
+      persistSelectedProfileId();
+      rebuildProfileSelectOptions();
+      applySelectedProfileToView({ rerender: true });
+      setStatus("Profile deleted.", "");
+    });
+  }
+}
+
 let diffClient = null;
 let reviewController = null;
 let activeViewerManager = null;
@@ -69,6 +347,8 @@ let lastDiffId = null;
 let lastSummary = null;
 let lastMode = "payload";
 let lastEngineOptions = null;
+let lastPayload = null;
+let lastViewOptions = null;
 let lastAuditPath = null;
 let isDesktopApp = false;
 let selectedOld = null;
@@ -92,6 +372,17 @@ let searchIndexCache = {
   new: { id: null, path: null }
 };
 let largeSummaryCleanup = null;
+
+let profileSelect = null;
+let profileSaveBtn = null;
+let profileRenameBtn = null;
+let profileDeleteBtn = null;
+
+let userProfiles = [];
+let selectedProfileId = null;
+
+const PROFILE_STORAGE_KEY = "tabulensis_compare_profiles_v1";
+const PROFILE_SELECTED_KEY = "tabulensis_selected_profile_v1";
 
 const FILE_SIDES = {
   old: { dropId: "dropOld", inputId: "fileOld", nameId: "nameOld" },
@@ -129,6 +420,8 @@ function clearResults() {
   lastSummary = null;
   lastMode = "payload";
   lastAuditPath = null;
+  lastPayload = null;
+  lastViewOptions = null;
   if (largeModeNav) {
     largeModeNav.innerHTML = "";
     largeModeNav.classList.remove("visible");
@@ -775,8 +1068,9 @@ async function runDiff() {
   showStage("read");
 
   try {
-    const viewOptions = { ignoreBlankToBlank: true };
-    const engineOptions = { preset: "balanced" };
+    const profile = currentProfile();
+    const viewOptions = viewOptionsFromProfile(profile, { ignoreBlankToBlank: true });
+    const engineOptions = engineOptionsFromProfile(profile);
     lastEngineOptions = { ...engineOptions };
     let payload;
 
@@ -818,6 +1112,7 @@ async function runDiff() {
     lastMode = outcome.mode || "payload";
     if (outcome.config) {
       lastEngineOptions = {
+        ...(lastEngineOptions || {}),
         ...(outcome.config.preset ? { preset: outcome.config.preset } : {}),
         ...(outcome.config.limits ? { limits: outcome.config.limits } : {})
       };
@@ -825,6 +1120,8 @@ async function runDiff() {
 
     if (outcome.mode === "payload" && outcome.payload) {
       const report = outcome.payload.report || outcome.payload;
+      lastPayload = outcome.payload;
+      lastViewOptions = { ...viewOptions };
       renderResults(outcome.payload, viewOptions);
       byId("raw").textContent = JSON.stringify(report, null, 2);
 
@@ -842,6 +1139,8 @@ async function runDiff() {
       renderLargeSummary(outcome.summary);
       byId("raw").textContent = JSON.stringify(outcome.summary, null, 2);
       lastReport = null;
+      lastPayload = null;
+      lastViewOptions = null;
       lastMeta = buildMetaFromSummary(outcome.summary);
 
       const opCount = outcome.summary.opCount || 0;
@@ -880,6 +1179,11 @@ function cleanupViewers() {
 function renderResults(payload, options = {}, state = {}) {
   cleanupViewers();
   hideLargeModeNav();
+  lastPayload = payload;
+  lastViewOptions = {
+    ...options,
+    ...(options.noiseFilters ? { noiseFilters: { ...options.noiseFilters } } : {})
+  };
   const workbookVm = buildWorkbookViewModel(payload, options);
   const resultsEl = byId("results");
   resultsEl.innerHTML = renderWorkbookVm(workbookVm);
@@ -1099,6 +1403,163 @@ function buildReviewOrder(workbookVm) {
   return order;
 }
 
+function resolveStringFromReport(report, id) {
+  if (id === null || id === undefined) return "";
+  if (typeof id !== "number") return String(id);
+  if (!report || !Array.isArray(report.strings)) return "<unknown>";
+  return report.strings[id] != null ? report.strings[id] : "<unknown>";
+}
+
+function domSafeId(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function makeExplainProvider(workbookVm) {
+  const report = workbookVm?.report || {};
+  const ops = Array.isArray(report.ops) ? report.ops : [];
+
+  const queryIndex = new Map(); // queryLower -> { name, loadSheets:Set, groupPaths:Set, defChangeKind:string|null }
+  const modelCounts = { semantic: 0, formattingOnly: 0, unknown: 0, other: 0 };
+
+  for (const op of ops) {
+    const kind = op?.kind || "";
+    if (kind.startsWith("Query")) {
+      const name = resolveStringFromReport(report, op.name);
+      const key = String(name).toLowerCase();
+      if (!queryIndex.has(key)) {
+        queryIndex.set(key, {
+          name,
+          loadSheets: new Set(),
+          groupPaths: new Set(),
+          defChangeKind: null
+        });
+      }
+      const entry = queryIndex.get(key);
+      if (kind === "QueryMetadataChanged") {
+        const field = op.field || "";
+        if (field === "LoadToSheet") {
+          const value = op.new != null ? resolveStringFromReport(report, op.new) : "";
+          if (value) entry.loadSheets.add(String(value));
+        }
+        if (field === "GroupPath") {
+          const value = op.new != null ? resolveStringFromReport(report, op.new) : "";
+          if (value) entry.groupPaths.add(String(value));
+        }
+      }
+      if (kind === "QueryDefinitionChanged") {
+        entry.defChangeKind = op.change_kind || op.changeKind || entry.defChangeKind;
+      }
+      continue;
+    }
+
+    if (kind === "MeasureDefinitionChanged" || kind === "CalculatedColumnDefinitionChanged") {
+      const ck = String(op.change_kind || op.changeKind || "unknown");
+      if (ck === "semantic") modelCounts.semantic += 1;
+      else if (ck === "formatting_only") modelCounts.formattingOnly += 1;
+      else modelCounts.unknown += 1;
+      continue;
+    }
+    if (kind.startsWith("Table") || kind.startsWith("ModelColumn") || kind.startsWith("Relationship") || kind.startsWith("Measure")) {
+      modelCounts.other += 1;
+    }
+  }
+
+  const otherQueryItems = Array.isArray(workbookVm?.other?.queries) ? workbookVm.other.queries : [];
+  const otherModelItems = Array.isArray(workbookVm?.other?.model) ? workbookVm.other.model : [];
+
+  return async function explainCell({ sheetVm, cellSummary }) {
+    const sheetName = sheetVm?.name || "";
+    const addr = cellSummary?.newAddress || cellSummary?.oldAddress || cellSummary?.viewAddress || "";
+    const formulaDiff = cellSummary?.formulaDiff || "";
+    const lines = [];
+    const jumps = [];
+
+    lines.push(`Cell: ${sheetName}!${addr}`);
+    if (cellSummary?.old?.value || cellSummary?.fresh?.value) {
+      lines.push(`Old value: ${cellSummary?.old?.value || ""}`);
+      lines.push(`New value: ${cellSummary?.fresh?.value || ""}`);
+    }
+    if (cellSummary?.old?.formula || cellSummary?.fresh?.formula) {
+      lines.push(`Old formula: ${cellSummary?.old?.formula || ""}`);
+      lines.push(`New formula: ${cellSummary?.fresh?.formula || ""}`);
+    }
+    if (formulaDiff) {
+      lines.push(`Formula diff: ${String(formulaDiff).replace(/_/g, " ")}`);
+    }
+
+    if (formulaDiff && String(formulaDiff).toLowerCase() !== "unchanged") {
+      lines.push("");
+      lines.push("Likely cause: formula changed.");
+    }
+
+    const sheetKey = String(sheetName).toLowerCase();
+    const queryCandidates = [];
+    for (const entry of queryIndex.values()) {
+      let strong = false;
+      for (const sheet of entry.loadSheets) {
+        if (String(sheet).toLowerCase().includes(sheetKey) || sheetKey.includes(String(sheet).toLowerCase())) {
+          strong = true;
+          break;
+        }
+      }
+      if (!strong) {
+        for (const path of entry.groupPaths) {
+          if (String(path).toLowerCase().includes(sheetKey)) {
+            strong = true;
+            break;
+          }
+        }
+      }
+      if (strong) queryCandidates.push(entry);
+    }
+
+    lines.push("");
+    if (queryCandidates.length) {
+      lines.push("Power Query candidates for this sheet:");
+      for (const entry of queryCandidates.slice(0, 5)) {
+        const ck = entry.defChangeKind ? String(entry.defChangeKind).replace(/_/g, " ") : "unknown";
+        lines.push(`- ${entry.name} (${ck})`);
+        const item = otherQueryItems.find(row => row && row.name && String(row.name).toLowerCase() === String(entry.name).toLowerCase());
+        if (item) {
+          jumps.push({
+            label: `Jump: Query ${entry.name}`,
+            elementId: `other-power-query-${domSafeId(item.id)}`
+          });
+        }
+      }
+      jumps.push({ label: "Jump: Power Query section", elementId: "other-power-query" });
+    } else {
+      lines.push("Power Query: no strong attribution found for this sheet.");
+      if (otherQueryItems.length) {
+        jumps.push({ label: "Jump: Power Query section", elementId: "other-power-query" });
+      }
+    }
+
+    lines.push("");
+    if (otherModelItems.length) {
+      lines.push("Model changes present:");
+      lines.push(`- semantic: ${modelCounts.semantic}`);
+      lines.push(`- formatting-only: ${modelCounts.formattingOnly}`);
+      lines.push(`- unknown: ${modelCounts.unknown}`);
+      if (modelCounts.other) lines.push(`- other model ops: ${modelCounts.other}`);
+      jumps.push({ label: "Jump: Model section", elementId: "other-model" });
+    } else {
+      lines.push("Model: no changes detected.");
+    }
+
+    if (!queryCandidates.length && !otherModelItems.length && (!formulaDiff || String(formulaDiff).toLowerCase() === "unchanged")) {
+      lines.push("");
+      lines.push("No strong attribution available. This may be caused by upstream sheet edits, data refresh, or external connections.");
+    }
+
+    return { text: lines.join("\n"), jumps };
+  };
+}
+
 function setupReviewWorkflow(rootEl, workbookVm, payloadCache, options = {}, state = {}) {
   const anchorMap = new Map(
     workbookVm.sheets.map(sheet => [sheet.name, new Map((sheet.changes?.anchors || []).map(anchor => [anchor.id, anchor]))])
@@ -1108,7 +1569,14 @@ function setupReviewWorkflow(rootEl, workbookVm, payloadCache, options = {}, sta
     focusRows: Boolean(state.focusRows),
     focusCols: Boolean(state.focusCols)
   };
-  const viewerManager = hydrateGridViewers(rootEl, workbookVm, displayOptions, state.expandedSheets || null);
+  const explainProvider = makeExplainProvider(workbookVm);
+  const viewerManager = hydrateGridViewers(
+    rootEl,
+    workbookVm,
+    displayOptions,
+    state.expandedSheets || null,
+    explainProvider
+  );
   const reviewOrder = buildReviewOrder(workbookVm);
   const reviewState = {
     activeSheetName: state.activeSheetName || null,
@@ -1122,6 +1590,10 @@ function setupReviewWorkflow(rootEl, workbookVm, payloadCache, options = {}, sta
   const movedInput = rootEl.querySelector('input[data-filter="only-moved"]');
   const limitedInput = rootEl.querySelector('input[data-filter="only-limited"]');
   const sheetChangeInput = rootEl.querySelector('input[data-filter="only-sheet-changes"]');
+  const hideMInput = rootEl.querySelector('input[data-filter="hide-m-formatting-only"]');
+  const hideDaxInput = rootEl.querySelector('input[data-filter="hide-dax-formatting-only"]');
+  const hideFormulaInput = rootEl.querySelector('input[data-filter="hide-formula-formatting-only"]');
+  const collapseMovesInput = rootEl.querySelector('input[data-filter="collapse-moves"]');
   const ignoreBlankInput = rootEl.querySelector('input[data-filter="ignore-blank"]');
   const contentModeSelect = rootEl.querySelector('select[data-filter="content-mode"]');
 
@@ -1131,6 +1603,11 @@ function setupReviewWorkflow(rootEl, workbookVm, payloadCache, options = {}, sta
   if (movedInput) movedInput.checked = Boolean(state.onlyMoved);
   if (limitedInput) limitedInput.checked = Boolean(state.onlyLimited);
   if (sheetChangeInput) sheetChangeInput.checked = Boolean(state.onlySheetChanges);
+  const noiseFilters = options.noiseFilters && typeof options.noiseFilters === "object" ? options.noiseFilters : {};
+  if (hideMInput) hideMInput.checked = Boolean(noiseFilters.hideMFormattingOnly);
+  if (hideDaxInput) hideDaxInput.checked = Boolean(noiseFilters.hideDaxFormattingOnly);
+  if (hideFormulaInput) hideFormulaInput.checked = Boolean(noiseFilters.hideFormulaFormattingOnly);
+  if (collapseMovesInput) collapseMovesInput.checked = Boolean(noiseFilters.collapseMoves);
   if (ignoreBlankInput) ignoreBlankInput.checked = options.ignoreBlankToBlank !== false;
   if (contentModeSelect) contentModeSelect.value = displayOptions.contentMode;
 
@@ -1302,9 +1779,21 @@ function setupReviewWorkflow(rootEl, workbookVm, payloadCache, options = {}, sta
     };
   }
 
-  function rebuildResults(ignoreBlankToBlank) {
+  function noiseFiltersFromUi() {
+    return {
+      hideMFormattingOnly: hideMInput?.checked || false,
+      hideDaxFormattingOnly: hideDaxInput?.checked || false,
+      hideFormulaFormattingOnly: hideFormulaInput?.checked || false,
+      collapseMoves: collapseMovesInput?.checked || false
+    };
+  }
+
+  function rebuildResults(delta = {}) {
     const nextState = captureState();
-    const nextOptions = { ...options, ignoreBlankToBlank };
+    const nextOptions = { ...options, ...delta };
+    if (delta.noiseFilters) {
+      nextOptions.noiseFilters = { ...delta.noiseFilters };
+    }
     renderResults(payloadCache, nextOptions, nextState);
   }
 
@@ -1484,8 +1973,10 @@ function setupReviewWorkflow(rootEl, workbookVm, payloadCache, options = {}, sta
       viewerManager.setDisplayOptions(displayOptions);
     } else if (event.target === structuralInput || event.target === movedInput || event.target === limitedInput || event.target === sheetChangeInput) {
       applySheetFilter(searchInput ? searchInput.value : "");
+    } else if (event.target === hideMInput || event.target === hideDaxInput || event.target === hideFormulaInput || event.target === collapseMovesInput) {
+      rebuildResults({ noiseFilters: noiseFiltersFromUi() });
     } else if (event.target === ignoreBlankInput) {
-      rebuildResults(ignoreBlankInput.checked);
+      rebuildResults({ ignoreBlankToBlank: ignoreBlankInput.checked });
     } else if (event.target === contentModeSelect) {
       displayOptions.contentMode = contentModeSelect.value;
       viewerManager.setDisplayOptions(displayOptions);
@@ -1543,6 +2034,7 @@ function setupReviewWorkflow(rootEl, workbookVm, payloadCache, options = {}, sta
 
   return {
     viewerManager,
+    captureState,
     cleanup() {
       rootEl.removeEventListener("click", onRootClick);
       rootEl.removeEventListener("input", onRootInput);
@@ -1554,7 +2046,7 @@ function setupReviewWorkflow(rootEl, workbookVm, payloadCache, options = {}, sta
   };
 }
 
-function hydrateGridViewers(rootEl, workbookVm, displayOptions = {}, expandedSheets = null) {
+function hydrateGridViewers(rootEl, workbookVm, displayOptions = {}, expandedSheets = null, explainProvider = null) {
   const sheetMap = new Map(workbookVm.sheets.map(sheet => [sheet.name, sheet]));
   const viewers = new Map();
   let currentOptions = { ...displayOptions };
@@ -1586,7 +2078,7 @@ function hydrateGridViewers(rootEl, workbookVm, displayOptions = {}, expandedShe
     const viewer = mountSheetGridViewer({
       mountEl: mount,
       sheetVm,
-      opts: { initialMode, initialAnchor, displayOptions: currentOptions }
+      opts: { initialMode, initialAnchor, displayOptions: currentOptions, onExplain: explainProvider }
     });
     mount.dataset.mounted = "true";
     viewers.set(sheetName, viewer);
@@ -1688,6 +2180,11 @@ async function main() {
 
     setupFileDrop("old");
     setupFileDrop("new");
+    profileSelect = byId("profileSelect");
+    profileSaveBtn = byId("profileSave");
+    profileRenameBtn = byId("profileRename");
+    profileDeleteBtn = byId("profileDelete");
+    initProfilesUi();
     largeModeNav = byId("largeModeNav");
     setupBatchSection();
     setupSearchSection();

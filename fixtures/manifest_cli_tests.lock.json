@@ -117,6 +117,14 @@
       "hash": "sha256:eb27d5411a697471a64f871410cc2fc21e6134dc76d947ebb1f071f2d3a112eb",
       "mode": "zip-entries-v1"
     },
+    "formula_semantic_a.xlsx": {
+      "hash": "sha256:797287d2a6fe95dadeec92b459aadd47bf35a69eaf7521fc0cc7e7e857bba1c7",
+      "mode": "zip-entries-v1"
+    },
+    "formula_semantic_b.xlsx": {
+      "hash": "sha256:f5bc384dacb228b2676ac5bd3ea7a97a20c6eb0a34693fc50cdf3f444ec7a802",
+      "mode": "zip-entries-v1"
+    },
     "grid_99_percent_blank.xlsx": {
       "hash": "sha256:361df2a5d4e2e4b4201a3334797504541ddde756b8ac611ddac0272f201aedf3",
       "mode": "zip-entries-v1"
@@ -579,6 +587,6 @@
     }
   },
   "manifest": "fixtures/manifest_cli_tests.yaml",
-  "output_dir": "/home/dvorak/repo/agent_hub_repos/excel_diff/fixtures/generated",
+  "output_dir": "fixtures/generated",
   "version": 1
 }

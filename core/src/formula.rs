@@ -610,22 +610,22 @@ impl<'a> Parser<'a> {
 
         if matches!(self.peek(), Some(b'$' | b'A'..=b'Z' | b'a'..=b'z')) {
             let start = self.pos;
-                if let Some(r) = self.try_parse_a1_cell_ref(sheet.clone())? {
-                    let start_ref = r.clone();
-                    let mut expr = FormulaExpr::CellRef(r);
-                    self.skip_ws();
-                    if self.peek() == Some(b':') {
-                        self.bump();
-                        let rhs = self.try_parse_a1_cell_ref(None)?;
-                        if let Some(end) = rhs {
-                            expr = FormulaExpr::RangeRef(RangeReference {
-                                sheet,
-                                start: start_ref,
-                                end,
-                            });
-                        }
+            if let Some(r) = self.try_parse_a1_cell_ref(sheet.clone())? {
+                let start_ref = r.clone();
+                let mut expr = FormulaExpr::CellRef(r);
+                self.skip_ws();
+                if self.peek() == Some(b':') {
+                    self.bump();
+                    let rhs = self.try_parse_a1_cell_ref(None)?;
+                    if let Some(end) = rhs {
+                        expr = FormulaExpr::RangeRef(RangeReference {
+                            sheet,
+                            start: start_ref,
+                            end,
+                        });
                     }
-                    return Ok(expr);
+                }
+                return Ok(expr);
             }
             self.pos = start;
         }

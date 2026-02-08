@@ -16,6 +16,8 @@
 ## Documentation Index (Operating Docs + Checklists)
 
 - Canonical docs entrypoint: `docs/index.md`.
+- Daily operator routine (source of truth): `meta_methodology.md`.
+- Meta methodology implementation checklist: `META_METHODOLOGY_IMPLEMENTATION_CHECKLIST.md`.
 - `docs/index.md` includes an auto-indexed list of unfinished checkbox checklists.
   - Refresh it: `python3 scripts/update_docs_index_checklists.py`
 - Repo-local Codex skill (docs navigation + index maintenance): `.codex_skills/tabulensis-docs/SKILL.md`
@@ -23,6 +25,7 @@
 Policy:
 - If you add/rename an operating doc or checklist, also add/update its link in `docs/index.md`.
 - If you add a checkbox-style checklist, prefer `- [ ]` / `- [x]` items so it shows up in the auto-index.
+- If asked to produce a daily plan or prioritize work, read `meta_methodology.md` plus the “Unfinished checklists” block in `docs/index.md`.
 
 ## Perf Validation Policy (Major vs Minor Changes)
 

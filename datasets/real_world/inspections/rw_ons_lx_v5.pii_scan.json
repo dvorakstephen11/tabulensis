@@ -1,0 +1,64 @@
+{
+  "bytes": 368891,
+  "dataset_id": "rw_ons_lx_v5",
+  "path": "corpus_public/sha256_3a3c2b40e4c9d8d73ff7523fdcbcd6ccec1f11ba289b7c5a8c8d6292959dfb86.xlsx",
+  "scan": {
+    "counts": {
+      "email": 8
+    },
+    "counts_disallowed": {},
+    "findings": [
+      {
+        "allowed": true,
+        "entry": "xl/worksheets/sheet1.xml",
+        "kind": "email",
+        "match": "lif***************.uk"
+      },
+      {
+        "allowed": true,
+        "entry": "xl/sharedStrings.xml",
+        "kind": "email",
+        "match": "pop*************.uk"
+      },
+      {
+        "allowed": true,
+        "entry": "xl/sharedStrings.xml",
+        "kind": "email",
+        "match": "psi*********************.uk"
+      },
+      {
+        "allowed": true,
+        "entry": "xl/worksheets/_rels/sheet1.xml.rels",
+        "kind": "email",
+        "match": "lif***************.uk"
+      },
+      {
+        "allowed": true,
+        "entry": "xl/worksheets/_rels/sheet1.xml.rels",
+        "kind": "email",
+        "match": "psi*********************.uk"
+      },
+      {
+        "allowed": true,
+        "entry": "xl/worksheets/_rels/sheet1.xml.rels",
+        "kind": "email",
+        "match": "lif***************.uk"
+      },
+      {
+        "allowed": true,
+        "entry": "xl/worksheets/_rels/sheet1.xml.rels",
+        "kind": "email",
+        "match": "pop*************.uk"
+      },
+      {
+        "allowed": true,
+        "entry": "xl/worksheets/_rels/sheet1.xml.rels",
+        "kind": "email",
+        "match": "lif***************.uk"
+      }
+    ],
+    "total_scanned_bytes": 1987418
+  },
+  "sha256": "3a3c2b40e4c9d8d73ff7523fdcbcd6ccec1f11ba289b7c5a8c8d6292959dfb86",
+  "timestamp": "2026-02-08T16:50:45.027579+00:00"
+}

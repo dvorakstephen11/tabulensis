@@ -12,10 +12,11 @@ name = "excel_diff"
 path = "src/lib.rs"
 
 [features]
-default = ["excel-open-xml", "std-fs", "vba", "dpapi", "base64-crate"]
+default = ["excel-open-xml", "std-fs", "vba", "dpapi", "base64-crate", "custom-xml", "custom-json-schema"]
 excel-open-xml = []
 custom-xml = []
 custom-jsonl = ["dep:ryu"]
+custom-json-schema = []
 vba = ["dep:ovba"]
 std-fs = []
 perf-metrics = []

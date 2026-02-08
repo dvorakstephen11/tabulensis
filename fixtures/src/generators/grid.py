@@ -161,6 +161,78 @@ class ValueFormulaGenerator(BaseGenerator):
             for name, data in other_files.items():
                 zf.writestr(name, data)
 
+
+class FormulaSemanticPairGenerator(BaseGenerator):
+    """Pair fixture: exercise formula_diff (formatting-only vs semantic change).
+
+    Notes:
+    - openpyxl does not compute cached formula values, so we inject <v> caches for determinism.
+    - Keep it tiny so UI scenarios stay fast and deterministic.
+    """
+
+    def generate(self, output_dir: Path, output_names: Union[str, List[str]]):
+        if isinstance(output_names, str):
+            output_names = [output_names]
+
+        if len(output_names) != 2:
+            raise ValueError("formula_semantic_pair generator expects exactly two output filenames")
+
+        def build_one(path: Path, variant: str):
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Sheet1"
+
+            ws["A1"] = 10
+            ws["A2"] = 5
+            ws["B1"] = 2
+
+            if variant == "a":
+                # B changes only whitespace: should classify as FormattingOnly when semantic formula
+                # diff is enabled.
+                ws["C1"] = "=A1+A2"
+                # B changes semantics.
+                ws["C2"] = "=A1*B1"
+            else:
+                ws["C1"] = "=A1 + A2"
+                ws["C2"] = "=A1*(B1+1)"
+
+            wb.save(path)
+            self._inject_formula_caches(path, variant)
+
+        build_one(output_dir / output_names[0], "a")
+        build_one(output_dir / output_names[1], "b")
+
+    def _inject_formula_caches(self, path: Path, variant: str):
+        ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+        with zipfile.ZipFile(path, "r") as zf:
+            sheet_xml = zf.read("xl/worksheets/sheet1.xml")
+            other_files = {
+                info.filename: zf.read(info.filename)
+                for info in zf.infolist()
+                if info.filename != "xl/worksheets/sheet1.xml"
+            }
+
+        root = ET.fromstring(sheet_xml)
+
+        def update_cell(ref: str, value: str):
+            cell = root.find(f".//{{{ns}}}c[@r='{ref}']")
+            if cell is None:
+                return
+            v = cell.find(f"{{{ns}}}v")
+            if v is None:
+                v = ET.SubElement(cell, f"{{{ns}}}v")
+            v.text = value
+
+        update_cell("C1", "15")
+        update_cell("C2", "20" if variant == "a" else "30")
+
+        ET.register_namespace("", ns)
+        updated_sheet = ET.tostring(root, encoding="utf-8", xml_declaration=False)
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("xl/worksheets/sheet1.xml", updated_sheet)
+            for name, data in other_files.items():
+                zf.writestr(name, data)
+
 class SingleCellDiffGenerator(BaseGenerator):
     """Generates a tiny pair of workbooks with a single differing cell."""
     def generate(self, output_dir: Path, output_names: Union[str, List[str]]):

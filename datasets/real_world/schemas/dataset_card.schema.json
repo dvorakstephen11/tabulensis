@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Real-World Dataset Card",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "kind", "homepage_url", "direct_download_url", "license_url", "license_summary", "estimated_size_bytes", "tags", "why"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9_]+$",
+      "description": "Stable dataset id (ASCII, lowercase, underscores)."
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["xlsx", "xlsm", "xltx", "xltm", "pbix", "pbit"],
+      "description": "Primary file type."
+    },
+    "homepage_url": {
+      "type": "string",
+      "description": "Human-facing page with context."
+    },
+    "direct_download_url": {
+      "type": "string",
+      "description": "Direct URL to the dataset bytes."
+    },
+    "license_url": {
+      "type": "string",
+      "description": "Canonical license/terms page."
+    },
+    "license_summary": {
+      "type": "string",
+      "description": "Short summary of why the license is acceptable and any attribution requirements."
+    },
+    "estimated_size_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Estimated size in bytes (best-effort)."
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "Stress axes and structure hints."
+    },
+    "why": {
+      "type": "string",
+      "description": "Why this dataset is valuable for perf/correctness coverage."
+    }
+  }
+}
+

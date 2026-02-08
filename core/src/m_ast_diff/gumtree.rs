@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::diff::AstMoveHint;
 
-use super::{FlatTree, move_hints_for_matches};
+use super::{move_hints_for_matches, FlatTree};
 
 pub(crate) struct GumTreeResult {
     pub(crate) covered_old: Vec<bool>,
@@ -39,8 +39,7 @@ pub(crate) fn match_unique_subtrees(
         matches.push(cand);
     }
 
-    let match_pairs: Vec<(usize, usize)> =
-        matches.iter().map(|m| (m.old_idx, m.new_idx)).collect();
+    let match_pairs: Vec<(usize, usize)> = matches.iter().map(|m| (m.old_idx, m.new_idx)).collect();
     let move_hints = move_hints_for_matches(old_tree, new_tree, &match_pairs, min_move_size);
 
     GumTreeResult {

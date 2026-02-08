@@ -45,7 +45,8 @@ pub(crate) fn diff_summary(old_ast: &MModuleAst, new_ast: &MModuleAst) -> AstDif
     let reduced_old = build_reduced_tree(&old_tree, &gum.covered_old);
     let reduced_new = build_reduced_tree(&new_tree, &gum.covered_new);
 
-    let counts = if reduced_old.labels.len().max(reduced_new.labels.len()) <= REDUCED_TED_MAX_NODES {
+    let counts = if reduced_old.labels.len().max(reduced_new.labels.len()) <= REDUCED_TED_MAX_NODES
+    {
         apted::tree_edit_counts(&reduced_old, &reduced_new)
     } else {
         apted::approximate_counts(&reduced_old, &reduced_new)

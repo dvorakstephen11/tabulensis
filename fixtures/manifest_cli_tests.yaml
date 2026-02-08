@@ -51,6 +51,13 @@ scenarios:
     generator: "value_formula"
     output: "pg3_value_and_formula_cells.xlsx"
 
+  # --- Desktop UI: formula semantic diff / Explain v1 wiring ---
+  - id: "ui_formula_semantic_pair"
+    generator: "formula_semantic_pair"
+    output:
+      - "formula_semantic_a.xlsx"
+      - "formula_semantic_b.xlsx"
+
   # --- Phase 3: Spreadsheet-mode G1/G2 ---
   - id: "g1_equal_sheet"
     generator: "basic_grid"

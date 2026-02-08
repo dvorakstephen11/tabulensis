@@ -151,6 +151,24 @@
         flex-wrap: wrap;
       }
 
+      .profile-controls {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .profile-label {
+        font-size: 12px;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      .profile-select {
+        min-width: 220px;
+      }
+
       .secondary-btn {
         background: var(--bg-primary);
         border: 1px solid var(--border-primary);
@@ -790,6 +808,212 @@
         text-transform: uppercase;
         letter-spacing: 0.5px;
         margin-top: 4px;
+      }
+
+      .summary-breakdowns {
+        margin-bottom: 28px;
+      }
+
+      .run-health {
+        padding: 12px 14px;
+        border-radius: 12px;
+        border: 1px solid var(--border-primary);
+        background: var(--bg-secondary);
+        color: var(--text-secondary);
+        margin-bottom: 14px;
+        font-size: 13px;
+      }
+
+      .run-health.ok {
+        border-color: var(--diff-add-border);
+        background: var(--diff-add-bg);
+        color: var(--text-primary);
+      }
+
+      .run-health.warn {
+        border-color: var(--diff-modify-border);
+        background: var(--diff-modify-bg);
+        color: var(--text-primary);
+      }
+
+      .summary-breakdowns-grid {
+        display: grid;
+        grid-template-columns: 1.2fr 0.8fr;
+        gap: 16px;
+        align-items: start;
+      }
+
+      @media (max-width: 980px) {
+        .summary-breakdowns-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      .summary-panel {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-primary);
+        border-radius: 14px;
+        padding: 16px;
+      }
+
+      .summary-panel-title {
+        font-size: 12px;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 10px;
+      }
+
+      .summary-table {
+        display: grid;
+        gap: 8px;
+      }
+
+      .summary-row {
+        display: grid;
+        grid-template-columns: 1.3fr 60px 60px 60px 60px 1.2fr;
+        gap: 10px;
+        align-items: center;
+        padding: 8px 10px;
+        border-radius: 12px;
+        border: 1px solid var(--border-secondary);
+        background: var(--bg-tertiary);
+      }
+
+      .summary-row.summary-header {
+        grid-template-columns: 1.3fr 60px 60px 60px 60px 1.2fr;
+        padding: 0 10px;
+        border: none;
+        background: transparent;
+        color: var(--text-secondary);
+      }
+
+      .summary-cell {
+        font-size: 12px;
+        color: var(--text-secondary);
+      }
+
+      .summary-row:not(.summary-header) .summary-cell.summary-name {
+        color: var(--text-primary);
+        font-weight: 600;
+      }
+
+      .summary-num {
+        text-align: right;
+        font-family: var(--font-mono);
+        color: var(--text-primary);
+      }
+
+      .summary-mini {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        justify-content: flex-end;
+      }
+
+      .summary-num.sev-high { color: var(--accent-red); }
+      .summary-num.sev-med { color: var(--accent-yellow); }
+      .summary-num.sev-low { color: var(--accent-green); }
+
+      .severity-cards {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+        margin-bottom: 18px;
+      }
+
+      .severity-card {
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border-secondary);
+        border-radius: 12px;
+        padding: 14px 10px;
+        text-align: center;
+      }
+
+      .severity-card .count {
+        font-size: 28px;
+        font-weight: 700;
+        font-family: var(--font-mono);
+      }
+
+      .severity-card .label {
+        font-size: 12px;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-top: 2px;
+      }
+
+      .severity-card.high .count { color: var(--accent-red); }
+      .severity-card.medium .count { color: var(--accent-yellow); }
+      .severity-card.low .count { color: var(--accent-green); }
+
+      .top-list {
+        display: grid;
+        gap: 8px;
+        margin-bottom: 18px;
+      }
+
+      .top-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid var(--border-secondary);
+        background: var(--bg-tertiary);
+      }
+
+      .top-name {
+        font-weight: 600;
+        color: var(--text-primary);
+        min-width: 0;
+        word-break: break-word;
+      }
+
+      .top-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: flex-end;
+        font-size: 12px;
+        color: var(--text-secondary);
+        white-space: nowrap;
+      }
+
+      .sev {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        padding: 2px 6px;
+        border-radius: 999px;
+        border: 1px solid var(--border-primary);
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+      }
+
+      .sev-high {
+        color: var(--accent-red);
+        border-color: var(--diff-remove-border);
+        background: var(--diff-remove-bg);
+      }
+
+      .sev-medium {
+        color: var(--accent-yellow);
+        border-color: var(--diff-modify-border);
+        background: var(--diff-modify-bg);
+      }
+
+      .sev-low {
+        color: var(--accent-green);
+        border-color: var(--diff-add-border);
+        background: var(--diff-add-bg);
+      }
+
+      .top-empty {
+        font-size: 12px;
+        color: var(--text-muted);
+        padding: 8px 2px;
       }
 
       .no-changes {
@@ -2299,6 +2523,68 @@
         cursor: pointer;
       }
 
+      .grid-explain-wrap {
+        margin-top: 14px;
+        padding-top: 12px;
+        border-top: 1px solid var(--border-secondary);
+        display: grid;
+        gap: 10px;
+      }
+
+      .grid-explain-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .grid-explain-title {
+        font-size: 12px;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+      }
+
+      .grid-explain-btn {
+        background: var(--bg-primary);
+        border: 1px solid var(--border-primary);
+        color: var(--text-secondary);
+        padding: 6px 10px;
+        border-radius: 8px;
+        font-size: 11px;
+        cursor: pointer;
+        transition: border-color 0.2s ease, color 0.2s ease;
+      }
+
+      .grid-explain-btn:hover {
+        border-color: var(--accent-blue);
+        color: var(--text-primary);
+      }
+
+      .grid-explain-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
+      .grid-explain-text {
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-family: var(--font-mono);
+        font-size: 12px;
+        line-height: 1.45;
+        color: var(--text-secondary);
+        background: var(--bg-primary);
+        border: 1px solid var(--border-primary);
+        border-radius: 12px;
+        padding: 12px 12px;
+      }
+
+      .grid-explain-jumps {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
       .grid-viewer.inspector-collapsed .grid-viewer-body {
         grid-template-columns: 1fr 48px;
       }
@@ -2347,6 +2633,13 @@
         <div class="action-bar">
           <div class="action-left">
             <button class="secondary-btn" id="cancel" disabled>Cancel</button>
+            <div class="profile-controls">
+              <span class="profile-label">Profile</span>
+              <select class="search-select profile-select" id="profileSelect"></select>
+              <button class="secondary-btn" id="profileSave">Save as...</button>
+              <button class="secondary-btn" id="profileRename">Rename...</button>
+              <button class="secondary-btn" id="profileDelete">Delete</button>
+            </div>
             <div class="export-group">
               <button class="secondary-btn" id="exportJson" disabled>Download report JSON</button>
               <button class="secondary-btn" id="exportHtml" disabled>Download HTML report</button>

@@ -48,9 +48,9 @@ pub struct WindowsDpapiDecryptor;
 impl DpapiDecryptor for WindowsDpapiDecryptor {
     fn decrypt(&self, blob: &[u8], entropy: &[u8]) -> Result<Vec<u8>, DpapiDecryptError> {
         use windows_sys::Win32::Foundation::LocalFree;
+        use windows_sys::Win32::Security::Cryptography::CryptUnprotectData;
         use windows_sys::Win32::Security::Cryptography::CRYPTPROTECT_UI_FORBIDDEN;
         use windows_sys::Win32::Security::Cryptography::CRYPT_INTEGER_BLOB;
-        use windows_sys::Win32::Security::Cryptography::CryptUnprotectData;
 
         if blob.is_empty() {
             return Err(DpapiDecryptError::Failed);
@@ -145,7 +145,9 @@ pub fn validate_permission_bindings(
             let expected_package_hash = sha256(&raw.package_parts);
             let expected_permissions_hash = sha256(&raw.permissions);
 
-            if package_hash == expected_package_hash && permissions_hash == expected_permissions_hash {
+            if package_hash == expected_package_hash
+                && permissions_hash == expected_permissions_hash
+            {
                 PermissionBindingsStatus::Verified
             } else {
                 PermissionBindingsStatus::InvalidOrTampered

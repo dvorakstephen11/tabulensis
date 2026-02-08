@@ -71,7 +71,8 @@ impl<'a> HardeningController<'a> {
         };
 
         self.timeout_tick = self.timeout_tick.saturating_add(1);
-        let should_check = self.timeout_tick == 1 || self.timeout_tick % TIMEOUT_CHECK_EVERY_TICKS == 0;
+        let should_check =
+            self.timeout_tick == 1 || self.timeout_tick % TIMEOUT_CHECK_EVERY_TICKS == 0;
         if !should_check {
             return false;
         }
@@ -96,7 +97,11 @@ impl<'a> HardeningController<'a> {
         self.aborted
     }
 
-    pub(super) fn check_op_limit(&mut self, current_op_count: usize, warnings: &mut Vec<String>) -> bool {
+    pub(super) fn check_op_limit(
+        &mut self,
+        current_op_count: usize,
+        warnings: &mut Vec<String>,
+    ) -> bool {
         if self.aborted {
             return true;
         }
@@ -182,4 +187,3 @@ fn bytes_to_mb_ceil(bytes: u64) -> u64 {
         .saturating_add(BYTES_PER_MB.saturating_sub(1))
         .saturating_div(BYTES_PER_MB)
 }
-

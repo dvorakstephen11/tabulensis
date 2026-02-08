@@ -5,10 +5,10 @@ use crate::sink::{DiffSink, SinkFinishGuard, VecSink};
 use crate::string_pool::StringPool;
 use crate::workbook::Sheet;
 
-use crate::diff::SheetId;
 use super::context::DiffContext;
 use super::grid_diff::try_diff_grids_internal;
 use super::hardening::HardeningController;
+use crate::diff::SheetId;
 
 pub fn diff_sheets(
     old: &Sheet,

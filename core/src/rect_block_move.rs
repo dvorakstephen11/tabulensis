@@ -85,14 +85,24 @@ pub(crate) fn detect_exact_rect_block_move_from_views(
     }
 
     let mut diff_rows: Vec<u32> = Vec::new();
-    for (idx, (a, b)) in view_a.row_meta.iter().zip(view_b.row_meta.iter()).enumerate() {
+    for (idx, (a, b)) in view_a
+        .row_meta
+        .iter()
+        .zip(view_b.row_meta.iter())
+        .enumerate()
+    {
         if a.signature != b.signature {
             diff_rows.push(idx as u32);
         }
     }
 
     let mut diff_cols: Vec<u32> = Vec::new();
-    for (idx, (a, b)) in view_a.col_meta.iter().zip(view_b.col_meta.iter()).enumerate() {
+    for (idx, (a, b)) in view_a
+        .col_meta
+        .iter()
+        .zip(view_b.col_meta.iter())
+        .enumerate()
+    {
         if a.hash != b.hash {
             diff_cols.push(idx as u32);
         }
@@ -127,9 +137,7 @@ pub(crate) fn detect_exact_rect_block_move_from_views(
     } else {
         let m01 = count_rect_mismatches(old, new, row_ranges.0, col_ranges.1);
         let m10 = count_rect_mismatches(old, new, row_ranges.1, col_ranges.0);
-        diag_mismatches
-            .saturating_add(m01)
-            .saturating_add(m10)
+        diag_mismatches.saturating_add(m01).saturating_add(m10)
     };
 
     if union_mismatches != expected_mismatches {
@@ -175,12 +183,12 @@ fn validate_orientation(
         col_ranges.1,
     ) {
         return Some(RectBlockMove {
-            src_start_row: row_ranges.0.0,
+            src_start_row: row_ranges.0 .0,
             src_row_count: row_count,
-            src_start_col: col_ranges.0.0,
+            src_start_col: col_ranges.0 .0,
             src_col_count: col_count,
-            dst_start_row: row_ranges.1.0,
-            dst_start_col: col_ranges.1.0,
+            dst_start_row: row_ranges.1 .0,
+            dst_start_col: col_ranges.1 .0,
             block_hash: None,
         });
     }

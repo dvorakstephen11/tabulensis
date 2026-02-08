@@ -19,8 +19,7 @@ pub(crate) fn estimate_gridview_bytes(grid: &Grid) -> u64 {
     let build_col_counts_bytes = ncols
         .saturating_mul(size_of::<u32>() as u64)
         .saturating_add(ncols.saturating_mul(size_of::<Option<u32>>() as u64));
-    let build_hashers_bytes =
-        ncols.saturating_mul(size_of::<xxhash_rust::xxh3::Xxh3>() as u64);
+    let build_hashers_bytes = ncols.saturating_mul(size_of::<xxhash_rust::xxh3::Xxh3>() as u64);
 
     row_view_bytes
         .saturating_add(row_meta_bytes)

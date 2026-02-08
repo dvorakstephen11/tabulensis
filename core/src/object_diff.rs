@@ -271,4 +271,3 @@ pub(crate) fn diff_vba_modules(
 
     ops
 }
-

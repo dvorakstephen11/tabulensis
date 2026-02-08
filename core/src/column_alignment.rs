@@ -1,6 +1,6 @@
 use crate::alignment::align_meta_with_amr;
 use crate::config::DiffConfig;
-use crate::grid_metadata::{FrequencyClass, RowMeta, classify_row_frequencies};
+use crate::grid_metadata::{classify_row_frequencies, FrequencyClass, RowMeta};
 use crate::grid_view::{ColHash, ColMeta, GridView, HashStats};
 use crate::hashing::hash_col_content_unordered_128;
 use crate::workbook::{ColSignature, Grid, RowSignature};
@@ -327,7 +327,9 @@ fn build_column_alignment_meta(view: &GridView, config: &DiffConfig) -> Vec<RowM
         .iter()
         .map(|col| RowMeta {
             row_idx: col.col_idx,
-            signature: RowSignature { hash: col.hash.hash },
+            signature: RowSignature {
+                hash: col.hash.hash,
+            },
             non_blank_count: col.non_blank_count,
             first_non_blank_col: col.first_non_blank_row,
             frequency_class: FrequencyClass::Common,

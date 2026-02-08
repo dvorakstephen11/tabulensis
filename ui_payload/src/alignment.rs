@@ -78,10 +78,11 @@ pub fn build_alignments(
             .get(&sheet)
             .map(Vec::as_slice)
             .unwrap_or(empty_ops.as_slice());
-        let old_sheet = old_lookup
-            .get(&sheet)
-            .copied()
-            .or_else(|| rename_map.get(&sheet).and_then(|old| old_lookup.get(old).copied()));
+        let old_sheet = old_lookup.get(&sheet).copied().or_else(|| {
+            rename_map
+                .get(&sheet)
+                .and_then(|old| old_lookup.get(old).copied())
+        });
         let new_sheet = new_lookup.get(&sheet).copied();
         alignments.push(build_sheet_alignment_for(&sheet, old_sheet, new_sheet, ops));
     }
@@ -337,13 +338,13 @@ fn axis_summary(
         && new_len >= added_total
         && (old_len - removed_total) == (new_len - added_total);
 
-    AxisSummary { view_len, consistent }
+    AxisSummary {
+        view_len,
+        consistent,
+    }
 }
 
-fn union_count<'a>(
-    base: &HashSet<u32>,
-    extra: impl Iterator<Item = &'a u32>,
-) -> u32 {
+fn union_count<'a>(base: &HashSet<u32>, extra: impl Iterator<Item = &'a u32>) -> u32 {
     let mut count = u32::try_from(base.len()).unwrap_or(u32::MAX);
     for value in extra {
         if !base.contains(value) {

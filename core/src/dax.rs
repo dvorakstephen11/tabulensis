@@ -48,7 +48,12 @@ impl BinaryOp {
         match self {
             BinaryOp::Or => 1,
             BinaryOp::And => 2,
-            BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => 3,
+            BinaryOp::Eq
+            | BinaryOp::Ne
+            | BinaryOp::Lt
+            | BinaryOp::Le
+            | BinaryOp::Gt
+            | BinaryOp::Ge => 3,
             BinaryOp::Concat => 4,
             BinaryOp::Add | BinaryOp::Sub => 5,
             BinaryOp::Mul | BinaryOp::Div => 6,
@@ -75,11 +80,27 @@ enum Expr {
     Boolean(bool),
     Identifier(String),
     BracketRef(String),
-    TableColumnRef { table: String, column: String },
-    Call { name: String, args: Vec<Expr> },
-    Unary { op: UnaryOp, expr: Box<Expr> },
-    Binary { op: BinaryOp, left: Box<Expr>, right: Box<Expr> },
-    VarBlock { vars: Vec<(String, Expr)>, body: Box<Expr> },
+    TableColumnRef {
+        table: String,
+        column: String,
+    },
+    Call {
+        name: String,
+        args: Vec<Expr>,
+    },
+    Unary {
+        op: UnaryOp,
+        expr: Box<Expr>,
+    },
+    Binary {
+        op: BinaryOp,
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+    VarBlock {
+        vars: Vec<(String, Expr)>,
+        body: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,92 +195,134 @@ impl Lexer {
     fn next_token(&mut self) -> Result<Token, DaxParseError> {
         self.skip_whitespace_and_comments();
         let Some(ch) = self.peek() else {
-            return Ok(Token { kind: TokenKind::End });
+            return Ok(Token {
+                kind: TokenKind::End,
+            });
         };
 
         match ch {
             '(' => {
                 self.advance();
-                Ok(Token { kind: TokenKind::LParen })
+                Ok(Token {
+                    kind: TokenKind::LParen,
+                })
             }
             ')' => {
                 self.advance();
-                Ok(Token { kind: TokenKind::RParen })
+                Ok(Token {
+                    kind: TokenKind::RParen,
+                })
             }
             ',' => {
                 self.advance();
-                Ok(Token { kind: TokenKind::Comma })
+                Ok(Token {
+                    kind: TokenKind::Comma,
+                })
             }
             '[' => self.read_bracket_ident(),
             '\'' => self.read_quoted_ident(),
             '"' => self.read_string_literal(),
             '+' => {
                 self.advance();
-                Ok(Token { kind: TokenKind::Plus })
+                Ok(Token {
+                    kind: TokenKind::Plus,
+                })
             }
             '-' => {
                 self.advance();
-                Ok(Token { kind: TokenKind::Minus })
+                Ok(Token {
+                    kind: TokenKind::Minus,
+                })
             }
             '*' => {
                 self.advance();
-                Ok(Token { kind: TokenKind::Operator(BinaryOp::Mul) })
+                Ok(Token {
+                    kind: TokenKind::Operator(BinaryOp::Mul),
+                })
             }
             '/' => {
                 self.advance();
-                Ok(Token { kind: TokenKind::Operator(BinaryOp::Div) })
+                Ok(Token {
+                    kind: TokenKind::Operator(BinaryOp::Div),
+                })
             }
             '^' => {
                 self.advance();
-                Ok(Token { kind: TokenKind::Operator(BinaryOp::Pow) })
+                Ok(Token {
+                    kind: TokenKind::Operator(BinaryOp::Pow),
+                })
             }
             '&' => {
                 self.advance();
                 if self.peek() == Some('&') {
                     self.advance();
-                    Ok(Token { kind: TokenKind::Operator(BinaryOp::And) })
+                    Ok(Token {
+                        kind: TokenKind::Operator(BinaryOp::And),
+                    })
                 } else {
-                    Ok(Token { kind: TokenKind::Operator(BinaryOp::Concat) })
+                    Ok(Token {
+                        kind: TokenKind::Operator(BinaryOp::Concat),
+                    })
                 }
             }
             '|' => {
                 self.advance();
                 if self.peek() == Some('|') {
                     self.advance();
-                    Ok(Token { kind: TokenKind::Operator(BinaryOp::Or) })
+                    Ok(Token {
+                        kind: TokenKind::Operator(BinaryOp::Or),
+                    })
                 } else {
                     Err(DaxParseError::new("unexpected '|'"))
                 }
             }
             '=' => {
                 self.advance();
-                Ok(Token { kind: TokenKind::Operator(BinaryOp::Eq) })
+                Ok(Token {
+                    kind: TokenKind::Operator(BinaryOp::Eq),
+                })
             }
             '<' => {
                 self.advance();
                 match self.peek() {
                     Some('=') => {
                         self.advance();
-                        Ok(Token { kind: TokenKind::Operator(BinaryOp::Le) })
+                        Ok(Token {
+                            kind: TokenKind::Operator(BinaryOp::Le),
+                        })
                     }
                     Some('>') => {
                         self.advance();
-                        Ok(Token { kind: TokenKind::Operator(BinaryOp::Ne) })
+                        Ok(Token {
+                            kind: TokenKind::Operator(BinaryOp::Ne),
+                        })
                     }
-                    _ => Ok(Token { kind: TokenKind::Operator(BinaryOp::Lt) }),
+                    _ => Ok(Token {
+                        kind: TokenKind::Operator(BinaryOp::Lt),
+                    }),
                 }
             }
             '>' => {
                 self.advance();
                 if self.peek() == Some('=') {
                     self.advance();
-                    Ok(Token { kind: TokenKind::Operator(BinaryOp::Ge) })
+                    Ok(Token {
+                        kind: TokenKind::Operator(BinaryOp::Ge),
+                    })
                 } else {
-                    Ok(Token { kind: TokenKind::Operator(BinaryOp::Gt) })
+                    Ok(Token {
+                        kind: TokenKind::Operator(BinaryOp::Gt),
+                    })
                 }
             }
             _ => {
-                if ch.is_ascii_digit() || (ch == '.' && self.peek_next().map(|n| n.is_ascii_digit()).unwrap_or(false)) {
+                if ch.is_ascii_digit()
+                    || (ch == '.'
+                        && self
+                            .peek_next()
+                            .map(|n| n.is_ascii_digit())
+                            .unwrap_or(false))
+                {
                     self.read_number()
                 } else if ch.is_ascii_alphabetic() || ch == '_' {
                     self.read_ident()
@@ -322,9 +385,9 @@ impl Lexer {
             }
         }
 
-        let num = buf.parse::<f64>().map_err(|_| {
-            DaxParseError::new(format!("invalid number literal '{}'", buf))
-        })?;
+        let num = buf
+            .parse::<f64>()
+            .map_err(|_| DaxParseError::new(format!("invalid number literal '{}'", buf)))?;
         Ok(Token {
             kind: TokenKind::Number(num.to_bits()),
         })

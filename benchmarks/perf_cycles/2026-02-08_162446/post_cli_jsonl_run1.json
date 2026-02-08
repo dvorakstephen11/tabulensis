@@ -1,0 +1,39 @@
+{
+  "timestamp": "2026-02-08T16:49:10.816976+00:00",
+  "git_commit": "b830c72cefe1",
+  "git_branch": "main",
+  "suite": "cli-jsonl",
+  "full_scale": false,
+  "parallel": false,
+  "tests": {
+    "cli_perf_jsonl_emit": {
+      "total_time_ms": 33,
+      "parse_time_ms": 0,
+      "diff_time_ms": 33,
+      "signature_build_time_ms": 0,
+      "move_detection_time_ms": 0,
+      "alignment_time_ms": 0,
+      "cell_diff_time_ms": 0,
+      "op_emit_time_ms": 33,
+      "report_serialize_time_ms": 0,
+      "peak_memory_bytes": 0,
+      "grid_storage_bytes": 0,
+      "string_pool_bytes": 0,
+      "op_buffer_bytes": 0,
+      "alignment_buffer_bytes": 0,
+      "rows_processed": 0,
+      "cells_compared": 0,
+      "anchors_found": 0,
+      "moves_detected": 0,
+      "hash_lookups_est": 0,
+      "allocations_est": 0,
+      "op_count": 200000,
+      "nrows": 4000,
+      "ncols": 50
+    }
+  },
+  "summary": {
+    "total_tests": 1,
+    "total_time_ms": 33
+  }
+}

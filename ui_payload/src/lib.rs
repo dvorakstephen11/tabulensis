@@ -4,16 +4,21 @@ use std::path::Path;
 use serde::Serialize;
 
 mod alignment;
+mod analysis;
 mod capabilities;
 mod options;
 mod outcome;
 
 pub use alignment::SheetAlignment;
+pub use analysis::{
+    analyze_report, CategoryBreakdownRow, CategoryCounts, DiffAnalysis, NoiseFilters, OpCategory,
+    OpNoiseClass, OpSeverity, SeverityCounts, SheetBreakdown,
+};
 pub use capabilities::{HostCapabilities, HostDefaults};
-pub use options::{DiffLimits, DiffOptions, DiffPreset, limits_from_config};
+pub use options::{limits_from_config, DiffLimits, DiffOptions, DiffPreset};
 pub use outcome::{
-    ChangeCounts, DiffOutcome, DiffOutcomeConfig, DiffOutcomeMode, DiffOutcomeSummary, SheetSummary,
-    SummaryMeta, SummarySink, summarize_report,
+    summarize_report, ChangeCounts, DiffOutcome, DiffOutcomeConfig, DiffOutcomeMode,
+    DiffOutcomeSummary, SheetSummary, SummaryMeta, SummarySink,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -206,10 +211,18 @@ pub fn build_payload_from_workbook_report(
     });
 
     let alignments = alignment::build_alignments(&report, &sheets);
-    let old_lookup: HashMap<String, &SheetSnapshot> =
-        sheets.old.sheets.iter().map(|s| (s.name.clone(), s)).collect();
-    let new_lookup: HashMap<String, &SheetSnapshot> =
-        sheets.new.sheets.iter().map(|s| (s.name.clone(), s)).collect();
+    let old_lookup: HashMap<String, &SheetSnapshot> = sheets
+        .old
+        .sheets
+        .iter()
+        .map(|s| (s.name.clone(), s))
+        .collect();
+    let new_lookup: HashMap<String, &SheetSnapshot> = sheets
+        .new
+        .sheets
+        .iter()
+        .map(|s| (s.name.clone(), s))
+        .collect();
     let mut interest_rects = Vec::new();
     for (sheet_name, ops) in &ops_by_sheet {
         let old_sheet = old_lookup.get(sheet_name).copied();
@@ -337,25 +350,30 @@ fn render_cell_value(
         Some(excel_diff::CellValue::Blank) => Some(String::new()),
         Some(excel_diff::CellValue::Number(n)) => Some(n.to_string()),
         Some(excel_diff::CellValue::Text(id)) => Some(pool.resolve(*id).to_string()),
-        Some(excel_diff::CellValue::Bool(b)) => {
-            Some(if *b { "TRUE".to_string() } else { "FALSE".to_string() })
-        }
+        Some(excel_diff::CellValue::Bool(b)) => Some(if *b {
+            "TRUE".to_string()
+        } else {
+            "FALSE".to_string()
+        }),
         Some(excel_diff::CellValue::Error(id)) => Some(pool.resolve(*id).to_string()),
     }
 }
 
 impl Rect {
     fn area(&self) -> u64 {
-        let rows = self.row_end.saturating_sub(self.row_start).saturating_add(1) as u64;
-        let cols = self.col_end.saturating_sub(self.col_start).saturating_add(1) as u64;
+        let rows = self
+            .row_end
+            .saturating_sub(self.row_start)
+            .saturating_add(1) as u64;
+        let cols = self
+            .col_end
+            .saturating_sub(self.col_start)
+            .saturating_add(1) as u64;
         rows.saturating_mul(cols)
     }
 
     fn contains(&self, row: u32, col: u32) -> bool {
-        row >= self.row_start
-            && row <= self.row_end
-            && col >= self.col_start
-            && col <= self.col_end
+        row >= self.row_start && row <= self.row_end && col >= self.col_start && col <= self.col_end
     }
 }
 
@@ -441,7 +459,9 @@ fn collect_interest_rects(
                 col_count,
                 ..
             } => {
-                if let Some(rect) = rect_from_range(*start_row, *row_count, *start_col, *col_count, nrows, ncols) {
+                if let Some(rect) =
+                    rect_from_range(*start_row, *row_count, *start_col, *col_count, nrows, ncols)
+                {
                     rects.push(rect);
                 }
             }
@@ -485,12 +505,17 @@ fn collect_interest_rects(
                     rects.push(rect);
                 }
             }
-            excel_diff::DiffOp::DuplicateKeyCluster { left_rows, right_rows, .. } => {
+            excel_diff::DiffOp::DuplicateKeyCluster {
+                left_rows,
+                right_rows,
+                ..
+            } => {
                 if preview_cols == 0 {
                     continue;
                 }
                 for row_idx in left_rows.iter().chain(right_rows.iter()) {
-                    if let Some(rect) = rect_from_range(*row_idx, 1, 0, preview_cols, nrows, ncols) {
+                    if let Some(rect) = rect_from_range(*row_idx, 1, 0, preview_cols, nrows, ncols)
+                    {
                         rects.push(rect);
                     }
                 }
@@ -504,10 +529,14 @@ fn collect_interest_rects(
                 if preview_cols == 0 {
                     continue;
                 }
-                if let Some(rect) = rect_from_range(*src_start_row, *row_count, 0, preview_cols, nrows, ncols) {
+                if let Some(rect) =
+                    rect_from_range(*src_start_row, *row_count, 0, preview_cols, nrows, ncols)
+                {
                     rects.push(rect);
                 }
-                if let Some(rect) = rect_from_range(*dst_start_row, *row_count, 0, preview_cols, nrows, ncols) {
+                if let Some(rect) =
+                    rect_from_range(*dst_start_row, *row_count, 0, preview_cols, nrows, ncols)
+                {
                     rects.push(rect);
                 }
             }
@@ -529,10 +558,14 @@ fn collect_interest_rects(
                 if preview_rows == 0 {
                     continue;
                 }
-                if let Some(rect) = rect_from_range(0, preview_rows, *src_start_col, *col_count, nrows, ncols) {
+                if let Some(rect) =
+                    rect_from_range(0, preview_rows, *src_start_col, *col_count, nrows, ncols)
+                {
                     rects.push(rect);
                 }
-                if let Some(rect) = rect_from_range(0, preview_rows, *dst_start_col, *col_count, nrows, ncols) {
+                if let Some(rect) =
+                    rect_from_range(0, preview_rows, *dst_start_col, *col_count, nrows, ncols)
+                {
                     rects.push(rect);
                 }
             }
@@ -620,8 +653,18 @@ fn collect_interest_rects_payload(
     for op in ops {
         match op {
             excel_diff::DiffOp::CellEdited { addr, .. } => {
-                if let Some(rect) = rect_with_context(addr.row, 1, addr.col, 1, min_rows, min_cols, caps) {
-                    push_interest_rect(&mut rects, &mut seen, &mut counter, "cell", "both", rect, None);
+                if let Some(rect) =
+                    rect_with_context(addr.row, 1, addr.col, 1, min_rows, min_cols, caps)
+                {
+                    push_interest_rect(
+                        &mut rects,
+                        &mut seen,
+                        &mut counter,
+                        "cell",
+                        "both",
+                        rect,
+                        None,
+                    );
                 }
             }
             excel_diff::DiffOp::RectReplaced {
@@ -631,50 +674,148 @@ fn collect_interest_rects_payload(
                 col_count,
                 ..
             } => {
-                if let Some(rect) = rect_with_context(*start_row, *row_count, *start_col, *col_count, min_rows, min_cols, caps) {
-                    push_interest_rect(&mut rects, &mut seen, &mut counter, "rect_replaced", "both", rect, None);
+                if let Some(rect) = rect_with_context(
+                    *start_row, *row_count, *start_col, *col_count, min_rows, min_cols, caps,
+                ) {
+                    push_interest_rect(
+                        &mut rects,
+                        &mut seen,
+                        &mut counter,
+                        "rect_replaced",
+                        "both",
+                        rect,
+                        None,
+                    );
                 }
             }
             excel_diff::DiffOp::RowAdded { row_idx, .. } => {
                 if preview_cols_new == 0 {
                     continue;
                 }
-                if let Some(rect) = rect_with_context(*row_idx, 1, 0, preview_cols_new, new_rows, new_cols, caps) {
-                    push_interest_rect(&mut rects, &mut seen, &mut counter, "row_added", "new", rect, None);
+                if let Some(rect) =
+                    rect_with_context(*row_idx, 1, 0, preview_cols_new, new_rows, new_cols, caps)
+                {
+                    push_interest_rect(
+                        &mut rects,
+                        &mut seen,
+                        &mut counter,
+                        "row_added",
+                        "new",
+                        rect,
+                        None,
+                    );
                 }
             }
             excel_diff::DiffOp::RowRemoved { row_idx, .. } => {
                 if preview_cols_old == 0 {
                     continue;
                 }
-                if let Some(rect) = rect_with_context(*row_idx, 1, 0, preview_cols_old, old_rows, old_cols, caps) {
-                    push_interest_rect(&mut rects, &mut seen, &mut counter, "row_removed", "old", rect, None);
+                if let Some(rect) =
+                    rect_with_context(*row_idx, 1, 0, preview_cols_old, old_rows, old_cols, caps)
+                {
+                    push_interest_rect(
+                        &mut rects,
+                        &mut seen,
+                        &mut counter,
+                        "row_removed",
+                        "old",
+                        rect,
+                        None,
+                    );
                 }
             }
             excel_diff::DiffOp::RowReplaced { row_idx, .. } => {
                 if preview_cols_old > 0 {
-                    if let Some(rect) = rect_with_context(*row_idx, 1, 0, preview_cols_old, old_rows, old_cols, caps) {
-                        push_interest_rect(&mut rects, &mut seen, &mut counter, "row_replaced", "old", rect, None);
+                    if let Some(rect) = rect_with_context(
+                        *row_idx,
+                        1,
+                        0,
+                        preview_cols_old,
+                        old_rows,
+                        old_cols,
+                        caps,
+                    ) {
+                        push_interest_rect(
+                            &mut rects,
+                            &mut seen,
+                            &mut counter,
+                            "row_replaced",
+                            "old",
+                            rect,
+                            None,
+                        );
                     }
                 }
                 if preview_cols_new > 0 {
-                    if let Some(rect) = rect_with_context(*row_idx, 1, 0, preview_cols_new, new_rows, new_cols, caps) {
-                        push_interest_rect(&mut rects, &mut seen, &mut counter, "row_replaced", "new", rect, None);
+                    if let Some(rect) = rect_with_context(
+                        *row_idx,
+                        1,
+                        0,
+                        preview_cols_new,
+                        new_rows,
+                        new_cols,
+                        caps,
+                    ) {
+                        push_interest_rect(
+                            &mut rects,
+                            &mut seen,
+                            &mut counter,
+                            "row_replaced",
+                            "new",
+                            rect,
+                            None,
+                        );
                     }
                 }
             }
-            excel_diff::DiffOp::DuplicateKeyCluster { left_rows, right_rows, .. } => {
+            excel_diff::DiffOp::DuplicateKeyCluster {
+                left_rows,
+                right_rows,
+                ..
+            } => {
                 if preview_cols_old > 0 {
                     for row_idx in left_rows {
-                        if let Some(rect) = rect_with_context(*row_idx, 1, 0, preview_cols_old, old_rows, old_cols, caps) {
-                            push_interest_rect(&mut rects, &mut seen, &mut counter, "row_cluster", "old", rect, None);
+                        if let Some(rect) = rect_with_context(
+                            *row_idx,
+                            1,
+                            0,
+                            preview_cols_old,
+                            old_rows,
+                            old_cols,
+                            caps,
+                        ) {
+                            push_interest_rect(
+                                &mut rects,
+                                &mut seen,
+                                &mut counter,
+                                "row_cluster",
+                                "old",
+                                rect,
+                                None,
+                            );
                         }
                     }
                 }
                 if preview_cols_new > 0 {
                     for row_idx in right_rows {
-                        if let Some(rect) = rect_with_context(*row_idx, 1, 0, preview_cols_new, new_rows, new_cols, caps) {
-                            push_interest_rect(&mut rects, &mut seen, &mut counter, "row_cluster", "new", rect, None);
+                        if let Some(rect) = rect_with_context(
+                            *row_idx,
+                            1,
+                            0,
+                            preview_cols_new,
+                            new_rows,
+                            new_cols,
+                            caps,
+                        ) {
+                            push_interest_rect(
+                                &mut rects,
+                                &mut seen,
+                                &mut counter,
+                                "row_cluster",
+                                "new",
+                                rect,
+                                None,
+                            );
                         }
                     }
                 }
@@ -683,16 +824,36 @@ fn collect_interest_rects_payload(
                 if preview_rows_new == 0 {
                     continue;
                 }
-                if let Some(rect) = rect_with_context(0, preview_rows_new, *col_idx, 1, new_rows, new_cols, caps) {
-                    push_interest_rect(&mut rects, &mut seen, &mut counter, "col_added", "new", rect, None);
+                if let Some(rect) =
+                    rect_with_context(0, preview_rows_new, *col_idx, 1, new_rows, new_cols, caps)
+                {
+                    push_interest_rect(
+                        &mut rects,
+                        &mut seen,
+                        &mut counter,
+                        "col_added",
+                        "new",
+                        rect,
+                        None,
+                    );
                 }
             }
             excel_diff::DiffOp::ColumnRemoved { col_idx, .. } => {
                 if preview_rows_old == 0 {
                     continue;
                 }
-                if let Some(rect) = rect_with_context(0, preview_rows_old, *col_idx, 1, old_rows, old_cols, caps) {
-                    push_interest_rect(&mut rects, &mut seen, &mut counter, "col_removed", "old", rect, None);
+                if let Some(rect) =
+                    rect_with_context(0, preview_rows_old, *col_idx, 1, old_rows, old_cols, caps)
+                {
+                    push_interest_rect(
+                        &mut rects,
+                        &mut seen,
+                        &mut counter,
+                        "col_removed",
+                        "old",
+                        rect,
+                        None,
+                    );
                 }
             }
             excel_diff::DiffOp::BlockMovedRows {
@@ -702,15 +863,49 @@ fn collect_interest_rects_payload(
                 ..
             } => {
                 if preview_cols_old > 0 {
-                    if let Some(rect) = rect_with_context(*src_start_row, *row_count, 0, preview_cols_old, old_rows, old_cols, caps) {
-                        let move_id = format!("r:{}+{}->{}", src_start_row, row_count, dst_start_row);
-                        push_interest_rect(&mut rects, &mut seen, &mut counter, "move_src", "old", rect, Some(move_id.clone()));
+                    if let Some(rect) = rect_with_context(
+                        *src_start_row,
+                        *row_count,
+                        0,
+                        preview_cols_old,
+                        old_rows,
+                        old_cols,
+                        caps,
+                    ) {
+                        let move_id =
+                            format!("r:{}+{}->{}", src_start_row, row_count, dst_start_row);
+                        push_interest_rect(
+                            &mut rects,
+                            &mut seen,
+                            &mut counter,
+                            "move_src",
+                            "old",
+                            rect,
+                            Some(move_id.clone()),
+                        );
                     }
                 }
                 if preview_cols_new > 0 {
-                    if let Some(rect) = rect_with_context(*dst_start_row, *row_count, 0, preview_cols_new, new_rows, new_cols, caps) {
-                        let move_id = format!("r:{}+{}->{}", src_start_row, row_count, dst_start_row);
-                        push_interest_rect(&mut rects, &mut seen, &mut counter, "move_dst", "new", rect, Some(move_id));
+                    if let Some(rect) = rect_with_context(
+                        *dst_start_row,
+                        *row_count,
+                        0,
+                        preview_cols_new,
+                        new_rows,
+                        new_cols,
+                        caps,
+                    ) {
+                        let move_id =
+                            format!("r:{}+{}->{}", src_start_row, row_count, dst_start_row);
+                        push_interest_rect(
+                            &mut rects,
+                            &mut seen,
+                            &mut counter,
+                            "move_dst",
+                            "new",
+                            rect,
+                            Some(move_id),
+                        );
                     }
                 }
             }
@@ -721,15 +916,49 @@ fn collect_interest_rects_payload(
                 ..
             } => {
                 if preview_rows_old > 0 {
-                    if let Some(rect) = rect_with_context(0, preview_rows_old, *src_start_col, *col_count, old_rows, old_cols, caps) {
-                        let move_id = format!("c:{}+{}->{}", src_start_col, col_count, dst_start_col);
-                        push_interest_rect(&mut rects, &mut seen, &mut counter, "move_src", "old", rect, Some(move_id.clone()));
+                    if let Some(rect) = rect_with_context(
+                        0,
+                        preview_rows_old,
+                        *src_start_col,
+                        *col_count,
+                        old_rows,
+                        old_cols,
+                        caps,
+                    ) {
+                        let move_id =
+                            format!("c:{}+{}->{}", src_start_col, col_count, dst_start_col);
+                        push_interest_rect(
+                            &mut rects,
+                            &mut seen,
+                            &mut counter,
+                            "move_src",
+                            "old",
+                            rect,
+                            Some(move_id.clone()),
+                        );
                     }
                 }
                 if preview_rows_new > 0 {
-                    if let Some(rect) = rect_with_context(0, preview_rows_new, *dst_start_col, *col_count, new_rows, new_cols, caps) {
-                        let move_id = format!("c:{}+{}->{}", src_start_col, col_count, dst_start_col);
-                        push_interest_rect(&mut rects, &mut seen, &mut counter, "move_dst", "new", rect, Some(move_id));
+                    if let Some(rect) = rect_with_context(
+                        0,
+                        preview_rows_new,
+                        *dst_start_col,
+                        *col_count,
+                        new_rows,
+                        new_cols,
+                        caps,
+                    ) {
+                        let move_id =
+                            format!("c:{}+{}->{}", src_start_col, col_count, dst_start_col);
+                        push_interest_rect(
+                            &mut rects,
+                            &mut seen,
+                            &mut counter,
+                            "move_dst",
+                            "new",
+                            rect,
+                            Some(move_id),
+                        );
                     }
                 }
             }
@@ -744,7 +973,12 @@ fn collect_interest_rects_payload(
             } => {
                 let move_id = format!(
                     "rect:{},{}+{}x{}->{},{}",
-                    src_start_row, src_start_col, src_row_count, src_col_count, dst_start_row, dst_start_col
+                    src_start_row,
+                    src_start_col,
+                    src_row_count,
+                    src_col_count,
+                    dst_start_row,
+                    dst_start_col
                 );
                 if let Some(rect) = rect_with_context(
                     *src_start_row,
@@ -755,7 +989,15 @@ fn collect_interest_rects_payload(
                     old_cols,
                     caps,
                 ) {
-                    push_interest_rect(&mut rects, &mut seen, &mut counter, "move_src", "old", rect, Some(move_id.clone()));
+                    push_interest_rect(
+                        &mut rects,
+                        &mut seen,
+                        &mut counter,
+                        "move_src",
+                        "old",
+                        rect,
+                        Some(move_id.clone()),
+                    );
                 }
                 if let Some(rect) = rect_with_context(
                     *dst_start_row,
@@ -766,7 +1008,15 @@ fn collect_interest_rects_payload(
                     new_cols,
                     caps,
                 ) {
-                    push_interest_rect(&mut rects, &mut seen, &mut counter, "move_dst", "new", rect, Some(move_id));
+                    push_interest_rect(
+                        &mut rects,
+                        &mut seen,
+                        &mut counter,
+                        "move_dst",
+                        "new",
+                        rect,
+                        Some(move_id),
+                    );
                 }
             }
             _ => {}

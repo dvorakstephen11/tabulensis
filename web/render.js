@@ -9,6 +9,14 @@ function esc(s) {
     .replace(/'/g, "&#39;");
 }
 
+function domSafeId(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
 function resolveString(report, id) {
   if (id === null || id === undefined) return "";
   if (typeof id !== "number") return String(id);
@@ -1150,6 +1158,22 @@ function renderReviewToolbar(vm) {
           Sheet add/remove/rename
         </label>
         <label class="toolbar-toggle">
+          <input type="checkbox" data-filter="hide-m-formatting-only" />
+          Hide formatting-only M
+        </label>
+        <label class="toolbar-toggle">
+          <input type="checkbox" data-filter="hide-dax-formatting-only" />
+          Hide formatting-only DAX
+        </label>
+        <label class="toolbar-toggle">
+          <input type="checkbox" data-filter="hide-formula-formatting-only" />
+          Hide formatting-only formulas
+        </label>
+        <label class="toolbar-toggle">
+          <input type="checkbox" data-filter="collapse-moves" />
+          Collapse moved blocks
+        </label>
+        <label class="toolbar-toggle">
           <input type="checkbox" data-filter="ignore-blank" checked />
           Ignore blank-to-blank
         </label>
@@ -1348,6 +1372,116 @@ function renderRawHunkGridSide(sheetVm, bounds, side, hunk) {
 
   html += `</div></div>`;
   return html;
+}
+
+function renderSummaryBreakdowns(vm) {
+  const analysis = vm && vm.analysis ? vm.analysis : null;
+  if (!analysis) return "";
+
+  const categories = Array.isArray(analysis.categories) ? analysis.categories : [];
+  const severity = analysis.severity || { high: 0, medium: 0, low: 0 };
+  const topSheets = Array.isArray(analysis.topSheets) ? analysis.topSheets : [];
+  const topArtifacts = Array.isArray(analysis.topArtifacts) ? analysis.topArtifacts : [];
+
+  const categoryRows = categories
+    .map(row => {
+      const counts = row.counts || {};
+      const sev = row.severity || {};
+      return `
+        <div class="summary-row">
+          <div class="summary-cell summary-name">${esc(row.category || "")}</div>
+          <div class="summary-cell summary-num">${row.opCount || 0}</div>
+          <div class="summary-cell summary-num sev-high">${sev.high || 0}</div>
+          <div class="summary-cell summary-num sev-med">${sev.medium || 0}</div>
+          <div class="summary-cell summary-num sev-low">${sev.low || 0}</div>
+          <div class="summary-cell summary-mini">
+            <span class="pill added">+${counts.added || 0}</span>
+            <span class="pill removed">-${counts.removed || 0}</span>
+            <span class="pill modified">~${counts.modified || 0}</span>
+            <span class="pill moved">&gt;${counts.moved || 0}</span>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+
+  const runHealth = analysis.incomplete
+    ? `<div class="run-health warn">Incomplete run. Some results may be missing.</div>`
+    : `<div class="run-health ok">Run complete.</div>`;
+
+  const topSheetRows = topSheets.length
+    ? topSheets
+        .map(sheet => {
+          const counts = sheet.counts || {};
+          const sev = String(sheet.severity || "low");
+          return `
+            <div class="top-row">
+              <div class="top-name">${esc(sheet.name || "")}</div>
+              <div class="top-meta">
+                <span class="sev sev-${esc(sev)}">${esc(sev)}</span>
+                <span class="top-count">${sheet.opCount || 0} ops</span>
+                <span class="pill added">+${counts.added || 0}</span>
+                <span class="pill removed">-${counts.removed || 0}</span>
+                <span class="pill modified">~${counts.modified || 0}</span>
+                <span class="pill moved">&gt;${counts.moved || 0}</span>
+              </div>
+            </div>
+          `;
+        })
+        .join("")
+    : `<div class="top-empty">No sheet-level changes.</div>`;
+
+  const topArtifactRows = topArtifacts.length
+    ? topArtifacts
+        .map(item => {
+          const sev = String(item.severity || "low");
+          const label = item.label || "";
+          return `
+            <div class="top-row">
+              <div class="top-name">${esc(label)}</div>
+              <div class="top-meta">
+                <span class="sev sev-${esc(sev)}">${esc(sev)}</span>
+                <span class="top-kind">${esc(item.kind || "")}</span>
+              </div>
+            </div>
+          `;
+        })
+        .join("")
+    : `<div class="top-empty">No non-grid changes.</div>`;
+
+  return `
+    <div class="summary-breakdowns">
+      ${runHealth}
+      <div class="summary-breakdowns-grid">
+        <div class="summary-panel">
+          <div class="summary-panel-title">Categories</div>
+          <div class="summary-table">
+            <div class="summary-row summary-header">
+              <div class="summary-cell">Category</div>
+              <div class="summary-cell">Ops</div>
+              <div class="summary-cell">High</div>
+              <div class="summary-cell">Med</div>
+              <div class="summary-cell">Low</div>
+              <div class="summary-cell">Counts</div>
+            </div>
+            ${categoryRows}
+          </div>
+        </div>
+        <div class="summary-panel">
+          <div class="summary-panel-title">Severity</div>
+          <div class="severity-cards">
+            <div class="severity-card high"><div class="count">${severity.high || 0}</div><div class="label">High</div></div>
+            <div class="severity-card medium"><div class="count">${severity.medium || 0}</div><div class="label">Medium</div></div>
+            <div class="severity-card low"><div class="count">${severity.low || 0}</div><div class="label">Low</div></div>
+          </div>
+          <div class="summary-panel-title">Top Sheets</div>
+          <div class="top-list">${topSheetRows}</div>
+          <div class="summary-panel-title">Top Artifacts</div>
+          <div class="top-list">${topArtifactRows}</div>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function renderRawHunkGrid(sheetVm, hunk) {
@@ -1724,8 +1858,9 @@ function renderStepDiffs(report, item) {
 
 function renderOtherChangesVm(title, icon, items, report) {
   if (!items || items.length === 0) return "";
+  const sectionId = `other-${domSafeId(title)}`;
   return `
-    <div class="other-changes">
+    <div class="other-changes" id="${esc(sectionId)}">
       <div class="other-changes-title">
         <span class="icon">${icon}</span>
         <span>${esc(title)} (${items.length})</span>
@@ -1744,8 +1879,9 @@ function renderOtherChangesVm(title, icon, items, report) {
             const newVal = item.newValue || "";
             const detail = item.detail || "";
             const stepDiffs = renderStepDiffs(report, item);
+            const rowId = `${sectionId}-${domSafeId(item.id)}`;
             return `
-              <div class="other-row ${esc(item.changeType || "modified")}">
+              <div class="other-row ${esc(item.changeType || "modified")}" id="${esc(rowId)}">
                 <div class="other-kind">${esc(item.kind || "")}</div>
                 <div class="other-name">${esc(item.label || item.name || "")}</div>
                 <div class="other-detail">${esc(detail)}${stepDiffs}</div>
@@ -1765,6 +1901,7 @@ export function renderWorkbookVm(vm) {
   html += renderWarnings(vm.warnings);
   html += renderPreviewLimitations(vm);
   html += renderSummaryCards(vm.counts);
+  html += renderSummaryBreakdowns(vm);
 
   const total = vm.counts.added + vm.counts.removed + vm.counts.modified + vm.counts.moved;
   if (total === 0) {

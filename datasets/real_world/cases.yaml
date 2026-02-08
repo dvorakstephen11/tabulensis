@@ -1,0 +1,50 @@
+version: 1
+
+# Real-world workload cases.
+#
+# Each case defines a perf workload over dataset A and dataset B.
+# Dataset bytes are resolved from `corpus_public/index.json` using dataset ids.
+#
+# Supported workloads (initial):
+# - diff_streaming_fast
+# - diff_streaming_jsonl
+#
+# For derived datasets, `export_real_world_metrics.py` can generate and ingest them into
+# `corpus_public/` before running the Rust perf tests.
+cases:
+  - case_id: rw_ons_lms_v141__diff_vs_v140__streaming_fast
+    dataset_a: rw_ons_lms_v140
+    dataset_b: rw_ons_lms_v141
+    workload: diff_streaming_fast
+    expect_ops: true
+
+  - case_id: rw_ons_lx_v5__identical__streaming_fast
+    dataset_a: rw_ons_lx_v5
+    dataset_b: rw_ons_lx_v5
+    workload: diff_streaming_fast
+    expect_ops: false
+
+  - case_id: rw_ons_lx_v5__derived_row_block_swap20_seed1__streaming_fast
+    dataset_a: rw_ons_lx_v5
+    dataset_b:
+      derived_from: rw_ons_lx_v5
+      derivation:
+        tool: mutate_openxml_xlsx.py
+        mode: row_block_swap
+        seed: 1
+        row_count: 20
+        worksheet_part: xl/worksheets/sheet10.xml
+    workload: diff_streaming_fast
+    expect_ops: true
+
+  - case_id: rw_ons_lms_v141__derived_numeric_edits10_seed1__jsonl
+    dataset_a: rw_ons_lms_v141
+    dataset_b:
+      derived_from: rw_ons_lms_v141
+      derivation:
+        tool: mutate_openxml_xlsx.py
+        mode: cell_edit_numeric
+        seed: 1
+        edits: 10
+    workload: diff_streaming_jsonl
+    expect_ops: true

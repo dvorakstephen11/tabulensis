@@ -14,4 +14,3 @@ pub struct NoProgress;
 impl ProgressCallback for NoProgress {
     fn on_progress(&self, _phase: &str, _percent: f32) {}
 }
-

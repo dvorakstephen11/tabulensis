@@ -11,6 +11,86 @@ const DEFAULT_OPTS = {
   previewCols: 80
 };
 
+const DEFAULT_NOISE_FILTERS = {
+  hideMFormattingOnly: false,
+  hideDaxFormattingOnly: false,
+  hideFormulaFormattingOnly: false,
+  collapseMoves: false
+};
+
+function normalizeNoiseFilters(raw) {
+  const input = raw && typeof raw === "object" ? raw : {};
+  return {
+    hideMFormattingOnly: Boolean(input.hideMFormattingOnly ?? input.hide_m_formatting_only),
+    hideDaxFormattingOnly: Boolean(input.hideDaxFormattingOnly ?? input.hide_dax_formatting_only),
+    hideFormulaFormattingOnly: Boolean(
+      input.hideFormulaFormattingOnly ?? input.hide_formula_formatting_only
+    ),
+    collapseMoves: Boolean(input.collapseMoves ?? input.collapse_moves)
+  };
+}
+
+function moveIdForOp(op) {
+  if (!op || typeof op !== "object") return "";
+  const kind = op.kind || "";
+  const sheet = op.sheet != null ? `s${op.sheet}:` : "";
+  const hash = op.block_hash != null ? `#${op.block_hash}` : "";
+  if (kind === "BlockMovedRows") {
+    return `${sheet}r:${op.src_start_row}+${op.row_count}->${op.dst_start_row}${hash}`;
+  }
+  if (kind === "BlockMovedColumns") {
+    return `${sheet}c:${op.src_start_col}+${op.col_count}->${op.dst_start_col}${hash}`;
+  }
+  if (kind === "BlockMovedRect") {
+    return `${sheet}x:${op.src_start_row},${op.src_start_col}+${op.src_row_count}x${op.src_col_count}->${op.dst_start_row},${op.dst_start_col}${hash}`;
+  }
+  return "";
+}
+
+function applyNoiseFiltersToOps(rawOps, rawFilters) {
+  const ops = Array.isArray(rawOps) ? rawOps : [];
+  const filters = { ...DEFAULT_NOISE_FILTERS, ...normalizeNoiseFilters(rawFilters) };
+  if (
+    !filters.hideMFormattingOnly &&
+    !filters.hideDaxFormattingOnly &&
+    !filters.hideFormulaFormattingOnly &&
+    !filters.collapseMoves
+  ) {
+    return ops;
+  }
+
+  const collapsedMoves = filters.collapseMoves ? new Set() : null;
+  const out = [];
+  for (const op of ops) {
+    const kind = op?.kind || "";
+
+    if (filters.hideMFormattingOnly && kind === "QueryDefinitionChanged") {
+      if ((op.change_kind || op.changeKind) === "formatting_only") continue;
+    }
+
+    if (filters.hideDaxFormattingOnly && (kind === "MeasureDefinitionChanged" || kind === "CalculatedColumnDefinitionChanged")) {
+      if ((op.change_kind || op.changeKind) === "formatting_only") continue;
+    }
+
+    if (filters.hideFormulaFormattingOnly && kind === "CellEdited") {
+      const diff = op.formula_diff || op.formulaDiff || "";
+      if (diff === "formatting_only") continue;
+    }
+
+    if (collapsedMoves && kind.startsWith("BlockMoved")) {
+      const moveId = moveIdForOp(op);
+      if (moveId) {
+        if (collapsedMoves.has(moveId)) continue;
+        collapsedMoves.add(moveId);
+      }
+    }
+
+    out.push(op);
+  }
+
+  return out;
+}
+
 function resolveString(report, id) {
   if (typeof id !== "number") return String(id);
   if (!report || !Array.isArray(report.strings)) return "<unknown>";
@@ -246,6 +326,102 @@ function isGridKind(kind) {
     kind.startsWith("Rect") ||
     kind === "DuplicateKeyCluster"
   );
+}
+
+const CATEGORY_ORDER = ["Grid", "Power Query", "Model", "Objects", "Other"];
+
+function opCategoryForKind(kind) {
+  const k = kind || "";
+  if (k.startsWith("Query")) return "Power Query";
+  if (isModelKind(k)) return "Model";
+  if (k.startsWith("Chart") || k.startsWith("NamedRange") || k.startsWith("Vba")) return "Objects";
+  if (k.startsWith("Sheet") || isGridKind(k)) return "Grid";
+  return "Other";
+}
+
+function severityRank(value) {
+  if (value === "high") return 3;
+  if (value === "medium") return 2;
+  return 1;
+}
+
+function opSeverity(op) {
+  const kind = op?.kind || "";
+
+  if (kind === "DuplicateKeyCluster") return "high";
+
+  if (kind.startsWith("Query")) {
+    if (kind === "QueryDefinitionChanged") {
+      const changeKind = (op.change_kind || op.changeKind || "").toLowerCase();
+      if (changeKind === "semantic") return "high";
+      if (changeKind === "formatting_only") return "low";
+      if (changeKind === "renamed") return "low";
+      return "medium";
+    }
+    if (kind === "QueryRenamed") return "low";
+    if (kind === "QueryAdded" || kind === "QueryRemoved") return "high";
+    if (kind === "QueryMetadataChanged") {
+      const field = op.field || "";
+      if (field === "LoadToSheet" || field === "LoadToModel") return "medium";
+      return "low";
+    }
+    return "medium";
+  }
+
+  if (isModelKind(kind)) {
+    if (kind === "MeasureDefinitionChanged" || kind === "CalculatedColumnDefinitionChanged") {
+      const changeKind = (op.change_kind || op.changeKind || "").toLowerCase();
+      if (changeKind === "semantic") return "high";
+      if (changeKind === "formatting_only") return "low";
+      return "medium";
+    }
+    if (kind.includes("Added") || kind.includes("Removed")) return "high";
+    if (kind.includes("TypeChanged")) return "high";
+    if (kind.startsWith("Relationship")) return "high";
+    return "medium";
+  }
+
+  if (kind.startsWith("Vba")) {
+    if (kind.includes("Changed") || kind.includes("Added") || kind.includes("Removed")) return "high";
+    return "medium";
+  }
+
+  if (kind.startsWith("Chart") || kind.startsWith("NamedRange")) {
+    return "medium";
+  }
+
+  if (kind.startsWith("Sheet")) {
+    if (kind === "SheetRenamed") return "low";
+    return "medium";
+  }
+
+  if (kind.startsWith("BlockMoved")) return "medium";
+
+  if (kind.startsWith("Row") || kind.startsWith("Column") || kind === "RectReplaced") {
+    return "medium";
+  }
+
+  if (kind === "CellEdited") {
+    const diff = (op.formula_diff || op.formulaDiff || "").toLowerCase();
+    if (diff === "semantic_change") return "high";
+    if (diff === "formatting_only") return "low";
+    if (diff === "added" || diff === "removed") return "high";
+    if (diff === "filled") return "medium";
+    if (diff === "text_change") return "medium";
+    return "medium";
+  }
+
+  return "medium";
+}
+
+function maxSeverityForOps(ops) {
+  let best = "low";
+  for (const op of ops || []) {
+    const sev = opSeverity(op);
+    if (severityRank(sev) > severityRank(best)) best = sev;
+    if (best === "high") return best;
+  }
+  return best;
 }
 
 function changeTypeForKind(kind) {
@@ -1632,6 +1808,7 @@ function buildSheetViewModel({ report, sheetName, ops, oldSheet, newSheet, align
 
   const items = buildChangeItems({ report, ops, rowsVm, colsVm, alignment, regions: baseRegions });
   const counts = buildSheetCounts(ops);
+  const severity = maxSeverityForOps(ops);
 
   let sheetState = "";
   let renameFrom = "";
@@ -1719,6 +1896,7 @@ function buildSheetViewModel({ report, sheetName, ops, oldSheet, newSheet, align
     sheetState,
     renameFrom,
     counts,
+    severity,
     flags: { hasStructural, hasMoves, hasGridOps },
     axis: { rows: rowsVm, cols: colsVm },
     preview,
@@ -1831,6 +2009,7 @@ function buildOtherItems(report, ops, prefix) {
     items.push({
       id: `${kind}-${name}`,
       changeType,
+      severity: opSeverity(op),
       label,
       detail,
       kind,
@@ -1843,10 +2022,106 @@ function buildOtherItems(report, ops, prefix) {
   return items;
 }
 
+function computeWorkbookAnalysis(report, sheetVms, other, noiseFilters) {
+  const ops = Array.isArray(report?.ops) ? report.ops : [];
+  const categories = new Map();
+  const severity = { high: 0, medium: 0, low: 0 };
+
+  for (const op of ops) {
+    const kind = op?.kind || "";
+    const category = opCategoryForKind(kind);
+    const sev = opSeverity(op);
+    const changeType = changeTypeForKind(kind);
+
+    let entry = categories.get(category);
+    if (!entry) {
+      entry = {
+        category,
+        opCount: 0,
+        counts: { added: 0, removed: 0, modified: 0, moved: 0 },
+        severity: { high: 0, medium: 0, low: 0 }
+      };
+      categories.set(category, entry);
+    }
+
+    entry.opCount += 1;
+    entry.counts[changeType] += 1;
+    entry.severity[sev] += 1;
+    severity[sev] += 1;
+  }
+
+  const categoryRows = CATEGORY_ORDER.map(category => {
+    return (
+      categories.get(category) || {
+        category,
+        opCount: 0,
+        counts: { added: 0, removed: 0, modified: 0, moved: 0 },
+        severity: { high: 0, medium: 0, low: 0 }
+      }
+    );
+  });
+
+  const warnings = Array.isArray(report?.warnings) ? report.warnings : [];
+  const complete = report?.complete !== false;
+  const warningCount = warnings.length;
+  const incomplete = !complete || warningCount > 0;
+
+  const topSheets = (Array.isArray(sheetVms) ? sheetVms : [])
+    .slice(0, 6)
+    .map(sheet => ({
+      kind: "sheet",
+      name: sheet.name,
+      severity: sheet.severity || "low",
+      opCount: sheet.opCount || 0,
+      counts: sheet.counts || { added: 0, removed: 0, modified: 0, moved: 0 }
+    }));
+
+  const artifacts = [];
+  const otherGroups = [
+    ...(other?.queries || []),
+    ...(other?.model || []),
+    ...(other?.vba || []),
+    ...(other?.namedRanges || []),
+    ...(other?.charts || [])
+  ];
+  for (const item of otherGroups) {
+    artifacts.push({
+      kind: item.kind || "Other",
+      label: item.label || item.name || "",
+      severity: item.severity || opSeverity(item.raw),
+      changeType: item.changeType || "modified"
+    });
+  }
+
+  artifacts.sort((a, b) => {
+    const sev = severityRank(b.severity) - severityRank(a.severity);
+    if (sev) return sev;
+    return String(a.label).localeCompare(String(b.label));
+  });
+
+  const topArtifacts = artifacts.slice(0, 6);
+
+  return {
+    opCount: ops.length,
+    complete,
+    warningCount,
+    incomplete,
+    noiseFilters: { ...DEFAULT_NOISE_FILTERS, ...normalizeNoiseFilters(noiseFilters) },
+    severity,
+    categories: categoryRows,
+    topSheets,
+    topArtifacts
+  };
+}
+
 export function buildWorkbookViewModel(payloadOrReport, opts = {}) {
   const { report, sheets, alignments, interestRects } = normalizePayload(payloadOrReport);
   const options = { ...DEFAULT_OPTS, ...opts };
-  const { sheetOps, renameMap, vbaOps, namedRangeOps, chartOps, queryOps, modelOps, counts } = categorizeOps(report);
+  const noiseFilters = normalizeNoiseFilters(options.noiseFilters || options.noise_filters);
+  const filteredOps = applyNoiseFiltersToOps(report?.ops, noiseFilters);
+  const viewReport = filteredOps === report?.ops ? report : { ...report, ops: filteredOps };
+  const { sheetOps, renameMap, vbaOps, namedRangeOps, chartOps, queryOps, modelOps, counts } =
+    categorizeOps(viewReport);
 
   const oldLookup = buildSheetLookup(sheets.oldSheets);
   const newLookup = buildSheetLookup(sheets.newSheets);
@@ -1856,7 +2131,7 @@ export function buildWorkbookViewModel(payloadOrReport, opts = {}) {
   const sheetVms = [];
   for (const [sheetName, ops] of sheetOps.entries()) {
     const sheetVm = buildSheetViewModel({
-      report,
+      report: viewReport,
       sheetName,
       ops,
       oldSheet: oldLookup.get(sheetName) || oldLookup.get(renameMap.get(sheetName)) || null,
@@ -1868,19 +2143,29 @@ export function buildWorkbookViewModel(payloadOrReport, opts = {}) {
     sheetVms.push(sheetVm);
   }
 
-  sheetVms.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+  sheetVms.sort((a, b) => {
+    const sev = severityRank(b.severity) - severityRank(a.severity);
+    if (sev) return sev;
+    if (b.opCount !== a.opCount) return b.opCount - a.opCount;
+    return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+  });
+
+  const other = {
+    vba: buildOtherItems(viewReport, vbaOps, "Vba"),
+    namedRanges: buildOtherItems(viewReport, namedRangeOps, "NamedRange"),
+    charts: buildOtherItems(viewReport, chartOps, "Chart"),
+    queries: buildOtherItems(viewReport, queryOps, "Query"),
+    model: buildOtherItems(viewReport, modelOps, "Model")
+  };
+
+  const analysis = computeWorkbookAnalysis(viewReport, sheetVms, other, noiseFilters);
 
   return {
-    report,
-    warnings: Array.isArray(report?.warnings) ? report.warnings : [],
+    report: viewReport,
+    warnings: Array.isArray(viewReport?.warnings) ? viewReport.warnings : [],
     counts,
     sheets: sheetVms,
-    other: {
-      vba: buildOtherItems(report, vbaOps, "Vba"),
-      namedRanges: buildOtherItems(report, namedRangeOps, "NamedRange"),
-      charts: buildOtherItems(report, chartOps, "Chart"),
-      queries: buildOtherItems(report, queryOps, "Query"),
-      model: buildOtherItems(report, modelOps, "Model")
-    }
+    other,
+    analysis
   };
 }

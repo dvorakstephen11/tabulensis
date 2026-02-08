@@ -84,16 +84,19 @@ Validate in browser:
 4. Deactivation:
    - `tabulensis license deactivate`
 
-## 7) Fulfillment: “Resend License” Email (Not Implemented Yet)
+## 7) Fulfillment: “Resend License” Email
 
-Right now `POST /license/resend` returns `{ "status": "queued" }` but does not send email.
+License emails are sent via **Resend** when configured.
 
-Decide and implement:
-1. Email provider (Resend/Postmark/SES/etc).
-2. Template: key + activation instructions + billing portal link.
-3. When to send:
-   - On `checkout.session.completed` webhook (primary)
-   - On-demand via `/license/resend`
+Required Worker settings:
+1. Secret: `RESEND_API_KEY`
+2. Vars: `RESEND_FROM`, `RESEND_REPLY_TO`
+
+Sending behavior:
+1. Primary: on `checkout.session.completed` webhook (idempotency-keyed by Stripe event id).
+2. On-demand: `POST /license/resend` (lookup by `email` or `license_key`).
+
+Setup checklist: `RESEND_SETUP_CHECKLIST.md`
 
 ## 8) Downloads: Make `tabulensis.com/download` Actually Serve Binaries
 
@@ -121,4 +124,3 @@ Checklist:
    - license transitions `pending` -> `trialing` -> `active` (at `invoice.paid`)
    - portal session opens from `/support/billing`
 3. Confirm device limit enforcement (2 devices) works as expected.
-

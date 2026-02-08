@@ -1,0 +1,11 @@
+{
+  "name": "Compare Formula Semantic",
+  "description": "Formula semantic diff to validate formula_diff classification and Explain v1 wiring.",
+  "oldPath": "../../../fixtures/generated/formula_semantic_a.xlsx",
+  "newPath": "../../../fixtures/generated/formula_semantic_b.xlsx",
+  "autoRunDiff": true,
+  "stableWaitMs": 900,
+  "expectMode": "payload",
+  "focusPanel": "grid",
+  "profileId": "builtin_finance_model_review"
+}

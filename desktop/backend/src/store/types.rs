@@ -221,7 +221,11 @@ pub fn op_index_fields(op: &DiffOp) -> OpIndexFields {
             fields.row = Some(*row_idx);
             fields.row_end = Some(*row_idx);
         }
-        DiffOp::DuplicateKeyCluster { left_rows, right_rows, .. } => {
+        DiffOp::DuplicateKeyCluster {
+            left_rows,
+            right_rows,
+            ..
+        } => {
             let mut rows: Vec<u32> = left_rows.iter().chain(right_rows.iter()).copied().collect();
             rows.sort_unstable();
             if let Some(first) = rows.first() {
@@ -241,7 +245,10 @@ pub fn op_index_fields(op: &DiffOp) -> OpIndexFields {
         } => {
             fields.row = Some(*src_start_row);
             fields.row_end = Some(src_start_row.saturating_add(*row_count).saturating_sub(1));
-            fields.move_id = Some(format!("r:{}+{}->{}", src_start_row, row_count, dst_start_row));
+            fields.move_id = Some(format!(
+                "r:{}+{}->{}",
+                src_start_row, row_count, dst_start_row
+            ));
         }
         DiffOp::BlockMovedColumns {
             src_start_col,
@@ -251,7 +258,10 @@ pub fn op_index_fields(op: &DiffOp) -> OpIndexFields {
         } => {
             fields.col = Some(*src_start_col);
             fields.col_end = Some(src_start_col.saturating_add(*col_count).saturating_sub(1));
-            fields.move_id = Some(format!("c:{}+{}->{}", src_start_col, col_count, dst_start_col));
+            fields.move_id = Some(format!(
+                "c:{}+{}->{}",
+                src_start_col, col_count, dst_start_col
+            ));
         }
         DiffOp::BlockMovedRect {
             src_start_row,
@@ -264,10 +274,18 @@ pub fn op_index_fields(op: &DiffOp) -> OpIndexFields {
         } => {
             fields.row = Some(*src_start_row);
             fields.col = Some(*src_start_col);
-            fields.row_end = Some(src_start_row.saturating_add(*src_row_count).saturating_sub(1));
-            fields.col_end = Some(src_start_col.saturating_add(*src_col_count).saturating_sub(1));
+            fields.row_end = Some(
+                src_start_row
+                    .saturating_add(*src_row_count)
+                    .saturating_sub(1),
+            );
+            fields.col_end = Some(
+                src_start_col
+                    .saturating_add(*src_col_count)
+                    .saturating_sub(1),
+            );
             fields.move_id = Some(format!(
-                "rect:{},{}+{}x{}->{}", 
+                "rect:{},{}+{}x{}->{}",
                 src_start_row, src_start_col, src_row_count, src_col_count, dst_start_row
             ));
             if fields.move_id.is_some() {
@@ -300,12 +318,11 @@ pub fn op_index_fields(op: &DiffOp) -> OpIndexFields {
     fields
 }
 
-pub fn accumulate_sheet_stats(
-    stats: &mut HashMap<u32, SheetStats>,
-    op: &DiffOp,
-) {
+pub fn accumulate_sheet_stats(stats: &mut HashMap<u32, SheetStats>, op: &DiffOp) {
     if let Some(sheet_id) = op_sheet_id(op).map(|id| id.0) {
-        let entry = stats.entry(sheet_id).or_insert_with(|| SheetStats::new(sheet_id));
+        let entry = stats
+            .entry(sheet_id)
+            .or_insert_with(|| SheetStats::new(sheet_id));
         entry.add_op(op);
     }
 }

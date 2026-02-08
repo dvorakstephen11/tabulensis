@@ -14,6 +14,8 @@ description: Navigate, audit, and maintain documentation in the Tabulensis (exce
 
 ## Find The Right Doc (Task Map)
 
+- Daily operator routine + automation goals: `meta_methodology.md`.
+- Meta methodology implementation checklist: `META_METHODOLOGY_IMPLEMENTATION_CHECKLIST.md`.
 - Desktop app (from source): `docs/desktop.md` (also mirrored in `README.md`).
 - Licensing backend (Worker + Rust service): `docs/licensing_service.md`.
 - Stripe/Worker deployment and wiring: `STRIPE_WORKER_NEXT_STEPS.md` and `tabulensis-api/wrangler.jsonc`.
@@ -51,6 +53,7 @@ python3 scripts/update_docs_index_checklists.py
 ## When Editing Docs As An Agent
 
 - Default to small, targeted doc edits.
+- If asked to propose a daily plan, prioritize work, or improve automation, read `meta_methodology.md` first, then use `docs/index.md` to find the relevant SOP/checklist to update.
 - If you change workflows (perf cycle, fixture manifests, release steps), update both:
   - the workflow doc (e.g., `docs/perf_playbook.md`, `docs/maintainers/fixtures.md`)
   - the pointer surface (`docs/index.md`, and optionally `AGENTS.md` if it affects agent guardrails)

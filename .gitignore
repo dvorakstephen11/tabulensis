@@ -13,6 +13,7 @@ __pycache__/
 # Local scratch
 tmp/
 corpus_private/
+corpus_public/
 license_service/data/
 *.sqlite
 *.sqlite-journal
@@ -20,6 +21,9 @@ license_service/data/
 
 # Shared Generated Data
 fixtures/generated/
+
+# Real-world perf exports (generated)
+benchmarks/results_real_world/
 
 
 # Docs

@@ -14,8 +14,10 @@ const REQUIRED_WIDGETS: &[&str] = &[
     "compare_btn",
     "cancel_btn",
     "compare_help_text",
+    "profile_choice",
     "preset_choice",
     "trusted_checkbox",
+    "profiles_btn",
     "progress_gauge",
     "progress_text",
     "run_summary_header",
@@ -27,13 +29,34 @@ const REQUIRED_WIDGETS: &[&str] = &[
     "compare_right_panel",
     "sheets_list",
     "sheets_filter_ctrl",
+    "hide_m_formatting_checkbox",
+    "hide_dax_formatting_checkbox",
+    "hide_formula_formatting_checkbox",
+    "collapse_moves_checkbox",
     "sheets_filter_status",
     "sheets_empty_panel",
     "sheets_empty_text",
     "sheets_table_host",
     "result_tabs",
+    "summary_warning_panel",
+    "summary_warning_text",
+    "summary_card_added_panel",
+    "summary_added_value",
+    "summary_added_label",
+    "summary_card_removed_panel",
+    "summary_removed_value",
+    "summary_removed_label",
+    "summary_card_modified_panel",
+    "summary_modified_value",
+    "summary_modified_label",
+    "summary_card_moved_panel",
+    "summary_moved_value",
+    "summary_moved_label",
+    "summary_categories_table_host",
+    "summary_top_sheets_table_host",
     "summary_text",
     "detail_text",
+    "explain_text",
     "grid_panel",
     "recents_list",
     "open_recent_btn",
@@ -52,7 +75,7 @@ const REQUIRED_WIDGETS: &[&str] = &[
 ];
 
 const ROOT_TAB_LABELS: &[&str] = &["Compare", "Recents", "Batch", "Search"];
-const RESULT_TAB_LABELS: &[&str] = &["Summary", "Details", "Grid"];
+const RESULT_TAB_LABELS: &[&str] = &["Summary", "Details", "Explain", "Grid"];
 
 pub fn validate_xrc(xrc: &str) -> Result<(), String> {
     let mut reader = Reader::from_str(xrc);

@@ -1,0 +1,52 @@
+version: 1
+
+# Real-world dataset registry (pinned public datasets).
+#
+# Policy:
+# - Do not add datasets with unclear licenses.
+# - Prefer stable, versioned URLs and record sha256.
+# - Do not commit the dataset bytes; use `corpus_public/` (gitignored).
+#
+# Fields (recommended):
+# - id, kind, source_url, source_homepage, retrieved_at, sha256, bytes
+# - license, license_url, attribution
+# - tags (stress axes), notes
+datasets:
+  - id: rw_ons_lms_v141
+    kind: xlsx
+    source_homepage: "https://www.ons.gov.uk/employmentandlabourmarket/peopleinwork/employmentandemployeetypes/datasets/labourmarketstatistics/current"
+    source_url: "https://www.ons.gov.uk/file?uri=%2Femploymentandlabourmarket%2Fpeopleinwork%2Femploymentandemployeetypes%2Fdatasets%2Flabourmarketstatistics%2Fcurrent%2Fprevious%2Fv141%2Flms.xlsx"
+    retrieved_at: "2026-02-08T16:32:34Z"
+    sha256: "bd01866794477febd9377da877b79e2570ec11b1ba8c79877720f1146af1245f"
+    bytes: 10085898
+    license: "OGL-UK-3.0"
+    license_url: "https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/"
+    attribution: "Office for National Statistics (ONS) - Labour market statistics time series (LMS) (previous version v141)"
+    tags: ["real-world", "xlsx", "openxml-parse-heavy", "single-sheet", "tall-table", "mostly-numeric", "timeseries"]
+    notes: "Single-sheet workbook with a very large worksheet XML (high uncompressed bytes); good OpenXML parse + diff realism."
+
+  - id: rw_ons_lms_v140
+    kind: xlsx
+    source_homepage: "https://www.ons.gov.uk/employmentandlabourmarket/peopleinwork/employmentandemployeetypes/datasets/labourmarketstatistics/current"
+    source_url: "https://www.ons.gov.uk/file?uri=%2Femploymentandlabourmarket%2Fpeopleinwork%2Femploymentandemployeetypes%2Fdatasets%2Flabourmarketstatistics%2Fcurrent%2Fprevious%2Fv140%2Flms.xlsx"
+    retrieved_at: "2026-02-08T16:32:34Z"
+    sha256: "3c5e6db6a4ec1c7a22605c8733729b50ca1beba9f3bf1f4ac057459919f47ed9"
+    bytes: 10077183
+    license: "OGL-UK-3.0"
+    license_url: "https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/"
+    attribution: "Office for National Statistics (ONS) - Labour market statistics time series (LMS) (previous version v140)"
+    tags: ["real-world", "xlsx", "openxml-parse-heavy", "single-sheet", "tall-table", "mostly-numeric", "timeseries"]
+    notes: "Paired with v141 for a natural real-world diff."
+
+  - id: rw_ons_lx_v5
+    kind: xlsx
+    source_homepage: "https://www.ons.gov.uk/peoplepopulationandcommunity/birthsdeathsandmarriages/lifeexpectancies/datasets/numbersurvivingatexactagelxbysingleyearofage/current"
+    source_url: "https://www.ons.gov.uk/file?uri=%2Fpeoplepopulationandcommunity%2Fbirthsdeathsandmarriages%2Flifeexpectancies%2Fdatasets%2Fnumbersurvivingatexactagelxbysingleyearofage%2Fcurrent%2Fprevious%2Fv5%2Ftimeseries3yrlx19802021.xlsx"
+    retrieved_at: "2026-02-08T16:32:34Z"
+    sha256: "3a3c2b40e4c9d8d73ff7523fdcbcd6ccec1f11ba289b7c5a8c8d6292959dfb86"
+    bytes: 368891
+    license: "OGL-UK-3.0"
+    license_url: "https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/"
+    attribution: "Office for National Statistics (ONS) - Number surviving at exact age (lx), by single year of age (previous version v5)"
+    tags: ["real-world", "xlsx", "many-sheets", "styles-heavy", "mostly-numeric", "timeseries"]
+    notes: "Small multi-sheet workbook with relatively large styles.xml; used for quick identical + derived-edit cases."

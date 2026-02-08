@@ -2,14 +2,14 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::{Hash, Hasher};
 
 use crate::config::{DiffConfig, SemanticNoisePolicy};
-use crate::datamashup::{DataMashup, Query, build_embedded_queries, build_queries};
+use crate::datamashup::{build_embedded_queries, build_queries, DataMashup, Query};
 use crate::diff::{DiffOp, QueryChangeKind as DiffQueryChangeKind, QueryMetadataField};
 use crate::diffable::{DiffContext, Diffable};
 use crate::hashing::XXH64_SEED;
-use crate::m_ast::{StepKind, canonicalize_m_ast, extract_steps, parse_m_expression};
+use crate::m_ast::{canonicalize_m_ast, extract_steps, parse_m_expression, StepKind};
+use crate::m_section::SectionParseError;
 use crate::matching::hungarian;
 use crate::string_pool::{StringId, StringPool};
-use crate::m_section::SectionParseError;
 
 #[deprecated(note = "use WorkbookPackage::diff instead")]
 #[cfg(any(test, feature = "dev-apis"))]
@@ -146,9 +146,10 @@ fn definition_change(
     }
 
     if enable_semantic {
-        if let (Some(old_h), Some(new_h)) =
-            (canonical_ast_and_hash(old_expr), canonical_ast_and_hash(new_expr))
-        {
+        if let (Some(old_h), Some(new_h)) = (
+            canonical_ast_and_hash(old_expr),
+            canonical_ast_and_hash(new_expr),
+        ) {
             let kind = if old_h == new_h {
                 DiffQueryChangeKind::FormattingOnly
             } else {
@@ -243,7 +244,9 @@ fn match_query_renames(
             sims[i][j] = sim;
             if sim >= similarity_threshold {
                 let base_cost = ((1.0 - sim) * cost_unit as f64).round() as i64;
-                let bias = (i as i64).saturating_mul(size as i64).saturating_add(j as i64);
+                let bias = (i as i64)
+                    .saturating_mul(size as i64)
+                    .saturating_add(j as i64);
                 costs[i][j] = base_cost.saturating_mul(bias_scale).saturating_add(bias);
             } else {
                 costs[i][j] = reject_cost;
@@ -336,16 +339,17 @@ fn diff_queries_to_ops(
             config.semantic.enable_m_semantic_diff,
             config.semantic.semantic_noise_policy,
         ) {
-            let semantic_detail =
-                if config.semantic.enable_m_semantic_diff && kind == DiffQueryChangeKind::Semantic {
-                    crate::m_semantic_detail::build_query_semantic_detail(
-                        &old_q.expression_m,
-                        &new_q.expression_m,
-                        pool,
-                    )
-                } else {
-                    None
-                };
+            let semantic_detail = if config.semantic.enable_m_semantic_diff
+                && kind == DiffQueryChangeKind::Semantic
+            {
+                crate::m_semantic_detail::build_query_semantic_detail(
+                    &old_q.expression_m,
+                    &new_q.expression_m,
+                    pool,
+                )
+            } else {
+                None
+            };
             ops.push(DiffOp::QueryDefinitionChanged {
                 name: to,
                 change_kind: kind,
@@ -390,18 +394,17 @@ fn diff_queries_to_ops(
                     config.semantic.enable_m_semantic_diff,
                     config.semantic.semantic_noise_policy,
                 ) {
-                    let semantic_detail =
-                        if config.semantic.enable_m_semantic_diff
-                            && kind == DiffQueryChangeKind::Semantic
-                        {
-                            crate::m_semantic_detail::build_query_semantic_detail(
-                                &old_q.expression_m,
-                                &new_q.expression_m,
-                                pool,
-                            )
-                        } else {
-                            None
-                        };
+                    let semantic_detail = if config.semantic.enable_m_semantic_diff
+                        && kind == DiffQueryChangeKind::Semantic
+                    {
+                        crate::m_semantic_detail::build_query_semantic_detail(
+                            &old_q.expression_m,
+                            &new_q.expression_m,
+                            pool,
+                        )
+                    } else {
+                        None
+                    };
 
                     ops.push(DiffOp::QueryDefinitionChanged {
                         name: name_id,

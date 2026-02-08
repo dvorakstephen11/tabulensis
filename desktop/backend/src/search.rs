@@ -53,7 +53,9 @@ pub fn search_diff_ops(
         )
         .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
     let rows = stmt
-        .query_map(params![diff_id, pattern, limit as i64], |row| row.get::<_, String>(0))
+        .query_map(params![diff_id, pattern, limit as i64], |row| {
+            row.get::<_, String>(0)
+        })
         .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
 
     let mut results = Vec::new();
@@ -78,7 +80,8 @@ pub fn build_search_index(
     let conn = store.connection();
     let path_str = path.display().to_string();
 
-    let meta = std::fs::metadata(path).map_err(|e| DiffErrorPayload::new("io", e.to_string(), false))?;
+    let meta =
+        std::fs::metadata(path).map_err(|e| DiffErrorPayload::new("io", e.to_string(), false))?;
     let size = meta.len() as i64;
     let mtime = meta
         .modified()
@@ -106,9 +109,8 @@ pub fn build_search_index(
     )
     .map_err(|e| DiffErrorPayload::new("store", e.to_string(), false))?;
 
-    index_workbook(conn, path, &index_id).map_err(|e| {
-        DiffErrorPayload::new("index", e.to_string(), false)
-    })?;
+    index_workbook(conn, path, &index_id)
+        .map_err(|e| DiffErrorPayload::new("index", e.to_string(), false))?;
 
     Ok(SearchIndexSummary {
         index_id,
@@ -154,13 +156,23 @@ pub fn search_workbook_index(
 fn match_op(op: &excel_diff::DiffOp, strings: &[String], query: &str) -> Option<SearchResult> {
     let query_lower = query.to_lowercase();
     match op {
-        excel_diff::DiffOp::CellEdited { sheet, addr, from, to, .. } => {
+        excel_diff::DiffOp::CellEdited {
+            sheet,
+            addr,
+            from,
+            to,
+            ..
+        } => {
             let sheet_name = resolve_string(strings, *sheet).to_string();
             let old_value = render_cell_value(strings, &from.value);
             let new_value = render_cell_value(strings, &to.value);
             let old_formula = render_formula(strings, from.formula);
             let new_formula = render_formula(strings, to.formula);
-            let text = format!("{} {} {} {}", old_value, new_value, old_formula, new_formula).to_lowercase();
+            let text = format!(
+                "{} {} {} {}",
+                old_value, new_value, old_formula, new_formula
+            )
+            .to_lowercase();
             if text.contains(&query_lower) {
                 return Some(SearchResult {
                     kind: "cell".to_string(),
@@ -187,7 +199,12 @@ fn match_op(op: &excel_diff::DiffOp, strings: &[String], query: &str) -> Option<
                 });
             }
         }
-        excel_diff::DiffOp::DuplicateKeyCluster { sheet, key, left_rows, right_rows } => {
+        excel_diff::DiffOp::DuplicateKeyCluster {
+            sheet,
+            key,
+            left_rows,
+            right_rows,
+        } => {
             let sheet_name = resolve_string(strings, *sheet).to_string();
             let key_text = key
                 .iter()
@@ -226,7 +243,10 @@ fn op_kind(op: &excel_diff::DiffOp) -> &'static str {
 }
 
 fn resolve_string(strings: &[String], id: excel_diff::StringId) -> &str {
-    strings.get(id.0 as usize).map(String::as_str).unwrap_or("<unknown>")
+    strings
+        .get(id.0 as usize)
+        .map(String::as_str)
+        .unwrap_or("<unknown>")
 }
 
 fn render_cell_value(strings: &[String], value: &Option<CellValue>) -> String {

@@ -90,11 +90,7 @@ pub(crate) struct DuplicateKeyCluster {
     pub right_rows: Vec<u32>,
 }
 
-pub(crate) fn diff_table_by_key(
-    old: &Grid,
-    new: &Grid,
-    key_columns: &[u32],
-) -> KeyedAlignment {
+pub(crate) fn diff_table_by_key(old: &Grid, new: &Grid, key_columns: &[u32]) -> KeyedAlignment {
     let spec = KeyColumnSpec::new(key_columns.to_vec());
     let (left_rows, left_lookup) = build_keyed_rows(old, &spec);
     let (right_rows, right_lookup) = build_keyed_rows(new, &spec);
@@ -160,7 +156,10 @@ fn build_keyed_rows(
 
     for row_idx in 0..grid.nrows {
         let key = extract_key(grid, row_idx, spec);
-        lookup.entry(key.clone()).or_insert_with(Vec::new).push(row_idx);
+        lookup
+            .entry(key.clone())
+            .or_insert_with(Vec::new)
+            .push(row_idx);
         rows.push(KeyedRow { key, row_idx });
     }
 
@@ -190,8 +189,11 @@ pub fn suggest_key_columns(grid: &Grid, pool: &StringPool) -> Vec<u32> {
         if let Some(cell) = grid.get(0, col) {
             if let Some(CellValue::Text(id)) = &cell.value {
                 let text = pool.resolve(*id).trim().to_lowercase();
-                return text == "id" || text == "key" || text == "sku" 
-                    || text.contains("_id") || text.ends_with("id");
+                return text == "id"
+                    || text == "key"
+                    || text == "sku"
+                    || text.contains("_id")
+                    || text.ends_with("id");
             }
         }
         false
@@ -422,8 +424,7 @@ mod tests {
         let grid_a = grid_from_rows(&[&[1, 10, 100], &[1, 20, 200], &[2, 10, 300]]);
         let grid_b = grid_from_rows(&[&[1, 20, 200], &[2, 10, 300], &[1, 10, 100]]);
 
-        let alignment =
-            diff_table_by_key(&grid_a, &grid_b, &[0, 1]);
+        let alignment = diff_table_by_key(&grid_a, &grid_b, &[0, 1]);
 
         assert!(
             alignment.left_only_rows.is_empty(),
@@ -451,8 +452,7 @@ mod tests {
         let grid_a = grid_from_rows(&[&[1, 999, 10, 100], &[1, 888, 20, 200], &[2, 777, 10, 300]]);
         let grid_b = grid_from_rows(&[&[2, 777, 10, 300], &[1, 999, 10, 100], &[1, 888, 20, 200]]);
 
-        let alignment =
-            diff_table_by_key(&grid_a, &grid_b, &[0, 2]);
+        let alignment = diff_table_by_key(&grid_a, &grid_b, &[0, 2]);
 
         assert!(alignment.left_only_rows.is_empty());
         assert!(alignment.right_only_rows.is_empty());
@@ -484,8 +484,7 @@ mod tests {
             &[1, 10, 100, 1000],
         ]);
 
-        let alignment =
-            diff_table_by_key(&grid_a, &grid_b, &[0, 1, 2]);
+        let alignment = diff_table_by_key(&grid_a, &grid_b, &[0, 1, 2]);
 
         assert!(alignment.left_only_rows.is_empty());
         assert!(alignment.right_only_rows.is_empty());
@@ -594,19 +593,10 @@ mod tests {
             );
         }
 
-        let rows = [
-            ("US", 1.0, 100.0),
-            ("US", 2.0, 200.0),
-            ("CA", 1.0, 300.0),
-        ];
+        let rows = [("US", 1.0, 100.0), ("US", 2.0, 200.0), ("CA", 1.0, 300.0)];
         for (idx, (country, customer, amount)) in rows.iter().enumerate() {
             let row = (idx + 1) as u32;
-            grid.insert_cell(
-                row,
-                0,
-                Some(CellValue::Text(pool.intern(country))),
-                None,
-            );
+            grid.insert_cell(row, 0, Some(CellValue::Text(pool.intern(country))), None);
             grid.insert_cell(row, 1, Some(CellValue::Number(*customer)), None);
             grid.insert_cell(row, 2, Some(CellValue::Number(*amount)), None);
         }
@@ -638,6 +628,9 @@ mod tests {
         }
 
         let keys = suggest_key_columns(&grid, &pool);
-        assert!(keys.is_empty(), "multiple unique headers should be ambiguous");
+        assert!(
+            keys.is_empty(),
+            "multiple unique headers should be ambiguous"
+        );
     }
 }

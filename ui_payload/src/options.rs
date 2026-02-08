@@ -65,6 +65,15 @@ pub struct DiffOptions {
     pub trusted: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_json: Option<String>,
+    // Iteration 1+ profile-friendly overrides. These are applied on top of the preset/configJson.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_m_semantic_diff: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_formula_semantic_diff: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_dax_semantic_diff: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub semantic_noise_policy: Option<excel_diff::SemanticNoisePolicy>,
 }
 
 impl DiffOptions {
@@ -85,6 +94,19 @@ impl DiffOptions {
 
         if let Some(limits) = &self.limits {
             limits.apply_to(&mut cfg);
+        }
+
+        if let Some(value) = self.enable_m_semantic_diff {
+            cfg.semantic.enable_m_semantic_diff = value;
+        }
+        if let Some(value) = self.enable_formula_semantic_diff {
+            cfg.semantic.enable_formula_semantic_diff = value;
+        }
+        if let Some(value) = self.enable_dax_semantic_diff {
+            cfg.semantic.enable_dax_semantic_diff = value;
+        }
+        if let Some(value) = self.semantic_noise_policy {
+            cfg.semantic.semantic_noise_policy = value;
         }
 
         cfg.validate().map_err(|e| e.to_string())?;

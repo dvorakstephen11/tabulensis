@@ -1,5 +1,6 @@
 #![feature(let_chains)]
-const WX_SRC_URL: &str = "https://github.com/wxWidgets/wxWidgets/releases/download/v3.3.1/wxWidgets-3.3.1.zip";
+const WX_SRC_URL: &str =
+    "https://github.com/wxWidgets/wxWidgets/releases/download/v3.3.1/wxWidgets-3.3.1.zip";
 const WX_VERSION: &str = "3.3.1";
 const WX_SRC_URL_SHA256: &str = "c25311fecbc4b508577bdee4e90660da8d0d79f4099bc40e9cac8338879f9334";
 
@@ -23,21 +24,34 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
 
     // Feature flags for conditional compilation in headers
     bindings_builder = bindings_builder
-        .clang_arg(format!("-DwxdUSE_AUI={}", if cfg!(feature = "aui") { 1 } else { 0 }))
+        .clang_arg(format!(
+            "-DwxdUSE_AUI={}",
+            if cfg!(feature = "aui") { 1 } else { 0 }
+        ))
         .clang_arg(format!(
             "-DwxdUSE_MEDIACTRL={}",
             if cfg!(feature = "media-ctrl") { 1 } else { 0 }
         ))
-        .clang_arg(format!("-DwxdUSE_WEBVIEW={}", if cfg!(feature = "webview") { 1 } else { 0 }))
-        .clang_arg(format!("-DwxdUSE_STC={}", if cfg!(feature = "stc") { 1 } else { 0 }))
-        .clang_arg(format!("-DwxdUSE_XRC={}", if cfg!(feature = "xrc") { 1 } else { 0 }))
+        .clang_arg(format!(
+            "-DwxdUSE_WEBVIEW={}",
+            if cfg!(feature = "webview") { 1 } else { 0 }
+        ))
+        .clang_arg(format!(
+            "-DwxdUSE_STC={}",
+            if cfg!(feature = "stc") { 1 } else { 0 }
+        ))
+        .clang_arg(format!(
+            "-DwxdUSE_XRC={}",
+            if cfg!(feature = "xrc") { 1 } else { 0 }
+        ))
         .clang_arg(format!(
             "-DwxdUSE_RICHTEXT={}",
             if cfg!(feature = "richtext") { 1 } else { 0 }
         ));
 
     // Skip library setup for docs.rs and rust-analyzer
-    if std::env::var("DOCS_RS").is_ok() || std::env::var("RUST_ANALYZER") == Ok("true".to_string()) {
+    if std::env::var("DOCS_RS").is_ok() || std::env::var("RUST_ANALYZER") == Ok("true".to_string())
+    {
         println!("info: docs/IDE mode - generating minimal bindings only");
 
         let bindings = bindings_builder
@@ -67,7 +81,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
         let archive_dest_path = std::env::temp_dir().join("wxWidgets.zip");
 
         #[allow(clippy::print_literal)]
-        if let Err(e) = download_file_with_git_http_proxy(WX_SRC_URL, &archive_dest_path, WX_SRC_URL_SHA256) {
+        if let Err(e) =
+            download_file_with_git_http_proxy(WX_SRC_URL, &archive_dest_path, WX_SRC_URL_SHA256)
+        {
             println!(
                 "cargo::error=Could not download wxWidgets source archive from {WX_SRC_URL}: {e}\n{}\n{}",
                 "Potential solutions: Check your network connectivity, ensure the URL is accessible,",
@@ -122,7 +138,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
                 }
             }
 
-            bindings_builder2.generate().expect("Unable to generate bindings")
+            bindings_builder2
+                .generate()
+                .expect("Unable to generate bindings")
         }
     };
 
@@ -157,9 +175,9 @@ fn resolve_profile_dir(out_dir: &std::path::Path, profile: &str) -> std::path::P
         .and_then(|build_dir| build_dir.parent())
         .map(|p| p.to_path_buf())
     {
-        println!(
-            "cargo::warning=PROFILE '{profile}' not found in OUT_DIR; using {dir:?} for wxWidgets cache"
-        );
+        // Cargo's `PROFILE` env var may not match the target dir name for custom profiles
+        // (for example `--profile release-desktop` still reports `PROFILE=release` in build.rs).
+        // Falling back to the parent of `.../build/<pkg>/out` is deterministic and expected.
         return dir;
     }
 
@@ -212,9 +230,26 @@ fn build_wxdragon_wrapper(
 
     cmake_config
         .define("wxdUSE_AUI", if cfg!(feature = "aui") { "1" } else { "0" })
-        .define("wxdUSE_MEDIACTRL", if cfg!(feature = "media-ctrl") { "1" } else { "0" })
-        .define("wxdUSE_WEBVIEW", if cfg!(feature = "webview") { "1" } else { "0" });
-    cmake_config.define("wxUSE_WEBVIEW", if cfg!(feature = "webview") { "ON" } else { "OFF" });
+        .define(
+            "wxdUSE_MEDIACTRL",
+            if cfg!(feature = "media-ctrl") {
+                "1"
+            } else {
+                "0"
+            },
+        )
+        .define(
+            "wxdUSE_WEBVIEW",
+            if cfg!(feature = "webview") { "1" } else { "0" },
+        );
+    cmake_config.define(
+        "wxUSE_WEBVIEW",
+        if cfg!(feature = "webview") {
+            "ON"
+        } else {
+            "OFF"
+        },
+    );
     if cfg!(feature = "webview") {
         if target_os == "macos" {
             cmake_config.define("wxUSE_WEBVIEW_WEBKIT", "ON");
@@ -227,7 +262,10 @@ fn build_wxdragon_wrapper(
     cmake_config
         .define("wxdUSE_STC", if cfg!(feature = "stc") { "1" } else { "0" })
         .define("wxdUSE_XRC", if cfg!(feature = "xrc") { "1" } else { "0" })
-        .define("wxdUSE_RICHTEXT", if cfg!(feature = "richtext") { "1" } else { "0" });
+        .define(
+            "wxdUSE_RICHTEXT",
+            if cfg!(feature = "richtext") { "1" } else { "0" },
+        );
 
     let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
 
@@ -251,7 +289,10 @@ fn build_wxdragon_wrapper(
         }
     }
 
-    let is_zigbuild = toolchain_file.as_ref().map(|s| s.contains("zigbuild")).unwrap_or_default();
+    let is_zigbuild = toolchain_file
+        .as_ref()
+        .map(|s| s.contains("zigbuild"))
+        .unwrap_or_default();
 
     // Prefer Ninja if available, fallback to Unix Makefiles
     let ninja_available = std::process::Command::new("ninja")
@@ -262,7 +303,8 @@ fn build_wxdragon_wrapper(
 
     // --- PATCH: Detect cross-compiling from Linux to Windows (zigbuild/cargo-zigbuild zig) ---
     let host_os = std::env::consts::OS;
-    let is_cross_linux_to_windows = host_os == "linux" && target_os == "windows" && target_env == "gnu" && is_zigbuild;
+    let is_cross_linux_to_windows =
+        host_os == "linux" && target_os == "windows" && target_env == "gnu" && is_zigbuild;
     if is_cross_linux_to_windows {
         // Command line: cargo zigbuild --target x86_64-pc-windows-gnu
 
@@ -282,14 +324,22 @@ fn build_wxdragon_wrapper(
             }
         }
 
-        cmake_config.generator(if ninja_available { "Ninja" } else { "Unix Makefiles" });
+        cmake_config.generator(if ninja_available {
+            "Ninja"
+        } else {
+            "Unix Makefiles"
+        });
     } else if target_os == "windows" {
         if target_env == "gnu" {
             // Potentially set MinGW toolchain for CMake if not automatically detected
             let host_os = std::env::consts::OS;
             let (generator, cc, cxx) = if host_os == "macos" {
                 // On macOS, use Unix Makefiles and MinGW cross-compiler for cross-compilation to Windows
-                ("Unix Makefiles", "x86_64-w64-mingw32-gcc", "x86_64-w64-mingw32-g++")
+                (
+                    "Unix Makefiles",
+                    "x86_64-w64-mingw32-gcc",
+                    "x86_64-w64-mingw32-g++",
+                )
             } else {
                 // On Windows, use MinGW Makefiles and native compilers
                 ("MinGW Makefiles", "gcc", "g++")
@@ -340,7 +390,10 @@ fn build_wxdragon_wrapper(
 
     if target_env != "msvc" {
         // Set CMake build type based on Rust profile
-        cmake_config.define("CMAKE_BUILD_TYPE", if is_debug { "Debug" } else { "Release" });
+        cmake_config.define(
+            "CMAKE_BUILD_TYPE",
+            if is_debug { "Debug" } else { "Release" },
+        );
     }
 
     let dst = cmake_config.build();
@@ -360,7 +413,10 @@ fn build_wxdragon_wrapper(
     // For Windows, wxWidgets libs might be in a subdirectory like gcc_x64_lib for MinGW
     if target_os == "windows" {
         if target_env == "gnu" {
-            let wx_lib2 = wxdragon_sys_build_dir.join("lib/gcc_x64_lib").display().to_string();
+            let wx_lib2 = wxdragon_sys_build_dir
+                .join("lib/gcc_x64_lib")
+                .display()
+                .to_string();
             println!("cargo:rustc-link-search=native={wx_lib2}");
 
             // --- Dynamically find MinGW GCC library paths ---
@@ -380,14 +436,19 @@ fn build_wxdragon_wrapper(
                 .unwrap_or_else(|_| panic!("Failed to execute {gcc_path} -print-libgcc-file-name"));
 
             if output_libgcc.status.success() {
-                let libgcc_path_str = String::from_utf8_lossy(&output_libgcc.stdout).trim().to_string();
+                let libgcc_path_str = String::from_utf8_lossy(&output_libgcc.stdout)
+                    .trim()
+                    .to_string();
                 if !libgcc_path_str.is_empty() {
                     let libgcc_path = std::path::Path::new(&libgcc_path_str);
                     if let Some(libgcc_dir) = libgcc_path.parent() {
                         let libgcc_dir_str = libgcc_dir.display().to_string();
 
                         println!("cargo:rustc-link-search=native={}", libgcc_dir_str);
-                        println!("info: Added GCC library search path (from libgcc): {}", libgcc_dir_str);
+                        println!(
+                            "info: Added GCC library search path (from libgcc): {}",
+                            libgcc_dir_str
+                        );
 
                         // Attempt to find the path containing libstdc++.a (often one level up, in `../<target>/lib`)
                         if let Some(gcc_dir) = libgcc_dir.parent() {
@@ -399,11 +460,16 @@ fn build_wxdragon_wrapper(
                                     // Construct the expected path for libstdc++.a based on `find` result structure
 
                                     // ../../x86_64-w64-mingw32/lib
-                                    let libstdcpp_dir = base_lib_dir.parent().unwrap().join("x86_64-w64-mingw32/lib");
+                                    let libstdcpp_dir = base_lib_dir
+                                        .parent()
+                                        .unwrap()
+                                        .join("x86_64-w64-mingw32/lib");
                                     let v = libstdcpp_dir.display();
                                     if libstdcpp_dir.exists() && libstdcpp_dir != libgcc_dir {
                                         println!("cargo:rustc-link-search=native={v}");
-                                        println!("info: Add GCC lib search path(for libstdc++):{v}");
+                                        println!(
+                                            "info: Add GCC lib search path(for libstdc++):{v}"
+                                        );
                                     } else {
                                         println!(
                                             "info: Could not find or verify expected libstdc++ path relative to libgcc path: {v}"
@@ -416,11 +482,15 @@ fn build_wxdragon_wrapper(
                         println!("cargo:warning=Could not get parent directory from libgcc path: {libgcc_path_str}");
                     }
                 } else {
-                    println!("cargo:warning=Command -print-libgcc-file-name returned empty output.");
+                    println!(
+                        "cargo:warning=Command -print-libgcc-file-name returned empty output."
+                    );
                 }
             } else {
                 let stderr = String::from_utf8_lossy(&output_libgcc.stderr);
-                println!("cargo:warning=Failed to run '{gcc_path} -print-libgcc-file-name': {stderr}");
+                println!(
+                    "cargo:warning=Failed to run '{gcc_path} -print-libgcc-file-name': {stderr}"
+                );
                 println!(
                     "cargo:warning=Static linking for stdc++/gcc might fail. Falling back to hoping they are in default paths."
                 );
@@ -446,7 +516,11 @@ fn build_wxdragon_wrapper(
             // wxWidgets downloads WebView2 NuGet package during CMake configuration
             // The libraries are typically in build/packages/Microsoft.Web.WebView2.*/build/native/
             if cfg!(feature = "webview") {
-                let webview2_arch = if target == "i686-pc-windows-msvc" { "x86" } else { "x64" };
+                let webview2_arch = if target == "i686-pc-windows-msvc" {
+                    "x86"
+                } else {
+                    "x64"
+                };
 
                 // wxWidgets downloads WebView2 to CMAKE_CURRENT_BINARY_DIR/packages in build/cmake/lib/webview/CMakeLists.txt
                 // The wxWidgets CMake uses add_subdirectory(build/cmake/lib libs), so the binary dir is "libs" (plural)
@@ -474,12 +548,19 @@ fn build_wxdragon_wrapper(
                                 let entry_name_str = entry_name.to_string_lossy();
                                 if entry_name_str.starts_with("Microsoft.Web.WebView2") {
                                     // Add architecture-specific library path for WebView2LoaderStatic.lib
-                                    let webview2_lib_path = entry.path().join(format!("build/native/{}", webview2_arch));
+                                    let webview2_lib_path = entry
+                                        .path()
+                                        .join(format!("build/native/{}", webview2_arch));
                                     if webview2_lib_path.exists() {
-                                        println!("cargo:rustc-link-search=native={}", webview2_lib_path.display());
+                                        println!(
+                                            "cargo:rustc-link-search=native={}",
+                                            webview2_lib_path.display()
+                                        );
                                         // Explicitly link WebView2LoaderStatic - the #pragma comment in wxWidgets
                                         // only works during MSVC compilation, not during Rust's final link stage
-                                        println!("cargo:rustc-link-lib=static=WebView2LoaderStatic");
+                                        println!(
+                                            "cargo:rustc-link-lib=static=WebView2LoaderStatic"
+                                        );
                                         println!(
                                             "info: Added WebView2 {} library path: {}",
                                             webview2_arch,
@@ -585,7 +666,8 @@ fn build_wxdragon_wrapper(
     } else if target_os == "windows" {
         // Detect cross-compilation from macOS to Windows
         let host_os = std::env::consts::OS;
-        let is_macos_to_windows_gnu = host_os == "macos" && target_os == "windows" && target_env == "gnu";
+        let is_macos_to_windows_gnu =
+            host_os == "macos" && target_os == "windows" && target_env == "gnu";
 
         if is_macos_to_windows_gnu || is_cross_linux_to_windows {
             // Cross-compilation from macOS or Linux: libraries have -Windows suffix
@@ -631,7 +713,9 @@ fn build_wxdragon_wrapper(
             println!("cargo:rustc-link-lib=static=wxexpat-3.3");
 
             if is_macos_to_windows_gnu {
-                println!("info: Using static linking for cross-compilation from macOS to Windows GNU");
+                println!(
+                    "info: Using static linking for cross-compilation from macOS to Windows GNU"
+                );
                 // Static linking for cross-compilation to avoid runtime dependencies
                 println!("cargo:rustc-link-lib=static=stdc++");
                 println!("cargo:rustc-link-lib=static=gcc");
@@ -751,8 +835,12 @@ fn build_wxdragon_wrapper(
                 }
                 println!("info: Using webkit2gtk-4.0 for WebView support");
             } else {
-                println!("cargo:warning=WebKitGTK not found. WebView feature may not work on Linux.");
-                println!("cargo:warning=Install webkit2gtk-4.1 or webkit2gtk-4.0 development packages:");
+                println!(
+                    "cargo:warning=WebKitGTK not found. WebView feature may not work on Linux."
+                );
+                println!(
+                    "cargo:warning=Install webkit2gtk-4.1 or webkit2gtk-4.0 development packages:"
+                );
                 println!("cargo:warning=  Ubuntu/Debian: sudo apt install libwebkit2gtk-4.1-dev");
                 println!("cargo:warning=  or: sudo apt install libwebkit2gtk-4.0-dev");
                 println!("cargo:warning=  Fedora: sudo dnf install webkit2gtk4.1-devel");
@@ -845,7 +933,11 @@ fn get_git_http_proxy() -> Option<String> {
         return None;
     }
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if stdout.is_empty() { None } else { Some(stdout) }
+    if stdout.is_empty() {
+        None
+    } else {
+        Some(stdout)
+    }
 }
 
 /// Download a ZIP file from `url` to `dest_path`, using ~/.gitconfig [http].proxy if present.
@@ -895,7 +987,10 @@ pub fn download_file_with_git_http_proxy<P: AsRef<std::path::Path>>(
     Ok(())
 }
 
-fn verify_downloaded_file_sha256<P: AsRef<std::path::Path>>(path: P, expected_sha: &str) -> std::io::Result<()> {
+fn verify_downloaded_file_sha256<P: AsRef<std::path::Path>>(
+    path: P,
+    expected_sha: &str,
+) -> std::io::Result<()> {
     let path = path.as_ref();
     let computed_sha = compute_file_sha256_hex(path)?;
     if !computed_sha.eq_ignore_ascii_case(expected_sha) {
@@ -936,7 +1031,7 @@ where
     P: AsRef<std::path::Path>,
     T: AsRef<std::path::Path>,
 {
-    use rawzip::{CompressionMethod, RECOMMENDED_BUFFER_SIZE, ZipArchive};
+    use rawzip::{CompressionMethod, ZipArchive, RECOMMENDED_BUFFER_SIZE};
     use std::io::{Error, ErrorKind::InvalidData};
 
     let file = std::fs::File::open(archive_path)?;
@@ -993,7 +1088,10 @@ where
     Ok(())
 }
 
-fn chk_wx_version<P: AsRef<std::path::Path>>(wxwidgets_dir: P, expected_version: &str) -> std::io::Result<bool> {
+fn chk_wx_version<P: AsRef<std::path::Path>>(
+    wxwidgets_dir: P,
+    expected_version: &str,
+) -> std::io::Result<bool> {
     use std::io::{BufRead, BufReader};
     let cfg = wxwidgets_dir.as_ref().join("configure");
 

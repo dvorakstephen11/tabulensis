@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Real-World Dataset Candidate List",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "candidates"],
+  "properties": {
+    "version": { "type": "integer", "enum": [1] },
+    "candidates": {
+      "type": "array",
+      "items": { "$ref": "dataset_card.schema.json" }
+    }
+  }
+}
+

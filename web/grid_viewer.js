@@ -89,6 +89,8 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
     initialAnchorIndex = -1;
   }
 
+  const explainFn = typeof opts.onExplain === "function" ? opts.onExplain : null;
+
   const state = {
     mode: opts.initialMode === "unified" ? "unified" : "side_by_side",
     selected: null,
@@ -105,7 +107,11 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
     colLookup: null,
     rowCount: sheetVm.axis.rows.entries.length,
     colCount: sheetVm.axis.cols.entries.length,
-    flash: null
+    flash: null,
+    explainKey: null,
+    explainLoading: false,
+    explainText: "",
+    explainJumps: []
   };
 
   mountEl.innerHTML = "";
@@ -583,6 +589,77 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
       });
       inspectorContent.append(jumpBtn);
     }
+
+    if (explainFn) {
+      const key = `${state.selected.viewRow},${state.selected.viewCol}`;
+      const canExplain = summary.diffKind !== "unchanged" && summary.diffKind !== "empty";
+
+      const wrap = createEl("div", "grid-explain-wrap");
+      const header = createEl("div", "grid-explain-header");
+      header.append(createEl("div", "grid-explain-title", "Explain"));
+      const busy = state.explainLoading && state.explainKey === key;
+      const btn = createEl("button", "grid-explain-btn", busy ? "Explaining..." : "Explain");
+      btn.type = "button";
+      btn.disabled = !canExplain || busy;
+      btn.addEventListener("click", () => {
+        if (!canExplain) return;
+        state.explainKey = key;
+        state.explainLoading = true;
+        state.explainText = "";
+        state.explainJumps = [];
+        updateInspector();
+
+        Promise.resolve(explainFn({ sheetVm, cellSummary: summary }))
+          .then(result => {
+            if (state.explainKey !== key) return;
+            state.explainLoading = false;
+            state.explainText = String(result?.text || "");
+            state.explainJumps = Array.isArray(result?.jumps) ? result.jumps : [];
+            updateInspector();
+          })
+          .catch(err => {
+            if (state.explainKey !== key) return;
+            state.explainLoading = false;
+            state.explainText = `Explain failed: ${err?.message || String(err)}`;
+            state.explainJumps = [];
+            updateInspector();
+          });
+      });
+      header.append(btn);
+      wrap.append(header);
+
+      if (state.explainKey === key) {
+        if (state.explainText) {
+          const pre = createEl("pre", "grid-explain-text");
+          pre.textContent = state.explainText;
+          wrap.append(pre);
+        } else if (busy) {
+          const pre = createEl("pre", "grid-explain-text");
+          pre.textContent = "Explaining...";
+          wrap.append(pre);
+        }
+
+        if (state.explainJumps && state.explainJumps.length) {
+          const jumpWrap = createEl("div", "grid-explain-jumps");
+          for (const jump of state.explainJumps.slice(0, 6)) {
+            const label = jump?.label || "Jump";
+            const elId = jump?.elementId || "";
+            const jumpBtn = createEl("button", "grid-inspector-jump", label);
+            jumpBtn.type = "button";
+            jumpBtn.addEventListener("click", () => {
+              if (!elId) return;
+              const target = document.getElementById(elId);
+              if (!target) return;
+              target.scrollIntoView({ behavior: "smooth", block: "center" });
+            });
+            jumpWrap.append(jumpBtn);
+          }
+          wrap.append(jumpWrap);
+        }
+      }
+
+      inspectorContent.append(wrap);
+    }
   }
 
   function resolveMoveTarget(cell) {
@@ -649,7 +726,15 @@ export function mountSheetGridViewer({ mountEl, sheetVm, opts = {} }) {
   }
 
   function selectCell(viewRow, viewCol, { center = false } = {}) {
+    const prevKey = state.selected ? `${state.selected.viewRow},${state.selected.viewCol}` : "";
+    const nextKey = `${viewRow},${viewCol}`;
     state.selected = { viewRow, viewCol };
+    if (prevKey !== nextKey) {
+      state.explainKey = null;
+      state.explainLoading = false;
+      state.explainText = "";
+      state.explainJumps = [];
+    }
     ensureSelectionVisible();
     updateInspector();
     const target = state.selected;

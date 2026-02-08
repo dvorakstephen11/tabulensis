@@ -13,8 +13,8 @@ This checklist covers setting up transactional license emails for Tabulensis usi
 ## 1) Decide Your Sending Identity
 
 - [x] Pick a sending subdomain (recommended), e.g. `mail.tabulensis.com`.
-- [ ] Pick a From address, e.g. `Tabulensis <licenses@mail.tabulensis.com>`.
-- [ ] Pick a Reply-To, e.g. `support@tabulensis.com`.
+- [x] Pick a From address, e.g. `Tabulensis <licenses@mail.tabulensis.com>`.
+- [x] Pick a Reply-To, e.g. `support@tabulensis.com`.
 
 ## 2) Verify Domain In Resend
 
@@ -31,10 +31,16 @@ This checklist covers setting up transactional license emails for Tabulensis usi
 - [ ] Store it in a password manager (do not commit, do not paste into logs).
 
 ## 4) Add Worker Secret (Cloudflare)
-[x] Run this command:
+
+- [x] Run this command:
 From `tabulensis-api/`:
 ```bash
 XDG_CONFIG_HOME=/tmp npx wrangler secret put RESEND_API_KEY
+```
+
+If you're using the `dev` env (`wrangler dev --env dev`), also set:
+```bash
+XDG_CONFIG_HOME=/tmp npx wrangler secret put RESEND_API_KEY --env dev
 ```
 
 Optional non-secret vars (set via Cloudflare dashboard or Wrangler vars):
@@ -44,33 +50,33 @@ Optional non-secret vars (set via Cloudflare dashboard or Wrangler vars):
 
 ## 5) Implement Email Sending In `tabulensis-api/`
 
-- [ ] Add dependency (recommended):
+- [x] Add dependency (recommended):
 - [x] `npm install resend`
-- [ ] Add Worker env support:
-- [ ] `RESEND_API_KEY` (secret)
-- [ ] `RESEND_FROM` (var, or hardcode)
-- [ ] Implement `sendLicenseEmail(to, licenseKey, ...)` using Resend send-email API (HTML + text).
-- [ ] Add an **Idempotency-Key** so retries don't double-send.
-- [ ] Recommended key: `license-email/stripe-event/<event.id>` for webhook sends.
+- [x] Add Worker env support:
+- [x] `RESEND_API_KEY` (secret)
+- [x] `RESEND_FROM` (var, or hardcode)
+- [x] Implement `sendLicenseEmail(to, licenseKey, ...)` using Resend send-email API (HTML + text).
+- [x] Add an **Idempotency-Key** so retries don't double-send.
+- [x] Recommended key: `license-email/stripe-event/<event.id>` for webhook sends.
 
 Wire email sending into:
 
-- [ ] Stripe webhook `checkout.session.completed`:
-- [ ] Use Stripe-provided email (if present) to send the license key.
-- [ ] `POST /license/resend`:
-- [ ] Look up license by `email` or `license_key`.
-- [ ] Send to the email stored on the license record.
-- [ ] If email is missing, return a clear error instructing the user to contact support.
+- [x] Stripe webhook `checkout.session.completed`:
+- [x] Use Stripe-provided email (if present) to send the license key.
+- [x] `POST /license/resend`:
+- [x] Look up license by `email` or `license_key`.
+- [x] Send to the email stored on the license record.
+- [x] If email is missing, return a clear error instructing the user to contact support.
 
 ## 6) Email Content (Minimum Good License Email)
 
-- [ ] Subject: `Your Tabulensis license key`
-- [ ] Include the license key (copy/paste friendly)
-- [ ] Include download link: `https://tabulensis.com/download`
-- [ ] Include activation command: `tabulensis license activate <KEY>`
-- [ ] Include billing link: `https://tabulensis.com/support/billing`
-- [ ] Include support contact: `support@tabulensis.com`
-- [ ] Include both HTML and plain-text bodies (recommended)
+- [x] Subject: `Your Tabulensis license key`
+- [x] Include the license key (copy/paste friendly)
+- [x] Include download link: `https://tabulensis.com/download`
+- [x] Include activation command: `tabulensis license activate <KEY>`
+- [x] Include billing link: `https://tabulensis.com/support/billing`
+- [x] Include support contact: `support@tabulensis.com`
+- [x] Include both HTML and plain-text bodies (recommended)
 
 ## 7) Test Before Sending Real Customer Email
 

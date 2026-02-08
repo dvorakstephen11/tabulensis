@@ -35,4 +35,3 @@ pub const DIFF_LIMITS_EXCEEDED: &str = "EXDIFF_DIFF_001";
 pub const DIFF_SINK_ERROR: &str = "EXDIFF_DIFF_002";
 pub const DIFF_SHEET_NOT_FOUND: &str = "EXDIFF_DIFF_003";
 pub const DIFF_INTERNAL_ERROR: &str = "EXDIFF_DIFF_004";
-

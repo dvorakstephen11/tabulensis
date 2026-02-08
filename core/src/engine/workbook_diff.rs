@@ -2,16 +2,16 @@ use crate::config::DiffConfig;
 use crate::diff::{DiffError, DiffOp, DiffReport, DiffSummary};
 #[cfg(feature = "perf-metrics")]
 use crate::perf::{DiffMetrics, Phase};
+use crate::progress::ProgressCallback;
 use crate::sink::{DiffSink, SinkFinishGuard, VecSink};
 use crate::string_pool::StringPool;
 use crate::workbook::{Sheet, SheetKind, Workbook};
-use crate::progress::ProgressCallback;
 
 use std::collections::{HashMap, HashSet};
 #[cfg(feature = "perf-metrics")]
 use std::mem::size_of;
 
-use super::context::{DiffContext, emit_op};
+use super::context::{emit_op, DiffContext};
 use super::grid_diff::try_diff_grids_internal;
 use super::hardening::HardeningController;
 use crate::diff::SheetId;
@@ -541,9 +541,12 @@ fn estimate_workbook_bytes(workbook: &Workbook) -> u64 {
         .iter()
         .map(|sheet| sheet.grid.estimated_bytes())
         .sum();
-    let named_ranges = workbook.named_ranges.len() as u64 * size_of::<crate::workbook::NamedRange>() as u64;
+    let named_ranges =
+        workbook.named_ranges.len() as u64 * size_of::<crate::workbook::NamedRange>() as u64;
     let charts = workbook.charts.len() as u64 * size_of::<crate::workbook::ChartObject>() as u64;
-    sheet_bytes.saturating_add(named_ranges).saturating_add(charts)
+    sheet_bytes
+        .saturating_add(named_ranges)
+        .saturating_add(charts)
 }
 
 #[cfg(feature = "perf-metrics")]
@@ -556,11 +559,7 @@ fn estimate_grid_storage_bytes(workbook: &Workbook) -> u64 {
 }
 
 #[cfg(feature = "perf-metrics")]
-fn estimate_alignment_buffer_bytes(
-    old: &Workbook,
-    new: &Workbook,
-    pool: &StringPool,
-) -> u64 {
+fn estimate_alignment_buffer_bytes(old: &Workbook, new: &Workbook, pool: &StringPool) -> u64 {
     let mut old_sheets: HashMap<SheetKey, &Sheet> = HashMap::new();
     for sheet in &old.sheets {
         old_sheets.insert(make_sheet_key(sheet, pool), sheet);
@@ -597,8 +596,8 @@ fn apply_accounted_peak(
     new: &Workbook,
     pool: &StringPool,
 ) {
-    let grid_storage_bytes = estimate_grid_storage_bytes(old)
-        .saturating_add(estimate_grid_storage_bytes(new));
+    let grid_storage_bytes =
+        estimate_grid_storage_bytes(old).saturating_add(estimate_grid_storage_bytes(new));
     let string_pool_bytes = pool.estimated_bytes();
     let alignment_buffer_bytes = estimate_alignment_buffer_bytes(old, new, pool);
 

@@ -175,6 +175,7 @@ td{background:#0d1117;}
 
     html.push_str("<div class=\"cols\">");
     html.push_str(&render_side_grid_html(
+        sheet_name,
         "Old",
         old_sheet,
         old_vp,
@@ -184,6 +185,7 @@ td{background:#0d1117;}
         old_preview_cols,
     ));
     html.push_str(&render_side_grid_html(
+        sheet_name,
         "New",
         new_sheet,
         new_vp,
@@ -215,11 +217,38 @@ td{background:#0d1117;}
         ));
     }
 
+    html.push_str(
+        r#"<script>
+(function () {
+  var post = window.__tabulensisPostMessage;
+  if (typeof post !== "function") return;
+  document.addEventListener("click", function (event) {
+    var target = event.target;
+    if (!target || !target.closest) return;
+    var td = target.closest("td");
+    if (!td) return;
+    var wrap = td.closest(".gridwrap");
+    if (!wrap) return;
+    var row = parseInt(td.getAttribute("data-row") || "", 10);
+    var col = parseInt(td.getAttribute("data-col") || "", 10);
+    if (!isFinite(row) || !isFinite(col)) return;
+    var sheetName = wrap.getAttribute("data-sheet") || "";
+    var side = wrap.getAttribute("data-side") || "";
+    try {
+      post(JSON.stringify({ method: "gridCellClick", params: { sheetName: sheetName, side: side, row: row, col: col } }));
+    } catch (err) {
+      // No-op: keep preview rendering stable even if the bridge isn't available.
+    }
+  });
+})();
+</script>"#,
+    );
     html.push_str("</div></body></html>");
     html
 }
 
 fn render_side_grid_html(
+    sheet_name: &str,
     label: &str,
     sheet: Option<&ui_payload::SheetSnapshot>,
     vp: Option<GridViewport>,
@@ -265,7 +294,11 @@ fn render_side_grid_html(
     }
 
     let cell_map = build_cell_lookup(&sheet.cells, &vp);
-    out.push_str("<div class=\"gridwrap\">");
+    out.push_str(&format!(
+        "<div class=\"gridwrap\" data-sheet=\"{}\" data-side=\"{}\">",
+        escape_html(sheet_name),
+        if side == GridSide::Old { "old" } else { "new" }
+    ));
     out.push_str("<table><thead><tr>");
     out.push_str("<th class=\"corner\"></th>");
     for col in vp.col_start..=vp.col_end {
@@ -355,11 +388,14 @@ fn render_side_grid_html(
             let cell = cell_map.get(&key).copied();
             let (display, title) = format_cell_display(cell);
             if title.is_empty() {
-                out.push_str(&format!("<td class=\"{}\">{}</td>", class, display));
+                out.push_str(&format!(
+                    "<td class=\"{}\" data-row=\"{}\" data-col=\"{}\">{}</td>",
+                    class, row, col, display
+                ));
             } else {
                 out.push_str(&format!(
-                    "<td class=\"{}\" title=\"{}\">{}</td>",
-                    class, title, display
+                    "<td class=\"{}\" data-row=\"{}\" data-col=\"{}\" title=\"{}\">{}</td>",
+                    class, row, col, title, display
                 ));
             }
         }

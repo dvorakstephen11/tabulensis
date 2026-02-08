@@ -1,9 +1,10 @@
 {
-  "timestamp": "2026-02-02T23:08:28.998693+00:00",
-  "git_commit": "2b60f1d644d1",
-  "git_branch": "20260201_ui_refactor",
+  "timestamp": "2026-02-08T15:29:31.294441+00:00",
+  "git_commit": "d06024b3bee2",
+  "git_branch": "main",
   "suite": "quick",
   "full_scale": false,
+  "parallel": false,
   "tests": {
     "perf_p1_large_dense": {
       "total_time_ms": 3,
@@ -15,7 +16,7 @@
       "cell_diff_time_ms": 0,
       "op_emit_time_ms": 0,
       "report_serialize_time_ms": 0,
-      "peak_memory_bytes": 2874787,
+      "peak_memory_bytes": 3408371,
       "grid_storage_bytes": 960000,
       "string_pool_bytes": 203,
       "op_buffer_bytes": 448,
@@ -28,12 +29,12 @@
       "allocations_est": 2040
     },
     "perf_p2_large_noise": {
-      "total_time_ms": 43,
+      "total_time_ms": 40,
       "parse_time_ms": 0,
-      "diff_time_ms": 43,
-      "signature_build_time_ms": 4,
+      "diff_time_ms": 40,
+      "signature_build_time_ms": 3,
       "move_detection_time_ms": 0,
-      "alignment_time_ms": 38,
+      "alignment_time_ms": 37,
       "cell_diff_time_ms": 0,
       "op_emit_time_ms": 0,
       "report_serialize_time_ms": 0,
@@ -50,16 +51,16 @@
       "allocations_est": 2040
     },
     "perf_p3_adversarial_repetitive": {
-      "total_time_ms": 14,
+      "total_time_ms": 12,
       "parse_time_ms": 0,
-      "diff_time_ms": 14,
+      "diff_time_ms": 12,
       "signature_build_time_ms": 6,
       "move_detection_time_ms": 0,
-      "alignment_time_ms": 6,
+      "alignment_time_ms": 5,
       "cell_diff_time_ms": 0,
       "op_emit_time_ms": 0,
       "report_serialize_time_ms": 0,
-      "peak_memory_bytes": 6768622,
+      "peak_memory_bytes": 7172550,
       "grid_storage_bytes": 2400000,
       "string_pool_bytes": 203,
       "op_buffer_bytes": 448,
@@ -94,9 +95,9 @@
       "allocations_est": 2200
     },
     "perf_p5_identical": {
-      "total_time_ms": 2,
+      "total_time_ms": 0,
       "parse_time_ms": 0,
-      "diff_time_ms": 2,
+      "diff_time_ms": 0,
       "signature_build_time_ms": 0,
       "move_detection_time_ms": 0,
       "alignment_time_ms": 0,
@@ -119,11 +120,11 @@
       "total_time_ms": 65,
       "parse_time_ms": 0,
       "diff_time_ms": 65,
-      "signature_build_time_ms": 13,
+      "signature_build_time_ms": 11,
       "move_detection_time_ms": 0,
       "alignment_time_ms": 0,
-      "cell_diff_time_ms": 51,
-      "op_emit_time_ms": 3,
+      "cell_diff_time_ms": 53,
+      "op_emit_time_ms": 2,
       "report_serialize_time_ms": 0,
       "peak_memory_bytes": 87557573,
       "grid_storage_bytes": 14400000,
@@ -140,7 +141,7 @@
   },
   "summary": {
     "total_tests": 6,
-    "total_time_ms": 128,
+    "total_time_ms": 121,
     "total_rows_processed": 22000,
     "total_cells_compared": 419020
   }

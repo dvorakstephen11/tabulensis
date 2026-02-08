@@ -12,16 +12,17 @@ mod tiny_lru;
 use std::path::Path;
 
 pub use batch::{BatchOutcome, BatchRequest};
+pub use diff_runner::CacheStats;
 pub use diff_runner::{
     CellsRangeRequest, DiffErrorPayload, DiffOutcome, DiffRequest, DiffRunner, OpsRangeRequest,
     RangeBounds, SheetCellsPayload, SheetMeta, SheetMetaRequest, SheetPayloadRequest,
 };
-pub use diff_runner::CacheStats;
 pub use events::{ProgressEvent, ProgressRx, ProgressTx};
 pub use paths::BackendPaths;
 pub use recents::RecentComparison;
 pub use search::{SearchIndexResult, SearchIndexSummary, SearchResult};
-pub use store::{DiffMode, DiffRunSummary, OpStore, RunStatus, StoreError, resolve_sheet_stats};
+pub use store::{resolve_sheet_stats, DiffMode, DiffRunSummary, OpStore, RunStatus, StoreError};
+pub use ui_payload::{DiffAnalysis, NoiseFilters};
 
 pub struct BackendConfig {
     pub app_name: String,
@@ -38,7 +39,11 @@ pub struct DesktopBackend {
 impl DesktopBackend {
     pub fn init(cfg: BackendConfig) -> Result<Self, DiffErrorPayload> {
         let paths = paths::resolve_paths(&cfg.app_name)?;
-        let runner = DiffRunner::new(paths.store_db_path.clone(), cfg.app_version, cfg.engine_version);
+        let runner = DiffRunner::new(
+            paths.store_db_path.clone(),
+            cfg.app_version,
+            cfg.engine_version,
+        );
         Ok(Self { paths, runner })
     }
 
@@ -50,7 +55,10 @@ impl DesktopBackend {
         recents::load_recents(&self.paths.recents_json_path)
     }
 
-    pub fn save_recent(&self, entry: RecentComparison) -> Result<Vec<RecentComparison>, DiffErrorPayload> {
+    pub fn save_recent(
+        &self,
+        entry: RecentComparison,
+    ) -> Result<Vec<RecentComparison>, DiffErrorPayload> {
         recents::save_recent(&self.paths.recents_json_path, entry)
     }
 
@@ -59,7 +67,33 @@ impl DesktopBackend {
         store.load_summary(diff_id).map_err(map_store_error)
     }
 
-    pub fn export_audit_xlsx_to_path(&self, diff_id: &str, path: &Path) -> Result<(), DiffErrorPayload> {
+    pub fn load_diff_analysis(
+        &self,
+        diff_id: &str,
+        filters: NoiseFilters,
+    ) -> Result<DiffAnalysis, DiffErrorPayload> {
+        let store = OpStore::open(&self.paths.store_db_path).map_err(map_store_error)?;
+        store
+            .load_diff_analysis(diff_id, filters)
+            .map_err(map_store_error)
+    }
+
+    pub fn load_ops_by_kinds(
+        &self,
+        diff_id: &str,
+        kinds: &[&str],
+    ) -> Result<Vec<excel_diff::DiffOp>, DiffErrorPayload> {
+        let store = OpStore::open(&self.paths.store_db_path).map_err(map_store_error)?;
+        store
+            .load_ops_by_kinds(diff_id, kinds)
+            .map_err(map_store_error)
+    }
+
+    pub fn export_audit_xlsx_to_path(
+        &self,
+        diff_id: &str,
+        path: &Path,
+    ) -> Result<(), DiffErrorPayload> {
         let store = OpStore::open(&self.paths.store_db_path).map_err(map_store_error)?;
         export::export_audit_xlsx_from_store(&store, diff_id, path)
             .map_err(|e| DiffErrorPayload::new("export", e.to_string(), false))
@@ -86,7 +120,11 @@ impl DesktopBackend {
         search::search_diff_ops(&self.paths.store_db_path, diff_id, query, limit)
     }
 
-    pub fn build_search_index(&self, path: &Path, side: &str) -> Result<SearchIndexSummary, DiffErrorPayload> {
+    pub fn build_search_index(
+        &self,
+        path: &Path,
+        side: &str,
+    ) -> Result<SearchIndexSummary, DiffErrorPayload> {
         search::build_search_index(&self.paths.store_db_path, path, side)
     }
 
@@ -104,7 +142,12 @@ impl DesktopBackend {
         request: BatchRequest,
         progress: ProgressTx,
     ) -> Result<BatchOutcome, DiffErrorPayload> {
-        batch::run_batch_compare(self.runner.clone(), &self.paths.store_db_path, request, progress)
+        batch::run_batch_compare(
+            self.runner.clone(),
+            &self.paths.store_db_path,
+            request,
+            progress,
+        )
     }
 
     pub fn load_batch_summary(&self, batch_id: &str) -> Result<BatchOutcome, DiffErrorPayload> {

@@ -326,3 +326,42 @@ Peak memory:
 Decision:
 - **Enable `custom-xml` by default for the desktop app** (large win on the non-identical cases; identical case is already dominated by the fast-diff short-circuit).
 - Keep `custom-xml` non-default for the core crate until broader real-world corpus / fuzz coverage is in place.
+
+## Core Default-On Trial (Perf Cycle, February 7, 2026)
+
+Goal:
+- Evaluate turning `custom-xml` on by default for the core crate (and downstream consumers that use core default features, such as `tabulensis-cli`).
+
+Change:
+- `core/Cargo.toml`: added `custom-xml` to `[features].default`.
+
+Fixture note:
+- One perf e2e fixture file (`fixtures/generated/e2e_p1_dense_a.xlsx`) was missing locally, causing the e2e perf test harness to fail.
+- Regenerated perf e2e fixtures via:
+  - `generate-fixtures --manifest fixtures/manifest_perf_e2e.yaml --force`
+
+Perf-cycle:
+- Cycle id: `2026-02-07_221949`
+- Pre: `python3 scripts/perf_cycle.py pre`
+- Post: `python3 scripts/perf_cycle.py post --cycle 2026-02-07_221949 --skip-fixtures`
+  - Note: pre/post SHAs in the report are identical because the default-on change was not committed during measurement.
+
+Results (median-of-3, from `benchmarks/perf_cycles/2026-02-07_221949/cycle_delta.md`):
+
+E2E total_time_ms deltas:
+- `e2e_p1_dense`: `2565 -> 1806 ms` (`-29.6%`)
+- `e2e_p2_noise`: `955 -> 643 ms` (`-32.7%`)
+- `e2e_p3_repetitive`: `2397 -> 1350 ms` (`-43.7%`)
+- `e2e_p4_sparse`: `111 -> 61 ms` (`-45.0%`)
+- `e2e_p6_sharedstrings_changed_numeric_only`: `170 -> 158 ms` (`-7.1%`)
+
+Other suite deltas:
+- Full-scale showed small wins (largest: `perf_50k_completely_different` `236 -> 214 ms`, `-9.3%`).
+- CLI JSONL emit improved: `37 -> 33 ms` (`-10.8%`).
+
+Signal report (`benchmarks/perf_cycles/2026-02-07_221949/cycle_signal.md`):
+- High-confidence improvements: `e2e_p1_dense`, `e2e_p3_repetitive`, `perf_50k_completely_different`.
+- No high-confidence regressions reported.
+
+Decision update:
+- Based on this perf-cycle coverage and passing correctness suite, it is now reasonable to **promote `custom-xml` to default-on in `excel_diff`** (keeping the feature flag available for rollback and A/B comparisons).

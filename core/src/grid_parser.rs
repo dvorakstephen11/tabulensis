@@ -2573,9 +2573,7 @@ fn convert_value_bytes(
             return Some(if neg { -v } else { v });
         }
         match raw[i] {
-            b'.' | b'e' | b'E' => {
-                lexical_core::parse::<f64>(raw).ok()
-            }
+            b'.' | b'e' | b'E' => lexical_core::parse::<f64>(raw).ok(),
             _ => None,
         }
     }
@@ -3127,16 +3125,10 @@ mod tests {
             let expected = raw_str
                 .parse::<f64>()
                 .expect("test cases should be valid f64");
-            let value = convert_value_bytes(
-                Some(raw),
-                None,
-                &[],
-                &mut pool,
-                &dummy_reader,
-                dummy_xml,
-            )
-            .expect("conversion should succeed")
-            .expect("value should be present");
+            let value =
+                convert_value_bytes(Some(raw), None, &[], &mut pool, &dummy_reader, dummy_xml)
+                    .expect("conversion should succeed")
+                    .expect("value should be present");
 
             match value {
                 CellValue::Number(actual) => {

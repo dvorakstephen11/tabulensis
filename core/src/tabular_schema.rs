@@ -1,23 +1,25 @@
+#[cfg(feature = "custom-json-schema")]
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::excel_open_xml::PackageError;
 use crate::model::{Measure, Model, ModelColumn, ModelRelationship, ModelTable};
 use crate::string_pool::StringPool;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct RawTabularModel {
     pub tables: Vec<RawTable>,
     pub relationships: Vec<RawRelationship>,
     pub measures: Vec<RawMeasure>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RawTable {
     pub name: String,
     pub columns: Vec<RawColumn>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RawColumn {
     pub name: String,
     pub data_type: Option<String>,
@@ -28,7 +30,7 @@ pub(crate) struct RawColumn {
     pub expression: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RawRelationship {
     pub from_table: String,
     pub from_column: String,
@@ -40,7 +42,7 @@ pub(crate) struct RawRelationship {
     pub name: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RawMeasure {
     pub full_name: String,
     pub expression: String,
@@ -56,6 +58,17 @@ pub(crate) fn parse_data_model_schema(bytes: &[u8]) -> Result<RawTabularModel, P
     })?;
     let text = strip_bom(text);
 
+    #[cfg(feature = "custom-json-schema")]
+    {
+        parse_data_model_schema_custom(text)
+    }
+    #[cfg(not(feature = "custom-json-schema"))]
+    {
+        parse_data_model_schema_value(text)
+    }
+}
+
+fn parse_data_model_schema_value(text: &str) -> Result<RawTabularModel, PackageError> {
     let v: Value = serde_json::from_str(text).map_err(|e| PackageError::UnsupportedFormat {
         message: format!("DataModelSchema JSON parse error: {}", e),
     })?;
@@ -70,6 +83,179 @@ pub(crate) fn parse_data_model_schema(bytes: &[u8]) -> Result<RawTabularModel, P
     collect_measures_anywhere(&v, "", &mut out);
     normalize(&mut out);
     Ok(out)
+}
+
+#[cfg(feature = "custom-json-schema")]
+fn parse_data_model_schema_custom(text: &str) -> Result<RawTabularModel, PackageError> {
+    let root: SchemaRoot =
+        serde_json::from_str(text).map_err(|e| PackageError::UnsupportedFormat {
+            message: format!("DataModelSchema JSON parse error: {}", e),
+        })?;
+
+    let model = match root.model {
+        Some(m) => m,
+        None => return parse_data_model_schema_value(text),
+    };
+
+    let tables = match model.tables {
+        Some(t) => t,
+        None => return parse_data_model_schema_value(text),
+    };
+
+    let mut out = RawTabularModel::default();
+
+    for t in tables {
+        let table_name = t.name.unwrap_or_default();
+
+        if !table_name.is_empty() {
+            let mut raw_table = RawTable {
+                name: table_name.clone(),
+                columns: Vec::new(),
+            };
+
+            if let Some(columns) = t.columns {
+                for c in columns {
+                    if let Some(col) = parse_column_schema(c) {
+                        raw_table.columns.push(col);
+                    }
+                }
+            }
+
+            out.tables.push(raw_table);
+        }
+
+        if let Some(measures) = t.measures {
+            for m in measures {
+                if let Some(rm) = parse_measure_schema(m, &table_name) {
+                    out.measures.push(rm);
+                }
+            }
+        }
+    }
+
+    if let Some(relationships) = model.relationships {
+        for rel in relationships {
+            if let Some(raw_rel) = parse_relationship_schema(rel) {
+                out.relationships.push(raw_rel);
+            }
+        }
+    }
+
+    normalize(&mut out);
+    Ok(out)
+}
+
+#[cfg(feature = "custom-json-schema")]
+fn opt_nonempty_string(s: Option<String>) -> Option<String> {
+    s.filter(|s| !s.is_empty())
+}
+
+#[cfg(feature = "custom-json-schema")]
+fn parse_measure_schema(v: SchemaMeasure, table_name: &str) -> Option<RawMeasure> {
+    let name = v.name?;
+    let expr = v.expression.unwrap_or_default();
+
+    let full_name = if table_name.is_empty() {
+        name
+    } else {
+        format!("{}/{}", table_name, name)
+    };
+
+    Some(RawMeasure {
+        full_name,
+        expression: expr,
+    })
+}
+
+#[cfg(feature = "custom-json-schema")]
+fn parse_column_schema(v: SchemaColumn) -> Option<RawColumn> {
+    let name = v.name?;
+    Some(RawColumn {
+        name,
+        data_type: opt_nonempty_string(v.data_type),
+        is_hidden: v.is_hidden,
+        format_string: opt_nonempty_string(v.format_string),
+        sort_by: opt_nonempty_string(v.sort_by_column),
+        summarize_by: opt_nonempty_string(v.summarize_by),
+        expression: opt_nonempty_string(v.expression),
+    })
+}
+
+#[cfg(feature = "custom-json-schema")]
+fn parse_relationship_schema(v: SchemaRelationship) -> Option<RawRelationship> {
+    let from_table = v.from_table?;
+    let from_column = v.from_column?;
+    let to_table = v.to_table?;
+    let to_column = v.to_column?;
+
+    Some(RawRelationship {
+        from_table,
+        from_column,
+        to_table,
+        to_column,
+        cross_filtering_behavior: opt_nonempty_string(v.cross_filtering_behavior),
+        cardinality: opt_nonempty_string(v.cardinality),
+        is_active: v.is_active,
+        name: opt_nonempty_string(v.name),
+    })
+}
+
+#[cfg(feature = "custom-json-schema")]
+#[derive(Debug, Deserialize)]
+struct SchemaRoot {
+    model: Option<SchemaModel>,
+}
+
+#[cfg(feature = "custom-json-schema")]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SchemaModel {
+    tables: Option<Vec<SchemaTable>>,
+    relationships: Option<Vec<SchemaRelationship>>,
+}
+
+#[cfg(feature = "custom-json-schema")]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SchemaTable {
+    name: Option<String>,
+    columns: Option<Vec<SchemaColumn>>,
+    measures: Option<Vec<SchemaMeasure>>,
+}
+
+#[cfg(feature = "custom-json-schema")]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SchemaColumn {
+    name: Option<String>,
+    data_type: Option<String>,
+    is_hidden: Option<bool>,
+    format_string: Option<String>,
+    sort_by_column: Option<String>,
+    summarize_by: Option<String>,
+    expression: Option<String>,
+}
+
+#[cfg(feature = "custom-json-schema")]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SchemaRelationship {
+    from_table: Option<String>,
+    from_column: Option<String>,
+    to_table: Option<String>,
+    to_column: Option<String>,
+    cross_filtering_behavior: Option<String>,
+    cardinality: Option<String>,
+    is_active: Option<bool>,
+    name: Option<String>,
+}
+
+#[cfg(feature = "custom-json-schema")]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SchemaMeasure {
+    name: Option<String>,
+    expression: Option<String>,
 }
 
 fn try_collect_from_model_tables(v: &Value, out: &mut RawTabularModel) -> bool {
@@ -185,7 +371,10 @@ fn collect_measures_anywhere(v: &Value, table_name: &str, out: &mut RawTabularMo
                 }
             }
 
-            let next_table = map.get("name").and_then(|x| x.as_str()).unwrap_or(table_name);
+            let next_table = map
+                .get("name")
+                .and_then(|x| x.as_str())
+                .unwrap_or(table_name);
 
             for (_k, child) in map {
                 collect_measures_anywhere(child, next_table, out);
@@ -206,7 +395,8 @@ fn normalize(out: &mut RawTabularModel) {
     out.measures
         .dedup_by(|a, b| a.full_name == b.full_name && a.expression == b.expression);
 
-    out.tables.sort_by(|a, b| cmp_case_insensitive(&a.name, &b.name));
+    out.tables
+        .sort_by(|a, b| cmp_case_insensitive(&a.name, &b.name));
     for table in &mut out.tables {
         table
             .columns
@@ -407,7 +597,10 @@ mod tests {
         assert_eq!(rel.from_column, "CustomerId");
         assert_eq!(rel.to_table, "Customers");
         assert_eq!(rel.to_column, "Id");
-        assert_eq!(rel.cross_filtering_behavior.as_deref(), Some("oneDirection"));
+        assert_eq!(
+            rel.cross_filtering_behavior.as_deref(),
+            Some("oneDirection")
+        );
         assert_eq!(rel.cardinality.as_deref(), Some("ManyToOne"));
         assert_eq!(rel.is_active, Some(true));
         assert_eq!(rel.name.as_deref(), Some("SalesCustomers"));
@@ -417,13 +610,62 @@ mod tests {
         assert_eq!(model.tables.len(), 1);
         assert_eq!(pool.resolve(model.tables[0].name), "Sales");
         assert_eq!(model.tables[0].columns.len(), 1);
-        assert_eq!(
-            pool.resolve(model.tables[0].columns[0].name),
-            "Amount"
-        );
+        assert_eq!(pool.resolve(model.tables[0].columns[0].name), "Amount");
         assert_eq!(model.relationships.len(), 1);
         assert_eq!(pool.resolve(model.relationships[0].from_table), "Sales");
         assert_eq!(model.measures.len(), 1);
         assert_eq!(pool.resolve(model.measures[0].name), "Sales/Total");
+    }
+
+    #[test]
+    #[cfg(feature = "custom-json-schema")]
+    fn custom_json_schema_parser_matches_value_parser() {
+        let json = r#"{
+            "model": {
+                "tables": [
+                    {
+                        "name": "Sales",
+                        "columns": [
+                            {
+                                "name": "Amount",
+                                "dataType": "decimal",
+                                "isHidden": true,
+                                "formatString": "0.00",
+                                "sortByColumn": "SortCol",
+                                "summarizeBy": "sum",
+                                "expression": "[Amount] * 2",
+                                "unusedHugeField": { "a": [1,2,3], "b": {"c": "d"} }
+                            }
+                        ],
+                        "measures": [
+                            {
+                                "name": "Total",
+                                "expression": "SUM(Sales[Amount])",
+                                "unused": [true, false, null]
+                            }
+                        ]
+                    }
+                ],
+                "relationships": [
+                    {
+                        "fromTable": "Sales",
+                        "fromColumn": "CustomerId",
+                        "toTable": "Customers",
+                        "toColumn": "Id",
+                        "crossFilteringBehavior": "oneDirection",
+                        "cardinality": "ManyToOne",
+                        "isActive": true,
+                        "name": "SalesCustomers",
+                        "ignored": { "nested": { "k": "v" } }
+                    }
+                ],
+                "ignoredTopLevel": "hello"
+            }
+        }"#;
+
+        let text = strip_bom(json);
+        let baseline = parse_data_model_schema_value(text).expect("baseline parse");
+        let custom = parse_data_model_schema_custom(text).expect("custom parse");
+        assert_eq!(baseline, custom);
     }
 }

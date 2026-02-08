@@ -166,9 +166,11 @@ Each iteration is an increment you can ship, market, and monetize independently.
 
 ---
 
-# I upgrades (make it a daily driver)
+# Iteration 1 upgrades (make it a daily driver)
 
 **Theme:** “Reduce time-to-answer: summarize changes, filter noise, deep-link to root cause.”
+
+Implementation plan: [`docs/product_iterations/iteration_1_daily_driver_plan.md`](docs/product_iterations/iteration_1_daily_driver_plan.md)
 
 ### Features
 
@@ -206,6 +208,8 @@ Each iteration is an increment you can ship, market, and monetize independently.
 # Iteration 2 — PBIP/PBIR/TMDL support (ride the ecosystem wave)
 
 **Theme:** “First-class diff/merge for source-controlled Power BI projects.”
+
+See: [Iteration 2 readiness](docs/product_iterations/iteration_2_readiness.md).
 
 ### Features
 

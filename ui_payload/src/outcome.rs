@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use excel_diff::{DiffOp, DiffReport, DiffSink, DiffSummary, QueryMetadataField, StringId};
 use serde::{Deserialize, Serialize};
 
-use crate::DiffWithSheets;
 use crate::options::{DiffLimits, DiffPreset};
+use crate::DiffWithSheets;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

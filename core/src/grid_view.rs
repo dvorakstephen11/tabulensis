@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-use std::hash::Hash;
 #[cfg(test)]
 use std::cell::Cell as ThreadLocalCell;
+use std::collections::HashMap;
+use std::hash::Hash;
 
 use crate::config::DiffConfig;
 use crate::grid_metadata::classify_row_frequencies;
@@ -114,8 +114,13 @@ impl<'a> GridView<'a> {
 
         sort_row_cells(&mut rows, total_cells);
 
-        let mut row_meta =
-            build_row_meta(&rows, &row_counts, &row_first_non_blank, config, total_cells);
+        let mut row_meta = build_row_meta(
+            &rows,
+            &row_counts,
+            &row_first_non_blank,
+            config,
+            total_cells,
+        );
 
         classify_row_frequencies(&mut row_meta, config);
 
@@ -171,10 +176,7 @@ fn build_gridview_dense<'a>(grid: &'a Grid, config: &DiffConfig) -> GridView<'a>
     let avg_per_row = if nrows == 0 {
         0
     } else {
-        cell_count
-            .saturating_add(nrows)
-            .saturating_sub(1)
-            / nrows
+        cell_count.saturating_add(nrows).saturating_sub(1) / nrows
     };
     let row_cap = avg_per_row.saturating_add(4).min(ncols);
 
@@ -426,9 +428,7 @@ fn build_row_meta<'a>(
         return rows
             .par_iter()
             .enumerate()
-            .map(|(idx, row_view)| {
-                row_meta_for_row(idx, row_view, row_counts, row_first_non_blank)
-            })
+            .map(|(idx, row_view)| row_meta_for_row(idx, row_view, row_counts, row_first_non_blank))
             .collect();
     }
 

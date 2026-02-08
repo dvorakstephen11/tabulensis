@@ -1,0 +1,2 @@
+test_name,total_time_ms,op_emit_time_ms,diff_time_ms,op_count,alignment_buffer_bytes,alignment_time_ms,allocations_est,anchors_found,cell_diff_time_ms,cells_compared,grid_storage_bytes,hash_lookups_est,move_detection_time_ms,moves_detected,ncols,nrows,op_buffer_bytes,parse_time_ms,peak_memory_bytes,report_serialize_time_ms,rows_processed,signature_build_time_ms,string_pool_bytes
+cli_perf_jsonl_emit,36,36,36,200000,0,0,0,0,0,0,0,0,0,0,50,4000,0,0,0,0,0,0,0

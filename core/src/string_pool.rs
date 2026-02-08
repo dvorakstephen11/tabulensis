@@ -92,7 +92,10 @@ impl StringPool {
 
         let strings_overhead = self.strings.capacity().saturating_mul(size_of::<String>());
         let strings_payload: usize = self.strings.iter().map(|s| s.capacity()).sum();
-        let index_overhead = self.index.capacity().saturating_mul(size_of::<(u64, Bucket)>());
+        let index_overhead = self
+            .index
+            .capacity()
+            .saturating_mul(size_of::<(u64, Bucket)>());
 
         let mut collision_payload = 0usize;
         for bucket in self.index.values() {
@@ -104,7 +107,6 @@ impl StringPool {
 
         (strings_overhead + strings_payload + index_overhead + collision_payload) as u64
     }
-
 }
 
 fn hash_str(s: &str) -> u64 {

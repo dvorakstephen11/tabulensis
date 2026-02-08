@@ -164,7 +164,12 @@ fn collect_step_refs(
     );
 
     let mut v: Vec<String> = out.into_iter().collect();
-    v.sort_by_key(|name| name_to_idx.get(name.as_str()).copied().unwrap_or(usize::MAX));
+    v.sort_by_key(|name| {
+        name_to_idx
+            .get(name.as_str())
+            .copied()
+            .unwrap_or(usize::MAX)
+    });
     v
 }
 
@@ -220,14 +225,7 @@ fn collect_step_refs_inner<'a>(
                 );
                 bound.push(b.name.as_str());
             }
-            collect_step_refs_inner(
-                body,
-                step_names,
-                name_to_idx,
-                current_step_idx,
-                bound,
-                out,
-            );
+            collect_step_refs_inner(body, step_names, name_to_idx, current_step_idx, bound, out);
             bound.pop_n(bindings.len());
         }
         MExpr::FunctionLiteral { params, body, .. } => {
@@ -235,26 +233,12 @@ fn collect_step_refs_inner<'a>(
             for p in params {
                 bound.push(p.name.as_str());
             }
-            collect_step_refs_inner(
-                body,
-                step_names,
-                name_to_idx,
-                current_step_idx,
-                bound,
-                out,
-            );
+            collect_step_refs_inner(body, step_names, name_to_idx, current_step_idx, bound, out);
             bound.pop_n(n);
         }
         MExpr::Each { body } => {
             bound.push("_");
-            collect_step_refs_inner(
-                body,
-                step_names,
-                name_to_idx,
-                current_step_idx,
-                bound,
-                out,
-            );
+            collect_step_refs_inner(body, step_names, name_to_idx, current_step_idx, bound, out);
             bound.pop_n(1);
         }
         MExpr::Record { fields } => {
@@ -271,59 +255,24 @@ fn collect_step_refs_inner<'a>(
         }
         MExpr::List { items } => {
             for i in items {
-                collect_step_refs_inner(
-                    i,
-                    step_names,
-                    name_to_idx,
-                    current_step_idx,
-                    bound,
-                    out,
-                );
+                collect_step_refs_inner(i, step_names, name_to_idx, current_step_idx, bound, out);
             }
         }
         MExpr::FunctionCall { args, .. } => {
             for a in args {
-                collect_step_refs_inner(
-                    a,
-                    step_names,
-                    name_to_idx,
-                    current_step_idx,
-                    bound,
-                    out,
-                );
+                collect_step_refs_inner(a, step_names, name_to_idx, current_step_idx, bound, out);
             }
         }
         MExpr::Access { base, key, .. } => {
-            collect_step_refs_inner(
-                base,
-                step_names,
-                name_to_idx,
-                current_step_idx,
-                bound,
-                out,
-            );
-            collect_step_refs_inner(
-                key,
-                step_names,
-                name_to_idx,
-                current_step_idx,
-                bound,
-                out,
-            );
+            collect_step_refs_inner(base, step_names, name_to_idx, current_step_idx, bound, out);
+            collect_step_refs_inner(key, step_names, name_to_idx, current_step_idx, bound, out);
         }
         MExpr::If {
             cond,
             then_branch,
             else_branch,
         } => {
-            collect_step_refs_inner(
-                cond,
-                step_names,
-                name_to_idx,
-                current_step_idx,
-                bound,
-                out,
-            );
+            collect_step_refs_inner(cond, step_names, name_to_idx, current_step_idx, bound, out);
             collect_step_refs_inner(
                 then_branch,
                 step_names,
@@ -342,52 +291,17 @@ fn collect_step_refs_inner<'a>(
             );
         }
         MExpr::UnaryOp { expr, .. } => {
-            collect_step_refs_inner(
-                expr,
-                step_names,
-                name_to_idx,
-                current_step_idx,
-                bound,
-                out,
-            );
+            collect_step_refs_inner(expr, step_names, name_to_idx, current_step_idx, bound, out);
         }
         MExpr::BinaryOp { left, right, .. } => {
-            collect_step_refs_inner(
-                left,
-                step_names,
-                name_to_idx,
-                current_step_idx,
-                bound,
-                out,
-            );
-            collect_step_refs_inner(
-                right,
-                step_names,
-                name_to_idx,
-                current_step_idx,
-                bound,
-                out,
-            );
+            collect_step_refs_inner(left, step_names, name_to_idx, current_step_idx, bound, out);
+            collect_step_refs_inner(right, step_names, name_to_idx, current_step_idx, bound, out);
         }
         MExpr::TypeAscription { expr, .. } => {
-            collect_step_refs_inner(
-                expr,
-                step_names,
-                name_to_idx,
-                current_step_idx,
-                bound,
-                out,
-            );
+            collect_step_refs_inner(expr, step_names, name_to_idx, current_step_idx, bound, out);
         }
         MExpr::TryOtherwise { expr, otherwise } => {
-            collect_step_refs_inner(
-                expr,
-                step_names,
-                name_to_idx,
-                current_step_idx,
-                bound,
-                out,
-            );
+            collect_step_refs_inner(expr, step_names, name_to_idx, current_step_idx, bound, out);
             collect_step_refs_inner(
                 otherwise,
                 step_names,
@@ -460,11 +374,11 @@ fn classify_remove_columns(args: &[MExpr], step_names: &BTreeSet<String>) -> Ste
         };
     }
 
-    let columns = extract_string_list(&args[1]).map(Extracted::Known).unwrap_or_else(|| {
-        Extracted::Unknown {
+    let columns = extract_string_list(&args[1])
+        .map(Extracted::Known)
+        .unwrap_or_else(|| Extracted::Unknown {
             hash: hash_expr_signature(&args[1], step_names),
-        }
-    });
+        });
 
     StepKind::TableRemoveColumns {
         columns,
@@ -481,11 +395,11 @@ fn classify_rename_columns(args: &[MExpr], step_names: &BTreeSet<String>) -> Ste
         };
     }
 
-    let renames = extract_rename_pairs(&args[1]).map(Extracted::Known).unwrap_or_else(|| {
-        Extracted::Unknown {
+    let renames = extract_rename_pairs(&args[1])
+        .map(Extracted::Known)
+        .unwrap_or_else(|| Extracted::Unknown {
             hash: hash_expr_signature(&args[1], step_names),
-        }
-    });
+        });
 
     StepKind::TableRenameColumns {
         renames,
@@ -523,27 +437,27 @@ fn classify_nested_join(args: &[MExpr], step_names: &BTreeSet<String>) -> StepKi
         };
     }
 
-    let left_keys = extract_string_list(&args[1]).map(Extracted::Known).unwrap_or_else(|| {
-        Extracted::Unknown {
+    let left_keys = extract_string_list(&args[1])
+        .map(Extracted::Known)
+        .unwrap_or_else(|| Extracted::Unknown {
             hash: hash_expr_signature(&args[1], step_names),
-        }
-    });
+        });
 
     let right_keys = if args.len() >= 4 {
-        extract_string_list(&args[3]).map(Extracted::Known).unwrap_or_else(|| {
-            Extracted::Unknown {
+        extract_string_list(&args[3])
+            .map(Extracted::Known)
+            .unwrap_or_else(|| Extracted::Unknown {
                 hash: hash_expr_signature(&args[3], step_names),
-            }
-        })
+            })
     } else {
         Extracted::Unknown { hash: 0 }
     };
 
-    let new_column = extract_string(&args[4]).map(Extracted::Known).unwrap_or_else(|| {
-        Extracted::Unknown {
+    let new_column = extract_string(&args[4])
+        .map(Extracted::Known)
+        .unwrap_or_else(|| Extracted::Unknown {
             hash: hash_expr_signature(&args[4], step_names),
-        }
-    });
+        });
 
     let join_kind_hash = args.get(5).map(|e| hash_expr_signature(e, step_names));
     let extras = if args.len() > 6 {
@@ -570,17 +484,17 @@ fn classify_join(args: &[MExpr], step_names: &BTreeSet<String>) -> StepKind {
         };
     }
 
-    let left_keys = extract_string_list(&args[1]).map(Extracted::Known).unwrap_or_else(|| {
-        Extracted::Unknown {
+    let left_keys = extract_string_list(&args[1])
+        .map(Extracted::Known)
+        .unwrap_or_else(|| Extracted::Unknown {
             hash: hash_expr_signature(&args[1], step_names),
-        }
-    });
+        });
 
-    let right_keys = extract_string_list(&args[3]).map(Extracted::Known).unwrap_or_else(|| {
-        Extracted::Unknown {
+    let right_keys = extract_string_list(&args[3])
+        .map(Extracted::Known)
+        .unwrap_or_else(|| Extracted::Unknown {
             hash: hash_expr_signature(&args[3], step_names),
-        }
-    });
+        });
 
     let join_kind_hash = args.get(4).map(|e| hash_expr_signature(e, step_names));
     let extras = if args.len() > 5 {

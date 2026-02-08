@@ -86,11 +86,12 @@ mod database_alignment;
 mod datamashup;
 mod datamashup_framing;
 mod datamashup_package;
-mod permission_bindings;
-pub mod error_codes;
+#[cfg(feature = "model-diff")]
+mod dax;
 mod diff;
 mod diffable;
 mod engine;
+pub mod error_codes;
 #[cfg(feature = "excel-open-xml")]
 mod excel_open_xml;
 mod formula;
@@ -98,38 +99,37 @@ mod formula_diff;
 mod grid_metadata;
 mod grid_parser;
 mod grid_view;
-mod memory_estimate;
 pub(crate) mod hashing;
-mod matching;
 mod m_ast;
 mod m_ast_diff;
 mod m_diff;
 mod m_section;
 mod m_semantic_detail;
-#[cfg(feature = "model-diff")]
-mod dax;
+mod matching;
+mod memory_estimate;
+#[cfg(all(feature = "perf-metrics", not(target_arch = "wasm32")))]
+mod memory_metrics;
 #[cfg(feature = "model-diff")]
 mod model;
 #[cfg(feature = "model-diff")]
 mod model_diff;
-#[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
-mod tabular_schema;
 mod object_diff;
 mod output;
 mod package;
-#[cfg(all(feature = "perf-metrics", not(target_arch = "wasm32")))]
-mod memory_metrics;
-mod progress;
 #[cfg(feature = "perf-metrics")]
 #[doc(hidden)]
 pub mod perf;
+mod permission_bindings;
 mod policy;
+mod progress;
 pub(crate) mod rect_block_move;
 pub(crate) mod region_mask;
 pub(crate) mod row_alignment;
 mod session;
 mod sink;
 mod string_pool;
+#[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+mod tabular_schema;
 mod vba;
 mod workbook;
 
@@ -247,43 +247,42 @@ pub mod advanced {
         try_diff_grids as try_diff_grids_with_pool, try_diff_grids_database_mode_streaming,
         try_diff_grids_streaming, try_diff_grids_streaming_with_progress,
         try_diff_sheets as try_diff_sheets_with_pool, try_diff_sheets_streaming,
-        try_diff_sheets_streaming_with_progress, try_diff_workbooks as try_diff_workbooks_with_pool,
-        try_diff_workbooks_streaming, try_diff_workbooks_streaming_with_progress,
-        try_diff_workbooks_with_progress,
+        try_diff_sheets_streaming_with_progress,
+        try_diff_workbooks as try_diff_workbooks_with_pool, try_diff_workbooks_streaming,
+        try_diff_workbooks_streaming_with_progress, try_diff_workbooks_with_progress,
     };
     pub use crate::session::DiffSession;
     pub use crate::sink::{CallbackSink, DiffSink, VecSink};
     pub use crate::string_pool::{StringId, StringPool};
 }
 
-pub use addressing::{AddressParseError, address_to_index, index_to_address};
-pub use capabilities::{EngineFeatures, engine_features};
+pub use addressing::{address_to_index, index_to_address, AddressParseError};
+pub use capabilities::{engine_features, EngineFeatures};
 pub use config::{DiffConfig, DiffConfigBuilder, LimitBehavior, SemanticNoisePolicy};
-pub use container::{ContainerError, ContainerLimits, OpcContainer, ZipContainer, ZipEntryFingerprint};
+pub use container::{
+    ContainerError, ContainerLimits, OpcContainer, ZipContainer, ZipEntryFingerprint,
+};
 #[doc(hidden)]
 pub use datamashup::parse_metadata;
 pub use datamashup::{
-    DataMashup, Metadata, Permissions, Query, QueryMetadata, build_data_mashup,
-    build_data_mashup_with_decryptor, build_embedded_queries, build_queries,
-};
-pub use datamashup_framing::{
-    DataMashupError, RawDataMashup, decode_datamashup_base64, parse_data_mashup,
+    build_data_mashup, build_data_mashup_with_decryptor, build_embedded_queries, build_queries,
+    DataMashup, Metadata, Permissions, Query, QueryMetadata,
 };
 #[doc(hidden)]
 pub use datamashup_framing::read_datamashup_text;
-pub use datamashup_package::{
-    DataMashupLimits, EmbeddedContent, PackageParts, PackageXml, SectionDocument,
-    parse_package_parts, parse_package_parts_with_limits,
+pub use datamashup_framing::{
+    decode_datamashup_base64, parse_data_mashup, DataMashupError, RawDataMashup,
 };
-pub use permission_bindings::{
-    DpapiDecryptError, DpapiDecryptor, PermissionBindingsKind, PermissionBindingsStatus,
+pub use datamashup_package::{
+    parse_package_parts, parse_package_parts_with_limits, DataMashupLimits, EmbeddedContent,
+    PackageParts, PackageXml, SectionDocument,
 };
 pub use diff::{
     AstDiffMode, AstDiffSummary, AstMoveHint, ColumnTypeChange, DiffError, DiffOp, DiffReport,
-    DiffSummary, ExtractedColumnTypeChanges, ExtractedRenamePairs, ExtractedString,
-    ExtractedStringList, FormulaDiffResult, QueryChangeKind, QueryMetadataField,
+    DiffSummary, ExpressionChangeKind, ExtractedColumnTypeChanges, ExtractedRenamePairs,
+    ExtractedString, ExtractedStringList, FormulaDiffResult, QueryChangeKind, QueryMetadataField,
     QuerySemanticDetail, RenamePair, SheetId, StepChange, StepDiff, StepParams, StepSnapshot,
-    StepType, ExpressionChangeKind,
+    StepType,
 };
 #[cfg(feature = "model-diff")]
 pub use diff::{ModelColumnProperty, RelationshipProperty};
@@ -302,42 +301,59 @@ pub use engine::{
     try_diff_workbooks_streaming, try_diff_workbooks_streaming_with_progress,
     try_diff_workbooks_with_progress,
 };
-#[cfg(feature = "excel-open-xml")]
-#[allow(deprecated)]
-#[doc(hidden)]
-pub use excel_open_xml::{ExcelOpenError, PackageError};
 #[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 #[allow(deprecated)]
 #[doc(hidden)]
 pub use excel_open_xml::{open_data_mashup, open_workbook as open_workbook_with_pool};
+#[cfg(feature = "excel-open-xml")]
+#[allow(deprecated)]
+#[doc(hidden)]
+pub use excel_open_xml::{ExcelOpenError, PackageError};
 pub use formula::{
-    BinaryOperator, CellReference, ColRef, ExcelError, FormulaExpr, FormulaParseError,
-    RangeReference, RowRef, UnaryOperator, formulas_equivalent_modulo_shift, parse_formula,
+    formulas_equivalent_modulo_shift, parse_formula, BinaryOperator, CellReference, ColRef,
+    ExcelError, FormulaExpr, FormulaParseError, RangeReference, RowRef, UnaryOperator,
 };
 pub use grid_parser::{GridParseError, SheetDescriptor};
 pub use grid_view::{
     ColHash, ColMeta, FrequencyClass, GridView, HashStats, RowHash, RowMeta, RowView,
 };
-#[doc(hidden)]
-pub use m_ast::{MAstAccessKind, MAstKind, MTokenDebug, tokenize_for_testing};
 pub use m_ast::{
-    MModuleAst, MParseError, ast_semantically_equal, canonicalize_m_ast, parse_m_expression,
+    ast_semantically_equal, canonicalize_m_ast, parse_m_expression, MModuleAst, MParseError,
 };
-pub use m_section::{SectionMember, SectionParseError, parse_section_members};
+#[doc(hidden)]
+pub use m_ast::{tokenize_for_testing, MAstAccessKind, MAstKind, MTokenDebug};
+pub use m_section::{parse_section_members, SectionMember, SectionParseError};
 #[cfg(feature = "model-diff")]
 pub use model::{Measure, Model, ModelColumn, ModelRelationship, ModelTable};
 #[cfg(feature = "model-diff")]
 pub use model_diff::{diff_models, ModelDiffResult};
+pub use permission_bindings::{
+    DpapiDecryptError, DpapiDecryptor, PermissionBindingsKind, PermissionBindingsStatus,
+};
+
+#[cfg(all(feature = "model-diff", feature = "excel-open-xml"))]
+#[doc(hidden)]
+pub fn datamodel_schema_parse_counts(
+    bytes: &[u8],
+) -> Result<(usize, usize, usize), crate::excel_open_xml::PackageError> {
+    let raw = tabular_schema::parse_data_model_schema(bytes)?;
+    Ok((
+        raw.tables.len(),
+        raw.relationships.len(),
+        raw.measures.len(),
+    ))
+}
+pub use database_alignment::suggest_key_columns;
 #[doc(hidden)]
 pub use output::json::diff_report_to_cell_diffs;
 #[cfg(all(feature = "excel-open-xml", feature = "std-fs"))]
 #[doc(hidden)]
 pub use output::json::diff_workbooks_to_json;
-pub use output::json::{CellDiff, serialize_cell_diffs, serialize_diff_report};
+pub use output::json::{serialize_cell_diffs, serialize_diff_report, CellDiff};
 pub use output::json_lines::JsonLinesSink;
 pub use package::{OpenXmlDiffError, PbixPackage, WorkbookPackage};
+pub use policy::{should_use_large_mode, AUTO_STREAM_CELL_THRESHOLD};
 pub use progress::{NoProgress, ProgressCallback};
-pub use policy::{AUTO_STREAM_CELL_THRESHOLD, should_use_large_mode};
 pub use session::DiffSession;
 pub use sink::{CallbackSink, DiffSink, VecSink};
 pub use string_pool::{StringId, StringPool};
@@ -346,4 +362,3 @@ pub use workbook::{
     Cell, CellAddress, CellSnapshot, CellValue, ChartInfo, ChartObject, ColSignature, Grid,
     NamedRange, RowSignature, Sheet, SheetKind, Workbook,
 };
-pub use database_alignment::suggest_key_columns;

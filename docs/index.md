@@ -9,9 +9,12 @@
 - If you want to embed Tabulensis in Rust code, start with [Configuration](config.md) and [Migration guide](migration.md).
 - If you want Git integration, start with [Git integration](git.md).
 - If you want to run the desktop app from source, start with [Desktop app](desktop.md).
+- If you want the future roadmap / planned product iterations, start with [Product roadmap](../product_roadmap.md).
 
 ## Operating docs (SOPs, runbooks, checklists)
 
+- [Meta methodology (daily operator routine)](../meta_methodology.md)
+- [Meta methodology implementation checklist](../META_METHODOLOGY_IMPLEMENTATION_CHECKLIST.md)
 - [Operations essentials](operations.md)
 - [Licensing backend (Worker + Rust service)](licensing_service.md)
 - [Stripe + licensing worker next steps](../STRIPE_WORKER_NEXT_STEPS.md)
@@ -30,7 +33,12 @@ To refresh: `python3 scripts/update_docs_index_checklists.py`
 <!-- BEGIN CHECKLIST INDEX -->
 
 - [.github/pull_request_template.md](../.github/pull_request_template.md) (open: 10, done: 0)
-- [RESEND_SETUP_CHECKLIST.md](../RESEND_SETUP_CHECKLIST.md) (open: 36, done: 11)
+- [META_METHODOLOGY_IMPLEMENTATION_CHECKLIST.md](../META_METHODOLOGY_IMPLEMENTATION_CHECKLIST.md) (open: 222, done: 12)
+- [RESEND_SETUP_CHECKLIST.md](../RESEND_SETUP_CHECKLIST.md) (open: 13, done: 35)
+- [docs/maintainers/architecture_debt_post_iteration_1.md](maintainers/architecture_debt_post_iteration_1.md) (open: 0, done: 11)
+- [docs/product_iterations/iteration_1_daily_driver_plan.md](product_iterations/iteration_1_daily_driver_plan.md) (open: 0, done: 10)
+- [docs/product_iterations/iteration_2_readiness.md](product_iterations/iteration_2_readiness.md) (open: 5, done: 0)
+- [docs/real_world_datasets_perf_plan.md](real_world_datasets_perf_plan.md) (open: 10, done: 30)
 - [docs/rust_docs/mvp_checklist.md](rust_docs/mvp_checklist.md) (open: 242, done: 0)
 - [docs/rust_docs/mvp_fulfillment_log.md](rust_docs/mvp_fulfillment_log.md) (open: 29, done: 19)
 - [tabulensis_launch_to_dos_from_our_chat.md](../tabulensis_launch_to_dos_from_our_chat.md) (open: 92, done: 0)
@@ -42,6 +50,7 @@ To refresh: `python3 scripts/update_docs_index_checklists.py`
 - [Maintainer entry points (code map)](maintainers/entrypoints.md)
 - [Maintainer fixtures notes](maintainers/fixtures.md)
 - [Maintainer architecture notes](maintainers/architecture.md)
+- [Architecture debt plan (post Iteration 1)](maintainers/architecture_debt_post_iteration_1.md)
 - [Fixtures (generator + manifests)](../fixtures/README.md)
 - [Benchmarks / perf harness](../benchmarks/README.md)
 - [Desktop UI scenarios](../desktop/ui_scenarios/README.md)
@@ -50,12 +59,16 @@ To refresh: `python3 scripts/update_docs_index_checklists.py`
 ## Guides
 
 - [CLI reference](cli.md)
+- [Product roadmap](../product_roadmap.md)
+- [Iteration 1 plan ("daily driver")](product_iterations/iteration_1_daily_driver_plan.md)
+- [Iteration 2 readiness (PBIP/PBIR/TMDL)](product_iterations/iteration_2_readiness.md)
 - [Configuration (`DiffConfig`)](config.md)
 - [Git integration](git.md)
 - [Database mode](database_mode.md)
 - [FAQ](faq.md)
 - [Architecture overview](architecture.md)
 - [Perf playbook](perf_playbook.md)
+- [Real-world datasets: procurement + perf/test program](real_world_datasets_perf_plan.md)
 - [Test suite excellence plan](test_suite_excellence_plan.md)
 - [Construct coverage: OpenXML](openxml_coverage.md)
 - [Construct coverage: formulas](formula_coverage.md)

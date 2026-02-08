@@ -6,8 +6,8 @@ use crate::perf::{DiffMetrics, Phase};
 use crate::sink::DiffSink;
 use crate::string_pool::StringPool;
 
-use crate::diff::SheetId;
 use super::hardening::HardeningController;
+use crate::diff::SheetId;
 
 #[derive(Debug, Default)]
 pub(super) struct DiffContext {
