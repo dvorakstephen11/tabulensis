@@ -34,3 +34,8 @@ docs/meta/audio/*.mp3
 
 # WASM build output
 web/wasm/
+
+# Node (Cloudflare Worker deploy from repo root)
+node_modules/
+.wrangler/
+npm-debug.log*

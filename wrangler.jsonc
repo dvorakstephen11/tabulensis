@@ -1,0 +1,61 @@
+/**
+ * Root-level Wrangler config.
+ *
+ * Why this exists:
+ * - Cloudflare’s Git deploy for this repo currently runs `npx wrangler deploy` from the repo root.
+ * - The actual Worker code/config lives under `tabulensis-api/`.
+ *
+ * This file makes `wrangler deploy` work from the repo root by pointing `main` at
+ * `tabulensis-api/src/index.ts` and duplicating the required bindings/vars.
+ *
+ * Canonical Worker config: `tabulensis-api/wrangler.jsonc`
+ * Keep changes in sync.
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "tabulensis-api",
+	"main": "tabulensis-api/src/index.ts",
+	"compatibility_date": "2026-01-28",
+	"compatibility_flags": ["nodejs_compat"],
+	"observability": { "enabled": true },
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "tabulensis_licensing_prod",
+			"database_id": "3a006753-fed6-4fc5-91ee-f1d58f4b8993",
+			"remote": true
+		}
+	],
+	"env": {
+		"dev": {
+			"vars": {
+				"RESEND_FROM": "Tabulensis <licenses@mail.tabulensis.com>",
+				"RESEND_REPLY_TO": "support@tabulensis.com"
+			},
+			"d1_databases": [
+				{
+					"binding": "DB",
+					"database_name": "tabulensis_licensing_dev",
+					"database_id": "40476b64-c6ac-400b-bfcb-04943e0e1a6c",
+					"remote": true
+				}
+			]
+		}
+	},
+	"vars": {
+		"RESEND_FROM": "Tabulensis <licenses@mail.tabulensis.com>",
+		"RESEND_REPLY_TO": "support@tabulensis.com",
+
+		// Stripe checkout UX wiring (non-secret)
+		"STRIPE_SUCCESS_URL": "https://tabulensis.com/download/success",
+		"STRIPE_CANCEL_URL": "https://tabulensis.com/download",
+		"STRIPE_PORTAL_RETURN_URL": "https://tabulensis.com/support/billing",
+		"STRIPE_TRIAL_DAYS": "30",
+
+		// Licensing policy knobs (non-secret defaults; can be overridden per-env)
+		"LICENSE_TOKEN_TTL_DAYS": "14",
+		"LICENSE_PAST_DUE_GRACE_DAYS": "3",
+		"LICENSE_MAX_DEVICES": "2"
+	}
+}
+
