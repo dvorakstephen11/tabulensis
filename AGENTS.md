@@ -18,6 +18,8 @@
 - Canonical docs entrypoint: `docs/index.md`.
 - Daily operator routine (source of truth): `meta_methodology.md`.
 - Meta methodology implementation checklist: `META_METHODOLOGY_IMPLEMENTATION_CHECKLIST.md`.
+- Overnight operator agent runbook: `docs/meta/automation/overnight_agent_runbook.md`.
+- Overnight operator agent config: `docs/meta/automation/overnight_agent.yaml`.
 - `docs/index.md` includes an auto-indexed list of unfinished checkbox checklists.
   - Refresh it: `python3 scripts/update_docs_index_checklists.py`
 - Repo-local Codex skill (docs navigation + index maintenance): `.codex_skills/tabulensis-docs/SKILL.md`

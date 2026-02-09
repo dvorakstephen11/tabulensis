@@ -21,11 +21,14 @@ Each scenario lives under `desktop/ui_scenarios/<name>/scenario.json` and should
 - `compare_power_query`: Power Query (M) diffs to validate category summary + noise filters.
 - `compare_formula_semantic`: formula semantic diff fixture to validate formula_diff classification + Explain v1 wiring.
 - `compare_large_mode`: large workbook to exercise large-mode UI behavior.
+- `compare_large_mode_details`: large workbook focused on Details to validate Details JSON render policy + controls.
 - `compare_canceled`: cancels a long-running diff to validate cancel UX and end-state messaging.
 - `compare_working`: captures a mid-run progress state to validate stage labels + progress gauge behavior.
 - `compare_unsupported`: unsupported extension to validate error UX and messaging.
 - `compare_container_limits`: ZIP entry count exceeds default container limits to validate safety-limit error UX.
 - `pbix_no_mashup`: PBIX fixture to validate error and messaging UI state.
+- `compare_pbip_summary`: PBIP folder diff to validate PBIP Navigator + Summary wiring.
+- `compare_pbip_details`: PBIP folder diff to validate PBIP Details (old/new normalized text) + Explain MVP.
 
 ## Canonical CI scenario set
 

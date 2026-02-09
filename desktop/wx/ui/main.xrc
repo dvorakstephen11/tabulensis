@@ -38,10 +38,10 @@
         </object>
         <object class="separator"></object>
         <object class="wxMenuItem" name="next_diff_menu">
-          <label>Next Sheet\tF8</label>
+          <label>Next Item\tF8</label>
         </object>
         <object class="wxMenuItem" name="prev_diff_menu">
-          <label>Previous Sheet\tShift+F8</label>
+          <label>Previous Item\tShift+F8</label>
         </object>
       </object>
       <object class="wxMenu" name="edit_menu">
@@ -56,7 +56,7 @@
       <object class="wxMenu" name="view_menu">
         <label>&amp;View</label>
         <object class="wxMenuItem" name="toggle_sheets_menu">
-          <label>Show Sheets Panel\tCtrl+1</label>
+          <label>Show Navigator Panel\tCtrl+1</label>
           <kind>check</kind>
         </object>
         <object class="wxMenuItem" name="reset_layout_menu">
@@ -147,6 +147,14 @@
                             <option>1</option>
                             <border>4</border>
                           </object>
+                          <object class="sizeritem">
+                            <object class="wxDirPickerCtrl" name="old_dir_picker">
+                              <style>wxDIRP_DIR_MUST_EXIST|wxDIRP_USE_TEXTCTRL</style>
+                            </object>
+                            <flag>wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM</flag>
+                            <option>1</option>
+                            <border>4</border>
+                          </object>
                         </object>
                         <flag>wxEXPAND</flag>
                         <option>1</option>
@@ -172,6 +180,14 @@
                             <object class="wxFilePickerCtrl" name="new_picker">
                               <style>wxFLP_OPEN|wxFLP_FILE_MUST_EXIST|wxFLP_USE_TEXTCTRL</style>
                               <wildcard>Excel/PBIX files (*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit)|*.xlsx;*.xlsm;*.xltx;*.xltm;*.xlsb;*.pbix;*.pbit|All files (*.*)|*.*</wildcard>
+                            </object>
+                            <flag>wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM</flag>
+                            <option>1</option>
+                            <border>4</border>
+                          </object>
+                          <object class="sizeritem">
+                            <object class="wxDirPickerCtrl" name="new_dir_picker">
+                              <style>wxDIRP_DIR_MUST_EXIST|wxDIRP_USE_TEXTCTRL</style>
                             </object>
                             <flag>wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM</flag>
                             <option>1</option>
@@ -209,6 +225,23 @@
                   <object class="sizeritem">
                     <object class="wxBoxSizer">
                       <orient>wxHORIZONTAL</orient>
+                      <object class="sizeritem">
+                        <object class="wxStaticText" name="domain_label">
+                          <label>Mode</label>
+                        </object>
+                        <flag>wxALL|wxALIGN_CENTER_VERTICAL</flag>
+                        <border>4</border>
+                      </object>
+                      <object class="sizeritem">
+                        <object class="wxChoice" name="domain_choice"></object>
+                        <flag>wxALL|wxALIGN_CENTER_VERTICAL</flag>
+                        <border>4</border>
+                      </object>
+                      <object class="sizeritem">
+                        <object class="wxChoice" name="pbip_profile_choice"></object>
+                        <flag>wxALL|wxALIGN_CENTER_VERTICAL</flag>
+                        <border>4</border>
+                      </object>
                       <object class="sizeritem">
                         <object class="wxChoice" name="profile_choice"></object>
                         <flag>wxALL|wxALIGN_CENTER_VERTICAL</flag>
@@ -558,7 +591,7 @@
                                     </object>
                                     <object class="sizeritem">
                                       <object class="wxStaticBoxSizer">
-                                        <label>Top Sheets (filtered)</label>
+                                        <label>Top Items (filtered)</label>
                                         <orient>wxVERTICAL</orient>
                                         <object class="sizeritem">
                                           <object class="wxPanel" name="summary_top_sheets_table_host"></object>
@@ -591,21 +624,153 @@
                                   </object>
                                 </object>
                               </object>
-                              <object class="notebookpage">
-                                <label>Details</label>
-                                <object class="wxPanel">
-                                  <object class="wxBoxSizer">
-                                    <orient>wxVERTICAL</orient>
-                                    <object class="sizeritem">
-                                      <object class="wxTextCtrl" name="detail_text">
-                                        <style>wxTE_MULTILINE|wxTE_READONLY</style>
-                                      </object>
-                                      <flag>wxEXPAND|wxALL</flag>
-                                      <option>1</option>
-                                      <border>4</border>
-                                    </object>
-                                  </object>
-                                </object>
+	                              <object class="notebookpage">
+	                                <label>Details</label>
+		                                <object class="wxPanel">
+		                                  <object class="wxBoxSizer">
+		                                    <orient>wxVERTICAL</orient>
+		                                    <object class="sizeritem">
+		                                      <object class="wxPanel" name="details_json_controls_panel">
+		                                        <object class="wxBoxSizer">
+		                                          <orient>wxVERTICAL</orient>
+		                                          <object class="sizeritem">
+		                                            <object class="wxBoxSizer">
+		                                              <orient>wxHORIZONTAL</orient>
+		                                              <object class="sizeritem">
+		                                                <object class="wxStaticText" name="details_json_controls_label">
+		                                                  <label>JSON:</label>
+		                                                </object>
+		                                                <flag>wxALIGN_CENTER_VERTICAL|wxRIGHT</flag>
+		                                                <option>0</option>
+		                                                <border>6</border>
+		                                              </object>
+		                                              <object class="sizeritem">
+		                                                <object class="wxChoice" name="details_json_format_choice"></object>
+		                                                <flag>wxALIGN_CENTER_VERTICAL|wxRIGHT</flag>
+		                                                <option>0</option>
+		                                                <border>8</border>
+		                                              </object>
+		                                              <object class="sizeritem">
+		                                                <object class="wxButton" name="details_json_render_btn">
+		                                                  <label>Render in-app</label>
+		                                                </object>
+		                                                <flag>wxALIGN_CENTER_VERTICAL|wxRIGHT</flag>
+		                                                <option>0</option>
+		                                                <border>6</border>
+		                                              </object>
+		                                              <object class="sizeritem">
+		                                                <object class="wxButton" name="details_json_copy_btn">
+		                                                  <label>Copy JSON</label>
+		                                                </object>
+		                                                <flag>wxALIGN_CENTER_VERTICAL|wxRIGHT</flag>
+		                                                <option>0</option>
+		                                                <border>6</border>
+		                                              </object>
+		                                              <object class="sizeritem">
+		                                                <object class="wxButton" name="details_json_write_btn">
+		                                                  <label>Write + Open</label>
+		                                                </object>
+		                                                <flag>wxALIGN_CENTER_VERTICAL</flag>
+		                                                <option>0</option>
+		                                              </object>
+		                                            </object>
+		                                            <flag>wxEXPAND|wxALL</flag>
+		                                            <option>0</option>
+		                                            <border>2</border>
+		                                          </object>
+		                                          <object class="sizeritem">
+		                                            <object class="wxStaticText" name="details_json_status_text">
+		                                              <label></label>
+		                                            </object>
+		                                            <flag>wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM</flag>
+		                                            <option>0</option>
+		                                            <border>4</border>
+		                                          </object>
+		                                        </object>
+		                                      </object>
+		                                      <flag>wxEXPAND|wxLEFT|wxRIGHT|wxTOP</flag>
+		                                      <option>0</option>
+		                                      <border>4</border>
+		                                    </object>
+		                                    <object class="sizeritem">
+		                                      <object class="wxTextCtrl" name="detail_text">
+		                                        <style>wxTE_MULTILINE|wxTE_READONLY</style>
+		                                      </object>
+		                                      <flag>wxEXPAND|wxALL</flag>
+	                                      <option>1</option>
+	                                      <border>4</border>
+	                                    </object>
+	                                    <object class="sizeritem">
+	                                      <object class="wxPanel" name="pbip_details_panel">
+	                                        <object class="wxBoxSizer">
+	                                          <orient>wxVERTICAL</orient>
+	                                          <object class="sizeritem">
+	                                            <object class="wxStaticText" name="pbip_details_header">
+	                                              <label>Select a document or entity to view details.</label>
+	                                            </object>
+	                                            <flag>wxEXPAND|wxLEFT|wxRIGHT|wxTOP</flag>
+	                                            <option>0</option>
+	                                            <border>4</border>
+	                                          </object>
+	                                          <object class="sizeritem">
+	                                            <object class="wxBoxSizer">
+	                                              <orient>wxHORIZONTAL</orient>
+	                                              <object class="sizeritem">
+	                                                <object class="wxBoxSizer">
+	                                                  <orient>wxVERTICAL</orient>
+	                                                  <object class="sizeritem">
+	                                                    <object class="wxStaticText" name="pbip_old_label">
+	                                                      <label>Old</label>
+	                                                    </object>
+	                                                    <flag>wxLEFT|wxRIGHT|wxTOP</flag>
+	                                                    <border>4</border>
+	                                                  </object>
+	                                                  <object class="sizeritem">
+	                                                    <object class="wxTextCtrl" name="pbip_old_text">
+	                                                      <style>wxTE_MULTILINE|wxTE_READONLY</style>
+	                                                    </object>
+	                                                    <flag>wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM</flag>
+	                                                    <option>1</option>
+	                                                    <border>4</border>
+	                                                  </object>
+	                                                </object>
+	                                                <flag>wxEXPAND</flag>
+	                                                <option>1</option>
+	                                              </object>
+	                                              <object class="sizeritem">
+	                                                <object class="wxBoxSizer">
+	                                                  <orient>wxVERTICAL</orient>
+	                                                  <object class="sizeritem">
+	                                                    <object class="wxStaticText" name="pbip_new_label">
+	                                                      <label>New</label>
+	                                                    </object>
+	                                                    <flag>wxLEFT|wxRIGHT|wxTOP</flag>
+	                                                    <border>4</border>
+	                                                  </object>
+	                                                  <object class="sizeritem">
+	                                                    <object class="wxTextCtrl" name="pbip_new_text">
+	                                                      <style>wxTE_MULTILINE|wxTE_READONLY</style>
+	                                                    </object>
+	                                                    <flag>wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM</flag>
+	                                                    <option>1</option>
+	                                                    <border>4</border>
+	                                                  </object>
+	                                                </object>
+	                                                <flag>wxEXPAND</flag>
+	                                                <option>1</option>
+	                                              </object>
+	                                            </object>
+	                                            <flag>wxEXPAND</flag>
+	                                            <option>1</option>
+	                                          </object>
+	                                        </object>
+	                                      </object>
+	                                      <flag>wxEXPAND|wxALL</flag>
+	                                      <option>1</option>
+	                                      <border>4</border>
+	                                    </object>
+	                                  </object>
+	                                </object>
                               </object>
                               <object class="notebookpage">
                                 <label>Explain</label>
@@ -624,7 +789,7 @@
                                 </object>
                               </object>
                               <object class="notebookpage">
-                                <label>Grid</label>
+                                <label>Preview</label>
                                 <object class="wxPanel" name="grid_tab">
                                   <object class="wxBoxSizer">
                                     <orient>wxVERTICAL</orient>

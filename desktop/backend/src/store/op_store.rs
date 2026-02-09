@@ -1,12 +1,16 @@
 use std::path::Path;
 
-use excel_diff::{DiffOp, DiffReport, DiffSummary};
+use excel_diff::{
+    DiffOp, DiffReport, DiffSummary, PbipDocDiff as CorePbipDocDiff,
+    PbipEntityDiff as CorePbipEntityDiff, PbipNormalizationProfile as CorePbipProfile,
+};
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use ui_payload::{
     CategoryBreakdownRow, CategoryCounts, DiffAnalysis, NoiseFilters, OpCategory, OpSeverity,
+    DetailsPayload, DiffDomain, NavigatorModel, NavigatorRow, SelectionKind, SelectionTarget,
     SeverityCounts, SheetBreakdown,
 };
 use uuid::Uuid;
@@ -15,7 +19,7 @@ use super::types::{
     accumulate_sheet_stats, op_index_fields, ChangeCounts, OpIndexFields, SheetStats,
 };
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -60,6 +64,8 @@ pub struct SheetSummary {
 #[serde(rename_all = "camelCase")]
 pub struct DiffRunSummary {
     pub diff_id: String,
+    #[serde(default)]
+    pub domain: DiffDomain,
     pub old_path: String,
     pub new_path: String,
     pub started_at: String,
@@ -150,6 +156,29 @@ impl OpStore {
             params![mode.as_str(), diff_id],
         )?;
         Ok(())
+    }
+
+    pub fn set_domain(&self, diff_id: &str, domain: DiffDomain) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO diff_domains (diff_id, domain) VALUES (?1, ?2)",
+            params![diff_id, domain.as_str()],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_domain(&self, diff_id: &str) -> Result<DiffDomain, StoreError> {
+        let row: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT domain FROM diff_domains WHERE diff_id = ?1",
+                params![diff_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(match row.as_deref().map(str::trim).unwrap_or("") {
+            "pbip_project" => DiffDomain::PbipProject,
+            _ => DiffDomain::ExcelWorkbook,
+        })
     }
 
     pub fn finish_run(
@@ -336,9 +365,11 @@ impl OpStore {
 
         let warnings = self.load_warnings(diff_id)?;
         let sheets = self.load_sheet_summaries(diff_id)?;
+        let domain = self.load_domain(diff_id).unwrap_or_default();
 
         Ok(DiffRunSummary {
             diff_id: diff_id.to_string(),
+            domain,
             old_path,
             new_path,
             started_at,
@@ -963,6 +994,305 @@ impl OpStore {
             sheets.push(row?);
         }
         Ok(sheets)
+    }
+
+    pub fn replace_pbip_docs(
+        &self,
+        diff_id: &str,
+        docs: &[CorePbipDocDiff],
+        profile: CorePbipProfile,
+        profile_summary: &str,
+    ) -> Result<(), StoreError> {
+        self.conn.execute(
+            "DELETE FROM diff_pbip_docs WHERE diff_id = ?1",
+            params![diff_id],
+        )?;
+
+        for doc in docs {
+            let applied = doc
+                .new
+                .as_ref()
+                .and_then(|s| s.normalization_applied.as_deref())
+                .or_else(|| doc.old.as_ref().and_then(|s| s.normalization_applied.as_deref()))
+                .unwrap_or(profile_summary);
+
+            let (old_hash, old_error, old_text) = doc
+                .old
+                .as_ref()
+                .map(|s| (Some(s.hash as i64), s.error.clone(), Some(s.normalized_text.clone())))
+                .unwrap_or((None, None, None));
+            let (new_hash, new_error, new_text) = doc
+                .new
+                .as_ref()
+                .map(|s| (Some(s.hash as i64), s.error.clone(), Some(s.normalized_text.clone())))
+                .unwrap_or((None, None, None));
+
+            self.conn.execute(
+                "INSERT INTO diff_pbip_docs (diff_id, path, doc_type, change_kind, impact_hint, normalization_profile, normalization_applied,\
+                 old_hash, new_hash, old_error, new_error, old_text, new_text) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                params![
+                    diff_id,
+                    doc.path,
+                    doc.doc_type.as_str(),
+                    doc.change_kind.as_str(),
+                    doc.impact_hint,
+                    profile.as_str(),
+                    applied,
+                    old_hash,
+                    new_hash,
+                    old_error,
+                    new_error,
+                    old_text,
+                    new_text,
+                ],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    pub fn replace_pbip_entities(
+        &self,
+        diff_id: &str,
+        entities: &[CorePbipEntityDiff],
+    ) -> Result<(), StoreError> {
+        self.conn.execute(
+            "DELETE FROM diff_pbip_entities WHERE diff_id = ?1",
+            params![diff_id],
+        )?;
+
+        for entity in entities {
+            let kind = format!("{:?}", entity.entity_kind).to_ascii_lowercase();
+            let ptr = entity.pointer.clone();
+            let entity_id = format!(
+                "doc:{}|kind:{}|ptr:{}|label:{}",
+                entity.doc_path,
+                kind,
+                ptr.as_deref().unwrap_or(""),
+                entity.label
+            );
+
+            let old_text = entity.old_text.clone();
+            let new_text = entity.new_text.clone();
+
+            self.conn.execute(
+                "INSERT INTO diff_pbip_entities (diff_id, entity_id, doc_path, entity_kind, label, change_kind, pointer, impact_hint, old_hash, new_hash, old_text, new_text) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![
+                    diff_id,
+                    entity_id,
+                    entity.doc_path,
+                    kind,
+                    entity.label,
+                    entity.change_kind.as_str(),
+                    ptr,
+                    Option::<String>::None,
+                    Option::<i64>::None,
+                    Option::<i64>::None,
+                    old_text,
+                    new_text,
+                ],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    pub fn load_pbip_navigator(&self, diff_id: &str) -> Result<NavigatorModel, StoreError> {
+        let mut model = NavigatorModel {
+            columns: vec![
+                "Path".to_string(),
+                "Type".to_string(),
+                "Change".to_string(),
+                "Impact".to_string(),
+            ],
+            rows: Vec::new(),
+        };
+
+        let mut stmt = self.conn.prepare(
+            "SELECT path, doc_type, change_kind, impact_hint, old_error, new_error \
+             FROM diff_pbip_docs WHERE diff_id = ?1 \
+             ORDER BY CASE change_kind WHEN 'modified' THEN 0 WHEN 'added' THEN 1 WHEN 'removed' THEN 2 ELSE 3 END, path",
+        )?;
+        let rows = stmt.query_map(params![diff_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+            ))
+        })?;
+
+        for row in rows {
+            let (path, doc_type, change_kind, impact, old_error, new_error) = row?;
+            let doc_path = path.clone();
+            let has_error = old_error.as_deref().map(str::trim).filter(|v| !v.is_empty()).is_some()
+                || new_error.as_deref().map(str::trim).filter(|v| !v.is_empty()).is_some();
+            let impact_display = if has_error {
+                match impact.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+                    Some(hint) => format!("Error | {hint}"),
+                    None => "Error".to_string(),
+                }
+            } else {
+                impact.unwrap_or_default()
+            };
+            model.rows.push(NavigatorRow {
+                target: SelectionTarget {
+                    domain: DiffDomain::PbipProject,
+                    kind: SelectionKind::Document,
+                    id: None,
+                    path: Some(doc_path.clone()),
+                    pointer: None,
+                    label: None,
+                },
+                cells: vec![
+                    path,
+                    doc_type.to_ascii_uppercase(),
+                    change_kind,
+                    impact_display,
+                ],
+            });
+
+            // Append entities for this document (if any).
+            let mut stmt = self.conn.prepare(
+                "SELECT entity_id, entity_kind, label, change_kind, pointer \
+                 FROM diff_pbip_entities WHERE diff_id = ?1 AND doc_path = ?2 \
+                 ORDER BY entity_kind, label",
+            )?;
+            let rows = stmt.query_map(params![diff_id, doc_path], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            })?;
+            for row in rows {
+                let (entity_id, kind, label, change_kind, pointer) = row?;
+                let display = format!("  {}: {}", kind, label);
+                model.rows.push(NavigatorRow {
+                    target: SelectionTarget {
+                        domain: DiffDomain::PbipProject,
+                        kind: SelectionKind::Entity,
+                        id: Some(entity_id),
+                        path: Some(doc_path.clone()),
+                        pointer,
+                        label: Some(label),
+                    },
+                    cells: vec![display, kind, change_kind, String::new()],
+                });
+            }
+        }
+
+        Ok(model)
+    }
+
+    pub fn load_pbip_details(
+        &self,
+        diff_id: &str,
+        target: &SelectionTarget,
+    ) -> Result<DetailsPayload, StoreError> {
+        if target.domain != DiffDomain::PbipProject {
+            return Err(StoreError::InvalidData(
+                "load_pbip_details called for non-PBIP domain".to_string(),
+            ));
+        }
+
+        match target.kind {
+            SelectionKind::Document => {
+                let Some(path) = target.path.as_deref() else {
+                    return Err(StoreError::InvalidData("Missing document path".to_string()));
+                };
+                let row = self
+                    .conn
+                    .query_row(
+                        "SELECT doc_type, change_kind, normalization_applied, old_error, new_error, old_text, new_text \
+                         FROM diff_pbip_docs WHERE diff_id = ?1 AND path = ?2",
+                        params![diff_id, path],
+                        |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, String>(1)?,
+                                row.get::<_, String>(2)?,
+                                row.get::<_, Option<String>>(3)?,
+                                row.get::<_, Option<String>>(4)?,
+                                row.get::<_, Option<String>>(5)?,
+                                row.get::<_, Option<String>>(6)?,
+                            ))
+                        },
+                    )
+                    .optional()?;
+                let Some((doc_type, change_kind, applied, old_error, new_error, old_text, new_text)) = row else {
+                    return Err(StoreError::InvalidData(format!(
+                        "Missing PBIP doc details for {path}"
+                    )));
+                };
+                let language = match doc_type.as_str() {
+                    "pbir" => "json",
+                    "tmdl" => "tmdl",
+                    _ => "text",
+                }
+                .to_string();
+                let mut header = format!("Document: {path} ({doc_type}, {change_kind})");
+                if let Some(err) = old_error.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+                    header.push_str(&format!("\nOld error: {err}"));
+                }
+                if let Some(err) = new_error.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+                    header.push_str(&format!("\nNew error: {err}"));
+                }
+                Ok(DetailsPayload {
+                    target: target.clone(),
+                    language,
+                    header,
+                    old_text,
+                    new_text,
+                    normalization_applied: Some(applied),
+                })
+            }
+            SelectionKind::Entity => {
+                let Some(entity_id) = target.id.as_deref() else {
+                    return Err(StoreError::InvalidData("Missing entity id".to_string()));
+                };
+                let row = self
+                    .conn
+                    .query_row(
+                        "SELECT entity_kind, label, change_kind, old_text, new_text \
+                         FROM diff_pbip_entities WHERE diff_id = ?1 AND entity_id = ?2",
+                        params![diff_id, entity_id],
+                        |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, String>(1)?,
+                                row.get::<_, String>(2)?,
+                                row.get::<_, Option<String>>(3)?,
+                                row.get::<_, Option<String>>(4)?,
+                            ))
+                        },
+                    )
+                    .optional()?;
+                let Some((kind, label, change_kind, old_text, new_text)) = row else {
+                    return Err(StoreError::InvalidData(format!(
+                        "Missing PBIP entity details for {entity_id}"
+                    )));
+                };
+                Ok(DetailsPayload {
+                    target: target.clone(),
+                    language: "json".to_string(),
+                    header: format!("{kind}: {label} ({change_kind})"),
+                    old_text,
+                    new_text,
+                    normalization_applied: None,
+                })
+            }
+            _ => Err(StoreError::InvalidData(format!(
+                "Unsupported SelectionKind for PBIP: {:?}",
+                target.kind
+            ))),
+        }
     }
 
     fn apply_schema(conn: &Connection) -> Result<(), StoreError> {

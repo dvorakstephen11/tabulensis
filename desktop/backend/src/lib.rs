@@ -22,7 +22,7 @@ pub use paths::BackendPaths;
 pub use recents::RecentComparison;
 pub use search::{SearchIndexResult, SearchIndexSummary, SearchResult};
 pub use store::{resolve_sheet_stats, DiffMode, DiffRunSummary, OpStore, RunStatus, StoreError};
-pub use ui_payload::{DiffAnalysis, NoiseFilters};
+pub use ui_payload::{DetailsPayload, DiffAnalysis, NavigatorModel, NoiseFilters, SelectionTarget};
 
 pub struct BackendConfig {
     pub app_name: String,
@@ -75,6 +75,22 @@ impl DesktopBackend {
         let store = OpStore::open(&self.paths.store_db_path).map_err(map_store_error)?;
         store
             .load_diff_analysis(diff_id, filters)
+            .map_err(map_store_error)
+    }
+
+    pub fn load_pbip_navigator(&self, diff_id: &str) -> Result<NavigatorModel, DiffErrorPayload> {
+        let store = OpStore::open(&self.paths.store_db_path).map_err(map_store_error)?;
+        store.load_pbip_navigator(diff_id).map_err(map_store_error)
+    }
+
+    pub fn load_pbip_details(
+        &self,
+        diff_id: &str,
+        target: &SelectionTarget,
+    ) -> Result<DetailsPayload, DiffErrorPayload> {
+        let store = OpStore::open(&self.paths.store_db_path).map_err(map_store_error)?;
+        store
+            .load_pbip_details(diff_id, target)
             .map_err(map_store_error)
     }
 

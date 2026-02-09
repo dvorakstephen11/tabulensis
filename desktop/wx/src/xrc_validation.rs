@@ -55,6 +55,13 @@ const REQUIRED_WIDGETS: &[&str] = &[
     "summary_categories_table_host",
     "summary_top_sheets_table_host",
     "summary_text",
+    "details_json_controls_panel",
+    "details_json_controls_label",
+    "details_json_format_choice",
+    "details_json_render_btn",
+    "details_json_copy_btn",
+    "details_json_write_btn",
+    "details_json_status_text",
     "detail_text",
     "explain_text",
     "grid_panel",
@@ -75,7 +82,8 @@ const REQUIRED_WIDGETS: &[&str] = &[
 ];
 
 const ROOT_TAB_LABELS: &[&str] = &["Compare", "Recents", "Batch", "Search"];
-const RESULT_TAB_LABELS: &[&str] = &["Summary", "Details", "Explain", "Grid"];
+// Iteration 2: rename Excel-specific "Grid" tab to the domain-agnostic "Preview".
+const RESULT_TAB_LABELS: &[&str] = &["Summary", "Details", "Explain", "Preview"];
 
 pub fn validate_xrc(xrc: &str) -> Result<(), String> {
     let mut reader = Reader::from_str(xrc);

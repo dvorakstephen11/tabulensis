@@ -10,12 +10,15 @@ For the canonical, always-up-to-date option list, run:
 tabulensis --help
 tabulensis diff --help
 tabulensis info --help
+tabulensis pbip --help
+tabulensis pbip normalize --help
 ```
 
 ## Supported formats
 
 - Workbooks: `.xlsx`, `.xlsm`, `.xltx`, `.xltm`
 - Power BI: `.pbix`, `.pbit`
+- PBIP artifacts: `.pbir`, `.tmdl` (via `tabulensis pbip normalize`)
 - `.xlsb` is detected but not supported yet; Tabulensis returns `EXDIFF_PKG_009` with a convert hint.
 
 ## `tabulensis diff <OLD> <NEW>`
@@ -81,3 +84,27 @@ Print a stable text representation of a single workbook:
 - optional Power Query summary with `--queries`
 
 This output is suitable for Git `textconv` (see [Git integration](git.md)).
+
+## `tabulensis pbip normalize <FILE>`
+
+Normalize a PBIP artifact file (PBIR JSON or TMDL) into a stable, deterministic text form suitable
+for Git `textconv` and PR diffs.
+
+- Input: `.pbir` or `.tmdl`
+- Output: normalized text on stdout
+- Profiles:
+  - `--profile strict`: text normalization only (no JSON parsing)
+  - `--profile balanced` (default): canonical JSON key ordering + conservative GUID normalization
+  - `--profile aggressive`: more GUID normalization (opt-in)
+
+See [Git integration](git.md) for a recommended `.gitattributes` + `~/.gitconfig` setup.
+
+## `tabulensis pbip diff <OLD_DIR> <NEW_DIR>`
+
+Diff two PBIP project folders (directory-to-directory) using the Iteration 2 PBIP engine.
+
+- `--profile <strict|balanced|aggressive>`: normalization profile (default: `balanced`)
+- `--markdown`: emit PR-friendly Markdown output
+- `--docs-only`: document diffs only (skip entity rollups)
+
+This command performs a license check (same as `tabulensis diff`).

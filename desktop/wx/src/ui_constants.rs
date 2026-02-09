@@ -9,6 +9,13 @@ pub(crate) const SHEETS_COLUMNS: [(&str, i32); 6] = [
     ("Moved", 70),
 ];
 
+pub(crate) const PBIP_NAV_COLUMNS: [(&str, i32); 4] = [
+    ("Path", 360),
+    ("Type", 80),
+    ("Change", 92),
+    ("Impact", 140),
+];
+
 pub(crate) const RECENTS_COLUMNS: [(&str, i32); 4] =
     [("Old", 220), ("New", 220), ("Last Run", 160), ("Mode", 80)];
 

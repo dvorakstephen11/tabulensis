@@ -1,0 +1,12 @@
+{
+  "name": "Compare PBIP Summary",
+  "description": "PBIP folder-to-folder diff to validate Summary + Navigator behavior.",
+  "oldPath": "../../../fixtures/generated/pbip_small_a",
+  "newPath": "../../../fixtures/generated/pbip_small_b",
+  "autoRunDiff": true,
+  "stableWaitMs": 800,
+  "expectMode": "large",
+  "focusPanel": "summary",
+  "trustedFiles": true
+}
+

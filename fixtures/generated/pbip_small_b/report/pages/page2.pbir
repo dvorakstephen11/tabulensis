@@ -1,0 +1,12 @@
+{
+  "objectId": "bbbbbbbb-0101-0202-0303-040404040404",
+  "displayName": "Trends",
+  "visuals": [
+    {
+      "id": "edededed-1111-2222-3333-444444444444",
+      "type": "lineChart",
+      "title": "Revenue Trend"
+    }
+  ]
+}
+

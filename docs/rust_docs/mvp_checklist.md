@@ -211,7 +211,7 @@ This is jurisdiction-dependent, so treat this as general guidance and confirm wi
 
   * [ ] Windows installer (MSI/NSIS)
   * [ ] macOS DMG + notarization
-  * [ ] Code signing certificates (Apple Developer ID, Windows cert)
+  * [ ] Code signing identities (Apple Developer ID; Windows via Azure Artifact Signing / Trusted Signing)
   * [ ] Auto-updater strategy (so patches don’t become “manual reinstall”)
 * [ ] Establish versioning discipline:
 

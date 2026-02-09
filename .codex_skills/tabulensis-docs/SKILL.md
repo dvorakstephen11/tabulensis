@@ -16,6 +16,7 @@ description: Navigate, audit, and maintain documentation in the Tabulensis (exce
 
 - Daily operator routine + automation goals: `meta_methodology.md`.
 - Meta methodology implementation checklist: `META_METHODOLOGY_IMPLEMENTATION_CHECKLIST.md`.
+- Overnight operator agent: `docs/meta/automation/overnight_operator_agent_plan.md`, `docs/meta/automation/overnight_agent_runbook.md`, `docs/meta/automation/overnight_agent.yaml`.
 - Desktop app (from source): `docs/desktop.md` (also mirrored in `README.md`).
 - Licensing backend (Worker + Rust service): `docs/licensing_service.md`.
 - Stripe/Worker deployment and wiring: `STRIPE_WORKER_NEXT_STEPS.md` and `tabulensis-api/wrangler.jsonc`.

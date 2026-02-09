@@ -1,0 +1,13 @@
+{
+  "name": "Compare Large Mode Details",
+  "description": "Large-mode trigger focused on Details to validate JSON render policy + controls.",
+  "oldPath": "../../../fixtures/generated/large_mode_trigger_a.xlsx",
+  "newPath": "../../../fixtures/generated/large_mode_trigger_b.xlsx",
+  "autoRunDiff": true,
+  "stableWaitMs": 1400,
+  "expectMode": "large",
+  "focusPanel": "details",
+  "preset": "balanced",
+  "trustedFiles": true
+}
+

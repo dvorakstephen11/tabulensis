@@ -492,9 +492,16 @@ async function stripeRequest(
 
 function checkoutSuccessUrl(env: Env, sessionIdPlaceholder: string): string {
 	const base = env.STRIPE_SUCCESS_URL?.trim() || 'https://tabulensis.com/download/success';
+	// IMPORTANT: Stripe only substitutes the literal `{CHECKOUT_SESSION_ID}` token.
+	// If we add it via `URLSearchParams`, `{`/`}` get percent-encoded and Stripe will not replace it.
 	const url = new URL(base);
-	url.searchParams.set('session_id', sessionIdPlaceholder);
-	return url.toString();
+	url.searchParams.delete('session_id');
+
+	const prefix = `${url.origin}${url.pathname}`;
+	const existing = url.searchParams.toString();
+	const existingQuery = existing ? `?${existing}` : '';
+	const sep = existing ? '&' : '?';
+	return `${prefix}${existingQuery}${sep}session_id=${sessionIdPlaceholder}${url.hash ?? ''}`;
 }
 
 function checkoutCancelUrl(env: Env): string {

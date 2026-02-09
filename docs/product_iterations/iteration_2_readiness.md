@@ -102,9 +102,9 @@ Assuming one engineer, focused work:
 
 ## Preflight Checklist
 
-- [ ] Pick 3 representative PBIP repos as fixtures (small/medium/large).
-- [ ] Write down normalization rules for PBIR and TMDL (what to ignore, what to stabilize).
-- [ ] Decide the first viewer UX (document list + drilldown vs page/visual tree).
-- [ ] Define a minimal diff op taxonomy for Iteration 2 MVP.
-- [ ] Add a perf baseline for PBIP parsing/diffing once Phase 1 lands.
+- [x] Pick 3 representative PBIP repos as fixtures (small/medium/large).
+- [x] Write down normalization rules for PBIR and TMDL (what to ignore, what to stabilize).
+- [x] Decide the first viewer UX (document list + drilldown vs page/visual tree).
+- [x] Define a minimal diff op taxonomy for Iteration 2 MVP.
+- [x] Add a perf baseline for PBIP parsing/diffing once Phase 1 lands.
 
