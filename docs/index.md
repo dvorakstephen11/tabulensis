@@ -36,7 +36,7 @@ To refresh: `python3 scripts/update_docs_index_checklists.py`
 <!-- BEGIN CHECKLIST INDEX -->
 
 - [.github/pull_request_template.md](../.github/pull_request_template.md) (open: 10, done: 0)
-- [META_METHODOLOGY_IMPLEMENTATION_CHECKLIST.md](../META_METHODOLOGY_IMPLEMENTATION_CHECKLIST.md) (open: 220, done: 14)
+- [META_METHODOLOGY_IMPLEMENTATION_CHECKLIST.md](../META_METHODOLOGY_IMPLEMENTATION_CHECKLIST.md) (open: 218, done: 16)
 - [RESEND_SETUP_CHECKLIST.md](../RESEND_SETUP_CHECKLIST.md) (open: 13, done: 35)
 - [docs/desktop_tab_switch_latency_plan.md](desktop_tab_switch_latency_plan.md) (open: 10, done: 0)
 - [docs/maintainers/architecture_debt_post_iteration_1.md](maintainers/architecture_debt_post_iteration_1.md) (open: 0, done: 11)

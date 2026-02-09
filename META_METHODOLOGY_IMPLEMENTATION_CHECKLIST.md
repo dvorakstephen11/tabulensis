@@ -48,9 +48,9 @@ Implementation order (dependency notes):
 
 - [x] Create directory `docs/meta/logs/`.
 - [x] Create directory `docs/meta/logs/daily/`.
-- [ ] Create directory `docs/meta/logs/research/`.
+- [x] Create directory `docs/meta/logs/research/`.
 - [ ] Create directory `docs/meta/logs/ops/`.
-- [ ] Create directory `docs/meta/logs/weekly/`.
+- [x] Create directory `docs/meta/logs/weekly/`.
 - [ ] Create directory `docs/meta/logs/marketing/`.
 - [ ] Create file `docs/meta/logs/README.md` describing:
   - naming convention for daily logs and research logs
