@@ -46,8 +46,8 @@ Implementation order (dependency notes):
   - what belongs in `docs/meta/automation/`
   - the update rule for `docs/index.md` (run `scripts/update_docs_index_checklists.py`)
 
-- [ ] Create directory `docs/meta/logs/`.
-- [ ] Create directory `docs/meta/logs/daily/`.
+- [x] Create directory `docs/meta/logs/`.
+- [x] Create directory `docs/meta/logs/daily/`.
 - [ ] Create directory `docs/meta/logs/research/`.
 - [ ] Create directory `docs/meta/logs/ops/`.
 - [ ] Create directory `docs/meta/logs/weekly/`.
