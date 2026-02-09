@@ -937,7 +937,7 @@ fn pg4_block_rect_json_shape_and_roundtrip() {
 
 #[test]
 fn pg4_diffop_roundtrip_each_variant() {
-    let mut ops = vec![
+    let ops = vec![
         DiffOp::SheetAdded {
             sheet: sid("SheetA"),
         },

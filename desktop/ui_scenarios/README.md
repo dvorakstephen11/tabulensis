@@ -26,6 +26,8 @@ Each scenario lives under `desktop/ui_scenarios/<name>/scenario.json` and should
 - `compare_unsupported`: unsupported extension to validate error UX and messaging.
 - `compare_container_limits`: ZIP entry count exceeds default container limits to validate safety-limit error UX.
 - `pbix_no_mashup`: PBIX fixture to validate error and messaging UI state.
+- `compare_pbip_summary`: PBIP folder diff to validate PBIP Navigator + Summary wiring.
+- `compare_pbip_details`: PBIP folder diff to validate PBIP Details (old/new normalized text) + Explain MVP.
 
 ## Canonical CI scenario set
 

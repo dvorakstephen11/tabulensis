@@ -75,7 +75,8 @@ const REQUIRED_WIDGETS: &[&str] = &[
 ];
 
 const ROOT_TAB_LABELS: &[&str] = &["Compare", "Recents", "Batch", "Search"];
-const RESULT_TAB_LABELS: &[&str] = &["Summary", "Details", "Explain", "Grid"];
+// Iteration 2: rename Excel-specific "Grid" tab to the domain-agnostic "Preview".
+const RESULT_TAB_LABELS: &[&str] = &["Summary", "Details", "Explain", "Preview"];
 
 pub fn validate_xrc(xrc: &str) -> Result<(), String> {
     let mut reader = Reader::from_str(xrc);

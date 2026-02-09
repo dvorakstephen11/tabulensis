@@ -101,10 +101,43 @@ pub enum Commands {
         #[arg(long, help = "Include Power Query information")]
         queries: bool,
     },
+    #[command(about = "PBIP/PBIR/TMDL helpers (Git UX kit)")]
+    Pbip {
+        #[command(subcommand)]
+        command: PbipCommands,
+    },
     #[command(about = "Manage your Tabulensis license")]
     License {
         #[command(subcommand)]
         command: LicenseCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum PbipCommands {
+    #[command(about = "Normalize a PBIR/TMDL file for stable diffs (textconv)")]
+    Normalize {
+        #[arg(help = "Path to the file (.pbir or .tmdl)")]
+        path: String,
+        #[arg(long, value_enum, default_value = "balanced", help = "Normalization profile")]
+        profile: PbipProfileArg,
+        #[arg(long, action = clap::ArgAction::SetTrue, help = "Include a small header (profile + rules)")]
+        header: bool,
+        #[arg(long, action = clap::ArgAction::SetTrue, help = "Exit non-zero on parse/normalization error")]
+        fail_on_error: bool,
+    },
+    #[command(about = "Diff two PBIP project directories (folder-to-folder)")]
+    Diff {
+        #[arg(help = "Path to the old/base PBIP project folder")]
+        old: String,
+        #[arg(help = "Path to the new/changed PBIP project folder")]
+        new: String,
+        #[arg(long, value_enum, default_value = "balanced", help = "Normalization profile")]
+        profile: PbipProfileArg,
+        #[arg(long, action = clap::ArgAction::SetTrue, help = "Emit PR-friendly Markdown")]
+        markdown: bool,
+        #[arg(long, action = clap::ArgAction::SetTrue, help = "Document diffs only (skip entity rollups)")]
+        docs_only: bool,
     },
 }
 
@@ -143,6 +176,23 @@ pub enum DiffPresetArg {
     Fastest,
     Balanced,
     MostPrecise,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
+pub enum PbipProfileArg {
+    Strict,
+    Balanced,
+    Aggressive,
+}
+
+impl PbipProfileArg {
+    pub fn to_profile(self) -> excel_diff::PbipNormalizationProfile {
+        match self {
+            Self::Strict => excel_diff::PbipNormalizationProfile::Strict,
+            Self::Balanced => excel_diff::PbipNormalizationProfile::Balanced,
+            Self::Aggressive => excel_diff::PbipNormalizationProfile::Aggressive,
+        }
+    }
 }
 
 fn main() -> ExitCode {
@@ -195,6 +245,7 @@ fn main() -> ExitCode {
             metrics_json,
         ),
         Some(Commands::Info { path, queries }) => commands::info::run(&path, queries),
+        Some(Commands::Pbip { command }) => commands::pbip::run(command),
         Some(Commands::License { command }) => commands::license::run(command),
         None => {
             let mut cmd = Cli::command();

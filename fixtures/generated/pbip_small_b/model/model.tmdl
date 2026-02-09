@@ -1,0 +1,9 @@
+model
+    table Sales
+        column Amount
+            dataType: decimal
+        column Month
+            dataType: string
+        measure TotalSales
+            expression: SUM(Sales[Amount])
+

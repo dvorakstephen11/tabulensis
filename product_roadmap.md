@@ -210,6 +210,7 @@ Implementation plan: [`docs/product_iterations/iteration_1_daily_driver_plan.md`
 **Theme:** “First-class diff/merge for source-controlled Power BI projects.”
 
 See: [Iteration 2 readiness](docs/product_iterations/iteration_2_readiness.md).
+Implementation plan: [Iteration 2 implementation plan](docs/product_iterations/iteration_2_implementation_plan.md).
 
 ### Features
 

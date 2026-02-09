@@ -1,4 +1,12 @@
 ## Three Documents
+
+- Tabulensis Product Docs
+    - Tabulensis needs to contain a COMPREHENSIVE user docs cookbook that will show and/or describe EVERYTHING the user can do with the tool, along with explanations of how to do it. This includes common workflows. This should be maximally readable and pleasant to look at.
+    - Should be equipped with synonym-powered semantic search (not sure what the most precise term is, get GPT-5.3-Coded to help you figure this out)
+- Demo excel workbooks
+    - Would be cool to ship two xlsx (or csv) files with the installer that would form a sort of tutorial. The grid diff would spell out "Tabulensis" in Yellow (updates) with a Green underline (new row added).
+
+
 - Product Feature Strategy
     * Competitor Analysis
         * Do any products currently create a graph depicting data sources and dependencies among sets of workbooks?

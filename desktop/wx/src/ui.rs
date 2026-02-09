@@ -116,12 +116,16 @@ pub(crate) fn build_ui_handles(
     compare_right_panel.set_min_size(Size::new(320, 240));
     let old_label = find_xrc_child::<StaticText>(&compare_container, "old_label");
     let old_picker = find_xrc_child::<FilePickerCtrl>(&compare_container, "old_picker");
+    let old_dir_picker = find_xrc_child::<DirPickerCtrl>(&compare_container, "old_dir_picker");
     let swap_btn = find_xrc_child::<Button>(&compare_container, "swap_btn");
     let new_label = find_xrc_child::<StaticText>(&compare_container, "new_label");
     let new_picker = find_xrc_child::<FilePickerCtrl>(&compare_container, "new_picker");
+    let new_dir_picker = find_xrc_child::<DirPickerCtrl>(&compare_container, "new_dir_picker");
     let compare_btn = find_xrc_child::<Button>(&compare_container, "compare_btn");
     let cancel_btn = find_xrc_child::<Button>(&compare_container, "cancel_btn");
     let compare_help_text = find_xrc_child::<StaticText>(&compare_container, "compare_help_text");
+    let domain_choice = find_xrc_child::<Choice>(&compare_container, "domain_choice");
+    let pbip_profile_choice = find_xrc_child::<Choice>(&compare_container, "pbip_profile_choice");
     let profile_choice = find_xrc_child::<Choice>(&compare_container, "profile_choice");
     let preset_choice = find_xrc_child::<Choice>(&compare_container, "preset_choice");
     let trusted_checkbox = find_xrc_child::<CheckBox>(&compare_container, "trusted_checkbox");
@@ -163,6 +167,13 @@ pub(crate) fn build_ui_handles(
         find_xrc_child::<Panel>(&compare_container, "summary_top_sheets_table_host");
     let summary_text = find_xrc_child::<TextCtrl>(&compare_container, "summary_text");
     let detail_text = find_xrc_child::<TextCtrl>(&compare_container, "detail_text");
+    let pbip_details_panel = find_xrc_child::<Panel>(&compare_container, "pbip_details_panel");
+    let pbip_details_header =
+        find_xrc_child::<StaticText>(&compare_container, "pbip_details_header");
+    let pbip_old_label = find_xrc_child::<StaticText>(&compare_container, "pbip_old_label");
+    let pbip_new_label = find_xrc_child::<StaticText>(&compare_container, "pbip_new_label");
+    let pbip_old_text = find_xrc_child::<TextCtrl>(&compare_container, "pbip_old_text");
+    let pbip_new_text = find_xrc_child::<TextCtrl>(&compare_container, "pbip_new_text");
     let explain_text = find_xrc_child::<TextCtrl>(&compare_container, "explain_text");
     let grid_panel = find_xrc_child::<Panel>(&compare_container, "grid_panel");
     let run_summary_header = find_xrc_child::<Panel>(&compare_container, "run_summary_header");
@@ -170,6 +181,8 @@ pub(crate) fn build_ui_handles(
     let run_summary_new = find_xrc_child::<StaticText>(&compare_container, "run_summary_new");
     let run_summary_meta = find_xrc_child::<StaticText>(&compare_container, "run_summary_meta");
     let sheets_filter_ctrl = find_xrc_child::<SearchCtrl>(&compare_container, "sheets_filter_ctrl");
+    let noise_filters_panel =
+        find_xrc_child::<Panel>(&compare_container, "noise_filters_panel");
     let hide_m_formatting_checkbox =
         find_xrc_child::<CheckBox>(&compare_container, "hide_m_formatting_checkbox");
     let hide_dax_formatting_checkbox =
@@ -234,6 +247,8 @@ pub(crate) fn build_ui_handles(
 
     theme::apply_content_text(&summary_text, false);
     theme::apply_content_text(&detail_text, true);
+    theme::apply_content_text(&pbip_old_text, true);
+    theme::apply_content_text(&pbip_new_text, true);
     theme::apply_content_text(&explain_text, true);
 
     // Summary panel styling.
@@ -285,6 +300,9 @@ pub(crate) fn build_ui_handles(
     }
     old_label.set_foreground_color(theme::Palette::TEXT_PRIMARY);
     new_label.set_foreground_color(theme::Palette::TEXT_PRIMARY);
+    pbip_details_header.set_foreground_color(theme::Palette::TEXT_PRIMARY);
+    pbip_old_label.set_foreground_color(theme::Palette::TEXT_SECONDARY);
+    pbip_new_label.set_foreground_color(theme::Palette::TEXT_SECONDARY);
     compare_help_text.set_foreground_color(theme::Palette::TEXT_SECONDARY);
     run_summary_old.set_foreground_color(theme::Palette::TEXT_PRIMARY);
     run_summary_new.set_foreground_color(theme::Palette::TEXT_PRIMARY);
@@ -294,9 +312,17 @@ pub(crate) fn build_ui_handles(
     let new_tip = "New: updated workbook (after).";
     old_label.set_tooltip(old_tip);
     old_picker.set_tooltip(old_tip);
+    old_dir_picker.set_tooltip("Old: baseline folder (before).");
     new_label.set_tooltip(new_tip);
     new_picker.set_tooltip(new_tip);
+    new_dir_picker.set_tooltip("New: updated folder (after).");
     swap_btn.set_tooltip("Swap Old and New paths.");
+
+    // Default UI mode is Workbook; PBIP-specific controls are shown when the domain switches.
+    old_dir_picker.show(false);
+    new_dir_picker.show(false);
+    pbip_profile_choice.show(false);
+    pbip_details_panel.show(false);
 
     sheets_filter_ctrl.set_tooltip("Filter sheets by name or counts (e.g., Pivot or 12).");
     sheets_filter_ctrl.show_search_button(false);
@@ -364,9 +390,13 @@ pub(crate) fn build_ui_handles(
         compare_btn,
         cancel_btn,
         old_picker,
+        old_dir_picker,
         new_picker,
+        new_dir_picker,
         swap_btn,
         compare_help_text,
+        domain_choice,
+        pbip_profile_choice,
         profile_choice,
         preset_choice,
         trusted_checkbox,
@@ -384,6 +414,10 @@ pub(crate) fn build_ui_handles(
         summary_top_sheets_table_host,
         summary_text,
         detail_text,
+        pbip_details_panel,
+        pbip_details_header,
+        pbip_old_text,
+        pbip_new_text,
         explain_text,
         grid_panel,
         root_tabs,
@@ -392,6 +426,7 @@ pub(crate) fn build_ui_handles(
         sheets_list_panel: sheets_list,
         sheets_table_host,
         sheets_filter_ctrl,
+        noise_filters_panel,
         hide_m_formatting_checkbox,
         hide_dax_formatting_checkbox,
         hide_formula_formatting_checkbox,

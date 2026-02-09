@@ -8,7 +8,8 @@ use std::thread;
 
 use excel_diff::{
     should_use_large_mode, ContainerError, ContainerLimits, DiffConfig, DiffError, DiffReport,
-    DiffSink, DiffSummary, PbixPackage, ProgressCallback, WorkbookPackage,
+    DiffSink, DiffSummary, PbipNormalizationProfile, PbixPackage, ProgressCallback,
+    WorkbookPackage,
 };
 use serde::Serialize;
 
@@ -29,8 +30,8 @@ use lru::LruCache;
 
 use crate::export::export_audit_xlsx_from_store;
 use crate::store::{
-    resolve_sheet_stats, DiffMode, DiffRunSummary, OpStore, OpStoreSink, RunStatus, SheetStats,
-    StoreError,
+    resolve_sheet_stats, ChangeCounts, DiffMode, DiffRunSummary, OpStore, OpStoreSink, RunStatus,
+    SheetStats, SheetStatsResolved, StoreError,
 };
 use ui_payload::{
     build_payload_from_pbix_report, limits_from_config, DiffOptions, DiffOutcomeConfig, DiffPreset,
@@ -508,6 +509,144 @@ impl EngineState {
         let old_path = PathBuf::from(&request.old_path);
         let new_path = PathBuf::from(&request.new_path);
 
+        if request.cancel.load(Ordering::Relaxed) {
+            return Err(DiffErrorPayload::new("canceled", "Diff canceled.", false));
+        }
+
+        let store = OpStore::open(&self.store_path).map_err(map_store_error)?;
+        let options = request.options.clone();
+        let trusted = options.trusted.unwrap_or(false);
+
+        // PBIP (Iteration 2): directory-to-directory compare. This is a separate diff domain and does
+        // not use the workbook DiffConfig.
+        let old_is_dir = old_path.is_dir();
+        let new_is_dir = new_path.is_dir();
+        if old_is_dir || new_is_dir {
+            if !old_is_dir || !new_is_dir {
+                return Err(DiffErrorPayload::new(
+                    "mismatch",
+                    "PBIP compare requires both Old and New to be folders.",
+                    false,
+                ));
+            }
+
+            let profile = options
+                .pbip_profile
+                .unwrap_or(PbipNormalizationProfile::Balanced);
+            let scan_cfg = excel_diff::PbipScanConfig::default();
+
+            let config_json = serde_json::json!({
+                "domain": "pbip_project",
+                "pbipProfile": profile.as_str(),
+            })
+            .to_string();
+            let outcome_config = DiffOutcomeConfig {
+                preset: None,
+                limits: None,
+            };
+
+            let diff_id = store
+                .start_run(
+                    &request.old_path,
+                    &request.new_path,
+                    &config_json,
+                    &self.engine_version,
+                    &self.app_version,
+                    DiffMode::Large,
+                    trusted,
+                )
+                .map_err(map_store_error)?;
+            let _ = store.set_domain(&diff_id, ui_payload::DiffDomain::PbipProject);
+
+            emit_progress(
+                &request.progress,
+                request.run_id,
+                "parse",
+                Some("scan"),
+                "Scanning PBIP projects...",
+                None,
+            );
+
+            let old_snapshot = excel_diff::snapshot_pbip_project(&old_path, profile, scan_cfg.clone())
+                .map_err(|e| DiffErrorPayload::new("pbip_scan", e.to_string(), false))?;
+            let new_snapshot = excel_diff::snapshot_pbip_project(&new_path, profile, scan_cfg)
+                .map_err(|e| DiffErrorPayload::new("pbip_scan", e.to_string(), false))?;
+
+            emit_progress(
+                &request.progress,
+                request.run_id,
+                "diff",
+                None,
+                "Diffing PBIP documents...",
+                None,
+            );
+
+            let mut report = excel_diff::diff_pbip_snapshots(&old_snapshot, &new_snapshot);
+
+            // Cap stored/displayed text to keep the store responsive.
+            let mut warnings: Vec<String> = Vec::new();
+            cap_pbip_doc_texts(&mut report.docs, &mut warnings);
+            cap_pbip_entity_texts(&mut report.entities, &mut warnings);
+            let doc_error_count = report
+                .docs
+                .iter()
+                .filter(|d| {
+                    d.old.as_ref().and_then(|s| s.error.as_ref()).is_some()
+                        || d.new.as_ref().and_then(|s| s.error.as_ref()).is_some()
+                })
+                .count();
+            if doc_error_count > 0 {
+                warnings.push(format!(
+                    "PBIP: {doc_error_count} documents failed to normalize; see Details."
+                ));
+            }
+
+            store
+                .replace_pbip_docs(&diff_id, &report.docs, profile, &old_snapshot.profile_summary)
+                .map_err(map_store_error)?;
+            store
+                .replace_pbip_entities(&diff_id, &report.entities)
+                .map_err(map_store_error)?;
+
+            let (counts, sheet_stats) = pbip_counts_and_sheet_stats(&report.docs);
+            let strings: Vec<String> = Vec::new();
+            let complete = report
+                .docs
+                .iter()
+                .all(|d| d.old.as_ref().map_or(true, |s| s.error.is_none()))
+                && report
+                    .docs
+                    .iter()
+                    .all(|d| d.new.as_ref().map_or(true, |s| s.error.is_none()));
+            let summary = DiffSummary {
+                complete,
+                warnings,
+                op_count: report.docs.len(),
+                #[cfg(feature = "perf-metrics")]
+                metrics: None,
+            };
+
+            store
+                .finish_run(
+                    &diff_id,
+                    &summary,
+                    &strings,
+                    &counts,
+                    &sheet_stats,
+                    RunStatus::Complete,
+                )
+                .map_err(map_store_error)?;
+
+            let summary_record = store.load_summary(&diff_id).map_err(map_store_error)?;
+            return Ok(DiffOutcome {
+                diff_id,
+                mode: DiffMode::Large,
+                payload: None,
+                summary: Some(summary_record),
+                config: Some(outcome_config),
+            });
+        }
+
         let old_kind = ui_payload::host_kind_from_path(&old_path).ok_or_else(|| {
             DiffErrorPayload::new("unsupported", "Unsupported old file extension", false)
         })?;
@@ -523,13 +662,6 @@ impl EngineState {
             ));
         }
 
-        if request.cancel.load(Ordering::Relaxed) {
-            return Err(DiffErrorPayload::new("canceled", "Diff canceled.", false));
-        }
-
-        let store = OpStore::open(&self.store_path).map_err(map_store_error)?;
-        let options = request.options.clone();
-        let trusted = options.trusted.unwrap_or(false);
         let config = options
             .effective_config(DiffConfig::balanced())
             .map_err(|e| DiffErrorPayload::new("config", e, false))?;
@@ -1180,6 +1312,152 @@ fn report_to_summary(report: &DiffReport) -> DiffSummary {
         #[cfg(feature = "perf-metrics")]
         metrics: report.metrics.clone(),
     }
+}
+
+const PBIP_DOC_TEXT_SIDE_CAP_BYTES: usize = 512 * 1024; // 512KB per side (old/new) per doc.
+const PBIP_ENTITY_TEXT_SIDE_CAP_BYTES: usize = 128 * 1024; // 128KB per side.
+const PBIP_TOTAL_TEXT_CAP_BYTES: usize = 6 * 1024 * 1024; // 6MB across the run.
+const PBIP_TEXT_WARNING_LIMIT: usize = 20;
+
+fn cap_pbip_doc_texts(docs: &mut [excel_diff::PbipDocDiff], warnings: &mut Vec<String>) {
+    // Deterministic capping: docs are already path-sorted, but do not rely on it.
+    docs.sort_by(|a, b| a.path.cmp(&b.path));
+
+    let mut total_bytes: usize = 0;
+    let mut shown_warnings: usize = 0;
+    let mut hidden_warnings: usize = 0;
+    let mut total_cap_hit = false;
+
+    for doc in docs {
+        for (side, snap_opt) in [("old", doc.old.as_mut()), ("new", doc.new.as_mut())] {
+            let Some(snap) = snap_opt else {
+                continue;
+            };
+            let original_len = snap.normalized_text.len();
+            if original_len == 0 {
+                continue;
+            }
+
+            if !total_cap_hit && total_bytes + original_len > PBIP_TOTAL_TEXT_CAP_BYTES {
+                total_cap_hit = true;
+                warnings.push(format!(
+                    "PBIP: total normalized-text cap reached ({} bytes). Some document details were omitted.",
+                    PBIP_TOTAL_TEXT_CAP_BYTES
+                ));
+            }
+
+            if total_cap_hit {
+                snap.normalized_text =
+                    "[omitted: normalized text exceeds run total cap]\n".to_string();
+                total_bytes = total_bytes.saturating_add(snap.normalized_text.len());
+                continue;
+            }
+
+            let (text, truncated) =
+                truncate_bytes_with_notice(&snap.normalized_text, PBIP_DOC_TEXT_SIDE_CAP_BYTES);
+            if truncated {
+                if shown_warnings < PBIP_TEXT_WARNING_LIMIT {
+                    warnings.push(format!(
+                        "PBIP: truncated {side} normalized text for '{}' ({} bytes > {} bytes cap).",
+                        doc.path,
+                        original_len,
+                        PBIP_DOC_TEXT_SIDE_CAP_BYTES
+                    ));
+                    shown_warnings += 1;
+                } else {
+                    hidden_warnings = hidden_warnings.saturating_add(1);
+                }
+                snap.normalized_text = text;
+            }
+
+            total_bytes = total_bytes.saturating_add(snap.normalized_text.len());
+        }
+    }
+
+    if hidden_warnings > 0 {
+        warnings.push(format!(
+            "PBIP: {hidden_warnings} additional documents had normalized text truncated."
+        ));
+    }
+}
+
+fn cap_pbip_entity_texts(entities: &mut [excel_diff::PbipEntityDiff], warnings: &mut Vec<String>) {
+    // Entity diffs are optional; keep the policy consistent with docs.
+    let mut shown_warnings: usize = 0;
+    let mut hidden_warnings: usize = 0;
+
+    for entity in entities {
+        for (side, text_opt) in [("old", &mut entity.old_text), ("new", &mut entity.new_text)] {
+            let Some(text) = text_opt.as_deref() else {
+                continue;
+            };
+            let original_len = text.len();
+            if original_len <= PBIP_ENTITY_TEXT_SIDE_CAP_BYTES {
+                continue;
+            }
+
+            let (truncated, _) = truncate_bytes_with_notice(text, PBIP_ENTITY_TEXT_SIDE_CAP_BYTES);
+            *text_opt = Some(truncated);
+
+            if shown_warnings < PBIP_TEXT_WARNING_LIMIT {
+                warnings.push(format!(
+                    "PBIP: truncated {side} entity text in '{}' ({} bytes > {} bytes cap).",
+                    entity.doc_path,
+                    original_len,
+                    PBIP_ENTITY_TEXT_SIDE_CAP_BYTES
+                ));
+                shown_warnings += 1;
+            } else {
+                hidden_warnings = hidden_warnings.saturating_add(1);
+            }
+        }
+    }
+
+    if hidden_warnings > 0 {
+        warnings.push(format!(
+            "PBIP: {hidden_warnings} additional entities had text truncated."
+        ));
+    }
+}
+
+fn pbip_counts_and_sheet_stats(
+    docs: &[excel_diff::PbipDocDiff],
+) -> (ChangeCounts, Vec<SheetStatsResolved>) {
+    // For PBIP MVP we only surface counts in the run summary. Navigator rows come from
+    // `diff_pbip_docs` / `diff_pbip_entities` instead of the legacy per-sheet table.
+    let mut counts = ChangeCounts::default();
+    for doc in docs {
+        match doc.change_kind {
+            excel_diff::PbipChangeKind::Added => counts.added = counts.added.saturating_add(1),
+            excel_diff::PbipChangeKind::Removed => {
+                counts.removed = counts.removed.saturating_add(1)
+            }
+            excel_diff::PbipChangeKind::Modified => {
+                counts.modified = counts.modified.saturating_add(1)
+            }
+            excel_diff::PbipChangeKind::Unchanged => {}
+        }
+    }
+    (counts, Vec::new())
+}
+
+fn truncate_bytes_with_notice(text: &str, cap_bytes: usize) -> (String, bool) {
+    if text.len() <= cap_bytes {
+        return (text.to_string(), false);
+    }
+
+    let mut end = cap_bytes.min(text.len());
+    while end > 0 && !text.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    let omitted = text.len().saturating_sub(end);
+
+    let mut out = text[..end].to_string();
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(&format!("\n...[truncated {omitted} bytes]...\n"));
+    (out, true)
 }
 
 fn outcome_config_from_options(options: &DiffOptions, cfg: &DiffConfig) -> DiffOutcomeConfig {

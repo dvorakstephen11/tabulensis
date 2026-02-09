@@ -42,6 +42,37 @@ Then run:
 git difftool --tool=tabulensis -- path/to/file.xlsx
 ```
 
+## 3) PBIP / PBIR / TMDL (text-native) normalization
+
+PBIP projects store report + model artifacts as files (for source control), but raw diffs can be noisy
+(JSON ordering, GUID churn, whitespace).
+
+Tabulensis can normalize PBIR (`.pbir`) and TMDL (`.tmdl`) per-file for a stable `git diff`.
+
+Add file patterns to `.gitattributes`:
+
+```gitattributes
+*.pbir diff=pbip
+*.tmdl diff=pbip
+```
+
+Add a diff driver to `~/.gitconfig` (or `.git/config`):
+
+```gitconfig
+[diff "pbip"]
+    textconv = tabulensis pbip normalize --profile balanced
+    cachetextconv = true
+```
+
+Now `git diff` will show canonicalized PBIR JSON (sorted keys + GUID normalization per profile) and
+lexically-normalized TMDL.
+
+For a one-shot PR summary across two PBIP folders (document + entity rollups), use:
+
+```bash
+tabulensis pbip diff --markdown <OLD_DIR> <NEW_DIR>
+```
+
 ## Notes / edge cases
 
 - `--git-diff` cannot be combined with `--format json` or `--format jsonl`.

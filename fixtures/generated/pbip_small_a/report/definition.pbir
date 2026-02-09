@@ -1,0 +1,23 @@
+{
+  "pages": [
+    {
+      "objectId": "99999999-8888-7777-6666-555555555555",
+      "displayName": "Overview"
+    },
+    {
+      "objectId": "12121212-3434-5656-7878-909090909090",
+      "displayName": "Details"
+    }
+  ],
+  "other": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "theme": {
+    "guid": "11111111-2222-3333-4444-555555555555",
+    "colors": [
+      "#ffffff",
+      "#000000"
+    ]
+  },
+  "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "name": "Sales Report"
+}
+

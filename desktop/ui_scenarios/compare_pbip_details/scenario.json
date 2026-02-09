@@ -1,0 +1,12 @@
+{
+  "name": "Compare PBIP Details",
+  "description": "PBIP folder-to-folder diff to validate Details rendering + Explain MVP.",
+  "oldPath": "../../../fixtures/generated/pbip_small_a",
+  "newPath": "../../../fixtures/generated/pbip_small_b",
+  "autoRunDiff": true,
+  "stableWaitMs": 800,
+  "expectMode": "large",
+  "focusPanel": "details",
+  "trustedFiles": true
+}
+

@@ -6,6 +6,7 @@ use serde::Serialize;
 mod alignment;
 mod analysis;
 mod capabilities;
+mod domain;
 mod options;
 mod outcome;
 
@@ -15,6 +16,7 @@ pub use analysis::{
     OpNoiseClass, OpSeverity, SeverityCounts, SheetBreakdown,
 };
 pub use capabilities::{HostCapabilities, HostDefaults};
+pub use domain::{DetailsPayload, DiffDomain, NavigatorModel, NavigatorRow, SelectionKind, SelectionTarget};
 pub use options::{limits_from_config, DiffLimits, DiffOptions, DiffPreset};
 pub use outcome::{
     summarize_report, ChangeCounts, DiffOutcome, DiffOutcomeConfig, DiffOutcomeMode,

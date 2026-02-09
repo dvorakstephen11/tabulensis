@@ -1,0 +1,12 @@
+{
+  "objectId": "abababab-0101-0202-0303-040404040404",
+  "displayName": "Overview",
+  "visuals": [
+    {
+      "id": "cdcdcdcd-1111-2222-3333-444444444444",
+      "type": "barChart",
+      "title": "Revenue by Month"
+    }
+  ]
+}
+

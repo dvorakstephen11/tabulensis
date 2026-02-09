@@ -1,3 +1,18 @@
+#
+# Tabulensis: example `.gitattributes` for Git integration.
+#
+
+# Excel (binary): use Tabulensis textconv/difftool for meaningful diffs.
 *.xlsx diff=xlsx
 *.xlsm diff=xlsx
+*.xltx diff=xlsx
+*.xltm diff=xlsx
+
+# Power BI Desktop packages (binary): treat similarly to Excel.
+*.pbix diff=xlsx
+*.pbit diff=xlsx
+
+# PBIP artifacts (text-native but noisy): normalize before diff.
+*.pbir diff=pbip
+*.tmdl diff=pbip
 

@@ -74,6 +74,9 @@ pub struct DiffOptions {
     pub enable_dax_semantic_diff: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub semantic_noise_policy: Option<excel_diff::SemanticNoisePolicy>,
+    // PBIP/PBIR/TMDL options (Iteration 2). These are ignored for workbook/PBIX diffs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pbip_profile: Option<excel_diff::PbipNormalizationProfile>,
 }
 
 impl DiffOptions {

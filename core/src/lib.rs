@@ -116,6 +116,7 @@ mod model_diff;
 mod object_diff;
 mod output;
 mod package;
+mod pbip;
 #[cfg(feature = "perf-metrics")]
 #[doc(hidden)]
 pub mod perf;
@@ -352,6 +353,14 @@ pub use output::json::diff_workbooks_to_json;
 pub use output::json::{serialize_cell_diffs, serialize_diff_report, CellDiff};
 pub use output::json_lines::JsonLinesSink;
 pub use package::{OpenXmlDiffError, PbixPackage, WorkbookPackage};
+pub use pbip::{
+    diff_snapshots as diff_pbip_snapshots, PbipChangeKind, PbipDiffReport, PbipDocDiff,
+    PbipDocRecord, PbipDocSnapshot, PbipDocType, PbipEntityDiff, PbipEntityKind,
+    PbipNormalizationProfile, PbipProjectSnapshot, NormalizationApplied, NormalizationError,
+    normalize_doc_text,
+};
+#[cfg(feature = "std-fs")]
+pub use pbip::{snapshot_project_from_fs as snapshot_pbip_project, PbipScanConfig, PbipScanError};
 pub use policy::{should_use_large_mode, AUTO_STREAM_CELL_THRESHOLD};
 pub use progress::{NoProgress, ProgressCallback};
 pub use session::DiffSession;

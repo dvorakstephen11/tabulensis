@@ -1,0 +1,27 @@
+{
+  "pages": [
+    {
+      "objectId": "99999999-8888-7777-6666-555555555555",
+      "displayName": "Summary"
+    },
+    {
+      "objectId": "12121212-3434-5656-7878-909090909090",
+      "displayName": "Details"
+    },
+    {
+      "objectId": "33333333-4444-5555-6666-777777777777",
+      "displayName": "Trends"
+    }
+  ],
+  "other": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "theme": {
+    "guid": "11111111-2222-3333-4444-555555555555",
+    "colors": [
+      "#ffffff",
+      "#111111"
+    ]
+  },
+  "id": "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+  "name": "Sales Report"
+}
+
