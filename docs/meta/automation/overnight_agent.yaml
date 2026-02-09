@@ -1,0 +1,134 @@
+version: 1
+
+repo:
+  # Base branch used for new iteration branches + worktrees.
+  base_branch: main
+
+  # Worktrees live outside the main repo working tree (safer; avoids accidental mutation).
+  worktree_root: ../excel_diff_worktrees/overnight
+
+  # Local-only runtime state/logs (gitignored via tmp/ + *.sqlite).
+  run_root: tmp/overnight_agent
+  state_json: tmp/overnight_agent/state.json
+
+  # Ops journal is committed on a dedicated branch/worktree to avoid merge conflicts.
+  ops_journal_branch: overnight/ops-journal
+  ops_journal_worktree: ../excel_diff_worktrees/overnight_ops_journal
+  exec_summary_log: docs/meta/logs/ops/executive_summary.log
+  reports_dir: docs/meta/logs/ops
+
+  git_identity:
+    name: Overnight Agent
+    email: overnight-agent@localhost
+
+llm:
+  # Provider options supported by scripts/overnight_agent.py:
+  # - codex_exec (recommended; uses `codex exec` and does NOT require OPENAI_API_KEY)
+  # - openai_chat_completions
+  # - mock
+  provider: codex_exec
+  codex_bin: codex
+  codex_exec_args: []
+  # Use your newest available Codex model (examples in docs/real_world_datasets_perf_plan.md).
+  model: gpt-5.3-codex
+  timeout_s: 600
+
+  # If you prefer calling the OpenAI HTTP API directly instead (requires OPENAI_API_KEY):
+  # provider: openai_chat_completions
+  # base_url: https://api.openai.com/v1
+  # api_key_env: OPENAI_API_KEY
+  # model: gpt-4o-mini
+  # temperature: 0.2
+  # timeout_s: 60
+
+tasks:
+  sources:
+    - kind: markdown_checklist
+      path: META_METHODOLOGY_IMPLEMENTATION_CHECKLIST.md
+      priority: 100
+    - kind: docs_index_checklists
+      path: docs/index.md
+      priority: 80
+    - kind: markdown_checklist
+      path: todo.md
+      enabled: false
+      priority: 10
+
+  selection:
+    max_attempts: 3
+    avoid_recent_minutes: 180
+    # If you want to hard-skip a pattern, add regexes here. Default: none.
+    skip_regex: []
+
+implementation:
+  # Patch-by-patch loop: max LLM patch rounds per iteration before failing.
+  max_patch_rounds: 3
+
+policy:
+  forbid_commands_regex:
+    - 'git\\s+reset\\s+--hard'
+    - 'git\\s+push\\s+--force'
+    - 'wrangler\\s+deploy'
+    - 'wrangler\\s+secret\\s+put'
+  max_changed_files_hard: 120
+  max_changed_rust_files_hard: 70
+  new_docs_require_index: true
+  new_docs_index_exempt_prefixes:
+    - docs/meta/logs/
+    - docs/meta/results/
+
+docs:
+  checklist_index_refresh:
+    recipe: python
+    cwd: .
+    cmd: ["python3", "scripts/update_docs_index_checklists.py"]
+
+suites:
+  fmt_rust:
+    - { recipe: python, cmd: ["python3", "scripts/safe_rustfmt.py", "--worktree"] }
+
+  tests_rust:
+    - { recipe: shell, cmd: ["bash", "-lc", "cargo test"] }
+
+  tests_worker:
+    - { recipe: shell, cwd: tabulensis-api, cmd: ["bash", "-lc", "npm test -- --run"] }
+
+  perf_quick:
+    - { recipe: shell, cmd: ["bash", "-lc",
+        "python3 scripts/check_perf_thresholds.py --suite quick --parallel --baseline benchmarks/baselines/quick.json --export-json benchmarks/latest_quick.json --export-csv benchmarks/latest_quick.csv"
+      ] }
+
+  perf_cycle_full:
+    pre:
+      - { recipe: python, cmd: ["python3", "scripts/perf_cycle.py", "pre", "--cycle", "{{cycle_id}}"] }
+    post:
+      - { recipe: python, cmd: ["python3", "scripts/perf_cycle.py", "post", "--cycle", "{{cycle_id}}"] }
+
+triggers:
+  worker_changed:
+    any_paths: ["tabulensis-api/**"]
+
+  rust_changed:
+    any_paths: ["*.rs", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml"]
+
+  major_perf_risk:
+    any_paths:
+      - "core/src/**"
+      - "desktop/backend/src/diff_runner.rs"
+      - "desktop/backend/src/store/**"
+      - "ui_payload/src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+
+  perf_sensitive:
+    any_paths: ["core/src/**", "ui_payload/src/**"]
+
+pipeline:
+  on_change:
+    - when: worker_changed
+      run: [tests_worker]
+    - when: rust_changed
+      run: [tests_rust]
+    - when: perf_sensitive
+      run: [perf_quick]

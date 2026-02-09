@@ -57,6 +57,9 @@ Repo-committed outputs (sanitized; no secrets):
   - `<run_id>_report.md` (per iteration)
   - `<date>_questions_for_operator.md` (blocked decisions)
 
+Operational note:
+- To avoid merge conflicts (many per-task branches all appending to the same journal), keep these log/report commits on a dedicated ops journal branch (for example `overnight/ops-journal`) with its own worktree.
+
 Configuration:
 - `docs/meta/automation/overnight_agent.yaml` (repo-specific config; portable schema)
 
@@ -143,6 +146,10 @@ Task scoring (configurable):
 ## Planning (LLM) Phase
 
 The planning phase must output a structured plan artifact (JSON or YAML), not prose only.
+
+LLM invocation options (choose via config):
+- Codex CLI non-interactive sessions (`codex exec`) for planning/patch generation (no `OPENAI_API_KEY` required by the runner).
+- Direct OpenAI HTTP API calls for planning/patch generation (requires `OPENAI_API_KEY`).
 
 Required plan fields:
 - goal
@@ -287,12 +294,12 @@ suites:
 
   perf_quick:
     - { recipe: shell, cmd: ["bash", "-lc",
-        "python scripts/check_perf_thresholds.py --suite quick --parallel --baseline benchmarks/baselines/quick.json --export-json benchmarks/latest_quick.json --export-csv benchmarks/latest_quick.csv"
+        "python3 scripts/check_perf_thresholds.py --suite quick --parallel --baseline benchmarks/baselines/quick.json --export-json benchmarks/latest_quick.json --export-csv benchmarks/latest_quick.csv"
       ] }
 
   perf_cycle_full:
     pre:
-      - { recipe: python, cmd: ["python3", "scripts/perf_cycle.py", "pre"] }
+      - { recipe: python, cmd: ["python3", "scripts/perf_cycle.py", "pre", "--cycle", "{{cycle_id}}"] }
     post:
       - { recipe: python, cmd: ["python3", "scripts/perf_cycle.py", "post", "--cycle", "{{cycle_id}}"] }
 
@@ -399,4 +406,3 @@ Acceptance criteria for "v1 robust":
 - Enforces perf policy and retention rules on major perf-risk changes.
 - Avoids wide-scope formatting churn by default.
 - Produces readable morning summaries and per-run reports with exact commands and artifact paths.
-

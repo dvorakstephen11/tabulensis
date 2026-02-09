@@ -13,7 +13,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod dev_scenario;
 mod explain;
@@ -105,6 +105,55 @@ impl ProgressStage {
             Self::Snapshot => (85, 100),
             Self::Batch => (0, 100),
             Self::Other => (0, 100),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DetailsJsonFormat {
+    Compact,
+    Pretty,
+}
+
+impl DetailsJsonFormat {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Compact => "Compact",
+            Self::Pretty => "Pretty",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DetailsJsonWaiter {
+    CopyToClipboard,
+    WriteToTempAndOpen,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DetailsTextKind {
+    GuidedEmpty,
+    DeferredReady,
+    Rendering,
+    InlineJson,
+    LargeSummary,
+    SheetStats,
+    Error,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DetailsTextState {
+    kind: DetailsTextKind,
+    gen: Option<u64>,
+    format: Option<DetailsJsonFormat>,
+}
+
+impl Default for DetailsTextState {
+    fn default() -> Self {
+        Self {
+            kind: DetailsTextKind::GuidedEmpty,
+            gen: None,
+            format: None,
         }
     }
 }
@@ -379,6 +428,12 @@ struct UiHandles {
     summary_categories_table_host: Panel,
     summary_top_sheets_table_host: Panel,
     summary_text: TextCtrl,
+    details_json_controls_panel: Panel,
+    details_json_format_choice: Choice,
+    details_json_render_btn: Button,
+    details_json_copy_btn: Button,
+    details_json_write_btn: Button,
+    details_json_status_text: StaticText,
     detail_text: TextCtrl,
     pbip_details_panel: Panel,
     pbip_details_header: StaticText,
@@ -453,8 +508,12 @@ struct CancelRestoreSnapshot {
     pending_detail_payload: Option<Arc<ui_payload::DiffWithSheets>>,
     pending_detail_sheet_name: Option<String>,
     pending_detail_payload_gen: u64,
-    pending_detail_json: Option<String>,
+    pending_detail_json: Option<Arc<String>>,
     pending_detail_json_gen: Option<u64>,
+    pending_detail_json_format: Option<DetailsJsonFormat>,
+    details_text_state: DetailsTextState,
+    pending_detail_force_inline_gen: Option<u64>,
+    pending_detail_force_inline_format: Option<DetailsJsonFormat>,
     sheet_names: Vec<String>,
     sheets_all: Vec<SheetRow>,
     sheets_filter: String,
@@ -485,9 +544,15 @@ struct AppState {
     pending_detail_sheet_name: Option<String>,
     pending_detail_payload_gen: u64,
     pending_detail_render_epoch: u64,
-    pending_detail_json: Option<String>,
+    pending_detail_json: Option<Arc<String>>,
     pending_detail_json_gen: Option<u64>,
+    pending_detail_json_format: Option<DetailsJsonFormat>,
     pending_detail_json_inflight_gen: Option<u64>,
+    pending_detail_json_inflight_format: Option<DetailsJsonFormat>,
+    pending_detail_json_waiters: Vec<DetailsJsonWaiter>,
+    pending_detail_force_inline_gen: Option<u64>,
+    pending_detail_force_inline_format: Option<DetailsJsonFormat>,
+    details_text_state: DetailsTextState,
     sheet_names: Vec<String>,
     sheets_all: Vec<SheetRow>,
     sheets_filter: String,
@@ -797,6 +862,7 @@ fn apply_results_domain_visibility_in_ctx(ctx: &mut UiContext) {
 
     // Details view.
     let pbip = domain == ui_payload::DiffDomain::PbipProject;
+    ctx.ui.details_json_controls_panel.show(!pbip);
     ctx.ui.detail_text.show(!pbip);
     ctx.ui.pbip_details_panel.show(pbip);
 
@@ -962,7 +1028,13 @@ fn clear_diff_results_in_ctx(ctx: &mut UiContext) {
     ctx.state.pending_detail_render_epoch = ctx.state.pending_detail_render_epoch.wrapping_add(1);
     ctx.state.pending_detail_json = None;
     ctx.state.pending_detail_json_gen = None;
+    ctx.state.pending_detail_json_format = None;
     ctx.state.pending_detail_json_inflight_gen = None;
+    ctx.state.pending_detail_json_inflight_format = None;
+    ctx.state.pending_detail_json_waiters.clear();
+    ctx.state.pending_detail_force_inline_gen = None;
+    ctx.state.pending_detail_force_inline_format = None;
+    ctx.state.details_text_state = DetailsTextState::default();
 
     ctx.state.sheets_all.clear();
     ctx.state.sheet_names.clear();
@@ -993,6 +1065,10 @@ fn clear_diff_results_in_ctx(ctx: &mut UiContext) {
 
     ctx.ui.summary_text.set_value(GUIDED_EMPTY_SUMMARY);
     ctx.ui.detail_text.set_value(GUIDED_EMPTY_DETAILS);
+    ctx.ui.details_json_status_text.set_label("");
+    ctx.ui.details_json_render_btn.enable(false);
+    ctx.ui.details_json_copy_btn.enable(false);
+    ctx.ui.details_json_write_btn.enable(false);
     ctx.ui
         .pbip_details_header
         .set_label("Select a document or entity to view details.");
@@ -1031,6 +1107,10 @@ fn take_cancel_restore_snapshot_in_ctx(ctx: &mut UiContext) -> CancelRestoreSnap
         pending_detail_payload_gen: ctx.state.pending_detail_payload_gen,
         pending_detail_json: ctx.state.pending_detail_json.take(),
         pending_detail_json_gen: ctx.state.pending_detail_json_gen.take(),
+        pending_detail_json_format: ctx.state.pending_detail_json_format.take(),
+        details_text_state: ctx.state.details_text_state,
+        pending_detail_force_inline_gen: ctx.state.pending_detail_force_inline_gen.take(),
+        pending_detail_force_inline_format: ctx.state.pending_detail_force_inline_format.take(),
         sheet_names: std::mem::take(&mut ctx.state.sheet_names),
         sheets_all: std::mem::take(&mut ctx.state.sheets_all),
         sheets_filter: std::mem::take(&mut ctx.state.sheets_filter),
@@ -1038,7 +1118,7 @@ fn take_cancel_restore_snapshot_in_ctx(ctx: &mut UiContext) -> CancelRestoreSnap
         pbip_rows: std::mem::take(&mut ctx.state.pbip_rows),
         pbip_target_keys: std::mem::take(&mut ctx.state.pbip_target_keys),
         summary_text: ctx.ui.summary_text.get_value(),
-        detail_text: ctx.ui.detail_text.get_value(),
+        detail_text: get_textctrl_value_profiled(&ctx.ui.detail_text, "detail_text_snapshot"),
         pbip_details_header: ctx.ui.pbip_details_header.get_label(),
         pbip_old_text: ctx.ui.pbip_old_text.get_value(),
         pbip_new_text: ctx.ui.pbip_new_text.get_value(),
@@ -1060,6 +1140,12 @@ fn restore_cancel_snapshot_in_ctx(ctx: &mut UiContext, snapshot: CancelRestoreSn
     ctx.state.pending_detail_json = snapshot.pending_detail_json;
     ctx.state.pending_detail_json_gen = snapshot.pending_detail_json_gen;
     ctx.state.pending_detail_json_inflight_gen = None;
+    ctx.state.pending_detail_json_format = snapshot.pending_detail_json_format;
+    ctx.state.pending_detail_json_inflight_format = None;
+    ctx.state.pending_detail_json_waiters.clear();
+    ctx.state.pending_detail_force_inline_gen = snapshot.pending_detail_force_inline_gen;
+    ctx.state.pending_detail_force_inline_format = snapshot.pending_detail_force_inline_format;
+    ctx.state.details_text_state = snapshot.details_text_state;
     ctx.state.sheet_names = snapshot.sheet_names;
     ctx.state.sheets_all = snapshot.sheets_all;
     ctx.state.sheets_filter = snapshot.sheets_filter;
@@ -1078,6 +1164,22 @@ fn restore_cancel_snapshot_in_ctx(ctx: &mut UiContext, snapshot: CancelRestoreSn
         .sheets_filter_ctrl
         .set_value(&ctx.state.sheets_filter);
     ctx.ui.result_tabs.set_selection(snapshot.result_tab);
+
+    sync_details_json_controls_in_ctx(ctx);
+    if let (Some(json), Some(format), Some(sheet)) = (
+        ctx.state.pending_detail_json.as_ref(),
+        ctx.state.pending_detail_json_format,
+        ctx.state.pending_detail_sheet_name.as_deref(),
+    ) {
+        ctx.ui.details_json_status_text.set_label(&format!(
+            "Sheet: {} | JSON: {} ({})",
+            sheet,
+            format_bytes_compact(json.len()),
+            format.label()
+        ));
+    } else if ctx.state.pending_detail_payload.is_none() {
+        ctx.ui.details_json_status_text.set_label("");
+    }
 
     // Ensure the virtual table matches the restored sheet list.
     rebuild_sheet_list_in_ctx(ctx);
@@ -1575,30 +1677,248 @@ fn apply_display_analysis_in_ctx(ctx: &mut UiContext, summary: &DiffRunSummary) 
     update_status_counts_in_ctx(ctx, Some(summary));
 }
 
-fn stage_detail_payload(
-    ctx: &mut UiContext,
-    sheet_name: String,
-    payload: ui_payload::DiffWithSheets,
-) {
-    ctx.state.pending_detail_sheet_name = Some(sheet_name.clone());
-    ctx.state.pending_detail_payload = Some(Arc::new(payload));
-    ctx.state.pending_detail_payload_gen = ctx.state.pending_detail_payload_gen.wrapping_add(1);
-    ctx.state.pending_detail_json = None;
-    ctx.state.pending_detail_json_gen = None;
-    ctx.state.pending_detail_json_inflight_gen = None;
+const DETAILS_JSON_INLINE_MAX_BYTES_DEFAULT: usize = 2 * 1024 * 1024;
+const DETAILS_TEXTCTRL_FREEZE_THRESHOLD_BYTES: usize = 16 * 1024;
 
-    if ctx.ui.result_tabs.selection() == RESULT_TAB_DETAILS {
-        render_staged_detail_payload(ctx);
-        return;
-    }
-
-    ctx.ui.detail_text.set_value(&format!(
-        "Sheet payload ready for '{sheet_name}'.\nOpen Details for JSON, or Grid for a visual preview."
-    ));
-    update_status_in_ctx(ctx, "Sheet payload ready (deferred until tab open).");
+fn ui_profile_enabled() -> bool {
+    env_flag("EXCEL_DIFF_PROFILE_UI").unwrap_or(false)
 }
 
-fn render_staged_detail_payload(ctx: &mut UiContext) {
+fn ui_perf_log<F: FnOnce() -> String>(f: F) {
+    if ui_profile_enabled() {
+        info!("{}", f());
+    }
+}
+
+fn format_bytes_compact(bytes: usize) -> String {
+    let value = bytes as f64;
+    const KB: f64 = 1024.0;
+    const MB: f64 = 1024.0 * 1024.0;
+    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
+    if value < KB {
+        format!("{bytes} B")
+    } else if value < MB {
+        format!("{:.1} KB", value / KB)
+    } else if value < GB {
+        format!("{:.1} MB", value / MB)
+    } else {
+        format!("{:.1} GB", value / GB)
+    }
+}
+
+fn details_inline_json_max_bytes() -> usize {
+    env_string("EXCEL_DIFF_DETAILS_JSON_MAX_BYTES")
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DETAILS_JSON_INLINE_MAX_BYTES_DEFAULT)
+}
+
+fn details_json_format_from_ui_in_ctx(ctx: &UiContext) -> DetailsJsonFormat {
+    match ctx.ui.details_json_format_choice.get_selection().unwrap_or(1) {
+        0 => DetailsJsonFormat::Compact,
+        _ => DetailsJsonFormat::Pretty,
+    }
+}
+
+fn set_textctrl_value_profiled(ctrl: &TextCtrl, value: &str, label: &'static str) {
+    let start = if ui_profile_enabled() {
+        Some(Instant::now())
+    } else {
+        None
+    };
+
+    if value.len() >= DETAILS_TEXTCTRL_FREEZE_THRESHOLD_BYTES {
+        ctrl.freeze();
+        ctrl.set_value(value);
+        ctrl.thaw();
+    } else {
+        ctrl.set_value(value);
+    }
+
+    if let Some(start) = start {
+        ui_perf_log(|| {
+            format!(
+                "UI_PERF set_value label={} bytes={} ms={}",
+                label,
+                value.len(),
+                start.elapsed().as_millis()
+            )
+        });
+    }
+}
+
+fn get_textctrl_value_profiled(ctrl: &TextCtrl, label: &'static str) -> String {
+    let start = if ui_profile_enabled() {
+        Some(Instant::now())
+    } else {
+        None
+    };
+    let value = ctrl.get_value();
+    if let Some(start) = start {
+        ui_perf_log(|| {
+            format!(
+                "UI_PERF get_value label={} bytes={} ms={}",
+                label,
+                value.len(),
+                start.elapsed().as_millis()
+            )
+        });
+    }
+    value
+}
+
+fn details_payload_stats(payload: &ui_payload::DiffWithSheets) -> (usize, u64, u64, bool) {
+    let ops = payload.report.ops.len();
+
+    let mut old_cells: u64 = 0;
+    let mut old_truncated = false;
+    for sheet in &payload.sheets.old.sheets {
+        old_cells = old_cells.saturating_add(sheet.included_cells as u64);
+        old_truncated |= sheet.truncated;
+    }
+
+    let mut new_cells: u64 = 0;
+    let mut new_truncated = false;
+    for sheet in &payload.sheets.new.sheets {
+        new_cells = new_cells.saturating_add(sheet.included_cells as u64);
+        new_truncated |= sheet.truncated;
+    }
+
+    (ops, old_cells, new_cells, old_truncated || new_truncated)
+}
+
+fn sync_details_json_controls_in_ctx(ctx: &mut UiContext) {
+    let enabled = ctx.state.pending_detail_payload.is_some();
+    ctx.ui.details_json_render_btn.enable(enabled);
+    ctx.ui.details_json_copy_btn.enable(enabled);
+    ctx.ui.details_json_write_btn.enable(enabled);
+    if !enabled {
+        ctx.ui.details_json_status_text.set_label("");
+    } else if let Some(sheet) = ctx.state.pending_detail_sheet_name.as_deref() {
+        if ctx.ui.details_json_status_text.get_label().trim().is_empty() {
+            ctx.ui
+                .details_json_status_text
+                .set_label(&format!("Sheet: {sheet}"));
+        }
+    }
+}
+
+fn set_detail_text_in_ctx(
+    ctx: &mut UiContext,
+    text: &str,
+    state: DetailsTextState,
+    status: Option<&str>,
+) {
+    if ctx.state.details_text_state != state {
+        set_textctrl_value_profiled(&ctx.ui.detail_text, text, "detail_text");
+        ctx.state.details_text_state = state;
+        if let Some(status) = status {
+            update_status_in_ctx(ctx, status);
+        }
+    }
+}
+
+fn sanitize_filename_component(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+        } else if ch == '-' || ch == '_' {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    let trimmed = out.trim_matches('_');
+    let trimmed = if trimmed.is_empty() { "value" } else { trimmed };
+    trimmed.chars().take(80).collect()
+}
+
+fn details_json_temp_path(
+    diff_id: Option<&str>,
+    sheet_name: &str,
+    format: DetailsJsonFormat,
+) -> PathBuf {
+    let root = std::env::temp_dir()
+        .join("tabulensis")
+        .join("details_json");
+    let diff = diff_id
+        .map(sanitize_filename_component)
+        .unwrap_or_else(|| "diff".to_string());
+    let sheet = sanitize_filename_component(sheet_name);
+    let suffix = match format {
+        DetailsJsonFormat::Compact => "compact",
+        DetailsJsonFormat::Pretty => "pretty",
+    };
+    root.join(diff).join(format!("{sheet}.{suffix}.json"))
+}
+
+fn write_details_json_to_temp_and_open(
+    diff_id: Option<String>,
+    sheet_name: String,
+    format: DetailsJsonFormat,
+    json: Arc<String>,
+) {
+    thread::spawn(move || {
+        let path = details_json_temp_path(diff_id.as_deref(), &sheet_name, format);
+        let result = (|| {
+            let Some(parent) = path.parent() else {
+                return Err("Invalid temp path.".to_string());
+            };
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            std::fs::write(&path, json.as_bytes()).map_err(|e| e.to_string())?;
+            open_path(&path, false)?;
+            Ok(())
+        })();
+
+        wxdragon::call_after(Box::new(move || {
+            let _ = with_ui_context(|ctx| match result {
+                Ok(()) => update_status_in_ctx(
+                    ctx,
+                    &format!("Wrote and opened JSON: {}", path.to_string_lossy()),
+                ),
+                Err(err) => update_status_in_ctx(ctx, &format!("Write/open failed: {err}")),
+            });
+        }));
+    });
+}
+
+fn perform_details_json_waiter_in_ctx(
+    ctx: &mut UiContext,
+    waiter: DetailsJsonWaiter,
+    sheet_name: &str,
+    format: DetailsJsonFormat,
+    json: Arc<String>,
+) {
+    match waiter {
+        DetailsJsonWaiter::CopyToClipboard => {
+            let clipboard = Clipboard::get();
+            if clipboard.set_text(json.as_str()) {
+                update_status_in_ctx(
+                    ctx,
+                    &format!("Copied {} JSON to clipboard: {sheet_name}.", format.label()),
+                );
+            } else {
+                update_status_in_ctx(ctx, "Clipboard unavailable.");
+            }
+        }
+        DetailsJsonWaiter::WriteToTempAndOpen => {
+            let diff_id = ctx.state.current_diff_id.clone();
+            write_details_json_to_temp_and_open(diff_id, sheet_name.to_string(), format, json);
+            update_status_in_ctx(
+                ctx,
+                &format!("Writing {} JSON to temp and opening...", format.label()),
+            );
+        }
+    }
+}
+
+fn request_detail_json_render_in_ctx(
+    ctx: &mut UiContext,
+    format: DetailsJsonFormat,
+    waiter: Option<DetailsJsonWaiter>,
+    reason: &'static str,
+) {
     let Some(payload) = ctx.state.pending_detail_payload.as_ref().cloned() else {
         return;
     };
@@ -1607,35 +1927,107 @@ fn render_staged_detail_payload(ctx: &mut UiContext) {
         .pending_detail_sheet_name
         .clone()
         .unwrap_or_else(|| "sheet".to_string());
-
     let gen = ctx.state.pending_detail_payload_gen;
-    let epoch = ctx.state.pending_detail_render_epoch;
-    if ctx.state.pending_detail_json_gen == Some(gen) {
-        if let Some(rendered) = ctx.state.pending_detail_json.as_ref() {
-            if ctx.ui.detail_text.get_value() != rendered.as_str() {
-                ctx.ui.detail_text.set_value(rendered);
-            }
-            update_status_in_ctx(ctx, &format!("Sheet payload loaded: {sheet_name}."));
+
+    if ctx.state.pending_detail_json_gen == Some(gen)
+        && ctx.state.pending_detail_json_format == Some(format)
+    {
+        if let (Some(waiter), Some(json)) = (waiter, ctx.state.pending_detail_json.as_ref()) {
+            perform_details_json_waiter_in_ctx(ctx, waiter, &sheet_name, format, json.clone());
         }
         return;
     }
 
-    if ctx.state.pending_detail_json_inflight_gen == Some(gen) {
-        if ctx.ui.detail_text.get_value().trim() != "Rendering JSON..." {
-            ctx.ui.detail_text.set_value("Rendering JSON...");
+    if ctx.state.pending_detail_json_inflight_gen == Some(gen)
+        && ctx.state.pending_detail_json_inflight_format == Some(format)
+    {
+        if let Some(waiter) = waiter {
+            if !ctx.state.pending_detail_json_waiters.contains(&waiter) {
+                ctx.state.pending_detail_json_waiters.push(waiter);
+            }
         }
-        update_status_in_ctx(ctx, &format!("Rendering JSON: {sheet_name}..."));
+        if ctx.ui.result_tabs.selection() == RESULT_TAB_DETAILS {
+            set_detail_text_in_ctx(
+                ctx,
+                "Rendering JSON...",
+                DetailsTextState {
+                    kind: DetailsTextKind::Rendering,
+                    gen: Some(gen),
+                    format: Some(format),
+                },
+                Some(&format!("Rendering JSON ({})...", format.label())),
+            );
+        }
         return;
+    }
+
+    // Invalidate any in-flight render for a different (gen, format) pair.
+    if ctx.state.pending_detail_json_inflight_gen.is_some() {
+        ctx.state.pending_detail_render_epoch = ctx.state.pending_detail_render_epoch.wrapping_add(1);
     }
 
     ctx.state.pending_detail_json_inflight_gen = Some(gen);
-    ctx.ui.detail_text.set_value("Rendering JSON...");
-    update_status_in_ctx(ctx, &format!("Rendering JSON: {sheet_name}..."));
+    ctx.state.pending_detail_json_inflight_format = Some(format);
+    ctx.state.pending_detail_json_waiters.clear();
+    if let Some(waiter) = waiter {
+        ctx.state.pending_detail_json_waiters.push(waiter);
+    }
+
+    let epoch = ctx.state.pending_detail_render_epoch;
+    ctx.ui
+        .details_json_status_text
+        .set_label(&format!("Rendering {} JSON...", format.label()));
+    if ctx.ui.result_tabs.selection() == RESULT_TAB_DETAILS {
+        set_detail_text_in_ctx(
+            ctx,
+            "Rendering JSON...",
+            DetailsTextState {
+                kind: DetailsTextKind::Rendering,
+                gen: Some(gen),
+                format: Some(format),
+            },
+            Some(&format!(
+                "Rendering JSON ({}) for {sheet_name}...",
+                format.label()
+            )),
+        );
+    } else {
+        update_status_in_ctx(
+            ctx,
+            &format!("Rendering JSON ({}) for {sheet_name}...", format.label()),
+        );
+    }
+
+    ui_perf_log(|| {
+        format!(
+            "UI_PERF json_render_start reason={} sheet={} format={} gen={}",
+            reason,
+            sheet_name,
+            format.label(),
+            gen
+        )
+    });
 
     let sheet_name_render = sheet_name.clone();
     thread::spawn(move || {
-        let text = serde_json::to_string_pretty(payload.as_ref())
-            .unwrap_or_else(|_| "{\"error\":\"failed to serialize payload\"}".to_string());
+        let start = Instant::now();
+        let text = match format {
+            DetailsJsonFormat::Pretty => serde_json::to_string_pretty(payload.as_ref()),
+            DetailsJsonFormat::Compact => serde_json::to_string(payload.as_ref()),
+        }
+        .unwrap_or_else(|err| format!("{{\"error\":\"failed to serialize payload\",\"detail\":\"{err}\"}}"));
+        let bytes = text.len();
+        let elapsed = start.elapsed();
+        ui_perf_log(|| {
+            format!(
+                "UI_PERF json_render_done sheet={} format={} bytes={} ms={}",
+                sheet_name_render,
+                format.label(),
+                bytes,
+                elapsed.as_millis()
+            )
+        });
+
         wxdragon::call_after(Box::new(move || {
             let _ = with_ui_context(|ctx| {
                 if ctx.state.pending_detail_render_epoch != epoch {
@@ -1649,17 +2041,270 @@ fn render_staged_detail_payload(ctx: &mut UiContext) {
                 {
                     return;
                 }
-                ctx.state.pending_detail_json = Some(text);
+
+                ctx.state.pending_detail_json = Some(Arc::new(text));
                 ctx.state.pending_detail_json_gen = Some(gen);
-                if ctx.state.pending_detail_json_inflight_gen == Some(gen) {
+                ctx.state.pending_detail_json_format = Some(format);
+                if ctx.state.pending_detail_json_inflight_gen == Some(gen)
+                    && ctx.state.pending_detail_json_inflight_format == Some(format)
+                {
                     ctx.state.pending_detail_json_inflight_gen = None;
+                    ctx.state.pending_detail_json_inflight_format = None;
                 }
-                if let Some(rendered) = ctx.state.pending_detail_json.as_ref() {
-                    ctx.ui.detail_text.set_value(rendered);
+
+                if let Some(json) = ctx.state.pending_detail_json.as_ref() {
+                    let size = format_bytes_compact(json.len());
+                    ctx.ui.details_json_status_text.set_label(&format!(
+                        "Sheet: {} | JSON: {} ({})",
+                        sheet_name_render,
+                        size,
+                        format.label()
+                    ));
                 }
-                update_status_in_ctx(ctx, &format!("Sheet payload loaded: {sheet_name_render}."));
+
+                let waiters = std::mem::take(&mut ctx.state.pending_detail_json_waiters);
+                if ctx.ui.result_tabs.selection() == RESULT_TAB_DETAILS {
+                    render_staged_detail_payload(ctx);
+                }
+
+                let json = ctx.state.pending_detail_json.clone();
+                if let Some(json) = json {
+                    for waiter in waiters {
+                        perform_details_json_waiter_in_ctx(
+                            ctx,
+                            waiter,
+                            &sheet_name_render,
+                            format,
+                            json.clone(),
+                        );
+                    }
+                }
             });
         }));
+    });
+}
+
+fn stage_detail_payload(
+    ctx: &mut UiContext,
+    sheet_name: String,
+    payload: ui_payload::DiffWithSheets,
+) {
+    ctx.state.pending_detail_sheet_name = Some(sheet_name.clone());
+    ctx.state.pending_detail_payload = Some(Arc::new(payload));
+    ctx.state.pending_detail_payload_gen = ctx.state.pending_detail_payload_gen.wrapping_add(1);
+    ctx.state.pending_detail_json = None;
+    ctx.state.pending_detail_json_gen = None;
+    ctx.state.pending_detail_json_format = None;
+    ctx.state.pending_detail_json_inflight_gen = None;
+    ctx.state.pending_detail_json_inflight_format = None;
+    ctx.state.pending_detail_json_waiters.clear();
+    ctx.state.pending_detail_force_inline_gen = None;
+    ctx.state.pending_detail_force_inline_format = None;
+    sync_details_json_controls_in_ctx(ctx);
+
+    if ctx.ui.result_tabs.selection() == RESULT_TAB_DETAILS {
+        render_staged_detail_payload(ctx);
+        let wants_ready = ctx.state.dev_ready_file.is_some()
+            && !ctx.state.dev_ready_fired
+            && ctx
+                .state
+                .dev_scenario
+                .as_ref()
+                .and_then(|s| s.focus_panel.as_deref())
+                .map(str::trim)
+                .is_some_and(|panel| panel.eq_ignore_ascii_case("details"));
+        if wants_ready {
+            wxdragon::call_after(Box::new(|| mark_ui_ready("sheet_payload_ready")));
+        }
+        return;
+    }
+
+    set_detail_text_in_ctx(
+        ctx,
+        &format!(
+        "Sheet payload ready for '{sheet_name}'.\nOpen Details for JSON, or Grid for a visual preview."
+        ),
+        DetailsTextState {
+            kind: DetailsTextKind::DeferredReady,
+            gen: Some(ctx.state.pending_detail_payload_gen),
+            format: None,
+        },
+        Some("Sheet payload ready (deferred until tab open)."),
+    );
+}
+
+fn render_staged_detail_payload(ctx: &mut UiContext) {
+    let Some(payload) = ctx.state.pending_detail_payload.as_ref().cloned() else {
+        sync_details_json_controls_in_ctx(ctx);
+        return;
+    };
+    let sheet_name = ctx
+        .state
+        .pending_detail_sheet_name
+        .clone()
+        .unwrap_or_else(|| "sheet".to_string());
+
+    let gen = ctx.state.pending_detail_payload_gen;
+    let format = details_json_format_from_ui_in_ctx(ctx);
+    sync_details_json_controls_in_ctx(ctx);
+
+    // If we have the JSON cached for the current (gen, format), decide whether to render inline.
+    if ctx.state.pending_detail_json_gen == Some(gen)
+        && ctx.state.pending_detail_json_format == Some(format)
+    {
+        let Some(rendered) = ctx.state.pending_detail_json.as_ref() else {
+            return;
+        };
+        let bytes = rendered.len();
+        let max_inline = details_inline_json_max_bytes();
+        let force_inline = ctx.state.pending_detail_force_inline_gen == Some(gen)
+            && ctx.state.pending_detail_force_inline_format == Some(format);
+
+        if force_inline || bytes <= max_inline {
+            let state = DetailsTextState {
+                kind: DetailsTextKind::InlineJson,
+                gen: Some(gen),
+                format: Some(format),
+            };
+            if ctx.state.details_text_state != state {
+                set_textctrl_value_profiled(&ctx.ui.detail_text, rendered.as_str(), "detail_text_json");
+                ctx.state.details_text_state = state;
+                update_status_in_ctx(ctx, &format!("Sheet payload loaded: {sheet_name}."));
+            }
+            return;
+        }
+
+        let (ops, old_cells, new_cells, truncated) = details_payload_stats(payload.as_ref());
+        let mut msg = String::new();
+        msg.push_str(&format!("Sheet payload ready: '{sheet_name}'.\n\n"));
+        msg.push_str(&format!(
+            "JSON ({}) is {} (inline limit: {}).\n",
+            format.label(),
+            format_bytes_compact(bytes),
+            format_bytes_compact(max_inline)
+        ));
+        msg.push_str("Not rendered in-app to keep the UI responsive.\n\n");
+        msg.push_str("Options:\n");
+        msg.push_str("- Render in-app (slow): click \"Render in-app\".\n");
+        msg.push_str("- Copy JSON: click \"Copy JSON\".\n");
+        msg.push_str("- Write + Open (recommended): click \"Write + Open\".\n");
+        msg.push_str("- Tip: choose \"Compact\" to reduce size.\n\n");
+        msg.push_str("Stats:\n");
+        msg.push_str(&format!("- Ops: {ops}\n"));
+        msg.push_str(&format!(
+            "- Preview cells (old/new): {old_cells}/{new_cells}{}\n",
+            if truncated { " (truncated)" } else { "" }
+        ));
+
+        set_detail_text_in_ctx(
+            ctx,
+            &msg,
+            DetailsTextState {
+                kind: DetailsTextKind::LargeSummary,
+                gen: Some(gen),
+                format: Some(format),
+            },
+            Some("Details JSON is large; not rendered in-app."),
+        );
+        return;
+    }
+
+    // If JSON is in-flight for this (gen, format), keep the placeholder.
+    if ctx.state.pending_detail_json_inflight_gen == Some(gen)
+        && ctx.state.pending_detail_json_inflight_format == Some(format)
+    {
+        set_detail_text_in_ctx(
+            ctx,
+            "Rendering JSON...",
+            DetailsTextState {
+                kind: DetailsTextKind::Rendering,
+                gen: Some(gen),
+                format: Some(format),
+            },
+            Some(&format!("Rendering JSON ({})...", format.label())),
+        );
+        return;
+    }
+
+    // Auto-render JSON on Details focus, but keep large JSON out of the notebook textctrl.
+    request_detail_json_render_in_ctx(ctx, format, None, "details_focus");
+}
+
+fn handle_details_json_format_changed() {
+    let _ = with_ui_context(|ctx| {
+        // Invalidate any in-flight render; the new format should win.
+        ctx.state.pending_detail_render_epoch = ctx.state.pending_detail_render_epoch.wrapping_add(1);
+        ctx.state.pending_detail_json_inflight_gen = None;
+        ctx.state.pending_detail_json_inflight_format = None;
+        ctx.state.pending_detail_json_waiters.clear();
+        ctx.state.pending_detail_force_inline_gen = None;
+        ctx.state.pending_detail_force_inline_format = None;
+
+        // If we had JSON cached for a different format, drop it to avoid surprises and memory spikes.
+        let desired = details_json_format_from_ui_in_ctx(ctx);
+        if ctx.state.pending_detail_json_format.is_some()
+            && ctx.state.pending_detail_json_format != Some(desired)
+        {
+            ctx.state.pending_detail_json = None;
+            ctx.state.pending_detail_json_gen = None;
+            ctx.state.pending_detail_json_format = None;
+        }
+
+        // Force the next Details focus to repaint without reading back from the widget.
+        ctx.state.details_text_state = DetailsTextState::default();
+        if ctx.ui.result_tabs.selection() == RESULT_TAB_DETAILS {
+            render_staged_detail_payload(ctx);
+        }
+    });
+}
+
+fn handle_details_json_render_requested() {
+    let _ = with_ui_context(|ctx| {
+        if ctx.state.pending_detail_payload.is_none() {
+            update_status_in_ctx(ctx, "No sheet payload loaded.");
+            return;
+        }
+        let format = details_json_format_from_ui_in_ctx(ctx);
+        let gen = ctx.state.pending_detail_payload_gen;
+        ctx.state.pending_detail_force_inline_gen = Some(gen);
+        ctx.state.pending_detail_force_inline_format = Some(format);
+        if ctx.ui.result_tabs.selection() == RESULT_TAB_DETAILS {
+            render_staged_detail_payload(ctx);
+        } else {
+            update_status_in_ctx(ctx, "Open Details to render JSON.");
+        }
+    });
+}
+
+fn handle_details_json_copy_requested() {
+    let _ = with_ui_context(|ctx| {
+        if ctx.state.pending_detail_payload.is_none() {
+            update_status_in_ctx(ctx, "No sheet payload loaded.");
+            return;
+        }
+        let format = details_json_format_from_ui_in_ctx(ctx);
+        request_detail_json_render_in_ctx(
+            ctx,
+            format,
+            Some(DetailsJsonWaiter::CopyToClipboard),
+            "copy_json",
+        );
+    });
+}
+
+fn handle_details_json_write_requested() {
+    let _ = with_ui_context(|ctx| {
+        if ctx.state.pending_detail_payload.is_none() {
+            update_status_in_ctx(ctx, "No sheet payload loaded.");
+            return;
+        }
+        let format = details_json_format_from_ui_in_ctx(ctx);
+        request_detail_json_render_in_ctx(
+            ctx,
+            format,
+            Some(DetailsJsonWaiter::WriteToTempAndOpen),
+            "write_json",
+        );
     });
 }
 
@@ -3750,9 +4395,11 @@ fn populate_recents(ctx: &mut UiContext, recents: Vec<RecentComparison>) {
 fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
     let mut ready_reason: Option<&'static str> = None;
     let mut defer_ready_for_pbip = false;
+    let mut defer_ready_for_sheet_payload = false;
     let mut large_analysis_request: Option<(DesktopBackend, String, ui_payload::NoiseFilters)> =
         None;
     let mut pbip_nav_request: Option<(DesktopBackend, String)> = None;
+    let mut trigger_sheet_selection: Option<usize> = None;
     let _ = with_ui_context(|ctx| {
         stop_progress_animation();
         ctx.state.active_run = None;
@@ -3788,11 +4435,21 @@ fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
                     ctx.state.pending_detail_render_epoch.wrapping_add(1);
                 ctx.state.pending_detail_json = None;
                 ctx.state.pending_detail_json_gen = None;
+                ctx.state.pending_detail_json_format = None;
                 ctx.state.pending_detail_json_inflight_gen = None;
+                ctx.state.pending_detail_json_inflight_format = None;
+                ctx.state.pending_detail_json_waiters.clear();
+                ctx.state.pending_detail_force_inline_gen = None;
+                ctx.state.pending_detail_force_inline_format = None;
+                ctx.state.details_text_state = DetailsTextState::default();
+                ctx.ui.details_json_status_text.set_label("");
+                ctx.ui.details_json_render_btn.enable(false);
+                ctx.ui.details_json_copy_btn.enable(false);
+                ctx.ui.details_json_write_btn.enable(false);
                 render_grid_placeholder(ctx, "Select a sheet to preview grid changes.");
 
                 if let Some(summary) = outcome.summary {
-                    ctx.ui.detail_text.set_value("");
+                    ctx.ui.detail_text.set_value(GUIDED_EMPTY_DETAILS);
                     ctx.state.sheets_filter.clear();
                     ctx.ui.sheets_filter_ctrl.set_value("");
                     if let Some(view) = ctx.ui.sheets_view {
@@ -3865,6 +4522,9 @@ fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
                                 if let Some(view) = ctx.ui.sheets_view {
                                     let _ = view.select_row(0);
                                 }
+                                if ctx.state.current_payload.is_none() {
+                                    trigger_sheet_selection = Some(0);
+                                }
                                 render_grid_for_current_selection(ctx);
                             } else if summary.op_count == 0 {
                                 render_grid_placeholder(ctx, "No differences detected.");
@@ -3873,6 +4533,31 @@ fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
                                     ctx,
                                     "No sheet-level grid changes were detected.",
                                 );
+                            }
+                        }
+
+                        // Dev scenarios can also focus Details; for large-mode runs, explicitly trigger
+                        // a sheet selection so the sheet payload load is deterministic.
+                        let wants_details_focus = ctx
+                            .state
+                            .dev_scenario
+                            .as_ref()
+                            .and_then(|s| s.focus_panel.as_deref())
+                            .map(|value| value.trim().eq_ignore_ascii_case("details"))
+                            .unwrap_or(false);
+                        if wants_details_focus {
+                            ctx.ui.root_tabs.set_selection(0);
+                            ctx.ui.result_tabs.set_selection(RESULT_TAB_DETAILS as usize);
+                            if !ctx.state.sheet_names.is_empty() {
+                                if let Some(view) = ctx.ui.sheets_view {
+                                    let _ = view.select_row(0);
+                                }
+                                if ctx.state.current_payload.is_none() {
+                                    trigger_sheet_selection = Some(0);
+                                    defer_ready_for_sheet_payload = ctx.state.dev_ready_file.is_some()
+                                        && !ctx.state.dev_ready_fired;
+                                }
+                                render_staged_detail_payload(ctx);
                             }
                         }
                     }
@@ -3907,6 +4592,7 @@ fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
                 if ctx.state.dev_ready_file.is_some()
                     && !ctx.state.dev_ready_fired
                     && !defer_ready_for_pbip
+                    && !defer_ready_for_sheet_payload
                 {
                     ready_reason = Some("diff_complete");
                 }
@@ -3941,6 +4627,15 @@ fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
                 ctx.ui
                     .detail_text
                     .set_value(&format!("{}: {}", err.code, err.message));
+                ctx.state.details_text_state = DetailsTextState {
+                    kind: DetailsTextKind::Error,
+                    gen: None,
+                    format: None,
+                };
+                ctx.ui.details_json_status_text.set_label("");
+                ctx.ui.details_json_render_btn.enable(false);
+                ctx.ui.details_json_copy_btn.enable(false);
+                ctx.ui.details_json_write_btn.enable(false);
                 update_status_in_ctx(ctx, &format!("Diff failed: {}", err.message));
                 render_grid_placeholder(ctx, "Run a diff to preview grid changes.");
                 theme::set_status_tone(
@@ -3958,6 +4653,12 @@ fn handle_diff_result(result: Result<DiffOutcome, DiffErrorPayload>) {
 
         sync_compare_controls_in_ctx(ctx);
     });
+
+    if let Some(row) = trigger_sheet_selection {
+        // Explicitly trigger selection handling; some DataView implementations don't emit selection
+        // change events for programmatic selection.
+        handle_sheet_selection(row);
+    }
 
     if let Some((backend, diff_id, filters)) = large_analysis_request {
         thread::spawn(move || {
@@ -4148,7 +4849,12 @@ fn start_compare() {
             ctx.state.pending_detail_render_epoch.wrapping_add(1);
         ctx.state.pending_detail_json = None;
         ctx.state.pending_detail_json_gen = None;
+        ctx.state.pending_detail_json_format = None;
         ctx.state.pending_detail_json_inflight_gen = None;
+        ctx.state.pending_detail_json_inflight_format = None;
+        ctx.state.pending_detail_json_waiters.clear();
+        ctx.state.pending_detail_force_inline_gen = None;
+        ctx.state.pending_detail_force_inline_format = None;
         ctx.state.sheets_all.clear();
         ctx.state.sheet_names.clear();
         ctx.state.sheets_filter.clear();
@@ -4180,6 +4886,15 @@ fn start_compare() {
         ctx.ui.progress_gauge.set_value(0);
         ctx.ui.summary_text.set_value("");
         ctx.ui.detail_text.set_value("");
+        ctx.state.details_text_state = DetailsTextState {
+            kind: DetailsTextKind::Rendering,
+            gen: None,
+            format: None,
+        };
+        ctx.ui.details_json_status_text.set_label("");
+        ctx.ui.details_json_render_btn.enable(false);
+        ctx.ui.details_json_copy_btn.enable(false);
+        ctx.ui.details_json_write_btn.enable(false);
         ctx.ui
             .pbip_details_header
             .set_label("Select a document or entity to view details.");
@@ -4272,6 +4987,11 @@ fn handle_sheet_selection(row: usize) {
                             sheet.counts.moved,
                         );
                         ctx.ui.detail_text.set_value(&text);
+                        ctx.state.details_text_state = DetailsTextState {
+                            kind: DetailsTextKind::SheetStats,
+                            gen: None,
+                            format: None,
+                        };
                         ctx.state.pending_detail_payload = None;
                         ctx.state.pending_detail_sheet_name = None;
                         ctx.state.pending_detail_payload_gen =
@@ -4280,7 +5000,16 @@ fn handle_sheet_selection(row: usize) {
                             ctx.state.pending_detail_render_epoch.wrapping_add(1);
                         ctx.state.pending_detail_json = None;
                         ctx.state.pending_detail_json_gen = None;
+                        ctx.state.pending_detail_json_format = None;
                         ctx.state.pending_detail_json_inflight_gen = None;
+                        ctx.state.pending_detail_json_inflight_format = None;
+                        ctx.state.pending_detail_json_waiters.clear();
+                        ctx.state.pending_detail_force_inline_gen = None;
+                        ctx.state.pending_detail_force_inline_format = None;
+                        ctx.ui.details_json_status_text.set_label("");
+                        ctx.ui.details_json_render_btn.enable(false);
+                        ctx.ui.details_json_copy_btn.enable(false);
+                        ctx.ui.details_json_write_btn.enable(false);
                         let html = ctx.state.current_payload.as_ref().map(|payload| {
                             grid_preview::build_sheet_grid_preview_html(&sheet_name, payload)
                         });
@@ -4314,7 +5043,27 @@ fn handle_sheet_selection(row: usize) {
                     ctx.state.pending_detail_render_epoch.wrapping_add(1);
                 ctx.state.pending_detail_json = None;
                 ctx.state.pending_detail_json_gen = None;
+                ctx.state.pending_detail_json_format = None;
                 ctx.state.pending_detail_json_inflight_gen = None;
+                ctx.state.pending_detail_json_inflight_format = None;
+                ctx.state.pending_detail_json_waiters.clear();
+                ctx.state.pending_detail_force_inline_gen = None;
+                ctx.state.pending_detail_force_inline_format = None;
+                ctx.state.details_text_state = DetailsTextState::default();
+                ctx.ui.details_json_status_text.set_label("");
+                ctx.ui.details_json_render_btn.enable(false);
+                ctx.ui.details_json_copy_btn.enable(false);
+                ctx.ui.details_json_write_btn.enable(false);
+                set_detail_text_in_ctx(
+                    ctx,
+                    "Loading sheet payload...",
+                    DetailsTextState {
+                        kind: DetailsTextKind::Rendering,
+                        gen: Some(ctx.state.pending_detail_payload_gen),
+                        format: None,
+                    },
+                    None,
+                );
                 render_grid_placeholder(ctx, "Loading grid preview...");
             }
             _ => {}
@@ -4436,6 +5185,15 @@ fn load_diff_summary_into_ui(diff_id: String) {
         request = Some((ctx.state.backend.clone(), noise_filters_from_ui(ctx)));
         ctx.ui.summary_text.set_value("Loading summary...");
         ctx.ui.detail_text.set_value("");
+        ctx.state.details_text_state = DetailsTextState {
+            kind: DetailsTextKind::Rendering,
+            gen: None,
+            format: None,
+        };
+        ctx.ui.details_json_status_text.set_label("");
+        ctx.ui.details_json_render_btn.enable(false);
+        ctx.ui.details_json_copy_btn.enable(false);
+        ctx.ui.details_json_write_btn.enable(false);
         ctx.ui.explain_text.set_value(GUIDED_EMPTY_EXPLAIN);
         render_grid_placeholder(ctx, "Loading summary...");
         update_status_in_ctx(ctx, "Loading summary...");
@@ -4474,7 +5232,17 @@ fn load_diff_summary_into_ui(diff_id: String) {
                         ctx.state.pending_detail_render_epoch.wrapping_add(1);
                     ctx.state.pending_detail_json = None;
                     ctx.state.pending_detail_json_gen = None;
+                    ctx.state.pending_detail_json_format = None;
                     ctx.state.pending_detail_json_inflight_gen = None;
+                    ctx.state.pending_detail_json_inflight_format = None;
+                    ctx.state.pending_detail_json_waiters.clear();
+                    ctx.state.pending_detail_force_inline_gen = None;
+                    ctx.state.pending_detail_force_inline_format = None;
+                    ctx.state.details_text_state = DetailsTextState::default();
+                    ctx.ui.details_json_status_text.set_label("");
+                    ctx.ui.details_json_render_btn.enable(false);
+                    ctx.ui.details_json_copy_btn.enable(false);
+                    ctx.ui.details_json_write_btn.enable(false);
                     ctx.state.sheets_filter.clear();
                     ctx.ui.sheets_filter_ctrl.set_value("");
                     if let Some(view) = ctx.ui.sheets_view {
@@ -4551,14 +5319,16 @@ fn load_diff_summary_into_ui(diff_id: String) {
                             None,
                             None,
                         ));
-                        ctx.ui.detail_text.set_value("");
+                        ctx.ui.detail_text.set_value(GUIDED_EMPTY_DETAILS);
+                        ctx.state.details_text_state = DetailsTextState::default();
                         ctx.ui.explain_text.set_value(
                             "Select a document (or entity) in the Navigator to view a PR-style explanation.",
                         );
                         render_grid_placeholder(ctx, "Preview is not available for PBIP diffs.");
                     } else {
                         apply_display_analysis_in_ctx(ctx, &summary);
-                        ctx.ui.detail_text.set_value("");
+                        ctx.ui.detail_text.set_value(GUIDED_EMPTY_DETAILS);
+                        ctx.state.details_text_state = DetailsTextState::default();
                         ctx.ui.explain_text.set_value(GUIDED_EMPTY_EXPLAIN);
                         render_grid_placeholder(ctx, "Select a sheet to preview grid changes.");
                     }
@@ -5408,7 +6178,13 @@ fn main() {
             pending_detail_render_epoch: 0,
             pending_detail_json: None,
             pending_detail_json_gen: None,
+            pending_detail_json_format: None,
             pending_detail_json_inflight_gen: None,
+            pending_detail_json_inflight_format: None,
+            pending_detail_json_waiters: Vec::new(),
+            pending_detail_force_inline_gen: None,
+            pending_detail_force_inline_format: None,
+            details_text_state: DetailsTextState::default(),
             sheet_names: Vec::new(),
             sheets_all: Vec::new(),
             sheets_filter: String::new(),
@@ -5526,6 +6302,17 @@ fn main() {
                 ctx.ui.detail_text.set_value(GUIDED_EMPTY_DETAILS);
                 ctx.ui.explain_text.set_value(GUIDED_EMPTY_EXPLAIN);
 
+                ctx.ui.details_json_format_choice.append("Compact");
+                ctx.ui.details_json_format_choice.append("Pretty");
+                ctx.ui.details_json_format_choice.set_selection(1);
+                ctx.ui.details_json_format_choice.set_tooltip(
+                    "Details JSON format. Compact is faster for very large payloads.",
+                );
+                ctx.ui.details_json_status_text.set_label("");
+                ctx.ui.details_json_render_btn.enable(false);
+                ctx.ui.details_json_copy_btn.enable(false);
+                ctx.ui.details_json_write_btn.enable(false);
+
                 ctx.ui.search_scope_choice.append("Changes");
                 ctx.ui.search_scope_choice.append("Old workbook");
                 ctx.ui.search_scope_choice.append("New workbook");
@@ -5546,6 +6333,20 @@ fn main() {
                 ctx.ui
                     .profile_choice
                     .on_selection_changed(|_| handle_profile_choice_changed());
+                ctx.ui
+                    .details_json_format_choice
+                    .on_selection_changed(|_| {
+                        wxdragon::call_after(Box::new(|| handle_details_json_format_changed()));
+                    });
+                ctx.ui
+                    .details_json_render_btn
+                    .on_click(|_| handle_details_json_render_requested());
+                ctx.ui
+                    .details_json_copy_btn
+                    .on_click(|_| handle_details_json_copy_requested());
+                ctx.ui
+                    .details_json_write_btn
+                    .on_click(|_| handle_details_json_write_requested());
                 ctx.ui.open_recent_btn.on_click(|_| open_recent());
                 ctx.ui.run_batch_btn.on_click(|_| run_batch());
                 ctx.ui.search_btn.on_click(|_| handle_search());
@@ -5597,7 +6398,10 @@ fn main() {
                     // programmatically (including from inside other UI callbacks). Always defer
                     // to avoid re-entrant `with_ui_context()` borrows.
                     let selection = event.get_selection();
+                    let scheduled_at = Instant::now();
                     wxdragon::call_after(Box::new(move || {
+                        let queue_ms = scheduled_at.elapsed().as_millis();
+                        let handler_start = Instant::now();
                         let _ = with_ui_context(|ctx| {
                             if selection == Some(RESULT_TAB_DETAILS) {
                                 render_staged_detail_payload(ctx);
@@ -5605,6 +6409,14 @@ fn main() {
                                 render_grid_for_current_selection(ctx);
                             }
                         });
+                        if ui_profile_enabled() {
+                            info!(
+                                "UI_PERF tab_switch selection={:?} queue_ms={} handler_ms={}",
+                                selection,
+                                queue_ms,
+                                handler_start.elapsed().as_millis()
+                            );
+                        }
                     }));
                 });
                 ctx.ui.frame.on_key_down(|event| {

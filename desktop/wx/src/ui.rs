@@ -166,6 +166,18 @@ pub(crate) fn build_ui_handles(
     let summary_top_sheets_table_host =
         find_xrc_child::<Panel>(&compare_container, "summary_top_sheets_table_host");
     let summary_text = find_xrc_child::<TextCtrl>(&compare_container, "summary_text");
+    let details_json_controls_panel =
+        find_xrc_child::<Panel>(&compare_container, "details_json_controls_panel");
+    let details_json_format_choice =
+        find_xrc_child::<Choice>(&compare_container, "details_json_format_choice");
+    let details_json_render_btn =
+        find_xrc_child::<Button>(&compare_container, "details_json_render_btn");
+    let details_json_copy_btn =
+        find_xrc_child::<Button>(&compare_container, "details_json_copy_btn");
+    let details_json_write_btn =
+        find_xrc_child::<Button>(&compare_container, "details_json_write_btn");
+    let details_json_status_text =
+        find_xrc_child::<StaticText>(&compare_container, "details_json_status_text");
     let detail_text = find_xrc_child::<TextCtrl>(&compare_container, "detail_text");
     let pbip_details_panel = find_xrc_child::<Panel>(&compare_container, "pbip_details_panel");
     let pbip_details_header =
@@ -237,6 +249,7 @@ pub(crate) fn build_ui_handles(
     theme::apply_surface(&run_summary_header);
     theme::apply_surface(&sheets_list);
     theme::apply_surface(&compare_right_panel);
+    theme::apply_surface(&details_json_controls_panel);
     theme::apply_surface(&grid_panel);
     theme::apply_surface(&recents_list);
     theme::apply_surface(&batch_results_list);
@@ -351,6 +364,7 @@ pub(crate) fn build_ui_handles(
     hide_dax_formatting_checkbox.set_foreground_color(theme::Palette::TEXT_PRIMARY);
     hide_formula_formatting_checkbox.set_foreground_color(theme::Palette::TEXT_PRIMARY);
     collapse_moves_checkbox.set_foreground_color(theme::Palette::TEXT_PRIMARY);
+    details_json_status_text.set_foreground_color(theme::Palette::TEXT_SECONDARY);
     include_glob_label.set_foreground_color(theme::Palette::TEXT_SECONDARY);
     exclude_glob_label.set_foreground_color(theme::Palette::TEXT_SECONDARY);
 
@@ -413,6 +427,12 @@ pub(crate) fn build_ui_handles(
         summary_categories_table_host,
         summary_top_sheets_table_host,
         summary_text,
+        details_json_controls_panel,
+        details_json_format_choice,
+        details_json_render_btn,
+        details_json_copy_btn,
+        details_json_write_btn,
+        details_json_status_text,
         detail_text,
         pbip_details_panel,
         pbip_details_header,

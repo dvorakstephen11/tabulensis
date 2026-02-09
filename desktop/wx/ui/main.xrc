@@ -624,16 +624,79 @@
                                   </object>
                                 </object>
                               </object>
-                              <object class="notebookpage">
-                                <label>Details</label>
-	                                <object class="wxPanel">
-	                                  <object class="wxBoxSizer">
-	                                    <orient>wxVERTICAL</orient>
-	                                    <object class="sizeritem">
-	                                      <object class="wxTextCtrl" name="detail_text">
-	                                        <style>wxTE_MULTILINE|wxTE_READONLY</style>
-	                                      </object>
-	                                      <flag>wxEXPAND|wxALL</flag>
+	                              <object class="notebookpage">
+	                                <label>Details</label>
+		                                <object class="wxPanel">
+		                                  <object class="wxBoxSizer">
+		                                    <orient>wxVERTICAL</orient>
+		                                    <object class="sizeritem">
+		                                      <object class="wxPanel" name="details_json_controls_panel">
+		                                        <object class="wxBoxSizer">
+		                                          <orient>wxVERTICAL</orient>
+		                                          <object class="sizeritem">
+		                                            <object class="wxBoxSizer">
+		                                              <orient>wxHORIZONTAL</orient>
+		                                              <object class="sizeritem">
+		                                                <object class="wxStaticText" name="details_json_controls_label">
+		                                                  <label>JSON:</label>
+		                                                </object>
+		                                                <flag>wxALIGN_CENTER_VERTICAL|wxRIGHT</flag>
+		                                                <option>0</option>
+		                                                <border>6</border>
+		                                              </object>
+		                                              <object class="sizeritem">
+		                                                <object class="wxChoice" name="details_json_format_choice"></object>
+		                                                <flag>wxALIGN_CENTER_VERTICAL|wxRIGHT</flag>
+		                                                <option>0</option>
+		                                                <border>8</border>
+		                                              </object>
+		                                              <object class="sizeritem">
+		                                                <object class="wxButton" name="details_json_render_btn">
+		                                                  <label>Render in-app</label>
+		                                                </object>
+		                                                <flag>wxALIGN_CENTER_VERTICAL|wxRIGHT</flag>
+		                                                <option>0</option>
+		                                                <border>6</border>
+		                                              </object>
+		                                              <object class="sizeritem">
+		                                                <object class="wxButton" name="details_json_copy_btn">
+		                                                  <label>Copy JSON</label>
+		                                                </object>
+		                                                <flag>wxALIGN_CENTER_VERTICAL|wxRIGHT</flag>
+		                                                <option>0</option>
+		                                                <border>6</border>
+		                                              </object>
+		                                              <object class="sizeritem">
+		                                                <object class="wxButton" name="details_json_write_btn">
+		                                                  <label>Write + Open</label>
+		                                                </object>
+		                                                <flag>wxALIGN_CENTER_VERTICAL</flag>
+		                                                <option>0</option>
+		                                              </object>
+		                                            </object>
+		                                            <flag>wxEXPAND|wxALL</flag>
+		                                            <option>0</option>
+		                                            <border>2</border>
+		                                          </object>
+		                                          <object class="sizeritem">
+		                                            <object class="wxStaticText" name="details_json_status_text">
+		                                              <label></label>
+		                                            </object>
+		                                            <flag>wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM</flag>
+		                                            <option>0</option>
+		                                            <border>4</border>
+		                                          </object>
+		                                        </object>
+		                                      </object>
+		                                      <flag>wxEXPAND|wxLEFT|wxRIGHT|wxTOP</flag>
+		                                      <option>0</option>
+		                                      <border>4</border>
+		                                    </object>
+		                                    <object class="sizeritem">
+		                                      <object class="wxTextCtrl" name="detail_text">
+		                                        <style>wxTE_MULTILINE|wxTE_READONLY</style>
+		                                      </object>
+		                                      <flag>wxEXPAND|wxALL</flag>
 	                                      <option>1</option>
 	                                      <border>4</border>
 	                                    </object>
