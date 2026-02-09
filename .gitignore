@@ -28,6 +28,9 @@ benchmarks/results_real_world/
 
 # Docs
 docs/meta/completion_estimates/
+docs/meta/today.md
+docs/meta/audio/*.wav
+docs/meta/audio/*.mp3
 
 # WASM build output
 web/wasm/

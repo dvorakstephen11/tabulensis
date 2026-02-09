@@ -29,6 +29,9 @@ llm:
   provider: codex_exec
   codex_bin: codex
   codex_exec_args: []
+  # Where Codex CLI stores sessions/history/auth. This must be writable; using a repo-local
+  # path makes the overnight agent work in sandboxed/CI environments.
+  codex_home: tmp/overnight_agent/codex_home
   # Use your newest available Codex model (examples in docs/real_world_datasets_perf_plan.md).
   model: gpt-5.3-codex
   timeout_s: 600

@@ -25,20 +25,23 @@ This checklist assumes:
 
 Set these in Worker env (prod + dev separately):
 
+Note (repo reality): non-sensitive vars are committed in `tabulensis-api/wrangler.jsonc` and will be applied on deploy.
+You still need to set secrets (Stripe keys, signing key, etc) in Cloudflare.
+
 Stripe:
 - `STRIPE_SECRET_KEY`
 - `STRIPE_WEBHOOK_SECRET`
 - `STRIPE_PRICE_ID`
-- `STRIPE_SUCCESS_URL=https://tabulensis.com/download/success`
-- `STRIPE_CANCEL_URL=https://tabulensis.com/download`
-- `STRIPE_PORTAL_RETURN_URL=https://tabulensis.com/support/billing`
-- `STRIPE_TRIAL_DAYS=30`
+- `STRIPE_SUCCESS_URL=https://tabulensis.com/download/success` (var; default set in `tabulensis-api/wrangler.jsonc`)
+- `STRIPE_CANCEL_URL=https://tabulensis.com/download` (var; default set in `tabulensis-api/wrangler.jsonc`)
+- `STRIPE_PORTAL_RETURN_URL=https://tabulensis.com/support/billing` (var; default set in `tabulensis-api/wrangler.jsonc`)
+- `STRIPE_TRIAL_DAYS=30` (var; default set in `tabulensis-api/wrangler.jsonc`)
 
 Licensing:
 - `LICENSE_SIGNING_KEY_B64` (32-byte Ed25519 seed, base64)
-- `LICENSE_TOKEN_TTL_DAYS=14`
-- `LICENSE_PAST_DUE_GRACE_DAYS=3`
-- `LICENSE_MAX_DEVICES=2`
+- `LICENSE_TOKEN_TTL_DAYS=14` (var; default set in `tabulensis-api/wrangler.jsonc`)
+- `LICENSE_PAST_DUE_GRACE_DAYS=3` (var; default set in `tabulensis-api/wrangler.jsonc`)
+- `LICENSE_MAX_DEVICES=2` (var; default set in `tabulensis-api/wrangler.jsonc`)
 - `LICENSE_ADMIN_TOKEN` (optional; enables `/license/reset`)
 
 Dev helpers:
@@ -110,7 +113,8 @@ Checklist:
    - Cloudflare R2 + public bucket
    - Cloudflare Pages static assets
    - GitHub Releases mirrored to `tabulensis.com/download`
-3. Update `public/download/index.html` “Windows/macOS/Linux release” links to real artifact URLs.
+   - Chosen: GitHub Releases (see `docs/meta/results/decision_register.md` `DR-0019`)
+3. Update `public/download/index.html` “Windows/macOS/Linux release” links to real artifact URLs (stable `releases/latest/download/...` URLs recommended).
 4. Ensure integrity:
    - Publish SHA256 checksums (`scripts/generate_checksums.py`)
 5. Optional:

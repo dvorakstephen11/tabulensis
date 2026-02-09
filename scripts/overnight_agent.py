@@ -568,10 +568,45 @@ def try_checkoff_task(repo_root: Path, task: Task) -> bool:
         lines[i] = re.sub("\\[\\s*\\]", "[x]", line, count=1)
         new_text = "".join(lines)
         if new_text != text:
-            src.write_text(new_text, encoding="utf-8", newline="\\n")
+            # NOTE: newline must be a real newline value for Python's open(..., newline=...).
+            src.write_text(new_text, encoding="utf-8", newline="\n")
             return True
         return False
     return False
+
+
+def is_retryable_task_failure(last_result: str) -> bool:
+    """
+    Return True for infra / transient failures that should not permanently exclude a task
+    from selection. This prevents a broken LLM/planning loop from "burning" the checklist.
+    """
+    msg = (last_result or "").strip()
+    if not msg:
+        return False
+
+    retryable_prefixes = (
+        "Plan field ",
+        "No JSON object found in LLM output.",
+        "Failed to parse JSON object from LLM output.",
+        "No unified diff found in LLM output.",
+        "codex exec failed:",
+        "OpenAI request failed:",
+        "Unexpected OpenAI response shape:",
+        "illegal newline value:",
+        "Command ['codex'",
+    )
+    if any(msg.startswith(p) for p in retryable_prefixes):
+        return True
+
+    retryable_substrings = (
+        "OpenAI error ",
+        "timed out",
+        "timeout",
+        "Temporary failure",
+        "Connection reset",
+        "Connection refused",
+    )
+    return any(s in msg for s in retryable_substrings)
 
 
 def select_next_task(conn: sqlite3.Connection, cfg: dict[str, Any], candidates: list[Task]) -> Task | None:
@@ -626,12 +661,14 @@ def select_next_task(conn: sqlite3.Connection, cfg: dict[str, Any], candidates: 
             status = str(row["status"])
             attempts = int(row["attempt_count"])
             last_attempted_at = row["last_attempted_at"]
+            last_result = row["last_result"]
+            last_result_s = str(last_result) if isinstance(last_result, str) else ""
 
             if status == "done":
                 continue
             if status == "blocked":
                 continue
-            if status == "failed" and attempts >= max_attempts:
+            if status == "failed" and attempts >= max_attempts and not is_retryable_task_failure(last_result_s):
                 continue
 
             if any(r.search(t.text) for r in compiled_skips):
@@ -975,11 +1012,13 @@ class CodexExecClient(LlmClient):
         codex_bin: str,
         model: str | None,
         extra_args: list[str],
+        codex_home: Path | None,
         timeout_s: int,
     ) -> None:
         self._codex_bin = codex_bin
         self._model = model.strip() if isinstance(model, str) else ""
         self._extra_args = list(extra_args)
+        self._codex_home = codex_home
         self._timeout_s = int(timeout_s)
 
         if shutil.which(self._codex_bin) is None:
@@ -988,9 +1027,55 @@ class CodexExecClient(LlmClient):
                 "Install Codex CLI or set llm.codex_bin to the correct executable."
             )
 
+    def _env(self) -> dict[str, str]:
+        env = dict(os.environ)
+        if self._codex_home is None:
+            return env
+
+        # Codex CLI persists sessions/history/auth under CODEX_HOME. For sandboxed environments,
+        # this MUST be writable, otherwise `codex exec` will fail with permission errors.
+        env["CODEX_HOME"] = str(self._codex_home)
+
+        try:
+            safe_mkdir(self._codex_home)
+        except Exception:
+            # Best-effort: if we can't create it, let codex error with a clearer message.
+            return env
+
+        # If this is a fresh CODEX_HOME, try to copy existing credentials so non-interactive
+        # automation can still authenticate. This copies secrets into tmp/ (gitignored).
+        try:
+            dst = self._codex_home / "auth.json"
+            if not dst.exists():
+                src = Path(os.path.expanduser("~/.codex/auth.json"))
+                if src.exists():
+                    dst.write_bytes(src.read_bytes())
+                    try:
+                        dst.chmod(0o600)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # Best-effort: copy user config as well (keeps provider/model defaults consistent).
+        try:
+            dst = self._codex_home / "config.toml"
+            if not dst.exists():
+                src = Path(os.path.expanduser("~/.codex/config.toml"))
+                if src.exists():
+                    dst.write_bytes(src.read_bytes())
+                    try:
+                        dst.chmod(0o600)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        return env
+
     def _call(self, *, system: str, user: str) -> str:
         # Keep the prompt simple and explicit; Codex CLI takes a single prompt string.
-        prompt = f"SYSTEM:\\n{system}\\n\\nUSER:\\n{user}\\n"
+        prompt = f"SYSTEM:\n{system}\n\nUSER:\n{user}\n"
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as tmp:
             out_path = tmp.name
@@ -1001,11 +1086,14 @@ class CodexExecClient(LlmClient):
             cmd += ["--model", self._model]
         cmd += self._extra_args
         # Per docs: `--output-last-message, -o <path>`
-        cmd += ["-o", out_path, prompt]
+        # Avoid OS argv length limits: pass prompt via stdin (codex exec uses stdin when PROMPT is '-' or omitted).
+        cmd += ["-o", out_path, "-"]
 
         proc = subprocess.run(
             cmd,
             cwd=ROOT,
+            input=prompt,
+            env=self._env(),
             capture_output=True,
             text=True,
             timeout=self._timeout_s,
@@ -1059,12 +1147,57 @@ def plan_from_obj(obj: dict[str, Any]) -> LlmPlan:
             raise LlmError(f"Plan field {name!r} must be an object.")
         return v
 
+    def _extract_path_hint(s: str) -> str | None:
+        s = (s or "").strip()
+        if not s:
+            return None
+
+        # Common pattern: "`path/to/file`: description..."
+        m = re.search(r"`([^`]+)`", s)
+        if m:
+            p = m.group(1).strip()
+            if p and (" " not in p):
+                return p
+
+        # Common pattern: "path/to/file: description..."
+        m2 = re.match(r"^([A-Za-z0-9_./-]+)\s*:", s)
+        if m2:
+            p = m2.group(1).strip()
+            if p and (" " not in p):
+                return p
+        return None
+
+    def _as_validation_plan(v: Any) -> dict[str, Any]:
+        # Historically, the LLM often returns a simple list of strings; normalize to an object.
+        if v is None:
+            return {}
+        if isinstance(v, dict):
+            return v
+        if isinstance(v, list):
+            return {"steps": [str(x) for x in v]}
+        if isinstance(v, str):
+            return {"steps": [v]}
+        raise LlmError("Plan field 'validation_plan' must be an object or list of strings.")
+
+    proposed_raw = _as_list(obj.get("proposed_changes"), "proposed_changes")
+    proposed_changes: list[dict[str, Any]] = []
+    for x in proposed_raw:
+        if isinstance(x, dict):
+            proposed_changes.append(x)
+            continue
+        if isinstance(x, str):
+            row: dict[str, Any] = {"summary": x}
+            p = _extract_path_hint(x)
+            if p:
+                row["path"] = p
+            proposed_changes.append(row)
+
     return LlmPlan(
         goal=_as_str(obj.get("goal"), "goal"),
-        proposed_changes=[x for x in _as_list(obj.get("proposed_changes"), "proposed_changes") if isinstance(x, dict)],
+        proposed_changes=proposed_changes,
         predicted_touched_paths=[str(x) for x in _as_list(obj.get("predicted_touched_paths"), "predicted_touched_paths")],
         risk_class=_as_str(obj.get("risk_class"), "risk_class"),
-        validation_plan=_as_dict(obj.get("validation_plan"), "validation_plan"),
+        validation_plan=_as_validation_plan(obj.get("validation_plan")),
         stop_conditions=[str(x) for x in _as_list(obj.get("stop_conditions"), "stop_conditions")],
     )
 
@@ -1119,10 +1252,15 @@ def make_llm_client(cfg: dict[str, Any]) -> LlmClient:
         if not isinstance(extra_args0, list) or not all(isinstance(x, str) for x in extra_args0):
             raise ConfigError("llm.codex_exec_args must be a list of strings")
         timeout_s = int(llm.get("timeout_s", 600))
+
+        codex_home_s = cfg_get_str(llm, "codex_home", "").strip()
+        codex_home = cfg_path(ROOT, codex_home_s) if codex_home_s else None
+
         return CodexExecClient(
             codex_bin=codex_bin,
             model=model,
             extra_args=[str(x) for x in extra_args0],
+            codex_home=codex_home,
             timeout_s=timeout_s,
         )
 
@@ -1321,7 +1459,7 @@ def write_ops_journal(
 
     ts = iso_utc_now()
     task_slug = slugify(task.text, max_len=40)
-    line = f"{ts} {run_id} {branch} {task_slug} phase={phase} result={status} msg={json.dumps(msg)}\\n"
+    line = f"{ts} {run_id} {branch} {task_slug} phase={phase} result={status} msg={json.dumps(msg)}\n"
 
     existing = ""
     if exec_log.exists():
@@ -1334,7 +1472,7 @@ def write_ops_journal(
             f.write(line)
 
     report_path = reports_dir / f"{run_id}_report.md"
-    report_path.write_text(report_md, encoding="utf-8", newline="\\n")
+    report_path.write_text(report_md, encoding="utf-8", newline="\n")
 
     run_git(
         journal_wt,
@@ -1372,19 +1510,19 @@ def append_questions_for_operator(
     safe_mkdir(reports_dir)
     q_path = reports_dir / f"{day_stamp_utc()}_questions_for_operator.md"
     if not q_path.exists():
-        q_path.write_text(f"# Questions For Operator ({day_stamp_utc()})\\n\\n", encoding="utf-8", newline="\\n")
+        q_path.write_text(f"# Questions For Operator ({day_stamp_utc()})\n\n", encoding="utf-8", newline="\n")
 
     current = q_path.read_text(encoding="utf-8", errors="replace")
     if run_id not in current:
         section = [
-            f"## {run_id}: {task.text}\\n\\n",
-            f"- Task source: `{task.source_path}:{task.line_number}`\\n",
-            f"- Branch: `{branch}`\\n\\n",
-            "Questions:\\n",
+            f"## {run_id}: {task.text}\n\n",
+            f"- Task source: `{task.source_path}:{task.line_number}`\n",
+            f"- Branch: `{branch}`\n\n",
+            "Questions:\n",
         ]
         for q in questions:
-            section.append(f"- {q}\\n")
-        section.append("\\n")
+            section.append(f"- {q}\n")
+        section.append("\n")
         with q_path.open("a", encoding="utf-8") as f:
             f.writelines(section)
 
@@ -1408,23 +1546,23 @@ def build_report_md(
     error: str | None,
 ) -> str:
     lines: list[str] = []
-    lines.append(f"# Overnight Operator Report: {run_id}\\n\\n")
-    lines.append(f"- Timestamp (UTC): {iso_utc_now()}\\n")
-    lines.append(f"- Status: **{status}**\\n")
+    lines.append(f"# Overnight Operator Report: {run_id}\n\n")
+    lines.append(f"- Timestamp (UTC): {iso_utc_now()}\n")
+    lines.append(f"- Status: **{status}**\n")
     if error:
-        lines.append(f"- Error: `{error}`\\n")
-    lines.append(f"- Branch: `{branch}`\\n")
-    lines.append(f"- Worktree: `{worktree_path or 'n/a'}`\\n")
-    lines.append(f"- Base branch: `{base_branch}`\\n")
-    lines.append(f"- Base commit: `{base_commit or 'n/a'}`\\n")
+        lines.append(f"- Error: `{error}`\n")
+    lines.append(f"- Branch: `{branch}`\n")
+    lines.append(f"- Worktree: `{worktree_path or 'n/a'}`\n")
+    lines.append(f"- Base branch: `{base_branch}`\n")
+    lines.append(f"- Base commit: `{base_commit or 'n/a'}`\n")
 
-    lines.append("\\n## Task\\n\\n")
-    lines.append(f"- Source: `{task.source_path}:{task.line_number}`\\n")
-    lines.append(f"- Text: {task.text}\\n")
+    lines.append("\n## Task\n\n")
+    lines.append(f"- Source: `{task.source_path}:{task.line_number}`\n")
+    lines.append(f"- Text: {task.text}\n")
 
     if plan is not None:
-        lines.append("\\n## Plan (LLM)\\n\\n")
-        lines.append("```json\\n")
+        lines.append("\n## Plan (LLM)\n\n")
+        lines.append("```json\n")
         lines.append(
             json_dumps(
                 {
@@ -1437,21 +1575,21 @@ def build_report_md(
                 }
             )
         )
-        lines.append("\\n```\\n")
+        lines.append("\n```\n")
 
     if commits:
-        lines.append("\\n## Commits\\n\\n")
+        lines.append("\n## Commits\n\n")
         for group, sha in commits.items():
-            lines.append(f"- {group}: `{sha}`\\n")
+            lines.append(f"- {group}: `{sha}`\n")
 
     if cmd_results:
-        lines.append("\\n## Commands\\n\\n")
+        lines.append("\n## Commands\n\n")
         for res in cmd_results:
-            lines.append(f"- `{_cmd_to_str(res.cmd)}` (cwd `{res.cwd}`) -> exit {res.exit_code}, {res.duration_s:.1f}s\\n")
+            lines.append(f"- `{_cmd_to_str(res.cmd)}` (cwd `{res.cwd}`) -> exit {res.exit_code}, {res.duration_s:.1f}s\n")
             if res.stdout_path:
-                lines.append(f"  - stdout: `{res.stdout_path}`\\n")
+                lines.append(f"  - stdout: `{res.stdout_path}`\n")
             if res.stderr_path:
-                lines.append(f"  - stderr: `{res.stderr_path}`\\n")
+                lines.append(f"  - stderr: `{res.stderr_path}`\n")
     return "".join(lines)
 
 
@@ -1514,6 +1652,12 @@ def build_plan_prompt(*, task: Task, base_branch: str, repo_root: Path) -> tuple
         Output format:
         - Return a single JSON object (no markdown) with EXACT keys:
           goal, proposed_changes, predicted_touched_paths, risk_class, validation_plan, stop_conditions
+        - Types:
+          - goal: string
+          - proposed_changes: array of objects like { "path": "path/to/file", "change": "what to change" }
+          - predicted_touched_paths: array of strings
+          - validation_plan: object (example: { "steps": ["..."] })
+          - stop_conditions: array of strings
         - risk_class MUST be one of:
           docs_only, minor, major_perf_risk, wide_scope, security_risk, decision_required
         """
@@ -2300,6 +2444,25 @@ def run_iteration(
         except Exception:
             pass
         return 2
+    finally:
+        # Ensure the human-readable state mirror reflects the DB final state even on crashes.
+        try:
+            rowF = db_get_iteration(conn, run_id)
+            if rowF is not None:
+                extra: dict[str, Any] = {"config": str(config_path)}
+                if rowF["task_key"]:
+                    extra["task_key"] = str(rowF["task_key"])
+                if rowF["last_error"]:
+                    extra["last_error"] = str(rowF["last_error"])
+                write_state_mirror(
+                    state_json_path,
+                    run_id=run_id,
+                    phase=str(rowF["phase"]),
+                    status=str(rowF["status"]),
+                    extra=extra,
+                )
+        except Exception:
+            pass
 
     return 0
 

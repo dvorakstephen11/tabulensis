@@ -31,7 +31,7 @@
       </p>
 
       <div class="checkout-row">
-        <input id="checkout-email" class="input" type="email" placeholder="Email for license delivery">
+        <input id="checkout-email" class="input" type="email" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false" required placeholder="Email for license delivery">
         <button id="checkout-btn" class="cta primary" data-checkout-url="https://license.tabulensis.com/api/checkout/start">Start trial / Buy</button>
         <a class="cta" href="/docs">Docs</a>
       </div>
@@ -39,23 +39,24 @@
       <div class="card-grid">
         <div class="card">
           <h3>Windows</h3>
-          <p>Download the latest Windows zip or exe from the releases page.</p>
+          <p>Download the latest Windows ZIP (recommended) or standalone EXE from GitHub Releases.</p>
           <div class="page-links">
-            <a href="/download">Windows release</a>
+            <a href="https://github.com/dvora/excel_diff/releases/latest/download/tabulensis-latest-windows-x86_64.zip">Windows ZIP</a>
+            <a href="https://github.com/dvora/excel_diff/releases/latest/download/tabulensis-latest-windows-x86_64.exe">Standalone EXE</a>
           </div>
         </div>
         <div class="card">
           <h3>macOS</h3>
           <p>Universal macOS binaries are available with each release.</p>
           <div class="page-links">
-            <a href="/download">macOS release</a>
+            <a href="https://github.com/dvora/excel_diff/releases/latest/download/tabulensis-latest-macos-universal.tar.gz">macOS universal</a>
           </div>
         </div>
         <div class="card">
           <h3>Linux</h3>
-          <p>Download the tar.gz or AppImage package for Linux.</p>
+          <p>Download the latest Linux tar.gz from GitHub Releases.</p>
           <div class="page-links">
-            <a href="/download">Linux release</a>
+            <a href="https://github.com/dvora/excel_diff/releases/latest/download/tabulensis-latest-linux-x86_64.tar.gz">Linux x86_64 tar.gz</a>
           </div>
         </div>
       </div>
@@ -106,21 +107,48 @@
       const status = document.getElementById("checkout-status");
       const emailInput = document.getElementById("checkout-email");
 
-      async function startCheckout() {
+      function showStatus(message) {
+        if (!status) return;
+        status.style.display = "block";
+        status.textContent = String(message || "");
+      }
+
+      function clearStatus() {
+        if (!status) return;
+        status.style.display = "none";
+        status.textContent = "";
+      }
+
+      function emailValue() {
+        return String(emailInput?.value || "").trim();
+      }
+
+      function setCheckoutEnabled() {
         if (!btn) return;
+        const emailOk = emailInput && emailValue() && emailInput.validity.valid;
+        btn.disabled = !emailOk;
+      }
+
+      async function startCheckout() {
+        if (!btn || !emailInput) return;
+        const email = emailValue();
+        if (!email || !emailInput.validity.valid) {
+          showStatus("Enter a valid email address for license delivery.");
+          emailInput.focus();
+          setCheckoutEnabled();
+          return;
+        }
+
         btn.disabled = true;
         btn.textContent = "Starting checkout...";
-        if (status) {
-          status.style.display = "none";
-          status.textContent = "";
-        }
+        clearStatus();
         try {
           const checkoutUrl =
             btn.dataset.checkoutUrl || "https://license.tabulensis.com/api/checkout/start";
           const res = await fetch(checkoutUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email: emailInput?.value || undefined }),
+            body: JSON.stringify({ email }),
           });
           const data = await res.json();
           if (!res.ok) {
@@ -132,12 +160,9 @@
           }
           throw new Error("Missing checkout URL");
         } catch (err) {
-          if (status) {
-            status.style.display = "block";
-            status.textContent = String(err);
-          }
+          showStatus(err);
         } finally {
-          btn.disabled = false;
+          setCheckoutEnabled();
           btn.textContent = "Start trial / Buy";
         }
       }
@@ -145,6 +170,13 @@
       if (btn) {
         btn.addEventListener("click", startCheckout);
       }
+      if (emailInput) {
+        emailInput.addEventListener("input", () => {
+          clearStatus();
+          setCheckoutEnabled();
+        });
+      }
+      setCheckoutEnabled();
     </script>
   </body>
 </html>

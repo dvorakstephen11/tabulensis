@@ -15,6 +15,9 @@ This repo includes a long-running “Overnight Operator Agent” implementation:
 
 ## Prereqs
 
+Execution environment:
+- Intended to run on the operator's local workstation (decision: `docs/meta/results/decision_register.md` `DR-0010`).
+
 Pick one LLM mode:
 
 1) Codex CLI mode (recommended; no `OPENAI_API_KEY` required by this script)
@@ -58,6 +61,13 @@ python3 scripts/overnight_agent.py --config docs/meta/automation/overnight_agent
 ```
 
 Stop: `Ctrl+C`.
+
+## Scheduling
+
+Scheduler decision: `docs/meta/results/decision_register.md` `DR-0011`.
+
+Windows Task Scheduler (WSL invocation) example:
+- `docs/meta/automation/task_scheduler_example.md`
 
 ## Where Outputs Go
 

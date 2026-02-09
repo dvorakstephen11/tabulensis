@@ -215,6 +215,12 @@ button.cta:disabled {
   border-radius: 12px;
 }
 
+.note.note-soft {
+  background: #ffffff;
+  color: var(--ink);
+  border: 2px solid var(--border);
+}
+
 footer {
   margin-top: 72px;
   display: flex;

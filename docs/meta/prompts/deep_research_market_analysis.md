@@ -3,6 +3,10 @@ Paste this into ChatGPT "Deep research" mode.
 Shortcut: `python3 scripts/deep_research_prompt.py` (copies to clipboard).
 -->
 
+## When to Use Which Prompt
+
+Use `deep_research_market_analysis.md` for the broad weekly scan (market/demand signals, competitor/adjacent watch, acquisition/partnership targets, and a high-level distribution sweep); use `deep_research_competitor_watch.md` for focused competitor/substitute monitoring (pricing/packaging/recent changes); use `deep_research_distribution_experiments.md` for a ranked backlog of 2-hour distribution micro-experiments with metrics; use `deep_research_security_watch.md` for stack-relevant security/CVE/supply-chain monitoring; and use `deep_research_ops_dashboard_apis.md` as needed while building an internal ops dashboard (Fastmail/Cloudflare/Resend/Stripe API feasibility).
+
 Today is {{RUN_DATE}}.
 
 You are doing deep research to support Tabulensis (https://tabulensis.com): a desktop app + CLI that compares Excel workbooks (.xlsx/.xlsm) and Power BI packages (.pbix/.pbit) and produces a structured diff (including Power Query / M changes).
@@ -42,8 +46,8 @@ Output format (Markdown):
 - ## Append-Only Research Log Entry (ready to paste)
   - Include: date, 5-10 bullets, and a compact "links" list.
 
-Citation requirements:
+## Citation Requirements
+
 - Provide direct links for non-obvious claims.
 - For any pricing or market-size numbers: cite the source and include the publication date.
 - When summarizing long sources, include the link and a 1-line reason it matters.
-

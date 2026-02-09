@@ -1,3 +1,7 @@
+## When to Use Which Prompt
+
+Use `deep_research_ops_dashboard_apis.md` as needed when you want to inventory what operator-relevant data is accessible via Fastmail/Cloudflare/Resend/Stripe APIs and shape an internal dashboard (MVP widgets + least-privilege posture); revisit quarterly or when vendor plans/APIs change. For a broader market + demand + acquisition/partnership scan, use `deep_research_market_analysis.md`; for competitor/pricing monitoring, use `deep_research_competitor_watch.md`; for distribution micro-experiments, use `deep_research_distribution_experiments.md`; and for stack-relevant security/CVE monitoring, use `deep_research_security_watch.md`.
+
 Today is {{RUN_DATE}} (local) / {{RUN_DATETIME}}.
 
 You are an AI research agent with web browsing. Your task is to answer:

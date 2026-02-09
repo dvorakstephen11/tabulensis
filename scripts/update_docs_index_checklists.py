@@ -2,7 +2,8 @@
 """
 Refresh the auto-generated checklist index in docs/index.md.
 
-This scans the repo for Markdown checkbox items like:
+This scans the repo's Markdown files (git-tracked plus untracked-but-not-ignored)
+for checkbox items like:
   - [ ] ...
   - [x] ...
   - [] ...
@@ -13,6 +14,12 @@ Then it updates the section between:
 
 Run from repo root:
   python3 scripts/update_docs_index_checklists.py
+
+Rationale:
+- The checklist index is committed. Scanning git-tracked files (plus untracked
+  files that are not ignored) keeps the output deterministic in CI and avoids
+  local-only scratch files accidentally polluting docs/index.md (as long as
+  scratch files are properly gitignored).
 """
 
 from __future__ import annotations
@@ -21,6 +28,7 @@ import argparse
 import os
 import re
 import sys
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
@@ -58,12 +66,54 @@ def _is_excluded(path: Path) -> bool:
 
 
 def iter_markdown_files(repo_root: Path) -> list[Path]:
-    out: list[Path] = []
-    for p in repo_root.rglob("*.md"):
-        if _is_excluded(p):
-            continue
-        out.append(p)
-    return out
+    """
+    Return absolute Paths for markdown files to scan.
+
+    Default: scan git-tracked markdown files plus untracked-but-not-ignored markdown files.
+    This respects `.gitignore` (so local-only ignored files do not pollute the index) while
+    still picking up newly created checklists before the first commit.
+    Fallback: filesystem scan when git is unavailable.
+    """
+    try:
+        tracked = subprocess.check_output(
+            ["git", "ls-files"],
+            cwd=str(repo_root),
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        untracked = subprocess.check_output(
+            ["git", "ls-files", "--others", "--exclude-standard"],
+            cwd=str(repo_root),
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+
+        paths: list[Path] = []
+        seen: set[str] = set()
+        for out_raw in (tracked, untracked):
+            for line in out_raw.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if not line.lower().endswith(".md"):
+                    continue
+                if line in seen:
+                    continue
+                seen.add(line)
+                p = (repo_root / line).resolve()
+                if not p.exists():
+                    continue
+                if _is_excluded(p):
+                    continue
+                paths.append(p)
+        return paths
+    except Exception:
+        out: list[Path] = []
+        for p in repo_root.rglob("*.md"):
+            if _is_excluded(p):
+                continue
+            out.append(p)
+        return out
 
 
 def count_checkboxes(md_path: Path) -> ChecklistStats:

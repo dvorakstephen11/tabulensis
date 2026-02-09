@@ -3,13 +3,13 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
     inputs:
       dry_run:
-        description: 'Dry run (do not create release)'
+        description: "Dry run (do not create release)"
         required: false
-        default: 'true'
+        default: "true"
         type: boolean
 
 env:
@@ -62,9 +62,6 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build release binary
-        run: cargo build --release --locked -p excel_diff_cli
-
       - name: Get version
         id: version
         shell: bash
@@ -75,38 +72,54 @@ jobs:
             echo "version=v0.0.0-dev" >> $GITHUB_OUTPUT
           fi
 
+      - name: Build release binary
+        shell: bash
+        run: cargo build --profile release-cli --locked -p tabulensis-cli
+
       - name: Create standalone EXE
         shell: bash
         run: |
-          cp target/release/excel-diff.exe excel-diff-${{ steps.version.outputs.version }}-windows-x86_64.exe
-
-      - name: Create package directory
-        shell: bash
-        run: |
-          mkdir -p staging/excel-diff-${{ steps.version.outputs.version }}-windows-x86_64
-          cp target/release/excel-diff.exe staging/excel-diff-${{ steps.version.outputs.version }}-windows-x86_64/
-          cp README.md staging/excel-diff-${{ steps.version.outputs.version }}-windows-x86_64/
+          cp target/release-cli/tabulensis.exe tabulensis-${{ steps.version.outputs.version }}-windows-x86_64.exe
+          cp tabulensis-${{ steps.version.outputs.version }}-windows-x86_64.exe tabulensis-latest-windows-x86_64.exe
 
       - name: Create ZIP archive
         shell: pwsh
         run: |
-          Compress-Archive -Path staging/excel-diff-${{ steps.version.outputs.version }}-windows-x86_64 -DestinationPath excel-diff-${{ steps.version.outputs.version }}-windows-x86_64.zip
+          $version = "${{ steps.version.outputs.version }}"
+
+          New-Item -ItemType Directory -Force -Path staging | Out-Null
+          $stageDir = "staging/tabulensis-$version-windows-x86_64"
+          New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+
+          Copy-Item -Force "target/release-cli/tabulensis.exe" "$stageDir/tabulensis.exe"
+          Copy-Item -Force "README.md" "$stageDir/README.md"
+          Copy-Item -Force "LICENSE.txt" "$stageDir/LICENSE.txt"
+          Copy-Item -Force "THIRD_PARTY_NOTICES.txt" "$stageDir/THIRD_PARTY_NOTICES.txt"
+
+          Compress-Archive -Path $stageDir -DestinationPath "tabulensis-$version-windows-x86_64.zip"
+          Copy-Item -Force "tabulensis-$version-windows-x86_64.zip" "tabulensis-latest-windows-x86_64.zip"
 
       - name: Compute SHA256
         shell: bash
         run: |
-          sha256sum excel-diff-${{ steps.version.outputs.version }}-windows-x86_64.zip > excel-diff-${{ steps.version.outputs.version }}-windows-x86_64.zip.sha256
-          sha256sum excel-diff-${{ steps.version.outputs.version }}-windows-x86_64.exe > excel-diff-${{ steps.version.outputs.version }}-windows-x86_64.exe.sha256
+          sha256sum tabulensis-${{ steps.version.outputs.version }}-windows-x86_64.zip > tabulensis-${{ steps.version.outputs.version }}-windows-x86_64.zip.sha256
+          sha256sum tabulensis-${{ steps.version.outputs.version }}-windows-x86_64.exe > tabulensis-${{ steps.version.outputs.version }}-windows-x86_64.exe.sha256
+          sha256sum tabulensis-latest-windows-x86_64.zip > tabulensis-latest-windows-x86_64.zip.sha256
+          sha256sum tabulensis-latest-windows-x86_64.exe > tabulensis-latest-windows-x86_64.exe.sha256
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-x86_64
           path: |
-            excel-diff-${{ steps.version.outputs.version }}-windows-x86_64.exe
-            excel-diff-${{ steps.version.outputs.version }}-windows-x86_64.exe.sha256
-            excel-diff-${{ steps.version.outputs.version }}-windows-x86_64.zip
-            excel-diff-${{ steps.version.outputs.version }}-windows-x86_64.zip.sha256
+            tabulensis-${{ steps.version.outputs.version }}-windows-x86_64.exe
+            tabulensis-${{ steps.version.outputs.version }}-windows-x86_64.exe.sha256
+            tabulensis-${{ steps.version.outputs.version }}-windows-x86_64.zip
+            tabulensis-${{ steps.version.outputs.version }}-windows-x86_64.zip.sha256
+            tabulensis-latest-windows-x86_64.exe
+            tabulensis-latest-windows-x86_64.exe.sha256
+            tabulensis-latest-windows-x86_64.zip
+            tabulensis-latest-windows-x86_64.zip.sha256
 
   build-macos-x64:
     needs: [validate-release, perf-fullscale-gate]
@@ -117,9 +130,6 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build release binary
-        run: cargo build --release --locked -p excel_diff_cli
-
       - name: Get version
         id: version
         run: |
@@ -129,30 +139,35 @@ jobs:
             echo "version=v0.0.0-dev" >> $GITHUB_OUTPUT
           fi
 
+      - name: Build release binary
+        run: cargo build --profile release-cli --locked -p tabulensis-cli
+
       - name: Create tarball
         run: |
           mkdir -p staging
-          cp target/release/excel-diff staging/
+          cp target/release-cli/tabulensis staging/
           cp README.md staging/
-          tar -czvf excel-diff-${{ steps.version.outputs.version }}-macos-x86_64.tar.gz -C staging .
+          cp LICENSE.txt staging/
+          cp THIRD_PARTY_NOTICES.txt staging/
+          tar -czvf tabulensis-${{ steps.version.outputs.version }}-macos-x86_64.tar.gz -C staging .
 
       - name: Compute SHA256
         run: |
-          shasum -a 256 excel-diff-${{ steps.version.outputs.version }}-macos-x86_64.tar.gz > excel-diff-${{ steps.version.outputs.version }}-macos-x86_64.tar.gz.sha256
+          shasum -a 256 tabulensis-${{ steps.version.outputs.version }}-macos-x86_64.tar.gz > tabulensis-${{ steps.version.outputs.version }}-macos-x86_64.tar.gz.sha256
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-x86_64
           path: |
-            excel-diff-${{ steps.version.outputs.version }}-macos-x86_64.tar.gz
-            excel-diff-${{ steps.version.outputs.version }}-macos-x86_64.tar.gz.sha256
+            tabulensis-${{ steps.version.outputs.version }}-macos-x86_64.tar.gz
+            tabulensis-${{ steps.version.outputs.version }}-macos-x86_64.tar.gz.sha256
 
       - name: Upload raw binary for universal
         uses: actions/upload-artifact@v4
         with:
           name: macos-x86_64-binary
-          path: target/release/excel-diff
+          path: target/release-cli/tabulensis
 
   build-macos-arm64:
     needs: [validate-release, perf-fullscale-gate]
@@ -163,9 +178,6 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build release binary
-        run: cargo build --release --locked -p excel_diff_cli
-
       - name: Get version
         id: version
         run: |
@@ -175,30 +187,35 @@ jobs:
             echo "version=v0.0.0-dev" >> $GITHUB_OUTPUT
           fi
 
+      - name: Build release binary
+        run: cargo build --profile release-cli --locked -p tabulensis-cli
+
       - name: Create tarball
         run: |
           mkdir -p staging
-          cp target/release/excel-diff staging/
+          cp target/release-cli/tabulensis staging/
           cp README.md staging/
-          tar -czvf excel-diff-${{ steps.version.outputs.version }}-macos-arm64.tar.gz -C staging .
+          cp LICENSE.txt staging/
+          cp THIRD_PARTY_NOTICES.txt staging/
+          tar -czvf tabulensis-${{ steps.version.outputs.version }}-macos-arm64.tar.gz -C staging .
 
       - name: Compute SHA256
         run: |
-          shasum -a 256 excel-diff-${{ steps.version.outputs.version }}-macos-arm64.tar.gz > excel-diff-${{ steps.version.outputs.version }}-macos-arm64.tar.gz.sha256
+          shasum -a 256 tabulensis-${{ steps.version.outputs.version }}-macos-arm64.tar.gz > tabulensis-${{ steps.version.outputs.version }}-macos-arm64.tar.gz.sha256
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-arm64
           path: |
-            excel-diff-${{ steps.version.outputs.version }}-macos-arm64.tar.gz
-            excel-diff-${{ steps.version.outputs.version }}-macos-arm64.tar.gz.sha256
+            tabulensis-${{ steps.version.outputs.version }}-macos-arm64.tar.gz
+            tabulensis-${{ steps.version.outputs.version }}-macos-arm64.tar.gz.sha256
 
       - name: Upload raw binary for universal
         uses: actions/upload-artifact@v4
         with:
           name: macos-arm64-binary
-          path: target/release/excel-diff
+          path: target/release-cli/tabulensis
 
   build-macos-universal:
     runs-on: macos-14
@@ -229,29 +246,80 @@ jobs:
 
       - name: Create universal binary
         run: |
-          lipo -create x86_64/excel-diff arm64/excel-diff -output excel-diff
-          file excel-diff
-          codesign -s - excel-diff
+          lipo -create x86_64/tabulensis arm64/tabulensis -output tabulensis
+          file tabulensis
+          codesign -s - tabulensis
 
       - name: Create tarball
         run: |
           mkdir -p staging
-          cp excel-diff staging/
+          cp tabulensis staging/
           cp README.md staging/
-          tar -czvf excel-diff-${{ steps.version.outputs.version }}-macos-universal.tar.gz -C staging .
+          cp LICENSE.txt staging/
+          cp THIRD_PARTY_NOTICES.txt staging/
+          tar -czvf tabulensis-${{ steps.version.outputs.version }}-macos-universal.tar.gz -C staging .
+          cp tabulensis-${{ steps.version.outputs.version }}-macos-universal.tar.gz tabulensis-latest-macos-universal.tar.gz
 
       - name: Compute SHA256
         run: |
-          shasum -a 256 excel-diff-${{ steps.version.outputs.version }}-macos-universal.tar.gz > excel-diff-${{ steps.version.outputs.version }}-macos-universal.tar.gz.sha256
-          cat excel-diff-${{ steps.version.outputs.version }}-macos-universal.tar.gz.sha256
+          shasum -a 256 tabulensis-${{ steps.version.outputs.version }}-macos-universal.tar.gz > tabulensis-${{ steps.version.outputs.version }}-macos-universal.tar.gz.sha256
+          shasum -a 256 tabulensis-latest-macos-universal.tar.gz > tabulensis-latest-macos-universal.tar.gz.sha256
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-universal
           path: |
-            excel-diff-${{ steps.version.outputs.version }}-macos-universal.tar.gz
-            excel-diff-${{ steps.version.outputs.version }}-macos-universal.tar.gz.sha256
+            tabulensis-${{ steps.version.outputs.version }}-macos-universal.tar.gz
+            tabulensis-${{ steps.version.outputs.version }}-macos-universal.tar.gz.sha256
+            tabulensis-latest-macos-universal.tar.gz
+            tabulensis-latest-macos-universal.tar.gz.sha256
+
+  build-linux-x86_64:
+    needs: [validate-release, perf-fullscale-gate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Get version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            echo "version=v0.0.0-dev" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build release binary
+        run: cargo build --profile release-cli --locked -p tabulensis-cli
+
+      - name: Create tarball
+        run: |
+          mkdir -p staging
+          cp target/release-cli/tabulensis staging/
+          cp README.md staging/
+          cp LICENSE.txt staging/
+          cp THIRD_PARTY_NOTICES.txt staging/
+          tar -czvf tabulensis-${{ steps.version.outputs.version }}-linux-x86_64.tar.gz -C staging .
+          cp tabulensis-${{ steps.version.outputs.version }}-linux-x86_64.tar.gz tabulensis-latest-linux-x86_64.tar.gz
+
+      - name: Compute SHA256
+        run: |
+          sha256sum tabulensis-${{ steps.version.outputs.version }}-linux-x86_64.tar.gz > tabulensis-${{ steps.version.outputs.version }}-linux-x86_64.tar.gz.sha256
+          sha256sum tabulensis-latest-linux-x86_64.tar.gz > tabulensis-latest-linux-x86_64.tar.gz.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: |
+            tabulensis-${{ steps.version.outputs.version }}-linux-x86_64.tar.gz
+            tabulensis-${{ steps.version.outputs.version }}-linux-x86_64.tar.gz.sha256
+            tabulensis-latest-linux-x86_64.tar.gz
+            tabulensis-latest-linux-x86_64.tar.gz.sha256
 
   smoke-macos-sequoia:
     name: Smoke Test (macOS Sequoia)
@@ -284,17 +352,17 @@ jobs:
         run: |
           set -euo pipefail
 
-          TARBALL=$(ls artifacts/macos/excel-diff-*-macos-universal.tar.gz | head -n 1)
+          TARBALL=$(ls artifacts/macos/tabulensis-*-macos-universal.tar.gz | head -n 1)
           mkdir -p staging
           tar -xzf "$TARBALL" -C staging
-          chmod +x staging/excel-diff
+          chmod +x staging/tabulensis
 
-          staging/excel-diff --version
-          staging/excel-diff --help >/dev/null
-          staging/excel-diff diff fixtures/generated/minimal.xlsx fixtures/generated/minimal.xlsx --format json >/dev/null
+          staging/tabulensis --version
+          staging/tabulensis --help >/dev/null
+          staging/tabulensis diff fixtures/generated/minimal.xlsx fixtures/generated/minimal.xlsx --format json >/dev/null
 
           set +e
-          staging/excel-diff diff fixtures/generated/col_append_right_a.xlsx fixtures/generated/col_append_right_b.xlsx >/dev/null
+          staging/tabulensis diff fixtures/generated/col_append_right_a.xlsx fixtures/generated/col_append_right_b.xlsx >/dev/null
           STATUS=$?
           set -e
           if [ "$STATUS" -ne 1 ]; then
@@ -335,31 +403,31 @@ jobs:
       - name: Extract checksums
         id: checksums
         run: |
-          WINDOWS_SHA=$(cat artifacts/windows/*.zip.sha256 | awk '{print $1}')
-          MACOS_SHA=$(cat artifacts/macos/*.tar.gz.sha256 | awk '{print $1}')
+          WINDOWS_SHA=$(cat artifacts/windows/tabulensis-${{ steps.version.outputs.version }}-windows-x86_64.zip.sha256 | awk '{print $1}')
+          MACOS_SHA=$(cat artifacts/macos/tabulensis-${{ steps.version.outputs.version }}-macos-universal.tar.gz.sha256 | awk '{print $1}')
           echo "windows_sha=$WINDOWS_SHA" >> $GITHUB_OUTPUT
           echo "macos_sha=$MACOS_SHA" >> $GITHUB_OUTPUT
 
       - name: Generate Scoop manifest
         run: |
-          cat > excel-diff.json << EOF
+          cat > tabulensis.json << EOF
           {
             "version": "${{ steps.version.outputs.version_num }}",
-            "description": "A tool for comparing Excel workbooks",
-            "homepage": "https://github.com/dvora/excel_diff",
+            "description": "Tabulensis CLI (compare Excel workbooks)",
+            "homepage": "https://tabulensis.com",
             "license": "MIT",
             "architecture": {
               "64bit": {
-                "url": "https://github.com/dvora/excel_diff/releases/download/${{ steps.version.outputs.version }}/excel-diff-${{ steps.version.outputs.version }}-windows-x86_64.zip",
+                "url": "https://github.com/dvora/excel_diff/releases/download/${{ steps.version.outputs.version }}/tabulensis-${{ steps.version.outputs.version }}-windows-x86_64.zip",
                 "hash": "${{ steps.checksums.outputs.windows_sha }}"
               }
             },
-            "bin": "excel-diff-${{ steps.version.outputs.version }}-windows-x86_64/excel-diff.exe",
+            "bin": "tabulensis-${{ steps.version.outputs.version }}-windows-x86_64/tabulensis.exe",
             "checkver": "github",
             "autoupdate": {
               "architecture": {
                 "64bit": {
-                  "url": "https://github.com/dvora/excel_diff/releases/download/v\$version/excel-diff-v\$version-windows-x86_64.zip"
+                  "url": "https://github.com/dvora/excel_diff/releases/download/v$version/tabulensis-v$version-windows-x86_64.zip"
                 }
               }
             }
@@ -368,24 +436,24 @@ jobs:
 
       - name: Generate Homebrew formula
         run: |
-          cat > excel-diff.rb << 'EOF'
-          class ExcelDiff < Formula
-            desc "A tool for comparing Excel workbooks"
-            homepage "https://github.com/dvora/excel_diff"
+          cat > tabulensis.rb << 'EOF'
+          class Tabulensis < Formula
+            desc "Tabulensis CLI (compare Excel workbooks)"
+            homepage "https://tabulensis.com"
             version "${{ steps.version.outputs.version_num }}"
             license "MIT"
 
             on_macos do
-              url "https://github.com/dvora/excel_diff/releases/download/${{ steps.version.outputs.version }}/excel-diff-${{ steps.version.outputs.version }}-macos-universal.tar.gz"
+              url "https://github.com/dvora/excel_diff/releases/download/${{ steps.version.outputs.version }}/tabulensis-${{ steps.version.outputs.version }}-macos-universal.tar.gz"
               sha256 "${{ steps.checksums.outputs.macos_sha }}"
             end
 
             def install
-              bin.install "excel-diff"
+              bin.install "tabulensis"
             end
 
             test do
-              system "#{bin}/excel-diff", "--version"
+              system "#{bin}/tabulensis", "--version"
             end
           end
           EOF
@@ -395,8 +463,8 @@ jobs:
         with:
           name: manifests
           path: |
-            excel-diff.json
-            excel-diff.rb
+            tabulensis.json
+            tabulensis.rb
 
   publish-release:
     runs-on: ubuntu-latest
@@ -405,6 +473,7 @@ jobs:
       - build-macos-x64
       - build-macos-arm64
       - build-macos-universal
+      - build-linux-x86_64
       - smoke-macos-sequoia
       - generate-manifests
       - perf-fullscale-gate
@@ -428,6 +497,7 @@ jobs:
           cat macos-x86_64/*.sha256 >> checksums.txt
           cat macos-arm64/*.sha256 >> checksums.txt
           cat macos-universal/*.sha256 >> checksums.txt
+          cat linux-x86_64/*.sha256 >> checksums.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
@@ -436,47 +506,48 @@ jobs:
           draft: false
           prerelease: ${{ contains(steps.version.outputs.version, '-') }}
           files: |
-            artifacts/windows-x86_64/excel-diff-*.exe
-            artifacts/windows-x86_64/excel-diff-*.zip
-            artifacts/macos-x86_64/excel-diff-*.tar.gz
-            artifacts/macos-arm64/excel-diff-*.tar.gz
-            artifacts/macos-universal/excel-diff-*.tar.gz
-            artifacts/manifests/excel-diff.json
-            artifacts/manifests/excel-diff.rb
+            artifacts/windows-x86_64/tabulensis-*.exe
+            artifacts/windows-x86_64/tabulensis-*.zip
+            artifacts/macos-x86_64/tabulensis-*.tar.gz
+            artifacts/macos-arm64/tabulensis-*.tar.gz
+            artifacts/macos-universal/tabulensis-*.tar.gz
+            artifacts/linux-x86_64/tabulensis-*.tar.gz
+            artifacts/manifests/tabulensis.json
+            artifacts/manifests/tabulensis.rb
             artifacts/checksums.txt
           body: |
             ## Installation
 
             ### Windows
-            Download the standalone `.exe` (or the ZIP) and add it to your PATH.
+            Download the ZIP (recommended) or the standalone `.exe` and add it to your PATH.
 
             Or use Scoop (manifest from this Release):
             ```powershell
-            # 1) Download `excel-diff.json` from the Release assets
+            # 1) Download `tabulensis.json` from the Release assets
             # 2) Install:
-            scoop install .\excel-diff.json
-
-            # Or, if you publish a Scoop bucket:
-            # scoop bucket add excel-diff https://github.com/dvora/scoop-excel-diff
-            # scoop install excel-diff
+            scoop install .\tabulensis.json
             ```
 
             ### macOS
             Using Homebrew (formula from this Release):
             ```bash
-            curl -LO https://github.com/dvora/excel_diff/releases/download/${{ steps.version.outputs.version }}/excel-diff.rb
-            brew install --formula ./excel-diff.rb
-
-            # Or, if you publish a Homebrew tap:
-            # brew tap dvora/excel-diff
-            # brew install excel-diff
+            curl -LO https://github.com/dvora/excel_diff/releases/download/${{ steps.version.outputs.version }}/tabulensis.rb
+            brew install --formula ./tabulensis.rb
             ```
 
             Or download the universal binary:
             ```bash
-            curl -LO https://github.com/dvora/excel_diff/releases/download/${{ steps.version.outputs.version }}/excel-diff-${{ steps.version.outputs.version }}-macos-universal.tar.gz
-            tar -xzf excel-diff-${{ steps.version.outputs.version }}-macos-universal.tar.gz
-            sudo mv excel-diff /usr/local/bin/
+            curl -LO https://github.com/dvora/excel_diff/releases/download/${{ steps.version.outputs.version }}/tabulensis-${{ steps.version.outputs.version }}-macos-universal.tar.gz
+            tar -xzf tabulensis-${{ steps.version.outputs.version }}-macos-universal.tar.gz
+            sudo mv tabulensis /usr/local/bin/
+            ```
+
+            ### Linux
+            Download and install the x86_64 tarball:
+            ```bash
+            curl -LO https://github.com/dvora/excel_diff/releases/download/${{ steps.version.outputs.version }}/tabulensis-${{ steps.version.outputs.version }}-linux-x86_64.tar.gz
+            tar -xzf tabulensis-${{ steps.version.outputs.version }}-linux-x86_64.tar.gz
+            sudo mv tabulensis /usr/local/bin/
             ```
 
             ### Web Demo
@@ -491,4 +562,3 @@ jobs:
 
             ## Checksums
             See `checksums.txt` for SHA256 hashes of all artifacts.
-

@@ -134,8 +134,8 @@ A stranger can **pay → receive a license → download → activate → run dif
 - [ ] Include `LICENSE.txt` (proprietary notice) and `THIRD_PARTY_NOTICES` in every release bundle
 
 ### 5.2 Hosting downloads
-- [ ] Decide where artifacts live (Cloudflare R2, GitHub Releases, etc.)
-- [ ] Ensure `/download` points to the correct versions
+- [x] Decide where artifacts live (Cloudflare R2, GitHub Releases, etc.) (Chosen: GitHub Releases; see `docs/meta/results/decision_register.md` `DR-0019`)
+- [x] Ensure `/download` points to the correct versions (implemented via stable `releases/latest/download/tabulensis-latest-*` links)
 
 ---
 
@@ -146,8 +146,8 @@ A stranger can **pay → receive a license → download → activate → run dif
 - [ ] Notarization in CI + stapling
 
 ### Windows
-- [ ] Authenticode signing certificate (OV to start, reconsider later)
-- [ ] Decide key handling strategy for CI (self-hosted runner with token vs signing service)
+- [ ] Azure Artifact Signing (Trusted Signing) account + certificate profile configured
+- [x] Decide key handling strategy for CI (Chosen: Azure Artifact Signing via GitHub OIDC + Environment approvals; see `docs/meta/results/decision_register.md` `DR-0020`)
 
 ---
 
@@ -175,4 +175,3 @@ A stranger can **pay → receive a license → download → activate → run dif
 - [ ] Auto-updater strategy
 - [ ] Better installer UX (MSI/DMG/PKG)
 - [ ] Code signing/notarization if not done pre-launch
-
