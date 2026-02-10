@@ -29,6 +29,9 @@ type Env = {
 	RESEND_FROM?: string; // var
 	RESEND_REPLY_TO?: string; // var
 
+	// Download proxy (serve release artifacts from your domain while using GitHub Releases as origin).
+	DOWNLOAD_ORIGIN_BASE_URL?: string; // default: GitHub latest release assets
+
 	// CORS allowlist for browser requests (CORS never applies to CLI/desktop).
 	APP_ORIGIN?: string;
 };
@@ -130,6 +133,19 @@ const TABULENSIS_DOWNLOAD_URL = 'https://tabulensis.com/download';
 const TABULENSIS_BILLING_URL = 'https://tabulensis.com/support/billing';
 const TABULENSIS_SUPPORT_EMAIL = 'support@tabulensis.com';
 const LICENSE_EMAIL_SUBJECT = 'Your Tabulensis license key';
+
+const DEFAULT_DOWNLOAD_ORIGIN_BASE_URL = 'https://github.com/dvora/excel_diff/releases/latest/download/';
+
+const ALLOWED_DOWNLOAD_ASSETS = new Set<string>([
+	'tabulensis-latest-windows-x86_64.exe',
+	'tabulensis-latest-windows-x86_64.zip',
+	'tabulensis-latest-windows-x86_64.exe.sha256',
+	'tabulensis-latest-windows-x86_64.zip.sha256',
+	'tabulensis-latest-macos-universal.tar.gz',
+	'tabulensis-latest-macos-universal.tar.gz.sha256',
+	'tabulensis-latest-linux-x86_64.tar.gz',
+	'tabulensis-latest-linux-x86_64.tar.gz.sha256',
+]);
 
 let schemaEnsured = false;
 let schemaEnsuring: Promise<void> | null = null;
@@ -510,6 +526,57 @@ function checkoutCancelUrl(env: Env): string {
 
 function portalReturnUrl(env: Env): string {
 	return env.STRIPE_PORTAL_RETURN_URL?.trim() || 'https://tabulensis.com/support/billing';
+}
+
+function safeDecodeURIComponent(value: string): string {
+	try {
+		return decodeURIComponent(value);
+	} catch {
+		return '';
+	}
+}
+
+function downloadOriginBaseUrl(env: Env): string {
+	const raw = env.DOWNLOAD_ORIGIN_BASE_URL?.trim();
+	if (!raw) return DEFAULT_DOWNLOAD_ORIGIN_BASE_URL;
+	return raw.endsWith('/') ? raw : `${raw}/`;
+}
+
+async function handleDownload(request: Request, env: Env): Promise<Response> {
+	const url = new URL(request.url);
+	const asset = url.pathname.startsWith('/download/') ? url.pathname.slice('/download/'.length) : '';
+	const decoded = asset ? safeDecodeURIComponent(asset) : '';
+	if (!decoded) return errorResponse(request, env, 'asset is required', 400);
+	if (decoded.includes('/') || decoded.includes('\\') || decoded.includes('..')) {
+		return errorResponse(request, env, 'invalid asset', 400);
+	}
+	if (!ALLOWED_DOWNLOAD_ASSETS.has(decoded)) {
+		return withCors(request, env, new Response('Not Found', { status: 404 }));
+	}
+
+	const originUrl = `${downloadOriginBaseUrl(env)}${decoded}`;
+
+	const passthroughHeaders = new Headers();
+	const range = request.headers.get('Range');
+	if (range) passthroughHeaders.set('Range', range);
+	const ifNoneMatch = request.headers.get('If-None-Match');
+	if (ifNoneMatch) passthroughHeaders.set('If-None-Match', ifNoneMatch);
+	const ifModifiedSince = request.headers.get('If-Modified-Since');
+	if (ifModifiedSince) passthroughHeaders.set('If-Modified-Since', ifModifiedSince);
+
+	const originRes = await fetch(originUrl, {
+		method: request.method,
+		headers: passthroughHeaders,
+		redirect: 'follow',
+	});
+
+	const headers = new Headers(originRes.headers);
+	headers.delete('set-cookie');
+
+	// Keep caching modest so "latest" can update shortly after a new release.
+	headers.set('Cache-Control', 'public, max-age=300');
+
+	return withCors(request, env, new Response(originRes.body, { status: originRes.status, headers }));
 }
 
 async function createCheckoutSession(env: Env, licenseKey: string, email?: string): Promise<any> {
@@ -1202,6 +1269,12 @@ export default {
 		if (pathname === '/public_key') {
 			if (request.method !== 'GET') return errorResponse(request, env as Env, 'method not allowed', 405);
 			return handlePublicKey(request, env as Env);
+		}
+		if (pathname.startsWith('/download/')) {
+			if (request.method !== 'GET' && request.method !== 'HEAD') {
+				return errorResponse(request, env as Env, 'method not allowed', 405);
+			}
+			return handleDownload(request, env as Env);
 		}
 		if (pathname === '/api/checkout/start') {
 			if (request.method !== 'POST') return errorResponse(request, env as Env, 'method not allowed', 405);

@@ -260,4 +260,48 @@ describe('tabulensis-api licensing worker', () => {
 				(globalThis as any).fetch = realFetch;
 			}
 		});
+
+		it('download proxy serves allowed assets', async () => {
+			const realFetch = globalThis.fetch;
+			(globalThis as any).fetch = async (input: any, init?: any) => {
+				const url = typeof input === 'string' ? input : String(input?.url ?? '');
+				if (
+					url ===
+					'https://github.com/dvora/excel_diff/releases/latest/download/tabulensis-latest-windows-x86_64.exe'
+				) {
+					return new Response('binary-data', {
+						status: 200,
+						headers: {
+							'content-type': 'application/octet-stream',
+							'content-disposition': 'attachment; filename="tabulensis-latest-windows-x86_64.exe"',
+						},
+					});
+				}
+				return realFetch(input, init);
+			};
+
+			try {
+				const ctx = createExecutionContext();
+				const req = new IncomingRequest(
+					'http://example.com/download/tabulensis-latest-windows-x86_64.exe',
+					{ method: 'GET' },
+				);
+				const res = await worker.fetch(req, testEnv(), ctx);
+				expect(res.status).toBe(200);
+				expect(res.headers.get('content-type')).toBe('application/octet-stream');
+				expect(res.headers.get('cache-control')).toBe('public, max-age=300');
+				expect(await res.text()).toBe('binary-data');
+				await waitOnExecutionContext(ctx);
+			} finally {
+				(globalThis as any).fetch = realFetch;
+			}
+		});
+
+		it('download proxy rejects unknown assets', async () => {
+			const ctx = createExecutionContext();
+			const req = new IncomingRequest('http://example.com/download/nope.exe', { method: 'GET' });
+			const res = await worker.fetch(req, testEnv(), ctx);
+			expect(res.status).toBe(404);
+			await waitOnExecutionContext(ctx);
+		});
 	});
