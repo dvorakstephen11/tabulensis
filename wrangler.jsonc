@@ -13,7 +13,7 @@
  */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "tabulensis-api",
+	"name": "tabulensis",
 	"main": "tabulensis-api/src/index.ts",
 	"compatibility_date": "2026-01-28",
 	"compatibility_flags": ["nodejs_compat"],
