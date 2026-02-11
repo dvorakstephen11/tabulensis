@@ -57,6 +57,7 @@ jobs:
             benchmarks/latest_fullscale.json
 
   build-windows:
+    if: ${{ github.event_name != 'workflow_dispatch' }}
     needs: [validate-release, perf-fullscale-gate]
     runs-on: windows-latest
     steps:
