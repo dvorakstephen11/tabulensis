@@ -127,7 +127,7 @@ jobs:
 
   build-macos-x64:
     needs: [validate-release, perf-fullscale-gate]
-    runs-on: macos-13
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
 
@@ -144,12 +144,12 @@ jobs:
           fi
 
       - name: Build release binary
-        run: cargo build --profile release-cli --locked -p tabulensis-cli
+        run: cargo build --profile release-cli --locked -p tabulensis-cli --target x86_64-apple-darwin
 
       - name: Create tarball
         run: |
           mkdir -p staging
-          cp target/release-cli/tabulensis staging/
+          cp target/x86_64-apple-darwin/release-cli/tabulensis staging/
           cp README.md staging/
           cp LICENSE.txt staging/
           cp THIRD_PARTY_NOTICES.txt staging/
@@ -171,7 +171,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: macos-x86_64-binary
-          path: target/release-cli/tabulensis
+          path: target/x86_64-apple-darwin/release-cli/tabulensis
 
   build-macos-arm64:
     needs: [validate-release, perf-fullscale-gate]
