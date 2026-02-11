@@ -141,6 +141,9 @@ jobs:
         with:
           targets: x86_64-apple-darwin
 
+      - name: Ensure x86_64 target on rust-toolchain override
+        run: rustup target add x86_64-apple-darwin
+
       - name: Get version
         id: version
         run: |
