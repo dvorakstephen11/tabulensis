@@ -71,9 +71,15 @@ See:
 Run the exact command once from Windows to validate quoting:
 
 ```powershell
-wsl.exe -d Ubuntu -- bash -lc "cd /home/dvorak/repo/agent_hub_repos/excel_diff && python3 scripts/overnight_agent.py --config docs/meta/automation/overnight_agent.yaml run-once --dry-run"
+wsl.exe -d Ubuntu -- bash -lc "cd /home/dvorak/repo/agent_hub_repos/excel_diff && python3 scripts/overnight_agent.py --config docs/meta/automation/overnight_agent.yaml doctor"
+```
+
+If you want an end-to-end smoke test (starts Codex), run a short session and stop it after a minute:
+
+```powershell
+wsl.exe -d Ubuntu -- bash -lc "cd /home/dvorak/repo/agent_hub_repos/excel_diff && python3 scripts/overnight_agent.py --config docs/meta/automation/overnight_agent.yaml supervise --hours 0.05"
 ```
 
 Then validate:
-- Exit code is 0.
-- A log file was created under `tmp/scheduler/` if you used the logged version.
+- Exit code is 0 (or you stopped with Ctrl+C).
+- Logs exist under `tmp/overnight_agent/runs/<run_id>/`.

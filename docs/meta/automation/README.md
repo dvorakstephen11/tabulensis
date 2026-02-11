@@ -45,7 +45,7 @@ Overnight agent specifics (see runbook):
 - Ops journal branch: `overnight/ops-journal`
 - Ops journal files:
   - `docs/meta/logs/ops/executive_summary.log`
-  - `docs/meta/logs/ops/<run_id>_report.md`
+  - `docs/meta/logs/ops/<run_id>_strategy.md` (recommended)
   - `docs/meta/logs/ops/<YYYY-MM-DD>_questions_for_operator.md`
 
 ### Report Filenames (Chosen)
@@ -65,7 +65,7 @@ Rules:
   - internal `run_id` if the system has one
 
 Note:
-- The overnight agent’s current ops journal uses `run_id`-based report names (`<run_id>_report.md`). That is acceptable as long as the run header inside the file is complete.
+- The overnight agent’s ops journal uses `run_id`-based filenames for per-run artifacts (for example `<run_id>_strategy.md`). That is acceptable as long as the run header inside the file is complete.
 
 ## Worktrees (Chosen)
 

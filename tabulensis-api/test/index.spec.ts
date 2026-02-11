@@ -12,6 +12,7 @@ describe('tabulensis-api licensing worker', () => {
 	function testEnv() {
 		return {
 			...env,
+			DOWNLOAD_BUCKET: undefined,
 			LICENSE_MOCK_STRIPE: '1',
 			LICENSE_SIGNING_KEY_B64: SEED_B64,
 			LICENSE_MAX_DEVICES: '2',
@@ -22,6 +23,7 @@ describe('tabulensis-api licensing worker', () => {
 			STRIPE_SUCCESS_URL: 'https://tabulensis.com/download/success',
 			STRIPE_CANCEL_URL: 'https://tabulensis.com/download',
 			STRIPE_PORTAL_RETURN_URL: 'https://tabulensis.com/support/billing',
+			DOWNLOAD_ORIGIN_BASE_URL: 'https://downloads.example.test/releases/latest/download/',
 		};
 	}
 
@@ -267,7 +269,7 @@ describe('tabulensis-api licensing worker', () => {
 				const url = typeof input === 'string' ? input : String(input?.url ?? '');
 				if (
 					url ===
-					'https://github.com/dvora/excel_diff/releases/latest/download/tabulensis-latest-windows-x86_64.exe'
+					'https://downloads.example.test/releases/latest/download/tabulensis-latest-windows-x86_64.exe'
 				) {
 					return new Response('binary-data', {
 						status: 200,
@@ -303,5 +305,41 @@ describe('tabulensis-api licensing worker', () => {
 			const res = await worker.fetch(req, testEnv(), ctx);
 			expect(res.status).toBe(404);
 			await waitOnExecutionContext(ctx);
+		});
+
+		it('download proxy masks upstream 404s (no GitHub HTML leakage)', async () => {
+			const realFetch = globalThis.fetch;
+			(globalThis as any).fetch = async (input: any, init?: any) => {
+				const url = typeof input === 'string' ? input : String(input?.url ?? '');
+				if (
+					url ===
+					'https://downloads.example.test/releases/latest/download/tabulensis-latest-windows-x86_64.exe'
+				) {
+					return new Response('<html>github 404</html>', {
+						status: 404,
+						headers: {
+							'content-type': 'text/html; charset=utf-8',
+							'x-github-request-id': 'test',
+						},
+					});
+				}
+				return realFetch(input, init);
+			};
+
+			try {
+				const ctx = createExecutionContext();
+				const req = new IncomingRequest(
+					'http://example.com/download/tabulensis-latest-windows-x86_64.exe',
+					{ method: 'GET' },
+				);
+				const res = await worker.fetch(req, testEnv(), ctx);
+				expect(res.status).toBe(404);
+				expect(res.headers.get('cache-control')).toBe('no-store');
+				expect(res.headers.get('x-github-request-id')).toBe(null);
+				expect(await res.text()).toBe('Not Found');
+				await waitOnExecutionContext(ctx);
+			} finally {
+				(globalThis as any).fetch = realFetch;
+			}
 		});
 	});

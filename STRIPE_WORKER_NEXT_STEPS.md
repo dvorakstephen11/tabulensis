@@ -103,21 +103,59 @@ Setup checklist: `RESEND_SETUP_CHECKLIST.md`
 
 ## 8) Downloads: Make `tabulensis.com/download` Actually Serve Binaries
 
-You still need a release publishing path that puts artifacts at:
-- `https://tabulensis.com/download/...` (Windows/macOS/Linux, plus checksums)
+The download page is a Cloudflare Pages static page:
+- `https://tabulensis.com/download/`
+
+Binary downloads are served from your domain via a Worker route:
+- `https://tabulensis.com/dl/<asset>` (handled by the licensing Worker)
+
+The Worker can serve downloads from:
+- Recommended: an R2 bucket bound as `DOWNLOAD_BUCKET` (keeps the origin private).
+- Alternative: an origin URL base set via `DOWNLOAD_ORIGIN_BASE_URL` (can be GitHub Releases, R2 public HTTP endpoint, S3, etc).
 
 Checklist:
 1. Decide where artifacts are built:
-   - CI (recommended) producing `target/dist/*` via `scripts/package_cli_*.py`
+   - CI (recommended): `.github/workflows/release.yml` produces stable `tabulensis-latest-*` assets as workflow artifacts (and can optionally upload them to R2).
+   - Local/manual (fine for MVP): put the stable `tabulensis-latest-*` files in `target/dist_latest/` in this repo.
 2. Decide hosting:
    - Cloudflare R2 + public bucket
    - Cloudflare Pages static assets
-   - GitHub Releases mirrored to `tabulensis.com/download`
-   - Chosen: GitHub Releases (see `docs/meta/results/decision_register.md` `DR-0019`)
-3. Update `public/download/index.html` “Windows/macOS/Linux release” links to real artifact URLs (stable `releases/latest/download/...` URLs recommended).
-4. Ensure integrity:
+   - GitHub Releases (only as an implementation detail behind the proxy, if you want)
+3. Create the Worker route for downloads:
+   - Route: `tabulensis.com/dl/*` (and optionally `www.tabulensis.com/dl/*`) -> `tabulensis-api`
+   - Note: this is already in `tabulensis-api/wrangler.jsonc` and the root `wrangler.jsonc`.
+4. R2 setup (recommended):
+   - Cloudflare Dashboard: enable R2 (Wrangler commands fail with API code `10042` until you do).
+   - Create R2 buckets:
+     - Prod: `tabulensis-downloads`
+     - Dev: `tabulensis-downloads-dev`
+     - Example commands:
+       - `npx wrangler r2 bucket create tabulensis-downloads`
+       - `npx wrangler r2 bucket create tabulensis-downloads-dev`
+   - Bind it to the Worker as `DOWNLOAD_BUCKET` (see `tabulensis-api/src/index.ts`).
+     - This repo already declares the binding:
+       - `tabulensis-api/wrangler.jsonc` and the root `wrangler.jsonc`
+       - Prod bucket: `tabulensis-downloads`
+       - Dev bucket: `tabulensis-downloads-dev`
+     - Note: `r2_buckets` is not inherited into named envs; that’s why `env.dev` also has its own `r2_buckets`.
+   - Upload release artifacts into that bucket with keys matching the asset filenames, for example:
+     - `tabulensis-latest-windows-x86_64.exe`
+     - `tabulensis-latest-windows-x86_64.zip`
+     - `tabulensis-latest-macos-universal.tar.gz`
+     - `tabulensis-latest-linux-x86_64.tar.gz`
+     - Note: these stable filenames are what the download page links to. Locally, you typically copy/zip from a build output like `target/release-cli/tabulensis` (Linux/macOS) or `target-windows/release-cli/tabulensis.exe` (Windows) into `target/dist_latest/`.
+     - Local upload helper (artifact dir is the repo-local folder containing those stable filenames):
+       - `./scripts/upload_downloads_to_r2.sh tabulensis-downloads target/dist_latest`
+   - Optional: automate uploads on tag releases via GitHub Actions:
+     - `.github/workflows/release.yml` includes an optional “Upload latest assets to R2” step.
+     - Set GitHub repo secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` (and optionally `R2_DOWNLOAD_BUCKET`).
+5. Origin URL setup (if not using R2 binding):
+   - Set `DOWNLOAD_ORIGIN_BASE_URL` to a base URL like `https://example.com/releases/latest/download/`.
+6. Update the download page links (already done):
+   - `public/download/index.html` links to `/dl/<asset>` (same-domain downloads).
+7. Ensure integrity:
    - Publish SHA256 checksums (`scripts/generate_checksums.py`)
-5. Optional:
+8. Optional:
    - Publish Homebrew formula + Scoop manifest at `https://tabulensis.com/download/`
 
 ## 9) Live-Mode Validation (Before Announcing)

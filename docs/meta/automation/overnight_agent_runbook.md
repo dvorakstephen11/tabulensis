@@ -18,49 +18,40 @@ This repo includes a long-running “Overnight Operator Agent” implementation:
 Execution environment:
 - Intended to run on the operator's local workstation (decision: `docs/meta/results/decision_register.md` `DR-0010`).
 
-Pick one LLM mode:
-
-1) Codex CLI mode (recommended; no `OPENAI_API_KEY` required by this script)
-
+Codex CLI:
 - Install/configure Codex CLI so `codex exec` works non-interactively.
-- Configure `docs/meta/automation/overnight_agent.yaml`:
-  - `llm.provider: codex_exec`
-  - `llm.model: <your newest available codex model>`
-
-2) OpenAI HTTP API mode (requires `OPENAI_API_KEY`)
-
-- Configure `docs/meta/automation/overnight_agent.yaml`:
-  - `llm.provider: openai_chat_completions`
-- Set your OpenAI API key in the environment:
-
-```bash
-export OPENAI_API_KEY='...'
-```
-
-In both modes, you can update the model in `docs/meta/automation/overnight_agent.yaml` (`llm.model`).
+- The overnight agent pins the model to `gpt-5.3-codex` with reasoning effort `xhigh` (enforced in code + config).
 
 ## Quick Checks
 
 ```bash
 python3 scripts/overnight_agent.py --config docs/meta/automation/overnight_agent.yaml doctor
-python3 scripts/overnight_agent.py --config docs/meta/automation/overnight_agent.yaml list-tasks --limit 30
 ```
 
-Dry run (no LLM calls; no code changes):
+If a session is active, check remaining time:
 
 ```bash
-python3 scripts/overnight_agent.py --config docs/meta/automation/overnight_agent.yaml run-once --dry-run
+python3 scripts/overnight_agent.py --config docs/meta/automation/overnight_agent.yaml time-remaining
+```
+
+Ops summary helper (appends + commits 1 executive-summary line on the ops journal branch; useful for the agent itself too):
+
+```bash
+python3 scripts/overnight_agent.py --config docs/meta/automation/overnight_agent.yaml ops-log \
+  --branch overnight/example_branch \
+  --commit n/a \
+  --message "Did X and Y; next step is Z."
 ```
 
 ## Start An Overnight Run
 
-Run for 10 hours (default), resuming an in-progress iteration after crashes/restarts:
+Run for 10 hours, resuming the previous Codex session after crashes/restarts when possible:
 
 ```bash
 python3 scripts/overnight_agent.py --config docs/meta/automation/overnight_agent.yaml supervise --hours 10
 ```
 
-Stop: `Ctrl+C`.
+Stop: `Ctrl+C` (the watchdog will terminate the Codex process).
 
 ## Scheduling
 
@@ -71,20 +62,23 @@ Windows Task Scheduler (WSL invocation) example:
 
 ## Where Outputs Go
 
-1. Task branches + worktrees:
+1. Session branches + worktrees:
 - Branches: `overnight/*`
-- Worktrees: `../excel_diff_worktrees/overnight/` (configurable)
+- Session worktrees: `../excel_diff_worktrees/overnight_session/` (configurable)
+- Ops journal worktree: `../excel_diff_worktrees/overnight_ops_journal/` (configurable)
 
 2. Raw run artifacts (local-only):
 - `tmp/overnight_agent/runs/<run_id>/**`
-- `tmp/overnight_agent/state.sqlite3`
-- `tmp/overnight_agent/state.json`
+- `tmp/overnight_agent/session.json`
+- `tmp/overnight_agent/codex_home/` (Codex CLI sessions/history/auth; needed for `resume --last`)
+- `tmp/overnight_agent/runs/<run_id>/codex_start.log`
+- `tmp/overnight_agent/runs/<run_id>/codex_resume.log`
 
 3. Ops journal (committed on a dedicated branch):
 - Branch: `overnight/ops-journal`
 - Files:
   - `docs/meta/logs/ops/executive_summary.log`
-  - `docs/meta/logs/ops/<run_id>_report.md`
+  - `docs/meta/logs/ops/<run_id>_strategy.md` (recommended; written by the agent)
   - `docs/meta/logs/ops/<YYYY-MM-DD>_questions_for_operator.md`
 
 To review the latest journal:

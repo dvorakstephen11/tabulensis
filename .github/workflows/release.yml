@@ -410,7 +410,7 @@ jobs:
 
       - name: Generate Scoop manifest
         run: |
-          cat > tabulensis.json << EOF
+          cat > tabulensis.json << 'EOF'
           {
             "version": "${{ steps.version.outputs.version_num }}",
             "description": "Tabulensis CLI (compare Excel workbooks)",
@@ -418,7 +418,7 @@ jobs:
             "license": "MIT",
             "architecture": {
               "64bit": {
-                "url": "https://github.com/dvora/excel_diff/releases/download/${{ steps.version.outputs.version }}/tabulensis-${{ steps.version.outputs.version }}-windows-x86_64.zip",
+                "url": "https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/tabulensis-${{ steps.version.outputs.version }}-windows-x86_64.zip",
                 "hash": "${{ steps.checksums.outputs.windows_sha }}"
               }
             },
@@ -427,7 +427,7 @@ jobs:
             "autoupdate": {
               "architecture": {
                 "64bit": {
-                  "url": "https://github.com/dvora/excel_diff/releases/download/v$version/tabulensis-v$version-windows-x86_64.zip"
+                  "url": "https://github.com/${{ github.repository }}/releases/download/v$version/tabulensis-v$version-windows-x86_64.zip"
                 }
               }
             }
@@ -444,7 +444,7 @@ jobs:
             license "MIT"
 
             on_macos do
-              url "https://github.com/dvora/excel_diff/releases/download/${{ steps.version.outputs.version }}/tabulensis-${{ steps.version.outputs.version }}-macos-universal.tar.gz"
+              url "https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/tabulensis-${{ steps.version.outputs.version }}-macos-universal.tar.gz"
               sha256 "${{ steps.checksums.outputs.macos_sha }}"
             end
 
@@ -531,13 +531,13 @@ jobs:
             ### macOS
             Using Homebrew (formula from this Release):
             ```bash
-            curl -LO https://github.com/dvora/excel_diff/releases/download/${{ steps.version.outputs.version }}/tabulensis.rb
+            curl -LO https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/tabulensis.rb
             brew install --formula ./tabulensis.rb
             ```
 
             Or download the universal binary:
             ```bash
-            curl -LO https://github.com/dvora/excel_diff/releases/download/${{ steps.version.outputs.version }}/tabulensis-${{ steps.version.outputs.version }}-macos-universal.tar.gz
+            curl -LO https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/tabulensis-${{ steps.version.outputs.version }}-macos-universal.tar.gz
             tar -xzf tabulensis-${{ steps.version.outputs.version }}-macos-universal.tar.gz
             sudo mv tabulensis /usr/local/bin/
             ```
@@ -545,13 +545,13 @@ jobs:
             ### Linux
             Download and install the x86_64 tarball:
             ```bash
-            curl -LO https://github.com/dvora/excel_diff/releases/download/${{ steps.version.outputs.version }}/tabulensis-${{ steps.version.outputs.version }}-linux-x86_64.tar.gz
+            curl -LO https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/tabulensis-${{ steps.version.outputs.version }}-linux-x86_64.tar.gz
             tar -xzf tabulensis-${{ steps.version.outputs.version }}-linux-x86_64.tar.gz
             sudo mv tabulensis /usr/local/bin/
             ```
 
             ### Web Demo
-            Try it in your browser at https://dvora.github.io/excel_diff
+            Try it in your browser at https://tabulensis.com
 
             ## Format Support
             - Supported: `.xlsx`, `.xlsm`, `.xltx`, `.xltm`, `.pbix`, `.pbit`
@@ -562,3 +562,41 @@ jobs:
 
             ## Checksums
             See `checksums.txt` for SHA256 hashes of all artifacts.
+
+      - name: Upload latest assets to R2 (optional)
+        if: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_DOWNLOAD_BUCKET: ${{ secrets.R2_DOWNLOAD_BUCKET }}
+        run: |
+          set -euo pipefail
+
+          bucket="${R2_DOWNLOAD_BUCKET:-tabulensis-downloads}"
+
+          upload() {
+            local file="$1"
+            local key
+            key="$(basename "${file}")"
+
+            local ct="application/octet-stream"
+            if [[ "${key}" == *.zip ]]; then
+              ct="application/zip"
+            elif [[ "${key}" == *.tar.gz ]]; then
+              ct="application/gzip"
+            elif [[ "${key}" == *.sha256 ]]; then
+              ct="text/plain; charset=utf-8"
+            fi
+
+            echo "Uploading ${key} -> r2://${bucket}/${key}"
+            npx wrangler r2 object put "${bucket}/${key}" --file "${file}" --remote --content-type "${ct}" >/dev/null
+          }
+
+          upload "artifacts/windows-x86_64/tabulensis-latest-windows-x86_64.exe"
+          upload "artifacts/windows-x86_64/tabulensis-latest-windows-x86_64.exe.sha256"
+          upload "artifacts/windows-x86_64/tabulensis-latest-windows-x86_64.zip"
+          upload "artifacts/windows-x86_64/tabulensis-latest-windows-x86_64.zip.sha256"
+          upload "artifacts/macos-universal/tabulensis-latest-macos-universal.tar.gz"
+          upload "artifacts/macos-universal/tabulensis-latest-macos-universal.tar.gz.sha256"
+          upload "artifacts/linux-x86_64/tabulensis-latest-linux-x86_64.tar.gz"
+          upload "artifacts/linux-x86_64/tabulensis-latest-linux-x86_64.tar.gz.sha256"

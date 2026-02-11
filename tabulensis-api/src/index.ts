@@ -29,8 +29,11 @@ type Env = {
 	RESEND_FROM?: string; // var
 	RESEND_REPLY_TO?: string; // var
 
-	// Download proxy (serve release artifacts from your domain while using GitHub Releases as origin).
-	DOWNLOAD_ORIGIN_BASE_URL?: string; // default: GitHub latest release assets
+	// Downloads
+	// - Prefer `DOWNLOAD_BUCKET` (R2) to serve binaries from your own storage.
+	// - Or set `DOWNLOAD_ORIGIN_BASE_URL` to proxy from an HTTP origin (GitHub Releases, S3, etc).
+	DOWNLOAD_ORIGIN_BASE_URL?: string;
+	DOWNLOAD_BUCKET?: R2Bucket; // preferred (keeps origin private), optional binding
 
 	// CORS allowlist for browser requests (CORS never applies to CLI/desktop).
 	APP_ORIGIN?: string;
@@ -133,8 +136,6 @@ const TABULENSIS_DOWNLOAD_URL = 'https://tabulensis.com/download';
 const TABULENSIS_BILLING_URL = 'https://tabulensis.com/support/billing';
 const TABULENSIS_SUPPORT_EMAIL = 'support@tabulensis.com';
 const LICENSE_EMAIL_SUBJECT = 'Your Tabulensis license key';
-
-const DEFAULT_DOWNLOAD_ORIGIN_BASE_URL = 'https://github.com/dvora/excel_diff/releases/latest/download/';
 
 const ALLOWED_DOWNLOAD_ASSETS = new Set<string>([
 	'tabulensis-latest-windows-x86_64.exe',
@@ -538,13 +539,17 @@ function safeDecodeURIComponent(value: string): string {
 
 function downloadOriginBaseUrl(env: Env): string {
 	const raw = env.DOWNLOAD_ORIGIN_BASE_URL?.trim();
-	if (!raw) return DEFAULT_DOWNLOAD_ORIGIN_BASE_URL;
+	if (!raw) return '';
 	return raw.endsWith('/') ? raw : `${raw}/`;
 }
 
 async function handleDownload(request: Request, env: Env): Promise<Response> {
 	const url = new URL(request.url);
-	const asset = url.pathname.startsWith('/download/') ? url.pathname.slice('/download/'.length) : '';
+	const asset = url.pathname.startsWith('/download/')
+		? url.pathname.slice('/download/'.length)
+		: url.pathname.startsWith('/dl/')
+			? url.pathname.slice('/dl/'.length)
+			: '';
 	const decoded = asset ? safeDecodeURIComponent(asset) : '';
 	if (!decoded) return errorResponse(request, env, 'asset is required', 400);
 	if (decoded.includes('/') || decoded.includes('\\') || decoded.includes('..')) {
@@ -554,7 +559,52 @@ async function handleDownload(request: Request, env: Env): Promise<Response> {
 		return withCors(request, env, new Response('Not Found', { status: 404 }));
 	}
 
-	const originUrl = `${downloadOriginBaseUrl(env)}${decoded}`;
+	if (env.DOWNLOAD_BUCKET) {
+		const object = await env.DOWNLOAD_BUCKET.get(decoded);
+		if (!object) {
+			return withCors(
+				request,
+				env,
+				new Response('Not Found', {
+					status: 404,
+					headers: { 'Cache-Control': 'no-store' },
+				}),
+			);
+		}
+
+		const headers = new Headers();
+		headers.set('Cache-Control', 'public, max-age=300');
+
+		const contentType = object.httpMetadata?.contentType ?? 'application/octet-stream';
+		headers.set('Content-Type', contentType);
+
+		// Force a download prompt; prevents the browser from attempting to render text/HTML.
+		headers.set('Content-Disposition', `attachment; filename="${decoded}"`);
+
+		const etag = object.httpEtag;
+		if (etag) headers.set('ETag', etag);
+		if (object.size !== undefined) headers.set('Content-Length', String(object.size));
+		if (object.uploaded) headers.set('Last-Modified', object.uploaded.toUTCString());
+
+		if (request.method === 'HEAD') {
+			return withCors(request, env, new Response(null, { status: 200, headers }));
+		}
+
+		return withCors(request, env, new Response(object.body, { status: 200, headers }));
+	}
+
+	const originBase = downloadOriginBaseUrl(env);
+	if (!originBase) {
+		return withCors(
+			request,
+			env,
+			new Response('Not Found', {
+				status: 404,
+				headers: { 'Cache-Control': 'no-store' },
+			}),
+		);
+	}
+	const originUrl = `${originBase}${decoded}`;
 
 	const passthroughHeaders = new Headers();
 	const range = request.headers.get('Range');
@@ -570,8 +620,43 @@ async function handleDownload(request: Request, env: Env): Promise<Response> {
 		redirect: 'follow',
 	});
 
-	const headers = new Headers(originRes.headers);
-	headers.delete('set-cookie');
+	// Avoid proxying GitHub HTML error pages (and their headers) back to the user.
+	if (originRes.status === 404) {
+		return withCors(
+			request,
+			env,
+			new Response('Not Found', {
+				status: 404,
+				headers: { 'Cache-Control': 'no-store' },
+			}),
+		);
+	}
+	if (!originRes.ok && originRes.status !== 304 && originRes.status !== 416) {
+		return withCors(
+			request,
+			env,
+			new Response('Download unavailable', {
+				status: 502,
+				headers: { 'Cache-Control': 'no-store' },
+			}),
+		);
+	}
+
+	// Forward only the few headers that matter for downloads (avoid leaking GitHub-isms).
+	const headers = new Headers();
+	for (const name of [
+		'content-type',
+		'content-length',
+		'content-range',
+		'accept-ranges',
+		'etag',
+		'last-modified',
+		'content-disposition',
+		'content-encoding',
+	]) {
+		const value = originRes.headers.get(name);
+		if (value) headers.set(name, value);
+	}
 
 	// Keep caching modest so "latest" can update shortly after a new release.
 	headers.set('Cache-Control', 'public, max-age=300');
@@ -1270,7 +1355,7 @@ export default {
 			if (request.method !== 'GET') return errorResponse(request, env as Env, 'method not allowed', 405);
 			return handlePublicKey(request, env as Env);
 		}
-		if (pathname.startsWith('/download/')) {
+		if (pathname.startsWith('/download/') || pathname.startsWith('/dl/')) {
 			if (request.method !== 'GET' && request.method !== 'HEAD') {
 				return errorResponse(request, env as Env, 'method not allowed', 405);
 			}

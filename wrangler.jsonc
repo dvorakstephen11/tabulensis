@@ -17,6 +17,16 @@
 	"main": "tabulensis-api/src/index.ts",
 	"compatibility_date": "2026-01-28",
 	"compatibility_flags": ["nodejs_compat"],
+	"routes": [
+		{
+			"pattern": "tabulensis.com/dl/*",
+			"zone_name": "tabulensis.com"
+		},
+		{
+			"pattern": "www.tabulensis.com/dl/*",
+			"zone_name": "tabulensis.com"
+		}
+	],
 	"observability": { "enabled": true },
 	"d1_databases": [
 		{
@@ -26,12 +36,25 @@
 			"remote": true
 		}
 	],
+	"r2_buckets": [
+		{
+			"binding": "DOWNLOAD_BUCKET",
+			"bucket_name": "tabulensis-downloads",
+			"preview_bucket_name": "tabulensis-downloads-dev"
+		}
+	],
 	"env": {
 		"dev": {
 			"vars": {
 				"RESEND_FROM": "Tabulensis <licenses@mail.tabulensis.com>",
 				"RESEND_REPLY_TO": "support@tabulensis.com"
 			},
+			"r2_buckets": [
+				{
+					"binding": "DOWNLOAD_BUCKET",
+					"bucket_name": "tabulensis-downloads-dev"
+				}
+			],
 			"d1_databases": [
 				{
 					"binding": "DB",
@@ -58,4 +81,3 @@
 		"LICENSE_MAX_DEVICES": "2"
 	}
 }
-

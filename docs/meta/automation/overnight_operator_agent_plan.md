@@ -17,7 +17,8 @@ Non-goals:
 2. Make it restart-safe:
    - Crashes must resume without guessing what happened.
 3. Make rollback trivial:
-   - One iteration equals one branch equals one worktree.
+   - One substantial work item equals one branch (recommended).
+   - The whole overnight run happens in a dedicated session worktree.
 4. Make heavy validation conditional:
    - Do not run full perf cycles unless policy requires it (and enforce retention rules).
 5. Make doc sprawl hard:
@@ -29,17 +30,19 @@ Non-goals:
 
 ## System Overview
 
-Two processes:
-1. Supervisor
-   - Single-instance lock
-   - Starts Runner
-   - Restarts Runner on crash (with backoff)
-   - Enforces time budget/window
-   - Rotates logs
-2. Runner
-   - Deterministic state machine with durable state
-   - Creates and uses worktrees and branches
-   - Selects tasks, plans, implements, validates, commits, reports
+Two components:
+1. Watchdog (this repo: `scripts/overnight_agent.py`)
+   - Single-instance lock (ensures only one supervisor is active).
+   - Creates/ensures:
+     - a dedicated *session worktree* (so the primary working tree stays untouched)
+     - an *ops journal worktree* (so logs can be committed without conflicts)
+   - Writes a durable session state file with the deadline (`tmp/overnight_agent/session.json`).
+   - Starts a single Codex session via `codex exec` (pinned model).
+   - If the Codex process exits early, resumes the same Codex thread via `codex exec resume --last`.
+2. Codex session (the actual “agent”)
+   - Self-directed: doc audit -> strategy -> execution loop until time budget expires.
+   - Uses branches + commits for rollback.
+   - Appends operator-facing summaries to the ops journal throughout the run.
 
 Recommended implementation language: Python (pragmatic, cross-platform, aligns with existing `scripts/*.py`).
 
@@ -47,14 +50,14 @@ Recommended implementation language: Python (pragmatic, cross-platform, aligns w
 
 Local-only runtime (not committed):
 - `tmp/overnight_agent/`
-  - `state.sqlite3` (durable state store)
-  - `state.json` (human-readable mirror)
-  - `runs/<run_id>/` (raw prompts/responses/logs, stdout/stderr, timing)
+  - `session.json` (durable session state: deadline, worktree paths, restart counters)
+  - `codex_home/` (Codex CLI sessions/history/auth; local-only)
+  - `runs/<run_id>/` (watchdog logs: Codex stdout/stderr, restart history)
 
 Repo-committed outputs (sanitized; no secrets):
 - `docs/meta/logs/ops/`
   - `executive_summary.log` (append-only)
-  - `<run_id>_report.md` (per iteration)
+  - `<run_id>_strategy.md` (recommended per-run plan; written by the agent)
   - `<date>_questions_for_operator.md` (blocked decisions)
 
 Operational note:
@@ -65,55 +68,53 @@ Configuration:
 
 ## Core Operational Loop
 
-Each iteration is a transaction:
-1. Choose a task (deterministically).
-2. Create isolated worktree + branch.
-3. Plan the change (LLM plan artifact).
-4. Implement (patch-by-patch).
-5. Run targeted formatting.
-6. Run the right validation suites (tests/perf) based on triggers.
-7. Refresh docs/index surfaces and checklist indexes.
-8. Run guardrails (line endings, change scope, perf retention).
-9. Commit changes (structured commits).
-10. Write a report + executive summary line.
-11. Repeat until time budget exhausted.
+The watchdog starts a single Codex session and then mostly stays out of the way.
 
-The "brainstorming loop" becomes its own iteration type that produces *documents and queues* (no code changes unless explicitly permitted in config).
+Codex session boot sequence (always first):
+1. Documentation audit:
+   - Scan for waste/contradictions (start at `docs/index.md` and `meta_methodology.md`).
+   - Prefer low-risk cleanup: fix broken links, consolidate duplicates only when clearly safe.
+   - Run `python3 scripts/docs_integrity.py` (and `--check-links` if fast) and fix issues.
+2. Strategy plan:
+   - Read `product_roadmap.md`, `docs/index.md`, and any relevant operating docs.
+   - Decide the next 1-3 most valuable tasks for the available time budget.
+   - Write a short plan artifact to `docs/meta/logs/ops/<run_id>_strategy.md` (commit on ops journal branch).
 
-## Durable State Machine (Restart Safe)
+Codex session execution loop (repeat until time budget is up):
+- Pick the next most profitable task.
+- Create a new `overnight/*` branch and commit changes (rollback-first).
+- Run appropriate validation (tests/perf) per `AGENTS.md`.
+- Update docs where needed (and keep docs sprawl low).
+- Append an executive summary line and any operator questions to the ops journal.
 
-Runner is a state machine that persists state after every phase. On crash/restart, it loads the last state and resumes the next idempotent step.
+Wrap-up near the deadline:
+- Stop starting new risky work; finish in-flight tasks or rollback cleanly.
+- Ensure logs are readable and that questions for the operator are written down.
 
-Recommended phases:
-1. `IDLE` (waiting / checking time window)
-2. `ACQUIRE_TASK` (load and score tasks)
-3. `PLAN` (LLM planning + predicted touched paths)
-4. `WORKTREE_CREATE` (git worktree + branch)
-5. `PRE_VALIDATE` (only for major-perf-risk: perf pre baseline)
-6. `IMPLEMENT` (apply patches, run micro-checks as needed)
-7. `FORMAT` (targeted formatting only)
-8. `TEST` (suite selection via triggers)
-9. `PERF_POST` (only if pre baseline ran)
-10. `DOCS_REFRESH` (update doc indexes)
-11. `GUARDRAILS` (scope/line endings/perf cycle scope)
-12. `COMMIT` (structured commits)
-13. `REPORT` (exec summary + per-run report)
-14. `CLEANUP` (optional: remove worktree / keep for inspection)
-15. `DONE`
+## Durable Session State (Restart Safe)
 
-State persistence:
-- SQLite `iterations` table tracks (run_id, task_id, phase, timestamps, worktree_path, branch, base_commit, last_good_commit, artifacts).
-- `state.json` mirrors the active run (for quick inspection without SQLite tooling).
+The watchdog is intentionally simple and only needs a small amount of durable state:
+
+- `tmp/overnight_agent/session.json`: deadline + worktree paths + restart counters.
+- `tmp/overnight_agent/codex_home/`: Codex CLI’s persisted session/thread state.
+
+Restart behavior:
+- If the watchdog crashes and is restarted while the deadline has not passed, it reuses the same
+  worktrees and resumes the most recent Codex `exec` thread (`codex exec resume --last`).
+- If the deadline has passed (or the operator uses `--no-resume`), it starts a new session and
+  writes a fresh `session.json`.
 
 ## Git Strategy (Rollback First)
 
 Hard rules:
 - The agent never mutates your primary working tree.
-- All changes happen in a per-iteration git worktree.
-- One iteration produces exactly one branch.
+- All changes happen in a dedicated *session* git worktree for the whole run.
+- For rollback, the agent should create one `overnight/*` branch per substantial work item (recommended),
+  and commit as it goes.
 
 Branch naming:
-- `overnight/YYYY-MM-DD_HHMM_<slug>`
+- Session branch (worktree base): `overnight/session_<run_id>`
+- Work item branches: `overnight/YYYY-MM-DD_HHMM_<slug>`
 
 Commit structure (default):
 1. `feat|perf|fix: <task summary>` (code/config changes)
@@ -124,64 +125,54 @@ Cleanup:
 - Default: keep the worktree for review (morning inspection).
 - Optional: an explicit retention policy can remove old worktrees after N days, but only those created by the agent.
 
-## Task Ingestion (Deterministic Inputs)
+## Work Discovery (Self-Directed)
 
-Task sources (ordered):
-1. `META_METHODOLOGY_IMPLEMENTATION_CHECKLIST.md` (checkbox tasks)
-2. Unfinished checklists from `docs/index.md` auto-index block
-3. `todo.md` (ideas/backlog; lowest priority)
-4. Optional: `docs/meta/automation/manual_queue.md` (explicit operator queue)
-5. Optional: GitHub issues (only if configured)
+The overnight agent does **not** consume a deterministic task queue.
 
-Task normalization:
-- Record (source_path, line_number, raw_text, tags, created_at, last_attempted_at, status).
-- De-duplicate identical tasks across sources.
+Instead, the Codex session should continuously discover the next most profitable work by scanning
+repo reality and operator intent, in roughly this order:
 
-Task scoring (configurable):
-- Prefer tasks that unlock other tasks (scaffolding).
-- Prefer low blast radius by default.
-- Prefer tasks with explicit acceptance criteria.
-- Penalize tasks requiring operator decisions late at night (route to questions queue).
+- Documentation quality:
+  - contradictions, redundancy, broken links, stale instructions
+  - gaps in runbooks/guardrails that cause operator time waste
+- Product leverage:
+  - `product_roadmap.md` and iteration plans under `docs/product_iterations/`
+  - UX/feature work that makes the product meaningfully better (small, shippable slices)
+- Operational leverage:
+  - `meta_methodology.md` and unfinished checklists indexed from `docs/index.md`
+  - automation improvements that reduce future toil
 
-## Planning (LLM) Phase
+Decision-heavy work:
+- If progress requires operator judgment, the agent should stop that thread of work and write a
+  concrete question to `docs/meta/logs/ops/<YYYY-MM-DD>_questions_for_operator.md` (ops journal branch),
+  then move to the next best task.
 
-The planning phase must output a structured plan artifact (JSON or YAML), not prose only.
+## Planning
 
-LLM invocation options (choose via config):
-- Codex CLI non-interactive sessions (`codex exec`) for planning/patch generation (no `OPENAI_API_KEY` required by the runner).
-- Direct OpenAI HTTP API calls for planning/patch generation (requires `OPENAI_API_KEY`).
+Planning happens inside the Codex session.
 
-Required plan fields:
-- goal
-- proposed changes (files + descriptions)
-- predicted touched paths (glob/paths)
-- risk class:
-  - `docs_only`
-  - `minor`
-  - `major_perf_risk`
-  - `wide_scope`
-  - `security_risk`
-  - `decision_required`
-- validation plan (which suites and why)
-- stop conditions (when to stop and ask operator)
+Recommended planning artifacts:
+- At run start, write `docs/meta/logs/ops/<run_id>_strategy.md` on the ops journal branch with:
+  - time budget + deadline
+  - top 1-3 tasks for the session (with rationale)
+  - explicit “stop conditions” (when to defer and ask the operator)
+- Before each substantial work item, write a short plan (can be in the branch’s first commit message or a short markdown note).
 
-If the plan is `decision_required`, the runner does not implement; it writes a question doc and moves to the next task.
+If progress requires operator judgment, the agent should not guess:
+- write the exact question(s) to `docs/meta/logs/ops/<YYYY-MM-DD>_questions_for_operator.md`
+- then move to the next best task
 
-## Implementation Phase (Patch-Based, Audited)
+## Implementation
 
-Mechanics:
-- The runner requests patches from the LLM in small chunks.
-- The runner applies patches and records:
-  - patch text
-  - files changed
-  - command outputs for follow-up checks
+Implementation happens inside the Codex session in the dedicated session worktree.
 
-Retries:
-- For each failed phase (tests/perf/guardrails), allow N fix attempts with increasingly constrained prompts.
-
-Safety:
-- Enforce forbidden command patterns (configured).
-- Enforce "no new doc without indexing" policy.
+Guidelines:
+- Keep changes small and auditable (prefer multiple small branches over one sprawling branch).
+- Commit frequently with clear messages.
+- Run validation appropriate to the touched code (follow `AGENTS.md` perf policy).
+- Avoid wide-scope formatting/refactors overnight.
+- Keep docs sprawl low: if you create a new operating doc, link it from `docs/index.md`.
+- Never do forbidden operations (deploys, secret rotation, destructive git).
 
 ## Validation and Perf Policy (Repo-Aware)
 
@@ -239,141 +230,76 @@ Design:
 
 ## Configuration: Portable YAML That Still Works
 
-The YAML must balance portability with usefulness:
-- Portability: runner ships with built-in "recipes" (cargo test, npm test, python script, shell).
-- Usefulness: repo YAML binds those recipes to real commands, and declares triggers/policies.
-
-Key concepts:
-- `recipes`: typed command invocations (shell, python, cargo, npm)
-- `suites`: ordered sets of recipe calls
-- `triggers`: glob patterns -> suites
-- `policy`: forbidden commands, change scope thresholds, perf retention rules
-- `pipeline`: orchestration rules (always/when-change/when-major)
+The watchdog config is intentionally small:
+- The “task selection” logic is inside the long-running Codex session, not a deterministic queue.
+- The YAML mostly defines *paths* and *Codex session settings* (worktrees, ops journal locations, CODEX_HOME).
 
 ### Example YAML (excel_diff wiring, schema pattern intended to be reusable)
 
 ```yaml
-version: 1
+version: 2
 
 repo:
-  name: excel_diff
   base_branch: main
-  worktree_root: ../excel_diff_worktrees/overnight
+  session_worktree_root: ../excel_diff_worktrees/overnight_session
+  ops_journal_branch: overnight/ops-journal
+  ops_journal_worktree: ../excel_diff_worktrees/overnight_ops_journal
   run_root: tmp/overnight_agent
+  session_state: tmp/overnight_agent/session.json
   exec_summary_log: docs/meta/logs/ops/executive_summary.log
+  reports_dir: docs/meta/logs/ops
+  git_identity:
+    name: Overnight Agent
+    email: overnight-agent@localhost
 
-policy:
-  forbid_commands_regex:
-    - 'git\\s+reset\\s+--hard'
-    - 'git\\s+push\\s+--force'
-    - 'wrangler\\s+deploy'
-  max_changed_files_soft: 40
-  max_changed_files_hard: 120
-
-docs:
-  index_file: docs/index.md
-  checklist_index_refresh:
-    recipe: python
-    cwd: .
-    cmd: ["python3", "scripts/update_docs_index_checklists.py"]
-
-suites:
-  guardrails_staged:
-    - { recipe: python, cmd: ["python3", "scripts/check_line_endings.py", "--staged"] }
-    - { recipe: python, cmd: ["python3", "scripts/check_change_scope.py", "--staged"] }
-    - { recipe: python, cmd: ["python3", "scripts/check_perf_cycle_scope.py", "--staged"], when: "perf_artifacts_staged" }
-
-  fmt_rust:
-    - { recipe: python, cmd: ["python3", "scripts/safe_rustfmt.py", "--worktree"] }
-
-  tests_rust:
-    - { recipe: shell, cmd: ["bash", "-lc", "cargo test"] }
-
-  tests_worker:
-    - { recipe: shell, cwd: tabulensis-api, cmd: ["bash", "-lc", "npm test -- --run"] }
-
-  perf_quick:
-    - { recipe: shell, cmd: ["bash", "-lc",
-        "python3 scripts/check_perf_thresholds.py --suite quick --parallel --baseline benchmarks/baselines/quick.json --export-json benchmarks/latest_quick.json --export-csv benchmarks/latest_quick.csv"
-      ] }
-
-  perf_cycle_full:
-    pre:
-      - { recipe: python, cmd: ["python3", "scripts/perf_cycle.py", "pre", "--cycle", "{{cycle_id}}"] }
-    post:
-      - { recipe: python, cmd: ["python3", "scripts/perf_cycle.py", "post", "--cycle", "{{cycle_id}}"] }
-
-triggers:
-  worker_changed:
-    any_paths: ["tabulensis-api/**"]
-  major_perf_risk:
-    any_paths:
-      - "core/src/**"
-      - "desktop/backend/src/diff_runner.rs"
-      - "desktop/backend/src/store/**"
-      - "ui_payload/src/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-  perf_sensitive:
-    any_paths: ["core/src/**", "ui_payload/src/**"]
-
-pipeline:
-  always:
-    - docs.checklist_index_refresh
-    - guardrails_staged
-  on_change:
-    - when: worker_changed
-      run: [tests_worker]
-    - when: perf_sensitive
-      run: [perf_quick]
-  on_major_perf_risk:
-    run_full_perf_cycle: true
-    run_suites: [perf_cycle_full]
+codex:
+  codex_bin: codex
+  codex_home: tmp/overnight_agent/codex_home
+  model: gpt-5.3-codex
+  model_reasoning_effort: xhigh
+  full_auto: true
+  sandbox: workspace-write
 ```
 
 Portability strategy:
-- In other repos, only `suites` commands and `triggers` change.
-- The runner should ship with a "starter generator" that can propose YAML by scanning for common markers:
-  - `Cargo.toml` -> suggest `cargo test`, safe rustfmt
-  - `package.json` -> suggest `npm test`
-  - `pyproject.toml` -> suggest `pytest`
-  - etc.
+- In other repos, update the `repo.*` paths and branch names to match local conventions.
+- Keep the model pinned for consistency.
 
 ## Observability (So It Can Fail Safely)
 
 Two output layers:
 1. Human layer (morning review):
    - `docs/meta/logs/ops/executive_summary.log` (append-only lines)
-   - `docs/meta/logs/ops/<run_id>_report.md` (full details)
+   - `docs/meta/logs/ops/<run_id>_strategy.md` (per-run plan and checkpoints; recommended)
+   - `docs/meta/logs/ops/<YYYY-MM-DD>_questions_for_operator.md` (blocked decisions)
 2. Machine layer (for resuming and debugging):
-   - `tmp/overnight_agent/runs/<run_id>/` (raw logs, prompts, outputs)
+   - `tmp/overnight_agent/session.json` (deadline + worktree paths)
+   - `tmp/overnight_agent/runs/<run_id>/codex_start.log` / `codex_resume.log` (Codex stdout/stderr)
+   - `tmp/overnight_agent/codex_home/` (Codex persisted session/thread state; local-only)
 
 Executive summary line format (recommended):
-- `<timestamp> <run_id> <branch> <task_slug> phase=<phase> result=<ok|failed|blocked> tests=<...> perf=<...> msg="<1-3 sentences>"`
+- `<ISO_UTC_TIMESTAMP> <branch> <commit_sha_or_n/a> <1-3 sentence summary>`
 
 ## Failure Modes and Recovery
 
 Crashes:
-- Supervisor restarts Runner.
-- Runner resumes based on persisted state and verifies invariants:
-  - worktree exists and points at expected branch
-  - branch exists
-  - base commit still available
+- Watchdog restarts the Codex process.
+- Watchdog resumes the previous Codex `exec` thread (`codex exec resume --last`) when possible.
+- Worktrees are reused and the deadline is read from `tmp/overnight_agent/session.json`.
 
 Test failures:
-- Retry fix up to N times.
-- If still failing:
-  - write report
-  - leave branch/worktree intact
-  - proceed to next task (or stop if configured)
+- The agent should attempt reasonable fixes.
+- If still failing, it should:
+  - record what failed in the ops journal (command + error excerpt)
+  - leave the branch/worktree intact for morning review
+  - switch to the next best task
 
 Perf cycle failures:
-- Do not start another cycle in the same iteration.
-- Write report and stop iteration.
+- Do not start another cycle on the same branch without explicitly calling it out.
+- Record the failure and move on (or stop if it is blocking the run).
 
 Doc/guardrail failures:
-- Treat as hard failures (because they break the methodology’s discoverability and churn discipline).
+- Treat as high priority (they directly impact operator efficiency and repo hygiene).
 
 ## Security and Privacy Model
 
@@ -383,26 +309,20 @@ Rules:
 - Any vendor "snapshot" automation must redact tokens/keys.
 - LLM prompts must not include secrets (use placeholders; do not paste `.env`).
 
-## Implementation Roadmap (Full Version)
+## Implementation Roadmap (Future Improvements)
 
-Suggested build order:
-1. Config schema and loader (YAML + defaults)
-2. Supervisor (lock, restarts, time window)
-3. Runner skeleton + SQLite state store
-4. Git/worktree manager
-5. Task ingestion (checkbox + docs/index auto-index)
-6. Task scoring/selection + decision routing
-7. LLM planning + structured plan artifact
-8. Patch application + change tracking
-9. Validation runner (suites + triggers)
-10. Perf cycle orchestration + retention enforcement
-11. Docs refresh + anti-doc-sprawl contract
-12. Reporting layer (exec summary + per-run markdown report)
-13. Hardening and portability (starter YAML generator for other repos)
+The core design is intentionally minimal: a watchdog + one self-sustaining Codex session.
+
+Potential follow-ups:
+- Stronger signal handling (Ctrl+C should always terminate the Codex process cleanly).
+- Resume fallback: if `codex exec resume --last` fails, start a fresh session with the same deadline.
+- Optional “heartbeat” file that the agent updates periodically so the watchdog can detect hangs.
+- Optional helper scripts to make ops-journal appends/commits deterministic.
 
 Acceptance criteria for "v1 robust":
-- Can run for N hours and produce multiple independent branches without touching the main working tree.
-- Can crash/restart and resume without duplicating side effects (idempotent state machine).
-- Enforces perf policy and retention rules on major perf-risk changes.
-- Avoids wide-scope formatting churn by default.
-- Produces readable morning summaries and per-run reports with exact commands and artifact paths.
+- Runs for N hours with **one** Codex session (restarted only if it exits early).
+- Can crash/restart and resume the Codex thread when possible.
+- Does not touch the primary working tree (uses the session worktree).
+- Uses branches + commits for rollback.
+- Appends operator-facing summaries throughout the run.
+- Always uses `gpt-5.3-codex` with reasoning effort `xhigh`.

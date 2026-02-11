@@ -368,7 +368,8 @@ Goal: demonstrate that the documented system is consistent, runnable, and non-fr
    - Confirm `docs/index.md` "Unfinished checklists" block matches reality.
 2. Validate automation wiring:
    - Run `python3 scripts/overnight_agent.py --config docs/meta/automation/overnight_agent.yaml doctor`.
-   - Run `python3 scripts/overnight_agent.py --config docs/meta/automation/overnight_agent.yaml list-tasks --limit 30`.
+   - If a session is active, run `python3 scripts/overnight_agent.py --config docs/meta/automation/overnight_agent.yaml time-remaining`.
+   - Optional end-to-end smoke (starts Codex): `python3 scripts/overnight_agent.py --config docs/meta/automation/overnight_agent.yaml supervise --hours 0.05 --no-resume`.
 3. Validate prompt tooling:
    - Run `python3 scripts/deep_research_prompt.py --help` and ensure docs match reality.
 4. Validate the daily operator loop:
@@ -434,4 +435,3 @@ In `docs/meta/results/decision_register.md`:
 4. Default recommendation (if any) and rationale.
 5. Chosen option, date, and evidence.
 6. Follow-up tasks (checklist pointers).
-
