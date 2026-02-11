@@ -68,6 +68,9 @@ jobs:
         with:
           targets: x86_64-apple-darwin
 
+      - name: Ensure x86_64 macOS target is installed for active toolchain
+        run: rustup target add x86_64-apple-darwin
+
       - name: Get version
         id: version
         shell: bash
